@@ -1,0 +1,31 @@
+[package]
+name = "entity-browser-tauri"
+version = "0.8.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Entity Browser — Tauri desktop shell"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-log = "2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+dirs = "6"
+
+# Entity system — native peer for backend
+# `sqlite` feature enables PeerBuilder::sqlite(path) so backend-peer
+# trees persist across restarts (per GUIDE-PERSISTENCE.md §1).
+entity-peer = { path = "../../entity-core-rust/core/peer", features = [
+    "websocket", "inbox", "continuation", "subscription", "clock", "revision", "query",
+    "sqlite", "history",
+] }
+entity-crypto = { path = "../../entity-core-rust/core/crypto" }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+[dev-dependencies]
+tempfile = "3"

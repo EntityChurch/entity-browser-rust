@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/json-schemas/tauri-v2/capability.schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Entity Browser",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "log:default"
+  ]
+}

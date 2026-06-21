@@ -1,0 +1,20 @@
+# WASM linker flags — set initial memory higher so WebKit doesn't
+# have to grant many incremental memory.grow() requests during
+# startup. Default is ~1.2MB which requires dozens of grow calls
+# when bootstrapping many peers.
+#
+# Sized for the embedded Knowledge Base corpus. The default
+# KB_DOCS_ROOT pulls the whole entity-systems workspace (~52MB of
+# markdown) in as static data, so initial-memory must exceed that
+# floor just to LINK (lld: "initial memory too small"). Narrowing the
+# corpus (KB_DOCS_MAX_BYTES / KB_DOCS_ROOT) lets these be dialed back.
+#
+# initial-memory: 96MB (> the ~52MB static-data + stack floor, with
+#                 heap headroom; small-corpus builds just over-reserve)
+# max-memory: 512MB (the 1.4k-entity ingest holds the corpus ~2-3x
+#             live: static embed + Entity tree + transient CBOR)
+# stack-size: 2MB (default is ~1MB, more headroom for deep call stacks)
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "link-args=--initial-memory=100663296 --max-memory=536870912 --stack-first -z stack-size=2097152",
+]

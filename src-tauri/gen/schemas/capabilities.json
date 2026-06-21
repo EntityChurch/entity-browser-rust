@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capability for the Entity Browser","local":true,"windows":["main"],"permissions":["core:default","log:default"]}}

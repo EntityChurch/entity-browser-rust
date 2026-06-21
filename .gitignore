@@ -1,0 +1,12 @@
+/target
+/dist
+/dist-papers
+# Output-isolated dirs for the publish-* family so it runs concurrently with
+# tauri-run without clobbering dist/ + target/ (Makefile DIST/TARGET_DIR).
+/dist-publish
+/target-publish
+Cargo.lock
+src-tauri/target/
+
+# Per-machine podman resource-cap overrides (RESOURCE-CAPS.md §4a) — never committed.
+caps.local.mk

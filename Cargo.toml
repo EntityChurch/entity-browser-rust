@@ -1,0 +1,293 @@
+[workspace]
+exclude = ["src-tauri"]
+
+[package]
+name = "entity-browser-rust"
+version = "0.8.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Entity Browser — web-sys DOM renderer for entity system data"
+
+[[bin]]
+name = "entity-browser"
+path = "src/main.rs"
+
+# Worker binary — produced on wasm32 builds, spawned by the main thread
+# via WorkerProxy::spawn. Stage 1B dropped its
+# required-features gate; the host dep is wasm32-conditional below.
+[[bin]]
+name = "entity-worker"
+path = "src/bin/entity-worker.rs"
+
+[dependencies]
+# Entity core crates (WASM-safe leaf crates — no tokio in dep chain).
+# Listed direct because view/app code imports them; the consumers are:
+#   entity-ecf      → `cbor_map!` macro + value helpers (5 sites)
+#   entity-hash     → `Hash` type for tree-paths (2 sites)
+#   entity-entity   → `Entity` constructor (15 sites)
+#   entity-store    → `LocationEntry` shape for tree_listing (1 site)
+# `entity-types` was dropped — no consumers in src/.
+entity-ecf = { path = "../entity-core-rust/core/ecf" }
+entity-hash = { path = "../entity-core-rust/core/hash" }
+entity-entity = { path = "../entity-core-rust/core/entity" }
+entity-store = { path = "../entity-core-rust/core/store" }
+
+# Peer runtime (WASM-safe with default-features=false). Direct because
+# `Peer`/`Connection`/`MemoryConnector` etc. are referenced by app-tier
+# (`src/peers.rs`, `src/app.rs`, the integration tests).
+entity-peer = { path = "../entity-core-rust/core/peer", default-features = false, features = [
+    "inbox", "continuation", "subscription", "clock", "revision", "query",
+    "attestation", "quorum", "identity", "role", "compute",
+    "history", "handlers",
+    "type-system", "content", "local-files",
+] }
+
+entity-crypto = { path = "../entity-core-rust/core/crypto" }   # PEM keypair load (`persistence.rs`)
+entity-handler = { path = "../entity-core-rust/core/handler" } # `system/tree` handler resolution (`ops/`)
+entity-capability = { path = "../entity-core-rust/core/capability" } # `ResourceTarget` for `execute` (2 sites)
+
+# Application SDK — extracted from this app's src/{sdk,register_handler,
+# subscription,peer_manager}.rs into entity-core-rust/bindings/sdk so it
+# can be shared with the Godot binding and any future consumers.
+entity-sdk = { path = "../entity-core-rust/bindings/sdk", default-features = false, features = [
+    "inbox", "continuation", "subscription", "clock", "revision", "query",
+    "attestation", "quorum", "identity", "role", "compute",
+    "history", "handlers",
+    "type-system", "content", "local-files",
+    # Main-thread durable IndexedDB backend (write-behind journal + checkpoint).
+    # The durable substrate for the Direct arm / Tauri WebView / persistent
+    # system peer. Compiled in but inert until a peer is built with `.idb()`.
+    "wasm-idb-persist",
+] }
+
+# Shell verb-dispatcher crate — extracted from `src/views/shell/` per
+# the shell-extraction plan. Phase 3 finish
+# shipped the renderer-consumes-`VerbOutput` adapter; 18
+# verbs Tier C/E live in the crate.
+entity-shell = { path = "../entity-core-rust/bindings/shell" }
+
+# async-trait for the SDK's L1 delivery Handler impl (same crate as entity-core)
+async-trait = "0.1"
+
+# WASM-compatible time for self-grant timestamps (same as entity-core-rust).
+web-time = "1.1"
+
+# QR code generation (pure Rust, WASM-safe)
+qrcode = "0.14"
+
+# Markdown → HTML for content-site page rendering (pure Rust, WASM-safe).
+# `default-features = false` drops the optional SIMD path; we keep the
+# `html` feature for `push_html`. Used by the content-site renderer
+# (`dom/content_site.rs`) and the unit-testable `markdown_to_html` helper.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+# Serialization
+ciborium = "0.2"
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+
+
+[features]
+default = ["native-ws"]
+# WebSocket listener for native (tokio-tungstenite). Excluded on WASM via Trunk.toml.
+# Also forwarded to entity-sdk so its `peer()` accessor and connector wiring
+# match this app's expectation of a native peer with the WS connector.
+native-ws = ["entity-peer/websocket", "entity-sdk/native-ws"]
+
+# Phase 0c frame-time measurement — counts per-frame L0 SDK calls
+# (`get_entity`, `tree_listing`) and logs them to console. Used to validate
+# the snapshot-cache assumption before Phase 1 freezes the cache API. Off
+# by default; enable for measurement runs only.
+measurement = []
+
+# Browser E2E suite (`tests/e2e_worker.rs`). Gated OFF by default so a plain
+# `cargo test` / `make test` is bare-box green (no Selenium needed) — the file
+# is `#![cfg(feature = "e2e")]`. `make e2e-worker` turns it on; it needs an
+# external Selenium-firefox container on :4444 (see tools/e2e/README.md).
+e2e = []
+
+# Baked demo apps for the Games/Apps launcher (war/calculator fixtures). OFF by
+# default: a real deployment serves apps off a registered origin (or ingests
+# them at publish), and with none present the launcher shows the honest empty
+# state ("No apps available yet.") rather than fake placeholders. `make
+# e2e-worker` turns this ON so the launcher→sandboxed-player e2e (Phase 2h.2)
+# has a deterministic app to render + launch without a live origin. These
+# fixtures are e2e-only test apps, never shipped — do NOT enable for any
+# release/serve/tauri build.
+demo-apps = []
+
+# Break-glass audit lamp for the Worker-arm subscription-leak class
+# (`feedback_worker_cache_get_needs_subscription`, bitten twice). When on,
+# a Worker-arm `cache_get`/`cache_list` of a prefix with no active
+# subscription logs a one-shot BREAK-GLASS warning with the path — the
+# cache mirror only holds subscribed prefixes, so the read is silently
+# empty. Off by default (some unsubscribed reads are benign: default-is-
+# correct, or write-seeds-cache same-peer); enable when hunting a "renders
+# empty on Worker but fine on Direct" bug. See the peer-arm
+# escape-hatch hardening review.
+audit-worker-reads = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "process"] }
+tempfile = "3"
+# E2E browser tests — drives a Selenium-standalone-firefox container via
+# WebDriver. See tests/e2e_worker.rs and tools/e2e/README.md.
+fantoccini = "0.22"
+serde_json = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+local-ip-address = "0.6"
+dirs = "6"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Worker-mode infrastructure. Always present on wasm32 — main bin
+# carries the Worker arm of `Peers` and selects mode at runtime
+# (see src/capabilities.rs + src/main.rs). The `host` crate is what
+# the entity-worker bin links against; only the bin uses it directly,
+# but listing it here keeps `cargo build --bin entity-worker` working
+# without any feature flag (Stage 1B).
+entity-wasm-worker-proxy = { path = "../entity-core-rust/bindings/wasm-worker-proxy" }
+entity-wasm-worker-protocol = { path = "../entity-core-rust/bindings/wasm-worker-protocol", features = ["conversions"] }
+entity-wasm-worker-host = { path = "../entity-core-rust/bindings/wasm-worker-host" }
+
+# Tokio with just the `sync` feature — runtime-agnostic channel
+# primitives (mpsc, etc.) used by the shell verb result-shape. No
+# runtime. Pinned for the entity_shell crate's streaming variant per
+# the shell-framing review §1.3; same import on
+# both native and WASM so verbs are render-context-neutral per
+# guide §3.7. (The native target's tokio entry — line 90 — pulls
+# in rt+macros for the runtime; this WASM entry only needs sync.)
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Window",
+    "HtmlElement",
+    "HtmlDivElement",
+    "HtmlCanvasElement",
+    "Element",
+    "Node",
+    "NodeList",
+    "Text",
+    "console",
+    "ShadowRoot",
+    "ShadowRootInit",
+    "ShadowRootMode",
+    "EventTarget",
+    "Event",
+    "MouseEvent",
+    "KeyboardEvent",
+    "CssStyleDeclaration",
+    "DomTokenList",
+    "HtmlButtonElement",
+    "HtmlDetailsElement",
+    "HtmlImageElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlTextAreaElement",
+    "File",
+    "FileList",
+    "Blob",
+    "HtmlVideoElement",
+    # Games window: embedded self-contained HTML apps run in a sandboxed iframe
+    # (`HtmlIFrameElement::content_window` to postMessage into the frame) and the
+    # host listens for the app's replies via `MessageEvent` (src/dom/games.rs).
+    "HtmlIFrameElement",
+    "MessageEvent",
+    "Navigator",
+    # Content-site overlay "Share" control copies the live ?site= permalink
+    # via `Navigator::clipboard()` -> `Clipboard::write_text` (dom/content_site).
+    "Clipboard",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "Url",
+    "Storage",
+    "Location",
+    "Performance",
+    # HTTP-poll content-site consumer (content_site::http_poll): simple
+    # GET via `Window::fetch_with_request` → `Response::array_buffer`. Simple
+    # requests only (no custom headers) so a static CDN needs no preflight;
+    # the request sets `cache: no-store` so mutable live data (catalog/pages
+    # at stable URLs) is never served stale from the browser cache.
+    "Request",
+    "RequestInit",
+    "RequestCache",
+    "Response",
+    # OPFS for boot-time orphan cleanup (Stage 2C). We only need the
+    # directory-handle + removeEntry surface — the actual sync access
+    # handles live in `entity-store::opfs`.
+    "FileSystemDirectoryHandle",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemRemoveOptions",
+    # Worker-side tracing init reads `?log=...` off the worker's URL via
+    # `WorkerGlobalScope::location()` -> `WorkerLocation::search()`.
+    "WorkerGlobalScope",
+    "WorkerLocation",
+    # Cross-Worker MessagePort transport: main thread spawns
+    # backend Workers manually so it can attach a control MessageChannel
+    # to the Init postMessage. The broker (in wasm-worker-proxy) holds
+    # the main-side ports and routes OpenChannel requests.
+    "Worker",
+    "WorkerOptions",
+    "MessagePort",
+    "MessageChannel",
+] }
+tracing-wasm = "0.2"
+console_error_panic_hook = "0.1"
+
+# Optimize crypto in debug builds — curve25519-dalek's u32 backend
+# panics with "attempt to multiply with overflow" in debug mode on
+# wasm32. Running it optimized avoids the debug overflow checks and
+# also makes key generation much faster.
+# Optimize crypto and hashing in debug builds — these use u32 backends
+# on wasm32 that overflow in debug mode, and their unoptimized code uses
+# far more stack/memory than optimized, causing WASM OOM on peer bootstrap.
+[profile.dev.package.curve25519-dalek]
+opt-level = 2
+overflow-checks = false
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 2
+
+[profile.dev.package.sha2]
+opt-level = 2
+
+[profile.dev.package.block-buffer]
+opt-level = 2
+
+# Size-optimized SHIPPING profile (C8). This is the real
+# browser deployment artifact — produced by `trunk build --release` /
+# `make wasm-release` / `make build-serve`. Optimized for download size
+# (iOS WASM-memory ceiling + first-paint UX), then wasm-opt -Oz on top
+# (index.html data-wasm-opt="z").
+#
+# `panic = "unwind"` is REQUIRED — the rAF loop's catch_unwind (C1) only
+# contains a frame panic under unwind. Do NOT change it to "abort".
+#
+# We deliberately do NOT set `strip = true`: the cargo strip removes the
+# `target_features` custom section, after which `wasm-opt` can't auto-detect
+# bulk-memory and fails ("memory.copy requires bulk memory operations").
+# trunk 0.21.14 has no way to pass `--enable-*` flags to wasm-opt, so we
+# rely on it reading target_features. wasm-opt -Oz (index.html
+# data-wasm-opt="z") strips names/debug as its final step anyway, so the
+# shipped bundle is still small — without breaking the build.
+[profile.release]
+opt-level = "z"      # smallest code size
+lto = true           # fat LTO across crates
+codegen-units = 1    # maximal cross-unit optimization (slower build)
+debug = false        # no debug info (wasm-opt strips the rest)
+panic = "unwind"     # REQUIRED for C1 rAF catch_unwind — do not change
