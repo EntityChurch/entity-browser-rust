@@ -1,0 +1,1020 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>War</title>
+  <style>
+/* Base styling for every entity app. Everything is scoped under .entity-root
+   so dropping an app into a host page touches nothing outside its own subtree. */
+.entity-root, .entity-root * { box-sizing: border-box; margin: 0; }
+
+.entity-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* NO min-height. A min-height taller than the iframe forces the flex column
+     past its container and shoves the last child (the control bar) off the
+     bottom — the original "buttons off-screen on mobile" bug. The invariant is:
+     the bar always keeps its height, the canvas takes the remainder. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #e8e8ea;
+  background: #15151a;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.entity-canvas {
+  /* Take the remainder AND be allowed to shrink to zero (min-height:0), so the
+     control bar below can never be pushed out of view. */
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ---- Control strip (Entity.Controls) -----------------------------------
+   Guaranteed-visible band in the thumb zone. flex:0 0 auto => it keeps its
+   natural height and never shrinks; the canvas gives up space, not the bar.
+   It pads itself out of the home-indicator / notch using whichever is larger:
+   the native env() inset (works standalone / top-level) or the inset the host
+   measured and passed in via --entity-safe-* (works embedded, where env() is
+   always 0 inside the sandboxed iframe). */
+.entity-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;            /* overflow wraps to a new row, never off-screen */
+  align-items: center;
+  gap: 10px;
+  background: #1b1b22;
+  border-top: 1px solid #2a2a33;
+  font-size: 14px;
+  padding: 10px 12px;
+  padding-top: 10px;
+  padding-bottom: calc(10px + max(env(safe-area-inset-bottom, 0px), var(--entity-safe-bottom, 0px)));
+  padding-left: calc(12px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+  padding-right: calc(12px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)));
+}
+
+.entity-bar .spacer { flex: 1 1 0; min-width: 0; }
+
+/* Inline value readout (bet amount, status, score). */
+.entity-bar .evalue {
+  text-align: center;
+  color: #c8c8d4;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One cohesive button: ≥44px touch target, clear states, shared palette. */
+.entity-bar button {
+  font: inherit;
+  font-weight: 600;
+  color: #e8e8ea;
+  background: #2f2f3a;
+  border: 1px solid #3a3a47;
+  border-radius: 10px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease, filter .12s ease, transform .04s ease;
+}
+.entity-bar button:hover { background: #3a3a47; }
+.entity-bar button:active { transform: translateY(1px); filter: brightness(0.9); }
+.entity-bar button:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+
+/* Primary action (Deal / Draw / Flip) — the one thing you usually want to tap. */
+.entity-bar button.primary {
+  background: #3a5bd0;
+  border-color: #4d6bea;
+  color: #fff;
+}
+.entity-bar button.primary:hover { background: #4d6bea; }
+
+/* Compact icon button for steppers (+ / −) and the like. */
+.entity-bar button.icon {
+  width: 44px;
+  padding: 0;
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* Toggled-on / selected (mode buttons, Auto). */
+.entity-bar button.active {
+  background: #3a5bd0;
+  border-color: #6c86ff;
+  color: #fff;
+}
+
+.entity-bar button[disabled],
+.entity-bar button.is-disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ---- Menu / screens overlay (Entity.Menu) ------------------------------
+   A full-area overlay that covers the play area and the control bar — the
+   start screen, settings page, and game-over screen live here. It's absolutely
+   positioned to fill .entity-root and sits above the canvas, D-pad, and bar
+   (z-index 20). Like the bar, it pads itself out of the notch / home-indicator
+   using whichever inset is larger (native env() standalone, or the host-passed
+   --entity-safe-* when embedded, where env() is always 0). Scrolls if a screen
+   is taller than the viewport so nothing is ever unreachable. */
+.entity-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: linear-gradient(160deg, #1b1b26 0%, #131319 100%);
+  padding: calc(20px + max(env(safe-area-inset-top, 0px), var(--entity-safe-top, 0px)))
+           calc(20px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)))
+           calc(20px + max(env(safe-area-inset-bottom, 0px), var(--entity-safe-bottom, 0px)))
+           calc(20px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+}
+
+.entity-menu-screen { width: 100%; display: flex; justify-content: center; }
+
+/* The titled card holding a screen's title, controls, and buttons. */
+.entity-menu-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+}
+
+.entity-menu-title {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: #f3f3f7;
+}
+.entity-menu-subtitle {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #b6b6c6;
+  margin-bottom: 4px;
+}
+
+/* Stacked action buttons (Start / Settings / Back …). Full width, big targets. */
+.entity-menu-btn {
+  font: inherit;
+  font-weight: 700;
+  color: #e8e8ea;
+  background: #2f2f3a;
+  border: 1px solid #3a3a47;
+  border-radius: 12px;
+  min-height: 52px;
+  padding: 0 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease, filter .12s ease, transform .04s ease;
+}
+.entity-menu-btn:hover { background: #3a3a47; }
+.entity-menu-btn:active { transform: translateY(1px); filter: brightness(0.92); }
+.entity-menu-btn:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+.entity-menu-btn.primary { background: #3a5bd0; border-color: #4d6bea; color: #fff; }
+.entity-menu-btn.primary:hover { background: #4d6bea; }
+.entity-menu-btn.is-disabled, .entity-menu-btn[disabled] {
+  opacity: 0.4; cursor: default; pointer-events: none;
+}
+
+/* A settings field: label over a segmented row of options. */
+.entity-menu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  background: #20202a;
+  border: 1px solid #2c2c38;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.entity-menu-field-label {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9ab0;
+}
+.entity-menu-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.entity-menu-option {
+  flex: 1 1 auto;
+  font: inherit;
+  font-weight: 600;
+  color: #d4d4e0;
+  background: #2a2a35;
+  border: 1px solid #383846;
+  border-radius: 9px;
+  min-height: 40px;
+  padding: 0 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease;
+}
+.entity-menu-option:hover { background: #34343f; }
+.entity-menu-option.active { background: #3a5bd0; border-color: #6c86ff; color: #fff; }
+.entity-menu-option:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+
+.entity-menu-note {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #8a8a9c;
+  text-align: left;
+}
+
+/* ---- D-pad overlay (Entity.Input) --------------------------------------
+   A translucent plus-shaped pad floating in the bottom corner of the play
+   area for thumb movement on touch devices (keyboard / swipe work too). It's
+   absolutely positioned inside .entity-root and sits clear of the control bar
+   and the home-indicator inset. Toggleable from a bar button; hidden by
+   setDpadVisible(false). The 3×3 grid keeps the centre + corners empty. */
+.entity-dpad {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(3, 46px);
+  grid-template-rows: repeat(3, 46px);
+  gap: 4px;
+  z-index: 5;
+  right: calc(10px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)));
+  bottom: calc(84px + max(env(safe-area-inset-bottom, 0px), var(--entity-safe-bottom, 0px)));
+  touch-action: none;
+}
+
+.entity-dpad-btn {
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  color: #e8e8ea;
+  background: rgba(47, 47, 58, 0.72);
+  border: 1px solid rgba(108, 134, 255, 0.35);
+  border-radius: 10px;
+  min-width: 46px;
+  min-height: 46px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(2px);
+}
+.entity-dpad-btn:active { background: rgba(58, 91, 208, 0.85); transform: translateY(1px); }
+.entity-dpad-btn:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+
+/* ---- On-screen keyboard (Entity.Keyboard) ------------------------------
+   A QWERTY for the word games, stacked between the canvas and the control bar
+   (so app.js creates it before the bar). flex:0 0 auto => it keeps its height;
+   the canvas gives up space. Pads itself out of the side insets; the bar below
+   owns the bottom inset. Keys wrap/shrink to fit narrow phones. */
+.entity-kb {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px calc(6px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)))
+           8px calc(6px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+  background: #17171d;
+  touch-action: manipulation;
+}
+.entity-kb.is-disabled { opacity: 0.5; pointer-events: none; }
+.entity-kb-row { display: flex; justify-content: center; gap: 5px; }
+.entity-kb-key {
+  font: inherit;
+  font-weight: 700;
+  font-size: 15px;
+  color: #e8e8ea;
+  background: #33333f;
+  border: 1px solid #41414f;
+  border-radius: 7px;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 42px;
+  height: 50px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s ease, transform .04s ease, filter .1s ease;
+}
+.entity-kb-key.wide { flex: 1.5 1 0; max-width: 60px; font-size: 18px; }
+.entity-kb-key:hover { background: #3d3d4a; }
+.entity-kb-key:active { transform: translateY(1px); filter: brightness(0.9); }
+.entity-kb-key:focus-visible { outline: 2px solid #6c86ff; outline-offset: 1px; }
+/* Per-key result tints (Wordle-style), set via Entity.Keyboard.mark(). */
+.entity-kb-key[data-state="correct"] { background: #3aa55c; border-color: #43c06c; color: #fff; }
+.entity-kb-key[data-state="present"] { background: #b5963a; border-color: #d0b043; color: #fff; }
+.entity-kb-key[data-state="absent"]  { background: #26262e; border-color: #2e2e38; color: #6a6a78; }
+
+</style>
+  <style>html, body { height: 100%; } body { margin: 0; }</style>
+</head>
+<body>
+  <script>
+// Entity App SDK — lifecycle, host bridge, and teardown.
+//
+// Attaches to window.Entity. Deliberately a classic script (no ES modules) so
+// bundling is nothing more than concatenating <script> tags into one file.
+//
+// Design contract: an app is fully self-contained and leaves nothing behind.
+// Every resource it creates is registered with a disposer, so the host can rip
+// it out (or the iframe can be removed) with no leftover listeners or timers.
+(function (global) {
+  'use strict';
+
+  // ---- Teardown registry -------------------------------------------------
+  function Cleanup() {
+    const fns = [];
+    return {
+      add(fn) { fns.push(fn); return fn; },
+      run() { while (fns.length) { try { fns.pop()(); } catch (e) { console.error(e); } } },
+    };
+  }
+
+  // ---- Host bridge -------------------------------------------------------
+  // Embedded (iframe in the outer system): talk over postMessage.
+  // Top-level (python server / standalone dev): every call is a no-op, so the
+  // exact same bundle runs in both places.
+  function makeHost() {
+    const embedded = global.parent && global.parent !== global;
+    const listeners = {};
+    function send(type, payload) {
+      if (!embedded) return;
+      global.parent.postMessage(Object.assign({ source: 'entity-app', type }, payload), '*');
+    }
+    if (embedded) {
+      global.addEventListener('message', (e) => {
+        const msg = e.data;
+        if (!msg || msg.source !== 'entity-host') return;
+        (listeners[msg.type] || []).forEach((fn) => fn(msg));
+      });
+    }
+    return {
+      embedded,
+      send,
+      on(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    };
+  }
+
+  // ---- State versioning --------------------------------------------------
+  // Saved state travels in a tiny envelope `{ __v, data }` so a shape change
+  // can't feed a returning player's old state into a create() that no longer
+  // understands it. A game stamps `version: N` on its def and bumps it whenever
+  // its state shape changes. On restore the SDK compares versions and, on a
+  // mismatch, either runs `def.migrate(data, fromVersion)` or — if there's no
+  // migration — discards the save and starts fresh. No game hand-writes a
+  // valid() guard, and a bump can never brick a user. Default version is 0, so
+  // unversioned games keep working and any legacy (pre-envelope) save is taken
+  // at face value only while the app is still at version 0.
+  function wrapState(state, ver) { return state == null ? null : { __v: ver, data: state }; }
+  function unwrapState(saved, ver, migrate) {
+    if (saved == null || typeof saved !== 'object') return saved == null ? null : (ver === 0 ? saved : null);
+    if (!('__v' in saved)) return ver === 0 ? saved : null;      // legacy/foreign plain state
+    if (saved.__v === ver) return saved.data;
+    if (migrate) { try { return migrate(saved.data, saved.__v); } catch (e) { console.error(e); return null; } }
+    return null;                                                 // shape changed, no migration -> fresh
+  }
+
+  // ---- Runner ------------------------------------------------------------
+  // def: { id, version?, migrate?, mount?, create(ctx) -> { serialize?, dispose? } }
+  function run(def) {
+    const host = makeHost();
+    const cleanup = Cleanup();
+    const mountEl = def.mount || document.body;
+    const version = def.version || 0;
+
+    const root = document.createElement('div');
+    root.className = 'entity-root';
+    root.dataset.app = def.id || 'app';
+    mountEl.appendChild(root);
+    cleanup.add(() => root.remove());
+
+    let api = null;
+    const viewportListeners = [];
+
+    const ctx = {
+      root,
+      host,
+      state: null,
+      // Viewport the host gave us: its inner size and the safe-area insets it
+      // measured. env(safe-area-inset-*) is always 0 inside a sandboxed iframe
+      // (we're not the top-level viewport), so the host is the only one that
+      // can see the real insets — it posts them in. Defaults cover standalone.
+      viewport: {
+        width: global.innerWidth || 0,
+        height: global.innerHeight || 0,
+        safe: { top: 0, right: 0, bottom: 0, left: 0 },
+      },
+      // Be told when the viewport / safe-area changes (resize, rotate).
+      onViewport(fn) { viewportListeners.push(fn); return fn; },
+      // Register a disposer; returns the fn for convenience.
+      onCleanup: cleanup.add,
+      // Add an event listener that auto-removes on teardown.
+      listen(target, type, fn, opts) {
+        target.addEventListener(type, fn, opts);
+        cleanup.add(() => target.removeEventListener(type, fn, opts));
+      },
+      // Push current state up to the host to persist. ctx.state stays the raw
+      // object; only the wire form is versioned-enveloped.
+      save(state) {
+        ctx.state = state;
+        host.send('state', { state: wrapState(state, version) });
+      },
+      // Tear the app down completely — nothing should remain after this.
+      destroy() {
+        if (api && api.dispose) { try { api.dispose(); } catch (e) { console.error(e); } }
+        cleanup.run();
+        host.send('closed', {});
+      },
+    };
+
+    function start(savedState) {
+      ctx.state = savedState || null;
+      try {
+        api = def.create(ctx) || {};
+        host.send('ready', {});
+      } catch (e) {
+        // Contain it: report to the host and tear down rather than leaving a
+        // half-mounted app. In an iframe this never reaches the outer page.
+        console.error(e);
+        host.send('error', { message: String((e && e.message) || e) });
+        cleanup.run();
+      }
+    }
+
+    // Host-measured viewport + safe-area insets. Stash on ctx, mirror the
+    // insets into CSS custom properties on root (so the control strip can pad
+    // itself), and notify any onViewport listeners.
+    function applyViewport(msg) {
+      const safe = (msg && msg.safe) || {};
+      const s = {
+        top: safe.top | 0, right: safe.right | 0,
+        bottom: safe.bottom | 0, left: safe.left | 0,
+      };
+      ctx.viewport = { width: msg.width | 0, height: msg.height | 0, safe: s };
+      root.style.setProperty('--entity-safe-top', s.top + 'px');
+      root.style.setProperty('--entity-safe-right', s.right + 'px');
+      root.style.setProperty('--entity-safe-bottom', s.bottom + 'px');
+      root.style.setProperty('--entity-safe-left', s.left + 'px');
+      viewportListeners.forEach((fn) => { try { fn(ctx.viewport); } catch (e) { console.error(e); } });
+    }
+    host.on('viewport', applyViewport);
+
+    // Host pulls latest state before persisting/closing.
+    host.on('request-state', () => {
+      const state = api && api.serialize ? api.serialize() : ctx.state;
+      host.send('state', { state: wrapState(state, version) });
+    });
+    host.on('destroy', () => ctx.destroy());
+
+    if (host.embedded) {
+      // Give the host a moment to hand us prior state; fall back to fresh.
+      let started = false;
+      const boot = (s) => { if (!started) { started = true; start(s); } };
+      host.on('init', (msg) => boot(unwrapState(msg.state, version, def.migrate)));
+      host.send('ready-for-init', {});
+      setTimeout(() => boot(null), 150);
+    } else {
+      start(null);
+    }
+
+    global.__entityApp = ctx; // handle for manual teardown / debugging
+    return ctx;
+  }
+
+  global.Entity = global.Entity || {};
+  global.Entity.run = run;
+  global.Entity.Cleanup = Cleanup;
+  // The saved-state envelope `{ __v, data }`, exposed so a host can introspect
+  // or migrate persisted state and so it's directly unit-testable.
+  global.Entity.StateCodec = { wrap: wrapState, unwrap: unwrapState };
+})(window);
+
+</script>
+  <script>
+// Canvas helpers — HiDPI-aware sizing, a render loop, and pointer mapping.
+// All wiring registers for teardown through ctx, so nothing leaks.
+(function (global) {
+  'use strict';
+  const Entity = global.Entity = global.Entity || {};
+
+  function create(ctx, opts) {
+    opts = opts || {};
+    const canvas = document.createElement('canvas');
+    canvas.className = 'entity-canvas';
+    ctx.root.appendChild(canvas);
+    const g = canvas.getContext('2d');
+
+    let w = 0, h = 0, dpr = 1, started = false;
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      dpr = global.devicePixelRatio || 1;
+      w = rect.width; h = rect.height;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Skip onResize during the initial synchronous sizing: the caller's
+      // `const view = create(...)` is still in its temporal dead zone, and an
+      // onResize handler that touches `view` would throw. Later (observer-
+      // driven) resizes fire normally.
+      if (started && opts.onResize) opts.onResize(w, h);
+    }
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+    ctx.onCleanup(() => ro.disconnect());
+
+    function pointer(e) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    const view = {
+      canvas, g,
+      get width() { return w; },
+      get height() { return h; },
+      pointer,
+      // Run a draw fn every frame (dt in seconds) until teardown.
+      loop(fn) {
+        let raf = 0, last = 0, running = true;
+        const tick = (t) => {
+          if (!running) return;
+          const dt = last ? (t - last) / 1000 : 0; last = t;
+          fn(dt);
+          raf = global.requestAnimationFrame(tick);
+        };
+        raf = global.requestAnimationFrame(tick);
+        ctx.onCleanup(() => { running = false; global.cancelAnimationFrame(raf); });
+      },
+      onClick(fn) { ctx.listen(canvas, 'click', (e) => fn(pointer(e), e)); },
+      onPointerDown(fn) { ctx.listen(canvas, 'pointerdown', (e) => fn(pointer(e), e)); },
+    };
+
+    resize();        // size synchronously so width/height are valid immediately
+    started = true;  // subsequent resizes may call onResize safely
+    return view;
+  }
+
+  Entity.Canvas = { create };
+})(window);
+
+</script>
+  <script>
+// Entity.Controls — a declarative, safe-area-aware control strip.
+//
+// Why this exists: every game used to hand-roll its own `.entity-bar` of flat
+// gray buttons, and nothing guaranteed that bar stayed on-screen on mobile.
+// This gives all games one consistent, good-looking, thumb-zone control band
+// with proper touch targets — and one place to fix layout/styling.
+//
+// Classic script (no modules); attaches to window.Entity. Every node it creates
+// and every listener it adds is registered through `ctx` for full teardown.
+//
+//   const bar = Entity.Controls.create(ctx);
+//   const deal = bar.button({ label: 'Deal', variant: 'primary', onClick: fn });
+//   const bet  = bar.label({ text: '$10', minWidth: '56px' });
+//   bar.spacer();
+//   deal.update({ disabled: true });   // hidden / active / label / variant too
+//   bet.set('$25');
+(function (global) {
+  'use strict';
+  const Entity = global.Entity = global.Entity || {};
+
+  function variantClass(variant) {
+    // base class is the bare <button>; variant adds 'primary' | 'secondary' |
+    // 'icon'. 'secondary' is the default look, so it needs no extra class.
+    if (!variant || variant === 'secondary') return '';
+    return variant;
+  }
+
+  function create(ctx, opts) {
+    opts = opts || {};
+    const bar = document.createElement('div');
+    bar.className = 'entity-bar' + (opts.className ? ' ' + opts.className : '');
+    ctx.root.appendChild(bar);
+    ctx.onCleanup(() => bar.remove());
+
+    const api = {
+      el: bar,
+
+      // A button. opts: { label, variant, icon, title, data, onClick }.
+      // Returns a handle whose .el is the raw <button> (so callers/tests can
+      // read textContent, dataset, className) plus .update() for live changes.
+      button(o) {
+        o = o || {};
+        const b = document.createElement('button');
+        b.textContent = o.label != null ? o.label : '';
+        const vc = variantClass(o.variant);
+        if (vc) b.className = vc;
+        if (o.title) b.title = o.title;
+        if (o.data) for (const k in o.data) b.dataset[k] = o.data[k];
+        if (o.onClick) ctx.listen(b, 'click', o.onClick);
+        bar.appendChild(b);
+
+        const handle = {
+          el: b,
+          update(p) {
+            p = p || {};
+            if ('label' in p) b.textContent = p.label;
+            if ('title' in p) b.title = p.title;
+            if ('disabled' in p) {
+              b.disabled = !!p.disabled;
+              b.classList.toggle('is-disabled', !!p.disabled);
+            }
+            if ('hidden' in p) b.style.display = p.hidden ? 'none' : '';
+            if ('active' in p) b.classList.toggle('active', !!p.active);
+            if ('variant' in p) { b.className = variantClass(p.variant); }
+            return handle;
+          },
+        };
+        return handle;
+      },
+
+      // A non-interactive readout (bet value, status line, score).
+      label(o) {
+        o = o || {};
+        const s = document.createElement('span');
+        s.className = 'evalue' + (o.className ? ' ' + o.className : '');
+        if (o.text != null) s.textContent = o.text;
+        if (o.minWidth) s.style.minWidth = o.minWidth;
+        bar.appendChild(s);
+
+        const handle = {
+          el: s,
+          set(t) { s.textContent = t; return handle; },
+          update(p) {
+            p = p || {};
+            if ('text' in p) s.textContent = p.text;
+            if ('hidden' in p) s.style.display = p.hidden ? 'none' : '';
+            return handle;
+          },
+        };
+        return handle;
+      },
+
+      // Flexible gap that pushes following items to the right.
+      spacer() {
+        const s = document.createElement('span');
+        s.className = 'spacer';
+        bar.appendChild(s);
+        return s;
+      },
+    };
+
+    // Dev-time clip detector (Detection option (b) from docs/MOBILE_UI.md): if
+    // the bar ends up below the visible viewport, turn that silent failure into
+    // a loud one. Real-browser only; the headless stub has no innerHeight, so
+    // this is a no-op under tests.
+    if (typeof global.innerHeight === 'number' && global.requestAnimationFrame) {
+      const raf = global.requestAnimationFrame(() => {
+        const r = bar.getBoundingClientRect && bar.getBoundingClientRect();
+        if (r && r.bottom > global.innerHeight + 1) {
+          console.warn(
+            '[entity] control bar is clipped (bottom ' + Math.round(r.bottom) +
+            'px > viewport ' + global.innerHeight + 'px). Check 100dvh, ' +
+            'safe-area insets, and min-height:0 in the host layout.');
+        }
+      });
+      ctx.onCleanup(() => global.cancelAnimationFrame(raf));
+    }
+
+    return api;
+  }
+
+  Entity.Controls = { create };
+})(window);
+
+</script>
+  <script>
+// Shared card-game primitives — standard 52-card deck and shuffling.
+// Used by solitaire and other card games to keep them tiny.
+(function (global) {
+  'use strict';
+  const Entity = global.Entity = global.Entity || {};
+
+  const SUITS = ['clubs', 'diamonds', 'hearts', 'spades'];
+  const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const GLYPH = { clubs: '♣', diamonds: '♦', hearts: '♥', spades: '♠' };
+
+  function deck() {
+    const cards = [];
+    for (const suit of SUITS)
+      for (let i = 0; i < RANKS.length; i++)
+        cards.push({
+          suit,
+          rank: RANKS[i],
+          value: i + 1, // A=1 .. K=13
+          red: suit === 'diamonds' || suit === 'hearts',
+        });
+    return cards;
+  }
+
+  // Fisher-Yates. Pass a seeded rng() for reproducible deals; defaults random.
+  function shuffle(cards, rng) {
+    rng = rng || Math.random;
+    const a = cards.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  Entity.Cards = { SUITS, RANKS, GLYPH, deck, shuffle };
+})(window);
+
+</script>
+  <script>
+// Shared card drawing for the card games (blackjack, video poker, war, …).
+// Keeps each game tiny and the cards visually consistent. Pure canvas drawing —
+// no state, no teardown surface. Sizes everything relative to the card height.
+//
+//   Entity.CardRender.face(g, card, x, y, w, h, opts?)  // face-up card
+//   Entity.CardRender.back(g, x, y, w, h)               // face-down card
+//   Entity.CardRender.slot(g, x, y, w, h)               // empty outline
+//
+// opts: { selected?: bool }  -> gold highlight border.
+(function (global) {
+  'use strict';
+  const Entity = global.Entity = global.Entity || {};
+
+  function rr(g, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  function slot(g, x, y, w, h) {
+    rr(g, x, y, w, h, 6);
+    g.strokeStyle = 'rgba(255,255,255,0.12)';
+    g.lineWidth = 2;
+    g.stroke();
+  }
+
+  function back(g, x, y, w, h) {
+    rr(g, x, y, w, h, 6);
+    g.fillStyle = '#2b4a8b';
+    g.fill();
+    rr(g, x + 4, y + 4, w - 8, h - 8, 4);
+    g.strokeStyle = 'rgba(255,255,255,0.28)';
+    g.lineWidth = 2;
+    g.stroke();
+  }
+
+  function face(g, card, x, y, w, h, opts) {
+    opts = opts || {};
+    rr(g, x, y, w, h, 6);
+    g.fillStyle = '#f6f6f1';
+    g.fill();
+    g.strokeStyle = opts.selected ? '#f5c542' : 'rgba(0,0,0,0.25)';
+    g.lineWidth = opts.selected ? 3 : 1;
+    g.stroke();
+
+    const col = card.red ? '#c0392b' : '#222226';
+    const gl = Entity.Cards.GLYPH[card.suit];
+    const fs = Math.max(10, Math.round(h * 0.22));
+    g.fillStyle = col;
+    g.textAlign = 'left';
+    g.textBaseline = 'top';
+    g.font = `bold ${fs}px system-ui, sans-serif`;
+    g.fillText(card.rank, x + 5, y + 4);
+    g.font = `${fs}px system-ui, sans-serif`;
+    g.fillText(gl, x + 5, y + 5 + fs);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = `${Math.round(h * 0.40)}px system-ui, sans-serif`;
+    g.fillText(gl, x + w / 2, y + h * 0.60);
+  }
+
+  Entity.CardRender = { rr, slot, back, face };
+})(window);
+
+</script>
+  <script>
+// War — pure rules, no DOM (window.War). Two players, deck split 26/26. Each
+// "flip" plays ONE battle so the game is watchable: both reveal a card; higher
+// rank takes the pot; equal rank pauses in a war (warPending). The next flip
+// resolves the war the real way — 3 cards face down, then 1 face up to compare —
+// repeating if those tie too. Ace ranks high.
+//
+// State (plain serializable data):
+//   {
+//     p1: [card], p2: [card],          // each player's deck; draw from the front
+//     pot: [card],                     // cards contested in the current battle
+//     faceUp: { a, b } | null,         // the two compared cards (a=p1, b=p2)
+//     warPending: boolean,             // a tie just happened; next flip resolves it
+//     rounds: number,                  // battles resolved
+//     winner: '1' | '2' | 'draw' | null,
+//     message: string,
+//   }
+(function (global) {
+  'use strict';
+  const Cards = global.Entity.Cards;
+  const MAX_ROUNDS = 5000; // hard cap so a pathological game always terminates
+
+  const rank = (c) => (c.value === 1 ? 14 : c.value); // Ace high
+
+  function deal(rng) {
+    const d = Cards.shuffle(Cards.deck(), rng);
+    return { p1: d.slice(0, 26), p2: d.slice(26), pot: [], faceUp: null, warPending: false, rounds: 0, winner: null, message: '' };
+  }
+
+  // Award the pot to the higher card's owner (shuffled back in, which also breaks
+  // deterministic cycles), end the battle, and bump the round counter.
+  function award(state, a, b, rng) {
+    const won = Cards.shuffle(state.pot, rng);
+    const to = rank(a) > rank(b) ? state.p1 : state.p2;
+    for (const c of won) to.push(c);
+    state.message = `Player ${rank(a) > rank(b) ? 1 : 2} takes ${won.length}`;
+    state.pot = [];
+    state.rounds++;
+    if (state.rounds >= MAX_ROUNDS) state.winner = state.p1.length >= state.p2.length ? '1' : '2';
+  }
+
+  // Reveal one card from each player into the pot and compare.
+  function reveal(state, rng) {
+    const a = state.p1.shift(), b = state.p2.shift();
+    state.pot.push(a, b);
+    state.faceUp = { a, b };
+    if (rank(a) === rank(b)) { state.warPending = true; state.message = 'War! Flip again'; }
+    else award(state, a, b, rng);
+  }
+
+  // Play one battle (or resolve one in-progress war). Returns true if anything
+  // changed. rng (optional) only affects pot ordering.
+  function flip(state, rng) {
+    if (state.winner) return false;
+
+    if (!state.warPending) {
+      if (!state.p1.length) { state.winner = '2'; state.message = 'Player 2 wins'; return true; }
+      if (!state.p2.length) { state.winner = '1'; state.message = 'Player 1 wins'; return true; }
+      reveal(state, rng);
+      return true;
+    }
+
+    // Resolving a war: each buries up to 3 cards, then reveals one to compare.
+    state.warPending = false;
+    for (let i = 0; i < 3 && state.p1.length; i++) state.pot.push(state.p1.shift());
+    for (let i = 0; i < 3 && state.p2.length; i++) state.pot.push(state.p2.shift());
+    if (!state.p1.length && !state.p2.length) { state.winner = 'draw'; state.message = "It's a draw"; return true; }
+    if (!state.p1.length) { state.winner = '2'; state.message = 'Player 2 wins'; return true; }
+    if (!state.p2.length) { state.winner = '1'; state.message = 'Player 1 wins'; return true; }
+    reveal(state, rng);
+    return true;
+  }
+
+  // Does a restored state match this version's shape? Guards against stale
+  // localStorage from an older bundle (the cause of the `state.pot` crash).
+  function valid(s) {
+    return !!s && Array.isArray(s.p1) && Array.isArray(s.p2) && Array.isArray(s.pot)
+      && typeof s.warPending === 'boolean' && (s.faceUp === null || typeof s.faceUp === 'object');
+  }
+
+  global.War = { deal, flip, rank, valid, MAX_ROUNDS };
+})(window);
+
+</script>
+  <script>
+// War — rendering + input + lifecycle. Rules live in war.js (window.War).
+// One flip = one battle, so wars are watchable: a tie shows "WAR!" and the next
+// flip resolves it. "Auto" runs flips on a timer to the finish.
+(function () {
+  'use strict';
+
+  Entity.run({
+    id: 'war',
+    create(ctx) {
+      const CR = Entity.CardRender;
+
+      // canvas first, control strip after -> controls sit in the thumb zone
+      const view = Entity.Canvas.create(ctx, { onResize: draw });
+
+      const bar = Entity.Controls.create(ctx);
+      bar.button({ label: 'Flip', variant: 'primary', onClick: flipOnce });
+      const autoBtn = bar.button({ label: 'Auto', onClick: toggleAuto });
+      bar.spacer();
+      bar.button({ label: 'New game', onClick: newGame });
+
+      let state = War.valid(ctx.state) ? ctx.state : War.deal();
+      let autoRAF = 0, lastTime = 0;
+
+      function stopAuto() {
+        if (autoRAF) { cancelAnimationFrame(autoRAF); autoRAF = 0; }
+        autoBtn.update({ active: false });
+      }
+      ctx.onCleanup(stopAuto);
+
+      function persist() { ctx.save(state); }
+
+      function flipOnce() {
+        if (state.winner) return;
+        War.flip(state);
+        if (state.winner) stopAuto();
+        persist(); draw();
+      }
+      function toggleAuto() {
+        if (autoRAF) { stopAuto(); return; }
+        if (state.winner) return;
+        autoBtn.update({ active: true });
+        lastTime = -Infinity;
+        const step = (t) => {
+          if (!autoRAF) return;
+          if (t - lastTime >= 550) { // slow enough to read each war
+            lastTime = t;
+            War.flip(state); draw();
+            if (state.winner) { stopAuto(); persist(); return; }
+          }
+          autoRAF = requestAnimationFrame(step);
+        };
+        autoRAF = requestAnimationFrame(step);
+      }
+      function newGame() { stopAuto(); state = War.deal(); persist(); draw(); }
+
+      // --- rendering ------------------------------------------------------
+      function text(g, s, x, y, color, size, weight, align) {
+        g.fillStyle = color;
+        g.textAlign = align || 'center';
+        g.textBaseline = 'middle';
+        g.font = `${weight || ''} ${size}px system-ui, sans-serif`.trim();
+        g.fillText(s, x, y);
+      }
+
+      function draw() {
+        const g = view.g, W = view.width, H = view.height;
+        g.clearRect(0, 0, W, H);
+        const cardW = Math.min(W * 0.26, 110);
+        const cardH = Math.min(cardW * 1.45, H * 0.34);
+        const cy = H * 0.52;
+        const gap = Math.max(20, W * 0.10);
+        const x1 = W / 2 - gap / 2 - cardW, x2 = W / 2 + gap / 2;
+        const yTop = cy - cardH / 2;
+        const fu = state.faceUp;
+
+        // scoreboard
+        text(g, 'Player 1', x1 + cardW / 2, yTop - cardH * 0.34, '#9aa0b4', 14, '600');
+        text(g, 'Player 2', x2 + cardW / 2, yTop - cardH * 0.34, '#9aa0b4', 14, '600');
+        text(g, String(state.p1.length), x1 + cardW / 2, yTop - cardH * 0.12, '#e8e8ea', Math.round(cardH * 0.22), 'bold');
+        text(g, String(state.p2.length), x2 + cardW / 2, yTop - cardH * 0.12, '#e8e8ea', Math.round(cardH * 0.22), 'bold');
+
+        // battle cards
+        drawSpot(g, fu && fu.a, state.p1.length, x1, yTop, cardW, cardH, CR);
+        drawSpot(g, fu && fu.b, state.p2.length, x2, yTop, cardW, cardH, CR);
+
+        // center: WAR / pot / result
+        const midY = cy;
+        if (state.winner) {
+          const label = state.winner === 'draw' ? 'DRAW' : `Player ${state.winner} wins!`;
+          text(g, label, W / 2, H * 0.16, '#9affa0', Math.round(H * 0.06), 'bold');
+        } else if (state.warPending) {
+          text(g, 'WAR!', W / 2, midY, '#f5c542', Math.round(cardH * 0.34), 'bold');
+        }
+        if (state.pot.length) text(g, `pot ${state.pot.length}`, W / 2, yTop + cardH + 18, '#8a8a98', 13);
+        if (state.message && !state.winner) text(g, state.message, W / 2, H - 14, '#9aa0b4', 13);
+      }
+      function drawSpot(g, card, count, x, y, w, h, CR) {
+        if (card) CR.face(g, card, x, y, w, h);
+        else if (count > 0) CR.back(g, x, y, w, h);
+        else CR.slot(g, x, y, w, h);
+      }
+
+      view.onClick(() => { if (!autoRAF) flipOnce(); });
+
+      if (!ctx.state) persist();
+      draw();
+      return { serialize: () => state };
+    },
+  });
+})();
+
+</script>
+</body>
+</html>

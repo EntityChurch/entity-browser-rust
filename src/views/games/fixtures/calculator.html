@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Calculator</title>
+  <style>
+/* Base styling for every entity app. Everything is scoped under .entity-root
+   so dropping an app into a host page touches nothing outside its own subtree. */
+.entity-root, .entity-root * { box-sizing: border-box; margin: 0; }
+
+.entity-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* NO min-height. A min-height taller than the iframe forces the flex column
+     past its container and shoves the last child (the control bar) off the
+     bottom — the original "buttons off-screen on mobile" bug. The invariant is:
+     the bar always keeps its height, the canvas takes the remainder. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #e8e8ea;
+  background: #15151a;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.entity-canvas {
+  /* Take the remainder AND be allowed to shrink to zero (min-height:0), so the
+     control bar below can never be pushed out of view. */
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ---- Panel surface (Entity.Panel) --------------------------------------
+   The DOM-layout lane for non-canvas apps (calculator, calendar). Like
+   .entity-canvas it takes the remaining height and may shrink to zero
+   (flex:1 1 0; min-height:0), so an Entity.Controls bar below it is never
+   shoved off-screen. Scrolls if its content is taller than the frame, and pads
+   itself out of the top/side insets (the bar below owns the bottom inset) using
+   whichever is larger: the native env() (standalone) or the host-passed
+   --entity-safe-* (embedded, where env() is always 0 in the sandbox). */
+.entity-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: calc(12px + max(env(safe-area-inset-top, 0px), var(--entity-safe-top, 0px)))
+           calc(12px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)))
+           12px
+           calc(12px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+  gap: 12px;
+}
+
+/* A grid of cells/buttons (calculator keypad, calendar month). Column count /
+   gap are set inline by Entity.Panel.grid(). */
+.entity-grid { display: grid; gap: 8px; }
+
+/* Large right-aligned numeric readout (the calculator display). The root sets
+   user-select:none for games; re-enable it here so the result can be selected
+   and copied (the whole point of a readout). */
+.entity-display {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+  color: #f3f3f7;
+  background: #1b1b22;
+  border: 1px solid #2a2a33;
+  border-radius: 12px;
+  padding: 18px 16px;
+  font-size: clamp(28px, 9vw, 44px);
+  line-height: 1.1;
+  overflow: hidden;
+  white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+/* Tappable buttons inside a panel: shares the bar's palette, ≥44px targets. */
+.entity-panel button {
+  font: inherit;
+  font-weight: 600;
+  font-size: 18px;
+  color: #e8e8ea;
+  background: #2f2f3a;
+  border: 1px solid #3a3a47;
+  border-radius: 12px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease, filter .12s ease, transform .04s ease;
+}
+.entity-panel button:hover { background: #3a3a47; }
+.entity-panel button:active { transform: translateY(1px); filter: brightness(0.9); }
+.entity-panel button:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+.entity-panel button.primary { background: #3a5bd0; border-color: #4d6bea; color: #fff; }
+.entity-panel button.primary:hover { background: #4d6bea; }
+.entity-panel button.accent { background: #b5963a; border-color: #d0b043; color: #fff; }
+.entity-panel button.accent:hover { background: #c8a743; }
+.entity-panel button[disabled], .entity-panel button.is-disabled {
+  opacity: 0.4; cursor: default; pointer-events: none;
+}
+
+/* ---- Control strip (Entity.Controls) -----------------------------------
+   Guaranteed-visible band in the thumb zone. flex:0 0 auto => it keeps its
+   natural height and never shrinks; the canvas gives up space, not the bar.
+   It pads itself out of the home-indicator / notch using whichever is larger:
+   the native env() inset (works standalone / top-level) or the inset the host
+   measured and passed in via --entity-safe-* (works embedded, where env() is
+   always 0 inside the sandboxed iframe). */
+.entity-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;            /* overflow wraps to a new row, never off-screen */
+  align-items: center;
+  gap: 10px;
+  background: #1b1b22;
+  border-top: 1px solid #2a2a33;
+  font-size: 14px;
+  padding: 10px 12px;
+  padding-top: 10px;
+  padding-bottom: calc(10px + max(env(safe-area-inset-bottom, 0px), var(--entity-safe-bottom, 0px)));
+  padding-left: calc(12px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+  padding-right: calc(12px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)));
+}
+
+.entity-bar .spacer { flex: 1 1 0; min-width: 0; }
+
+/* Inline value readout (bet amount, status, score). */
+.entity-bar .evalue {
+  text-align: center;
+  color: #c8c8d4;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One cohesive button: ≥44px touch target, clear states, shared palette. */
+.entity-bar button {
+  font: inherit;
+  font-weight: 600;
+  color: #e8e8ea;
+  background: #2f2f3a;
+  border: 1px solid #3a3a47;
+  border-radius: 10px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease, filter .12s ease, transform .04s ease;
+}
+.entity-bar button:hover { background: #3a3a47; }
+.entity-bar button:active { transform: translateY(1px); filter: brightness(0.9); }
+.entity-bar button:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+
+/* Primary action (Deal / Draw / Flip) — the one thing you usually want to tap. */
+.entity-bar button.primary {
+  background: #3a5bd0;
+  border-color: #4d6bea;
+  color: #fff;
+}
+.entity-bar button.primary:hover { background: #4d6bea; }
+
+/* Compact icon button for steppers (+ / −) and the like. */
+.entity-bar button.icon {
+  width: 44px;
+  padding: 0;
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* Toggled-on / selected (mode buttons, Auto). */
+.entity-bar button.active {
+  background: #3a5bd0;
+  border-color: #6c86ff;
+  color: #fff;
+}
+
+.entity-bar button[disabled],
+.entity-bar button.is-disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ---- Menu / screens overlay (Entity.Menu) ------------------------------
+   A full-area overlay that covers the play area and the control bar — the
+   start screen, settings page, and game-over screen live here. It's absolutely
+   positioned to fill .entity-root and sits above the canvas, D-pad, and bar
+   (z-index 20). Like the bar, it pads itself out of the notch / home-indicator
+   using whichever inset is larger (native env() standalone, or the host-passed
+   --entity-safe-* when embedded, where env() is always 0). Scrolls if a screen
+   is taller than the viewport so nothing is ever unreachable. */
+.entity-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: linear-gradient(160deg, #1b1b26 0%, #131319 100%);
+  padding: calc(20px + max(env(safe-area-inset-top, 0px), var(--entity-safe-top, 0px)))
+           calc(20px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)))
+           calc(20px + max(env(safe-area-inset-bottom, 0px), var(--entity-safe-bottom, 0px)))
+           calc(20px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+}
+
+.entity-menu-screen { width: 100%; display: flex; justify-content: center; }
+
+/* The titled card holding a screen's title, controls, and buttons. */
+.entity-menu-card {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+}
+
+.entity-menu-title {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: #f3f3f7;
+}
+.entity-menu-subtitle {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #b6b6c6;
+  margin-bottom: 4px;
+}
+
+/* Stacked action buttons (Start / Settings / Back …). Full width, big targets. */
+.entity-menu-btn {
+  font: inherit;
+  font-weight: 700;
+  color: #e8e8ea;
+  background: #2f2f3a;
+  border: 1px solid #3a3a47;
+  border-radius: 12px;
+  min-height: 52px;
+  padding: 0 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease, filter .12s ease, transform .04s ease;
+}
+.entity-menu-btn:hover { background: #3a3a47; }
+.entity-menu-btn:active { transform: translateY(1px); filter: brightness(0.92); }
+.entity-menu-btn:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+.entity-menu-btn.primary { background: #3a5bd0; border-color: #4d6bea; color: #fff; }
+.entity-menu-btn.primary:hover { background: #4d6bea; }
+.entity-menu-btn.is-disabled, .entity-menu-btn[disabled] {
+  opacity: 0.4; cursor: default; pointer-events: none;
+}
+
+/* A settings field: label over a segmented row of options. */
+.entity-menu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  background: #20202a;
+  border: 1px solid #2c2c38;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.entity-menu-field-label {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9ab0;
+}
+.entity-menu-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.entity-menu-option {
+  flex: 1 1 auto;
+  font: inherit;
+  font-weight: 600;
+  color: #d4d4e0;
+  background: #2a2a35;
+  border: 1px solid #383846;
+  border-radius: 9px;
+  min-height: 40px;
+  padding: 0 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .12s ease, border-color .12s ease;
+}
+.entity-menu-option:hover { background: #34343f; }
+.entity-menu-option.active { background: #3a5bd0; border-color: #6c86ff; color: #fff; }
+.entity-menu-option:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+
+.entity-menu-note {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #8a8a9c;
+  text-align: left;
+}
+
+/* ---- D-pad overlay (Entity.Input) --------------------------------------
+   A translucent plus-shaped pad floating in the bottom corner of the play
+   area for thumb movement on touch devices (keyboard / swipe work too). It's
+   absolutely positioned inside .entity-root and sits clear of the control bar
+   and the home-indicator inset. Toggleable from a bar button; hidden by
+   setDpadVisible(false). The 3×3 grid keeps the centre + corners empty. */
+.entity-dpad {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(3, 46px);
+  grid-template-rows: repeat(3, 46px);
+  gap: 4px;
+  z-index: 5;
+  right: calc(10px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)));
+  bottom: calc(84px + max(env(safe-area-inset-bottom, 0px), var(--entity-safe-bottom, 0px)));
+  touch-action: none;
+}
+
+.entity-dpad-btn {
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  color: #e8e8ea;
+  background: rgba(47, 47, 58, 0.72);
+  border: 1px solid rgba(108, 134, 255, 0.35);
+  border-radius: 10px;
+  min-width: 46px;
+  min-height: 46px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(2px);
+}
+.entity-dpad-btn:active { background: rgba(58, 91, 208, 0.85); transform: translateY(1px); }
+.entity-dpad-btn:focus-visible { outline: 2px solid #6c86ff; outline-offset: 2px; }
+
+/* ---- On-screen keyboard (Entity.Keyboard) ------------------------------
+   A QWERTY for the word games, stacked between the canvas and the control bar
+   (so app.js creates it before the bar). flex:0 0 auto => it keeps its height;
+   the canvas gives up space. Pads itself out of the side insets; the bar below
+   owns the bottom inset. Keys wrap/shrink to fit narrow phones. */
+.entity-kb {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px calc(6px + max(env(safe-area-inset-right, 0px), var(--entity-safe-right, 0px)))
+           8px calc(6px + max(env(safe-area-inset-left, 0px), var(--entity-safe-left, 0px)));
+  background: #17171d;
+  touch-action: manipulation;
+}
+.entity-kb.is-disabled { opacity: 0.5; pointer-events: none; }
+.entity-kb-row { display: flex; justify-content: center; gap: 5px; }
+.entity-kb-key {
+  font: inherit;
+  font-weight: 700;
+  font-size: 15px;
+  color: #e8e8ea;
+  background: #33333f;
+  border: 1px solid #41414f;
+  border-radius: 7px;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 42px;
+  height: 50px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s ease, transform .04s ease, filter .1s ease;
+}
+.entity-kb-key.wide { flex: 1.5 1 0; max-width: 60px; font-size: 18px; }
+.entity-kb-key:hover { background: #3d3d4a; }
+.entity-kb-key:active { transform: translateY(1px); filter: brightness(0.9); }
+.entity-kb-key:focus-visible { outline: 2px solid #6c86ff; outline-offset: 1px; }
+/* Per-key result tints (Wordle-style), set via Entity.Keyboard.mark(). */
+.entity-kb-key[data-state="correct"] { background: #3aa55c; border-color: #43c06c; color: #fff; }
+.entity-kb-key[data-state="present"] { background: #b5963a; border-color: #d0b043; color: #fff; }
+.entity-kb-key[data-state="absent"]  { background: #26262e; border-color: #2e2e38; color: #6a6a78; }
+
+</style>
+  <style>html, body { height: 100%; } body { margin: 0; }</style>
+</head>
+<body>
+  <script>
+// Entity App SDK — lifecycle, host bridge, and teardown.
+//
+// Attaches to window.Entity. Deliberately a classic script (no ES modules) so
+// bundling is nothing more than concatenating <script> tags into one file.
+//
+// Design contract: an app is fully self-contained and leaves nothing behind.
+// Every resource it creates is registered with a disposer, so the host can rip
+// it out (or the iframe can be removed) with no leftover listeners or timers.
+(function (global) {
+  'use strict';
+
+  // ---- Teardown registry -------------------------------------------------
+  function Cleanup() {
+    const fns = [];
+    return {
+      add(fn) { fns.push(fn); return fn; },
+      run() { while (fns.length) { try { fns.pop()(); } catch (e) { console.error(e); } } },
+    };
+  }
+
+  // ---- Host bridge -------------------------------------------------------
+  // Embedded (iframe in the outer system): talk over postMessage.
+  // Top-level (python server / standalone dev): every call is a no-op, so the
+  // exact same bundle runs in both places.
+  function makeHost() {
+    const embedded = global.parent && global.parent !== global;
+    const listeners = {};
+    function send(type, payload) {
+      if (!embedded) return;
+      global.parent.postMessage(Object.assign({ source: 'entity-app', type }, payload), '*');
+    }
+    if (embedded) {
+      global.addEventListener('message', (e) => {
+        const msg = e.data;
+        if (!msg || msg.source !== 'entity-host') return;
+        (listeners[msg.type] || []).forEach((fn) => fn(msg));
+      });
+    }
+    return {
+      embedded,
+      send,
+      on(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    };
+  }
+
+  // ---- State versioning --------------------------------------------------
+  // Saved state travels in a tiny envelope `{ __v, data }` so a shape change
+  // can't feed a returning player's old state into a create() that no longer
+  // understands it. A game stamps `version: N` on its def and bumps it whenever
+  // its state shape changes. On restore the SDK compares versions and, on a
+  // mismatch, either runs `def.migrate(data, fromVersion)` or — if there's no
+  // migration — discards the save and starts fresh. No game hand-writes a
+  // valid() guard, and a bump can never brick a user. Default version is 0, so
+  // unversioned games keep working and any legacy (pre-envelope) save is taken
+  // at face value only while the app is still at version 0.
+  function wrapState(state, ver) { return state == null ? null : { __v: ver, data: state }; }
+  function unwrapState(saved, ver, migrate) {
+    if (saved == null || typeof saved !== 'object') return saved == null ? null : (ver === 0 ? saved : null);
+    if (!('__v' in saved)) return ver === 0 ? saved : null;      // legacy/foreign plain state
+    if (saved.__v === ver) return saved.data;
+    if (migrate) { try { return migrate(saved.data, saved.__v); } catch (e) { console.error(e); return null; } }
+    return null;                                                 // shape changed, no migration -> fresh
+  }
+
+  // ---- Runner ------------------------------------------------------------
+  // def: { id, version?, migrate?, mount?, create(ctx) -> { serialize?, dispose? } }
+  function run(def) {
+    const host = makeHost();
+    const cleanup = Cleanup();
+    const mountEl = def.mount || document.body;
+    const version = def.version || 0;
+
+    const root = document.createElement('div');
+    root.className = 'entity-root';
+    root.dataset.app = def.id || 'app';
+    mountEl.appendChild(root);
+    cleanup.add(() => root.remove());
+
+    let api = null;
+    const viewportListeners = [];
+
+    const ctx = {
+      root,
+      host,
+      state: null,
+      // Viewport the host gave us: its inner size and the safe-area insets it
+      // measured. env(safe-area-inset-*) is always 0 inside a sandboxed iframe
+      // (we're not the top-level viewport), so the host is the only one that
+      // can see the real insets — it posts them in. Defaults cover standalone.
+      viewport: {
+        width: global.innerWidth || 0,
+        height: global.innerHeight || 0,
+        safe: { top: 0, right: 0, bottom: 0, left: 0 },
+      },
+      // Be told when the viewport / safe-area changes (resize, rotate).
+      onViewport(fn) { viewportListeners.push(fn); return fn; },
+      // Register a disposer; returns the fn for convenience.
+      onCleanup: cleanup.add,
+      // Add an event listener that auto-removes on teardown.
+      listen(target, type, fn, opts) {
+        target.addEventListener(type, fn, opts);
+        cleanup.add(() => target.removeEventListener(type, fn, opts));
+      },
+      // Push current state up to the host to persist. ctx.state stays the raw
+      // object; only the wire form is versioned-enveloped.
+      save(state) {
+        ctx.state = state;
+        host.send('state', { state: wrapState(state, version) });
+      },
+      // Tear the app down completely — nothing should remain after this.
+      destroy() {
+        if (api && api.dispose) { try { api.dispose(); } catch (e) { console.error(e); } }
+        cleanup.run();
+        host.send('closed', {});
+      },
+    };
+
+    function start(savedState) {
+      ctx.state = savedState || null;
+      try {
+        api = def.create(ctx) || {};
+        host.send('ready', {});
+      } catch (e) {
+        // Contain it: report to the host and tear down rather than leaving a
+        // half-mounted app. In an iframe this never reaches the outer page.
+        console.error(e);
+        host.send('error', { message: String((e && e.message) || e) });
+        cleanup.run();
+      }
+    }
+
+    // Host-measured viewport + safe-area insets. Stash on ctx, mirror the
+    // insets into CSS custom properties on root (so the control strip can pad
+    // itself), and notify any onViewport listeners.
+    function applyViewport(msg) {
+      const safe = (msg && msg.safe) || {};
+      const s = {
+        top: safe.top | 0, right: safe.right | 0,
+        bottom: safe.bottom | 0, left: safe.left | 0,
+      };
+      ctx.viewport = { width: msg.width | 0, height: msg.height | 0, safe: s };
+      root.style.setProperty('--entity-safe-top', s.top + 'px');
+      root.style.setProperty('--entity-safe-right', s.right + 'px');
+      root.style.setProperty('--entity-safe-bottom', s.bottom + 'px');
+      root.style.setProperty('--entity-safe-left', s.left + 'px');
+      viewportListeners.forEach((fn) => { try { fn(ctx.viewport); } catch (e) { console.error(e); } });
+    }
+    host.on('viewport', applyViewport);
+
+    // Host pulls latest state before persisting/closing.
+    host.on('request-state', () => {
+      const state = api && api.serialize ? api.serialize() : ctx.state;
+      host.send('state', { state: wrapState(state, version) });
+    });
+    host.on('destroy', () => ctx.destroy());
+
+    if (host.embedded) {
+      // Give the host a moment to hand us prior state; fall back to fresh.
+      let started = false;
+      const boot = (s) => { if (!started) { started = true; start(s); } };
+      host.on('init', (msg) => boot(unwrapState(msg.state, version, def.migrate)));
+      host.send('ready-for-init', {});
+      setTimeout(() => boot(null), 150);
+    } else {
+      start(null);
+    }
+
+    global.__entityApp = ctx; // handle for manual teardown / debugging
+    return ctx;
+  }
+
+  global.Entity = global.Entity || {};
+  global.Entity.run = run;
+  global.Entity.Cleanup = Cleanup;
+  // The saved-state envelope `{ __v, data }`, exposed so a host can introspect
+  // or migrate persisted state and so it's directly unit-testable.
+  global.Entity.StateCodec = { wrap: wrapState, unwrap: unwrapState };
+})(window);
+
+</script>
+  <script>
+// Entity.Panel — the DOM-layout lane for non-canvas apps.
+//
+// Why this exists: games draw onto a <canvas>, but a calculator keypad or a
+// calendar month-grid are plain DOM — buttons, cells, a readout. This gives
+// those apps one shared, safe-area-aware content surface that obeys the same
+// layout invariant as .entity-canvas (it takes the remaining height and is
+// allowed to shrink to zero), so an Entity.Controls bar placed below it is
+// never clipped on mobile. Plus a tiny element builder so apps don't each
+// hand-roll createElement/appendChild/listener wiring.
+//
+// Classic script (no modules); attaches to window.Entity. Every node it creates
+// and every listener wired through `h({on})` is registered through `ctx` for
+// full teardown — drop the app and nothing is left behind.
+//
+//   const panel = Entity.Panel.create(ctx);
+//   const out = panel.h('div', { class: 'entity-display', text: '0' });
+//   panel.el.appendChild(out);
+//   const pad = panel.grid({ cols: 4, gap: 8 });
+//   pad.appendChild(panel.h('button', { text: '7', on: { click: () => …} }));
+(function (global) {
+  'use strict';
+  const Entity = global.Entity = global.Entity || {};
+
+  // Tiny declarative element builder. attrs: { class, text, title, data:{},
+  // style:{}, on:{ type: fn } }. Listeners go through ctx.listen so they
+  // auto-dispose. Extra children are appended in order.
+  function makeH(ctx) {
+    return function h(tag, attrs, ...kids) {
+      const el = document.createElement(tag);
+      attrs = attrs || {};
+      if (attrs.class) el.className = attrs.class;
+      if (attrs.text != null) el.textContent = attrs.text;
+      if (attrs.title) el.title = attrs.title;
+      if (attrs.data) for (const k in attrs.data) el.dataset[k] = attrs.data[k];
+      if (attrs.style) for (const k in attrs.style) el.style[k] = attrs.style[k];
+      if (attrs.on) for (const type in attrs.on) ctx.listen(el, type, attrs.on[type]);
+      for (const c of kids) {
+        if (c == null) continue;
+        if (typeof c === 'string') el.appendChild(document.createTextNode(c));
+        else el.appendChild(c);
+      }
+      return el;
+    };
+  }
+
+  function create(ctx, opts) {
+    opts = opts || {};
+    const el = document.createElement('div');
+    el.className = 'entity-panel' + (opts.className ? ' ' + opts.className : '');
+    ctx.root.appendChild(el);
+    ctx.onCleanup(() => el.remove());
+
+    const h = makeH(ctx);
+
+    return {
+      el,
+      h,
+      // A CSS-grid container. opts: { cols, gap, className }. Caller appends
+      // cells (usually h('button', …)). cols is a column count or any valid
+      // grid-template-columns string.
+      grid(o) {
+        o = o || {};
+        const g = h('div', { class: 'entity-grid' + (o.className ? ' ' + o.className : '') });
+        if (o.cols != null) {
+          g.style.gridTemplateColumns =
+            typeof o.cols === 'number' ? `repeat(${o.cols}, 1fr)` : o.cols;
+        }
+        if (o.gap != null) g.style.gap = typeof o.gap === 'number' ? o.gap + 'px' : o.gap;
+        el.appendChild(g);
+        return g;
+      },
+    };
+  }
+
+  Entity.Panel = { create };
+})(window);
+
+</script>
+  <script>
+// window.Calc — the calculator's pure state machine, no DOM.
+//
+// Split out so the arithmetic is unit-testable headlessly (the app.js shell is
+// just a keypad + a readout that calls input() and reads value()). A standard
+// immediate-execution four-function calculator: chained ops evaluate left to
+// right as you go, `=` finishes, plus %, ± and backspace.
+//
+//   const c = Calc.create();
+//   c.input('2'); c.input('+'); c.input('3'); c.input('=');
+//   c.value(); // "5"
+(function (global) {
+  'use strict';
+  const Entity = global.Entity = global.Entity || {};
+
+  const OPS = {
+    '+': (a, b) => a + b,
+    '-': (a, b) => a - b,
+    '*': (a, b) => a * b,
+    '/': (a, b) => (b === 0 ? NaN : a / b),
+  };
+  const MAX_DIGITS = 12; // cap entry so it can't overflow the readout
+
+  // Number -> display string: kill float noise (0.1+0.2), fall back to
+  // exponential for the very large / very small, trim trailing zeros.
+  function fmt(n) {
+    if (!isFinite(n)) return 'Error';
+    if (n === 0) return '0';
+    const abs = Math.abs(n);
+    if (abs >= 1e15 || abs < 1e-9) return String(Number(n.toExponential(6)));
+    const rounded = Math.round(n * 1e10) / 1e10;
+    return String(rounded);
+  }
+
+  function create() {
+    let display = '0';   // the string currently shown
+    let acc = null;      // the left operand, once an operator is chosen
+    let op = null;       // the pending operator key, or null
+    let fresh = true;    // next digit starts a new number (replaces display)
+    let error = false;
+
+    const num = () => parseFloat(display);
+
+    function clearAll() { display = '0'; acc = null; op = null; fresh = true; error = false; }
+
+    function inputDigit(d) {
+      if (error) clearAll();
+      if (fresh) { display = d === '.' ? '0.' : d; fresh = false; return; }
+      if (d === '.') { if (!display.includes('.')) display += '.'; return; }
+      const digits = display.replace('-', '').replace('.', '').length;
+      if (digits >= MAX_DIGITS) return;
+      display = display === '0' ? d : display + d;
+    }
+
+    // Fold the freshly-typed operand into acc using the pending op. Returns
+    // false (and goes to Error) on a non-finite result (e.g. /0).
+    function applyPending() {
+      const b = num();
+      if (op === null) { acc = b; return true; }
+      const r = OPS[op](acc, b);
+      if (!isFinite(r)) { error = true; display = 'Error'; acc = null; op = null; fresh = true; return false; }
+      acc = r; display = fmt(r); return true;
+    }
+
+    function setOp(nextOp) {
+      if (error) return;
+      if (!fresh) { if (!applyPending()) return; }
+      else if (acc === null) acc = num();
+      op = nextOp; fresh = true;
+    }
+
+    function evaluate() {
+      if (error || op === null) return;
+      if (!applyPending()) return;
+      op = null; acc = null; fresh = true;
+    }
+
+    function percent() {
+      if (error) return;
+      let n = num();
+      n = op !== null && acc !== null ? acc * n / 100 : n / 100;
+      display = fmt(n); fresh = false;
+    }
+
+    function negate() {
+      if (error || display === '0') return;
+      display = display[0] === '-' ? display.slice(1) : '-' + display;
+    }
+
+    function backspace() {
+      if (error) { clearAll(); return; }
+      if (fresh) return;
+      const bare = display[0] === '-' ? display.length - 1 : display.length;
+      if (bare <= 1) { display = '0'; fresh = true; return; }
+      display = display.slice(0, -1);
+    }
+
+    return {
+      // Drive the calculator with one key at a time. Accepts: '0'-'9', '.',
+      // '+' '-' '*' '/', '=', 'C'/'AC', '%', '±' (or 'neg'), 'back'.
+      input(key) {
+        if (/^[0-9]$/.test(key) || key === '.') inputDigit(key);
+        else if (key in OPS) setOp(key);
+        else if (key === '=') evaluate();
+        else if (key === 'C' || key === 'AC') clearAll();
+        else if (key === '%') percent();
+        else if (key === '±' || key === 'neg') negate();
+        else if (key === 'back') backspace();
+        return this;
+      },
+      value() { return display; },
+      pendingOp() { return op; },     // for the app to highlight the active operator
+      isError() { return error; },
+      clear() { clearAll(); return this; },
+    };
+  }
+
+  Entity.Calc = { create };
+  global.Calc = Entity.Calc;
+})(window);
+
+</script>
+  <script>
+// Calculator — a DOM app on Entity.Panel. Pure arithmetic lives in window.Calc;
+// this is just the readout + keypad and the physical-keyboard wiring.
+(function () {
+  'use strict';
+
+  // Keypad layout. key = what we feed Calc.input(); label = what's drawn.
+  // variant tints the operator column (accent) and equals (primary); span lets
+  // the zero key fill two columns. Operators map symbol -> Calc key.
+  const KEYS = [
+    { label: 'AC', key: 'AC' }, { label: '±', key: '±' }, { label: '%', key: '%' }, { label: '÷', key: '/', variant: 'accent' },
+    { label: '7', key: '7' }, { label: '8', key: '8' }, { label: '9', key: '9' }, { label: '×', key: '*', variant: 'accent' },
+    { label: '4', key: '4' }, { label: '5', key: '5' }, { label: '6', key: '6' }, { label: '−', key: '-', variant: 'accent' },
+    { label: '1', key: '1' }, { label: '2', key: '2' }, { label: '3', key: '3' }, { label: '+', key: '+', variant: 'accent' },
+    { label: '0', key: '0', span: 2 }, { label: '.', key: '.' }, { label: '=', key: '=', variant: 'primary' },
+  ];
+
+  // Physical key -> Calc key. Lets the keyboard drive the same input path.
+  function mapKey(e) {
+    const k = e.key;
+    if (/^[0-9]$/.test(k) || k === '.' || k === '+' || k === '-' || k === '*' || k === '/' || k === '%') return k;
+    if (k === 'Enter' || k === '=') return '=';
+    if (k === 'Backspace') return 'back';
+    if (k === 'Escape' || k === 'Delete' || k === 'c' || k === 'C') return 'AC';
+    return null;
+  }
+
+  Entity.run({
+    id: 'calculator',
+    create(ctx) {
+      const calc = Calc.create();
+      const panel = Entity.Panel.create(ctx);
+
+      const display = panel.h('div', { class: 'entity-display', text: '0' });
+      panel.el.appendChild(display);
+
+      const pad = panel.grid({ cols: 4, gap: 8 });
+      pad.style.flex = '1 1 auto';     // keypad grows to fill the panel
+      const opButtons = {};            // Calc key -> button, for active highlight
+
+      function render() {
+        display.textContent = calc.value();
+        const op = calc.pendingOp();
+        for (const k in opButtons) opButtons[k].classList.toggle('active', k === op);
+      }
+
+      for (const spec of KEYS) {
+        const btn = panel.h('button', {
+          text: spec.label,
+          class: spec.variant || '',
+          on: { click: () => { calc.input(spec.key); render(); } },
+        });
+        if (spec.span) btn.style.gridColumn = 'span ' + spec.span;
+        if (spec.key in { '+': 1, '-': 1, '*': 1, '/': 1 }) opButtons[spec.key] = btn;
+        pad.appendChild(btn);
+      }
+
+      // Physical keyboard drives the same Calc.input path.
+      ctx.listen(window, 'keydown', (e) => {
+        const k = mapKey(e);
+        if (k == null) return;
+        e.preventDefault();
+        calc.input(k);
+        render();
+      });
+
+      render();
+      return {};
+    },
+  });
+})();
+
+</script>
+</body>
+</html>

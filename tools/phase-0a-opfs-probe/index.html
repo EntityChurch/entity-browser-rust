@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Phase 0a — OPFS + Dedicated Worker Probe</title>
+  <style>
+    body { font-family: ui-monospace, Menlo, Consolas, monospace; margin: 2em; max-width: 56em; }
+    h1 { font-size: 1.2em; }
+    table { border-collapse: collapse; margin-top: 1em; }
+    th, td { padding: 0.4em 0.8em; border: 1px solid #888; text-align: left; vertical-align: top; }
+    th { background: #eee; }
+    .ok { color: #060; font-weight: bold; }
+    .fail { color: #a00; font-weight: bold; }
+    .pending { color: #888; }
+    .summary { padding: 1em; margin-top: 1em; border-radius: 4px; }
+    .summary.ok { background: #efe; border: 1px solid #6c6; }
+    .summary.fail { background: #fee; border: 1px solid #c66; }
+    pre { background: #f4f4f4; padding: 0.5em; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Phase 0a — OPFS + Dedicated Worker Probe</h1>
+  <p>Verifies that the deployment environment supports two things needed by
+     the WASM worker migration plan:</p>
+  <ol>
+    <li>Spawning a dedicated Web Worker via <code>new Worker(...)</code>.</li>
+    <li>Opening an OPFS <code>FileSystemSyncAccessHandle</code> <em>inside</em>
+        the worker (the only synchronous file I/O API in browsers, and the
+        chosen WASM persistence primitive).</li>
+  </ol>
+
+  <h2>Environment</h2>
+  <pre id="env"></pre>
+
+  <h2>Results</h2>
+  <table id="results">
+    <thead>
+      <tr><th>Test</th><th>Status</th><th>Detail</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1. Worker spawn (<code>new Worker</code>)</td><td class="pending" id="r-spawn">—</td><td id="d-spawn"></td></tr>
+      <tr><td>2. Main thread reaches worker (postMessage)</td><td class="pending" id="r-msg">—</td><td id="d-msg"></td></tr>
+      <tr><td>3. <code>navigator.storage.getDirectory()</code> in worker</td><td class="pending" id="r-getdir">—</td><td id="d-getdir"></td></tr>
+      <tr><td>4. <code>getFileHandle({ create: true })</code></td><td class="pending" id="r-fh">—</td><td id="d-fh"></td></tr>
+      <tr><td>5. <code>createSyncAccessHandle()</code></td><td class="pending" id="r-sah">—</td><td id="d-sah"></td></tr>
+      <tr><td>6. Write + read 4KB via sync handle</td><td class="pending" id="r-rw">—</td><td id="d-rw"></td></tr>
+      <tr><td>7. Close + cleanup</td><td class="pending" id="r-cleanup">—</td><td id="d-cleanup"></td></tr>
+    </tbody>
+  </table>
+
+  <div id="summary" class="summary pending">Running…</div>
+
+  <h2>Reporting</h2>
+  <p>Copy the table + environment block below into the Phase 0a results
+     section for this platform. Or screenshot — whichever is easier.</p>
+  <h3>Raw data</h3>
+  <pre id="rawdata"></pre>
+
+  <script>
+    const env = {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      vendor: navigator.vendor,
+      languages: navigator.languages,
+      hardwareConcurrency: navigator.hardwareConcurrency,
+      crossOriginIsolated: window.crossOriginIsolated,
+      isSecureContext: window.isSecureContext,
+      hasStorageManager: !!(navigator.storage && navigator.storage.getDirectory),
+    };
+    document.getElementById('env').textContent = JSON.stringify(env, null, 2);
+
+    const results = {};
+    function setRow(id, ok, detail) {
+      const r = document.getElementById('r-' + id);
+      const d = document.getElementById('d-' + id);
+      r.textContent = ok ? 'OK' : 'FAIL';
+      r.className = ok ? 'ok' : 'fail';
+      d.textContent = detail || '';
+      results[id] = { ok, detail };
+      refreshSummary();
+    }
+
+    function refreshSummary() {
+      const s = document.getElementById('summary');
+      const fails = Object.values(results).filter(r => !r.ok);
+      const total = 7;
+      const seen = Object.keys(results).length;
+      if (seen < total) {
+        s.textContent = `Running… (${seen}/${total})`;
+        s.className = 'summary pending';
+      } else if (fails.length === 0) {
+        s.textContent = `PASS — dedicated worker + OPFS SyncAccessHandle both available. Platform viable for Phase 2.`;
+        s.className = 'summary ok';
+      } else {
+        const firstFail = Object.entries(results).find(([_, v]) => !v.ok);
+        s.textContent = `FAIL at test ${firstFail[0]} — ${firstFail[1].detail}. Platform NOT viable for Phase 2 OPFS; per R10b plan, document a minimum-platform commitment for this target.`;
+        s.className = 'summary fail';
+      }
+      document.getElementById('rawdata').textContent = JSON.stringify({ env, results }, null, 2);
+    }
+
+    // Test 1 + 2: spawn worker, exchange a message.
+    let worker;
+    try {
+      worker = new Worker('worker.js');
+      setRow('spawn', true, 'Worker constructed.');
+    } catch (e) {
+      setRow('spawn', false, `${e.name}: ${e.message}`);
+      // Can't continue without a worker.
+      ['msg', 'getdir', 'fh', 'sah', 'rw', 'cleanup'].forEach(k =>
+        setRow(k, false, 'Skipped — no worker.'));
+    }
+
+    if (worker) {
+      const startMsgTimeout = setTimeout(() => {
+        setRow('msg', false, 'Worker did not respond within 5s.');
+      }, 5000);
+
+      worker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'ready') {
+          clearTimeout(startMsgTimeout);
+          setRow('msg', true, 'Worker responded.');
+          worker.postMessage({ type: 'run-opfs-probe' });
+        } else if (msg.type === 'result') {
+          for (const [k, v] of Object.entries(msg.results)) {
+            setRow(k, v.ok, v.detail);
+          }
+        } else if (msg.type === 'error') {
+          console.error('worker error', msg);
+        }
+      };
+
+      worker.onerror = (e) => {
+        clearTimeout(startMsgTimeout);
+        setRow('msg', false, `Worker error: ${e.message || e}`);
+      };
+    }
+  </script>
+</body>
+</html>

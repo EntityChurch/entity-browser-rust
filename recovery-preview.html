@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Entity Browser — Storage Inventory (preview)</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #0f1115; color: #d7dce2;
+    font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 19px; margin: 0 0 2px; color: #f0f3f7; }
+  .sub { color: #8b94a3; font-size: 12.5px; margin: 0 0 22px; }
+  .sub code { color: #9fb4cf; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+    color: #9fb4cf; margin: 26px 0 6px; border-bottom: 1px solid #232936;
+    padding-bottom: 5px; }
+  .note { color: #7e8696; font-size: 12px; margin: 0 0 12px; }
+  .card { background: #161a22; border: 1px solid #232936; border-radius: 8px;
+    padding: 12px 14px; margin: 9px 0; }
+  .card .name { font-weight: 600; color: #e7ebf1; word-break: break-all; }
+  .card .meta { color: #8b94a3; font-size: 12.5px; margin-top: 3px; }
+  .kv { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+  .kv span { font-size: 12.5px; color: #aab2c0; }
+  .kv b { color: #d7dce2; font-weight: 600; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    border: 1px solid currentColor; margin-left: 7px; vertical-align: middle; }
+  .tag.code { color: #c08a3e; } .tag.data { color: #4f9d69; }
+  .tag.secret { color: #c0563e; } .tag.transient { color: #6b7280; }
+  .empty { color: #6b7280; font-style: italic; padding: 4px 0; }
+  .err { color: #c0563e; font-size: 12.5px; }
+  .bar { height: 8px; background: #232936; border-radius: 5px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; background: #3f7bbf; }
+  .intro { background: #131722; border: 1px solid #232936; border-left: 3px solid #3f7bbf;
+    border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; }
+  .intro p { margin: 0 0 8px; color: #c2cad6; font-size: 13px; }
+  .intro p:last-child { margin-bottom: 0; }
+  .intro b { color: #e7ebf1; } .intro code { color: #9fb4cf; }
+  .legend { font-size: 11.5px; color: #7e8696; margin: 4px 0 0; }
+  .foot { margin-top: 34px; padding-top: 14px; border-top: 1px solid #232936;
+    color: #6b7280; font-size: 12px; }
+  button.re { background: #232936; color: #cdd5e0; border: 1px solid #313a4b;
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Entity Browser — Storage Inventory</h1>
+  <p class="sub">Read-only preview &middot; origin <code id="origin">…</code> &middot; <span id="ts">…</span>
+     &middot; <button class="re" onclick="location.reload()">Re-scan</button></p>
+  <div class="intro">
+    <p><b>What is this?</b> Entity Browser is a <b>local-first</b> application: your content and
+       your identity live in an <i>entity tree</i> stored inside <i>this browser</i> — not on a
+       remote server. Each identity is a <i>peer</i>; the tree is the single source of truth, and
+       the app works offline because everything it needs is already on your machine. This page is a
+       read-only inventory of everything Entity Browser has saved here.</p>
+    <p><b>What "here" means — scope.</b> Browsers partition storage by <b>origin</b> =
+       protocol + host + <b>port</b> (this one is <code id="origin2">…</code>). Everything below
+       belongs to that origin. The URL <b>path does not matter</b>: every page on this origin and
+       <b>every open tab share the same storage</b> shown here. A different <b>port or domain</b> is
+       a completely separate world with its own independent data.</p>
+  </div>
+  <p class="legend">
+    <span class="tag code">app code</span> cached program, safe to discard &nbsp;
+    <span class="tag data">your data</span> durable content &amp; identity &nbsp;
+    <span class="tag secret">secret</span> private — value hidden &nbsp;
+    <span class="tag transient">transient</span> per-tab, cleared on close
+  </p>
+
+  <h2>Storage summary</h2>
+  <p class="note">What the browser thinks Entity Browser is using overall, and whether it's
+     protected from automatic eviction.</p>
+  <div id="summary"><div class="empty">probing…</div></div>
+
+  <h2>App code <span class="tag code">app code</span></h2>
+  <p class="note">Service Workers and Cache Storage hold the program itself (HTML / WASM / JS),
+     not your data. A "hard reset" clears these; you lose nothing but a re-download.</p>
+  <div id="sw"><div class="empty">probing…</div></div>
+  <div id="caches"><div class="empty">probing…</div></div>
+
+  <h2>Your data — IndexedDB <span class="tag data">your data</span></h2>
+  <p class="note">The durable entity tree(s). The primary peer lives at
+     <code>entity-peer-&lt;id&gt;</code>; each backend peer gets its own database. Extra
+     <code>entity-peer-*</code> databases that no longer match the current identity are
+     <em>orphans</em> — abandoned by a prior reset, still taking space.</p>
+  <div id="idb"><div class="empty">probing…</div></div>
+
+  <h2>Your data — localStorage <span class="tag data">your data</span></h2>
+  <p class="note">The system seed (root of identity) and the key vault. Secret values are
+     hidden — only presence and size are shown.</p>
+  <div id="ls"><div class="empty">probing…</div></div>
+
+  <h2>Your data — OPFS (Worker mode only) <span class="tag data">your data</span></h2>
+  <p class="note">Origin-Private File System tree, used only when the app runs with
+     <code>?worker=1</code>. Empty here means you're on the default main-thread IndexedDB arm.</p>
+  <div id="opfs"><div class="empty">probing…</div></div>
+
+  <h2>Transient — sessionStorage <span class="tag transient">transient</span></h2>
+  <p class="note">Per-tab scratch (e.g. the WASM load-retry counter). Cleared when the tab closes.</p>
+  <div id="ss"><div class="empty">probing…</div></div>
+
+  <div class="foot">
+    Preview only — this page performs <b>no writes and no deletes</b>. It is the report that the
+    future <code>?systemrecovery=1</code> screen will show <em>before</em> offering any
+    confirm-gated reset. Nothing leaves this machine.
+  </div>
+</div>
+
+<script>
+"use strict";
+// Self-contained, read-only. Every probe is independently try/caught so one
+// unsupported API never blanks the rest of the report.
+
+const $ = (id) => document.getElementById(id);
+const fmtBytes = (n) => {
+  if (n == null || isNaN(n)) return "—";
+  if (n < 1024) return n + " B";
+  const u = ["KB","MB","GB","TB"]; let i = -1; let v = n;
+  do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  return v.toFixed(v < 10 ? 1 : 0) + " " + u[i];
+};
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const card = (name, meta, tag) =>
+  `<div class="card"><div class="name">${esc(name)}${tag||""}</div>` +
+  (meta ? `<div class="meta">${meta}</div>` : "") + `</div>`;
+const setEmpty = (el, msg) => { el.innerHTML = `<div class="empty">${esc(msg)}</div>`; };
+const setErr = (el, msg) => { el.innerHTML = `<div class="err">${esc(msg)}</div>`; };
+const shortId = (s) => (s && s.length > 18) ? s.slice(0, 8) + "…" + s.slice(-6) : (s || "?");
+// Peer mode → [pretty label, durability note]. Mirrors src/peer_mode.rs.
+const MODE_INFO = {
+  "frontend":       ["frontend · main-thread", "durable in the system IndexedDB (leader tab)"],
+  "backend-memory": ["backend · memory",       "ephemeral — data lost on reload"],
+  "backend-opfs":   ["backend · OPFS",          "durable in its own OPFS store"],
+};
+
+$("origin").textContent = location.origin;
+$("origin2").textContent = location.origin;
+$("ts").textContent = new Date().toLocaleString();
+
+// --- Storage summary: estimate + persisted -------------------------------
+(async () => {
+  const el = $("summary");
+  try {
+    let html = "";
+    if (navigator.storage && navigator.storage.estimate) {
+      const e = await navigator.storage.estimate();
+      const pct = e.quota ? Math.min(100, (e.usage / e.quota) * 100) : 0;
+      html += card("Disk usage",
+        `<div class="kv"><span>used <b>${fmtBytes(e.usage)}</b></span>` +
+        `<span>quota <b>${fmtBytes(e.quota)}</b></span></div>` +
+        `<div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>`);
+    }
+    let persisted = null;
+    if (navigator.storage && navigator.storage.persisted) {
+      persisted = await navigator.storage.persisted();
+    }
+    html += card("Durability",
+      persisted === null ? "persistence API unavailable"
+        : persisted ? "<b>persisted</b> — protected from automatic eviction"
+        : "<b>evictable</b> — the browser may clear this under storage pressure",
+      persisted === false ? '<span class="tag secret">evictable</span>' : "");
+    el.innerHTML = html || `<div class="empty">no summary APIs available</div>`;
+  } catch (e) { setErr(el, "summary failed: " + e); }
+})();
+
+// --- Service Workers ------------------------------------------------------
+(async () => {
+  const el = $("sw");
+  try {
+    if (!("serviceWorker" in navigator) || !navigator.serviceWorker.getRegistrations) {
+      return setEmpty(el, "Service Worker API unavailable");
+    }
+    const regs = await navigator.serviceWorker.getRegistrations();
+    if (!regs.length) return setEmpty(el, "no service workers registered");
+    el.innerHTML = regs.map((r) => {
+      const w = r.active || r.waiting || r.installing;
+      const state = w ? `${w.state}` : "none";
+      return card("Service Worker", `<div class="kv">` +
+        `<span>scope <b>${esc(r.scope)}</b></span>` +
+        `<span>script <b>${esc(w ? w.scriptURL.split('/').pop() : '—')}</b></span>` +
+        `<span>state <b>${esc(state)}</b></span></div>`);
+    }).join("");
+  } catch (e) { setErr(el, "service-worker probe failed: " + e); }
+})();
+
+// --- Cache Storage --------------------------------------------------------
+(async () => {
+  const el = $("caches");
+  try {
+    if (!("caches" in self)) return setEmpty(el, "Cache Storage API unavailable");
+    const names = await caches.keys();
+    if (!names.length) return setEmpty(el, "no caches");
+    const cards = [];
+    for (const name of names) {
+      try {
+        const c = await caches.open(name);
+        const reqs = await c.keys();
+        cards.push(card(name, `<div class="kv"><span><b>${reqs.length}</b> cached responses</span></div>`));
+      } catch (e) { cards.push(card(name, `<span class="err">unreadable: ${esc(e)}</span>`)); }
+    }
+    el.innerHTML = cards.join("");
+  } catch (e) { setErr(el, "cache probe failed: " + e); }
+})();
+
+// --- IndexedDB ------------------------------------------------------------
+function openWithTimeout(name, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const t = setTimeout(() => finish({ error: "timed out (locked by another tab?)" }), ms);
+    let req;
+    try { req = indexedDB.open(name); } catch (e) { clearTimeout(t); return finish({ error: String(e) }); }
+    req.onsuccess = () => { clearTimeout(t); finish({ db: req.result }); };
+    req.onerror = () => { clearTimeout(t); finish({ error: String(req.error) }); };
+    req.onblocked = () => { clearTimeout(t); finish({ error: "blocked (open in another tab)" }); };
+  });
+}
+function countStore(db, store) {
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(store, "readonly");
+      const rq = tx.objectStore(store).count();
+      rq.onsuccess = () => resolve(rq.result);
+      rq.onerror = () => resolve(null);
+    } catch (_) { resolve(null); }
+  });
+}
+(async () => {
+  const el = $("idb");
+  try {
+    if (!indexedDB.databases) {
+      return setEmpty(el, "indexedDB.databases() unavailable (older Safari) — cannot enumerate; named DBs still exist");
+    }
+    const dbs = await indexedDB.databases();
+    const entity = dbs.filter((d) => d.name && d.name.startsWith("entity-peer-"));
+    const others = dbs.filter((d) => !d.name || !d.name.startsWith("entity-peer-"));
+    if (!dbs.length) return setEmpty(el, "no IndexedDB databases");
+    const cards = [];
+    for (const d of entity) {
+      const r = await openWithTimeout(d.name, 2500);
+      if (r.error) { cards.push(card(d.name, `<span class="err">${esc(r.error)}</span>`)); continue; }
+      const db = r.db;
+      const stores = Array.from(db.objectStoreNames);
+      const parts = [];
+      for (const s of stores) {
+        const n = await countStore(db, s);
+        parts.push(`<span>${esc(s)} <b>${n == null ? "?" : n}</b></span>`);
+      }
+      db.close();
+      cards.push(card(d.name,
+        `<div class="kv"><span>version <b>${d.version ?? "?"}</b></span>${parts.join("")}</div>`));
+    }
+    for (const d of others) {
+      cards.push(card(d.name || "(unnamed)",
+        `<div class="kv"><span>version <b>${d.version ?? "?"}</b></span>` +
+        `<span class="tag transient">not Entity Browser</span></div>`));
+    }
+    el.innerHTML = cards.join("") +
+      (entity.length > 1 ? `<p class="legend">Note: more than one <code>entity-peer-*</code> database. ` +
+        `The current identity uses one; the rest are backend peers or orphans from a prior reset.</p>` : "");
+  } catch (e) { setErr(el, "IndexedDB probe failed: " + e); }
+})();
+
+// --- localStorage (secret-masked) ----------------------------------------
+(async () => {
+  const el = $("ls");
+  try {
+    const keys = Object.keys(localStorage);
+    if (!keys.length) return setEmpty(el, "localStorage empty");
+    const cards = keys.sort().map((k) => {
+      const raw = localStorage.getItem(k) || "";
+      const size = fmtBytes(new Blob([raw]).size);
+
+      // The key vault: line-oriented `peer_id|seed_hex|label|mode`. Only the
+      // SEED is secret — the peer id, mode, and label are safe to show, and
+      // showing them is what makes the peer roster legible.
+      if (k === "entity_peers") {
+        const rows = raw.split("\n").map((s) => s.trim()).filter(Boolean).map((line) => {
+          const f = line.split("|");
+          return { id: f[0] || "?", label: (f[2] || "").trim(), mode: f[3] || "frontend" };
+        }).filter((p) => !/^v\d+$/.test(p.id)); // skip the vault_codec v{N} version marker line
+        const list = rows.length ? rows.map((p) => {
+          const info = MODE_INFO[p.mode] || [p.mode, ""];
+          return `<div class="kv" style="margin-top:6px">` +
+            `<span><b>${esc(shortId(p.id))}</b></span>` +
+            `<span class="tag data">${esc(info[0])}</span>` +
+            (p.label ? `<span>“${esc(p.label)}”</span>` : "") +
+            (info[1] ? `<span style="color:#7e8696">${esc(info[1])}</span>` : "") +
+            `<span>seed <b>hidden</b></span></div>`;
+        }).join("") : `<div class="empty">vault present but holds no peers</div>`;
+        return card(k, `<div class="kv"><span>private key vault</span>` +
+          `<span><b>${rows.length}</b> peer${rows.length === 1 ? "" : "s"}</span>` +
+          `<span>size <b>${size}</b></span></div>` + list,
+          '<span class="tag secret">seeds hidden</span>');
+      }
+
+      // The root identity seed is fully secret — presence + size only.
+      if (k === "entity_system_seed") {
+        return card(k, `<div class="kv"><span>root identity seed (the system peer)</span>` +
+          `<span>size <b>${size}</b></span><span>value <b>hidden</b></span></div>`,
+          '<span class="tag secret">secret</span>');
+      }
+
+      // Everything else is a non-secret pref — safe to show the value.
+      const shown = raw.length > 80 ? raw.slice(0, 80) + "…" : raw;
+      return card(k, `<div class="kv"><span>size <b>${size}</b></span>` +
+        `<span>value <b>${esc(shown)}</b></span></div>`);
+    });
+    el.innerHTML = cards.join("");
+  } catch (e) { setErr(el, "localStorage probe failed: " + e); }
+})();
+
+// --- OPFS (Worker mode) ---------------------------------------------------
+(async () => {
+  const el = $("opfs");
+  try {
+    if (!navigator.storage || !navigator.storage.getDirectory) {
+      return setEmpty(el, "OPFS API unavailable");
+    }
+    const root = await navigator.storage.getDirectory();
+    const entries = [];
+    // values() is async-iterable where supported.
+    if (root.values) {
+      for await (const h of root.values()) entries.push(h);
+    }
+    if (!entries.length) return setEmpty(el, "OPFS root empty (default main-thread IDB arm — expected)");
+    el.innerHTML = entries.map((h) =>
+      card(h.name, `<div class="kv"><span>kind <b>${esc(h.kind)}</b></span></div>`)).join("");
+  } catch (e) { setEmpty(el, "OPFS not enumerable here: " + e); }
+})();
+
+// --- sessionStorage -------------------------------------------------------
+(async () => {
+  const el = $("ss");
+  try {
+    const keys = Object.keys(sessionStorage);
+    if (!keys.length) return setEmpty(el, "sessionStorage empty");
+    el.innerHTML = keys.sort().map((k) => {
+      const raw = sessionStorage.getItem(k) || "";
+      const shown = raw.length > 80 ? raw.slice(0, 80) + "…" : raw;
+      return card(k, `<div class="kv"><span>value <b>${esc(shown)}</b></span></div>`);
+    }).join("");
+  } catch (e) { setErr(el, "sessionStorage probe failed: " + e); }
+})();
+</script>
+</body>
+</html>

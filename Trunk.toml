@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+dist = "dist"
+# Disable default features (native-ws) for WASM builds
+no_default_features = true
+
+[watch]
+watch = ["src", "index.html"]
+ignore = ["./src-tauri"]
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 1420

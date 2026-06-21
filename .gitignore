@@ -1,0 +1,8 @@
+/target
+/dist
+/dist-papers
+Cargo.lock
+src-tauri/target/
+
+# Per-machine podman resource-cap overrides (RESOURCE-CAPS.md §4a) — never committed.
+caps.local.mk

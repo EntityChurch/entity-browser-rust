@@ -1,0 +1,185 @@
+# Canonical docs manifest — entity-browser-rust (Entity Browser).
+# Lists the PUBLISHABLE, durable doc surface in reading order. Absence is the
+# honest default: dated handoffs/audits/reviews under docs/plans/, docs/archive/,
+# and *REVIEW*/*AUDIT*/*DESIGN* files are ephemeral and deliberately NOT listed.
+# Schema: docs/release-readiness/CANONICAL-DOCS-FORMAT.md (meta repo).
+
+[project]
+name   = "Entity Browser"
+slug   = "entity-browser-rust"
+repo   = "entity-browser-rust"
+github = "https://github.com/EntityChurch/entity-browser-rust"
+intro  = """
+Entity Browser is a binding/app in the entity-systems stack: a DOM-primary Rust
+application built on top of the Rust reference implementation (entity-core-rust)
+and its SDK. It is a worked reference example of building an entity-backed
+application — a multi-window manager, content sites, and embedded HTML/JS apps,
+all with the entity tree as the single source of truth — and ships as a WASM
+browser app (primary) and a Tauri desktop shell. It depends on entity-core-rust;
+nothing depends on it. The only rendering path is HTML DOM (the legacy
+egui/native renderer was removed). This is a 0.8 research preview — a reference paradigm, not a
+mandate, and not a hardened production deployment. Confidence: the browser path
+is solid and exercised; Tauri/WebKitGTK durability is exploratory (see README
+release notes).
+"""
+
+[[doc]]
+path  = "README.md"
+title = "Entity Browser — README"
+blurb = "What the repo is, where it sits in the stack, how to build (make + podman, or host toolchain), and the v0.8 release caveats."
+group = "Overview"
+
+[[doc]]
+path  = "docs/architecture/specs/SYSTEM-VISION.md"
+title = "System Vision"
+blurb = "Orientation — what the entity browser is for and the model it embodies. Start here."
+group = "Architecture"
+
+[[doc]]
+path  = "docs/architecture/specs/PROJECT-ARCHITECTURE.md"
+title = "Project Architecture"
+blurb = "The high-level architecture of the application and its major subsystems."
+group = "Architecture"
+
+[[doc]]
+path  = "docs/architecture/specs/IMPLEMENTATION-ARCHITECTURE.md"
+title = "Implementation Architecture"
+blurb = "How it is built — peers/SDK router, entity-backed window state, DOM rendering, the action flow."
+group = "Architecture"
+
+[[doc]]
+path  = "docs/architecture/specs/WINDOW-ARCHITECTURE.md"
+title = "Window Architecture"
+blurb = "The window manager and the entity-backed window-state model (the tree IS the data model)."
+group = "Architecture"
+
+[[doc]]
+path  = "docs/architecture/specs/ENTITY-APP-FRAMEWORK.md"
+title = "Entity App Framework"
+blurb = "The app-layer conventions: app/{app-id}/... namespace, model→output→renderer pattern."
+group = "Architecture"
+
+[[doc]]
+path  = "docs/architecture/specs/ENTITY-SDK-API.md"
+title = "Entity SDK API (app-side view)"
+blurb = "The SDK surface this app consumes (canonical SDK lives in the entity-sdk crate upstream)."
+group = "Architecture"
+
+[[doc]]
+path  = "docs/architecture/guides/DEVELOPER-GUIDE.md"
+title = "Developer Guide"
+blurb = "Working in the codebase: patterns, conventions, and how to add or modify a window."
+group = "Guides"
+
+[[doc]]
+path  = "docs/architecture/guides/DESIGN-PRINCIPLES.md"
+title = "Design Principles"
+blurb = "The principles that govern the codebase — entity-backed state, DOM-only rendering, no parallel data structures."
+group = "Guides"
+
+# --- Tools (CLI / make targets / knobs people invoke) ---
+[[doc]]
+path  = "docs/architecture/guides/TOOLS.md"
+title = "Tools & commands reference"
+blurb = "The complete command surface: every make target, both binaries, the entity-browser publish CLI + flags, build-time/runtime knobs, Tauri IPC commands, helper scripts, and external tools the build invokes."
+group = "Tools"
+
+[[doc]]
+path  = "docs/architecture/guides/PUBLISH-INGEST-FORMAT.md"
+title = "Publish ingest format"
+blurb = "The tool-agnostic on-disk site format that `entity-browser publish --ingest` consumes (manifest + pages + assets) — how to publish content WITHOUT the papers renderer, the publish-pipeline edge-case audit, and the release rip-out plan for the papers-specific wiring."
+group = "Tools"
+
+[[doc]]
+path  = "docs/architecture/guides/SHELL.md"
+title = "Entity Shell reference"
+blurb = "The in-app entity shell: 20-verb reference, keybindings, alias system, add-a-verb checklist."
+group = "Tools"
+
+# ── How we work — Disciplines & Doctrines (the methodology this repo runs) ────
+# The browser-substrate methodology: the lens (charter), the procedures
+# (doctrines), and the substrate ground-truth model. CLAUDE.md tags these
+# "⭐ READ FIRST"; they were dropped from v0.8.0 (the release-filter gap).
+[[doc]]
+path  = "docs/architecture/specs/DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md"
+title = "Discipline charter — browser substrate (the lens)"
+blurb = "THE LENS: an L5 app on a double sandwich (browser-as-userspace-OS + entity-OS kernel). 16 disciplines (D1–D11 inherited, D12–D16 browser-native, each earned by a shipped bug), 9 per-diff review questions, anti-pattern catalog AP1–AP11."
+group = "How we work"
+
+[[doc]]
+path  = "docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md"
+title = "Doctrines — browser substrate (the procedures)"
+blurb = "The procedure layer on the charter: the Feature Development Doctrine (F0–F8, 'build X') and Audit Doctrine (A0–A12, 'Y is broken'), the recurring-failure-cycle named in §0.5, and the F7/A10 ratchet."
+group = "How we work"
+
+[[doc]]
+path  = "docs/architecture/specs/MODEL-BROWSER-WASM-RUNTIME.md"
+title = "Substrate model — browser/WASM runtime (ground truth)"
+blurb = "How the browser/WASM substrate actually behaves (two heaps, the frame contract, the §10 boundary map, the §11 invariants). Read before any leak / freeze / lifetime / persistence debugging."
+group = "How we work"
+
+# ── Authoritative architecture models (CLAUDE.md: prose docs are stale; these win)
+[[doc]]
+path  = "docs/architecture/reviews/PEER-SDK-ARM-ARCHITECTURE-REVIEW.md"
+title = "Peer/SDK-arm architecture (authoritative)"
+blurb = "The canonical model of the Direct/Worker per-peer SDK arm split, its known defects, and the refactor plan. Authoritative — prose architecture docs on this topic are stale."
+group = "Authoritative models"
+
+[[doc]]
+path  = "docs/architecture/reviews/MODEL-PEER-LIFECYCLE-AND-STARTUP.md"
+title = "Peer lifecycle & startup model (authoritative)"
+blurb = "The authoritative model of peer identity, the three peer sets (A spawn-list / B hosted / C registry), startup, and delete. Read before any boot/persistence change."
+group = "Authoritative models"
+
+# ── Reference: the apps / publishing / deployment surfaces (⭐ START HERE) ─────
+[[doc]]
+path  = "docs/architecture/specs/REFERENCE-CONTENT-SITE-APP.md"
+title = "Content-Site app — closeout reference"
+blurb = "The single app-level reference for the content-site surface: the two surfaces (window vs Site Mode overlay), the host-agnostic renderer, the data model, link resolution, responsive nav, foreign-site caching, publishing + deployment, the code map, and the 'create your own sites' assessment."
+group = "App references"
+
+[[doc]]
+path  = "docs/architecture/specs/REFERENCE-ENTITY-JS-APPS-PLATFORM.md"
+title = "Entity JS-apps platform reference"
+blurb = "The platform for running self-contained HTML/JS apps (first set: games) in a sandboxed iframe over the tree: the app contract, the data model, the runtime, the sizing rules, distribution, and the end-to-end flows."
+group = "App references"
+
+[[doc]]
+path  = "docs/architecture/specs/REFERENCE-PUBLISHING-PIPELINE.md"
+title = "Publishing pipeline reference (authoritative)"
+blurb = "The end-to-end content-site flow source→tree→dist/→CDN→live SPA, live-proven with images. Ownership boundary, dist/ layout, the --live same-origin knob, the asset two-hop, and the code surface. Read for anything publish/ingest/serve."
+group = "App references"
+
+[[doc]]
+path  = "docs/architecture/specs/REFERENCE-THEMING.md"
+title = "Theming reference (authoritative)"
+blurb = "How theming works via CSS custom properties: how to change a color, how to add a theme, the chrome vs content-site token families."
+group = "App references"
+
+[[doc]]
+path  = "docs/architecture/guides/GUIDE-DEPLOYMENT-AND-CONFIGURATION.md"
+title = "Deployment & configuration guide"
+blurb = "The operator/DevOps quick-ref: persistent PIDs, the /entity-deployment.json schema + precedence, the three profiles (full/tutorial/strict-site), deployment recipes, the make publish knob table, dist/ layout, and gotchas."
+group = "App references"
+
+# ── Design & performance detail (the Stage/Phase glossary's owning docs) ──────
+# The deeper design-of-record + measured baselines that the DEVELOPER-GUIDE
+# "Stage / phase numbering glossary" routes to by name; listed so those links
+# resolve in the published set.
+[[doc]]
+path  = "docs/architecture/specs/ENTITY-TREE-REFACTOR-DESIGN.md"
+title = "Entity-tree refactor design (Stage A–G)"
+blurb = "The design-of-record for the entity-tree perf/refactor work (local-mirror, per-event subscription, caches, lazy QR), annotated with per-stage status. Owns the 'Stage A–G' scheme."
+group = "Design & perf detail"
+
+[[doc]]
+path  = "docs/architecture/reviews/PERF-ANALYSIS.md"
+title = "Performance analysis (measured baselines)"
+blurb = "Measured perf baselines for the entity-tree stages (Stage A/A.1/C/F §0.*). The reference for what the refactor cost and bought."
+group = "Design & perf detail"
+
+[[doc]]
+path  = "docs/architecture/WORKER-MODE-LIVING-DOC.md"
+title = "Worker-mode migration (living doc)"
+blurb = "The WASM worker-mode migration living doc — owns the 'Phase 0–3.3' scheme; the running record of the Direct→Worker arm migration."
+group = "Design & perf detail"
