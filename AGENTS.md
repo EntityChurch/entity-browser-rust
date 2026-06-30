@@ -1,6 +1,6 @@
-# entity-browser-rust (egui) — AGENTS.md
+# entity-browser-rust (DOM/WASM) — AGENTS.md
 
-Read **AGENTS-STANDARD.md** first. This file adds entity-browser-rust (egui) specifics.
+Read **AGENTS-STANDARD.md** first. This file adds entity-browser-rust specifics.
 
 ## Overview
 
