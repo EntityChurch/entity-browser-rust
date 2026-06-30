@@ -183,3 +183,9 @@ path  = "docs/architecture/WORKER-MODE-LIVING-DOC.md"
 title = "Worker-mode migration (living doc)"
 blurb = "The WASM worker-mode migration living doc — owns the 'Phase 0–3.3' scheme; the running record of the Direct→Worker arm migration."
 group = "Design & perf detail"
+
+[[doc]]
+path  = "docs/status/STATUS.md"
+title = "Status"
+blurb = "Current project status — where the project is, recent work, backlog, and what's next."
+group = "Overview"
