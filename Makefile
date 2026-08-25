@@ -128,7 +128,7 @@ image:
 # build. Resource caps (PODMAN_RUN_CAPS) bound every container.
 define RUN
 	mkdir -p $(CARGO_CACHE) $(TRUNK_CACHE)
-	podman run --rm $(PODMAN_RUN_CAPS) \
+	podman run --rm $(PODMAN_RUN_CAPS) $(2) \
 		-v $(PARENT):/src/entity-systems:z \
 		-v $(CARGO_CACHE):/usr/local/cargo/registry:z \
 		-v $(TRUNK_CACHE):/root/.cache:z \
@@ -137,6 +137,19 @@ define RUN
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		sh -c '$(1)'
+endef
+
+# Serve a static directory ($(1), relative to this repo) from inside the image,
+# on $(PORT). Keeps the "podman + make only" contract — no host python3.
+# `--network host`: the container binds the host port directly (rootless `-p`
+# port-forwarding resets connections under pasta/slirp; host-net is reliable and
+# is what a local dev server wants). Foreground; Ctrl-C stops it.
+define RUN_SERVE
+	podman run --rm $(PODMAN_RUN_CAPS) --network host \
+		-v $(PARENT):/src/entity-systems:z \
+		-w /src/entity-systems/$(notdir $(CURDIR)) \
+		$(IMAGE) \
+		python3 -m http.server $(PORT) --bind 0.0.0.0 --directory $(1)
 endef
 
 # There is no native UI build. The native binary is a deprecation stub
@@ -220,7 +233,9 @@ e2e-worker: image
 	# feature is on. This target turns it on; it needs Selenium on :4444.
 	# --test-threads=1: the e2e tests share one Selenium session + http port,
 	# so they must run serially (the main boot test + the multi-tab guard test).
-	cargo test --features e2e --test e2e_worker -- --nocapture --test-threads=1
+	# In-container (podman+make only); --network host so the test reaches the
+	# Selenium container on :4444 and Selenium reaches the test's :8092 server.
+	$(call RUN,cargo test --features e2e --test e2e_worker -- --nocapture --test-threads=1,--network host)
 
 # Tauri desktop (size-optimized release WASM + debug backend, logs to stdout).
 # Use this for development — stable WASM (no overflow panics). Right-click
@@ -298,7 +313,7 @@ tauri-bundle-run: tauri-bundle
 # certainty you're serving the latest optimized build.
 serve:
 	@echo "  → http://localhost:$(PORT)   (override with: make serve PORT=8082)"
-	python3 -m http.server $(PORT) --directory dist
+	$(call RUN_SERVE,dist)
 
 # Build the SHIPPING (release-optimized) WASM, then serve it — always the
 # latest. Use this when you want certainty you're running the real
@@ -311,7 +326,7 @@ build-serve: wasm-release
 	@ls -lh dist/*.wasm 2>/dev/null | awk '{print "  " $$9 "  " $$5}'
 	@echo "  → http://localhost:$(PORT)   (override with: make build-serve PORT=8082)"
 	@echo ""
-	python3 -m http.server $(PORT) --directory dist
+	$(call RUN_SERVE,dist)
 
 # Publish — render the site set to static no-JS HTML (the legacy-web /
 # CDN / permalink projection). Headless native, no browser: builds a peer,

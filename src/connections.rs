@@ -38,10 +38,19 @@ use crate::app_paths;
 /// Entity type name for connection-presence entries.
 pub const CONNECTION_TYPE: &str = "app/entity-browser/connection";
 
+/// Entity type name for the per-peer authorization mirror
+/// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §4`).
+pub const AUTHZ_TYPE: &str = "app/entity-browser/authz";
+
 /// A remembered remote peer — the enriched connection record
 /// (`DESIGN-CROSS-DEVICE-FILE-TRANSFER §13.2`). Presence in the registry
 /// means "we have connected at least once"; the body says how to reach it
 /// again and when we last did.
+///
+/// `authorized` joins in a **sibling** `authz` entity
+/// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §4`): the connect path overwrites the
+/// whole connection entity fire-and-forget, so authorization is stored apart
+/// where a reconnect can't clobber it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RememberedPeer {
     /// Remote peer id (the registry entry's last path segment).
@@ -51,6 +60,10 @@ pub struct RememberedPeer {
     pub addr: String,
     /// Epoch-ms of the most recent successful connect; 0 if unknown.
     pub last_seen: u64,
+    /// Granted profile name (§2.2: `file-transfer` / `file-transfer-rw` /
+    /// `trusted`), or `None` when paired but not authorized. A local mirror
+    /// of the authoritative policy grant on the exposing peer.
+    pub authorized: Option<String>,
 }
 
 #[derive(Clone)]
@@ -84,6 +97,25 @@ impl ConnectionsWriter {
         let path = app_paths::connection_entry_path(app_paths::APP_ID, &self.system_peer_id, remote_pid);
         handle.remove(path);
     }
+
+    /// Record that `remote_pid` is authorized under the given grant `profile`
+    /// (§2.2). Writes the sibling `authz` entity — disjoint from the connection
+    /// record, so a later reconnect (`add`) can never clobber it. Idempotent on
+    /// the path; a re-authorize overwrites the profile. A local mirror of the
+    /// authoritative policy grant on the exposing peer.
+    pub fn set_authorized(&self, remote_pid: &str, profile: &str) {
+        let Some(handle) = &self.handle else { return };
+        let path = app_paths::authz_entry_path(app_paths::APP_ID, &self.system_peer_id, remote_pid);
+        handle.put(path, make_authz_entity(profile));
+    }
+
+    /// Clear a peer's authorization mirror (revoke). No-op if not present.
+    #[allow(dead_code)] // wired up with the revoke UI (later increment)
+    pub fn clear_authorized(&self, remote_pid: &str) {
+        let Some(handle) = &self.handle else { return };
+        let path = app_paths::authz_entry_path(app_paths::APP_ID, &self.system_peer_id, remote_pid);
+        handle.remove(path);
+    }
 }
 
 fn make_connection_entity(addr: &str, last_seen: u64) -> Entity {
@@ -92,6 +124,28 @@ fn make_connection_entity(addr: &str, last_seen: u64) -> Entity {
         "last_seen" => integer(last_seen as i64)
     });
     Entity::new(CONNECTION_TYPE, data).expect("connection entity construction is infallible")
+}
+
+fn make_authz_entity(profile: &str) -> Entity {
+    let data = to_ecf(&cbor_map! {
+        "profile" => text(profile)
+    });
+    Entity::new(AUTHZ_TYPE, data).expect("authz entity construction is infallible")
+}
+
+/// Decode an `authz` entity's profile string. Best-effort: a malformed or
+/// bodyless entity decodes to `None` (treated as not authorized).
+fn decode_authz(entity: &Entity) -> Option<String> {
+    let value = ciborium::from_reader::<ciborium::Value, _>(entity.data.as_slice()).ok()?;
+    let map = value.as_map()?;
+    for (k, v) in map {
+        if let (Some("profile"), ciborium::Value::Text(s)) = (k.as_text(), v) {
+            if !s.is_empty() {
+                return Some(s.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Decode a connection entity's remembered-peer body. Best-effort: a
@@ -157,8 +211,8 @@ pub fn read_connected(peers: &Peers) -> Vec<String> {
 ///
 /// **Worker-arm note:** this reads each entry's body via [`Peers::get_entity`],
 /// which on the Worker arm hits the cache mirror populated only for
-/// *subscribed* prefixes — any surface that calls this must also watch
-/// [`app_paths::connections_prefix`]
+/// *subscribed* prefixes — any surface that calls this must watch **both**
+/// [`app_paths::connections_prefix`] and [`app_paths::authz_prefix`]
 /// (`[[feedback_worker_cache_get_needs_subscription]]`).
 pub fn read_connections(peers: &Peers) -> Vec<RememberedPeer> {
     let pid = peers.system_peer_id();
@@ -178,10 +232,14 @@ pub fn read_connections(peers: &Peers) -> Vec<RememberedPeer> {
                 .get_entity(pid, &entry.path)
                 .map(|e| decode_connection(&e))
                 .unwrap_or_default();
+            // Join the sibling authz mirror (absent ⇒ paired, not authorized).
+            let authz_path = app_paths::authz_entry_path(app_paths::APP_ID, pid, &remote);
+            let authorized = peers.get_entity(pid, &authz_path).and_then(|e| decode_authz(&e));
             Some(RememberedPeer {
                 remote_pid: remote,
                 addr,
                 last_seen,
+                authorized,
             })
         })
         .collect()
@@ -268,5 +326,74 @@ mod tests {
         let records = read_connections(&pm);
         assert_eq!(records.len(), 1, "same peer overwrites, not duplicates");
         assert_eq!(records[0].addr, "ws://new:4041", "addr refreshed to latest");
+    }
+
+    #[test]
+    fn unauthorized_peer_reads_none() {
+        let pm = Peers::new_direct();
+        let writer = ConnectionsWriter::new(&pm);
+        writer.add("REMOTE_A", "ws://a:1");
+
+        let records = read_connections(&pm);
+        assert_eq!(records[0].authorized, None, "paired but not authorized");
+    }
+
+    #[test]
+    fn set_authorized_records_profile() {
+        let pm = Peers::new_direct();
+        let writer = ConnectionsWriter::new(&pm);
+        writer.add("REMOTE_A", "ws://a:1");
+        writer.set_authorized("REMOTE_A", "file-transfer");
+
+        let records = read_connections(&pm);
+        assert_eq!(records.len(), 1, "authz is a sibling, not a second known peer");
+        assert_eq!(records[0].authorized.as_deref(), Some("file-transfer"));
+    }
+
+    /// The load-bearing invariant (§4): a reconnect (`add`) must NOT clobber an
+    /// existing authorization. `add` overwrites the connection entity
+    /// fire-and-forget with no read; storing authz in a disjoint sibling entity
+    /// is what makes this safe.
+    #[test]
+    fn reconnect_preserves_authorization() {
+        let pm = Peers::new_direct();
+        let writer = ConnectionsWriter::new(&pm);
+        writer.add("REMOTE_A", "ws://old:4041");
+        writer.set_authorized("REMOTE_A", "file-transfer-rw");
+        // Reconnect from a new address — overwrites the connection record.
+        writer.add("REMOTE_A", "ws://new:4041");
+
+        let records = read_connections(&pm);
+        assert_eq!(records[0].addr, "ws://new:4041", "addr refreshed");
+        assert_eq!(
+            records[0].authorized.as_deref(),
+            Some("file-transfer-rw"),
+            "reconnect must not wipe authorization"
+        );
+    }
+
+    #[test]
+    fn clear_authorized_revokes() {
+        let pm = Peers::new_direct();
+        let writer = ConnectionsWriter::new(&pm);
+        writer.add("REMOTE_A", "ws://a:1");
+        writer.set_authorized("REMOTE_A", "trusted");
+        writer.clear_authorized("REMOTE_A");
+
+        let records = read_connections(&pm);
+        assert_eq!(records.len(), 1, "still a known peer after revoke");
+        assert_eq!(records[0].authorized, None, "authorization cleared");
+    }
+
+    #[test]
+    fn reauthorize_overwrites_profile() {
+        let pm = Peers::new_direct();
+        let writer = ConnectionsWriter::new(&pm);
+        writer.add("REMOTE_A", "ws://a:1");
+        writer.set_authorized("REMOTE_A", "file-transfer");
+        writer.set_authorized("REMOTE_A", "trusted");
+
+        let records = read_connections(&pm);
+        assert_eq!(records[0].authorized.as_deref(), Some("trusted"));
     }
 }

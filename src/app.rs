@@ -2761,8 +2761,11 @@ impl EntityApp {
             if !crate::tauri_ipc::is_tauri() { return; }
             let log = self.event_log_writer.clone();
             let pending = self.pending_backend_peers.clone();
+            // Designate this system peer (S) as the backend's manager so B can
+            // self-seed S's manager grant (increment 3, step 1).
+            let manager_pid = self.peer_manager.system_peer_id().to_string();
             wasm_bindgen_futures::spawn_local(async move {
-                match crate::tauri_ipc::start_backend_peer(&peer_id).await {
+                match crate::tauri_ipc::start_backend_peer(&peer_id, &manager_pid).await {
                     Ok(info) => {
                         log.log(format!(
                             "Backend peer started: {}",

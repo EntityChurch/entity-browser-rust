@@ -141,10 +141,13 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", 
 tempfile = "3"
 # Test-only: enable the SQLite-backed tree so the cross-peer upload
 # persistence test can build the backend peer exactly as the Tauri desktop
-# does (`.sqlite()`), which the in-memory store does not exercise. Feature is
-# unioned onto the main entity-peer dep for native test builds ONLY — dev-deps
+# does (`.sqlite()`), which the in-memory store does not exercise. `websocket`
+# for the cross-peer WS harness. `capability-handler` so tests/authorize_gate.rs
+# builds B with the SAME §6.2 handler the real (src-tauri) backend has — the
+# capability policy-table union is guarded off without it (connection.rs:427).
+# Unioned onto the main entity-peer dep for native test builds ONLY — dev-deps
 # never affect the `make wasm` lib build.
-entity-peer = { path = "../entity-core-rust/core/peer", default-features = false, features = ["sqlite", "websocket"] }
+entity-peer = { path = "../entity-core-rust/core/peer", default-features = false, features = ["sqlite", "websocket", "capability-handler"] }
 # E2E browser tests — drives a Selenium-standalone-firefox container via
 # WebDriver. See tests/e2e_worker.rs and tools/e2e/README.md.
 fantoccini = "0.22"

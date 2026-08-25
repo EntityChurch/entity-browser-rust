@@ -8,6 +8,7 @@ use entity_peer::transport::{Connector, WebSocketConnector, WebSocketListener, L
 use serde::Serialize;
 use tauri::Manager;
 
+mod manager_grant;
 mod persistence;
 
 /// Best-effort detection of this host's primary LAN IP — the address
@@ -205,6 +206,10 @@ fn create_backend_peer(
 async fn start_backend_peer(
     state: tauri::State<'_, BackendPeers>,
     peer_id: String,
+    // The system peer (S) that manages this backend — designated at start so B
+    // can self-seed S's manager grant (DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3
+    // Step 1). Empty when no frontend designates a manager (headless spawn).
+    manager_peer_id: String,
 ) -> Result<BackendPeerResponse, String> {
     // Extract what we need under the lock, then release it for async work.
     let (seed, label, sqlite_path) = {
@@ -255,6 +260,11 @@ async fn start_backend_peer(
 
     let shared = peer.shared();
     peer.start_engines(&shared);
+
+    // Seed the manager grant for S on B's own tree, before the listener opens.
+    // The only pre-authored grant in the locked-down posture; inert while
+    // debug_open_grants is on, load-bearing once it's retired (step 7).
+    manager_grant::seed_manager_grant(&shared, &peer_id, &manager_peer_id);
 
     // Mount the demo share root so a paired phone can list/read files over
     // the connection (DESIGN-CROSS-DEVICE-FILE-TRANSFER §7, Slice 0). The
@@ -497,8 +507,10 @@ async fn autostart_listener(
     };
 
     // Reuse the production command implementation so the test exercises
-    // the exact same listener-build path as a real user click.
-    let response = start_backend_peer(state, peer_id).await?;
+    // the exact same listener-build path as a real user click. No manager peer
+    // is designated in this helper's context (headless spawn) — the manager
+    // grant seed is skipped on an empty manager id.
+    let response = start_backend_peer(state, peer_id, String::new()).await?;
     let ws_addr = response
         .ws_addr
         .ok_or_else(|| "start_backend_peer returned no ws_addr".to_string())?;

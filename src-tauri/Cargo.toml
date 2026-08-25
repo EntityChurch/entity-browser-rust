@@ -25,6 +25,12 @@ entity-peer = { path = "../../entity-core-rust/core/peer", features = [
     "sqlite", "history",
 ] }
 entity-crypto = { path = "../../entity-core-rust/core/crypto" }
+# Capability grant authoring — B self-seeds S's manager grant at designation
+# (DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 1).
+entity-capability = { path = "../../entity-core-rust/core/capability" }
+entity-ecf = { path = "../../entity-core-rust/core/ecf" }
+entity-entity = { path = "../../entity-core-rust/core/entity" }
+entity-types = { path = "../../entity-core-rust/core/types" }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 # Capture the backend peer's `tracing` output. entity-peer logs exclusively
 # via `tracing` (handshake/dispatch/write/errors); without a subscriber in
@@ -41,3 +47,5 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 
 [dev-dependencies]
 tempfile = "3"
+# manager_grant tests decode the authored policy body the way the kernel does.
+ciborium = "0.2"
