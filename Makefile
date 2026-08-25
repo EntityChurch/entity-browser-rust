@@ -118,6 +118,7 @@ help:
 	@echo "  wasm / wasm-release / serve / build-serve / e2e-worker"
 	@echo "    e2e-worker  T=<test> UNTIL=<phase> SKIP_BUILD=1 narrow the run"
 	@echo "    e2e-phases  list what T= and UNTIL= accept"
+	@echo "    e2e-webrtc  two-browser §6.5 WebRTC S5 gate (host podman; BUILD=1 rebuilds dist/)"
 	@echo "  desktop (containerized display passthrough — Wayland/X11):"
 	@echo "    tauri-run            run the app; HOST_HOME=1 uses your real \$$HOME,"
 	@echo "                         SHARE_DIR=<dir> shares a host folder over local/files"
@@ -421,6 +422,38 @@ e2e-phases:
 	@echo
 	@echo "UNTIL=<phase> — phases of worker_boots_and_opens_all_windows, in run order:"
 	@sed -n '/^const PHASE_ORDER/,/^];/p' tests/e2e_worker.rs | sed -e '1d' -e '$$d' -e 's/^/ /'
+
+# The two-browser §6.5 WebRTC gate — the terminal S5 validation. Unlike
+# `e2e-worker` (ONE Selenium session on :4444), this stands up TWO firefox
+# containers on a shared podman bridge + a real signaling node: the only
+# topology in which browser↔browser ICE succeeds. Rootless pasta mirrors the
+# host IP into a default-network container, so a host-net pair advertises
+# colliding candidates and ICE fails; the bridge gives distinct routable IPs.
+# See tools/e2e/webrtc-rung1/README.md + the "WebRTC / two-browser" gotcha in
+# AGENTS.md.
+#
+# It orchestrates podman DIRECTLY (creates a network, runs containers, rebuilds
+# the signaling node from core-rust HEAD to defeat build-skew), so it runs on
+# the HOST, not via $(call RUN) — podman-in-podman would defeat the point. Host
+# needs make + podman + python3 (python3 already drives the existing e2e).
+#
+# Fail-closed: the rig's BIDIRECTIONAL verdict (both channels open AND both
+# directions status=200) is the exit code. Containers/node/dist-server are torn
+# down before (clean slate) and after (cleanup) regardless of outcome.
+#
+# Requires dist/ (build once with `make wasm`); `BUILD=1` rebuilds it here.
+e2e-webrtc:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc SKIPPED: podman not found on host (this gate manages containers directly)"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc: two-browser §6.5 WebRTC S5 gate (host podman)"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc: PASS"; else echo ">>> e2e-webrtc: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
 
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
 # Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:
@@ -760,4 +793,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

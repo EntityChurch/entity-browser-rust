@@ -173,7 +173,11 @@ def main():
         print("\nopening shells:", open_shell(A_BASE, sa), open_shell(B_BASE, sb))
         time.sleep(1.0)
 
-        op = sys.argv[2] if len(sys.argv) > 2 else "list"
+        # `get` is a REAL system/tree operation (core/tree/src/lib.rs:428,457:
+        # get|put|snapshot|diff|merge|extract). The prior default `list` does not
+        # exist there and the handler correctly returned 400 unknown_operation —
+        # so every run failed at the APPLICATION layer regardless of transport.
+        op = sys.argv[2] if len(sys.argv) > 2 else "get"
         cmd_a = f"exec entity://{pb}/system/tree {op}"
         cmd_b = f"exec entity://{pa}/system/tree {op}"
 
@@ -185,7 +189,7 @@ def main():
 
         # --- poll both scrollbacks; print progress so we see pending vs error ---
         window_s = float(sys.argv[3]) if len(sys.argv) > 3 else 45.0
-        settle = lambda t: any(k in t.lower() for k in ["error", "fail", "timed out", "timeout", "revision", "children", '"path"', "entries"])
+        settle = lambda t: any(k in t.lower() for k in ["error", "fail", "timed out", "timeout", "revision", "children", '"path"', "entries", "status=", "no originating authority"])
         a_tail = b_tail = ""
         for i in range(int(window_s * 2)):
             time.sleep(0.5)
@@ -239,9 +243,75 @@ def main():
                 show = v[-4:] if k == "negotiation tick" else v[:3]
                 for line in show:
                     print(f"   {k}:", line)
-        ok = ("no transport profile" not in a_tail and "no transport profile" not in b_tail
-              and (settle(a_tail) or settle(b_tail)))
-        print("\nRESULT:", "PASS ✅ real cross-peer round-trip" if ok else "FAIL ❌ (see tails + signaling log)")
+        # --- HONEST GATE — rung-1 = ONE real cross-peer round-trip over WebRTC ---
+        # The prior gate keyed PASS on settle(), which matches "error"/"timeout" as
+        # "settled" — so a 400/401/timeout printed PASS ✅ (core-rust flagged this 3×).
+        # Replaced with two independent proofs, BOTH required:
+        #   (1) the data channel is OPEN on both peers (transport up), and
+        #   (2) at least one direction carried a real round-trip: the request crossed
+        #       the channel, the handler ran, and a tree payload came back (not an error).
+        # The §6.5 acceptor-authority gap (ask 2) means the reverse direction legitimately
+        # cannot originate yet — that is surfaced as a KNOWN gap, not hidden, not a failure.
+        def channel_open(base, sid):
+            hits, _ = grep_log(base, sid, ["data channel is OPEN", "live path established"])
+            return any(v for v in hits.values())
+
+        def classify(tail):
+            t = tail.lower()
+            if "no originating authority" in t:
+                return "auth-blocked"          # KNOWN §6.5 gap — upstream ruling pending
+            # A real success is an explicit 2xx status crossing back from the REMOTE
+            # handler over the channel — observed shape:
+            #   `status=200 type="system/handler" ... {"interface": "system/handler/..."}`
+            # or a get that returns tree data. `status=2` is the unambiguous signal.
+            # Do NOT key on `type="system/` or `+1 included` — BOTH appear in error
+            # responses too (`type="system/protocol/error"`, `... +1 included`), which
+            # once mis-passed a 403. Body markers below never appear in error bodies.
+            if ("status=2" in t
+                    or any(s in t for s in ['"interface"', "revision", "entries",
+                                            "content_hash", "entity_type", '"path"',
+                                            "listing"])):
+                return "success"               # a real payload crossed back from the remote
+            if any(e in t for e in ["unknown_operation", "unresolvable", "not_found",
+                                    "not found", "status=4", "status=5", " 400", " 401",
+                                    "invalid_params", "timed out", "timeout",
+                                    "no transport profile", "no live path", "error", "failed"]):
+                return "error"
+            return "pending"
+
+        open_a, open_b = channel_open(A_BASE, sa), channel_open(B_BASE, sb)
+        cls_a, cls_b = classify(a_tail), classify(b_tail)
+        success_dirs = [d for d, c in (("A", cls_a), ("B", cls_b)) if c == "success"]
+        blocked_dirs = [d for d, c in (("A", cls_a), ("B", cls_b)) if c == "auth-blocked"]
+        errored_dirs = [d for d, c in (("A", cls_a), ("B", cls_b)) if c == "error"]
+        print("\n── rung-1 gate ─────────────────────────────────────")
+        print(f"   channel OPEN:  A={open_a}  B={open_b}")
+        print(f"   A> {op} -> {cls_a}    B> {op} -> {cls_b}")
+        if blocked_dirs:
+            print(f"   NOTE: dir(s) {blocked_dirs} = KNOWN §6.5 symmetric-originate gap — the")
+            print(f"         acceptor holds no capability granted BY the remote (only one it")
+            print(f"         minted FOR it). Upstream ruling pending (core-rust SPEC-AMBIGUITIES")
+            print(f"         '§6.5 symmetric originate'). Not counted against rung-1.")
+        # PASS: transport up on BOTH peers AND BOTH directions carried a real
+        # round-trip. §6.5 mutual minting (PROPOSAL-SYMMETRIC-REENTRY-MUTUAL-
+        # MINTING) makes the answerer→offerer direction work too, so bidirectional
+        # is now the bar — a lone-direction pass means the reciprocal grant did not
+        # land (or verify) and is a FAIL, not a known gap.
+        both_open = open_a and open_b
+        ok = both_open and len(success_dirs) == 2
+        if ok:
+            print("\nRESULT: PASS ✅ BIDIRECTIONAL cross-peer WebRTC round-trip "
+                  "(both directions status=200 over one §6.5 data channel).")
+        else:
+            why = []
+            if not both_open:
+                why.append(f"channel not open (A={open_a} B={open_b})")
+            if len(success_dirs) != 2:
+                why.append(f"not bidirectional (A={cls_a} B={cls_b}; success={success_dirs})")
+            if blocked_dirs:
+                why.append(f"dir(s) {blocked_dirs} still 'no originating authority' — "
+                           f"reciprocal §6.5 grant did not land")
+            print(f"\nRESULT: FAIL ❌ — {'; '.join(why)} (see tails + signaling log)")
         return 0 if ok else 1
     finally:
         rq(A_BASE, "DELETE", f"/session/{sa}")

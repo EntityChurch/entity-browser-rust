@@ -89,7 +89,15 @@ sleep 1
 
 echo ">> driving integration spike"
 BEFORE=$(wc -l < /tmp/sig_repro.out)
-python3 "$SCRATCH/spike_rung1_integration.py" "$NODE" list 30 || true
+# The spike is the GATE: `main()` returns 0 only on a BIDIRECTIONAL pass (both
+# channels open AND both directions status=200), 1 otherwise. Capture that rc —
+# do NOT `|| true` it away, or the rig always exits 0 and can never fail a gate.
+# `set +e` around it so a FAIL still prints the node-vantage diagnostics below
+# (the whole debugging value) instead of `set -e` aborting before them.
+set +e
+python3 "$SCRATCH/spike_rung1_integration.py" "$NODE" get 30
+DRIVE_RC=$?
+set -e
 echo ""
 echo ">> NODE VANTAGE — signaling offer/collect by (caller, rendezvous_key) during run:"
 echo "   (the discriminator, per ROUTING-2026-08-04-the-establisher-was-swallowing-...)"
@@ -110,3 +118,10 @@ echo "   · two offers, SAME key, collect included_count=0 → node not returnin
 echo "   · collect non-zero, no channel  → past rendezvous; read the peer-side §6.5 warn! (spike output above)"
 echo ""
 echo "(node peer id in \$NODE=$NODE; teardown with: bash $0 teardown)"
+
+# The gate's verdict IS this script's exit code. Containers/node/dist are left
+# up on purpose (manual inspection); `make e2e-webrtc` tears them down around
+# this run. A bare `bash rung1_repro.sh` now exits non-zero on a FAIL.
+echo ""
+echo ">> gate exit: $DRIVE_RC ($([ "$DRIVE_RC" -eq 0 ] && echo 'PASS ✅' || echo 'FAIL ❌'))"
+exit "$DRIVE_RC"
