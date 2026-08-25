@@ -599,5 +599,17 @@
     "one": "{n} пир",
     "few": "{n} пира",
     "many": "{n} пиров"
-  }
+  },
+
+  "window.programs": "Программы",
+  "programs.subtitle": "Переносимые вычислительные программы — написаны один раз (workbench-go), монтируются из своих дескрипторов, выполняются вычислительным движком этого пира.",
+  "programs.install": "Установить",
+  "programs.restart": "Перезапустить",
+  "programs.status_absent": "не установлена",
+  "programs.status_refused": "не удаётся смонтировать",
+  "programs.status_materializing": "установка {done}/{total}…",
+  "programs.status_running": "выполняется",
+  "programs.status_faulted": "сбой",
+  "programs.status_line": "{status} · тик {ticks} · {rate}/с",
+  "programs.display_waiting": "ожидание первого кадра"
 }

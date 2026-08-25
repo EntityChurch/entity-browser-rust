@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} vertainen",
     "other": "{n} vertaista"
-  }
+  },
+
+  "window.programs": "Ohjelmat",
+  "programs.subtitle": "Siirrettävät laskentaohjelmat — kirjoitettu kerran (workbench-go), liitetty kuvaajistaan, tämän vertaisen laskentamoottorin suorittamia.",
+  "programs.install": "Asenna",
+  "programs.restart": "Käynnistä uudelleen",
+  "programs.status_absent": "ei asennettu",
+  "programs.status_refused": "ei voi liittää",
+  "programs.status_materializing": "asennetaan {done}/{total}…",
+  "programs.status_running": "käynnissä",
+  "programs.status_faulted": "virhetilassa",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "odotetaan ensimmäistä ruutua"
 }

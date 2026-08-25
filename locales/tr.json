@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Programlar",
+  "programs.subtitle": "Taşınabilir hesaplama programları — bir kez yazılır (workbench-go), tanımlayıcılarından bağlanır, bu eşin hesaplama motorunca değerlendirilir.",
+  "programs.install": "Kur",
+  "programs.restart": "Yeniden başlat",
+  "programs.status_absent": "kurulu değil",
+  "programs.status_refused": "bağlanamıyor",
+  "programs.status_materializing": "kuruluyor {done}/{total}…",
+  "programs.status_running": "çalışıyor",
+  "programs.status_faulted": "hata verdi",
+  "programs.status_line": "{status} · tik {ticks} · {rate}/s",
+  "programs.display_waiting": "ilk kare bekleniyor"
 }

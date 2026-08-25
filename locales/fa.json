@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} همتا",
     "other": "{n} همتا"
-  }
+  },
+
+  "window.programs": "برنامه‌ها",
+  "programs.subtitle": "برنامه‌های محاسباتی قابل‌انتقال — یک بار نوشته می‌شوند (workbench-go)، از توصیف‌گرهایشان سوار می‌شوند و موتور محاسبات این همتا آن‌ها را ارزیابی می‌کند.",
+  "programs.install": "نصب",
+  "programs.restart": "راه‌اندازی مجدد",
+  "programs.status_absent": "نصب نشده",
+  "programs.status_refused": "سوار نمی‌شود",
+  "programs.status_materializing": "در حال نصب {done}/{total}…",
+  "programs.status_running": "در حال اجرا",
+  "programs.status_faulted": "خراب",
+  "programs.status_line": "{status} · تیک {ticks} · {rate}/ثانیه",
+  "programs.display_waiting": "در انتظار نخستین فریم"
 }

@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"
-  }
+  },
+
+  "window.programs": "Programma's",
+  "programs.subtitle": "Overdraagbare compute-programma's — eenmaal geschreven (workbench-go), gemount vanuit hun descriptors, geëvalueerd door de compute-engine van deze peer.",
+  "programs.install": "Installeren",
+  "programs.restart": "Herstarten",
+  "programs.status_absent": "niet geïnstalleerd",
+  "programs.status_refused": "kan niet mounten",
+  "programs.status_materializing": "installeren {done}/{total}…",
+  "programs.status_running": "actief",
+  "programs.status_faulted": "gefaald",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "wachten op het eerste frame"
 }

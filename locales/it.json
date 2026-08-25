@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Programmi",
+  "programs.subtitle": "Programmi di calcolo trasferibili — scritti una sola volta (workbench-go), montati dai loro descrittori, valutati dal motore di calcolo di questo peer.",
+  "programs.install": "Installa",
+  "programs.restart": "Riavvia",
+  "programs.status_absent": "non installato",
+  "programs.status_refused": "impossibile montare",
+  "programs.status_materializing": "installazione {done}/{total}…",
+  "programs.status_running": "in esecuzione",
+  "programs.status_faulted": "in errore",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "in attesa del primo frame"
 }

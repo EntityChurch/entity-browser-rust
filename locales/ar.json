@@ -620,5 +620,17 @@
     "few": "{n} نظراء",
     "many": "{n} نظيرًا",
     "other": "{n} نظير"
-  }
+  },
+
+  "window.programs": "البرامج",
+  "programs.subtitle": "برامج حوسبة قابلة للنقل — تُكتب مرة واحدة (workbench-go)، وتُركَّب من واصفاتها، ويقيّمها محرّك الحوسبة لدى هذا النظير.",
+  "programs.install": "تثبيت",
+  "programs.restart": "إعادة تشغيل",
+  "programs.status_absent": "غير مثبَّت",
+  "programs.status_refused": "يتعذّر التركيب",
+  "programs.status_materializing": "جارٍ التثبيت {done}/{total}…",
+  "programs.status_running": "قيد التشغيل",
+  "programs.status_faulted": "معطّل",
+  "programs.status_line": "{status} · نبضة {ticks} · {rate}/ث",
+  "programs.display_waiting": "بانتظار الإطار الأول"
 }

@@ -585,5 +585,17 @@
 
   "peer.count": {
     "other": "{n} 个对等节点"
-  }
+  },
+
+  "window.programs": "程序",
+  "programs.subtitle": "可迁移的计算程序 —— 一次编写（workbench-go），从描述符挂载，由本对等节点的计算引擎求值。",
+  "programs.install": "安装",
+  "programs.restart": "重启",
+  "programs.status_absent": "未安装",
+  "programs.status_refused": "无法挂载",
+  "programs.status_materializing": "正在安装 {done}/{total}…",
+  "programs.status_running": "运行中",
+  "programs.status_faulted": "已故障",
+  "programs.status_line": "{status} · 节拍 {ticks} · {rate}/秒",
+  "programs.display_waiting": "等待第一帧"
 }

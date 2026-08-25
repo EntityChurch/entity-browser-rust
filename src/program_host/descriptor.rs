@@ -326,6 +326,17 @@ pub fn as_u64(v: &Value) -> Option<u64> {
     }
 }
 
+/// A CBOR integer as `i64` (display-list vertices are signed world-space).
+pub fn as_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Integer(i) => {
+            let n: i128 = (*i).into();
+            i64::try_from(n).ok()
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} पीयर",
     "other": "{n} पीयर"
-  }
+  },
+
+  "window.programs": "प्रोग्राम",
+  "programs.subtitle": "स्थानांतरणीय कंप्यूट प्रोग्राम — एक बार लिखे जाते हैं (workbench-go), अपने डिस्क्रिप्टर से माउंट होते हैं, और इस पीयर का कंप्यूट इंजन इन्हें चलाता है।",
+  "programs.install": "इंस्टॉल करें",
+  "programs.restart": "फिर से शुरू करें",
+  "programs.status_absent": "इंस्टॉल नहीं है",
+  "programs.status_refused": "माउंट नहीं हो सकता",
+  "programs.status_materializing": "इंस्टॉल हो रहा है {done}/{total}…",
+  "programs.status_running": "चल रहा है",
+  "programs.status_faulted": "विफल",
+  "programs.status_line": "{status} · टिक {ticks} · {rate}/से",
+  "programs.display_waiting": "पहले फ़्रेम की प्रतीक्षा"
 }

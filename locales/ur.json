@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} پیئر",
     "other": "{n} پیئرز"
-  }
+  },
+
+  "window.programs": "پروگرام",
+  "programs.subtitle": "منتقل ہونے والے کمپیوٹ پروگرام — ایک بار لکھے جاتے ہیں (workbench-go)، اپنے ڈسکرپٹرز سے ماؤنٹ ہوتے ہیں، اور اس پیئر کا کمپیوٹ انجن ان کی جانچ کرتا ہے۔",
+  "programs.install": "انسٹال کریں",
+  "programs.restart": "دوبارہ شروع کریں",
+  "programs.status_absent": "انسٹال نہیں",
+  "programs.status_refused": "ماؤنٹ نہیں ہو سکتا",
+  "programs.status_materializing": "انسٹال ہو رہا ہے {done}/{total}…",
+  "programs.status_running": "چل رہا ہے",
+  "programs.status_faulted": "خراب",
+  "programs.status_line": "{status} · ٹک {ticks} · {rate}/سیکنڈ",
+  "programs.display_waiting": "پہلے فریم کا انتظار"
 }

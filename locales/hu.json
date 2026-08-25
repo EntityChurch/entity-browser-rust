@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Programok",
+  "programs.subtitle": "Átvihető számítási programok — egyszer megírva (workbench-go), a leíróikból csatolva, e peer számítási motorja értékeli ki őket.",
+  "programs.install": "Telepítés",
+  "programs.restart": "Újraindítás",
+  "programs.status_absent": "nincs telepítve",
+  "programs.status_refused": "nem csatolható",
+  "programs.status_materializing": "telepítés {done}/{total}…",
+  "programs.status_running": "fut",
+  "programs.status_faulted": "hibás",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "várakozás az első képkockára"
 }

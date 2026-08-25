@@ -7,7 +7,7 @@
 
 use ciborium::Value;
 
-use super::descriptor::as_u64;
+use super::descriptor::{as_i64, as_u64};
 
 /// `app/shape/text-frame` — `{cols, rows, cells}`, cells = code points,
 /// row-major, `len == cols*rows`.
@@ -95,6 +95,81 @@ impl TextFrame {
     }
 }
 
+/// `app/shape/display-list` — struct-of-arrays closed quads (the workbench
+/// vector display, `DisplayListDto`): `kinds` (colour indices) + `x0..x3` /
+/// `y0..y3` (world-space vertices), one entry per actor. All arrays share one
+/// length; a length divergence is the blank-board bug class (refused, not drawn
+/// as garbage). Decoded here into per-quad rows the driver draws — the driver
+/// stays program-blind (a `kind` is a colour index, never an object type).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayList {
+    /// One row per actor: `(kind, [(x,y); 4])` — the closed outline.
+    pub quads: Vec<(u64, [(i64, i64); 4])>,
+}
+
+impl DisplayList {
+    pub fn decode(entity: &entity_entity::Entity) -> Result<Self, String> {
+        if entity.entity_type != DISPLAY_LIST_TYPE {
+            return Err(format!(
+                "display-list: entity type {} != {DISPLAY_LIST_TYPE}",
+                entity.entity_type
+            ));
+        }
+        let value: Value = ciborium::from_reader(entity.data.as_slice())
+            .map_err(|e| format!("display-list cbor: {e}"))?;
+        let map = value.as_map().ok_or("display-list: not a map")?;
+        let mut kinds: Option<Vec<u64>> = None;
+        // x0,y0,x1,y1,x2,y2,x3,y3 in draw order.
+        let mut coords: [Option<Vec<i64>>; 8] = Default::default();
+        const NAMES: [&str; 8] = ["x0", "y0", "x1", "y1", "x2", "y2", "x3", "y3"];
+        for (k, v) in map {
+            match k.as_text() {
+                Some("kinds") => {
+                    kinds = v
+                        .as_array()
+                        .map(|a| a.iter().map(|n| as_u64(n).unwrap_or(0)).collect())
+                }
+                Some(name) => {
+                    if let Some(idx) = NAMES.iter().position(|n| *n == name) {
+                        coords[idx] = v
+                            .as_array()
+                            .map(|a| a.iter().map(|n| as_i64(n).unwrap_or(0)).collect());
+                    }
+                }
+                None => {}
+            }
+        }
+        let kinds = kinds.ok_or("display-list: kinds required")?;
+        let n = kinds.len();
+        let mut arrays: Vec<Vec<i64>> = Vec::with_capacity(8);
+        for (i, slot) in coords.into_iter().enumerate() {
+            let a = slot.ok_or_else(|| format!("display-list: {} required", NAMES[i]))?;
+            if a.len() != n {
+                return Err(format!(
+                    "display-list: {} len {} != kinds len {n}",
+                    NAMES[i],
+                    a.len()
+                ));
+            }
+            arrays.push(a);
+        }
+        let quads = (0..n)
+            .map(|i| {
+                (
+                    kinds[i],
+                    [
+                        (arrays[0][i], arrays[1][i]),
+                        (arrays[2][i], arrays[3][i]),
+                        (arrays[4][i], arrays[5][i]),
+                        (arrays[6][i], arrays[7][i]),
+                    ],
+                )
+            })
+            .collect();
+        Ok(Self { quads })
+    }
+}
+
 /// The single numeric input field of a seeded input-port entity — the
 /// program-blind way to learn what field name the program's step reads
 /// (`dir` for Snake, `keys` for Asteroids; workbench's own `EncodeKeySet`
@@ -175,5 +250,74 @@ mod tests {
         let (field, v) = input_field_name(&e).unwrap();
         assert_eq!(field, "dir");
         assert_eq!(v, DIR_DOWN);
+    }
+
+    fn display_list_entity(kinds: Vec<u64>, xs: [Vec<i64>; 8]) -> entity_entity::Entity {
+        let arr = |v: &[i64]| {
+            Value::Array(
+                v.iter()
+                    .map(|n| Value::Integer(ciborium::value::Integer::from(*n)))
+                    .collect(),
+            )
+        };
+        let names = ["x0", "y0", "x1", "y1", "x2", "y2", "x3", "y3"];
+        let mut fields = vec![(
+            Value::Text("kinds".into()),
+            Value::Array(
+                kinds
+                    .iter()
+                    .map(|n| Value::Integer(ciborium::value::Integer::from(*n)))
+                    .collect(),
+            ),
+        )];
+        for (i, n) in names.iter().enumerate() {
+            fields.push((Value::Text((*n).into()), arr(&xs[i])));
+        }
+        let data = entity_ecf::to_ecf(&Value::Map(fields));
+        entity_entity::Entity::new(DISPLAY_LIST_TYPE, data).unwrap()
+    }
+
+    #[test]
+    fn display_list_roundtrip() {
+        // Two actors, kinds 0 and 3; a unit square and a shifted one.
+        let e = display_list_entity(
+            vec![0, 3],
+            [
+                vec![0, 10], // x0
+                vec![0, 10], // y0
+                vec![1, 11], // x1
+                vec![0, 10], // y1
+                vec![1, 11], // x2
+                vec![1, 11], // y2
+                vec![0, 10], // x3
+                vec![1, 11], // y3
+            ],
+        );
+        let dl = DisplayList::decode(&e).unwrap();
+        assert_eq!(dl.quads.len(), 2);
+        assert_eq!(dl.quads[0], (0, [(0, 0), (1, 0), (1, 1), (0, 1)]));
+        assert_eq!(dl.quads[1].0, 3);
+        assert_eq!(dl.quads[1].1[0], (10, 10));
+    }
+
+    /// Blank-board bug class: a coordinate array shorter than `kinds` must be
+    /// refused, not drawn with garbage/zero vertices.
+    #[test]
+    fn display_list_length_mismatch_refused() {
+        let e = display_list_entity(
+            vec![0, 1],
+            [
+                vec![0],    // x0 — short!
+                vec![0, 0],
+                vec![1, 1],
+                vec![0, 0],
+                vec![1, 1],
+                vec![1, 1],
+                vec![0, 0],
+                vec![1, 1],
+            ],
+        );
+        let err = DisplayList::decode(&e).unwrap_err();
+        assert!(err.contains("x0 len"), "{err}");
     }
 }

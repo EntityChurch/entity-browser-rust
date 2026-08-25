@@ -585,5 +585,17 @@
 
   "peer.count": {
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Program",
+  "programs.subtitle": "Program komputasi yang dapat dipindahkan — ditulis sekali (workbench-go), dipasang dari deskriptornya, dievaluasi oleh mesin komputasi peer ini.",
+  "programs.install": "Pasang",
+  "programs.restart": "Mulai ulang",
+  "programs.status_absent": "belum terpasang",
+  "programs.status_refused": "tidak dapat dipasang",
+  "programs.status_materializing": "memasang {done}/{total}…",
+  "programs.status_running": "berjalan",
+  "programs.status_faulted": "gagal",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "menunggu bingkai pertama"
 }

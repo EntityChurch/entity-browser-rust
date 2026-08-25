@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} ομότιμος",
     "other": "{n} ομότιμοι"
-  }
+  },
+
+  "window.programs": "Προγράμματα",
+  "programs.subtitle": "Μεταφερόμενα υπολογιστικά προγράμματα — γραμμένα μία φορά (workbench-go), προσαρτημένα από τους περιγραφείς τους, αποτιμώνται από τη μηχανή υπολογισμού αυτού του ομότιμου.",
+  "programs.install": "Εγκατάσταση",
+  "programs.restart": "Επανεκκίνηση",
+  "programs.status_absent": "μη εγκατεστημένο",
+  "programs.status_refused": "αδυναμία προσάρτησης",
+  "programs.status_materializing": "εγκατάσταση {done}/{total}…",
+  "programs.status_running": "εκτελείται",
+  "programs.status_faulted": "σφάλμα",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "αναμονή για το πρώτο καρέ"
 }

@@ -103,6 +103,9 @@ pub fn read_dist(dir: &Path) -> Result<IngestedSets, String> {
                 .and_then(|b| b.as_str())
                 .map(str::to_string),
             size: parse_size(item.get("size")),
+            // Retain the `type` so the host can pick a delivery mode per app
+            // (L5 payloads load via `src`); empty `type` → `None`.
+            app_type: (!app_type.is_empty()).then(|| app_type.to_string()),
         };
 
         let html_path = dir.join(format!("{id}.html"));

@@ -294,12 +294,27 @@ clean:
 	rm -rf dist/ dist-publish/ .tauri-home/ .cache/ src-tauri/target/release/bundle/
 	-podman rmi $(IMAGE)
 
+# DEMO bakes the `demo-apps` fixtures (War, Calculator, and the L5 demos **Ping**
+# + **Life**) into the debug build so a plain `make serve` / `make tauri-run` can
+# render + launch them without a live origin — the fast way to actually *use* the
+# L5 app-host (open the Apps window → "Life (L5)"). **ON by default** for now (dev
+# convenience); `make wasm DEMO=0` turns it off. Only the DEBUG `wasm` target is
+# affected — `wasm-release` / `build-serve` stay clean, so the SHIPPING artifact
+# never bakes fixtures (real deployments serve apps off a registered origin). When
+# we bundle/ship for real we revisit this default. (Same feature the e2e uses; see
+# views/games ensure_demo_set.)
+DEMO ?= 1
+WASM_FEATURES ?=
+ifeq ($(DEMO),1)
+WASM_FEATURES += --features demo-apps
+endif
+
 # WASM debug build → dist/. Single bundle for both Direct (default)
 # and Worker (`?worker=1`) modes — capability detection at boot picks
 # Worker automatically when available and falls back to Direct on
-# failure (Stage 1B).
+# failure (Stage 1B). `DEMO=1` bakes the demo apps (incl. the L5 demos).
 wasm: image
-	$(call RUN,trunk build --dist $(DIST) && ./tools/check-dist.sh $(DIST))
+	$(call RUN,trunk build $(WASM_FEATURES) --dist $(DIST) && ./tools/check-dist.sh $(DIST))
 
 # Alias — `make build` is the conventional bare-box entry point across the repo group.
 build: wasm
@@ -524,11 +539,38 @@ tauri-bundle: wasm-release
 tauri-bundle-run: tauri-bundle
 	$(call RUN_GUI,./src-tauri/target/debug/entity-browser-tauri)
 
+# Regenerate the compute-program fixture bundles (assets/programs/*.json)
+# by running the UNCHANGED workbench-go authoring code in the pinned golang
+# image and dumping the authored entities + per-tick oracle hashes
+# (tools/program-dump; DESIGN-COMPUTE-PROGRAM-HOST-POC.md). Go is a
+# fixture-generation dependency only — never part of the app toolchain.
+# Needs the sibling checkouts ../entity-workbench-go and ../entity-core-go.
+program-fixtures:
+	mkdir -p assets/programs
+	podman run --rm \
+		-v $(PARENT):/src:z \
+		-v program-dump-gocache:/go/pkg/mod \
+		-w /src/$(notdir $(CURDIR))/tools/program-dump \
+		golang:1.25-bookworm \
+		sh -c "go mod tidy && go run . -out ../../assets/programs"
+
 # Serve whatever is currently in dist/ (no rebuild). Fast, but does NOT
 # guarantee the bundle is current — use `make build-serve` when you need
 # certainty you're serving the latest optimized build.
 serve:
 	@echo "  → http://localhost:$(PORT)   (override with: make serve PORT=8082)"
+	$(call RUN_SERVE,dist)
+
+# Build WITH the demo apps (incl. the L5 Ping + Life demos) and serve — the
+# one-command way to actually try L5 app-hosting in a real browser. Open the
+# Apps window → "Life (L5)" to watch Conway's Life run in a WASM entity-peer
+# inside a same-origin sandboxed iframe. (The demos are on by default now, so a
+# plain `make serve` after any build works too; this just guarantees a fresh one.)
+serve-demo: image
+	$(call RUN,trunk build --features demo-apps --dist $(DIST) && ./tools/check-dist.sh $(DIST))
+	@echo ""
+	@echo "  → http://localhost:$(PORT)   — open the Apps window → 'Life (L5)'"
+	@echo ""
 	$(call RUN_SERVE,dist)
 
 # Build the SHIPPING (release-optimized) WASM, then serve it — always the
@@ -707,4 +749,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker e2e-phases tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: program-fixtures native test lint wasm wasm-release wasm-measurement e2e-worker e2e-phases tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

@@ -1043,6 +1043,33 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Peer not created — {reason}"),
     ),
     ("storage.refresh", Message::Simple("Refresh disk usage")),
+    // -- Programs window (compute-program host) --
+    ("window.programs", Message::Simple("Programs")),
+    (
+        "programs.subtitle",
+        Message::Simple(
+            "Transferable compute programs — authored once (workbench-go), \
+             mounted from their descriptors, evaluated by this peer's compute engine.",
+        ),
+    ),
+    ("programs.install", Message::Simple("Install")),
+    ("programs.restart", Message::Simple("Restart")),
+    ("programs.status_absent", Message::Simple("not installed")),
+    ("programs.status_refused", Message::Simple("cannot mount")),
+    (
+        "programs.status_materializing",
+        Message::Simple("installing {done}/{total}…"),
+    ),
+    ("programs.status_running", Message::Simple("running")),
+    ("programs.status_faulted", Message::Simple("faulted")),
+    (
+        "programs.status_line",
+        Message::Simple("{status} · tick {ticks} · {rate}/s"),
+    ),
+    (
+        "programs.display_waiting",
+        Message::Simple("waiting for the first frame"),
+    ),
     ("storage.no_peers", Message::Simple("(no hosted peers)")),
     ("storage.used_quota", Message::Simple("Used / quota")),
     ("storage.persisted", Message::Simple("Persisted")),

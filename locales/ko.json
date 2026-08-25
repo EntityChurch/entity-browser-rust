@@ -585,5 +585,17 @@
 
   "peer.count": {
     "other": "피어 {n}개"
-  }
+  },
+
+  "window.programs": "프로그램",
+  "programs.subtitle": "전송 가능한 컴퓨트 프로그램 — 한 번 작성되어(workbench-go) 디스크립터에서 마운트되고 이 피어의 컴퓨트 엔진이 평가합니다.",
+  "programs.install": "설치",
+  "programs.restart": "재시작",
+  "programs.status_absent": "설치되지 않음",
+  "programs.status_refused": "마운트할 수 없음",
+  "programs.status_materializing": "설치 중 {done}/{total}…",
+  "programs.status_running": "실행 중",
+  "programs.status_faulted": "오류",
+  "programs.status_line": "{status} · 틱 {ticks} · {rate}/s",
+  "programs.display_waiting": "첫 프레임을 기다리는 중"
 }

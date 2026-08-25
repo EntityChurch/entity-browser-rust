@@ -599,5 +599,17 @@
     "one": "{n} пір",
     "few": "{n} піри",
     "many": "{n} пірів"
-  }
+  },
+
+  "window.programs": "Програми",
+  "programs.subtitle": "Переносні обчислювальні програми — написані один раз (workbench-go), монтуються зі своїх дескрипторів, виконуються обчислювальним рушієм цього піра.",
+  "programs.install": "Встановити",
+  "programs.restart": "Перезапустити",
+  "programs.status_absent": "не встановлено",
+  "programs.status_refused": "неможливо змонтувати",
+  "programs.status_materializing": "встановлення {done}/{total}…",
+  "programs.status_running": "виконується",
+  "programs.status_faulted": "збій",
+  "programs.status_line": "{status} · тік {ticks} · {rate}/с",
+  "programs.display_waiting": "очікування першого кадру"
 }

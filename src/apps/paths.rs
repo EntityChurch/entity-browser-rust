@@ -15,6 +15,20 @@ pub const GAMES_SET: &str = "games";
 /// The app-set id for non-game apps (tools / utilities — calculator, calendar…).
 pub const APPS_SET: &str = "apps";
 
+/// The entity-apps `type` for an **L5 app** — an app whose payload is a full WASM
+/// entity-peer (browser-rust in stripped `?app-host=` mode) running a compute
+/// program behind the iframe boundary, not opaque JS UI. Routes to [`APPS_SET`]
+/// like any non-game type; the host reads it (via `AppEntry.app_type`) to deliver
+/// the bundle by `src` rather than `srcdoc` (a multi-MB wasm can't be inlined).
+pub const APP_TYPE_L5: &str = "entity-peer-app";
+
+/// Whether an [`AppEntry`](super::format::AppEntry)'s `app_type` marks it an L5
+/// app (see [`APP_TYPE_L5`]) — the one predicate the host uses to choose `src`
+/// delivery. `None`/other types are ordinary `srcdoc` apps.
+pub fn is_l5_app(app_type: Option<&str>) -> bool {
+    app_type == Some(APP_TYPE_L5)
+}
+
 /// Every app-set the platform knows, in display order. One window per set
 /// (Games, Apps); publish emits each; discovery scans each.
 pub const APP_SETS: &[&str] = &[GAMES_SET, APPS_SET];
