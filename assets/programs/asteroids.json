@@ -1,0 +1,2779 @@
+{
+ "program": "asteroids",
+ "root": "app/asteroids",
+ "origin_peer": "2K6jkjtmPtY8mMAb4dYgiBNAq7KrdYonVjeCn2e1sGYmx8",
+ "descriptor_path": "app/asteroids/interface",
+ "rng_seed": 12345,
+ "entities": [
+  {
+   "path": "app/asteroids/display-expr",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821003b3f3e3d74810d810f8c514dff87e35e43c5b90379f8e443e86a5faca008542f6862696e64696e677381a2646e616d6561736576616c7565582100e7a8437ebc5384a929e2969e1f3b07401b175fb71be6be3579e5d21caec6d3e9",
+   "hash": "ecf-sha256:7f3b9e959911c8e540791b78b238e5ea61798168f7cc433b6cf27dd2f52ef0d0"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/007e98e0e1ffbb72",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75659038ff38ec38b4386100186218b518ed19010018ed18b5186200386138b438ec",
+   "hash": "ecf-sha256:007e98e0e1ffbb72b58c4d9911d90ce3c22e0910402b8e0849cbeb2b9818c674"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/011c501399883435",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100749adfeb98980ee009289a823dee6cdc41f68531ab3f09e0b7153f7ebb9057b466706172616d73816171",
+   "hash": "ecf-sha256:011c501399883435cf074e5e66342b29e85a76b35a256b59d02054952b54f083"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/0235a88e9e4d99b4",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756506",
+   "hash": "ecf-sha256:0235a88e9e4d99b411361b87758a44f6ad548a142665c292f4c8525aa46d1c57"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/07d17509fab4b43a",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100404bf5d0ad527857df1a2a85a1ba6e1f1811d68ab04513979a70ce2f87eaa36e65696e646578582100e42bcab7279e868528fd15c3468f59df752dd347f0405690b9b5f730053a46eb",
+   "hash": "ecf-sha256:07d17509fab4b43a6bd18471780c9be4cb9565fdb41a9c786162f61bd34e9574"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/082608952be88d1a",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100a5553681118a8c6b492f23eb5b91a32fc011caef497410f6edcca25951877f8d66706172616d73816171",
+   "hash": "ecf-sha256:082608952be88d1a92426b9e9a2dc853c410d0574638ee210dfaa6d5b11314a5"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/0cb555f3cc773aaa",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562793066656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:0cb555f3cc773aaa17b4f5af3f8932a99dc56702fbd26d8ba6ba8a6afe5808a5"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/0d4928ff713791f3",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100007e98e0e1ffbb72b58c4d9911d90ce3c22e0910402b8e0849cbeb2b9818c67465696e646578582100e42bcab7279e868528fd15c3468f59df752dd347f0405690b9b5f730053a46eb",
+   "hash": "ecf-sha256:0d4928ff713791f321b952b7599363cff744598aa93b45445ec6fd6871a11efc"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/115da41ac8ff7708",
+   "type": "compute/lambda",
+   "data_hex": "a264626f647958210016379517df83c8ba2dc217e8c9140aceeb9da25e7057d1a90189402060db06e466706172616d73816169",
+   "hash": "ecf-sha256:115da41ac8ff77083b1e7920c805215dff478567a14230d9d5b1dac19afa82c2"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/12e4703891a530d1",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100fc58ec32c0f688b60455dd091e952fea2639af5f573fbafaa2f47a3a3f63e1e76a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:12e4703891a530d1aa05e4980f72bcae93d54ad91947f2314382cab13b4f5fa6"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/137e4f293d862b0d",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65646c697665",
+   "hash": "ecf-sha256:137e4f293d862b0d377882d3b6db561edf618c2ca6a2eeca7c7facba6e7ae308"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/16379517df83c8ba",
+   "type": "compute/compare",
+   "data_hex": "a3626f70636e6571646c656674582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:16379517df83c8ba2dc217e8c9140aceeb9da25e7057d1a90189402060db06e4"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/166804d037b7a76c",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65656b696e647366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:166804d037b7a76ce2b1730aa8bfc52de7617d7de1f26f9a6915767e18cf0a56"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/1a724ba31cfbe9a7",
+   "type": "compute/lambda",
+   "data_hex": "a264626f647958210097fc3caaa9c8b1603b3e3fb0efd4fa5c7cdd825b37a87f818ed13d1c56da96e266706172616d73816171",
+   "hash": "ecf-sha256:1a724ba31cfbe9a7a30cf48d170753cff78a71dc1d90befd5e957d7c16f98ea9"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/1e63b1fef5c4916f",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd647468656e582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a120485369636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:1e63b1fef5c4916f2b407719d36ecf735f7538e6335e2c29c387d40bd861f7ee"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/1fad291b65e3f116",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562783166656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:1fad291b65e3f1167797553aa985243532149e0c2ec90dfde08f4ca12e224755"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/20a7c7ce47d06fc5",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c65667458210095533d5145db8b9287eca2b0644b7506e44475d5de405d1b676eb957c570d0a9657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:20a7c7ce47d06fc53d65c6b90c8115f54f829d49393883b441c17bdeb235f484"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/21062e3f30bd7e90",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100d38a4532e935f74036f427292f308571644aedeb9e3070b2d2608efbb99cebde6a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:21062e3f30bd7e9017fd3eae4eb1101349e1ce904313cb98d344f5bbddecdda7"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/229d9ac1f4f4a9a2",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821007a831486b88e040a3f4d7453efaa2ae73f93fc723bfc01029be9fa0fb4b2d88165726967687458210075efc8441615688598d6b39120c84ef0e68362ad926d7e226e3b668a10e4ffe5",
+   "hash": "ecf-sha256:229d9ac1f4f4a9a280978254933dfe133ffe71d2a2fc7eb95629931b65b01aa9"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/261333840f959f17",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821007990ca426861ab890a7396ea8ae68a930a93e8bf182a9cd78bf264031d095e33647468656e58210070ec472541c8f9d7d5a5550bf7ae35a922e7529b24b7d8d982e4a19682fe58c169636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:261333840f959f17d32dbf824fedd68eef90209eec6042baef9aa9ed79c29399"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/2c513cdbc3a3280a",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100404bf5d0ad527857df1a2a85a1ba6e1f1811d68ab04513979a70ce2f87eaa36e65696e64657858210020a7c7ce47d06fc53d65c6b90c8115f54f829d49393883b441c17bdeb235f484",
+   "hash": "ecf-sha256:2c513cdbc3a3280a880e336008dbbe3e5082b14c06a9a1b1bf95ca2cae678001"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/2f2824b6b7f80eec",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c65667458210007d17509fab4b43a6bd18471780c9be4cb9565fdb41a9c786162f61bd34e9574657269676874582100261333840f959f17d32dbf824fedd68eef90209eec6042baef9aa9ed79c29399",
+   "hash": "ecf-sha256:2f2824b6b7f80eec7ab7a1096906522cc677d7f3d8b8c45b917d74617c69fdba"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/30bcd02ae55c3c87",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100688494c906c107dc8bf8c74c6f60c09f1503d60d25f3972a2ba2ef0e2f52f5e86a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:30bcd02ae55c3c87490d1b6d775c234f196d17534f0deea2d39001d990956569"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/319f97141ce4d04a",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821007af6dd0118d31d4587051cd353a0282e751f52dbcf3b6bbd877f67136e7c99dc6a636f6c6c656374696f6e582100137e4f293d862b0d377882d3b6db561edf618c2ca6a2eeca7c7facba6e7ae3086470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:319f97141ce4d04a382673afaa84d8cedd7844605d0cc2f8432ca5cd850eae7f"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/33a503bccd01291f",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821006844628eb63005c36da18c77c3bac670a00d381a4cdad94cfa94929e0715287265696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:33a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/342ac7b07d5b50fb",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100007e98e0e1ffbb72b58c4d9911d90ce3c22e0910402b8e0849cbeb2b9818c67465696e6465785821006e7f736e17a58d08b281bcdc7f7fca835fcadfba18268d9df1aab882b5b837c2",
+   "hash": "ecf-sha256:342ac7b07d5b50fbe266706cbe7e9fbec8daa8312a8c48fe97da0a813fab6da3"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/34530cd4c1355ce5",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821007990ca426861ab890a7396ea8ae68a930a93e8bf182a9cd78bf264031d095e33647468656e582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a120485369636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:34530cd4c1355ce5e818adf09e71a78076051e0e04aace5add5daff58e09135a"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/346db6f8cd621c91",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd657269676874582100772ab7174f77431f346ee8c168580f179e81f2b4317a5370892583a80b570220",
+   "hash": "ecf-sha256:346db6f8cd621c916ff93f045b70af22aae9ae4c68b5108d54e12b48b1f5250f"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/38d00d6974844fe6",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e6572696768745821002f2824b6b7f80eec7ab7a1096906522cc677d7f3d8b8c45b917d74617c69fdba",
+   "hash": "ecf-sha256:38d00d6974844fe63a40c216057f8db700eb00bfd068b9246ec93bccbd2a4770"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/392920ea54c81f22",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce65696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/3945451dc035a7ab",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100a97caf84847880345b373e03981075cb3c0b77d06cc5347d64213f328d38620f65726967687458210034530cd4c1355ce5e818adf09e71a78076051e0e04aace5add5daff58e09135a",
+   "hash": "ecf-sha256:3945451dc035a7ab72102e04725811478cc1a9b8e3732c89c3c39fe8df3e4a1f"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/3abfa4d68cd41d2b",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75650a",
+   "hash": "ecf-sha256:3abfa4d68cd41d2b8aff421d803519d4879f3fde49726641fe745bb39ab2a6ca"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/3b3f3e3d74810d81",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100d0ac9756ec2062d2fe87f7264bafb7698c1e8b6623a1b23b81e11e2acdf774d06862696e64696e677385a2646e616d65656b696e64736576616c7565582100166804d037b7a76ce2b1730aa8bfc52de7617d7de1f26f9a6915767e18cf0a56a2646e616d6564726f74736576616c7565582100f040fa32fbef0a24c75319cfe5a407f04a81f2250557d069dc15dfc6a7cc2b8ca2646e616d6563737a736576616c7565582100a9e27f0af6f8036033e2bedbca72a9e43c5bc9830fe581925d1c431a5ebe4e87a2646e616d656278736576616c7565582100c184d2774d34256a3f2090918dfe9068e03dab8b83ed06b1f1258eca17a12bb4a2646e616d656279736576616c7565582100de65294e9b157276042705107b6d0e0af7995fb73fd8a6f9f966f0e828a892dc",
+   "hash": "ecf-sha256:3b3f3e3d74810d810f8c514dff87e35e43c5b90379f8e443e86a5faca008542f"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/404bf5d0ad527857",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75659000186218b518ed19010018ed18b5186200386138b438ec38ff38ec38b43861",
+   "hash": "ecf-sha256:404bf5d0ad527857df1a2a85a1ba6e1f1811d68ab04513979a70ce2f87eaa36e"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/48538ba0b9b7028f",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656173",
+   "hash": "ecf-sha256:48538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/4cc63c5771c0e8f1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821006bd3d7041db97527d0d22f46afb08c1ec22561c6d430b6cc69b3a3ea35c8ed74657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:4cc63c5771c0e8f19ef6e02a9b8fe5efd28add47a43aef9a8db9302ef3689f86"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/4ce1d74a0b8b8c5c",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100bde852462dd1386a79ec8c69fffd584947d3484a64133e29ad67abbfa73948e86862696e64696e677381a2646e616d6564726164756576616c7565582100cb0bba4da5c38a5b5520648012385e41a81f80ba71f707c2f18613d71e718684",
+   "hash": "ecf-sha256:4ce1d74a0b8b8c5cced2ead1766e867f5877ddb4a9e664b4798e2bfd49012492"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/51bd058ff09a5a28",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65627873",
+   "hash": "ecf-sha256:51bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa45"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/51e33f82c0eef02f",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100082608952be88d1a92426b9e9a2dc853c410d0574638ee210dfaa6d5b11314a56a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:51e33f82c0eef02f68a108362bee6974dfc42c70128a23901efbcde40cc51f38"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/53be1416d7a0b6f1",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65657175616473",
+   "hash": "ecf-sha256:53be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/560bca0f6c785ee8",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65646b696e6466656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:560bca0f6c785ee837c9103089ba2d5e6b7e4d75cdfb1e27e5421f6ce3da0b69"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/56b04a3d5c9e5262",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:56b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/588c75852bcd2ecd",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65627973",
+   "hash": "ecf-sha256:588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c8"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/59b541d5e7138de8",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100011c501399883435cf074e5e66342b29e85a76b35a256b59d02054952b54f0836a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:59b541d5e7138de84cf54b0540ef2bdb29e2a1eef86263d6c6dadf281ccb2649"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/5a7cf05d867ed7eb",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd657269676874582100638752b21671f777d2e2c84c7b5f04a6affd46a278680e989fce46a431ccc93b",
+   "hash": "ecf-sha256:5a7cf05d867ed7eb39117d99f98046965443de4379fd4ec2e74e38e0ea01cf97"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/5a8f75a3934fddce",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e6572696768745821003945451dc035a7ab72102e04725811478cc1a9b8e3732c89c3c39fe8df3e4a1f",
+   "hash": "ecf-sha256:5a8f75a3934fddceb97c540f3f30834192bc203a22804258f8a050e512ef89d1"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/5d88e1bede3a5e4e",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100115da41ac8ff77083b1e7920c805215dff478567a14230d9d5b1dac19afa82c26a636f6c6c656374696f6e5821009cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e2668386470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:5d88e1bede3a5e4eb4b2895161857b3c8931a6db9092906b923923d0bf198328"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/638752b21671f777",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821007e2590971793549586564f63112232bc9fbd725a29b8816e255ffac2ac5f5bd3647468656e5821007e2590971793549586564f63112232bc9fbd725a29b8816e255ffac2ac5f5bd369636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:638752b21671f777d2e2c84c7b5f04a6affd46a278680e989fce46a431ccc93b"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/6844628eb63005c3",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6564726f7473",
+   "hash": "ecf-sha256:6844628eb63005c36da18c77c3bac670a00d381a4cdad94cfa94929e07152872"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/688494c906c107dc",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821000cb555f3cc773aaa17b4f5af3f8932a99dc56702fbd26d8ba6ba8a6afe5808a566706172616d73816171",
+   "hash": "ecf-sha256:688494c906c107dc8bf8c74c6f60c09f1503d60d25f3972a2ba2ef0e2f52f5e8"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/6ac1ca5908085c62",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656171",
+   "hash": "ecf-sha256:6ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/6bd3d7041db97527",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd65726967687458210088868c51553527f56a366b00ea37e327b639ddb65d0ffeba43d8ca1367d15042",
+   "hash": "ecf-sha256:6bd3d7041db97527d0d22f46afb08c1ec22561c6d430b6cc69b3a3ea35c8ed74"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/6c10e9c10ac22b48",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd657269676874582100b92b7149af7454ffa9124c99e693dcd862dd8c56bc864ae1b90eab65c172baf0",
+   "hash": "ecf-sha256:6c10e9c10ac22b48ab888abf1f9e1fad70aea4e53247a3a3ff41bf9aa2e74c99"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/6e7f736e17a58d08",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821005a7cf05d867ed7eb39117d99f98046965443de4379fd4ec2e74e38e0ea01cf97657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:6e7f736e17a58d08b281bcdc7f7fca835fcadfba18268d9df1aab882b5b837c2"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/70ec472541c8f9d7",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756509",
+   "hash": "ecf-sha256:70ec472541c8f9d7d5a5550bf7ae35a922e7529b24b7d8d982e4a19682fe58c1"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/722e659d03e63aaa",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100d8d4513a58d113deb079100c8bd551e581129b76ee6c9c18ac6bb3e664627c3266706172616d73816171",
+   "hash": "ecf-sha256:722e659d03e63aaaf49e6e52cabff06fb44b57a43b13215154d44183d792e38d"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/749adfeb98980ee0",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562783266656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:749adfeb98980ee009289a823dee6cdc41f68531ab3f09e0b7153f7ebb9057b4"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/75aa215b0ee4afd8",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100007e98e0e1ffbb72b58c4d9911d90ce3c22e0910402b8e0849cbeb2b9818c67465696e64657858210020a7c7ce47d06fc53d65c6b90c8115f54f829d49393883b441c17bdeb235f484",
+   "hash": "ecf-sha256:75aa215b0ee4afd82f5cffc6db4b7c9bdcd94939187463b7b481453624c36530"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/75efc84416156885",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821007990ca426861ab890a7396ea8ae68a930a93e8bf182a9cd78bf264031d095e33647468656e582100e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e69636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:75efc8441615688598d6b39120c84ef0e68362ad926d7e226e3b668a10e4ffe5"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/772ab7174f77431f",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182647468656e582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf718269636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:772ab7174f77431f346ee8c168580f179e81f2b4317a5370892583a80b570220"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/7990ca426861ab89",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656472616475",
+   "hash": "ecf-sha256:7990ca426861ab890a7396ea8ae68a930a93e8bf182a9cd78bf264031d095e33"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/7a831486b88e040a",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100007e98e0e1ffbb72b58c4d9911d90ce3c22e0910402b8e0849cbeb2b9818c67465696e6465785821004cc63c5771c0e8f19ef6e02a9b8fe5efd28add47a43aef9a8db9302ef3689f86",
+   "hash": "ecf-sha256:7a831486b88e040a3f4d7453efaa2ae73f93fc723bfc01029be9fa0fb4b2d881"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/7af6dd0118d31d45",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821004ce1d74a0b8b8c5cced2ead1766e867f5877ddb4a9e664b4798e2bfd4901249266706172616d73816169",
+   "hash": "ecf-sha256:7af6dd0118d31d4587051cd353a0282e751f52dbcf3b6bbd877f67136e7c99dc"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/7cb63425dae3b497",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c65667458210075aa215b0ee4afd82f5cffc6db4b7c9bdcd94939187463b7b481453624c3653065726967687458210075efc8441615688598d6b39120c84ef0e68362ad926d7e226e3b668a10e4ffe5",
+   "hash": "ecf-sha256:7cb63425dae3b4971da6de48cdb994e0fb2361f8a1f89089e4e4ebccb0cb6ffb"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/7e25909717935495",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756508",
+   "hash": "ecf-sha256:7e2590971793549586564f63112232bc9fbd725a29b8816e255ffac2ac5f5bd3"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/88868c51553527f5",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e647468656e5821000235a88e9e4d99b411361b87758a44f6ad548a142665c292f4c8525aa46d1c5769636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:88868c51553527f56a366b00ea37e327b639ddb65d0ffeba43d8ca1367d15042"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/8b5a5c5962f2a8d7",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100c1bac4a740f6f437b7388a2a3a2722b01f0a03c393e22121b4ddbf32f1e55ff86862696e64696e677381a2646e616d656571756164736576616c7565582100319f97141ce4d04a382673afaa84d8cedd7844605d0cc2f8432ca5cd850eae7f",
+   "hash": "ecf-sha256:8b5a5c5962f2a8d777c8d6d49de14ba0f0169b97382ff8f58710fa1c44eeb73d"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/9067e61df1b69f1e",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:9067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/95533d5145db8b92",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd657269676874582100ff9fcd9cde28e6152e5214f7b1b2ac8f2e1dab8bd084bd524b8d3c1a4e1c4046",
+   "hash": "ecf-sha256:95533d5145db8b9287eca2b0644b7506e44475d5de405d1b676eb957c570d0a9"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/97c06987ee1e57b9",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821009ae71a2695b8e20308fe7ee6f3102263fb3e95776fc31ba2f69708d91ca8e3e56a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:97c06987ee1e57b98ca376ebd0b32d9118d44eb622469a4af99eb6127ab4f65b"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/97fc3caaa9c8b160",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562783366656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:97fc3caaa9c8b1603b3e3fb0efd4fa5c7cdd825b37a87f818ed13d1c56da96e2"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/9ae71a2695b8e203",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821001fad291b65e3f1167797553aa985243532149e0c2ec90dfde08f4ca12e22475566706172616d73816171",
+   "hash": "ecf-sha256:9ae71a2695b8e20308fe7ee6f3102263fb3e95776fc31ba2f69708d91ca8e3e5"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/9cd6e86320e79d45",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75659818000102030405060708090a0b0c0d0e0f1011121314151617",
+   "hash": "ecf-sha256:9cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e266838"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a1b93dafcf600ca6",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75650c",
+   "hash": "ecf-sha256:a1b93dafcf600ca6d771f690e6a04efa738df66f51077b7c8bf66f6f10eca81d"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a2e6f1efc5e6a2a2",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100722e659d03e63aaaf49e6e52cabff06fb44b57a43b13215154d44183d792e38d6a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:a2e6f1efc5e6a2a239fdd476c6a4b8c7a992340e2e0a81a04c61941d25083cbd"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a5553681118a8c6b",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562793366656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:a5553681118a8c6b492f23eb5b91a32fc011caef497410f6edcca25951877f8d"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a80ea2ce5b7f5d3f",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:a80ea2ce5b7f5d3f1463eecc033f5d6e75aa96cd93e0db9fa00a220e7198e7d0"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a95d1d0749dbebc4",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100560bca0f6c785ee837c9103089ba2d5e6b7e4d75cdfb1e27e5421f6ce3da0b6966706172616d73816171",
+   "hash": "ecf-sha256:a95d1d0749dbebc4072b44e158368a3b8bb9321b5f3292727d2362dc0c497b16"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a97caf8484788034",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100404bf5d0ad527857df1a2a85a1ba6e1f1811d68ab04513979a70ce2f87eaa36e65696e6465785821006e7f736e17a58d08b281bcdc7f7fca835fcadfba18268d9df1aab882b5b837c2",
+   "hash": "ecf-sha256:a97caf84847880345b373e03981075cb3c0b77d06cc5347d64213f328d38620f"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/a9e27f0af6f80360",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6563737a7366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:a9e27f0af6f8036033e2bedbca72a9e43c5bc9830fe581925d1c431a5ebe4e87"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/aafa5290111ec29e",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756500",
+   "hash": "ecf-sha256:aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ab1007464548bdd8",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ad0a9798883da74b",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100a95d1d0749dbebc4072b44e158368a3b8bb9321b5f3292727d2362dc0c497b166a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:ad0a9798883da74ba26e4071f5cbdb3f79ad1cafb3516bb170937d42e6e27202"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/b6c75616faeb23f1",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821001a724ba31cfbe9a7a30cf48d170753cff78a71dc1d90befd5e957d7c16f98ea96a636f6c6c656374696f6e58210053be1416d7a0b6f1dbf394dba8239fc5a689a378542df551ffd6fa30e238478a6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:b6c75616faeb23f12328b74c9b8faf745e31efd621c503036a892a7682943840"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/b763fccd584143e0",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756503",
+   "hash": "ecf-sha256:b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a1204853"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/b8b38467d161ec10",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65656b696e6473",
+   "hash": "ecf-sha256:b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/b8cadc0cda02ee69",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563737a73",
+   "hash": "ecf-sha256:b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd70"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/b92b7149af7454ff",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100342ac7b07d5b50fbe266706cbe7e9fbec8daa8312a8c48fe97da0a813fab6da365726967687458210034530cd4c1355ce5e818adf09e71a78076051e0e04aace5add5daff58e09135a",
+   "hash": "ecf-sha256:b92b7149af7454ffa9124c99e693dcd862dd8c56bc864ae1b90eab65c172baf0"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/bde852462dd1386a",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a962783058210038d00d6974844fe63a40c216057f8db700eb00bfd068b9246ec93bccbd2a4770627831582100ece73e4f78f6b5f85e04e2fb8d7617cff7a283eb4ffaa6359bf9680eed6b41e16278325821005a8f75a3934fddceb97c540f3f30834192bc203a22804258f8a050e512ef89d1627833582100ccef4891a9a1b34a359fe892c897de4111446864cf6f4817a57498ec6b8b2dd7627930582100c6fb95ebed441b860c70fefb0f9f49fd307d1343a20d11da06fe309892341205627931582100dd04fdba63c50bc53ee25255d5be5aae3572fe7e933ef2e70112c029a1effaa56279325821006c10e9c10ac22b48ab888abf1f9e1fad70aea4e53247a3a3ff41bf9aa2e74c99627933582100e9caecca035d894f3a4092d8d43bea65779d59ce50486fd31b89dbe37d949afb646b696e64582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf5866b656e746974795f74797065781a6170702f61737465726f6964732f646973706c61792f71756164",
+   "hash": "ecf-sha256:bde852462dd1386a79ec8c69fffd584947d3484a64133e29ad67abbfa73948e8"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/bfd2bf225c9b67a3",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756501",
+   "hash": "ecf-sha256:bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/c08efe1001b7ae3b",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821000235a88e9e4d99b411361b87758a44f6ad548a142665c292f4c8525aa46d1c57657269676874582100e632aa47bab5dae26ffd3f4dfc8953ef45d29689b83136da50a7cb5c78ae00f4",
+   "hash": "ecf-sha256:c08efe1001b7ae3b71777ca07521e798a856e812667b0e6b08eba2ebc818b47c"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/c184d2774d34256a",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562787366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:c184d2774d34256a3f2090918dfe9068e03dab8b83ed06b1f1258eca17a12bb4"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/c1bac4a740f6f437",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a962783058210012e4703891a530d1aa05e4980f72bcae93d54ad91947f2314382cab13b4f5fa662783158210097c06987ee1e57b98ca376ebd0b32d9118d44eb622469a4af99eb6127ab4f65b62783258210059b541d5e7138de84cf54b0540ef2bdb29e2a1eef86263d6c6dadf281ccb2649627833582100b6c75616faeb23f12328b74c9b8faf745e31efd621c503036a892a768294384062793058210030bcd02ae55c3c87490d1b6d775c234f196d17534f0deea2d39001d990956569627931582100a2e6f1efc5e6a2a239fdd476c6a4b8c7a992340e2e0a81a04c61941d25083cbd62793258210021062e3f30bd7e9017fd3eae4eb1101349e1ce904313cb98d344f5bbddecdda762793358210051e33f82c0eef02f68a108362bee6974dfc42c70128a23901efbcde40cc51f38656b696e6473582100ad0a9798883da74ba26e4071f5cbdb3f79ad1cafb3516bb170937d42e6e272026b656e746974795f74797065766170702f73686170652f646973706c61792d6c697374",
+   "hash": "ecf-sha256:c1bac4a740f6f437b7388a2a3a2722b01f0a03c393e22121b4ddbf32f1e55ff8"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/c6fb95ebed441b86",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd657269676874582100ef269297fb8649cd8da4e60e5ee6f64c98c4ae38fce22dbe306c0dbe66ff600a",
+   "hash": "ecf-sha256:c6fb95ebed441b860c70fefb0f9f49fd307d1343a20d11da06fe309892341205"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/cb0bba4da5c38a5b",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821001e63b1fef5c4916f2b407719d36ecf735f7538e6335e2c29c387d40bd861f7ee647468656e582100c08efe1001b7ae3b71777ca07521e798a856e812667b0e6b08eba2ebc818b47c69636f6e646974696f6e582100a80ea2ce5b7f5d3f1463eecc033f5d6e75aa96cd93e0db9fa00a220e7198e7d0",
+   "hash": "ecf-sha256:cb0bba4da5c38a5b5520648012385e41a81f80ba71f707c2f18613d71e718684"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ccef4891a9a1b34a",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e657269676874582100fe6d64dedddf5dc93cf1e80704bc6b9e3357e9f0d8a1bab23a171b8ba5dcd5ab",
+   "hash": "ecf-sha256:ccef4891a9a1b34a359fe892c897de4111446864cf6f4817a57498ec6b8b2dd7"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d0ac9756ec2062d2",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821008b5a5c5962f2a8d777c8d6d49de14ba0f0169b97382ff8f58710fa1c44eeb73d6862696e64696e677381a2646e616d65646c6976656576616c75655821005d88e1bede3a5e4eb4b2895161857b3c8931a6db9092906b923923d0bf198328",
+   "hash": "ecf-sha256:d0ac9756ec2062d2fe87f7264bafb7698c1e8b6623a1b23b81e11e2acdf774d0"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d28def0ae8a0c821",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562783066656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:d28def0ae8a0c8214b92dfa4363d8a48e1832748b7d2747615092e2f3b1ce1bb"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d349c3f011190a52",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562793266656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:d349c3f011190a527d8d16644310d0a1f7ffdde1e599b0e4158aa474489fe40d"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d38a4532e935f740",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100d349c3f011190a527d8d16644310d0a1f7ffdde1e599b0e4158aa474489fe40d66706172616d73816171",
+   "hash": "ecf-sha256:d38a4532e935f74036f427292f308571644aedeb9e3070b2d2608efbb99cebde"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d4821dda442752cb",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756510",
+   "hash": "ecf-sha256:d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d8b12531ad141208",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100404bf5d0ad527857df1a2a85a1ba6e1f1811d68ab04513979a70ce2f87eaa36e65696e6465785821004cc63c5771c0e8f19ef6e02a9b8fe5efd28add47a43aef9a8db9302ef3689f86",
+   "hash": "ecf-sha256:d8b12531ad14120830b74f7c0920563e0faff3c563155a9731146ea6c1da3317"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/d8d4513a58d113de",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562793166656e746974795821006ac1ca5908085c6293c40bc1a934d03881cf8b4af9642585e09641b2b7c65d04",
+   "hash": "ecf-sha256:d8d4513a58d113deb079100c8bd551e581129b76ee6c9c18ac6bb3e664627c32"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/dd04fdba63c50bc5",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd657269676874582100229d9ac1f4f4a9a280978254933dfe133ffe71d2a2fc7eb95629931b65b01aa9",
+   "hash": "ecf-sha256:dd04fdba63c50bc53ee25255d5be5aae3572fe7e933ef2e70112c029a1effaa5"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/de65294e9b157276",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562797366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:de65294e9b157276042705107b6d0e0af7995fb73fd8a6f9f966f0e828a892dc"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/e3610609a55f91d0",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756504",
+   "hash": "ecf-sha256:e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/e42bcab7279e8685",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100346db6f8cd621c916ff93f045b70af22aae9ae4c68b5108d54e12b48b1f5250f657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:e42bcab7279e868528fd15c3468f59df752dd347f0405690b9b5f730053a46eb"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/e632aa47bab5dae2",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd7065696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:e632aa47bab5dae26ffd3f4dfc8953ef45d29689b83136da50a7cb5c78ae00f4"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/e7a8437ebc5384a9",
+   "type": "compute/lookup/tree",
+   "data_hex": "a1647061746878432f324b366a6b6a746d507459386d4d41623464596769424e4171374b7264596f6e566a65436e3265317347596d78382f6170702f61737465726f6964732f7374617465",
+   "hash": "ecf-sha256:e7a8437ebc5384a929e2969e1f3b07401b175fb71be6be3579e5d21caec6d3e9"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/e9caecca035d894f",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd6572696768745821007cb63425dae3b4971da6de48cdb994e0fb2361f8a1f89089e4e4ebccb0cb6ffb",
+   "hash": "ecf-sha256:e9caecca035d894f3a4092d8d43bea65779d59ce50486fd31b89dbe37d949afb"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ea52e549c8979b57",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656169",
+   "hash": "ecf-sha256:ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ece73e4f78f6b5f8",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e657269676874582100f47b3f1dba1668af085c8180cd1b5b8a76f8b9afd3158a957ade7e012bd53c38",
+   "hash": "ecf-sha256:ece73e4f78f6b5f85e04e2fb8d7617cff7a283eb4ffaa6359bf9680eed6b41e1"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ef269297fb8649cd",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821000d4928ff713791f321b952b7599363cff744598aa93b45445ec6fd6871a11efc657269676874582100261333840f959f17d32dbf824fedd68eef90209eec6042baef9aa9ed79c29399",
+   "hash": "ecf-sha256:ef269297fb8649cd8da4e60e5ee6f64c98c4ae38fce22dbe306c0dbe66ff600a"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/f040fa32fbef0a24",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6564726f747366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:f040fa32fbef0a24c75319cfe5a407f04a81f2250557d069dc15dfc6a7cc2b8c"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/f1fdc5de02f8112c",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756502",
+   "hash": "ecf-sha256:f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/f47b3f1dba1668af",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100d8b12531ad14120830b74f7c0920563e0faff3c563155a9731146ea6c1da331765726967687458210075efc8441615688598d6b39120c84ef0e68362ad926d7e226e3b668a10e4ffe5",
+   "hash": "ecf-sha256:f47b3f1dba1668af085c8180cd1b5b8a76f8b9afd3158a957ade7e012bd53c38"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/fc58ec32c0f688b6",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100d28def0ae8a0c8214b92dfa4363d8a48e1832748b7d2747615092e2f3b1ce1bb66706172616d73816171",
+   "hash": "ecf-sha256:fc58ec32c0f688b60455dd091e952fea2639af5f573fbafaa2f47a3a3f63e1e7"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/fe6d64dedddf5dc9",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821002c513cdbc3a3280a880e336008dbbe3e5082b14c06a9a1b1bf95ca2cae67800165726967687458210075efc8441615688598d6b39120c84ef0e68362ad926d7e226e3b668a10e4ffe5",
+   "hash": "ecf-sha256:fe6d64dedddf5dc93cf1e80704bc6b9e3357e9f0d8a1bab23a171b8ba5dcd5ab"
+  },
+  {
+   "path": "app/asteroids/display-expr/_expr/ff9fcd9cde28e615",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100a1b93dafcf600ca6d771f690e6a04efa738df66f51077b7c8bf66f6f10eca81d647468656e5821003abfa4d68cd41d2b8aff421d803519d4879f3fde49726641fe745bb39ab2a6ca69636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:ff9fcd9cde28e6152e5214f7b1b2ac8f2e1dab8bd084bd524b8d3c1a4e1c4046"
+  },
+  {
+   "path": "app/asteroids/input0",
+   "type": "app/shape/key-set",
+   "data_hex": "a1646b65797300",
+   "hash": "ecf-sha256:065ca327b653b43b0483bbfe9e0b198214a0b772abe0f4e8b9f132ad399d78f9"
+  },
+  {
+   "path": "app/asteroids/interface",
+   "type": "app/program/interface",
+   "data_hex": "a86473746570726170702f61737465726f6964732f73746570647469636ba2646d6f64656c636c6f636b2d64726976656e69726174655f68696e740c69737465705f68617368784b6563662d7368613235363a303836376630326265663238396563343436643866633037396534373734393036323639373061323438343765323161326262333633353836303465396337636a73746174655f70617468736170702f61737465726f6964732f73746174656b696e7075745f706f72747381a8646b696e6468736e617073686f74646e616d65646b6579736470617468736170702f61737465726f6964732f696e70757464726f6c6565696e707574657363656e65a1666b65796d6170a46130646c656674613165726967687461326674687275737461336466697265657368617065676b65792d73657467696e697469616c746170702f61737465726f6964732f696e7075743068747970655f726566716170702f73686170652f6b65792d7365746c6f75747075745f706f72747381a8646b696e6468736e617073686f74646e616d6567646973706c61796470617468756170702f61737465726f6964732f646973706c617964726f6c6567646973706c6179657363656e65a26477726170f566626f756e64731a000100006573686170656c646973706c61792d6c69737466736f75726365781a6170702f61737465726f6964732f646973706c61792d6578707268747970655f726566766170702f73686170652f646973706c61792d6c6973746d696e697469616c5f7374617465746170702f61737465726f6964732f73746174653072696e697469616c5f73746174655f68617368784b6563662d7368613235363a36396333336530396439646339343662396333313562303832396235363862616130613235656133383333303636626334616434656266396439396336623536",
+   "hash": "ecf-sha256:6b542d8a2e74a6fe12ca68b3ddba2b4f18d207124a054ef8fdba4f2776c6d57b"
+  },
+  {
+   "path": "app/asteroids/state0",
+   "type": "app/asteroids/state",
+   "data_hex": "ab627873981819800019d00019800019300019800000000000000000000000000000000000000000627973981819800019800019d0001980001930000000000000000000000000000000000000000063726e6719303963737a739818000303030300000000000000000000000000000000000000637678739818001834385038331851000000000000000000000000000000000000006376797398180018511834385038330000000000000000000000000000000000000064726f747398180000000000000000000000000000000000000000000000006474746c739818000000000000000000000000000000000000000000000000656b696e647398180102020202000000000000000000000000000000000000006573636f7265006673746174757300",
+   "hash": "ecf-sha256:69c33e09d9dc946b9c315b0829b568baa0a25ea3833066bc4ad4ebf9d99c6b56"
+  },
+  {
+   "path": "app/asteroids/step",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100180f4d4d8845732256f8d21a4764557ffa0d53ec1c89b75b44eb7d2d4a2c89f86862696e64696e677381a2646e616d6561736576616c7565582100e7a8437ebc5384a929e2969e1f3b07401b175fb71be6be3579e5d21caec6d3e9",
+   "hash": "ecf-sha256:0867f02bef289ec446d8fc079e477490626970a24847e21a2bb36358604e9c7c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0021ab407769972d",
+   "type": "compute/if",
+   "data_hex": "a364656c736558210058a8e86eed5d5ccf2ef6d51ba7e764af458f29b0763e1466d5971a7659527f9c647468656e58210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a69636f6e646974696f6e582100d5f4d37618eb9bb36c14e32a149ca995a204136ab747fd57956897265b339c54",
+   "hash": "ecf-sha256:0021ab407769972dc7749df56d0109f8d66f69a7ee27d1958dba6cf8e819c5bd"
+  },
+  {
+   "path": "app/asteroids/step/_expr/003888b12834adaa",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626c74646c65667458210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2657269676874582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:003888b12834adaa634177a9164256b72b14261543be62b588d7663124340520"
+  },
+  {
+   "path": "app/asteroids/step/_expr/015d20214b981b35",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756590385f38583843382400182518441859186018591844182500382438433858",
+   "hash": "ecf-sha256:015d20214b981b35bf6c27fe205e33bf06a6bb4fb9fab572b1fd8aafe06c7786"
+  },
+  {
+   "path": "app/asteroids/step/_expr/020858891d999f8d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100b70e90ccbf0ee688e2e4c7f65d7027df488f67b347ae793bc646ad2b05e553226572696768745821009b6eea4bf6475a3fd450f9f5b8cfbb8d49c2ad1a02f41b15efd5143fe104de76",
+   "hash": "ecf-sha256:020858891d999f8d89f1f91f0e7677a9e1ce7915442fd286dd3649dfbf42c236"
+  },
+  {
+   "path": "app/asteroids/step/_expr/031057f5e40de618",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce65696e64657858210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2",
+   "hash": "ecf-sha256:031057f5e40de6188826f2b33500974b0aed50bf8a167f24e3b99bc4ca37eb9d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/043f43cf629b9028",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100382cc91e7100e65422c12cfbd4220084dc401c3ad68b4ffad20f45dd00c761d9657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:043f43cf629b9028a59e42d7439bee4099174734e2c4192c55349437096241f2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/06aa2e7323d9788b",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd7065696e64657858210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2",
+   "hash": "ecf-sha256:06aa2e7323d9788bebe0050a0ef1906bc94ee213c89d1989cf091f40be58b4bb"
+  },
+  {
+   "path": "app/asteroids/step/_expr/06e39d4a9c795c4e",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100cb829564e619cb5c200b2fdaae3be1cff2624a3f43b0d2c905df51f39628c154657269676874582100903b2e7d05fd374e240a9485faf68190f5da4f25fc7db0b54adc25015b4e007a",
+   "hash": "ecf-sha256:06e39d4a9c795c4e71d36844e70cfb11fe75fc7b0df3062b7aca4971641fd186"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0783912d7b8f9dd6",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65656672656573",
+   "hash": "ecf-sha256:0783912d7b8f9dd678200d7d62fa62f51dc7a88bf8f7d6cb3dc55b1cfba2cac7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/07d6c16a855c42ea",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586657269676874582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a1204853",
+   "hash": "ecf-sha256:07d6c16a855c42ea060dfecfb35db0158261b7c828d7406ba9cffaf7b806f886"
+  },
+  {
+   "path": "app/asteroids/step/_expr/07f35c6435d2c112",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565f4",
+   "hash": "ecf-sha256:07f35c6435d2c11204ceeff414d9db4680f890e7d74f2393cb74f777f989a9fe"
+  },
+  {
+   "path": "app/asteroids/step/_expr/081a0f66d926e506",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182657269676874582100c2fdb65ec7ee31894103f0effd1cbef2ea9e24e1a637ac2f6cd8b52025184ae1",
+   "hash": "ecf-sha256:081a0f66d926e5061586c1f2a534bf4271dfd3f4b448817325f8e834f18840d1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/08e65c5a72059714",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e64657858210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2",
+   "hash": "ecf-sha256:08e65c5a720597141df889f95fb39a0ae8f91956e56c8126cba81081992d36e4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/08ee4870440719f3",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821009b3451650070a970112322f47735dee2f96bc860efed3264d4303a9a352e86a766706172616d73816161",
+   "hash": "ecf-sha256:08ee4870440719f32ab97802b024194026efc1bd3129b56c2e03ff82181f95bb"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0a441956ba268453",
+   "type": "compute/length",
+   "data_hex": "a1656172726179582100d87f67174aeb8ec5b5b4caffe9629a1c1dd7c5cec489377ea9e60af9f1265ed3",
+   "hash": "ecf-sha256:0a441956ba2684537102c708c4e8d564029ed8861b59f1f89bb553c008fd4a38"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0af3960f19c6beee",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100c58a88cc547d9fdcd89278f78e5500952eacba5f8d73e9051b4f80c3584d263965696e646578582100979defaa0842407bf9978ca1d516f0395ce5346733b56d6d5ab846ec4648e19f",
+   "hash": "ecf-sha256:0af3960f19c6beeef1a76782eebe5c6d7af9cdf5132ca3ffa8172ddccaa3307c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0b0bf08e6afa0eca",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e646578582100d56efe5b766c544717a138158842c245148ab3b551af8ae03e500921b878460f",
+   "hash": "ecf-sha256:0b0bf08e6afa0eca94c8e01ce77ba7fbd7482d1aec8b8c5343994bcc168a3a92"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0d55982b4fadc8e1",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65646e726f74",
+   "hash": "ecf-sha256:0d55982b4fadc8e1bb75cbdc90447ea7cc0f5a413530c0cd3403af9cb17755e5"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0eb9d283b7d8fa38",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100cbb24c6c73a64d4ff4ca7edbcf1b6b0337501f9feaf7044fd97592b3d03ee4886a636f6c6c656374696f6e5821009cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e2668386470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:0eb9d283b7d8fa383802365cd142c6f58096253f8d53c204019d96b153bec7a4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/0ff623969658a90c",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce65696e6465785821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:0ff623969658a90c1fcb9f738f8a65a0e795d78f5a13a32fd9a0125bee628a0e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/10596a62b9144b89",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce65696e646578582100d56efe5b766c544717a138158842c245148ab3b551af8ae03e500921b878460f",
+   "hash": "ecf-sha256:10596a62b9144b89fbd30feb36962e62aa771ade47d626def955b0f30a91b27b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/10895cecf2e2cedd",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821006844628eb63005c36da18c77c3bac670a00d381a4cdad94cfa94929e0715287265696e646578582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:10895cecf2e2ceddea4afd70ba8ebb768f1ee7edaacb75459f80dfaebcd883fa"
+  },
+  {
+   "path": "app/asteroids/step/_expr/12f5e20ac1c9ae85",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100144e52a214f367b17692976a4736b33bf4b81001d2887329f62effc79eb1265d657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:12f5e20ac1c9ae85ed40df327fce050b1cd407d62325b49b985494e867c8c307"
+  },
+  {
+   "path": "app/asteroids/step/_expr/144e52a214f367b1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821003780f6289ec19ee9a1c8889c52aa3005fce70dbcb0e12775fa804226daa6df1a6572696768745821000af3960f19c6beeef1a76782eebe5c6d7af9cdf5132ca3ffa8172ddccaa3307c",
+   "hash": "ecf-sha256:144e52a214f367b17692976a4736b33bf4b81001d2887329f62effc79eb1265d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/15e8ebe7dbf4a18d",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65687368697064656164",
+   "hash": "ecf-sha256:15e8ebe7dbf4a18def4638ef009645e7d6bd208b31a083067e89305413b9973f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/166804d037b7a76c",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65656b696e647366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:166804d037b7a76ce2b1730aa8bfc52de7617d7de1f26f9a6915767e18cf0a56"
+  },
+  {
+   "path": "app/asteroids/step/_expr/17dce7c493e40907",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756512",
+   "hash": "ecf-sha256:17dce7c493e40907cccd1f64fa2d6e6b8d90e6972c5ccd2cd108b40691f16ad4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/180f4d4d88457322",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821000021ab407769972dc7749df56d0109f8d66f69a7ee27d1958dba6cf8e819c5bd6862696e64696e67738ca2646e616d65646b6579736576616c756558210082179db1f1bf83181f5fe1a0d0a9fb391f7104e2ad1b7d843f47b78134b25e0ea2646e616d65656b696e64736576616c7565582100166804d037b7a76ce2b1730aa8bfc52de7617d7de1f26f9a6915767e18cf0a56a2646e616d6563726e676576616c75655821006a6f8749955cf8e34eca4c6608ca0ebe5c1b8d404125dbb4e1e665b639f34cfda2646e616d6564726f74736576616c7565582100f040fa32fbef0a24c75319cfe5a407f04a81f2250557d069dc15dfc6a7cc2b8ca2646e616d656573636f72656576616c756558210028d2bf35a6a0d5211219faee98ac6fbfd86e1396ecfc8ca7be4615fddb088d0ba2646e616d65667374617475736576616c7565582100ac2f479816fac5ebae310109e3ad5947f4420cfd57ceec520dcda94cbe4a9237a2646e616d6563737a736576616c7565582100a9e27f0af6f8036033e2bedbca72a9e43c5bc9830fe581925d1c431a5ebe4e87a2646e616d656474746c736576616c7565582100cb366613ffafc3292d692601004a00b45cfaf81a2e17d2f7de78b166c2490f2ba2646e616d65637678736576616c756558210091b01529bde40505a908b33f42ad2ff08f452fdd6b45882ab77c51cd70c0c0dfa2646e616d65637679736576616c7565582100eecf37fb61daf654cc48958d5203b26e82a73d49b1a980cb4bdb08ffc3eea70ca2646e616d656278736576616c7565582100c184d2774d34256a3f2090918dfe9068e03dab8b83ed06b1f1258eca17a12bb4a2646e616d656279736576616c7565582100de65294e9b157276042705107b6d0e0af7995fb73fd8a6f9f966f0e828a892dc",
+   "hash": "ecf-sha256:180f4d4d8845732256f8d21a4764557ffa0d53ec1c89b75b44eb7d2d4a2c89f8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/183b37429633829d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100e46281ee8c947218c7826719077758754875afbecca75a32c87e30189766a93e657269676874582100e46281ee8c947218c7826719077758754875afbecca75a32c87e30189766a93e",
+   "hash": "ecf-sha256:183b37429633829d485fd462ab72d34947ad14c88595b45a21bd1c0200340c8f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/189a7fa1be721552",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100f25415a293b6a0bc8e41e1ef09b220a23c78b1dded86036c182d06ed842790426a636f6c6c656374696f6e5821009cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e2668386470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:189a7fa1be721552ffe6b22162124ec60e64068fd8bf8987ef2e7ecd3b4b0951"
+  },
+  {
+   "path": "app/asteroids/step/_expr/195429f581c63385",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:195429f581c633856eec5d050f7064631e80257bb8ded4d1af0c6fb25acef553"
+  },
+  {
+   "path": "app/asteroids/step/_expr/1a03aa2d4883d1e5",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100195429f581c633856eec5d050f7064631e80257bb8ded4d1af0c6fb25acef553",
+   "hash": "ecf-sha256:1a03aa2d4883d1e5afd12d5e5582fa32968dee93c5eb5c8fd4c17050ec910b1d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/1a3c4ea8756a92f5",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c65667458210099f25f9da4758de866f3a16952f9ab1c337f4f81daadac1d25003e328044755b657269676874582100c80d8db40920bf07b995f941ca49732d9e061f9a88335fca9224755d094e6178",
+   "hash": "ecf-sha256:1a3c4ea8756a92f593003b3fde34e7967f7b75eb2267188c74c1f030c71d22b3"
+  },
+  {
+   "path": "app/asteroids/step/_expr/1a7f708c44849934",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100fc20cb444a72f1884882694de7abf90ea164e4975af907e65abcffb2bd12c819657269676874582100c3455ebd052f82c35a9519b5278d771e0a5f8fdf53b1a5a9bc371e7b0d8d3ecf",
+   "hash": "ecf-sha256:1a7f708c44849934910497c83ec40261b677699f73d88a5246ae9d88f357957d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/1dc84fe5c28087d4",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a86178582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf71826179582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf718262737a582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182627678582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182627679582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf718263726f74582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf71826374746c582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182646b696e64582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf71826b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:1dc84fe5c28087d478313de0ec25957de38c4f6479a584bf449953fd64faa014"
+  },
+  {
+   "path": "app/asteroids/step/_expr/1fa85092aa5fcdb8",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626c74646c6566745821006379a0f2831e3e0c737029588b4acd3d22677a8a9c5d3c64c78d656f33d7e03f65726967687458210068a5d3f4584bc7a493d58fb552935ee06cb791db3b4e59e6a3c77aa432ccac59",
+   "hash": "ecf-sha256:1fa85092aa5fcdb8b7858998c9f20c68a76a3b7f8a7c6ece868f2207c9819825"
+  },
+  {
+   "path": "app/asteroids/step/_expr/1fcc7dd7587401f9",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656573636f7265",
+   "hash": "ecf-sha256:1fcc7dd7587401f9baa41e44e09b348b71619e9d5cf64fe716198546bc4272f7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/200501fc0429464e",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100020858891d999f8d89f1f91f0e7677a9e1ce7915442fd286dd3649dfbf42c236657269676874582100020858891d999f8d89f1f91f0e7677a9e1ce7915442fd286dd3649dfbf42c236",
+   "hash": "ecf-sha256:200501fc0429464ef32fd0d361669ae8e02028ef2af284267e99010e7d9e8a19"
+  },
+  {
+   "path": "app/asteroids/step/_expr/223c9ace052351d1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100bb4ad87c390c736febe8f1c02803054e98bf2c56b73c7c43c14cb93d9aa04d84657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:223c9ace052351d1525ffd6c71e07b00ddd75faa18ef61106950463ce1877fc2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/22ea7c967fd33660",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100e00451699954255ae89028d271d5678480f19fbbb6371648453403f4aa361b33657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:22ea7c967fd336609143138016f631fee16daacddba35e9fe12016d066881f2f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2380c71bd06e227f",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6566666972696e67",
+   "hash": "ecf-sha256:2380c71bd06e227f516139878bb791434cd68a755f7ddf09e13159d2dce8d235"
+  },
+  {
+   "path": "app/asteroids/step/_expr/23d1f56ff17a7983",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100353c61e2695506dec86028b6241f7eef1643df23d297ee4618d9724180389d4c657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:23d1f56ff17a7983dae730c565cf3b83fed868a5cb0942091790a508a6419a28"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2496b14977171db7",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a86178582100d2fa1cd7913f2c0c23153f0596e49f16d0818c7e68c0a3d62ba6cc5212ac91a16179582100e5281365df2ae402b8c66a9fbbcb1c6385dab7999a14fbaa1f5b27665c4b0ba962737a582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182627678582100d43b5efee62fa28b172c85d8f8fa7237ae216c0c8df2c7a51314c561e95eef606276795821008e2657ef5a189a3020972d8fd611a5f9ef0ac7c537bbb8bbdab2e332f340c8e163726f7458210010895cecf2e2ceddea4afd70ba8ebb768f1ee7edaacb75459f80dfaebcd883fa6374746c58210017dce7c493e40907cccd1f64fa2d6e6b8d90e6972c5ccd2cd108b40691f16ad4646b696e64582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a12048536b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:2496b14977171db79ea118087750c4f8caf821a0221b08c814c2a848e9d37731"
+  },
+  {
+   "path": "app/asteroids/step/_expr/253714b230465b4d",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821004a6ad96cdc11946905eb763c5682cc19b10bfed95d06a1f684a10b2ed30a2b0865696e6465785821005cb0e601c1a207b634df6593a1104258d3c185033020a3a22fde94ee807e4245",
+   "hash": "ecf-sha256:253714b230465b4deafdee0ced08fddeff43bfe1c06114db4aadca1824cb00f8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/265740e5c2bd56e1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c65667458210051057ec5b474a9e348bfe7526267f743d6bc1a7fbc931a5b11436c893830159965726967687458210051057ec5b474a9e348bfe7526267f743d6bc1a7fbc931a5b11436c8938301599",
+   "hash": "ecf-sha256:265740e5c2bd56e1aa155c20a99c4ccc6b0aeb1ff426d0f63d1cecc6bec27371"
+  },
+  {
+   "path": "app/asteroids/step/_expr/26c5016e14ce849c",
+   "type": "compute/lambda",
+   "data_hex": "a264626f647958210066ec6d8c0d0f6b9f32780aab582ad91f09db756874a2bf4ce96d1ee5968421ad66706172616d7381616a",
+   "hash": "ecf-sha256:26c5016e14ce849cd90d47d601ba102f0de7dc01a66ad214723d01650c8ec625"
+  },
+  {
+   "path": "app/asteroids/step/_expr/28d2bf35a6a0d521",
+   "type": "compute/field",
+   "data_hex": "a2646e616d656573636f726566656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:28d2bf35a6a0d5211219faee98ac6fbfd86e1396ecfc8ca7be4615fddb088d0b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2c1f99d17166fc30",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100ca619885e89f8b0b585f0c2f2a3a25a9d158259a0cdef8b23cb9feb9c459c308657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:2c1f99d17166fc3019ea7ae8487676308d964bcc723214f11079aca82f945ad8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2c2b1ed3def5b30f",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565190600",
+   "hash": "ecf-sha256:2c2b1ed3def5b30f5b79fc4896287604976cd046ecf7ae91a9d9a7285b755787"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2c3bee63b536fac7",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063646976646c656674582100a57b7054068f2520219df13d185d3537b00be7acdc2f25378ad7dea4dd73fbe7657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:2c3bee63b536fac7237bdaa4a021d7e4737b077cf2c4f63ffd84143b46135308"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2d12122db3dc9e54",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100e9aabedd509c4dfab7470273762c98cf84981ce04fc430e0d548d1e9b3f1973b6a636f6c6c656374696f6e5821000783912d7b8f9dd678200d7d62fa62f51dc7a88bf8f7d6cb3dc55b1cfba2cac76470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:2d12122db3dc9e542efe2bb7e3ef481b768102bfb9fbb6f1741e582933f06ca8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2e5af381641810bd",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100c78c634e83beb9a945641b7a8ed8378299e04e270ee1eda08753755f732a1d3e6862696e64696e677382a2646e616d65636e76786576616c7565582100be6ca4718f5e61a4c42777099e286c5a610b835a9f526068142b30e8c13a5756a2646e616d65636e76796576616c7565582100cb0a10eda3b5f916eef469cf4fe4aadad1c5ec8f6425a07e22aad5b6ee48d5e3",
+   "hash": "ecf-sha256:2e5af381641810bd6d9ee0cb4280b056b072f9a0fdd59acbd32dec0f1b2fd43d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2ed03fbb9b5329f4",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a86178582100e0d7043ff69ed43e4f43ca6759f850ae14cf9f7aa213901b7caf37a918ca92ba6179582100b45a62129e684d8a8cbcfa8d1c89ae8bc744ffd9f3445a2365c7fc5a5d1117a862737a58210045e2418f7cb65b4636bf19eaf7f4c017b760fb1dda9dd5b69555fb32751a0921627678582100f44c2101b5bae6cae8f4739631eefd5f4955baa858ed9daff41a6b387cb32b20627679582100081a0f66d926e5061586c1f2a534bf4271dfd3f4b448817325f8e834f18840d163726f74582100dc16b8859387572db6d6eee9ee7e31ae0ab36b80ac189d12b327a2b988e81f206374746c582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182646b696e64582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b12936b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:2ed03fbb9b5329f4afec34f1ab6656a8d551ef6edeeda8379cbdbe0002295e3b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/2ff89b4da6a960ab",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821002ed03fbb9b5329f4afec34f1ab6656a8d551ef6edeeda8379cbdbe0002295e3b6862696e64696e677381a2646e616d65637372636576616c7565582100818d3503e7d270e7422a6e1f39342e9023b152baf81d6b29e1138e16504fe84f",
+   "hash": "ecf-sha256:2ff89b4da6a960ab136b81db9eb6854e36e74afbc0d94aa621ffacd3f37933b8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/306e12c6e1be65bc",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821008b67bd1a0aa2f1706fea50e78cb48c0dc69906edad5c1c418f5733d82923210e647468656e582100a581c43b05aca6a7dc2fe3ffadcb2c16467ea19ac37868cac6e5c7b372cb754169636f6e646974696f6e582100ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48",
+   "hash": "ecf-sha256:306e12c6e1be65bcd5f97705f7491d7249abb9b0de350390be8f803cb6307e7d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3121a528e1ccfc36",
+   "type": "compute/if",
+   "data_hex": "a364656c736558210076091ce0536e2a98e8c981731a95a631f46159b35583e5bd243c6138a4877935647468656e5821002ff89b4da6a960ab136b81db9eb6854e36e74afbc0d94aa621ffacd3f37933b869636f6e646974696f6e58210048e9dd5dc824a46ec500b363a200f32404830f8268e4f044bf0d753f50c26734",
+   "hash": "ecf-sha256:3121a528e1ccfc362bdcd8491404ec900903e43221b066765723ced58d818a54"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3147ab75dbc1e16f",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c65667458210031b039f787085d066b6712150301e55880236841283438deed56f8414acbad4c657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:3147ab75dbc1e16f4fb6ce92a9fff08f3f2de6a4e17211b384112a47a3052c54"
+  },
+  {
+   "path": "app/asteroids/step/_expr/31b039f787085d06",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063646976646c6566745821001a03aa2d4883d1e5afd12d5e5582fa32968dee93c5eb5c8fd4c17050ec910b1d657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:31b039f787085d066b6712150301e55880236841283438deed56f8414acbad4c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/326aec2daa7f8dc0",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100b6e65bde2c6ff606e686830b6dd79da7d73d5310182b2aee6c62d9af962b7194657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:326aec2daa7f8dc0c093096adb63af6da83e3033616082ed7399d77707eca190"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3398ad7cbff241af",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100cc8e00314d58cc50cf80f3f30889ec56c5cfc3aebd744ebcf48b84b44ea1e32366706172616d7381616a",
+   "hash": "ecf-sha256:3398ad7cbff241afd38c831ba3bccedc942d92e2a39391e2e3f635d894253155"
+  },
+  {
+   "path": "app/asteroids/step/_expr/33a503bccd01291f",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821006844628eb63005c36da18c77c3bac670a00d381a4cdad94cfa94929e0715287265696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:33a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd"
+  },
+  {
+   "path": "app/asteroids/step/_expr/33d888a8931a7f07",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473ab6278735821003f5d3b2444e0f663e9e65e04aa03bf6fd18f9521680ccb2d0a402075903c5c9462797358210038c5e87911f84d74e4228689304a73cb20f466e1eec2edc8d0f9dbbb562abfb763726e67582100778e92cfaac40dd870e00f21681a587b229c48f98e29e632dfb875d54a2871d563737a735821004aef3c45a44c60f0b40394b5721e1ef73cd8b9dd1f5d0b170c12f35bdcb2fc08637678735821009815942d92e2cf15c90ed6ff84d6d670980fe48aaff65b947be402cdd8b749fa63767973582100c16d58fb4cee67f11ef73756fb0ce8179968cf85cdf334f2ef0da8a3a2abe75164726f7473582100c13a239eb066cf60b0fed08d5e74acdd1eac243446a1e56963a2f55b9d2e969f6474746c7358210088a8b70f36bbfe473ec3fc7cdcba3b312d07a5c3b155994b60e54dcfe383080a656b696e6473582100f465b1ee95c69d6ea01076e017aa5ac21fd2398dac12136d8d093ec64b5db1126573636f7265582100b0a9765da642a5ca0f2b87b19d456c1ac785fb14aa43c9baeddafd21e5786b6066737461747573582100dd6e8c87ba97c6338747978cffb40a1f6bcadda86153a69e39cd4bb74bb3f03d6b656e746974795f74797065736170702f61737465726f6964732f7374617465",
+   "hash": "ecf-sha256:33d888a8931a7f073f875ead475b0daa91cbc0c792001c2fe2ecde407b9a4b96"
+  },
+  {
+   "path": "app/asteroids/step/_expr/34c49f5432e20060",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c65667458210006aa2e7323d9788bebe0050a0ef1906bc94ee213c89d1989cf091f40be58b4bb657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:34c49f5432e2006086200c90e38330a0ed93770954cb8f84e8e3cd5db73e2b96"
+  },
+  {
+   "path": "app/asteroids/step/_expr/353c61e2695506de",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e657269676874582100eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d839",
+   "hash": "ecf-sha256:353c61e2695506dec86028b6241f7eef1643df23d297ee4618d9724180389d4c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/35f10ca03ad8e7f3",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565903735302800091116181816110900283035",
+   "hash": "ecf-sha256:35f10ca03ad8e7f3e74db17daf8397036fedf5b1a8b638d5aff9b6725382e9d9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3780f6289ec19ee9",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e646578582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:3780f6289ec19ee9a1c8889c52aa3005fce70dbcb0e12775fa804226daa6df1a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/382cc91e7100e654",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821006b9d77caf574aa28ad5e92dd5ce3fe4fe535ca46b3625abc1fae0313f4dc0e68657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:382cc91e7100e65422c12cfbd4220084dc401c3ad68b4ffad20f45dd00c761d9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3890f86c195cc53f",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c65667458210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2657269676874582100e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e",
+   "hash": "ecf-sha256:3890f86c195cc53f33e7f194c6c32d9f3323be7779cde8833a883ae5ce089207"
+  },
+  {
+   "path": "app/asteroids/step/_expr/38bda0e6b0f898c4",
+   "type": "compute/length",
+   "data_hex": "a16561727261795821004e64f2ec1d21917ede31778b040d870446aaeb5fd88dd544b3d7725b68c78ab8",
+   "hash": "ecf-sha256:38bda0e6b0f898c463943b7e40f131e50b43410949cb62027cc7b5c4ec48279c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/38c5e87911f84d74",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e58210008ee4870440719f32ab97802b024194026efc1bd3129b56c2e03ff82181f95bb6a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:38c5e87911f84d74e4228689304a73cb20f466e1eec2edc8d0f9dbbb562abfb7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/392920ea54c81f22",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce65696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3a013295c89961aa",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821005bc4052f010b388685ccab69666e612dbd769787717f19f18815655c5cda685a657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:3a013295c89961aa1e7feaea9ea011d03fe44ad4996940b9910fb0fc6193311f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3ae6e729e69de27b",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821003e58daaf42f455b5b615a9a032c8314150bb33b1bfbf0cb50be1ac1dbc64ae18657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:3ae6e729e69de27b9e658fce6cf35c8229b2c327829e12a1376337e0f6b3dd09"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3c21234ffab2612f",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6566737461747573",
+   "hash": "ecf-sha256:3c21234ffab2612f3ac8c60931414ee4117787f6fdaf5cf3457803a7e2a833b5"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3e58daaf42f455b5",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100b8faedc3f0f358c59717402c885f3b4eb370f690811f3a9b1158e6c5b9d1c4bc657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:3e58daaf42f455b5b615a9a032c8314150bb33b1bfbf0cb50be1ac1dbc64ae18"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3e7c9e877bb78c41",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100fe89cde142a366253ee1070d5b9fd965ee2872cb9d10e397c1a940ef7ff332c6657269676874582100200501fc0429464ef32fd0d361669ae8e02028ef2af284267e99010e7d9e8a19",
+   "hash": "ecf-sha256:3e7c9e877bb78c4159579c93c71472dc752b171ad98bebfce7a9df628367bc4b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3f223427c11c093b",
+   "type": "compute/let",
+   "data_hex": "a264626f647958210033d888a8931a7f073f875ead475b0daa91cbc0c792001c2fe2ecde407b9a4b966862696e64696e677382a2646e616d6564616374736576616c75655821000eb9d283b7d8fa383802365cd142c6f58096253f8d53c204019d96b153bec7a4a2646e616d65646e726e676576616c75655821001a7f708c44849934910497c83ec40261b677699f73d88a5246ae9d88f357957d",
+   "hash": "ecf-sha256:3f223427c11c093b7549fd41c96bf2be885a1fd0c37d57e0cf90cd12e563f0da"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3f521428491a92b5",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210069ae842bc32242a9c90c8784c7802e06bbbe539be2079fc408c3a12d41d4681165696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:3f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3f5d3b2444e0f663",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821005118aa6fa5048cdd76b8e199a49cbe2736359edf1d2b9c95ddd8f225452807056a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:3f5d3b2444e0f663e9e65e04aa03bf6fd18f9521680ccb2d0a402075903c5c94"
+  },
+  {
+   "path": "app/asteroids/step/_expr/3fa647eb46ce5463",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821003f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b657269676874582100d507c198781049f11db752cee9d97e4179233713e6ce4924fd0ff2bddb9e96d8",
+   "hash": "ecf-sha256:3fa647eb46ce54631eca1497fa029a27a09944132569e09fb3fd809586a6fb40"
+  },
+  {
+   "path": "app/asteroids/step/_expr/423fb80745990985",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821004fbb5beb5087b8d5c507579c672d42a9c21b533cb2bb1b3077576f2b05be3e4365696e6465785821000d55982b4fadc8e1bb75cbdc90447ea7cc0f5a413530c0cd3403af9cb17755e5",
+   "hash": "ecf-sha256:423fb807459909856d91263c1084db33afaa0d66e4c6b5f3524eb74d4603d382"
+  },
+  {
+   "path": "app/asteroids/step/_expr/43ca626e5f1728ad",
+   "type": "compute/length",
+   "data_hex": "a1656172726179582100a05e0e7f859eecc6c3e7ad489904ef0f5547b9e8a9332d6169d46251d579cbf2",
+   "hash": "ecf-sha256:43ca626e5f1728add956f55451bc165d3d294fc26189b2441a64dbacba709504"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4527f23abc3aa962",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100dc5ea24e1db148b4e5ce3544d3c78e30b6671a568d409eead2e48cea8a08ed2f657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:4527f23abc3aa962e74fe39cb2330331052ec010b98a3c7d0632e74148744844"
+  },
+  {
+   "path": "app/asteroids/step/_expr/45e2418f7cb65b46",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100a9c8d44c7dfbbb809a80720faaf73d93fc4d2ca74bfae65e61b7f5185c496e6b657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:45e2418f7cb65b4636bf19eaf7f4c017b760fb1dda9dd5b69555fb32751a0921"
+  },
+  {
+   "path": "app/asteroids/step/_expr/48538ba0b9b7028f",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656173",
+   "hash": "ecf-sha256:48538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/48e9dd5dc824a46e",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626c74646c65667458210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a265726967687458210043ca626e5f1728add956f55451bc165d3d294fc26189b2441a64dbacba709504",
+   "hash": "ecf-sha256:48e9dd5dc824a46ec500b363a200f32404830f8268e4f044bf0d753f50c26734"
+  },
+  {
+   "path": "app/asteroids/step/_expr/495421d835ab70a1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100ae02a401b44a68c285c24d73d6c9ecc7f130afcaf075df3f0bfbf7369cd950c1",
+   "hash": "ecf-sha256:495421d835ab70a15765d439dcad3e9d15e3af36edcc334801df74d3bf559ac5"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4a6ad96cdc119469",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75659000182518441859186018591844182500382438433858385f385838433824",
+   "hash": "ecf-sha256:4a6ad96cdc11946905eb763c5682cc19b10bfed95d06a1f684a10b2ed30a2b08"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4aef3c45a44c60f0",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821008195a83d1a36c322e091ffa9a2d98a19a0cdf0f8a5f2f14b5eaab8560c2acdfa6a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:4aef3c45a44c60f0b40394b5721e1ef73cd8b9dd1f5d0b170c12f35bdcb2fc08"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4da6c7ac839546c3",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100addece7628374ab6621c79ea67883fcfcd76ae76207d199ea4ac5a9a504270ab657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:4da6c7ac839546c31e475db9a9dace93113f4c10a0557a115bad400cffab2c68"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4e64f2ec1d21917e",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563617374",
+   "hash": "ecf-sha256:4e64f2ec1d21917ede31778b040d870446aaeb5fd88dd544b3d7725b68c78ab8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4f0372de11634f7b",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063646976646c6566745821004ff80a0de013e959740a49069252e3c46055e5dcba32a162c1ebd7b8290fde8d657269676874582100e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e",
+   "hash": "ecf-sha256:4f0372de11634f7bb9af718124cf626cf60b5af94b9f4a60e60f52cb39de0c62"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4fbb5beb5087b8d5",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565900009111618181611090028303537353028",
+   "hash": "ecf-sha256:4fbb5beb5087b8d5c507579c672d42a9c21b533cb2bb1b3077576f2b05be3e43"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4fce7c91ae35af4d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100b6e65bde2c6ff606e686830b6dd79da7d73d5310182b2aee6c62d9af962b7194657269676874582100a369549f990603206760acabf02417bfd8c5eb7c674c3065098ef639f38666b6",
+   "hash": "ecf-sha256:4fce7c91ae35af4d6dca0c7280ddea0205178c4c548254ed3a79b7455aa01488"
+  },
+  {
+   "path": "app/asteroids/step/_expr/4ff80a0de013e959",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100a4fa8862433617ab8d7253630488216366b3ab176b7a9a1785151b54b1b55541",
+   "hash": "ecf-sha256:4ff80a0de013e959740a49069252e3c46055e5dcba32a162c1ebd7b8290fde8d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/507f2c3a2afbd475",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821006b7f938896db5da59d78b7c39b8cf7a45843bcb293aad6f6b9688e6273c0486065696e64657858210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2",
+   "hash": "ecf-sha256:507f2c3a2afbd475fab10cb088adcc4c3087629d6c4f878fb290c510e4a177c4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/50e9181ec433da03",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563767873",
+   "hash": "ecf-sha256:50e9181ec433da03c188e5d1f65b1a6ad09ec7a8e8bc2932573fd4bdf661c728"
+  },
+  {
+   "path": "app/asteroids/step/_expr/51057ec5b474a9e3",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821002c2b1ed3def5b30f5b79fc4896287604976cd046ecf7ae91a9d9a7285b755787657269676874582100b0eb26f9edd458ecb5fcd0f5c545b2deafd1d1bc8175a666e02aeba8f049ba49",
+   "hash": "ecf-sha256:51057ec5b474a9e348bfe7526267f743d6bc1a7fbc931a5b11436c8938301599"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5118aa6fa5048cdd",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821009942fbe96b7bbc79e1685a24f71442aebba963eeb6ac3c2c965e912b9cafb7f466706172616d73816161",
+   "hash": "ecf-sha256:5118aa6fa5048cdd76b8e199a49cbe2736359edf1d2b9c95ddd8f22545280705"
+  },
+  {
+   "path": "app/asteroids/step/_expr/51bd058ff09a5a28",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65627873",
+   "hash": "ecf-sha256:51bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa45"
+  },
+  {
+   "path": "app/asteroids/step/_expr/53283959e3bc8885",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626c74646c65667458210006e39d4a9c795c4e71d36844e70cfb11fe75fc7b0df3062b7aca4971641fd186657269676874582100265740e5c2bd56e1aa155c20a99c4ccc6b0aeb1ff426d0f63d1cecc6bec27371",
+   "hash": "ecf-sha256:53283959e3bc8885a0217a6a2edf490126148a020d4c4c9e9fff161913c78d02"
+  },
+  {
+   "path": "app/asteroids/step/_expr/55201785b2102b6a",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65616a",
+   "hash": "ecf-sha256:55201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/56b04a3d5c9e5262",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:56b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd"
+  },
+  {
+   "path": "app/asteroids/step/_expr/58439939d6556924",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100c53990df3343c5b62e26468b127b765dc19b4d86f07cb573c747d90c177f969266706172616d73816161",
+   "hash": "ecf-sha256:58439939d6556924defb4d5df7688215309633b1545094178aaeb3d6bd069bdf"
+  },
+  {
+   "path": "app/asteroids/step/_expr/588c75852bcd2ecd",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65627973",
+   "hash": "ecf-sha256:588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/58a8e86eed5d5ccf",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821003f223427c11c093b7549fd41c96bf2be885a1fd0c37d57e0cf90cd12e563f0da6862696e64696e677388a2646e616d65636173746576616c7565582100f15c5f22d8a0bb20de0fcff193bc6467ebb327a08e45c86dcaf01d76faa6d260a2646e616d656462756c6c6576616c7565582100189a7fa1be721552ffe6b22162124ec60e64068fd8bf8987ef2e7ecd3b4b0951a2646e616d6566666972696e676576616c75655821005cc35fe9d2b0ad33a0f323b979b711d842f33f919cb4fa50d73f0efe1ad3bb46a2646e616d656566726565736576616c7565582100a77adf6afe178aba68b956d4b02b3157978adb23c70a3c313d21e61ce639e3a6a2646e616d6564686974626576616c7565582100d00267c835cad3ad129d34a8812c115741704744390975843dd68e95029b902da2646e616d65656e6f6173746576616c75655821005fec37be4c797079b9c2a47251bc865a98911f545b79677ba7653124448294aaa2646e616d656873686970646561646576616c75655821009685ce2e32a202ff00e2bb84ada56e42ce50d542e5cced7353684ffa5d2af1b9a2646e616d656673706c6974736576616c75655821009baf7a45a3f6c60ae53726c688db114f031ab1fcb50240e72e4e21d6c7778d46",
+   "hash": "ecf-sha256:58a8e86eed5d5ccf2ef6d51ba7e764af458f29b0763e1466d5971a7659527f9c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/58ea5abac592a313",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626774646c65667458210006aa2e7323d9788bebe0050a0ef1906bc94ee213c89d1989cf091f40be58b4bb657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:58ea5abac592a313f8b7727572f21ec6e2d7203d8b8d3d816a91640a30694d24"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5a2a1ab5f0ba20a1",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656461637473",
+   "hash": "ecf-sha256:5a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5a4c8b2114051c54",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821008e9d1553be32c8fb04e5824091da0f8115036a9776a4ac004ceab1d0cd0246f366706172616d73816162",
+   "hash": "ecf-sha256:5a4c8b2114051c543dc261aeb12d3c9ea0f5e3e0b522d21917bdda5e35963ef7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5bc4052f010b3886",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd657269676874582100c0bdd1e013f4c324cb29ae58cd0a54c3027552e416e673f9c4b071c2ccabb598",
+   "hash": "ecf-sha256:5bc4052f010b388685ccab69666e612dbd769787717f19f18815655c5cda685a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5cb0e601c1a207b6",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65627776",
+   "hash": "ecf-sha256:5cb0e601c1a207b634df6593a1104258d3c185033020a3a22fde94ee807e4245"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5cc35fe9d2b0ad33",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c6566745821005e65586dd6b6cc05456bff73893a60cff4c2e29e1ed9739efd1f7b2eafe8c8da657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:5cc35fe9d2b0ad33a0f323b979b711d842f33f919cb4fa50d73f0efe1ad3bb46"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5e65586dd6b6cc05",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100c639208041124bddc562aabdc058a407298daeb9a10e010ed8f6b19989162794657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:5e65586dd6b6cc05456bff73893a60cff4c2e29e1ed9739efd1f7b2eafe8c8da"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5f306f157b4679fe",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821004f0372de11634f7bb9af718124cf626cf60b5af94b9f4a60e60f52cb39de0c62657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:5f306f157b4679fe8399631a0883739fb3fc3b1be2adb9e56203d68b3c906edb"
+  },
+  {
+   "path": "app/asteroids/step/_expr/5fec37be4c797079",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c65667458210038bda0e6b0f898c463943b7e40f131e50b43410949cb62027cc7b5c4ec48279c657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:5fec37be4c797079b9c2a47251bc865a98911f545b79677ba7653124448294aa"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6236b71c274efd13",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e6465785821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:6236b71c274efd13cfd637cd5162d40e91cf90f77bf3c69538a4fe3e4aacc292"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6379a0f2831e3e0c",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821008bf21952e9486016deb7c1bedac56c2358ec8927040f3aa4e749facad5831d30657269676874582100183b37429633829d485fd462ab72d34947ad14c88595b45a21bd1c0200340c8f",
+   "hash": "ecf-sha256:6379a0f2831e3e0c737029588b4acd3d22677a8a9c5d3c64c78d656f33d7e03f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/66ec6d8c0d0f6b9f",
+   "type": "compute/logic",
+   "data_hex": "a3626f7063616e64646c65667458210034c49f5432e2006086200c90e38330a0ed93770954cb8f84e8e3cd5db73e2b96657269676874582100507f2c3a2afbd475fab10cb088adcc4c3087629d6c4f878fb290c510e4a177c4",
+   "hash": "ecf-sha256:66ec6d8c0d0f6b9f32780aab582ad91f09db756874a2bf4ce96d1ee5968421ad"
+  },
+  {
+   "path": "app/asteroids/step/_expr/67f904c93a5c3047",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565903902ff3902c539021e3901250019012619021f1902c61903001902c619021f1901260039012539021e3902c5",
+   "hash": "ecf-sha256:67f904c93a5c304788a98d48d637117b15cdbd9cc790a9eb0bf073c3698a7b97"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6844628eb63005c3",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6564726f7473",
+   "hash": "ecf-sha256:6844628eb63005c36da18c77c3bac670a00d381a4cdad94cfa94929e07152872"
+  },
+  {
+   "path": "app/asteroids/step/_expr/68a5d3f4584bc7a4",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821008bd8b39e936e76e1f766ef3fac4a6ff47fe11999b0e5a86b3a242251e57cf9066572696768745821008bd8b39e936e76e1f766ef3fac4a6ff47fe11999b0e5a86b3a242251e57cf906",
+   "hash": "ecf-sha256:68a5d3f4584bc7a493d58fb552935ee06cb791db3b4e59e6a3c77aa432ccac59"
+  },
+  {
+   "path": "app/asteroids/step/_expr/69ae842bc32242a9",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563767973",
+   "hash": "ecf-sha256:69ae842bc32242a9c90c8784c7802e06bbbe539be2079fc408c3a12d41d46811"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6a6f8749955cf8e3",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6563726e6766656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:6a6f8749955cf8e34eca4c6608ca0ebe5c1b8d404125dbb4e1e665b639f34cfd"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6b7f938896db5da5",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656468697462",
+   "hash": "ecf-sha256:6b7f938896db5da59d78b7c39b8cf7a45843bcb293aad6f6b9688e6273c04860"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6b9d77caf574aa28",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100cca242a3615748f00a739c0d2dae579b813918b660647be15506abf2150bd22b657269676874582100d009dc225a259b46f1a59cf4fcdb88e4ed0e5ffe94b5a88ab622768f65c68b1c",
+   "hash": "ecf-sha256:6b9d77caf574aa28ad5e92dd5ce3fe4fe535ca46b3625abc1fae0313f4dc0e68"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6d758e270c62fb6d",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65636e7678",
+   "hash": "ecf-sha256:6d758e270c62fb6de118ffa5678aa7784288d3b8d66c64ced5e38c36c4802199"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6dadb3452621d9c6",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100f5b3392197448e8c9684946928d0133422d80d45d5602fa39d82783c40bb7e9e6862696e64696e677381a2646e616d656277616576616c7565582100f5769763c39ea5ada0ce38b25d788ad5a3d0807f09924dd3b38c2d972808c2b1",
+   "hash": "ecf-sha256:6dadb3452621d9c615d024d2c309cdea626c18307be020a3192133eebf003f46"
+  },
+  {
+   "path": "app/asteroids/step/_expr/6e5a71c06cad20d5",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821001dc84fe5c28087d478313de0ec25957de38c4f6479a584bf449953fd64faa014647468656e5821008e0964942bdad6e79268e4bb95f6ed4dd337e9dc816a7348679b1c7adc1afd7069636f6e646974696f6e582100beb895a4ee2f4c7cb0c9ec3b86e8a4def3f79d5fa7da6f837c04f1d8c34fc87b",
+   "hash": "ecf-sha256:6e5a71c06cad20d59abd3e4ee462a57c23d5e2a870d785b64602c5701f2efe30"
+  },
+  {
+   "path": "app/asteroids/step/_expr/704564d3393c2980",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100223c9ace052351d1525ffd6c71e07b00ddd75faa18ef61106950463ce1877fc2657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:704564d3393c298064d07dc651f8c2b401246ee78eb512cb6c32040e1c44a2c6"
+  },
+  {
+   "path": "app/asteroids/step/_expr/70dbb3d28e261f7e",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100d30fd4f874bcbe73d597e9e8b062b1b3dbe21915d0fc96591a4b465726a9e880657269676874582100d30fd4f874bcbe73d597e9e8b062b1b3dbe21915d0fc96591a4b465726a9e880",
+   "hash": "ecf-sha256:70dbb3d28e261f7ec7e8f1bd41aeef1015d5993319f8ba41b8fb813b69f39c90"
+  },
+  {
+   "path": "app/asteroids/step/_expr/711355e6765a1305",
+   "type": "compute/length",
+   "data_hex": "a16561727261795821002d12122db3dc9e542efe2bb7e3ef481b768102bfb9fbb6f1741e582933f06ca8",
+   "hash": "ecf-sha256:711355e6765a130531791c58e7d18e62780786d7e3be472382f66c127fc31ede"
+  },
+  {
+   "path": "app/asteroids/step/_expr/727ded01e516dc2c",
+   "type": "compute/length",
+   "data_hex": "a1656172726179582100fe37e6d9a39c75e309d0c67cc57d66e01be95905c17b0a60fbf3024adf3fe4a2",
+   "hash": "ecf-sha256:727ded01e516dc2cf6475b37f71be7018720dfeddf3efd3dbf9857e952228342"
+  },
+  {
+   "path": "app/asteroids/step/_expr/7402035e132d2518",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c65667458210023d1f56ff17a7983dae730c565cf3b83fed868a5cb0942091790a508a6419a28657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:7402035e132d2518deffb87b4bc901d7437820bbacacdcf1a690e407c1e77c56"
+  },
+  {
+   "path": "app/asteroids/step/_expr/747f96d5128257e1",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656462756c6c",
+   "hash": "ecf-sha256:747f96d5128257e1beff5101d2c1e427ae4104702fd0ffd673d6c29c1928337a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/74cc0f90cbd3e584",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100b3dd5ba716bbe498c469ca91805757caaa9d744bf7991101b00cbbabad2628476a636f6c6c656374696f6e5821004e64f2ec1d21917ede31778b040d870446aaeb5fd88dd544b3d7725b68c78ab86470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:74cc0f90cbd3e5844d728ac863857c39f8f98a78a9b34dc1b5f0fe39a107b2ec"
+  },
+  {
+   "path": "app/asteroids/step/_expr/76091ce0536e2a98",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821001dc84fe5c28087d478313de0ec25957de38c4f6479a584bf449953fd64faa014647468656e5821006dadb3452621d9c615d024d2c309cdea626c18307be020a3192133eebf003f4669636f6e646974696f6e582100adbb78fe645def4d186c52f8e81a8067e910fea9f609a77956893cf26a886745",
+   "hash": "ecf-sha256:76091ce0536e2a98e8c981731a95a631f46159b35583e5bd243c6138a4877935"
+  },
+  {
+   "path": "app/asteroids/step/_expr/778e92cfaac40dd8",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65646e726e67",
+   "hash": "ecf-sha256:778e92cfaac40dd870e00f21681a587b229c48f98e29e632dfb875d54a2871d5"
+  },
+  {
+   "path": "app/asteroids/step/_expr/7ac355daabbc71d0",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c6566745821000ff623969658a90c1fcb9f738f8a65a0e795d78f5a13a32fd9a0125bee628a0e657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:7ac355daabbc71d092f0b1117d461fbaeacdc7b84913397639255fa31f57f575"
+  },
+  {
+   "path": "app/asteroids/step/_expr/7c6c9b2cb6420b4d",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100a537f72c29a5637be74cf863d77a60d55763d74fb7d6fe0ca295d176fa57c98e66706172616d73816161",
+   "hash": "ecf-sha256:7c6c9b2cb6420b4dd8df7c00a247a9b312620043f58a756703c71149af4d75d2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/7e25909717935495",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756508",
+   "hash": "ecf-sha256:7e2590971793549586564f63112232bc9fbd725a29b8816e255ffac2ac5f5bd3"
+  },
+  {
+   "path": "app/asteroids/step/_expr/7eeff23072e5d242",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c6566745821006236b71c274efd13cfd637cd5162d40e91cf90f77bf3c69538a4fe3e4aacc29265726967687458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd",
+   "hash": "ecf-sha256:7eeff23072e5d24263c18cf4ede3df5d06a95cec15a6e0eeb5038b675fe9505a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/818d3503e7d270e7",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100a05e0e7f859eecc6c3e7ad489904ef0f5547b9e8a9332d6169d46251d579cbf265696e64657858210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2",
+   "hash": "ecf-sha256:818d3503e7d270e7422a6e1f39342e9023b152baf81d6b29e1138e16504fe84f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8195a83d1a36c322",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100a42551d6380739038b8762ee474780baf35676d2936f4c2d5dac001a78b0905b66706172616d73816161",
+   "hash": "ecf-sha256:8195a83d1a36c322e091ffa9a2d98a19a0cdf0f8a5f2f14b5eaab8560c2acdfa"
+  },
+  {
+   "path": "app/asteroids/step/_expr/82179db1f1bf8318",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65646b65797366656e74697479582100c279dddb6ed5fb48e4072249c07a97877ee7e5ae7c182d8bd6db721c264d85c1",
+   "hash": "ecf-sha256:82179db1f1bf83181f5fe1a0d0a9fb391f7104e2ad1b7d843f47b78134b25e0e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/83671f00bb7b484b",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100e632aa47bab5dae26ffd3f4dfc8953ef45d29689b83136da50a7cb5c78ae00f4657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:83671f00bb7b484b61840cc431f37e77c846540c134b8c9fb6478280a4ba54fb"
+  },
+  {
+   "path": "app/asteroids/step/_expr/88a8b70f36bbfe47",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821008bacb5b5ea355d993193839daf412fecc5622ce671e7f4150d342d808313df616a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:88a8b70f36bbfe473ec3fc7cdcba3b312d07a5c3b155994b60e54dcfe383080a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/89554938b8f6da23",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100031057f5e40de6188826f2b33500974b0aed50bf8a167f24e3b99bc4ca37eb9d657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:89554938b8f6da23b8216334be87e22d7f6693c329a199ec80d76d61db158488"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8a7bc3755ac20fba",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821006b7f938896db5da59d78b7c39b8cf7a45843bcb293aad6f6b9688e6273c0486065696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:8a7bc3755ac20fba29c291fc5bae0bbd758976e85ded2aeabbe6e38516562679"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8a814c8d6f5fba94",
+   "type": "compute/field",
+   "data_hex": "a2646e616d656374746c66656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:8a814c8d6f5fba9425106de59401501258ed57f9315cd61e1480a77fa36f20c1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8afeb91e343c8e8f",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100c607eb40af59660b0ad5fa2eba0235650fe8c10a229d0d92069e0b73cf110355647468656e5821002496b14977171db79ea118087750c4f8caf821a0221b08c814c2a848e9d3773169636f6e646974696f6e582100d444573220ac667c1cfc5e2b917902c0ceb54be76e199c8f34003392cbb99254",
+   "hash": "ecf-sha256:8afeb91e343c8e8fcd99874e2b000957fea77a25a3f7dc06f473702208b62478"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8b67bd1a0aa2f170",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100c037b4d5c865809504b03a12729da0705b9b74b8eaeb4f1b3220ffd4403ebe39647468656e5821009c4f887077411588d9a6904a4dda68fa8b4a279263392fc79efe88f8c1cadf6a69636f6e646974696f6e582100a80ea2ce5b7f5d3f1463eecc033f5d6e75aa96cd93e0db9fa00a220e7198e7d0",
+   "hash": "ecf-sha256:8b67bd1a0aa2f1706fea50e78cb48c0dc69906edad5c1c418f5733d82923210e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8bacb5b5ea355d99",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821008a814c8d6f5fba9425106de59401501258ed57f9315cd61e1480a77fa36f20c166706172616d73816161",
+   "hash": "ecf-sha256:8bacb5b5ea355d993193839daf412fecc5622ce671e7f4150d342d808313df61"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8bd8b39e936e76e1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100f7c4fd7a2b10622efbe8e651b1d8d8a83b141668a56cacd056d868ed711597b765726967687458210051057ec5b474a9e348bfe7526267f743d6bc1a7fbc931a5b11436c8938301599",
+   "hash": "ecf-sha256:8bd8b39e936e76e1f766ef3fac4a6ff47fe11999b0e5a86b3a242251e57cf906"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8bf21952e9486016",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100b524f1bf94e4a94d009bc17f0f24b33c24266fd99a77adafed0b6b5a084d89d0657269676874582100b524f1bf94e4a94d009bc17f0f24b33c24266fd99a77adafed0b6b5a084d89d0",
+   "hash": "ecf-sha256:8bf21952e9486016deb7c1bedac56c2358ec8927040f3aa4e749facad5831d30"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8e0964942bdad6e7",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a861785821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e617958210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd62737a58210083671f00bb7b484b61840cc431f37e77c846540c134b8c9fb6478280a4ba54fb627678582100faaaba50db1e6f0d8dd2012ebe1145cd430bf87cd8b7639cb2144c791c35891e627679582100eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d83963726f7458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd6374746c582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182646b696e64582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b12936b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:8e0964942bdad6e79268e4bb95f6ed4dd337e9dc816a7348679b1c7adc1afd70"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8e2657ef5a189a30",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210067f904c93a5c304788a98d48d637117b15cdbd9cc790a9eb0bf073c3698a7b9765696e64657858210010895cecf2e2ceddea4afd70ba8ebb768f1ee7edaacb75459f80dfaebcd883fa",
+   "hash": "ecf-sha256:8e2657ef5a189a3020972d8fd611a5f9ef0ac7c537bbb8bbdab2e332f340c8e1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8e89c443219b5e28",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65646b657973",
+   "hash": "ecf-sha256:8e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8e9d1553be32c8fb",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626c74646c6566745821003e7c9e877bb78c4159579c93c71472dc752b171ad98bebfce7a9df628367bc4b65726967687458210070dbb3d28e261f7ec7e8f1bd41aeef1015d5993319f8ba41b8fb813b69f39c90",
+   "hash": "ecf-sha256:8e9d1553be32c8fb04e5824091da0f8115036a9776a4ac004ceab1d0cd0246f3"
+  },
+  {
+   "path": "app/asteroids/step/_expr/8ed2ce43628877d1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009a651048ec986e56014cb0cf9085972efaef136eb6c865c47383cbe6ccf429be657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:8ed2ce43628877d1e4e373a2a14bc4fbb27d0a67da2dd1da7489b668ff59ae6d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/903b2e7d05fd374e",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821007eeff23072e5d24263c18cf4ede3df5d06a95cec15a6e0eeb5038b675fe9505a6572696768745821007eeff23072e5d24263c18cf4ede3df5d06a95cec15a6e0eeb5038b675fe9505a",
+   "hash": "ecf-sha256:903b2e7d05fd374e240a9485faf68190f5da4f25fc7db0b54adc25015b4e007a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/903cbafe1253a962",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656474746c73",
+   "hash": "ecf-sha256:903cbafe1253a96293bc158d5b0db1d3f0b7cd4523acbc16e55c2d2cee8a6fb7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9067e61df1b69f1e",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:9067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/91b01529bde40505",
+   "type": "compute/field",
+   "data_hex": "a2646e616d656376787366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:91b01529bde40505a908b33f42ad2ff08f452fdd6b45882ab77c51cd70c0c0df"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9294cf8273fb3ed5",
+   "type": "compute/length",
+   "data_hex": "a165617272617958210074cc0f90cbd3e5844d728ac863857c39f8f98a78a9b34dc1b5f0fe39a107b2ec",
+   "hash": "ecf-sha256:9294cf8273fb3ed52a4735549bc996d1f1ff73bb678e97900648c8c405b90f1a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9313f01741e0e67c",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c6566745821003147ab75dbc1e16f4fb6ce92a9fff08f3f2de6a4e17211b384112a47a3052c54657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:9313f01741e0e67c3334612fc2be348aec314d1031800703ae5b0c2a4926798b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/93f87a3c418716dc",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821008afeb91e343c8e8fcd99874e2b000957fea77a25a3f7dc06f473702208b624786862696e64696e677381a2646e616d6561726576616c7565582100711355e6765a130531791c58e7d18e62780786d7e3be472382f66c127fc31ede",
+   "hash": "ecf-sha256:93f87a3c418716dc1d67b225813d76d82a43d62ba5f701c28dd8e9362dd6eb4d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/963b85e9446feef9",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100e42228facebae7ccf7ff9929e1dfd13b6a633df1bc2b04af59878c7b47054c88657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:963b85e9446feef9cb8b6ad69c28224ac0de24518c99965636c6ab28f62c981c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9685ce2e32a202ff",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626774646c6566745821000a441956ba2684537102c708c4e8d564029ed8861b59f1f89bb553c008fd4a38657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:9685ce2e32a202ff00e2bb84ada56e42ce50d542e5cced7353684ffa5d2af1b9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/979defaa0842407b",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65627761",
+   "hash": "ecf-sha256:979defaa0842407bf9978ca1d516f0395ce5346733b56d6d5ab846ec4648e19f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9815942d92e2cf15",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e58210058439939d6556924defb4d5df7688215309633b1545094178aaeb3d6bd069bdf6a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:9815942d92e2cf15c90ed6ff84d6d670980fe48aaff65b947be402cdd8b749fa"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9942fbe96b7bbc79",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65617866656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:9942fbe96b7bbc79e1685a24f71442aebba963eeb6ac3c2c965e912b9cafb7f4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/99f25f9da4758de8",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563726e67",
+   "hash": "ecf-sha256:99f25f9da4758de866f3a16952f9ab1c337f4f81daadac1d25003e328044755b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9a3fa326dcc382a7",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821008ed2ce43628877d1e4e373a2a14bc4fbb27d0a67da2dd1da7489b668ff59ae6d657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:9a3fa326dcc382a7ae2900e467b0650830d3f02ccd405fbc73ecc15111b7468a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9a651048ec986e56",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e6572696768745821006d758e270c62fb6de118ffa5678aa7784288d3b8d66c64ced5e38c36c4802199",
+   "hash": "ecf-sha256:9a651048ec986e56014cb0cf9085972efaef136eb6c865c47383cbe6ccf429be"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9a978e22c0297b0c",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a861785821007402035e132d2518deffb87b4bc901d7437820bbacacdcf1a690e407c1e77c566179582100704564d3393c298064d07dc651f8c2b401246ee78eb512cb6c32040e1c44a2c662737a582100e632aa47bab5dae26ffd3f4dfc8953ef45d29689b83136da50a7cb5c78ae00f4627678582100eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d8396276795821003f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b63726f7458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd6374746c582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182646b696e64582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b12936b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:9a978e22c0297b0c333c8d62aa9dd30cf423c5edfc95edcd8fbba3523c9b6648"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9b3451650070a970",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65617966656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:9b3451650070a970112322f47735dee2f96bc860efed3264d4303a9a352e86a7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9b6eea4bf6475a3f",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e646578582100d56efe5b766c544717a138158842c245148ab3b551af8ae03e500921b878460f",
+   "hash": "ecf-sha256:9b6eea4bf6475a3fd450f9f5b8cfbb8d49c2ad1a02f41b15efd5143fe104de76"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9baf7a45a3f6c60a",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821003398ad7cbff241afd38c831ba3bccedc942d92e2a39391e2e3f635d8942531556a636f6c6c656374696f6e5821004e64f2ec1d21917ede31778b040d870446aaeb5fd88dd544b3d7725b68c78ab86470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:9baf7a45a3f6c60ae53726c688db114f031ab1fcb50240e72e4e21d6c7778d46"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9c4f887077411588",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821009a978e22c0297b0c333c8d62aa9dd30cf423c5edfc95edcd8fbba3523c9b6648647468656e5821006e5a71c06cad20d59abd3e4ee462a57c23d5e2a870d785b64602c5701f2efe3069636f6e646974696f6e5821008a7bc3755ac20fba29c291fc5bae0bbd758976e85ded2aeabbe6e38516562679",
+   "hash": "ecf-sha256:9c4f887077411588d9a6904a4dda68fa8b4a279263392fc79efe88f8c1cadf6a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9ccf1d11407bde3b",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656161",
+   "hash": "ecf-sha256:9ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9cd6e86320e79d45",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75659818000102030405060708090a0b0c0d0e0f1011121314151617",
+   "hash": "ecf-sha256:9cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e266838"
+  },
+  {
+   "path": "app/asteroids/step/_expr/9d5284f0b5ad1e9d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:9d5284f0b5ad1e9d2ba88006546285a75869d432b57bf4f73b04cdb59388aeab"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a05e0e7f859eecc6",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656673706c697473",
+   "hash": "ecf-sha256:a05e0e7f859eecc6c3e7ad489904ef0f5547b9e8a9332d6169d46251d579cbf2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a369549f99060320",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182647468656e582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd69636f6e646974696f6e5821002380c71bd06e227f516139878bb791434cd68a755f7ddf09e13159d2dce8d235",
+   "hash": "ecf-sha256:a369549f990603206760acabf02417bfd8c5eb7c674c3065098ef639f38666b6"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a42551d638073903",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562737a66656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:a42551d6380739038b8762ee474780baf35676d2936f4c2d5dac001a78b0905b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a4fa8862433617ab",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e",
+   "hash": "ecf-sha256:a4fa8862433617ab8d7253630488216366b3ab176b7a9a1785151b54b1b55541"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a537f72c29a5637b",
+   "type": "compute/field",
+   "data_hex": "a2646e616d65646b696e6466656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:a537f72c29a5637be74cf863d77a60d55763d74fb7d6fe0ca295d176fa57c98e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a57a3971ea52aba0",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100b491a7695e1e7ee1ec2a5140048b51bdd00b350da0971ba5c856b2a14f4e68fc657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:a57a3971ea52aba0c46c2375603e9e488a6ae2e6d710d92d6771aa272debf903"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a57b7054068f2520",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100f9c28fa8bcc707fa9a5160a863e4902798eb2c8e6d7c375384fba5cc00afb1e8",
+   "hash": "ecf-sha256:a57b7054068f2520219df13d185d3537b00be7acdc2f25378ad7dea4dd73fbe7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a581c43b05aca6a7",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821002e5af381641810bd6d9ee0cb4280b056b072f9a0fdd59acbd32dec0f1b2fd43d6862696e64696e677381a2646e616d65646e726f746576616c75655821003a013295c89961aa1e7feaea9ea011d03fe44ad4996940b9910fb0fc6193311f",
+   "hash": "ecf-sha256:a581c43b05aca6a7dc2fe3ffadcb2c16467ea19ac37868cac6e5c7b372cb7541"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a77adf6afe178aba",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100b19753887e0d24fd5166be0108d5479bd7b1d96d8386fa4d8756ce880b4440676a636f6c6c656374696f6e5821009cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e2668386470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:a77adf6afe178aba68b956d4b02b3157978adb23c70a3c313d21e61ce639e3a6"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a7d219acd4e974e9",
+   "type": "compute/length",
+   "data_hex": "a1656172726179582100e6b89e3fc6a157f25d75d25f483d08ad1e4492ba675858805eb79f95afb213e1",
+   "hash": "ecf-sha256:a7d219acd4e974e962fe84b52aba286bc53834df0e6b28f9b0fb26a75f609928"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a80ea2ce5b7f5d3f",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:a80ea2ce5b7f5d3f1463eecc033f5d6e75aa96cd93e0db9fa00a220e7198e7d0"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a888d2edfb61b822",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c65667458210099f25f9da4758de866f3a16952f9ab1c337f4f81daadac1d25003e328044755b657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:a888d2edfb61b822f349b6ee96a33bffaef6c42cdcecbab159df6eeb1f1433f4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a9c8d44c7dfbbb80",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd7065696e646578582100b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9",
+   "hash": "ecf-sha256:a9c8d44c7dfbbb809a80720faaf73d93fc4d2ca74bfae65e61b7f5185c496e6b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/a9e27f0af6f80360",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6563737a7366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:a9e27f0af6f8036033e2bedbca72a9e43c5bc9830fe581925d1c431a5ebe4e87"
+  },
+  {
+   "path": "app/asteroids/step/_expr/aab4aaf4c06afae7",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd647468656e582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf718269636f6e646974696f6e58210015e8ebe7dbf4a18def4638ef009645e7d6bd208b31a083067e89305413b9973f",
+   "hash": "ecf-sha256:aab4aaf4c06afae78b0f2d4963604d29ccc722658eab16325eefa2c52617a81f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/aafa5290111ec29e",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756500",
+   "hash": "ecf-sha256:aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182"
+  },
+  {
+   "path": "app/asteroids/step/_expr/ab1007464548bdd8",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100392920ea54c81f22353f378a6617fc6432705565d6b3fc6bf647ac94e15bf586657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:ab1007464548bdd827ed416eba48456eab0778908cafbf27db28c962e35b6f48"
+  },
+  {
+   "path": "app/asteroids/step/_expr/ac2f479816fac5eb",
+   "type": "compute/field",
+   "data_hex": "a2646e616d656673746174757366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:ac2f479816fac5ebae310109e3ad5947f4420cfd57ceec520dcda94cbe4a9237"
+  },
+  {
+   "path": "app/asteroids/step/_expr/ad3754c98f3697a8",
+   "type": "compute/logic",
+   "data_hex": "a3626f70626f72646c656674582100c4ec68eea186f2e1625c8c029e71d9bb463dc03e863ca0839fc8f7799cb94e4b657269676874582100d96f000d1130941365bdd70896efaf1c7d4767c726713b1a041303024bc56982",
+   "hash": "ecf-sha256:ad3754c98f3697a858cdd97889bd4e24ed54a473b1e4050956ba851f91929a59"
+  },
+  {
+   "path": "app/asteroids/step/_expr/adbb78fe645def4d",
+   "type": "compute/logic",
+   "data_hex": "a3626f7063616e64646c656674582100b478e3b291841815daf1c7a845d9ec226a1d026a0ca29fcc36e117f91750ac72657269676874582100f1a940c4ddb8a534146fe4f832d7241fecadf69cfdc708bed5e8e3330c1639c5",
+   "hash": "ecf-sha256:adbb78fe645def4d186c52f8e81a8067e910fea9f609a77956893cf26a886745"
+  },
+  {
+   "path": "app/asteroids/step/_expr/addece7628374ab6",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100979defaa0842407bf9978ca1d516f0395ce5346733b56d6d5ab846ec4648e19f657269676874582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a1204853",
+   "hash": "ecf-sha256:addece7628374ab6621c79ea67883fcfcd76ae76207d199ea4ac5a9a504270ab"
+  },
+  {
+   "path": "app/asteroids/step/_expr/ae02a401b44a68c2",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b8106572696768745821007e2590971793549586564f63112232bc9fbd725a29b8816e255ffac2ac5f5bd3",
+   "hash": "ecf-sha256:ae02a401b44a68c285c24d73d6c9ecc7f130afcaf075df3f0bfbf7369cd950c1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/aed5c7059716b5f9",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100b1584d3a4f78928f22ea75fb9578dab88b216cb8e51103f99eabaf19b934dbdc647468656e5821001dc84fe5c28087d478313de0ec25957de38c4f6479a584bf449953fd64faa01469636f6e646974696f6e582100ad3754c98f3697a858cdd97889bd4e24ed54a473b1e4050956ba851f91929a59",
+   "hash": "ecf-sha256:aed5c7059716b5f989be298b7568b834290ffd57dfca2a0a16b43993ae6a7241"
+  },
+  {
+   "path": "app/asteroids/step/_expr/af4f6dae683be987",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821002c1f99d17166fc3019ea7ae8487676308d964bcc723214f11079aca82f945ad86572696768745821003890f86c195cc53f33e7f194c6c32d9f3323be7779cde8833a883ae5ce089207",
+   "hash": "ecf-sha256:af4f6dae683be987e6ff9a3dc3806e55ab532641f90d54e20800cfcd7e396813"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b04bc298e058a371",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100fde218ecae76a0fa74423cd5e5496c2e3a60c7e4cd63a59e8a552fa76f889f9a66706172616d73816161",
+   "hash": "ecf-sha256:b04bc298e058a37125ddfd1f1657552a02fe2fa6bf3c68ad842f28868215daad"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b0a9765da642a5ca",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821001fcc7dd7587401f9baa41e44e09b348b71619e9d5cf64fe716198546bc4272f7657269676874582100727ded01e516dc2cf6475b37f71be7018720dfeddf3efd3dbf9857e952228342",
+   "hash": "ecf-sha256:b0a9765da642a5ca0f2b87b19d456c1ac785fb14aa43c9baeddafd21e5786b60"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b0eb26f9edd458ec",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd7065696e6465785821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:b0eb26f9edd458ecb5fcd0f5c545b2deafd1d1bc8175a666e02aeba8f049ba49"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b1584d3a4f78928f",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a861785821007402035e132d2518deffb87b4bc901d7437820bbacacdcf1a690e407c1e77c566179582100704564d3393c298064d07dc651f8c2b401246ee78eb512cb6c32040e1c44a2c662737a582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182627678582100eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d8396276795821003f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b63726f7458210033a503bccd01291f39f6d497fd3772aaf1869754d2523ab90d45f7438bd8d8bd6374746c5821004527f23abc3aa962e74fe39cb2330331052ec010b98a3c7d0632e74148744844646b696e64582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a12048536b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:b1584d3a4f78928f22ea75fb9578dab88b216cb8e51103f99eabaf19b934dbdc"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b19753887e0d24fd",
+   "type": "compute/lambda",
+   "data_hex": "a264626f647958210089554938b8f6da23b8216334be87e22d7f6693c329a199ec80d76d61db15848866706172616d7381616a",
+   "hash": "ecf-sha256:b19753887e0d24fd5166be0108d5479bd7b1d96d8386fa4d8756ce880b444067"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b3dd5ba716bbe498",
+   "type": "compute/lambda",
+   "data_hex": "a264626f647958210053283959e3bc8885a0217a6a2edf490126148a020d4c4c9e9fff161913c78d0266706172616d73816161",
+   "hash": "ecf-sha256:b3dd5ba716bbe498c469ca91805757caaa9d744bf7991101b00cbbabad262847"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b45a62129e684d8a",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e646578582100b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9",
+   "hash": "ecf-sha256:b45a62129e684d8a8cbcfa8d1c89ae8bc744ffd9f3445a2365c7fc5a5d1117a8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b478e3b291841815",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65656e6f617374",
+   "hash": "ecf-sha256:b478e3b291841815daf1c7a845d9ec226a1d026a0ca29fcc36e117f91750ac72"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b491a7695e1e7ee1",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100cca242a3615748f00a739c0d2dae579b813918b660647be15506abf2150bd22b6572696768745821008e2657ef5a189a3020972d8fd611a5f9ef0ac7c537bbb8bbdab2e332f340c8e1",
+   "hash": "ecf-sha256:b491a7695e1e7ee1ec2a5140048b51bdd00b350da0971ba5c856b2a14f4e68fc"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b524f1bf94e4a94d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100c28d304f6a6ddb3f9f1d52dc295f3fbb1a1c95df58352597929a5519829de75b6572696768745821003780f6289ec19ee9a1c8889c52aa3005fce70dbcb0e12775fa804226daa6df1a",
+   "hash": "ecf-sha256:b524f1bf94e4a94d009bc17f0f24b33c24266fd99a77adafed0b6b5a084d89d0"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b560c635783d10e9",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c656674582100eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d839657269676874582100423fb807459909856d91263c1084db33afaa0d66e4c6b5f3524eb74d4603d382",
+   "hash": "ecf-sha256:b560c635783d10e9ad5a7095905332140aeee192eb99485f6dccd6a2a68bbd97"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b5a195100fdcedd7",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563737263",
+   "hash": "ecf-sha256:b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b6e65bde2c6ff606",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656172",
+   "hash": "ecf-sha256:b6e65bde2c6ff606e686830b6dd79da7d73d5310182b2aee6c62d9af962b7194"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b70e90ccbf0ee688",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e64657858210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2",
+   "hash": "ecf-sha256:b70e90ccbf0ee688e2e4c7f65d7027df488f67b347ae793bc646ad2b05e55322"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b763fccd584143e0",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756503",
+   "hash": "ecf-sha256:b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a1204853"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b8b38467d161ec10",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65656b696e6473",
+   "hash": "ecf-sha256:b8b38467d161ec105e1afb33f75bff082ed4ad25c47b9a79601ae209eeb7fdce"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b8bfc6bdef3f2556",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a86178582100fdb9eea4017d933d1a64b6a207f188a3644e7c7589e6bfa6549e249ef997f4d76179582100043f43cf629b9028a59e42d7439bee4099174734e2c4192c55349437096241f262737a582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a1204853627678582100253714b230465b4deafdee0ced08fddeff43bfe1c06114db4aadca1824cb00f8627679582100e60e44d8bd0ab109ac00c836a1447d62065362caaa6657990bbecafd94c440c463726f74582100979defaa0842407bf9978ca1d516f0395ce5346733b56d6d5ab846ec4648e19f6374746c582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182646b696e64582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b12936b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:b8bfc6bdef3f25567112b2cfd1b125ebb0a9f7e5b1fecf01afb24ddcaabb6bea"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b8cadc0cda02ee69",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d6563737a73",
+   "hash": "ecf-sha256:b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd70"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b8faedc3f0f358c5",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd657269676874582100e5d9748269ab392269fab5cb429e1c0fe067e4a817472e3175eb8906b4deefac",
+   "hash": "ecf-sha256:b8faedc3f0f358c59717402c885f3b4eb370f690811f3a9b1158e6c5b9d1c4bc"
+  },
+  {
+   "path": "app/asteroids/step/_expr/b95c90d341b9aa69",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626774646c656674582100a7d219acd4e974e962fe84b52aba286bc53834df0e6b28f9b0fb26a75f609928657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:b95c90d341b9aa695f1be949d4769bffd694909e4155c4d5bc56c011d12d6e94"
+  },
+  {
+   "path": "app/asteroids/step/_expr/bb4ad87c390c736f",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c65667458210056b04a3d5c9e52623d04c9ee46d915b1bbb098d63a07887c160bc7c6e9ffc0dd6572696768745821003f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b",
+   "hash": "ecf-sha256:bb4ad87c390c736febe8f1c02803054e98bf2c56b73c7c43c14cb93d9aa04d84"
+  },
+  {
+   "path": "app/asteroids/step/_expr/be6ca4718f5e61a4",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d839647468656e582100b560c635783d10e9ad5a7095905332140aeee192eb99485f6dccd6a2a68bbd9769636f6e646974696f6e582100d9f3f1066514300b1f84e020df438e312a6b0e68f4d2494e4146295343483dfb",
+   "hash": "ecf-sha256:be6ca4718f5e61a4c42777099e286c5a610b835a9f526068142b30e8c13a5756"
+  },
+  {
+   "path": "app/asteroids/step/_expr/beb895a4ee2f4c7c",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626774646c656674582100e632aa47bab5dae26ffd3f4dfc8953ef45d29689b83136da50a7cb5c78ae00f4657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:beb895a4ee2f4c7cb0c9ec3b86e8a4def3f79d5fa7da6f837c04f1d8c34fc87b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/bf2d80644b207902",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565900019012619021f1902c61903001902c619021f1901260039012539021e3902c53902ff3902c539021e390125",
+   "hash": "ecf-sha256:bf2d80644b2079027081ea7562ae34058119d577c9d098e460173b998ca65ce9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/bfb26466c2c0ad12",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c65667458210008e65c5a720597141df889f95fb39a0ae8f91956e56c8126cba81081992d36e46572696768745821000b0bf08e6afa0eca94c8e01ce77ba7fbd7482d1aec8b8c5343994bcc168a3a92",
+   "hash": "ecf-sha256:bfb26466c2c0ad12b9b575d9c10625742f3d426707d89f449b6cbe2eed5f0c28"
+  },
+  {
+   "path": "app/asteroids/step/_expr/bfd2bf225c9b67a3",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756501",
+   "hash": "ecf-sha256:bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c037b4d5c8658095",
+   "type": "compute/if",
+   "data_hex": "a364656c736558210093f87a3c418716dc1d67b225813d76d82a43d62ba5f701c28dd8e9362dd6eb4d647468656e582100aed5c7059716b5f989be298b7568b834290ffd57dfca2a0a16b43993ae6a724169636f6e646974696f6e58210007d6c16a855c42ea060dfecfb35db0158261b7c828d7406ba9cffaf7b806f886",
+   "hash": "ecf-sha256:c037b4d5c865809504b03a12729da0705b9b74b8eaeb4f1b3220ffd4403ebe39"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c0bdd1e013f4c324",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100d7825b7969fda9b37a587f57fe962a231f2df2a94ebca6c06c4ecea3c078880b647468656e582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd69636f6e646974696f6e582100963b85e9446feef9cb8b6ad69c28224ac0de24518c99965636c6ab28f62c981c",
+   "hash": "ecf-sha256:c0bdd1e013f4c324cb29ae58cd0a54c3027552e416e673f9c4b071c2ccabb598"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c13a239eb066cf60",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100b04bc298e058a37125ddfd1f1657552a02fe2fa6bf3c68ad842f28868215daad6a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:c13a239eb066cf60b0fed08d5e74acdd1eac243446a1e56963a2f55b9d2e969f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c16d58fb4cee67f1",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100fb148b65e278299e216e3b63145b1d9c3ea3586783dedf622ad48fd14e3ebdc96a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:c16d58fb4cee67f11ef73756fb0ce8179968cf85cdf334f2ef0da8a3a2abe751"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c184d2774d34256a",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562787366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:c184d2774d34256a3f2090918dfe9068e03dab8b83ed06b1f1258eca17a12bb4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c253854e1f822830",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821007ac355daabbc71d092f0b1117d461fbaeacdc7b84913397639255fa31f57f57566706172616d73816161",
+   "hash": "ecf-sha256:c253854e1f822830dc47afc993d004773128f1b76e8e73112a9d5a3df490f744"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c279dddb6ed5fb48",
+   "type": "compute/lookup/tree",
+   "data_hex": "a1647061746878432f324b366a6b6a746d507459386d4d41623464596769424e4171374b7264596f6e566a65436e3265317347596d78382f6170702f61737465726f6964732f696e707574",
+   "hash": "ecf-sha256:c279dddb6ed5fb48e4072249c07a97877ee7e5ae7c182d8bd6db721c264d85c1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c28d304f6a6ddb3f",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e6465785821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:c28d304f6a6ddb3f9f1d52dc295f3fbb1a1c95df58352597929a5519829de75b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c2fdb65ec7ee3189",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210050e9181ec433da03c188e5d1f65b1a6ad09ec7a8e8bc2932573fd4bdf661c72865696e646578582100b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9",
+   "hash": "ecf-sha256:c2fdb65ec7ee31894103f0effd1cbef2ea9e24e1a637ac2f6cd8b52025184ae1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c3455ebd052f82c3",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75651a80000000",
+   "hash": "ecf-sha256:c3455ebd052f82c35a9519b5278d771e0a5f8fdf53b1a5a9bc371e7b0d8d3ecf"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c4ec68eea186f2e1",
+   "type": "compute/compare",
+   "data_hex": "a3626f70636c7465646c656674582100dc5ea24e1db148b4e5ce3544d3c78e30b6671a568d409eead2e48cea8a08ed2f657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:c4ec68eea186f2e1625c8c029e71d9bb463dc03e863ca0839fc8f7799cb94e4b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c53990df3343c5b6",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562767866656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:c53990df3343c5b62e26468b127b765dc19b4d86f07cb573c747d90c177f9692"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c58a88cc547d9fdc",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75659000191e9d1938921949e91950001949e9193892191e9d00391e9c3938913949e8394fff3949e8393891391e9c",
+   "hash": "ecf-sha256:c58a88cc547d9fdcd89278f78e5500952eacba5f8d73e9051b4f80c3584d2639"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c607eb40af59660b",
+   "type": "compute/let",
+   "data_hex": "a264626f64795821003121a528e1ccfc362bdcd8491404ec900903e43221b066765723ced58d818a546862696e64696e677381a2646e616d65616a6576616c75655821004fce7c91ae35af4d6dca0c7280ddea0205178c4c548254ed3a79b7455aa01488",
+   "hash": "ecf-sha256:c607eb40af59660b0ad5fa2eba0235650fe8c10a229d0d92069e0b73cf110355"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c624e85661c116b5",
+   "type": "compute/lambda",
+   "data_hex": "a264626f64795821001fa85092aa5fcdb8b7858998c9f20c68a76a3b7f8a7c6ece868f2207c981982566706172616d73816161",
+   "hash": "ecf-sha256:c624e85661c116b50d47140faec6e968b6966dab6d7f509d84a3ab8b9e3ec1d1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c639208041124bdd",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063646976646c656674582100495421d835ab70a15765d439dcad3e9d15e3af36edcc334801df74d3bf559ac56572696768745821007e2590971793549586564f63112232bc9fbd725a29b8816e255ffac2ac5f5bd3",
+   "hash": "ecf-sha256:c639208041124bddc562aabdc058a407298daeb9a10e010ed8f6b19989162794"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c78c634e83beb9a9",
+   "type": "compute/construct",
+   "data_hex": "a2666669656c6473a861785821009a3fa326dcc382a7ae2900e467b0650830d3f02ccd405fbc73ecc15111b7468a61795821003ae6e729e69de27b9e658fce6cf35c8229b2c327829e12a1376337e0f6b3dd0962737a582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf71826276785821006d758e270c62fb6de118ffa5678aa7784288d3b8d66c64ced5e38c36c4802199627679582100e5d9748269ab392269fab5cb429e1c0fe067e4a817472e3175eb8906b4deefac63726f745821000d55982b4fadc8e1bb75cbdc90447ea7cc0f5a413530c0cd3403af9cb17755e56374746c582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182646b696e64582100aab4aaf4c06afae78b0f2d4963604d29ccc722658eab16325eefa2c52617a81f6b656e746974795f7479706578196170702f61737465726f6964732f73746174652f6163746f72",
+   "hash": "ecf-sha256:c78c634e83beb9a945641b7a8ed8378299e04e270ee1eda08753755f732a1d3e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c80d8db40920bf07",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75651a41c64e6d",
+   "hash": "ecf-sha256:c80d8db40920bf07b995f941ca49732d9e061f9a88335fca9224755d094e6178"
+  },
+  {
+   "path": "app/asteroids/step/_expr/c86da13581b666c7",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100c28d304f6a6ddb3f9f1d52dc295f3fbb1a1c95df58352597929a5519829de75b6572696768745821009067e61df1b69f1e697a78f08268ce1de0db223a506cd10727f3d919e7f8473e",
+   "hash": "ecf-sha256:c86da13581b666c7974d2b0a46903e4a0a02439eff155f1367f28abfc3d4ed7c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/ca619885e89f8b0b",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063646976646c656674582100dfe4e047bd0400993bb0fa8a8512418ba7f7024e1e6f763f63d7e4657cce8886657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:ca619885e89f8b0b585f0c2f2a3a25a9d158259a0cdef8b23cb9feb9c459c308"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cb0a10eda3b5f916",
+   "type": "compute/if",
+   "data_hex": "a364656c73655821003f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b647468656e5821003fa647eb46ce54631eca1497fa029a27a09944132569e09fb3fd809586a6fb4069636f6e646974696f6e582100d9f3f1066514300b1f84e020df438e312a6b0e68f4d2494e4146295343483dfb",
+   "hash": "ecf-sha256:cb0a10eda3b5f916eef469cf4fe4aadad1c5ec8f6425a07e22aad5b6ee48d5e3"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cb366613ffafc329",
+   "type": "compute/field",
+   "data_hex": "a2646e616d656474746c7366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:cb366613ffafc3292d692601004a00b45cfaf81a2e17d2f7de78b166c2490f2b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cb4bb5f6b9e2234a",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756590394fff3949e8393891391e9c00191e9d1938921949e91950001949e9193892191e9d00391e9c3938913949e8",
+   "hash": "ecf-sha256:cb4bb5f6b9e2234a185c838172c7546e4444d8df6faccebe7b1ac4a7fa811d7a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cb829564e619cb5c",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100c86da13581b666c7974d2b0a46903e4a0a02439eff155f1367f28abfc3d4ed7c657269676874582100c86da13581b666c7974d2b0a46903e4a0a02439eff155f1367f28abfc3d4ed7c",
+   "hash": "ecf-sha256:cb829564e619cb5c200b2fdaae3be1cff2624a3f43b0d2c905df51f39628c154"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cbb24c6c73a64d4f",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100306e12c6e1be65bcd5f97705f7491d7249abb9b0de350390be8f803cb6307e7d66706172616d73816169",
+   "hash": "ecf-sha256:cbb24c6c73a64d4ff4ca7edbcf1b6b0337501f9feaf7044fd97592b3d03ee488"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cc8e00314d58cc50",
+   "type": "compute/logic",
+   "data_hex": "a3626f7063616e64646c65667458210058ea5abac592a313f8b7727572f21ec6e2d7203d8b8d3d816a91640a30694d24657269676874582100507f2c3a2afbd475fab10cb088adcc4c3087629d6c4f878fb290c510e4a177c4",
+   "hash": "ecf-sha256:cc8e00314d58cc50cf80f3f30889ec56c5cfc3aebd744ebcf48b84b44ea1e323"
+  },
+  {
+   "path": "app/asteroids/step/_expr/cca242a3615748f0",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100588c75852bcd2ecd458e4e17f2bfd5a92b7afb866ada473377052e4e6bb9e7c865696e646578582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:cca242a3615748f00a739c0d2dae579b813918b660647be15506abf2150bd22b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d00267c835cad3ad",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100e6168cc741f5e3ed6a7a6c62e2f403d1334b1320a001626656da79d307b75b386a636f6c6c656374696f6e5821009cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e2668386470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:d00267c835cad3ad129d34a8812c115741704744390975843dd68e95029b902d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d009dc225a259b46",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100cb4bb5f6b9e2234a185c838172c7546e4444d8df6faccebe7b1ac4a7fa811d7a65696e646578582100979defaa0842407bf9978ca1d516f0395ce5346733b56d6d5ab846ec4648e19f",
+   "hash": "ecf-sha256:d009dc225a259b46f1a59cf4fcdb88e4ed0e5ffe94b5a88ab622768f65c68b1c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d2cf996f40f1145e",
+   "type": "compute/literal",
+   "data_hex": "a16576616c75651a00010000",
+   "hash": "ecf-sha256:d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d2fa1cd7913f2c0c",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c65667458210022ea7c967fd336609143138016f631fee16daacddba35e9fe12016d066881f2f657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:d2fa1cd7913f2c0c23153f0596e49f16d0818c7e68c0a3d62ba6cc5212ac91a1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d30fd4f874bcbe73",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c6566745821002c2b1ed3def5b30f5b79fc4896287604976cd046ecf7ae91a9d9a7285b75578765726967687458210006aa2e7323d9788bebe0050a0ef1906bc94ee213c89d1989cf091f40be58b4bb",
+   "hash": "ecf-sha256:d30fd4f874bcbe73d597e9e8b062b1b3dbe21915d0fc96591a4b465726a9e880"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d43b5efee62fa28b",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100bf2d80644b2079027081ea7562ae34058119d577c9d098e460173b998ca65ce965696e64657858210010895cecf2e2ceddea4afd70ba8ebb768f1ee7edaacb75459f80dfaebcd883fa",
+   "hash": "ecf-sha256:d43b5efee62fa28b172c85d8f8fa7237ae216c0c8df2c7a51314c561e95eef60"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d444573220ac667c",
+   "type": "compute/logic",
+   "data_hex": "a3626f7063616e64646c6566745821002380c71bd06e227f516139878bb791434cd68a755f7ddf09e13159d2dce8d235657269676874582100326aec2daa7f8dc0c093096adb63af6da83e3033616082ed7399d77707eca190",
+   "hash": "ecf-sha256:d444573220ac667c1cfc5e2b917902c0ceb54be76e199c8f34003392cbb99254"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d4821dda442752cb",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756510",
+   "hash": "ecf-sha256:d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d507c198781049f1",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210035f10ca03ad8e7f3e74db17daf8397036fedf5b1a8b638d5aff9b6725382e9d965696e6465785821000d55982b4fadc8e1bb75cbdc90447ea7cc0f5a413530c0cd3403af9cb17755e5",
+   "hash": "ecf-sha256:d507c198781049f11db752cee9d97e4179233713e6ce4924fd0ff2bddb9e96d8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d56efe5b766c5447",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656162",
+   "hash": "ecf-sha256:d56efe5b766c544717a138158842c245148ab3b551af8ae03e500921b878460f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d5f4d37618eb9bb3",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c6566745821003c21234ffab2612f3ac8c60931414ee4117787f6fdaf5cf3457803a7e2a833b5657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:d5f4d37618eb9bb36c14e32a149ca995a204136ab747fd57956897265b339c54"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d7825b7969fda9b3",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182647468656e5821009d5284f0b5ad1e9d2ba88006546285a75869d432b57bf4f73b04cdb59388aeab69636f6e646974696f6e5821009313f01741e0e67c3334612fc2be348aec314d1031800703ae5b0c2a4926798b",
+   "hash": "ecf-sha256:d7825b7969fda9b37a587f57fe962a231f2df2a94ebca6c06c4ecea3c078880b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d87f67174aeb8ec5",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100c624e85661c116b50d47140faec6e968b6966dab6d7f509d84a3ab8b9e3ec1d16a636f6c6c656374696f6e5821004e64f2ec1d21917ede31778b040d870446aaeb5fd88dd544b3d7725b68c78ab86470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:d87f67174aeb8ec5b5b4caffe9629a1c1dd7c5cec489377ea9e60af9f1265ed3"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d96f000d11309413",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626774646c6566745821009294cf8273fb3ed52a4735549bc996d1f1ff73bb678e97900648c8c405b90f1a657269676874582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182",
+   "hash": "ecf-sha256:d96f000d1130941365bdd70896efaf1c7d4767c726713b1a041303024bc56982"
+  },
+  {
+   "path": "app/asteroids/step/_expr/d9f3f1066514300b",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c6566745821005f306f157b4679fe8399631a0883739fb3fc3b1be2adb9e56203d68b3c906edb657269676874582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd",
+   "hash": "ecf-sha256:d9f3f1066514300b1f84e020df438e312a6b0e68f4d2494e4146295343483dfb"
+  },
+  {
+   "path": "app/asteroids/step/_expr/da5c752d88e190a5",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c65667458210010596a62b9144b89fbd30feb36962e62aa771ade47d626def955b0f30a91b27b657269676874582100b763fccd584143e0976d35ef0efc60f5b6ccb970ecd39865892649d3a1204853",
+   "hash": "ecf-sha256:da5c752d88e190a5bc015c18068202a44929f772830765fbd0eacc5832b0d2c2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/db0a630fb9fa77ab",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565193039",
+   "hash": "ecf-sha256:db0a630fb9fa77ab2ac6138ee2a50988a3e26f416e7aba4767ca1e6bb47f6785"
+  },
+  {
+   "path": "app/asteroids/step/_expr/dc16b8859387572d",
+   "type": "compute/index",
+   "data_hex": "a26561727261795821006844628eb63005c36da18c77c3bac670a00d381a4cdad94cfa94929e0715287265696e646578582100b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9",
+   "hash": "ecf-sha256:dc16b8859387572db6d6eee9ee7e31ae0ab36b80ac189d12b327a2b988e81f20"
+  },
+  {
+   "path": "app/asteroids/step/_expr/dc5ea24e1db148b4",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100903cbafe1253a96293bc158d5b0db1d3f0b7cd4523acbc16e55c2d2cee8a6fb765696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:dc5ea24e1db148b4e5ce3544d3c78e30b6671a568d409eead2e48cea8a08ed2f"
+  },
+  {
+   "path": "app/asteroids/step/_expr/dd6e8c87ba97c633",
+   "type": "compute/if",
+   "data_hex": "a364656c7365582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf7182647468656e582100bfd2bf225c9b67a36440733977d3dc45d83ba30f4af40d989580a89a63027efd69636f6e646974696f6e58210015e8ebe7dbf4a18def4638ef009645e7d6bd208b31a083067e89305413b9973f",
+   "hash": "ecf-sha256:dd6e8c87ba97c6338747978cffb40a1f6bcadda86153a69e39cd4bb74bb3f03d"
+  },
+  {
+   "path": "app/asteroids/step/_expr/de65294e9b157276",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562797366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:de65294e9b157276042705107b6d0e0af7995fb73fd8a6f9f966f0e828a892dc"
+  },
+  {
+   "path": "app/asteroids/step/_expr/dfe4e047bd040099",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c65667458210099f25f9da4758de866f3a16952f9ab1c337f4f81daadac1d25003e328044755b657269676874582100a888d2edfb61b822f349b6ee96a33bffaef6c42cdcecbab159df6eeb1f1433f4",
+   "hash": "ecf-sha256:dfe4e047bd0400993bb0fa8a8512418ba7f7024e1e6f763f63d7e4657cce8886"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e00451699954255a",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821003780f6289ec19ee9a1c8889c52aa3005fce70dbcb0e12775fa804226daa6df1a657269676874582100d43b5efee62fa28b172c85d8f8fa7237ae216c0c8df2c7a51314c561e95eef60",
+   "hash": "ecf-sha256:e00451699954255ae89028d271d5678480f19fbbb6371648453403f4aa361b33"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e0d7043ff69ed43e",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210051bd058ff09a5a282a324a1de3d929ca020d11cfef615d94dbc16e03fa42aa4565696e646578582100b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9",
+   "hash": "ecf-sha256:e0d7043ff69ed43e4f43ca6759f850ae14cf9f7aa213901b7caf37a918ca92ba"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e181c9a3921c60d4",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626571646c656674582100031057f5e40de6188826f2b33500974b0aed50bf8a167f24e3b99bc4ca37eb9d657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:e181c9a3921c60d4ccb8e3f33014400cb34cb61986598efe8fe2e8ac10ad8179"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e3610609a55f91d0",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756504",
+   "hash": "ecf-sha256:e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e42228facebae7cc",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821002c3bee63b536fac7237bdaa4a021d7e4737b077cf2c4f63ffd84143b46135308657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:e42228facebae7ccf7ff9929e1dfd13b6a633df1bc2b04af59878c7b47054c88"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e46281ee8c947218",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c6566745821006236b71c274efd13cfd637cd5162d40e91cf90f77bf3c69538a4fe3e4aacc292657269676874582100cca242a3615748f00a739c0d2dae579b813918b660647be15506abf2150bd22b",
+   "hash": "ecf-sha256:e46281ee8c947218c7826719077758754875afbecca75a32c87e30189766a93e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e5281365df2ae402",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100a57a3971ea52aba0c46c2375603e9e488a6ae2e6d710d92d6771aa272debf903657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:e5281365df2ae402b8c66a9fbbcb1c6385dab7999a14fbaa1f5b27665c4b0ba9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e5d9748269ab3922",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d65636e7679",
+   "hash": "ecf-sha256:e5d9748269ab392269fab5cb429e1c0fe067e4a817472e3175eb8906b4deefac"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e60e44d8bd0ab109",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100015d20214b981b35bf6c27fe205e33bf06a6bb4fb9fab572b1fd8aafe06c778665696e6465785821005cb0e601c1a207b634df6593a1104258d3c185033020a3a22fde94ee807e4245",
+   "hash": "ecf-sha256:e60e44d8bd0ab109ac00c836a1447d62065362caaa6657990bbecafd94c440c4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e6168cc741f5e3ed",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100efc8405c71dc7db3fecdcbfab0fe1d11b0c502ba39a3a6e2194bd7a85063d88666706172616d7381616a",
+   "hash": "ecf-sha256:e6168cc741f5e3ed6a7a6c62e2f403d1334b1320a001626656da79d307b75b38"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e632aa47bab5dae2",
+   "type": "compute/index",
+   "data_hex": "a2656172726179582100b8cadc0cda02ee6936ec244028ba97232ebfb0a28185654306c0ce6653f1cd7065696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:e632aa47bab5dae26ffd3f4dfc8953ef45d29689b83136da50a7cb5c78ae00f4"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e6b89e3fc6a157f2",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821005a4c8b2114051c543dc261aeb12d3c9ea0f5e3e0b522d21917bdda5e35963ef76a636f6c6c656374696f6e582100747f96d5128257e1beff5101d2c1e427ae4104702fd0ffd673d6c29c1928337a6470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:e6b89e3fc6a157f25d75d25f483d08ad1e4492ba675858805eb79f95afb213e1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e7a8437ebc5384a9",
+   "type": "compute/lookup/tree",
+   "data_hex": "a1647061746878432f324b366a6b6a746d507459386d4d41623464596769424e4171374b7264596f6e566a65436e3265317347596d78382f6170702f61737465726f6964732f7374617465",
+   "hash": "ecf-sha256:e7a8437ebc5384a929e2969e1f3b07401b175fb71be6be3579e5d21caec6d3e9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/e9aabedd509c4dfa",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100003888b12834adaa634177a9164256b72b14261543be62b588d766312434052066706172616d7381616a",
+   "hash": "ecf-sha256:e9aabedd509c4dfab7470273762c98cf84981ce04fc430e0d548d1e9b3f1973b"
+  },
+  {
+   "path": "app/asteroids/step/_expr/ea52e549c8979b57",
+   "type": "compute/lookup/scope",
+   "data_hex": "a1646e616d656169",
+   "hash": "ecf-sha256:ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed"
+  },
+  {
+   "path": "app/asteroids/step/_expr/eecf37fb61daf654",
+   "type": "compute/field",
+   "data_hex": "a2646e616d656376797366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:eecf37fb61daf654cc48958d5203b26e82a73d49b1a980cb4bdb08ffc3eea70c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/eede858e7ee01e8b",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210050e9181ec433da03c188e5d1f65b1a6ad09ec7a8e8bc2932573fd4bdf661c72865696e646578582100ea52e549c8979b57b4f2bee6e66811c93360e5bb2cea95dd590f00e1d7591aed",
+   "hash": "ecf-sha256:eede858e7ee01e8b19ce5fa41fb2f06489c2e8d7a3fcd4e1ec03ed1c2b58d839"
+  },
+  {
+   "path": "app/asteroids/step/_expr/efc8405c71dc7db3",
+   "type": "compute/if",
+   "data_hex": "a364656c736558210007f35c6435d2c11204ceeff414d9db4680f890e7d74f2393cb74f777f989a9fe647468656e582100b95c90d341b9aa695f1be949d4769bffd694909e4155c4d5bc56c011d12d6e9469636f6e646974696f6e582100e181c9a3921c60d4ccb8e3f33014400cb34cb61986598efe8fe2e8ac10ad8179",
+   "hash": "ecf-sha256:efc8405c71dc7db3fecdcbfab0fe1d11b0c502ba39a3a6e2194bd7a85063d886"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f040fa32fbef0a24",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6564726f747366656e7469747958210048538ba0b9b7028f8790c5213ece225c557982c83d5c28ddaa7968e72f691d7a",
+   "hash": "ecf-sha256:f040fa32fbef0a24c75319cfe5a407f04a81f2250557d069dc15dfc6a7cc2b8c"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f15c5f22d8a0bb20",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e582100c253854e1f822830dc47afc993d004773128f1b76e8e73112a9d5a3df490f7446a636f6c6c656374696f6e5821009cd6e86320e79d45bfdcba562e0828178351b449bf9fab6722dfad518e2668386470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:f15c5f22d8a0bb20de0fcff193bc6467ebb327a08e45c86dcaf01d76faa6d260"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f1a940c4ddb8a534",
+   "type": "compute/compare",
+   "data_hex": "a3626f70626c74646c65667458210055201785b2102b6a08f13d32f7fbeaa0722f33ec16d0646c2bd8fc448042e0a2657269676874582100e3610609a55f91d085bb1a1c5778f1fc5f789f36208cd1989a03a093e2d09a9e",
+   "hash": "ecf-sha256:f1a940c4ddb8a534146fe4f832d7241fecadf69cfdc708bed5e8e3330c1639c5"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f1fdc5de02f8112c",
+   "type": "compute/literal",
+   "data_hex": "a16576616c756502",
+   "hash": "ecf-sha256:f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f25415a293b6a0bc",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100da5c752d88e190a5bc015c18068202a44929f772830765fbd0eacc5832b0d2c266706172616d73816162",
+   "hash": "ecf-sha256:f25415a293b6a0bc8e41e1ef09b220a23c78b1dded86036c182d06ed84279042"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f34efc5e58fb4105",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6562767966656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:f34efc5e58fb4105fd4df138d20b2ab39aeeb6b7f04adc6b82241832e5dea946"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f44c2101b5bae6ca",
+   "type": "compute/index",
+   "data_hex": "a265617272617958210069ae842bc32242a9c90c8784c7802e06bbbe539be2079fc408c3a12d41d4681165696e646578582100b5a195100fdcedd7b701a73ab24a04d13f5e977fdce98e0911406b0a9ac8ace9",
+   "hash": "ecf-sha256:f44c2101b5bae6cae8f4739631eefd5f4955baa858ed9daff41a6b387cb32b20"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f465b1ee95c69d6e",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e5821007c6c9b2cb6420b4dd8df7c00a247a9b312620043f58a756703c71149af4d75d26a636f6c6c656374696f6e5821005a2a1ab5f0ba20a19080aa884eee890ce602c57997905d504d5bfd9dfcf291de6470617468781b73797374656d2f636f6d707574652f6275696c74696e732f6d6170696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:f465b1ee95c69d6ea01076e017aa5ac21fd2398dac12136d8d093ec64b5db112"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f5769763c39ea5ad",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c656674582100af4f6dae683be987e6ff9a3dc3806e55ab532641f90d54e20800cfcd7e396813657269676874582100d4821dda442752cb55004712990a6c344164da3c79f03c035997e69c4345a671",
+   "hash": "ecf-sha256:f5769763c39ea5ada0ce38b25d788ad5a3d0807f09924dd3b38c2d972808c2b1"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f5b3392197448e8c",
+   "type": "compute/let",
+   "data_hex": "a264626f6479582100b8bfc6bdef3f25567112b2cfd1b125ebb0a9f7e5b1fecf01afb24ddcaabb6bea6862696e64696e677381a2646e616d656277766576616c75655821004da6c7ac839546c31e475db9a9dace93113f4c10a0557a115bad400cffab2c68",
+   "hash": "ecf-sha256:f5b3392197448e8c9684946928d0133422d80d45d5602fa39d82783c40bb7e9e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f7c4fd7a2b10622e",
+   "type": "compute/literal",
+   "data_hex": "a16576616c7565190300",
+   "hash": "ecf-sha256:f7c4fd7a2b10622efbe8e651b1d8d8a83b141668a56cacd056d868ed711597b7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/f9c28fa8bcc707fa",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c6566745821008e89c443219b5e28f1b385d4117cb325096b02e3966d719b2f56be78b195b810657269676874582100f1fdc5de02f8112c3ee5a70d3f1b7c025d52bacab1da744404be7b32ad9b1293",
+   "hash": "ecf-sha256:f9c28fa8bcc707fa9a5160a863e4902798eb2c8e6d7c375384fba5cc00afb1e8"
+  },
+  {
+   "path": "app/asteroids/step/_expr/faaaba50db1e6f0d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063737562646c656674582100aafa5290111ec29ef17d4e2d502f7878d3905df4e4745bc08bc85c3c6fcf71826572696768745821003f521428491a92b502e1317ff17a02c6f61705706473d2f4b9520f6960e2d46b",
+   "hash": "ecf-sha256:faaaba50db1e6f0d8dd2012ebe1145cd430bf87cd8b7639cb2144c791c35891e"
+  },
+  {
+   "path": "app/asteroids/step/_expr/fb148b65e278299e",
+   "type": "compute/lambda",
+   "data_hex": "a264626f6479582100f34efc5e58fb4105fd4df138d20b2ab39aeeb6b7f04adc6b82241832e5dea94666706172616d73816161",
+   "hash": "ecf-sha256:fb148b65e278299e216e3b63145b1d9c3ea3586783dedf622ad48fd14e3ebdc9"
+  },
+  {
+   "path": "app/asteroids/step/_expr/fc20cb444a72f188",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f7063616464646c6566745821001a3c4ea8756a92f593003b3fde34e7967f7b75eb2267188c74c1f030c71d22b3657269676874582100db0a630fb9fa77ab2ac6138ee2a50988a3e26f416e7aba4767ca1e6bb47f6785",
+   "hash": "ecf-sha256:fc20cb444a72f1884882694de7abf90ea164e4975af907e65abcffb2bd12c819"
+  },
+  {
+   "path": "app/asteroids/step/_expr/fdb9eea4017d933d",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d6f64646c65667458210012f5e20ac1c9ae85ed40df327fce050b1cd407d62325b49b985494e867c8c307657269676874582100d2cf996f40f1145ed78bf3d874a3202e8e9b1fe17bcfc100e6691b5cf84d4baa",
+   "hash": "ecf-sha256:fdb9eea4017d933d1a64b6a207f188a3644e7c7589e6bfa6549e249ef997f4d7"
+  },
+  {
+   "path": "app/asteroids/step/_expr/fde218ecae76a0fa",
+   "type": "compute/field",
+   "data_hex": "a2646e616d6563726f7466656e746974795821009ccf1d11407bde3b279ca3bc19b6d3bc96a45d9e7241ad7501eaacc8b8b58185",
+   "hash": "ecf-sha256:fde218ecae76a0fa74423cd5e5496c2e3a60c7e4cd63a59e8a552fa76f889f9a"
+  },
+  {
+   "path": "app/asteroids/step/_expr/fe37e6d9a39c75e3",
+   "type": "compute/apply",
+   "data_hex": "a36461726773a262666e58210026c5016e14ce849cd90d47d601ba102f0de7dc01a66ad214723d01650c8ec6256a636f6c6c656374696f6e5821004e64f2ec1d21917ede31778b040d870446aaeb5fd88dd544b3d7725b68c78ab86470617468781e73797374656d2f636f6d707574652f6275696c74696e732f66696c746572696f7065726174696f6e646576616c",
+   "hash": "ecf-sha256:fe37e6d9a39c75e309d0c67cc57d66e01be95905c17b0a60fbf3024adf3fe4a2"
+  },
+  {
+   "path": "app/asteroids/step/_expr/fe89cde142a36625",
+   "type": "compute/arithmetic",
+   "data_hex": "a3626f70636d756c646c656674582100bfb26466c2c0ad12b9b575d9c10625742f3d426707d89f449b6cbe2eed5f0c28657269676874582100bfb26466c2c0ad12b9b575d9c10625742f3d426707d89f449b6cbe2eed5f0c28",
+   "hash": "ecf-sha256:fe89cde142a366253ee1070d5b9fd965ee2872cb9d10e397c1a940ef7ff332c6"
+  }
+ ],
+ "inputs": [
+  {
+   "tick": 2,
+   "port": "keys",
+   "type": "app/shape/key-set",
+   "data_hex": "a1646b65797302"
+  },
+  {
+   "tick": 5,
+   "port": "keys",
+   "type": "app/shape/key-set",
+   "data_hex": "a1646b65797304"
+  },
+  {
+   "tick": 9,
+   "port": "keys",
+   "type": "app/shape/key-set",
+   "data_hex": "a1646b65797308"
+  },
+  {
+   "tick": 12,
+   "port": "keys",
+   "type": "app/shape/key-set",
+   "data_hex": "a1646b65797300"
+  }
+ ],
+ "oracle": [
+  {
+   "state_hash": "ecf-sha256:472d5e722b32f66ccca7ea753e394da42ed55eedc0d1a4145732cdecce397796",
+   "port_hashes": {
+    "display": "ecf-sha256:6dee70d9bc71cb99918ad76522bd868c09183051c90cafc5c1d16a89093a0568"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:0892cf2a124b8c2373ed458ffebaa4744673abe4972e09540184b364ea8a0bb7",
+   "port_hashes": {
+    "display": "ecf-sha256:9d8db89a0da61b3c4d4b3930f1304a5a4f72626a98548c47b1d576e8b86bee21"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:04e36cf294ca78c25c3d2086678a39e95ab74cb5ca7dc7f2dbb47b08026843cd",
+   "port_hashes": {
+    "display": "ecf-sha256:0e92d761cb66c08aab89a4fb0a369a652462f96bbc197036c6aacd8ed72b4cbf"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:3c663f5d46b13817e9d6c8f9a7e87af81a4b9f2d0df88bc0da170e036ff3903a",
+   "port_hashes": {
+    "display": "ecf-sha256:4a00178288c4b0b51eb0e428af59647555b68ce816b2b8b613ef66afe3897b9a"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:b295d539985475fffd7761aa318eb2aa0da04b2a10f46a6ec8488cfdb29c23e0",
+   "port_hashes": {
+    "display": "ecf-sha256:7fef6c6cb2137e263a473ac17013dec09069410ad7544ef9c9a30d997725cd11"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:bc26a56adf4e4cbbb0793116824c4ab8a16d1a53f358052e51fb7086bb859039",
+   "port_hashes": {
+    "display": "ecf-sha256:316fea005438b337c6effc2d1a27abf8e022162a9cf1a8411b79495eb9a10c56"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:70cd479badd9ddf0ae2d06571c9e8c8fe271260f45ba84f6fc425dc85822f972",
+   "port_hashes": {
+    "display": "ecf-sha256:02c18ae525ddcdc16b02abefb4fef38dc1c35047c9a38b1606ec587a5e36836f"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:a2c60c537a1904e5334ca0151f5e2b1af672a3ae02641e75979f5055bc55e8cf",
+   "port_hashes": {
+    "display": "ecf-sha256:e242060e391b72f39ec4a7c38f46c89fb314798cfd6d5d79934fbe9517068309"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:b3b29ef9c1b90ce989114e856b3f0d0e1a4b827553734df1909eecf47ac4ea7b",
+   "port_hashes": {
+    "display": "ecf-sha256:ae16a2b222ebc7241d98a23fcd7a7e5351f17893a9ae690b42f38b45fc5f5739"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:3e0d193d75ecabd886875f25253dfa9dde5f9e257ecae9ad3c423eca030c6598",
+   "port_hashes": {
+    "display": "ecf-sha256:37d2d913bb065412940f794b3f1f4edd6b2b27f18fed84e97df69bb2233efeee"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:67a0862d7761a9b59ae6646b15f6fc70f691b167f79e5d6e6bdac2be2fc81e05",
+   "port_hashes": {
+    "display": "ecf-sha256:a3f40a622adb59e73371307773c3ed1c0c737647e6852c6baf35957fb0ac0b50"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:69a97acd1ceb5b97bbceac76178758efba3245c8fbc4c697007a66cd18e46004",
+   "port_hashes": {
+    "display": "ecf-sha256:a6336cdd463754a7c4efc33cc182993ff376de452c3a05d795fb53d0d58ff04e"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:b9eb59456dc8c2a9ae0161df406fc76bf7cb3b5d423d81c55d5c006d988a119e",
+   "port_hashes": {
+    "display": "ecf-sha256:aefd3e4952b4f046f19d292597930fe440ca9f401e1e451d02b7eff674b5ae1c"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:346c051db7d44acc259e7767ea544510e0b72b49f9cfcaca1c385af995e29612",
+   "port_hashes": {
+    "display": "ecf-sha256:3c0a1087635ba2770eaa749d5d21464d87130846b6198c26e8e8574707ca7053"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:b4e493cb531093a81d321a88ffd095639c096504ceac8c071c540479fa5ea594",
+   "port_hashes": {
+    "display": "ecf-sha256:4b00b1adaaeef36bf7ef62480618167aa7ee5a4e493c5ea62f5d70532e9d9c49"
+   }
+  },
+  {
+   "state_hash": "ecf-sha256:eecc0277ba1c1e7e2e690d27ec36f9c25e9eafd0d9871eb6dc57ee9b0feee972",
+   "port_hashes": {
+    "display": "ecf-sha256:5c230f936f3faa338f7ca5d0c4dfb45915de20abb7833a5c9f06f163a3c76b19"
+   }
+  }
+ ]
+}

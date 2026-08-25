@@ -326,8 +326,53 @@
     "other": "{actor} — {n} waargenomen mogelijkheden"
   },
 
+  "storage.refresh": "Schijfgebruik vernieuwen",
+  "storage.no_peers": "(geen gehoste peers)",
+  "storage.used_quota": "Gebruikt / quota",
+  "storage.persisted": "Behouden",
+  "storage.persisted_yes": "ja (beschermd tegen verwijdering)",
+  "storage.persisted_no": "nee (best-effort / verwijderbaar)",
+  "storage.persisted_unknown": "onbekend",
+  "storage.on_disk_sqlite": "Op schijf (SQLite)",
+  "storage.content_blobs": "Content-store-blobs",
+  "storage.live_paths": "Actieve boompaden",
+  "storage.backend_stopped": "(backend gestopt — live tellingen niet beschikbaar)",
+  "storage.orphaned_blobs": "Vervangen / verweesde blobs (ong.)",
+  "storage.save_state_paths": "Opslagstatus-paden",
+  "storage.no_breakdown": "(uitsplitsing per prefix niet beschikbaar op Worker/OPFS)",
+
+  "sysoverview.native_peer": "Native peer",
+  "sysoverview.listen": "Luisteren",
+  "sysoverview.not_listening": "(luistert niet)",
+  "sysoverview.link": "Verbinding (S↔B)",
+  "sysoverview.share_tree": "Delen (boom)",
+  "sysoverview.share_tree_hint": "Bestanden die een verbonden apparaat kan bladeren en ophalen, weergegeven onder de boom van deze peer",
+  "sysoverview.share_disk": "Delen (schijf)",
+  "sysoverview.no_backend": "Geen systeem-backend ingericht.",
+  "sysoverview.loading_status": "Status laden…",
+  "sysoverview.waiting_link": "Wachten op de backend-verbinding — apparaten verschijnen zodra ze verbonden zijn.",
+  "sysoverview.checking_devices": "Verbonden apparaten controleren…",
+  "sysoverview.devices_error": "Kan de apparaten van de backend niet lezen — de manager-verbinding is mogelijk nog niet gereed.",
+  "sysoverview.no_devices": "Geen apparaten verbonden met deze backend.",
+  "sysoverview.col_grant": "Machtiging",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"
-  }
+  },
+
+  "window.programs": "Programma's",
+  "programs.subtitle": "Overdraagbare compute-programma's — eenmaal geschreven (workbench-go), gemount vanuit hun descriptors, geëvalueerd door de compute-engine van deze peer.",
+  "programs.install": "Installeren",
+  "programs.start": "Starten",
+  "programs.stop": "Stoppen",
+  "programs.restart": "Herstarten",
+  "programs.status_absent": "niet geïnstalleerd",
+  "programs.status_refused": "kan niet mounten",
+  "programs.status_materializing": "installeren {done}/{total}…",
+  "programs.status_stopped": "gestopt",
+  "programs.status_running": "actief",
+  "programs.status_faulted": "gefaald",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "wachten op het eerste frame"
 }

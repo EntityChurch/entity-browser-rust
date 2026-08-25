@@ -329,9 +329,54 @@
     "other": "{actor} — {n} de capabilități observate"
   },
 
+  "storage.refresh": "Reîmprospătează utilizarea discului",
+  "storage.no_peers": "(niciun peer găzduit)",
+  "storage.used_quota": "Utilizat / cotă",
+  "storage.persisted": "Persistat",
+  "storage.persisted_yes": "da (protejat împotriva evacuării)",
+  "storage.persisted_no": "nu (best-effort / evacuabil)",
+  "storage.persisted_unknown": "necunoscut",
+  "storage.on_disk_sqlite": "Pe disc (SQLite)",
+  "storage.content_blobs": "Bloburi din magazinul de conținut",
+  "storage.live_paths": "Căi de arbore active",
+  "storage.backend_stopped": "(backend oprit — numărători live indisponibile)",
+  "storage.orphaned_blobs": "Bloburi înlocuite / orfane (aprox.)",
+  "storage.save_state_paths": "Căi de stare salvată",
+  "storage.no_breakdown": "(defalcare pe prefix indisponibilă pe Worker/OPFS)",
+
+  "sysoverview.native_peer": "Peer nativ",
+  "sysoverview.listen": "Ascultare",
+  "sysoverview.not_listening": "(nu ascultă)",
+  "sysoverview.link": "Legătură (S↔B)",
+  "sysoverview.share_tree": "Partajare (arbore)",
+  "sysoverview.share_tree_hint": "Fișiere pe care un dispozitiv conectat le poate răsfoi și descărca, expuse sub arborele acestui peer",
+  "sysoverview.share_disk": "Partajare (disc)",
+  "sysoverview.no_backend": "Niciun backend de sistem furnizat.",
+  "sysoverview.loading_status": "Se încarcă starea…",
+  "sysoverview.waiting_link": "Se așteaptă legătura backendului — dispozitivele apar după conectare.",
+  "sysoverview.checking_devices": "Se verifică dispozitivele conectate…",
+  "sysoverview.devices_error": "Nu s-au putut citi dispozitivele backendului — legătura managerului poate să nu fie încă gata.",
+  "sysoverview.no_devices": "Niciun dispozitiv conectat la acest backend.",
+  "sysoverview.col_grant": "Acordare",
+
   "peer.count": {
     "one": "{n} peer",
     "few": "{n} peeri",
     "other": "{n} de peeri"
-  }
+  },
+
+  "window.programs": "Programe",
+  "programs.subtitle": "Programe de calcul transferabile — scrise o singură dată (workbench-go), montate din descriptorii lor, evaluate de motorul de calcul al acestui peer.",
+  "programs.install": "Instalează",
+  "programs.start": "Pornește",
+  "programs.stop": "Oprește",
+  "programs.restart": "Repornește",
+  "programs.status_absent": "neinstalat",
+  "programs.status_refused": "nu se poate monta",
+  "programs.status_materializing": "se instalează {done}/{total}…",
+  "programs.status_stopped": "oprit",
+  "programs.status_running": "rulează",
+  "programs.status_faulted": "eșuat",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "se așteaptă primul cadru"
 }

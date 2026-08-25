@@ -326,8 +326,53 @@
     "other": "{actor} — {n} beobachtete Fähigkeiten"
   },
 
+  "storage.refresh": "Festplattennutzung aktualisieren",
+  "storage.no_peers": "(keine gehosteten Peers)",
+  "storage.used_quota": "Belegt / Kontingent",
+  "storage.persisted": "Persistiert",
+  "storage.persisted_yes": "ja (räumungsgeschützt)",
+  "storage.persisted_no": "nein (Best-Effort / räumbar)",
+  "storage.persisted_unknown": "unbekannt",
+  "storage.on_disk_sqlite": "Auf Datenträger (SQLite)",
+  "storage.content_blobs": "Content-Store-Blobs",
+  "storage.live_paths": "Aktive Baumpfade",
+  "storage.backend_stopped": "(Backend gestoppt — Live-Zählungen nicht verfügbar)",
+  "storage.orphaned_blobs": "Ersetzte / verwaiste Blobs (ca.)",
+  "storage.save_state_paths": "Speicherzustandspfade",
+  "storage.no_breakdown": "(Aufschlüsselung pro Präfix bei Worker/OPFS nicht verfügbar)",
+
+  "sysoverview.native_peer": "Nativer Peer",
+  "sysoverview.listen": "Lauschen",
+  "sysoverview.not_listening": "(lauscht nicht)",
+  "sysoverview.link": "Verbindung (S↔B)",
+  "sysoverview.share_tree": "Freigabe (Baum)",
+  "sysoverview.share_tree_hint": "Dateien, die ein verbundenes Gerät durchsuchen und abrufen kann, unter dem Baum dieses Peers freigegeben",
+  "sysoverview.share_disk": "Freigabe (Datenträger)",
+  "sysoverview.no_backend": "Kein System-Backend bereitgestellt.",
+  "sysoverview.loading_status": "Status wird geladen…",
+  "sysoverview.waiting_link": "Warten auf die Backend-Verbindung — Geräte erscheinen nach dem Verbinden.",
+  "sysoverview.checking_devices": "Verbundene Geräte werden geprüft…",
+  "sysoverview.devices_error": "Die Geräte des Backends konnten nicht gelesen werden — die Manager-Verbindung ist möglicherweise noch nicht bereit.",
+  "sysoverview.no_devices": "Keine Geräte mit diesem Backend verbunden.",
+  "sysoverview.col_grant": "Berechtigung",
+
   "peer.count": {
     "one": "{n} Peer",
     "other": "{n} Peers"
-  }
+  },
+
+  "window.programs": "Programme",
+  "programs.subtitle": "Übertragbare Compute-Programme — einmal geschrieben (workbench-go), aus ihren Deskriptoren gemountet, von der Compute-Engine dieses Peers ausgewertet.",
+  "programs.install": "Installieren",
+  "programs.start": "Starten",
+  "programs.stop": "Stoppen",
+  "programs.restart": "Neu starten",
+  "programs.status_absent": "nicht installiert",
+  "programs.status_refused": "kann nicht gemountet werden",
+  "programs.status_materializing": "Installation {done}/{total}…",
+  "programs.status_stopped": "gestoppt",
+  "programs.status_running": "läuft",
+  "programs.status_faulted": "fehlgeschlagen",
+  "programs.status_line": "{status} · Tick {ticks} · {rate}/s",
+  "programs.display_waiting": "warte auf das erste Bild"
 }

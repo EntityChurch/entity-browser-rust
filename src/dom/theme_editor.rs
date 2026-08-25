@@ -42,7 +42,7 @@ pub fn render(container: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
         Some(editing) => render_editor(&wrapper, editing, output, ctx),
         None => util::append(
             &wrapper,
-            &components::empty("No theme loaded — duplicate one above to start."),
+            &components::empty(&crate::i18n::t("theme.no_theme", &[])),
         ),
     }
 
@@ -138,7 +138,7 @@ fn render_picker(parent: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
 /// The editor card for the loaded theme: label/scheme + grouped token rows
 /// (S7 — repeated records are tables) + Save/Revert/Delete.
 fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorOutput, ctx: &DomCtx) {
-    let card = components::card(&format!("Edit \"{}\"", editing.label));
+    let card = components::card(&crate::i18n::t("theme.edit_title", &[("label", &editing.label)]));
     let rev = output.revision;
 
     // The live preview repaints the WHOLE app from the draft — say so up
@@ -147,7 +147,7 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
     preview_hint.set_attribute("style", theme::HINT).ok();
     util::set_text(
         &preview_hint,
-        "Edits preview live across the whole app. Save keeps them; Revert restores the real theme.",
+        &crate::i18n::t("theme.preview_hint", &[]),
     );
     util::append(&card, &preview_hint);
 
@@ -178,17 +178,15 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
     util::append(
         &card,
         &components::field(
-            "Scheme",
-            "Not a color: browsers render native widgets (dropdown popups, scrollbars, carets) \
-             in one of exactly two modes, dark or light — pick the one your palette sits closest \
-             to so those widgets match.",
+            &crate::i18n::t("theme.scheme", &[]),
+            &crate::i18n::t("theme.scheme_hint", &[]),
             &scheme,
         ),
     );
 
     for group in &editing.groups {
-        util::append(&card, &components::subheading(group.title));
-        let (table, tbody) = components::table(&["Token", "Value"]);
+        util::append(&card, &components::subheading(&crate::i18n::t(group.title, &[])));
+        let (table, tbody) = components::table(&[&crate::i18n::t("theme.col_token", &[]), &crate::i18n::t("theme.col_value", &[])]);
         for (token, value) in &group.rows {
             let cell = util::create_element("div");
             cell.set_attribute("style", theme::TREE_ROW).ok();
@@ -289,7 +287,7 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
         hint.set_attribute("style", theme::HINT).ok();
         util::set_text(
             &hint,
-            "This theme is in use (chrome theme or site override) — switch first to delete.",
+            &crate::i18n::t("theme.in_use", &[]),
         );
         util::append(&card, &hint);
     }

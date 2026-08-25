@@ -35,6 +35,7 @@ mod frame_counters;
 mod i18n;
 mod ops;
 mod peers;
+mod program_host;
 #[cfg(target_arch = "wasm32")]
 mod peers_worker;
 mod listener_state;

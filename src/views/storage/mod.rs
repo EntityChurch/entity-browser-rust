@@ -79,8 +79,8 @@ impl StorageWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Storage",
-            description: "Per-peer content-store / tree usage and disk estimate",
+            name: "Storage", // i18n-ignore — identity key; display via window.storage
+            description: "Per-peer content-store / tree usage and disk estimate", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |_id, peer_id, pm| {
                 let mut window = StorageWindow::new(peer_id.to_string());
@@ -117,11 +117,11 @@ impl StorageWindow {
 
 impl WindowView for StorageWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Storage")
+        crate::i18n::window_title("Storage") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "Storage"
+        "Storage" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn watch(&self) -> &WindowWatch {

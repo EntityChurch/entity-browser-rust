@@ -323,7 +323,52 @@
     "other": "{actor} — 観測された機能 {n} 件"
   },
 
+  "storage.refresh": "ディスク使用量を更新",
+  "storage.no_peers": "（ホストされたピアなし）",
+  "storage.used_quota": "使用量 / クォータ",
+  "storage.persisted": "永続化",
+  "storage.persisted_yes": "はい（削除保護あり）",
+  "storage.persisted_no": "いいえ（ベストエフォート / 削除可能）",
+  "storage.persisted_unknown": "不明",
+  "storage.on_disk_sqlite": "ディスク上（SQLite）",
+  "storage.content_blobs": "コンテンツストアの blob",
+  "storage.live_paths": "アクティブなツリーパス",
+  "storage.backend_stopped": "（バックエンド停止 — ライブカウント利用不可）",
+  "storage.orphaned_blobs": "置き換え / 孤立した blob（概算）",
+  "storage.save_state_paths": "保存状態のパス",
+  "storage.no_breakdown": "（Worker/OPFS ではプレフィックス別の内訳は利用できません）",
+
+  "sysoverview.native_peer": "ネイティブピア",
+  "sysoverview.listen": "リッスン",
+  "sysoverview.not_listening": "（リッスンしていません）",
+  "sysoverview.link": "リンク（S↔B）",
+  "sysoverview.share_tree": "共有（ツリー）",
+  "sysoverview.share_tree_hint": "接続されたデバイスが閲覧・取得できるファイル。このピアのツリー配下に公開されます",
+  "sysoverview.share_disk": "共有（ディスク）",
+  "sysoverview.no_backend": "システムバックエンドがプロビジョニングされていません。",
+  "sysoverview.loading_status": "状態を読み込み中…",
+  "sysoverview.waiting_link": "バックエンドリンクを待機中 — デバイスは接続されると表示されます。",
+  "sysoverview.checking_devices": "接続中のデバイスを確認中…",
+  "sysoverview.devices_error": "バックエンドのデバイスを読み取れませんでした — マネージャーリンクがまだ準備できていない可能性があります。",
+  "sysoverview.no_devices": "このバックエンドに接続されているデバイスはありません。",
+  "sysoverview.col_grant": "付与",
+
   "peer.count": {
     "other": "{n} 個のピア"
-  }
+  },
+
+  "window.programs": "プログラム",
+  "programs.subtitle": "転送可能なコンピュートプログラム — 一度だけ記述され（workbench-go）、ディスクリプタからマウントされ、このピアの計算エンジンで評価されます。",
+  "programs.install": "インストール",
+  "programs.start": "開始",
+  "programs.stop": "停止",
+  "programs.restart": "再起動",
+  "programs.status_absent": "未インストール",
+  "programs.status_refused": "マウントできません",
+  "programs.status_materializing": "インストール中 {done}/{total}…",
+  "programs.status_stopped": "停止中",
+  "programs.status_running": "実行中",
+  "programs.status_faulted": "障害",
+  "programs.status_line": "{status} · ティック {ticks} · {rate}/s",
+  "programs.display_waiting": "最初のフレームを待っています"
 }

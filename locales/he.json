@@ -329,9 +329,54 @@
     "other": "{actor} — {n} יכולות שנצפו"
   },
 
+  "storage.refresh": "רענון שימוש בדיסק",
+  "storage.no_peers": "(אין עמיתים מתארחים)",
+  "storage.used_quota": "בשימוש / מכסה",
+  "storage.persisted": "נשמר",
+  "storage.persisted_yes": "כן (מוגן מפני פינוי)",
+  "storage.persisted_no": "לא (מאמץ מיטבי / ניתן לפינוי)",
+  "storage.persisted_unknown": "לא ידוע",
+  "storage.on_disk_sqlite": "בדיסק (SQLite)",
+  "storage.content_blobs": "Blobs של מאגר התוכן",
+  "storage.live_paths": "נתיבי עץ פעילים",
+  "storage.backend_stopped": "(ה-backend נעצר — ספירות חיות אינן זמינות)",
+  "storage.orphaned_blobs": "Blobs שהוחלפו / יתומים (בקירוב)",
+  "storage.save_state_paths": "נתיבי מצב שמירה",
+  "storage.no_breakdown": "(פירוט לפי קידומת אינו זמין ב-Worker/OPFS)",
+
+  "sysoverview.native_peer": "עמית מקורי",
+  "sysoverview.listen": "מאזין",
+  "sysoverview.not_listening": "(לא מאזין)",
+  "sysoverview.link": "קישור (S↔B)",
+  "sysoverview.share_tree": "שיתוף (עץ)",
+  "sysoverview.share_tree_hint": "קבצים שמכשיר מחובר יכול לעיין בהם ולמשוך, חשופים תחת העץ של עמית זה",
+  "sysoverview.share_disk": "שיתוף (דיסק)",
+  "sysoverview.no_backend": "לא הוקצה backend מערכת.",
+  "sysoverview.loading_status": "טוען סטטוס…",
+  "sysoverview.waiting_link": "ממתין לקישור ה-backend — מכשירים מופיעים לאחר החיבור.",
+  "sysoverview.checking_devices": "בודק מכשירים מחוברים…",
+  "sysoverview.devices_error": "לא ניתן היה לקרוא את מכשירי ה-backend — ייתכן שקישור המנהל עדיין לא מוכן.",
+  "sysoverview.no_devices": "אין מכשירים מחוברים ל-backend זה.",
+  "sysoverview.col_grant": "הענקה",
+
   "peer.count": {
     "one": "{n} עמית",
     "two": "{n} עמיתים",
     "other": "{n} עמיתים"
-  }
+  },
+
+  "window.programs": "תוכניות",
+  "programs.subtitle": "תוכניות חישוב ניידות — נכתבות פעם אחת (workbench-go), נטענות מהמתארים שלהן ומוערכות על ידי מנוע החישוב של עמית זה.",
+  "programs.install": "התקנה",
+  "programs.start": "הפעלה",
+  "programs.stop": "עצירה",
+  "programs.restart": "הפעלה מחדש",
+  "programs.status_absent": "לא מותקנת",
+  "programs.status_refused": "לא ניתן לטעון",
+  "programs.status_materializing": "מתקין {done}/{total}…",
+  "programs.status_stopped": "עצורה",
+  "programs.status_running": "פועלת",
+  "programs.status_faulted": "תקולה",
+  "programs.status_line": "{status} · טיק {ticks} · {rate}/שנ׳",
+  "programs.display_waiting": "ממתין לפריים הראשון"
 }

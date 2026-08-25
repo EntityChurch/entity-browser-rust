@@ -35,7 +35,7 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     // Counts update live via subscription; this re-probes the disk estimate.
     let refresh = crate::dom::components::button(
         ctx,
-        "Refresh disk usage",
+        &crate::i18n::t("storage.refresh", &[]),
         crate::dom::components::ButtonKind::Small,
         crate::views::storage::REFRESH_EVENT,
     );
@@ -66,7 +66,7 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     if output.peers.is_empty() {
         let empty = util::create_element("p");
         empty.set_attribute("style", theme::HINT).ok();
-        util::set_text(&empty, "(no hosted peers)");
+        util::set_text(&empty, &crate::i18n::t("storage.no_peers", &[]));
         util::append(&wrapper, &empty);
     } else {
         for peer in &output.peers {
@@ -94,7 +94,7 @@ fn origin_block(est: &OriginEstimate) -> Element {
     util::append(
         &block,
         &stat_row(
-            "Used / quota",
+            &crate::i18n::t("storage.used_quota", &[]),
             &format!(
                 "{} / {}{pct}",
                 format_bytes(est.usage_bytes),
@@ -103,11 +103,11 @@ fn origin_block(est: &OriginEstimate) -> Element {
         ),
     );
     let persisted = match est.persisted {
-        Some(true) => "yes (eviction-protected)",
-        Some(false) => "no (best-effort / evictable)",
-        None => "unknown",
+        Some(true) => crate::i18n::t("storage.persisted_yes", &[]),
+        Some(false) => crate::i18n::t("storage.persisted_no", &[]),
+        None => crate::i18n::t("storage.persisted_unknown", &[]),
     };
-    util::append(&block, &stat_row("Persisted", persisted));
+    util::append(&block, &stat_row(&crate::i18n::t("storage.persisted", &[]), &persisted));
     block
 }
 
@@ -138,7 +138,7 @@ fn backend_card(b: &BackendStoreView) -> Element {
     util::append(
         &card,
         &stat_row(
-            "On-disk (SQLite)",
+            &crate::i18n::t("storage.on_disk_sqlite", &[]),
             &b.sqlite_bytes
                 .map(|n| format_bytes(n as f64))
                 .unwrap_or_else(|| "—".to_string()),
@@ -149,13 +149,13 @@ fn backend_card(b: &BackendStoreView) -> Element {
     // on-disk size (honest — no live store to read).
     match (b.running, b.entity_count, b.path_count) {
         (true, Some(e), Some(p)) => {
-            util::append(&card, &stat_row("Content-store blobs", &e.to_string()));
-            util::append(&card, &stat_row("Live tree paths", &p.to_string()));
+            util::append(&card, &stat_row(&crate::i18n::t("storage.content_blobs", &[]), &e.to_string()));
+            util::append(&card, &stat_row(&crate::i18n::t("storage.live_paths", &[]), &p.to_string()));
         }
         _ => {
             let note = util::create_element("div");
             note.set_attribute("style", theme::HINT).ok();
-            util::set_text(&note, "(backend stopped — live counts unavailable)");
+            util::set_text(&note, &crate::i18n::t("storage.backend_stopped", &[]));
             util::append(&card, &note);
         }
     }
@@ -176,18 +176,18 @@ fn peer_card(peer: &PeerStorage) -> Element {
     util::append(&title, &id);
     let badge = util::create_element("span");
     badge.set_attribute("style", BADGE).ok();
-    util::set_text(&badge, if peer.is_backend { "Worker / OPFS" } else { "Direct / IDB" });
+    util::set_text(&badge, if peer.is_backend { "Worker / OPFS" } else { "Direct / IDB" }); // i18n-ignore — technical arm badges (OPFS/IDB)
     util::append(&title, &badge);
     util::append(&card, &title);
 
     // Headline stats.
-    util::append(&card, &stat_row("Content-store blobs", &peer.content_blobs.to_string()));
-    util::append(&card, &stat_row("Live tree paths", &peer.live_paths.to_string()));
+    util::append(&card, &stat_row(&crate::i18n::t("storage.content_blobs", &[]), &peer.content_blobs.to_string()));
+    util::append(&card, &stat_row(&crate::i18n::t("storage.live_paths", &[]), &peer.live_paths.to_string()));
     let orphans = peer.approx_orphans();
     util::append(
         &card,
         &stat_row_colored(
-            "Superseded / orphaned blobs (approx.)",
+            &crate::i18n::t("storage.orphaned_blobs", &[]),
             &orphans.to_string(),
             if orphans > 0 { Some(crate::theme_tokens::STATUS_INFO) } else { None },
         ),
@@ -195,7 +195,7 @@ fn peer_card(peer: &PeerStorage) -> Element {
     util::append(
         &card,
         &stat_row_colored(
-            "Save-state paths",
+            &crate::i18n::t("storage.save_state_paths", &[]),
             &peer.save_state_paths.to_string(),
             if peer.save_state_paths > 0 { Some(crate::theme_tokens::STATUS_INFO) } else { None },
         ),
@@ -205,7 +205,7 @@ fn peer_card(peer: &PeerStorage) -> Element {
     if peer.is_backend && peer.buckets.is_empty() {
         let note = util::create_element("div");
         note.set_attribute("style", theme::HINT).ok();
-        util::set_text(&note, "(per-prefix breakdown unavailable on the Worker/OPFS arm)");
+        util::set_text(&note, &crate::i18n::t("storage.no_breakdown", &[]));
         util::append(&card, &note);
     } else if !peer.buckets.is_empty() {
         let sub = util::create_element("div");
@@ -257,7 +257,7 @@ fn short_id(id: &str) -> String {
 fn format_bytes(bytes: f64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if bytes < 1.0 {
-        return "0 B".to_string();
+        return "0 B".to_string(); // i18n-ignore — byte unit, language-neutral
     }
     let mut value = bytes;
     let mut unit = 0;
@@ -266,7 +266,7 @@ fn format_bytes(bytes: f64) -> String {
         unit += 1;
     }
     if unit == 0 {
-        format!("{} B", value as u64)
+        format!("{} B", value as u64) // i18n-ignore — byte unit, language-neutral
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }

@@ -73,8 +73,8 @@ impl SiteEditorWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Site Creator",
-            description: "Create and edit your own content sites (markdown)",
+            name: "Site Creator", // i18n-ignore — identity key; display via window.site_creator
+            description: "Create and edit your own content sites (markdown)", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |_id, peer_id, pm| {
                 let mut window = SiteEditorWindow::new(peer_id.to_string());
@@ -97,11 +97,11 @@ impl SiteEditorWindow {
 
 impl WindowView for SiteEditorWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Site Creator")
+        crate::i18n::window_title("Site Creator") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "Site Creator"
+        "Site Creator" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

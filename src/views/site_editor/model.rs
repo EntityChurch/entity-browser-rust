@@ -156,7 +156,7 @@ impl SiteEditorModel {
             return;
         }
         if peers.get_entity(peer_id, &paths::manifest_path(peer_id, site_id)).is_some() {
-            self.set_notice(format!("A site '{site_id}' already exists."), true);
+            self.set_notice(crate::i18n::t("siteeditor.site_exists", &[("site_id", site_id)]), true);
             return;
         }
         let title = {
@@ -165,7 +165,7 @@ impl SiteEditorModel {
         };
 
         // Page first, then manifest (minimize the manifest-without-root window).
-        let body = format!("# {title}\n\nWelcome to **{title}**.\n");
+        let body = crate::i18n::t("siteeditor.default_page", &[("title", &title)]);
         peers.seed_write(
             peer_id,
             paths::page_path(peer_id, site_id, INDEX_PAGE),
@@ -186,7 +186,7 @@ impl SiteEditorModel {
             inner.create_open = false; // collapse the create card; the new site is now open
             inner.expanded.clear();
             inner.pending_folders.clear();
-            inner.notice = Some(Notice { text: format!("Created site '{site_id}'."), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.site_created", &[("site_id", site_id)]), is_error: false });
         }
     }
 
@@ -270,7 +270,7 @@ impl SiteEditorModel {
         inner.cursor = target;
         inner.cursor_is_page = false;
         inner.notice = Some(Notice {
-            text: format!("Folder '{name}' — add a page here to keep it."),
+            text: crate::i18n::t("siteeditor.folder_note", &[("name", &name)]),
             is_error: false,
         });
     }
@@ -312,7 +312,7 @@ impl SiteEditorModel {
                 (Some(s), Some(p)) => (s, p),
                 _ => {
                     drop(inner);
-                    self.set_notice("Select a site and page first.".to_string(), true);
+                    self.set_notice(crate::i18n::t("siteeditor.select_site_page", &[]), true);
                     return;
                 }
             }
@@ -340,7 +340,7 @@ impl SiteEditorModel {
         // A save can change a top-level page's title → its nav label; keep the
         // browser nav in sync (a no-op when the derived nav is unchanged).
         self.rebuild_nav(peers, peer_id, &site);
-        self.set_notice(format!("Saved '{page}'."), false);
+        self.set_notice(crate::i18n::t("siteeditor.page_saved", &[("page", &page)]), false);
     }
 
     /// Add a new (empty) page in the **add-target directory** (derived from the
@@ -354,7 +354,7 @@ impl SiteEditorModel {
                 Some(s) => (s, join_cwd(&add_target(&inner), name.trim())),
                 None => {
                     drop(inner);
-                    return self.set_notice("Select a site first.".into(), true);
+                    return self.set_notice(crate::i18n::t("siteeditor.select_site", &[]), true);
                 }
             }
         };
@@ -363,7 +363,7 @@ impl SiteEditorModel {
         }
         let path = paths::page_path(peer_id, &site, &slug);
         if peers.get_entity(peer_id, &path).is_some() {
-            return self.set_notice(format!("A page '{slug}' already exists."), true);
+            return self.set_notice(crate::i18n::t("siteeditor.page_exists", &[("slug", &slug)]), true);
         }
         let title = humanize(slug.rsplit('/').next().unwrap_or(&slug));
         let body = format!("# {title}\n\n");
@@ -376,7 +376,7 @@ impl SiteEditorModel {
             inner.cursor = slug.clone();
             inner.cursor_is_page = true;
             inner.selected_page = Some(slug.clone());
-            inner.notice = Some(Notice { text: format!("Added page '{slug}'."), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_added", &[("slug", &slug)]), is_error: false });
         }
     }
 
@@ -403,7 +403,7 @@ impl SiteEditorModel {
                 inner.cursor_is_page = root.is_some();
                 inner.selected_page = root;
             }
-            inner.notice = Some(Notice { text: format!("Deleted page '{slug}'."), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_deleted", &[("slug", &slug)]), is_error: false });
         }
     }
 
@@ -424,7 +424,7 @@ impl SiteEditorModel {
                 inner.selected_site = None;
                 inner.selected_page = None;
             }
-            inner.notice = Some(Notice { text: format!("Deleted site '{site_id}'."), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.site_deleted", &[("site_id", &site_id)]), is_error: false });
         }
     }
 
@@ -465,23 +465,23 @@ impl SiteEditorModel {
     pub fn rename_page(&self, peers: &Peers, peer_id: &str, from: &str, to: &str) {
         let site = match self.inner.lock().unwrap().selected_site.clone() {
             Some(s) => s,
-            None => return self.set_notice("Select a site first.".into(), true),
+            None => return self.set_notice(crate::i18n::t("siteeditor.select_site", &[]), true),
         };
         let to = to.trim().trim_matches('/').to_string();
         if let Err(reason) = validate::validate_page_slug(&to) {
             return self.set_notice(reason, true);
         }
         if to == from {
-            return self.set_notice("New path is the same as the current one.".into(), true);
+            return self.set_notice(crate::i18n::t("siteeditor.same_path", &[]), true);
         }
         let from_path = paths::page_path(peer_id, &site, from);
         let entity = match peers.get_entity(peer_id, &from_path) {
             Some(e) => e,
-            None => return self.set_notice(format!("No page '{from}' to move."), true),
+            None => return self.set_notice(crate::i18n::t("siteeditor.no_page_to_move", &[("from", &from)]), true),
         };
         let to_path = paths::page_path(peer_id, &site, &to);
         if peers.get_entity(peer_id, &to_path).is_some() {
-            return self.set_notice(format!("A page '{to}' already exists."), true);
+            return self.set_notice(crate::i18n::t("siteeditor.page_exists", &[("slug", &to)]), true);
         }
 
         // Write the same content at the new path, then remove the old path. The
@@ -522,7 +522,7 @@ impl SiteEditorModel {
                 inner.cursor = to.clone();
                 inner.cursor_is_page = true;
             }
-            inner.notice = Some(Notice { text: format!("Moved '{from}' → '{to}'."), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_moved", &[("from", &from), ("to", &to)]), is_error: false });
         }
     }
 

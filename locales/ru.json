@@ -329,9 +329,54 @@
     "many": "{actor} — {n} наблюдаемых возможностей"
   },
 
+  "storage.refresh": "Обновить использование диска",
+  "storage.no_peers": "(нет размещённых пиров)",
+  "storage.used_quota": "Использовано / квота",
+  "storage.persisted": "Сохраняется",
+  "storage.persisted_yes": "да (защищено от вытеснения)",
+  "storage.persisted_no": "нет (по возможности / вытесняемо)",
+  "storage.persisted_unknown": "неизвестно",
+  "storage.on_disk_sqlite": "На диске (SQLite)",
+  "storage.content_blobs": "Блобы хранилища контента",
+  "storage.live_paths": "Активные пути дерева",
+  "storage.backend_stopped": "(бэкенд остановлен — живые счётчики недоступны)",
+  "storage.orphaned_blobs": "Замещённые / осиротевшие блобы (прибл.)",
+  "storage.save_state_paths": "Пути состояния сохранения",
+  "storage.no_breakdown": "(разбивка по префиксам недоступна на Worker/OPFS)",
+
+  "sysoverview.native_peer": "Нативный пир",
+  "sysoverview.listen": "Прослушивание",
+  "sysoverview.not_listening": "(не слушает)",
+  "sysoverview.link": "Связь (S↔B)",
+  "sysoverview.share_tree": "Общий доступ (дерево)",
+  "sysoverview.share_tree_hint": "Файлы, которые подключённое устройство может просматривать и загружать, доступны в дереве этого пира",
+  "sysoverview.share_disk": "Общий доступ (диск)",
+  "sysoverview.no_backend": "Системный бэкенд не подготовлен.",
+  "sysoverview.loading_status": "Загрузка состояния…",
+  "sysoverview.waiting_link": "Ожидание связи с бэкендом — устройства появятся после подключения.",
+  "sysoverview.checking_devices": "Проверка подключённых устройств…",
+  "sysoverview.devices_error": "Не удалось прочитать устройства бэкенда — связь с менеджером может быть ещё не готова.",
+  "sysoverview.no_devices": "К этому бэкенду не подключено ни одного устройства.",
+  "sysoverview.col_grant": "Право",
+
   "peer.count": {
     "one": "{n} пир",
     "few": "{n} пира",
     "many": "{n} пиров"
-  }
+  },
+
+  "window.programs": "Программы",
+  "programs.subtitle": "Переносимые вычислительные программы — написаны один раз (workbench-go), монтируются из своих дескрипторов, выполняются вычислительным движком этого пира.",
+  "programs.install": "Установить",
+  "programs.start": "Запустить",
+  "programs.stop": "Остановить",
+  "programs.restart": "Перезапустить",
+  "programs.status_absent": "не установлена",
+  "programs.status_refused": "не удаётся смонтировать",
+  "programs.status_materializing": "установка {done}/{total}…",
+  "programs.status_stopped": "остановлена",
+  "programs.status_running": "выполняется",
+  "programs.status_faulted": "сбой",
+  "programs.status_line": "{status} · тик {ticks} · {rate}/с",
+  "programs.display_waiting": "ожидание первого кадра"
 }

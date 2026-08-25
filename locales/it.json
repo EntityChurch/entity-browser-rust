@@ -326,8 +326,53 @@
     "other": "{actor} — {n} capacità osservate"
   },
 
+  "storage.refresh": "Aggiorna utilizzo del disco",
+  "storage.no_peers": "(nessun peer ospitato)",
+  "storage.used_quota": "Usato / quota",
+  "storage.persisted": "Persistito",
+  "storage.persisted_yes": "sì (protetto da sfratto)",
+  "storage.persisted_no": "no (best-effort / rimovibile)",
+  "storage.persisted_unknown": "sconosciuto",
+  "storage.on_disk_sqlite": "Su disco (SQLite)",
+  "storage.content_blobs": "Blob dell'archivio di contenuti",
+  "storage.live_paths": "Percorsi albero attivi",
+  "storage.backend_stopped": "(backend fermato — conteggi in tempo reale non disponibili)",
+  "storage.orphaned_blobs": "Blob sostituiti / orfani (circa)",
+  "storage.save_state_paths": "Percorsi di stato salvato",
+  "storage.no_breakdown": "(ripartizione per prefisso non disponibile su Worker/OPFS)",
+
+  "sysoverview.native_peer": "Peer nativo",
+  "sysoverview.listen": "Ascolto",
+  "sysoverview.not_listening": "(non in ascolto)",
+  "sysoverview.link": "Collegamento (S↔B)",
+  "sysoverview.share_tree": "Condivisione (albero)",
+  "sysoverview.share_tree_hint": "File che un dispositivo connesso può sfogliare e scaricare, esposti sotto l'albero di questo peer",
+  "sysoverview.share_disk": "Condivisione (disco)",
+  "sysoverview.no_backend": "Nessun backend di sistema fornito.",
+  "sysoverview.loading_status": "Caricamento stato…",
+  "sysoverview.waiting_link": "In attesa del collegamento del backend — i dispositivi appaiono una volta connessi.",
+  "sysoverview.checking_devices": "Controllo dei dispositivi connessi…",
+  "sysoverview.devices_error": "Impossibile leggere i dispositivi del backend — il collegamento del gestore potrebbe non essere ancora pronto.",
+  "sysoverview.no_devices": "Nessun dispositivo connesso a questo backend.",
+  "sysoverview.col_grant": "Concessione",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Programmi",
+  "programs.subtitle": "Programmi di calcolo trasferibili — scritti una sola volta (workbench-go), montati dai loro descrittori, valutati dal motore di calcolo di questo peer.",
+  "programs.install": "Installa",
+  "programs.start": "Avvia",
+  "programs.stop": "Ferma",
+  "programs.restart": "Riavvia",
+  "programs.status_absent": "non installato",
+  "programs.status_refused": "impossibile montare",
+  "programs.status_materializing": "installazione {done}/{total}…",
+  "programs.status_stopped": "fermo",
+  "programs.status_running": "in esecuzione",
+  "programs.status_faulted": "in errore",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "in attesa del primo frame"
 }

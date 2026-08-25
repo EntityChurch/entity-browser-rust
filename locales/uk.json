@@ -329,9 +329,54 @@
     "many": "{actor} — {n} спостережуваних можливостей"
   },
 
+  "storage.refresh": "Оновити використання диска",
+  "storage.no_peers": "(немає розміщених пірів)",
+  "storage.used_quota": "Використано / квота",
+  "storage.persisted": "Зберігається",
+  "storage.persisted_yes": "так (захищено від витіснення)",
+  "storage.persisted_no": "ні (за можливості / витісняється)",
+  "storage.persisted_unknown": "невідомо",
+  "storage.on_disk_sqlite": "На диску (SQLite)",
+  "storage.content_blobs": "Блоби сховища вмісту",
+  "storage.live_paths": "Активні шляхи дерева",
+  "storage.backend_stopped": "(бекенд зупинено — живі лічильники недоступні)",
+  "storage.orphaned_blobs": "Замінені / осиротілі блоби (прибл.)",
+  "storage.save_state_paths": "Шляхи стану збереження",
+  "storage.no_breakdown": "(розбивка за префіксами недоступна на Worker/OPFS)",
+
+  "sysoverview.native_peer": "Нативний пір",
+  "sysoverview.listen": "Прослуховування",
+  "sysoverview.not_listening": "(не слухає)",
+  "sysoverview.link": "Зв'язок (S↔B)",
+  "sysoverview.share_tree": "Спільний доступ (дерево)",
+  "sysoverview.share_tree_hint": "Файли, які підключений пристрій може переглядати та завантажувати, доступні в дереві цього піра",
+  "sysoverview.share_disk": "Спільний доступ (диск)",
+  "sysoverview.no_backend": "Системний бекенд не підготовлено.",
+  "sysoverview.loading_status": "Завантаження стану…",
+  "sysoverview.waiting_link": "Очікування зв'язку з бекендом — пристрої з'являться після підключення.",
+  "sysoverview.checking_devices": "Перевірка підключених пристроїв…",
+  "sysoverview.devices_error": "Не вдалося прочитати пристрої бекенда — зв'язок із менеджером може бути ще не готовий.",
+  "sysoverview.no_devices": "До цього бекенда не підключено жодного пристрою.",
+  "sysoverview.col_grant": "Право",
+
   "peer.count": {
     "one": "{n} пір",
     "few": "{n} піри",
     "many": "{n} пірів"
-  }
+  },
+
+  "window.programs": "Програми",
+  "programs.subtitle": "Переносні обчислювальні програми — написані один раз (workbench-go), монтуються зі своїх дескрипторів, виконуються обчислювальним рушієм цього піра.",
+  "programs.install": "Встановити",
+  "programs.start": "Запустити",
+  "programs.stop": "Зупинити",
+  "programs.restart": "Перезапустити",
+  "programs.status_absent": "не встановлено",
+  "programs.status_refused": "неможливо змонтувати",
+  "programs.status_materializing": "встановлення {done}/{total}…",
+  "programs.status_stopped": "зупинено",
+  "programs.status_running": "виконується",
+  "programs.status_faulted": "збій",
+  "programs.status_line": "{status} · тік {ticks} · {rate}/с",
+  "programs.display_waiting": "очікування першого кадру"
 }

@@ -483,6 +483,21 @@ tauri-bundle: wasm-release
 tauri-bundle-run: tauri-bundle
 	$(call RUN_GUI,./src-tauri/target/debug/entity-browser-tauri)
 
+# Regenerate the compute-program fixture bundles (assets/programs/*.json)
+# by running the UNCHANGED workbench-go authoring code in the pinned golang
+# image and dumping the authored entities + per-tick oracle hashes
+# (tools/program-dump; DESIGN-COMPUTE-PROGRAM-HOST-POC.md). Go is a
+# fixture-generation dependency only — never part of the app toolchain.
+# Needs the sibling checkouts ../entity-workbench-go and ../entity-core-go.
+program-fixtures:
+	mkdir -p assets/programs
+	podman run --rm \
+		-v $(PARENT):/src:z \
+		-v program-dump-gocache:/go/pkg/mod \
+		-w /src/$(notdir $(CURDIR))/tools/program-dump \
+		golang:1.25-bookworm \
+		sh -c "go mod tidy && go run . -out ../../assets/programs"
+
 # Serve whatever is currently in dist/ (no rebuild). Fast, but does NOT
 # guarantee the bundle is current — use `make build-serve` when you need
 # certainty you're serving the latest optimized build.
@@ -666,4 +681,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: program-fixtures native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

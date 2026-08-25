@@ -329,9 +329,54 @@
     "other": "{actor} — {n} pozorovaných schopností"
   },
 
+  "storage.refresh": "Obnovit využití disku",
+  "storage.no_peers": "(žádné hostované peery)",
+  "storage.used_quota": "Využito / kvóta",
+  "storage.persisted": "Trvale uloženo",
+  "storage.persisted_yes": "ano (chráněno před vyřazením)",
+  "storage.persisted_no": "ne (best-effort / vyřaditelné)",
+  "storage.persisted_unknown": "neznámé",
+  "storage.on_disk_sqlite": "Na disku (SQLite)",
+  "storage.content_blobs": "Bloby úložiště obsahu",
+  "storage.live_paths": "Aktivní cesty stromu",
+  "storage.backend_stopped": "(backend zastaven — živé počty nedostupné)",
+  "storage.orphaned_blobs": "Nahrazené / osiřelé bloby (přibl.)",
+  "storage.save_state_paths": "Cesty stavu uložení",
+  "storage.no_breakdown": "(rozpad podle prefixu nedostupný na Worker/OPFS)",
+
+  "sysoverview.native_peer": "Nativní peer",
+  "sysoverview.listen": "Naslouchání",
+  "sysoverview.not_listening": "(nenaslouchá)",
+  "sysoverview.link": "Propojení (S↔B)",
+  "sysoverview.share_tree": "Sdílení (strom)",
+  "sysoverview.share_tree_hint": "Soubory, které připojené zařízení může procházet a stahovat, zveřejněné pod stromem tohoto peeru",
+  "sysoverview.share_disk": "Sdílení (disk)",
+  "sysoverview.no_backend": "Není zřízen žádný systémový backend.",
+  "sysoverview.loading_status": "Načítání stavu…",
+  "sysoverview.waiting_link": "Čekání na propojení backendu — zařízení se objeví po připojení.",
+  "sysoverview.checking_devices": "Kontrola připojených zařízení…",
+  "sysoverview.devices_error": "Nelze načíst zařízení backendu — propojení správce nemusí být ještě připraveno.",
+  "sysoverview.no_devices": "K tomuto backendu nejsou připojena žádná zařízení.",
+  "sysoverview.col_grant": "Oprávnění",
+
   "peer.count": {
     "one": "{n} peer",
     "few": "{n} peery",
     "other": "{n} peerů"
-  }
+  },
+
+  "window.programs": "Programy",
+  "programs.subtitle": "Přenositelné výpočetní programy — napsané jednou (workbench-go), připojené ze svých deskriptorů, vyhodnocované výpočetním strojem tohoto peeru.",
+  "programs.install": "Nainstalovat",
+  "programs.start": "Spustit",
+  "programs.stop": "Zastavit",
+  "programs.restart": "Restartovat",
+  "programs.status_absent": "nenainstalováno",
+  "programs.status_refused": "nelze připojit",
+  "programs.status_materializing": "instalace {done}/{total}…",
+  "programs.status_stopped": "zastaveno",
+  "programs.status_running": "běží",
+  "programs.status_faulted": "selhalo",
+  "programs.status_line": "{status} · tik {ticks} · {rate}/s",
+  "programs.display_waiting": "čekání na první snímek"
 }

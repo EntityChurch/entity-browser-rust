@@ -326,8 +326,53 @@
     "other": "{actor} — {n} παρατηρούμενες δυνατότητες"
   },
 
+  "storage.refresh": "Ανανέωση χρήσης δίσκου",
+  "storage.no_peers": "(κανένας φιλοξενούμενος ομότιμος)",
+  "storage.used_quota": "Σε χρήση / όριο",
+  "storage.persisted": "Διατηρήθηκε",
+  "storage.persisted_yes": "ναι (προστασία από εκδίωξη)",
+  "storage.persisted_no": "όχι (βέλτιστη προσπάθεια / εκδιώξιμο)",
+  "storage.persisted_unknown": "άγνωστο",
+  "storage.on_disk_sqlite": "Στον δίσκο (SQLite)",
+  "storage.content_blobs": "Blob αποθήκης περιεχομένου",
+  "storage.live_paths": "Ενεργές διαδρομές δέντρου",
+  "storage.backend_stopped": "(το backend σταμάτησε — ζωντανές μετρήσεις μη διαθέσιμες)",
+  "storage.orphaned_blobs": "Αντικατεστημένα / ορφανά blob (περίπου)",
+  "storage.save_state_paths": "Διαδρομές αποθηκευμένης κατάστασης",
+  "storage.no_breakdown": "(η ανάλυση ανά πρόθεμα δεν είναι διαθέσιμη σε Worker/OPFS)",
+
+  "sysoverview.native_peer": "Εγγενής ομότιμος",
+  "sysoverview.listen": "Ακρόαση",
+  "sysoverview.not_listening": "(δεν ακούει)",
+  "sysoverview.link": "Σύνδεσμος (S↔B)",
+  "sysoverview.share_tree": "Κοινή χρήση (δέντρο)",
+  "sysoverview.share_tree_hint": "Αρχεία που μια συνδεδεμένη συσκευή μπορεί να περιηγηθεί και να λάβει, εκτεθειμένα κάτω από το δέντρο αυτού του ομότιμου",
+  "sysoverview.share_disk": "Κοινή χρήση (δίσκος)",
+  "sysoverview.no_backend": "Δεν έχει παρασχεθεί backend συστήματος.",
+  "sysoverview.loading_status": "Φόρτωση κατάστασης…",
+  "sysoverview.waiting_link": "Αναμονή για τον σύνδεσμο backend — οι συσκευές εμφανίζονται μόλις συνδεθούν.",
+  "sysoverview.checking_devices": "Έλεγχος συνδεδεμένων συσκευών…",
+  "sysoverview.devices_error": "Δεν ήταν δυνατή η ανάγνωση των συσκευών του backend — ο σύνδεσμος διαχειριστή ίσως δεν είναι ακόμη έτοιμος.",
+  "sysoverview.no_devices": "Καμία συσκευή δεν είναι συνδεδεμένη σε αυτό το backend.",
+  "sysoverview.col_grant": "Παραχώρηση",
+
   "peer.count": {
     "one": "{n} ομότιμος",
     "other": "{n} ομότιμοι"
-  }
+  },
+
+  "window.programs": "Προγράμματα",
+  "programs.subtitle": "Μεταφερόμενα υπολογιστικά προγράμματα — γραμμένα μία φορά (workbench-go), προσαρτημένα από τους περιγραφείς τους, αποτιμώνται από τη μηχανή υπολογισμού αυτού του ομότιμου.",
+  "programs.install": "Εγκατάσταση",
+  "programs.start": "Εκκίνηση",
+  "programs.stop": "Διακοπή",
+  "programs.restart": "Επανεκκίνηση",
+  "programs.status_absent": "μη εγκατεστημένο",
+  "programs.status_refused": "αδυναμία προσάρτησης",
+  "programs.status_materializing": "εγκατάσταση {done}/{total}…",
+  "programs.status_stopped": "σταματημένο",
+  "programs.status_running": "εκτελείται",
+  "programs.status_faulted": "σφάλμα",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "αναμονή για το πρώτο καρέ"
 }

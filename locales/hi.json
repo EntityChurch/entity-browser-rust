@@ -326,8 +326,53 @@
     "other": "{actor} — {n} देखी गई क्षमताएँ"
   },
 
+  "storage.refresh": "डिस्क उपयोग रीफ़्रेश करें",
+  "storage.no_peers": "(कोई होस्टेड पीयर नहीं)",
+  "storage.used_quota": "उपयोग किया गया / कोटा",
+  "storage.persisted": "संरक्षित",
+  "storage.persisted_yes": "हाँ (निष्कासन-संरक्षित)",
+  "storage.persisted_no": "नहीं (सर्वोत्तम प्रयास / निष्कासनीय)",
+  "storage.persisted_unknown": "अज्ञात",
+  "storage.on_disk_sqlite": "डिस्क पर (SQLite)",
+  "storage.content_blobs": "कंटेंट-स्टोर blob",
+  "storage.live_paths": "सक्रिय ट्री पथ",
+  "storage.backend_stopped": "(बैकएंड रुका — लाइव गणना अनुपलब्ध)",
+  "storage.orphaned_blobs": "प्रतिस्थापित / अनाथ blob (लगभग)",
+  "storage.save_state_paths": "सेव-स्टेट पथ",
+  "storage.no_breakdown": "(Worker/OPFS पर उपसर्ग-वार विभाजन अनुपलब्ध)",
+
+  "sysoverview.native_peer": "नेटिव पीयर",
+  "sysoverview.listen": "सुनना",
+  "sysoverview.not_listening": "(नहीं सुन रहा)",
+  "sysoverview.link": "लिंक (S↔B)",
+  "sysoverview.share_tree": "साझा करें (ट्री)",
+  "sysoverview.share_tree_hint": "फ़ाइलें जिन्हें एक कनेक्टेड डिवाइस ब्राउज़ और पुल कर सकता है, इस पीयर के ट्री के अंतर्गत प्रदर्शित",
+  "sysoverview.share_disk": "साझा करें (डिस्क)",
+  "sysoverview.no_backend": "कोई सिस्टम बैकएंड प्रावधानित नहीं है।",
+  "sysoverview.loading_status": "स्थिति लोड हो रही है…",
+  "sysoverview.waiting_link": "बैकएंड लिंक की प्रतीक्षा — कनेक्ट होने पर डिवाइस दिखाई देंगे।",
+  "sysoverview.checking_devices": "कनेक्टेड डिवाइस जाँच रहे हैं…",
+  "sysoverview.devices_error": "बैकएंड के डिवाइस पढ़े नहीं जा सके — प्रबंधक लिंक अभी तैयार नहीं हो सकता है।",
+  "sysoverview.no_devices": "इस बैकएंड से कोई डिवाइस कनेक्ट नहीं है।",
+  "sysoverview.col_grant": "अनुदान",
+
   "peer.count": {
     "one": "{n} पीयर",
     "other": "{n} पीयर"
-  }
+  },
+
+  "window.programs": "प्रोग्राम",
+  "programs.subtitle": "स्थानांतरणीय कंप्यूट प्रोग्राम — एक बार लिखे जाते हैं (workbench-go), अपने डिस्क्रिप्टर से माउंट होते हैं, और इस पीयर का कंप्यूट इंजन इन्हें चलाता है।",
+  "programs.install": "इंस्टॉल करें",
+  "programs.start": "शुरू करें",
+  "programs.stop": "रोकें",
+  "programs.restart": "फिर से शुरू करें",
+  "programs.status_absent": "इंस्टॉल नहीं है",
+  "programs.status_refused": "माउंट नहीं हो सकता",
+  "programs.status_materializing": "इंस्टॉल हो रहा है {done}/{total}…",
+  "programs.status_stopped": "रुका हुआ",
+  "programs.status_running": "चल रहा है",
+  "programs.status_faulted": "विफल",
+  "programs.status_line": "{status} · टिक {ticks} · {rate}/से",
+  "programs.display_waiting": "पहले फ़्रेम की प्रतीक्षा"
 }

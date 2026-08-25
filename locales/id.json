@@ -323,7 +323,52 @@
     "other": "{actor} — {n} kemampuan teramati"
   },
 
+  "storage.refresh": "Segarkan penggunaan disk",
+  "storage.no_peers": "(tidak ada peer yang dihosting)",
+  "storage.used_quota": "Terpakai / kuota",
+  "storage.persisted": "Dipertahankan",
+  "storage.persisted_yes": "ya (dilindungi dari penggusuran)",
+  "storage.persisted_no": "tidak (best-effort / dapat digusur)",
+  "storage.persisted_unknown": "tidak diketahui",
+  "storage.on_disk_sqlite": "Di disk (SQLite)",
+  "storage.content_blobs": "Blob penyimpanan konten",
+  "storage.live_paths": "Jalur pohon aktif",
+  "storage.backend_stopped": "(backend dihentikan — hitungan langsung tidak tersedia)",
+  "storage.orphaned_blobs": "Blob tergantikan / yatim (perkiraan)",
+  "storage.save_state_paths": "Jalur status simpan",
+  "storage.no_breakdown": "(rincian per prefiks tidak tersedia di Worker/OPFS)",
+
+  "sysoverview.native_peer": "Peer native",
+  "sysoverview.listen": "Mendengarkan",
+  "sysoverview.not_listening": "(tidak mendengarkan)",
+  "sysoverview.link": "Tautan (S↔B)",
+  "sysoverview.share_tree": "Bagikan (pohon)",
+  "sysoverview.share_tree_hint": "File yang dapat dijelajahi dan diambil perangkat terhubung, diekspos di bawah pohon peer ini",
+  "sysoverview.share_disk": "Bagikan (disk)",
+  "sysoverview.no_backend": "Tidak ada backend sistem yang disediakan.",
+  "sysoverview.loading_status": "Memuat status…",
+  "sysoverview.waiting_link": "Menunggu tautan backend — perangkat muncul setelah terhubung.",
+  "sysoverview.checking_devices": "Memeriksa perangkat terhubung…",
+  "sysoverview.devices_error": "Tidak dapat membaca perangkat backend — tautan pengelola mungkin belum siap.",
+  "sysoverview.no_devices": "Tidak ada perangkat terhubung ke backend ini.",
+  "sysoverview.col_grant": "Pemberian",
+
   "peer.count": {
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Program",
+  "programs.subtitle": "Program komputasi yang dapat dipindahkan — ditulis sekali (workbench-go), dipasang dari deskriptornya, dievaluasi oleh mesin komputasi peer ini.",
+  "programs.install": "Pasang",
+  "programs.start": "Mulai",
+  "programs.stop": "Berhenti",
+  "programs.restart": "Mulai ulang",
+  "programs.status_absent": "belum terpasang",
+  "programs.status_refused": "tidak dapat dipasang",
+  "programs.status_materializing": "memasang {done}/{total}…",
+  "programs.status_stopped": "berhenti",
+  "programs.status_running": "berjalan",
+  "programs.status_faulted": "gagal",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "menunggu bingkai pertama"
 }

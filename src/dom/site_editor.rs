@@ -102,12 +102,12 @@ pub fn render(container: &Element, output: &SiteEditorOutput, ctx: &DomCtx) {
 
     // "Your sites" (collapsible) — a clean list of sites, each with its render
     // health as a small ✓/⚠ next to the name.
-    util::append(&wrapper, &components::collapsible_header(ctx, "Your sites", output.sites_open, EV_TOGGLE_SITES));
+    util::append(&wrapper, &components::collapsible_header(ctx, &crate::i18n::t("siteeditor.your_sites", &[]), output.sites_open, EV_TOGGLE_SITES));
     if output.sites_open {
         util::append(&wrapper, &sites_block(output, ctx));
         // "New site" is its own expander → a tidy card on demand, not a row of
         // input boxes always sitting under the list.
-        util::append(&wrapper, &components::collapsible_header(ctx, "New site", output.create_open, EV_TOGGLE_CREATE));
+        util::append(&wrapper, &components::collapsible_header(ctx, &crate::i18n::t("siteeditor.new_site", &[]), output.create_open, EV_TOGGLE_CREATE));
         if output.create_open {
             util::append(&wrapper, &create_block(ctx));
         }
@@ -141,7 +141,7 @@ fn sites_block(output: &SiteEditorOutput, ctx: &DomCtx) -> Element {
     if output.sites.is_empty() {
         let empty = util::create_element("p");
         empty.set_attribute("style", theme::HINT).ok();
-        util::set_text(&empty, "(none yet — use “New site” below)");
+        util::set_text(&empty, &crate::i18n::t("siteeditor.no_sites", &[]));
         util::append(&block, &empty);
         return block;
     }
@@ -159,9 +159,9 @@ fn site_row(site: &SiteListItem, selected: bool, ctx: &DomCtx) -> Element {
     // Health glyph: ✓ renders / ⚠ won't (tooltip carries the reason).
     let health = util::create_element("span");
     let (glyph, color, tip) = if site.renderable {
-        ("\u{2713}", crate::theme_tokens::STATUS_OK, "Renders in the browser".to_string())
+        ("\u{2713}", crate::theme_tokens::STATUS_OK, crate::i18n::t("siteeditor.renders_ok", &[]))
     } else {
-        ("\u{26a0}", crate::theme_tokens::STATUS_WARN, format!("Won't render: {}", site.reason))
+        ("\u{26a0}", crate::theme_tokens::STATUS_WARN, crate::i18n::t("siteeditor.wont_render", &[("reason", &site.reason)]))
     };
     health.set_attribute("style", &format!("flex:0 0 16px;text-align:center;font-size:14px;color:{color}")).ok();
     health.set_attribute("title", &tip).ok();
@@ -185,7 +185,7 @@ fn create_block(ctx: &DomCtx) -> Element {
     let block = components::card("");
 
     let id_input = util::tracked_input(&block, ctx, "new_site_id", "", theme::INPUT);
-    id_input.set_attribute("placeholder", "new site-id (letters, digits, - _)").ok();
+    id_input.set_attribute("placeholder", &crate::i18n::t("siteeditor.site_id_placeholder", &[])).ok();
     let title_input = util::tracked_input(&block, ctx, "new_site_title", "", theme::INPUT);
     title_input.set_attribute("placeholder", &crate::i18n::t("siteeditor.title_optional", &[])).ok();
 
@@ -228,7 +228,7 @@ fn editor_block(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     on_confirmed_event(
         ctx,
         &del_site,
-        Some(format!("Delete the entire site '{}' and all its pages? This cannot be undone.", sel.site_id)),
+        Some(crate::i18n::t("siteeditor.confirm_delete_site", &[("id", &sel.site_id)])),
         EV_DELETE_SITE,
         sel.site_id.clone(),
     );
@@ -236,7 +236,7 @@ fn editor_block(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     util::append(&block, &head);
 
     // Tree navigator (collapsible).
-    util::append(&block, &components::collapsible_header(ctx, "Pages", sel.pages_open, EV_TOGGLE_PAGES));
+    util::append(&block, &components::collapsible_header(ctx, &crate::i18n::t("siteeditor.pages", &[]), sel.pages_open, EV_TOGGLE_PAGES));
     if sel.pages_open {
         util::append(&block, &navigator(sel, ctx));
     }
@@ -258,7 +258,7 @@ fn navigator(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     // Site-root row — click to make the site root the add-target. Highlighted
     // (same blue as a selected page) when it's the current target.
     let (root_row, _, root_btn) =
-        components::tree_row(0, false, false, sel.cursor.is_empty(), "\u{1f3e0} / (site root)"); // 🏠
+        components::tree_row(0, false, false, sel.cursor.is_empty(), &crate::i18n::t("siteeditor.site_root_row", &[])); // 🏠
     ctx.on_window_event(&root_btn, "click", EV_CD, "");
     util::append(&nav, &root_row);
 
@@ -270,7 +270,7 @@ fn navigator(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     if sel.rows.is_empty() {
         let empty = util::create_element("p");
         empty.set_attribute("style", theme::HINT).ok();
-        util::set_text(&empty, "(no pages yet — add one below)");
+        util::set_text(&empty, &crate::i18n::t("siteeditor.no_pages", &[]));
         util::append(&list, &empty);
     } else {
         for row in &sel.rows {
@@ -284,7 +284,7 @@ fn navigator(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     let target_label = util::create_element("div");
     target_label.set_attribute("style", "font-size:12px;color:var(--text-dim,#888);margin-top:8px").ok();
     let where_ = if sel.add_target.is_empty() {
-        "site root".to_string()
+        crate::i18n::t("siteeditor.site_root", &[])
     } else {
         format!("/{}", sel.add_target)
     };
@@ -302,10 +302,10 @@ fn add_controls(ctx: &DomCtx) -> Element {
     row.set_attribute("style", ROW).ok();
     let field = "new_page_slug";
     let input = util::tracked_input(&row, ctx, field, "", &format!("{};flex:1 1 160px;max-width:280px", theme::INPUT));
-    input.set_attribute("placeholder", "page or folder name").ok();
+    input.set_attribute("placeholder", &crate::i18n::t("siteeditor.page_name_placeholder", &[])).ok();
 
-    for (label, event) in [("+ Add page", EV_ADD_PAGE), ("+ Add folder", EV_ADD_DIR)] {
-        let btn = components::button_el(label, components::ButtonKind::Small);
+    for (label_key, event) in [("siteeditor.add_page", EV_ADD_PAGE), ("siteeditor.add_folder", EV_ADD_DIR)] {
+        let btn = components::button_el(&crate::i18n::t(label_key, &[]), components::ButtonKind::Small);
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
@@ -440,7 +440,7 @@ fn page_editor(
     let label = util::create_element("div");
     label.set_attribute("style", "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim,#888)").ok();
     let name = util::create_element("span");
-    util::set_text(&name, &format!("Markdown — {page}"));
+    util::set_text(&name, &crate::i18n::t("siteeditor.markdown_label", &[("page", page)]));
     util::append(&label, &name);
     let dirty_marker = util::create_element("span");
     dirty_marker.set_attribute(
@@ -452,12 +452,12 @@ fn page_editor(
         ),
     )
     .ok();
-    util::set_text(&dirty_marker, "\u{25cf} Unsaved changes");
+    util::set_text(&dirty_marker, &crate::i18n::t("siteeditor.unsaved", &[]));
     util::append(&label, &dirty_marker);
     util::append(&bar, &label);
     let prev_toggle = components::button(
         ctx,
-        if show_preview { "Hide preview" } else { "Show preview" },
+        &if show_preview { crate::i18n::t("siteeditor.hide_preview", &[]) } else { crate::i18n::t("siteeditor.show_preview", &[]) },
         components::ButtonKind::Small,
         EV_TOGGLE_PREVIEW,
     );
@@ -570,7 +570,7 @@ fn page_editor(
     on_confirmed_event(
         ctx,
         &del_page,
-        Some(format!("Delete the page '{page}'? This cannot be undone.")),
+        Some(crate::i18n::t("siteeditor.confirm_delete_page", &[("page", page)])),
         EV_DELETE_PAGE,
         page.to_string(),
     );

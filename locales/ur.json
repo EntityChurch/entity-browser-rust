@@ -326,8 +326,53 @@
     "other": "{actor} — {n} مشاہدہ شدہ صلاحیتیں"
   },
 
+  "storage.refresh": "ڈسک استعمال ریفریش کریں",
+  "storage.no_peers": "(کوئی میزبان پیئر نہیں)",
+  "storage.used_quota": "استعمال شدہ / کوٹا",
+  "storage.persisted": "محفوظ رکھا گیا",
+  "storage.persisted_yes": "ہاں (اخراج سے محفوظ)",
+  "storage.persisted_no": "نہیں (بہترین کوشش / قابلِ اخراج)",
+  "storage.persisted_unknown": "نامعلوم",
+  "storage.on_disk_sqlite": "ڈسک پر (SQLite)",
+  "storage.content_blobs": "مواد اسٹور blobs",
+  "storage.live_paths": "فعال ٹری راستے",
+  "storage.backend_stopped": "(بیک اینڈ رک گیا — لائیو گنتی دستیاب نہیں)",
+  "storage.orphaned_blobs": "تبدیل شدہ / یتیم blobs (تقریباً)",
+  "storage.save_state_paths": "سیو اسٹیٹ راستے",
+  "storage.no_breakdown": "(Worker/OPFS پر سابقہ کے حساب سے تقسیم دستیاب نہیں)",
+
+  "sysoverview.native_peer": "مقامی پیئر",
+  "sysoverview.listen": "سننا",
+  "sysoverview.not_listening": "(نہیں سن رہا)",
+  "sysoverview.link": "لنک (S↔B)",
+  "sysoverview.share_tree": "اشتراک (ٹری)",
+  "sysoverview.share_tree_hint": "فائلیں جنہیں ایک منسلک آلہ براؤز اور حاصل کر سکتا ہے، اس پیئر کے ٹری کے تحت ظاہر",
+  "sysoverview.share_disk": "اشتراک (ڈسک)",
+  "sysoverview.no_backend": "کوئی سسٹم بیک اینڈ فراہم نہیں کیا گیا۔",
+  "sysoverview.loading_status": "حالت لوڈ ہو رہی ہے…",
+  "sysoverview.waiting_link": "بیک اینڈ لنک کا انتظار — آلات منسلک ہونے پر ظاہر ہوں گے۔",
+  "sysoverview.checking_devices": "منسلک آلات چیک کیے جا رہے ہیں…",
+  "sysoverview.devices_error": "بیک اینڈ کے آلات پڑھے نہ جا سکے — منیجر لنک ابھی تیار نہ ہو۔",
+  "sysoverview.no_devices": "اس بیک اینڈ سے کوئی آلہ منسلک نہیں۔",
+  "sysoverview.col_grant": "اجازت",
+
   "peer.count": {
     "one": "{n} پیئر",
     "other": "{n} پیئرز"
-  }
+  },
+
+  "window.programs": "پروگرام",
+  "programs.subtitle": "منتقل ہونے والے کمپیوٹ پروگرام — ایک بار لکھے جاتے ہیں (workbench-go)، اپنے ڈسکرپٹرز سے ماؤنٹ ہوتے ہیں، اور اس پیئر کا کمپیوٹ انجن ان کی جانچ کرتا ہے۔",
+  "programs.install": "انسٹال کریں",
+  "programs.start": "شروع کریں",
+  "programs.stop": "روکیں",
+  "programs.restart": "دوبارہ شروع کریں",
+  "programs.status_absent": "انسٹال نہیں",
+  "programs.status_refused": "ماؤنٹ نہیں ہو سکتا",
+  "programs.status_materializing": "انسٹال ہو رہا ہے {done}/{total}…",
+  "programs.status_stopped": "رکا ہوا",
+  "programs.status_running": "چل رہا ہے",
+  "programs.status_faulted": "خراب",
+  "programs.status_line": "{status} · ٹک {ticks} · {rate}/سیکنڈ",
+  "programs.display_waiting": "پہلے فریم کا انتظار"
 }

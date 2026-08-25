@@ -326,8 +326,53 @@
     "other": "{actor} — {n} observerte evner"
   },
 
+  "storage.refresh": "Oppdater diskbruk",
+  "storage.no_peers": "(ingen vertsbaserte peers)",
+  "storage.used_quota": "Brukt / kvote",
+  "storage.persisted": "Bevart",
+  "storage.persisted_yes": "ja (beskyttet mot fjerning)",
+  "storage.persisted_no": "nei (best-effort / kan fjernes)",
+  "storage.persisted_unknown": "ukjent",
+  "storage.on_disk_sqlite": "På disk (SQLite)",
+  "storage.content_blobs": "Content-store-blober",
+  "storage.live_paths": "Aktive trestier",
+  "storage.backend_stopped": "(backend stoppet — sanntidstellinger utilgjengelige)",
+  "storage.orphaned_blobs": "Erstattede / foreldreløse blober (ca.)",
+  "storage.save_state_paths": "Lagringstilstand-stier",
+  "storage.no_breakdown": "(oppdeling per prefiks utilgjengelig på Worker/OPFS)",
+
+  "sysoverview.native_peer": "Nativ peer",
+  "sysoverview.listen": "Lytter",
+  "sysoverview.not_listening": "(lytter ikke)",
+  "sysoverview.link": "Kobling (S↔B)",
+  "sysoverview.share_tree": "Del (tre)",
+  "sysoverview.share_tree_hint": "Filer som en tilkoblet enhet kan bla i og hente, eksponert under denne peerens tre",
+  "sysoverview.share_disk": "Del (disk)",
+  "sysoverview.no_backend": "Ingen systembackend klargjort.",
+  "sysoverview.loading_status": "Laster status…",
+  "sysoverview.waiting_link": "Venter på backend-koblingen — enheter vises når de er tilkoblet.",
+  "sysoverview.checking_devices": "Sjekker tilkoblede enheter…",
+  "sysoverview.devices_error": "Kunne ikke lese backendens enheter — manager-koblingen er kanskje ikke klar ennå.",
+  "sysoverview.no_devices": "Ingen enheter tilkoblet denne backend.",
+  "sysoverview.col_grant": "Tildeling",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"
-  }
+  },
+
+  "window.programs": "Programmer",
+  "programs.subtitle": "Overførbare beregningsprogrammer — skrevet én gang (workbench-go), montert fra deskriptorene sine, evaluert av denne peerens beregningsmotor.",
+  "programs.install": "Installer",
+  "programs.start": "Start",
+  "programs.stop": "Stopp",
+  "programs.restart": "Start på nytt",
+  "programs.status_absent": "ikke installert",
+  "programs.status_refused": "kan ikke monteres",
+  "programs.status_materializing": "installerer {done}/{total}…",
+  "programs.status_stopped": "stoppet",
+  "programs.status_running": "kjører",
+  "programs.status_faulted": "feilet",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "venter på første bilde"
 }

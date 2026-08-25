@@ -482,6 +482,38 @@ pub const EN: &[(&str, Message)] = &[
     // -- system overview surface --
     ("sysoverview.clear_logs", Message::Simple("Clear logs")),
     ("sysoverview.logs", Message::Simple("Logs")),
+    ("sysoverview.native_peer", Message::Simple("Native peer")),
+    ("sysoverview.listen", Message::Simple("Listen")),
+    ("sysoverview.not_listening", Message::Simple("(not listening)")),
+    ("sysoverview.link", Message::Simple("Link (S↔B)")),
+    ("sysoverview.share_tree", Message::Simple("Share (tree)")),
+    (
+        "sysoverview.share_tree_hint",
+        Message::Simple("Files a connected device can browse and pull, exposed under this peer's tree"),
+    ),
+    ("sysoverview.share_disk", Message::Simple("Share (disk)")),
+    (
+        "sysoverview.no_backend",
+        Message::Simple("No System backend provisioned."),
+    ),
+    ("sysoverview.loading_status", Message::Simple("Loading status…")),
+    (
+        "sysoverview.waiting_link",
+        Message::Simple("Waiting for the backend link — devices appear once connected."),
+    ),
+    (
+        "sysoverview.checking_devices",
+        Message::Simple("Checking connected devices…"),
+    ),
+    (
+        "sysoverview.devices_error",
+        Message::Simple("Couldn't read the backend's devices — the manager link may not be ready yet."),
+    ),
+    (
+        "sysoverview.no_devices",
+        Message::Simple("No devices connected to this backend."),
+    ),
+    ("sysoverview.col_grant", Message::Simple("Grant")),
     ("sysoverview.device_auth", Message::Simple("Device authorizations")),
     ("sysoverview.profile_pull", Message::Simple("Pull only")),
     ("sysoverview.profile_twoway", Message::Simple("Two-way")),
@@ -605,6 +637,66 @@ pub const EN: &[(&str, Message)] = &[
     (
         "storage.peer_not_created",
         Message::Simple("Peer not created — {reason}"),
+    ),
+    ("storage.refresh", Message::Simple("Refresh disk usage")),
+    // -- Programs window (compute-program host) --
+    ("window.programs", Message::Simple("Programs")),
+    (
+        "programs.subtitle",
+        Message::Simple(
+            "Transferable compute programs — authored once (workbench-go), \
+             mounted from their descriptors, evaluated by this peer's compute engine.",
+        ),
+    ),
+    ("programs.install", Message::Simple("Install")),
+    ("programs.start", Message::Simple("Start")),
+    ("programs.stop", Message::Simple("Stop")),
+    ("programs.restart", Message::Simple("Restart")),
+    ("programs.status_absent", Message::Simple("not installed")),
+    ("programs.status_refused", Message::Simple("cannot mount")),
+    (
+        "programs.status_materializing",
+        Message::Simple("installing {done}/{total}…"),
+    ),
+    ("programs.status_stopped", Message::Simple("stopped")),
+    ("programs.status_running", Message::Simple("running")),
+    ("programs.status_faulted", Message::Simple("faulted")),
+    (
+        "programs.status_line",
+        Message::Simple("{status} · tick {ticks} · {rate}/s"),
+    ),
+    (
+        "programs.display_waiting",
+        Message::Simple("waiting for the first frame"),
+    ),
+    ("storage.no_peers", Message::Simple("(no hosted peers)")),
+    ("storage.used_quota", Message::Simple("Used / quota")),
+    ("storage.persisted", Message::Simple("Persisted")),
+    (
+        "storage.persisted_yes",
+        Message::Simple("yes (eviction-protected)"),
+    ),
+    (
+        "storage.persisted_no",
+        Message::Simple("no (best-effort / evictable)"),
+    ),
+    ("storage.persisted_unknown", Message::Simple("unknown")),
+    // Technical acronyms (SQLite/OPFS/IDB) kept verbatim; prose translated.
+    ("storage.on_disk_sqlite", Message::Simple("On-disk (SQLite)")),
+    ("storage.content_blobs", Message::Simple("Content-store blobs")),
+    ("storage.live_paths", Message::Simple("Live tree paths")),
+    (
+        "storage.backend_stopped",
+        Message::Simple("(backend stopped — live counts unavailable)"),
+    ),
+    (
+        "storage.orphaned_blobs",
+        Message::Simple("Superseded / orphaned blobs (approx.)"),
+    ),
+    ("storage.save_state_paths", Message::Simple("Save-state paths")),
+    (
+        "storage.no_breakdown",
+        Message::Simple("(per-prefix breakdown unavailable on the Worker/OPFS arm)"),
     ),
     // -- chain trace surface --
     ("chaintrace.chain_id", Message::Simple("Chain ID:")),

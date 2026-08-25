@@ -326,8 +326,53 @@
     "other": "{actor} — {n} havaittua ominaisuutta"
   },
 
+  "storage.refresh": "Päivitä levynkäyttö",
+  "storage.no_peers": "(ei isännöityjä vertaisia)",
+  "storage.used_quota": "Käytetty / kiintiö",
+  "storage.persisted": "Säilytetty",
+  "storage.persisted_yes": "kyllä (häätösuojattu)",
+  "storage.persisted_no": "ei (paras yritys / poistettavissa)",
+  "storage.persisted_unknown": "tuntematon",
+  "storage.on_disk_sqlite": "Levyllä (SQLite)",
+  "storage.content_blobs": "Sisältövaraston blobit",
+  "storage.live_paths": "Aktiiviset puupolut",
+  "storage.backend_stopped": "(taustapalvelu pysäytetty — reaaliaikaiset laskennat eivät saatavilla)",
+  "storage.orphaned_blobs": "Korvatut / orvot blobit (n.)",
+  "storage.save_state_paths": "Tallennustilan polut",
+  "storage.no_breakdown": "(etuliitekohtainen erittely ei saatavilla Worker/OPFS:llä)",
+
+  "sysoverview.native_peer": "Natiivi vertainen",
+  "sysoverview.listen": "Kuuntelee",
+  "sysoverview.not_listening": "(ei kuuntele)",
+  "sysoverview.link": "Linkki (S↔B)",
+  "sysoverview.share_tree": "Jaa (puu)",
+  "sysoverview.share_tree_hint": "Tiedostot, joita yhdistetty laite voi selata ja hakea, näkyvät tämän vertaisen puun alla",
+  "sysoverview.share_disk": "Jaa (levy)",
+  "sysoverview.no_backend": "Järjestelmän taustapalvelua ei ole varattu.",
+  "sysoverview.loading_status": "Ladataan tilaa…",
+  "sysoverview.waiting_link": "Odotetaan taustapalvelun linkkiä — laitteet ilmestyvät, kun ne on yhdistetty.",
+  "sysoverview.checking_devices": "Tarkistetaan yhdistettyjä laitteita…",
+  "sysoverview.devices_error": "Taustapalvelun laitteita ei voitu lukea — hallintalinkki ei ehkä ole vielä valmis.",
+  "sysoverview.no_devices": "Tähän taustapalveluun ei ole yhdistettyjä laitteita.",
+  "sysoverview.col_grant": "Myöntö",
+
   "peer.count": {
     "one": "{n} vertainen",
     "other": "{n} vertaista"
-  }
+  },
+
+  "window.programs": "Ohjelmat",
+  "programs.subtitle": "Siirrettävät laskentaohjelmat — kirjoitettu kerran (workbench-go), liitetty kuvaajistaan, tämän vertaisen laskentamoottorin suorittamia.",
+  "programs.install": "Asenna",
+  "programs.start": "Käynnistä",
+  "programs.stop": "Pysäytä",
+  "programs.restart": "Käynnistä uudelleen",
+  "programs.status_absent": "ei asennettu",
+  "programs.status_refused": "ei voi liittää",
+  "programs.status_materializing": "asennetaan {done}/{total}…",
+  "programs.status_stopped": "pysäytetty",
+  "programs.status_running": "käynnissä",
+  "programs.status_faulted": "virhetilassa",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "odotetaan ensimmäistä ruutua"
 }

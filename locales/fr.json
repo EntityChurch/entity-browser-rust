@@ -326,8 +326,53 @@
     "other": "{actor} — {n} capacités observées"
   },
 
+  "storage.refresh": "Actualiser l'utilisation du disque",
+  "storage.no_peers": "(aucun pair hébergé)",
+  "storage.used_quota": "Utilisé / quota",
+  "storage.persisted": "Persisté",
+  "storage.persisted_yes": "oui (protégé contre l'éviction)",
+  "storage.persisted_no": "non (au mieux / expulsable)",
+  "storage.persisted_unknown": "inconnu",
+  "storage.on_disk_sqlite": "Sur disque (SQLite)",
+  "storage.content_blobs": "Blobs du magasin de contenu",
+  "storage.live_paths": "Chemins d'arbre actifs",
+  "storage.backend_stopped": "(backend arrêté — compteurs en direct indisponibles)",
+  "storage.orphaned_blobs": "Blobs remplacés / orphelins (approx.)",
+  "storage.save_state_paths": "Chemins d'état enregistré",
+  "storage.no_breakdown": "(ventilation par préfixe indisponible sur Worker/OPFS)",
+
+  "sysoverview.native_peer": "Pair natif",
+  "sysoverview.listen": "Écoute",
+  "sysoverview.not_listening": "(pas d'écoute)",
+  "sysoverview.link": "Lien (S↔B)",
+  "sysoverview.share_tree": "Partage (arbre)",
+  "sysoverview.share_tree_hint": "Fichiers qu'un appareil connecté peut parcourir et récupérer, exposés sous l'arbre de ce pair",
+  "sysoverview.share_disk": "Partage (disque)",
+  "sysoverview.no_backend": "Aucun backend système provisionné.",
+  "sysoverview.loading_status": "Chargement du statut…",
+  "sysoverview.waiting_link": "En attente du lien du backend — les appareils apparaissent une fois connectés.",
+  "sysoverview.checking_devices": "Vérification des appareils connectés…",
+  "sysoverview.devices_error": "Impossible de lire les appareils du backend — le lien du gestionnaire n'est peut-être pas encore prêt.",
+  "sysoverview.no_devices": "Aucun appareil connecté à ce backend.",
+  "sysoverview.col_grant": "Autorisation",
+
   "peer.count": {
     "one": "{n} pair",
     "other": "{n} pairs"
-  }
+  },
+
+  "window.programs": "Programmes",
+  "programs.subtitle": "Programmes de calcul transférables — écrits une seule fois (workbench-go), montés depuis leurs descripteurs, évalués par le moteur de calcul de ce pair.",
+  "programs.install": "Installer",
+  "programs.start": "Démarrer",
+  "programs.stop": "Arrêter",
+  "programs.restart": "Redémarrer",
+  "programs.status_absent": "non installé",
+  "programs.status_refused": "montage impossible",
+  "programs.status_materializing": "installation {done}/{total}…",
+  "programs.status_stopped": "arrêté",
+  "programs.status_running": "en cours",
+  "programs.status_faulted": "en défaut",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "en attente de la première image"
 }

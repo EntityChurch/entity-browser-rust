@@ -97,13 +97,13 @@ pub fn render(
     let status = components::card(&crate::i18n::t("label.status", &[]));
     match &output.backend {
         Some(b) => {
-            add_row(&status, "Native peer", &b.short_id, Some(&b.peer_id), None);
+            add_row(&status, &crate::i18n::t("sysoverview.native_peer", &[]), &b.short_id, Some(&b.peer_id), None);
             let status_color = status_color_for(&b.status);
-            add_row(&status, "Status", &b.status, None, Some(status_color));
+            add_row(&status, &crate::i18n::t("label.status", &[]), &b.status, None, Some(status_color));
             add_row(
                 &status,
-                "Listen",
-                b.ws_addr.as_deref().unwrap_or("(not listening)"),
+                &crate::i18n::t("sysoverview.listen", &[]),
+                &b.ws_addr.clone().unwrap_or_else(|| crate::i18n::t("sysoverview.not_listening", &[])),
                 None,
                 None,
             );
@@ -111,26 +111,26 @@ pub fn render(
             // liveness: "Connected" only when the auth read actually succeeded
             // over the transport (the real probe) — a remembered-but-stale link
             // (read failing) shows Connecting, not a false Connected.
-            add_chip_row(&status, "Link (S↔B)", components::conn_chip(link_state(output)));
+            add_chip_row(&status, &crate::i18n::t("sysoverview.link", &[]), components::conn_chip(link_state(output)));
             // Share: the tree prefix a paired device browses, plus the real
             // on-disk directory (answers "where do shared files live").
             add_row(
                 &status,
-                "Share (tree)",
+                &crate::i18n::t("sysoverview.share_tree", &[]),
                 &output.share_prefix,
-                Some("Files a connected device can browse and pull, exposed under this peer's tree"),
+                Some(&crate::i18n::t("sysoverview.share_tree_hint", &[])),
                 None,
             );
             if let Some(path) = &output.share_path {
-                add_row(&status, "Share (disk)", path, Some(path), None);
+                add_row(&status, &crate::i18n::t("sysoverview.share_disk", &[]), path, Some(path), None);
             }
         }
         None => {
             // Non-content states (S5): still loading vs genuinely absent.
             if output.fetched {
-                util::append(&status, &components::empty("No System backend provisioned."));
+                util::append(&status, &components::empty(&crate::i18n::t("sysoverview.no_backend", &[])));
             } else {
-                util::append(&status, &components::loading("Loading status…"));
+                util::append(&status, &components::loading(&crate::i18n::t("sysoverview.loading_status", &[])));
             }
         }
     }
@@ -252,16 +252,16 @@ fn render_authorizations(parent: &Element, output: &SystemOverviewOutput, ctx: &
     if !output.connected {
         util::append(
             &card,
-            &components::empty("Waiting for the backend link — devices appear once connected."),
+            &components::empty(&crate::i18n::t("sysoverview.waiting_link", &[])),
         );
     } else if !auth.checked {
-        util::append(&card, &components::loading("Checking connected devices…"));
+        util::append(&card, &components::loading(&crate::i18n::t("sysoverview.checking_devices", &[])));
     } else if let Some(err) = &auth.error {
         // Clean, human presentation (operator ask): a plain headline + the raw
         // reason kept as dim detail rather than dumped as the whole message.
         util::append(
             &card,
-            &components::error("Couldn't read the backend's devices — the manager link may not be ready yet."),
+            &components::error(&crate::i18n::t("sysoverview.devices_error", &[])),
         );
         let detail = util::create_element("p");
         detail
@@ -270,9 +270,14 @@ fn render_authorizations(parent: &Element, output: &SystemOverviewOutput, ctx: &
         util::set_text(&detail, err);
         util::append(&card, &detail);
     } else if auth.pending.is_empty() && auth.authorized.is_empty() {
-        util::append(&card, &components::empty("No devices connected to this backend."));
+        util::append(&card, &components::empty(&crate::i18n::t("sysoverview.no_devices", &[])));
     } else {
-        let (tbl, body) = components::table(&["Device", "Status", "Grant", ""]);
+        let (tbl, body) = components::table(&[
+            &crate::i18n::t("label.device", &[]),
+            &crate::i18n::t("label.status", &[]),
+            &crate::i18n::t("sysoverview.col_grant", &[]),
+            "",
+        ]);
         for row in &auth.pending {
             append_pending_row(&body, auth, row, ctx);
         }

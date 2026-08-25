@@ -11,10 +11,6 @@ src/dom/path_tap.rs raw=2 phys=0
 src/dom/query_console.rs raw=9 phys=0
 src/dom/scanner.rs raw=2 phys=0
 src/dom/site_directory.rs raw=9 phys=0
-src/dom/site_editor.rs raw=19 phys=0
-src/dom/storage.rs raw=18 phys=0
-src/dom/system_overview.rs raw=17 phys=0
-src/dom/theme_editor.rs raw=7 phys=0
 src/dom/wire_recorder.rs raw=1 phys=0
 src/format.rs raw=2 phys=0
 src/peer_display.rs raw=2 phys=0
@@ -39,11 +35,4 @@ src/views/query_console/mod.rs raw=4 phys=0
 src/views/shell/binding.rs raw=13 phys=0
 src/views/shell/mod.rs raw=5 phys=0
 src/views/shell/model.rs raw=15 phys=0
-src/views/site_editor/mod.rs raw=4 phys=0
-src/views/site_editor/model.rs raw=16 phys=0
-src/views/site_editor/validate.rs raw=11 phys=0
-src/views/storage/mod.rs raw=4 phys=0
-src/views/system_overview/mod.rs raw=4 phys=0
-src/views/theme_editor/mod.rs raw=4 phys=0
-src/views/theme_editor/model.rs raw=13 phys=0
 src/views/wire_recorder/mod.rs raw=4 phys=0
