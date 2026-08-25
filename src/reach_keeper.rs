@@ -62,6 +62,24 @@
 //!   every load and is rebuilt from what the user does. Writing it to the tree
 //!   would re-grow a stale mirror nobody clears.
 //!
+//! ## Why a stranger still cannot reach us, stated precisely
+//!
+//! It is tempting to say *"pair mode needs both peer-ids, so a stranger holding
+//! only ours cannot derive the bucket."* **That is wrong, and the correct
+//! version is the argument for fixing it.** `pair_key` **sorts** its two
+//! arguments, so a stranger `S` holding our id `P` holds *both* inputs and can
+//! derive `pair_key(S,P)` and deposit there right now. Nothing is secret.
+//!
+//! What is missing is on **our** side: to be present for any possible `S` we
+//! would have to stand at `pair_key(X,P)` for every `X` — unbounded. So the
+//! deficiency is **responder-side enumerability, not key derivability**, and
+//! that is exactly the property a listening socket has and this one lacks: a
+//! listener has *one* well-known address, while `pair` mode gives us **one
+//! address per counterpart**. A fifth rendezvous mode keyed on our own peer-id
+//! alone — one bucket, derivable by anyone holding `P` — is the rendezvous
+//! spelling of a well-known port, and is the minimal fix rather than merely a
+//! convenient one. Routed to arch as `ROUTING-2026-08-20-e` §1.1.
+//!
 //! ## Why it never gives up
 //!
 //! A standing offer is a standing invitation. A peer that is offline now may be
@@ -141,6 +159,30 @@ impl ReachKeeper {
         if let Ok(mut map) = self.inner.lock() {
             map.remove(&(local.to_string(), remote.to_string()));
         }
+    }
+
+    /// Drop **every** local peer's intent toward `remote`, and report how many
+    /// went. This is the teardown half of [`want`](Self::want), and it is
+    /// remote-scoped for the same reason
+    /// [`Peers::forget_routes_to`](crate::peers::Peers::forget_routes_to) is:
+    /// intent is keyed `(local, remote)` and *any* local peer may hold one, so
+    /// a pair-scoped drop silently leaves the others probing.
+    ///
+    /// **Presence is an advertisement, so withdrawing it is not optional.**
+    /// `Action::ForgetConnection` already sweeps the registry row, the
+    /// published transport route and the dial marker — the route's own comment
+    /// is *"or Forget doesn't forget"*. The intent is the fourth thing that
+    /// outlives the user's dismissal, and the loudest: while a forgotten peer
+    /// is not `Connected` the keeper keeps dispatching at it **forever** on the
+    /// slow cadence, because [never giving up](self) is deliberate. Presence at
+    /// a rendezvous *is* how this peer form says "I am reachable" — so an
+    /// intent nobody can withdraw is a standing invitation to a peer the user
+    /// has told us to forget.
+    pub fn forget_remote(&self, remote: &str) -> usize {
+        let Ok(mut map) = self.inner.lock() else { return 0 };
+        let before = map.len();
+        map.retain(|(_, r), _| r != remote);
+        before - map.len()
     }
 
     #[cfg(test)]
@@ -385,5 +427,39 @@ mod tests {
         assert_eq!(k.targets().len(), 1);
         k.forget(&local, &remote);
         assert!(k.targets().is_empty(), "forget drops the intent");
+    }
+
+    /// `Action::ForgetConnection` is remote-scoped — the user dismissed a
+    /// *peer*, not one of our local peers' relationships with it. Intent is
+    /// keyed `(local, remote)`, so a forget that names a single local silently
+    /// leaves every other local peer standing at the rendezvous for someone the
+    /// user told us to forget.
+    ///
+    /// Mutation check: swap `forget_remote` for a pair-scoped
+    /// `forget(&local_a, &remote)` and the second assertion fails with the
+    /// `frontend-idb` peer's intent still live.
+    #[test]
+    fn forgetting_a_peer_withdraws_every_local_peers_reach_intent() {
+        let k = ReachKeeper::new();
+        let (local_a, local_b) = ("2KPrimaryLocalPeerXXXXXXXXXXXXXXXXXXXXXXXXXX", "2KDurableIdbLocalPeerXXXXXXXXXXXXXXXXXXXXXXX");
+        let forgotten = "2KTheStrangerWeAreDismissingXXXXXXXXXXXXXXXX";
+        let kept = "2KSomebodyWeStillTalkToXXXXXXXXXXXXXXXXXXXXX";
+
+        // Two local peers hold intent toward the same remote — the ordinary
+        // shape once a durable this-tab peer lands beside the primary.
+        k.want(local_a, forgotten);
+        k.want(local_b, forgotten);
+        k.want(local_a, kept);
+        assert_eq!(k.targets().len(), 2, "two distinct remotes are wanted");
+
+        assert_eq!(k.forget_remote(forgotten), 2, "both locals' intents go, and it says how many");
+
+        let left = k.targets();
+        assert!(!left.contains(forgotten), "a forgotten peer must not still be wanted by anyone");
+        assert!(left.contains(kept), "and forgetting one peer must not disturb another");
+
+        // Idempotent: dismissing an already-forgotten peer is not an error and
+        // reports honestly that there was nothing to withdraw.
+        assert_eq!(k.forget_remote(forgotten), 0);
     }
 }

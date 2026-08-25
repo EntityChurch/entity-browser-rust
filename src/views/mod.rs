@@ -17,6 +17,7 @@ pub mod peer_connections;
 pub mod peer_management;
 pub mod programs;
 pub mod query_console;
+pub mod registry_browser;
 pub mod settings;
 pub mod shell;
 pub mod site_editor;
@@ -34,6 +35,41 @@ pub fn short_pid(pid: &str) -> String {
     } else {
         pid.to_string()
     }
+}
+
+/// A Unix-ms timestamp as `YYYY-MM-DD` (UTC).
+///
+/// Exists for `GUIDE-SERVING-MODE` §8's third state, which is
+/// *"Verified as of {published_at}"* — **with the date, always**. Bare
+/// *"Verified"* is read by every user as *"this is current"*, which is the one
+/// claim a signed root cannot support: a publisher who has not republished and
+/// an origin withholding a newer root are byte-identical at our end. The date is
+/// what lets a person notice a stale site, and against a withholding origin it is
+/// the only detection mechanism that exists.
+///
+/// **Day resolution, deliberately, and UTC.** `published_at` is a property of the
+/// *artifact*, not of our fetch, so minute precision would imply a freshness we
+/// cannot offer — the same trap §8 names when it forbids *"last checked N minutes
+/// ago"*. Local-time conversion is not attempted: the timestamp is the
+/// publisher's, and shifting it into the reader's zone invents precision about
+/// someone else's clock.
+///
+/// Dependency-free (Howard Hinnant's `civil_from_days`) rather than pulling a
+/// date crate into the wasm bundle for one label.
+pub fn format_day(ms: u64) -> String {
+    let days = (ms / 86_400_000) as i64;
+    // Shift the era so March is month 1 and the leap day lands at the end.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11], March-based
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// User-facing peer identity: the peer's metadata `label` (the alias
@@ -103,4 +139,34 @@ impl EventCategory {
 pub struct EventEntry {
     pub message: String,
     pub category: EventCategory,
+}
+
+#[cfg(test)]
+mod format_day_tests {
+    use super::format_day;
+
+    /// `format_day` is the instrument for `GUIDE-SERVING-MODE` §8's third state,
+    /// so it is pinned against known epochs rather than trusted.
+    ///
+    /// The era arithmetic is the part worth testing: it shifts the year to start
+    /// in March so the leap day falls at the end, which makes February 29 and the
+    /// century rules (2000 is a leap year, 1900 and 2100 are not) the cases most
+    /// likely to be wrong and least likely to be noticed in a UI label.
+    #[test]
+    fn a_published_at_renders_as_a_utc_day() {
+        // Anchors: the epoch, and a timestamp already used as a fixture in
+        // `content_site::cache`.
+        assert_eq!(format_day(0), "1970-01-01");
+        assert_eq!(format_day(1_700_000_000_123), "2023-11-14");
+
+        // Sub-day precision is DISCARDED, not rounded: the label is a day, and a
+        // millisecond before midnight is still that day.
+        assert_eq!(format_day(86_400_000 - 1), "1970-01-01");
+        assert_eq!(format_day(86_400_000), "1970-01-02");
+
+        // Leap-year handling, where the era shift earns its keep.
+        assert_eq!(format_day(951_782_400_000), "2000-02-29"); // a leap day
+        assert_eq!(format_day(951_868_800_000), "2000-03-01"); // the day after
+        assert_eq!(format_day(4_107_542_400_000), "2100-03-01"); // 2100 is NOT a leap year
+    }
 }

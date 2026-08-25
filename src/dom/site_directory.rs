@@ -263,10 +263,60 @@ fn subline(entry: &SiteEntry) -> String {
             None => crate::i18n::t("sitedir.sub_cached", &[]),
         }
     };
+    // **The verification state rides here, and it is not optional.**
+    //
+    // `cached · labs.example` on its own is `GUIDE-SERVING-MODE` §8's first
+    // forbidden cell: a **transport** fact ("which host served this") rendered as
+    // neutral chrome on a row where **nothing has been verified**, which a reader
+    // takes as "fine". Host and key are different questions and only the second
+    // is what the trust chain makes answerable.
+    //
+    // A **foreign** site reached over the Site Browser's own fetch path is always
+    // the "never checked" state today: the two-hop check proves a body matches the
+    // pointer the same origin served — real against corruption, silent about
+    // authorship, because the origin supplied the pointer too. So the honest
+    // label is *not verified*, and it stays that way until the signed path is
+    // wired in (`GUIDE-PUBLISHING-AND-NAMES` §7.3, backlog B-3).
+    //
+    // An **owned** site is not in this taxonomy at all — it is our own tree, not
+    // something an origin served us, and stamping "not verified" on it would be
+    // crying wolf on the one case with nothing to verify.
+    if !entry.owned {
+        s.push_str(" \u{00b7} ");
+        s.push_str(&verification_label(entry));
+    }
     if entry.visit_count > 0 {
         s.push_str(&format!(" \u{00b7} {}\u{00d7}", entry.visit_count));
     }
     s
+}
+
+/// The §8 verification state for a fetched site.
+///
+/// Three states, **never collapsed into two**. Today the Site Browser can only
+/// ever produce the first — it reads no signed root — and this function exists in
+/// three-state shape so that wiring the signed path in is a change of *inputs*
+/// rather than a new vocabulary invented under deadline.
+///
+/// The `Verified` arm carries a **date, always**: bare "Verified" is read as
+/// "this is current", which is precisely the claim a published root cannot
+/// support (a publisher who has not republished and an origin withholding a
+/// newer root are byte-identical at our end). The date is what lets a user notice
+/// a stale site, and against a withholding origin it is the only detection
+/// mechanism there is.
+///
+/// **Do not add a "last checked N minutes ago" here.** That bounds *our fetch*,
+/// not the publisher's republish, and it will be read as the latter — §8 names
+/// that specific temptation and refuses it.
+fn verification_label(entry: &SiteEntry) -> String {
+    match entry.verified_at {
+        None => crate::i18n::t("sitedir.sub_not_verified", &[]),
+        Some(0) => crate::i18n::t("sitedir.sub_verify_failed", &[]),
+        Some(published_at_ms) => crate::i18n::t(
+            "sitedir.sub_verified_as_of",
+            &[("date", &crate::views::format_day(published_at_ms))],
+        ),
+    }
 }
 
 /// Pull the host out of an origin string (`https://labs.example/x` →

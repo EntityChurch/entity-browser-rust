@@ -27,6 +27,7 @@ use crate::views::{
     peer_management::PeerManagementWindow,
     programs::ProgramsWindow,
     query_console::QueryConsoleWindow,
+    registry_browser::RegistryBrowserWindow,
     settings::SettingsWindow,
     shell::ShellWindow,
     site_editor::SiteEditorWindow,
@@ -56,6 +57,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         FileTransferWindow::window_type(),
         ExecuteConsoleWindow::window_type(),
         QueryConsoleWindow::window_type(),
+        RegistryBrowserWindow::window_type(),
         SettingsWindow::window_type(),
         EventLogWindow::window_type(),
         PeerManagementWindow::window_type(),
@@ -109,6 +111,13 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
                 "Programs",
                 "Chat",
                 "Site Browser",
+                // Beside Site Browser deliberately, not under System: a person
+                // looking for "how do I find a site that isn't already listed"
+                // looks here, and the registry is the answer to that question.
+                // It is System-*scoped* (a pin is deployment infrastructure) —
+                // scope and category are orthogonal, which is exactly the case
+                // this pairing exercises.
+                "Registry Browser",
                 "Site Creator",
                 "Knowledge Base",
             ],
@@ -165,10 +174,22 @@ mod tests {
     /// number moves only in a commit that meant to move it. (Name kept honest —
     /// it has said "twentytwo" through three counts; the assertion is the fact.)
     #[test]
-    fn roster_is_twentyfour_and_settings_is_system_scoped() {
+    fn roster_is_twentyfive_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
         // 25 → 24: Games and Apps merged into one launcher with category chips.
-        assert_eq!(meta.len(), 24, "the standard roster is 24 windows");
+        // 24 → 25: the Registry Browser — the naming chain's product surface,
+        // where before it was reachable only from the Shell's `name` verb.
+        assert_eq!(meta.len(), 25, "the standard roster is 25 windows");
+        // **System-scoped, and that is the interesting part of this row.** A
+        // registry pin is deployment infrastructure read from the durable
+        // `SessionConfig`, not a property of whichever peer a window is bound to
+        // — the same split the `connector` verb got wrong once by using the bound
+        // peer and quietly managing a second registry. It nonetheless sits in the
+        // AppsContent *menu group*, which is what makes it the live proof that
+        // scope and category are orthogonal.
+        let registry =
+            meta.iter().find(|(n, _)| *n == "Registry Browser").expect("Registry Browser present");
+        assert_eq!(registry.1, WindowScope::System);
         assert_eq!(
             meta.iter().filter(|(n, _)| *n == "Games").count(),
             0,

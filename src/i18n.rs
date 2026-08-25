@@ -1072,6 +1072,7 @@ pub const EN: &[(&str, Message)] = &[
     ("window.wire_recorder", Message::Simple("Wire Recorder")),
     ("window.content_stream", Message::Simple("Content Stream")),
     ("window.site_browser", Message::Simple("Site Browser")),
+    ("window.registry_browser", Message::Simple("Registry Browser")),
     ("window.storage", Message::Simple("Storage")),
     ("window.site_creator", Message::Simple("Site Creator")),
     ("window.system_overview", Message::Simple("System Overview")),
@@ -1179,6 +1180,81 @@ pub const EN: &[(&str, Message)] = &[
     ("sitedir.sub_owned", Message::Simple("owned")),
     ("sitedir.sub_cached", Message::Simple("cached")),
     ("sitedir.sub_cached_from", Message::Simple("cached · {host}")),
+    // **The verification state, which is NOT optional chrome.**
+    // `guides/GUIDE-SERVING-MODE` §8 rules three states and forbids collapsing
+    // them into two. `cached · {host}` alone was the first row's forbidden cell:
+    // a *transport* fact ("which host served this") rendered as neutral chrome on
+    // a page where **nothing has been verified**, which reads as "fine".
+    //
+    // These are the ruled strings, not invented ones — that guide is the declared
+    // home for this wording, so a state we need but cannot express is an arch gap
+    // to file rather than a string to make up here.
+    //
+    // `not_verified` is what the Site Browser's own fetch path earns today: the
+    // two-hop hash check proves a body matches the pointer the same origin
+    // served, which is real against corruption and proves nothing about
+    // authorship. `verified_as_of` carries a **date, always** — bare "Verified"
+    // is read as "this is current", the one claim a published root cannot
+    // support, and the date is the only way a user can notice a stale site
+    // against a withholding origin.
+    ("sitedir.sub_not_verified", Message::Simple("not verified")),
+    ("sitedir.sub_verified_as_of", Message::Simple("verified as of {date}")),
+    ("sitedir.sub_verify_failed", Message::Simple("verification failed")),
+    // -- registry browser --
+    // The panel that answers "which registries am I pointed at, what do they
+    // carry, and what was checked". Wording rules that are load-bearing:
+    // `from_signed_root` says WHERE the names came from (not the host-served
+    // `.list`, which commits to nothing); `truncated` must appear whenever a walk
+    // was bounded, or a short list is indistinguishable from a small registry;
+    // and `open_caveat` states plainly that opening does not make the pages
+    // verified, because the Site Browser reads no signed root.
+    ("registry.pinned", Message::Simple("Pinned registry")),
+    ("registry.origin", Message::Simple("Origin")),
+    ("registry.source", Message::Simple("Source")),
+    ("registry.source_user", Message::Simple("pinned here")),
+    ("registry.source_deployment", Message::Simple("seeded by this deployment")),
+    ("registry.this_origin", Message::Simple("this origin")),
+    ("registry.no_pin", Message::Simple(
+        "No registry pinned. This deployment seeds none and none was typed, so name resolution \
+         fails closed \u{2014} nothing is trusted by default.")),
+    ("registry.sessions", Message::Simple("{n} publisher(s) pinned in this tab")),
+    ("registry.names", Message::Simple("Names")),
+    ("registry.browse", Message::Simple("Walk the signed root")),
+    ("registry.names_idle", Message::Simple(
+        "Not fetched yet \u{2014} this is not an empty registry.")),
+    ("registry.walking", Message::Simple("Walking the signed root\u{2026}")),
+    ("registry.names_none", Message::Simple(
+        "The walk completed and this registry carries no names.")),
+    ("registry.from_signed_root", Message::Simple(
+        "{n} name(s), recovered from the registry's signed root ({nodes} node(s) fetched). The \
+         host was trusted for nothing.")),
+    ("registry.truncated", Message::Simple(
+        "Partial list \u{2014} the walk hit its budget and stopped. There are more names than \
+         these.")),
+    ("registry.name_ph", Message::Simple("a name to resolve")),
+    ("registry.resolve", Message::Simple("Resolve")),
+    ("registry.resolve_a_name", Message::Simple("Resolve a name")),
+    ("registry.resolving", Message::Simple("Resolving\u{2026}")),
+    ("registry.checked", Message::Simple("Checked")),
+    ("registry.association", Message::Simple("Association committed by the signed root")),
+    ("registry.name_match", Message::Simple("Binding names the name asked for")),
+    ("registry.revocation", Message::Simple("Revocation probed inside the signed tree")),
+    ("registry.expires", Message::Simple("Believable until")),
+    ("registry.no_origin", Message::Simple("no origin published")),
+    ("registry.clamped", Message::Simple(
+        "This resolver honors {honored} ms, not the {issued} ms the registry issued (local \
+         ceiling).")),
+    ("registry.needs_browser", Message::Simple(
+        "This needs the browser \u{2014} the fetch is window.fetch, whose futures are !Send, so \
+         the native build has no implementation rather than a silent empty result.")),
+    ("registry.no_key", Message::Simple(
+        "The pinned registry peer-id carries no public key, so it cannot be pinned (the SHA-256 \
+         legacy form needs an out-of-band key).")),
+    ("registry.open_site", Message::Simple("Open in Site Browser")),
+    ("registry.open_caveat", Message::Simple(
+        "This registers the origin the signed binding named. The pages themselves are not \
+         verified \u{2014} the Site Browser reads no signed root, so that origin still chooses \
+         which content each path points to.")),
     // -- content-site surface --
     ("contentsite.enter_peer", Message::Simple("Enter Peer")),
     ("contentsite.contents_menu", Message::Simple("Contents \u{25be}")),

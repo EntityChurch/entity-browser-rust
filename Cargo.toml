@@ -42,6 +42,14 @@ entity-hash = { path = "../entity-core-rust/core/hash" }
 entity-entity = { path = "../entity-core-rust/core/entity" }
 entity-store = { path = "../entity-core-rust/core/store" }
 entity-types = { path = "../entity-core-rust/core/types" }
+# The HAMT decoder — `TYPE_TREE_SNAPSHOT_NODE` / `SnapshotNodeData::from_cbor` /
+# `Entry`, used by `SignedSession::enumerate` to walk a signed root's key set
+# and by the publisher's `--verify` closure check. **Shared, not native-only:**
+# the keys live INSIDE the trie nodes, so a browser that will not decode a node
+# cannot enumerate a registry from its signed root, and has to fall back on a
+# host-served listing that commits to nothing. Pure codec (CBOR + hashes), no
+# I/O, so it builds for wasm32 unchanged.
+entity-tree = { path = "../entity-core-rust/core/tree" }
 # Content reassembly (blob → chunks → bytes) for materializing pulled files
 # onto the device (`src/ops/download.rs`). Already compiled transitively via
 # the peer's `content`/`local-files` features; direct dep for `reassemble`.
@@ -225,12 +233,12 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
 # E2E browser tests — drives a Selenium-standalone-firefox container via
 # WebDriver. See tests/e2e_worker.rs and tools/e2e/README.md.
 fantoccini = "0.22"
-# Test-only: the HAMT builder + the 3-key wire codec, for the published-root
-# walk spike (`tests/published_root_walk.rs`). Neither is a direct dep of the
-# app — `entity-peer` uses both but re-exports neither — and both are already
-# compiled transitively, so this adds an edge for the test build only and does
-# NOT affect `make wasm`.
-entity-tree = { path = "../entity-core-rust/core/tree" }
+# Test-only: the 3-key wire codec, for the published-root walk spike
+# (`tests/published_root_walk.rs`). `entity-peer` uses it and re-exports it not
+# at all, and it is already compiled transitively, so this adds an edge for the
+# test build only. (`entity-tree` was here too until enumeration made it a
+# first-class dependency — it is in `[dependencies]` now, so a second entry
+# would only be a place for the two to drift.)
 entity-wire = { path = "../entity-core-rust/core/wire" }
 # Test-only: the registry backend's own types + `peer_issued::resolve_one`, for
 # the static registry ↔ static domain chain (`tests/registry_static_resolve.rs`).
@@ -241,13 +249,19 @@ serde_json = "1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 # B14 — the signed root over a static publish (`content_site/signed_root.rs`).
-# `entity-tree` is the HAMT builder, `entity-wire` the 3-key codec the manifest
-# must be encoded in (`verify_signed_root` reads its `content_hash`, which the
-# bare hashable form does not carry). NATIVE ONLY: the publisher is the CLI, and
-# the browser consumes a signed root rather than emitting one — so neither crate
-# reaches `make wasm`. Both were already compiled transitively by `entity-peer`,
-# which uses them and re-exports neither.
-entity-tree = { path = "../entity-core-rust/core/tree" }
+# `entity-wire` is the 3-key codec the manifest must be encoded in
+# (`verify_signed_root` reads its `content_hash`, which the bare hashable form
+# does not carry). NATIVE ONLY: only the publisher emits, and the browser
+# consumes a signed root rather than emitting one.
+#
+# `entity-tree` used to be native-only beside it, on the reasoning that the
+# browser "consumes rather than emits". That was true while consuming meant
+# RESOLVING one key. It stopped being true when the browser learned to
+# ENUMERATE (`SignedSession::enumerate`): the keys live inside the HAMT nodes,
+# so a consumer that will not decode a node cannot answer "what does this
+# registry carry" from the signed root at all — which is exactly why that
+# question used to get answered from a host-served `.list` that commits to
+# nothing. It is now in the shared section below.
 entity-wire = { path = "../entity-core-rust/core/wire" }
 local-ip-address = "0.6"
 dirs = "6"

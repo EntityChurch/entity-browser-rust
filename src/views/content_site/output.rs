@@ -72,6 +72,24 @@ pub struct SiteEntry {
     /// ms the cache was last verified-fresh, and the origin it was fetched from.
     pub last_reconciled: u64,
     pub source_transport: String,
+    /// **The `GUIDE-SERVING-MODE` §8 verification state**, which is a different
+    /// question from `last_reconciled` and must not be derived from it:
+    ///
+    /// - `None` — *never checked*. No signature has been verified for this site.
+    ///   **This is every foreign site today**, because the Site Browser's fetch
+    ///   path reads no signed root: its two-hop check proves a body matches the
+    ///   pointer the same origin served, which is real against corruption and
+    ///   says nothing about authorship.
+    /// - `Some(0)` — *verification failed*. The hostile-origin signal: bad
+    ///   signature, `seq` rollback, or an incomplete closure walk.
+    /// - `Some(published_at_ms)` — *verified*, and the timestamp is the
+    ///   **publisher's** `published_at`, never our fetch time. Rendering it is
+    ///   mandatory, not decorative (§8's third row).
+    ///
+    /// `last_reconciled` answers *"when did WE last fetch"* — a fact about us. A
+    /// surface that showed it as freshness would be claiming a bound on the
+    /// content's age that it does not have, which §8 names and forbids.
+    pub verified_at: Option<u64>,
 }
 
 /// The site-aware window's directory: every site this peer holds, bookmarked
