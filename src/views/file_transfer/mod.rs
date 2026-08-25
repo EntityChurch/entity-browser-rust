@@ -132,6 +132,11 @@ impl FileTransferWindow {
                     &sys_pid,
                     crate::app_paths::authz_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // Reachability of the target — the axis this window lacked. The
+                // registry above answers "do we know this peer"; only the kernel
+                // liveness surface answers "can we reach it right now", and the
+                // two are independent.
+                crate::peer_liveness::watch_all_vantages(pm, &mut window.watch);
                 Box::new(window)
             },
         }
@@ -210,7 +215,7 @@ impl WindowView for FileTransferWindow {
                 self.load_dir(peers, &target, "", false);
             }
         }
-        let output = self.model.render_output(peers);
+        let output = self.model.render_output(peers, &ctx.dial_markers);
         crate::dom::file_transfer::render(container, &output, ctx);
     }
 }

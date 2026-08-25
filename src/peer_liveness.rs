@@ -127,6 +127,36 @@ pub fn peer_status_prefix(vantage_pid: &str) -> String {
     format!("/{vantage_pid}/{TYPE_PEER_STATUS}/")
 }
 
+/// Subscribe `watch` to the kernel liveness surface for **every local vantage**
+/// — the one call any surface that shows connection state owes, before it shows
+/// any.
+///
+/// **Why this is a function and not a paragraph.** Forgetting it fails in the
+/// worst available way: on the Worker arm (the default) a tree read hits a cache
+/// mirror fed only for subscribed prefixes, so an unsubscribed reader gets
+/// `Unknown` forever — it compiles, renders, and quietly shows a dash next to a
+/// peer that is plainly working. The watch is also the *wake* signal, so without
+/// it a surface keeps painting `Connected` through a real drop until something
+/// unrelated dirties the frame. Neither symptom points at the missing
+/// subscription. Three windows hand-rolled this loop before it became a call.
+///
+/// **Every vantage, not just "ours."** [`read_peer_liveness_all`] merges every
+/// local peer's view and picks the most-alive one, so watching a subset makes
+/// that read *silently partial* rather than merely narrow — a remote reachable
+/// only through another local peer reads as unknown.
+///
+/// Call it once at window construction, alongside the window's own prefixes. It
+/// does not cover peers created *later* — see the note on
+/// [`read_peer_liveness_all`]'s callers; a window opened before a peer exists
+/// will not see that peer's vantage until it is rebuilt. That is a standing
+/// limitation of construction-time subscription, shared by every window here,
+/// and not introduced by this helper.
+pub fn watch_all_vantages(peers: &Peers, watch: &mut crate::window_watch::WindowWatch) {
+    for vantage in peers.peer_ids() {
+        peers.watch_prefix(watch, &vantage, peer_status_prefix(&vantage));
+    }
+}
+
 /// Read `vantage_pid`'s view of every remote peer's liveness from the kernel
 /// status surface. Rows sorted by `remote_pid`. Empty when nothing is connected
 /// — or, in the Worker arm, when the prefix wasn't watched.
@@ -155,8 +185,8 @@ pub fn read_peer_liveness(peers: &Peers, vantage_pid: &str) -> Vec<PeerLiveness>
 /// one vantage, the most-alive view wins (Connected > Suspect > Disconnected),
 /// tie-broken by the freshest `last_seen`. Rows sorted by `remote_pid`.
 ///
-/// Callers must have watched each vantage's [`peer_status_prefix`] (Worker-arm
-/// cache seeding).
+/// Callers must have watched each vantage's [`peer_status_prefix`] — use
+/// [`watch_all_vantages`], which is that rule as a call rather than as prose.
 pub fn read_peer_liveness_all(peers: &Peers) -> Vec<PeerLiveness> {
     use std::collections::BTreeMap;
     let mut best: BTreeMap<String, PeerLiveness> = BTreeMap::new();

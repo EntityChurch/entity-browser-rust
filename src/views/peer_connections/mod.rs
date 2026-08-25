@@ -102,18 +102,10 @@ impl PeerConnectionsWindow {
                     &sys_pid,
                     crate::app_paths::connector_selection_path(crate::app_paths::APP_ID, &sys_pid),
                 );
-                // Subscribe the KERNEL liveness surface (`system/peer/status`)
-                // for every local vantage — the authoritative read-model the
-                // known-device rows render from. Watching seeds the Worker-arm
-                // cache and wakes the window on a kernel
-                // connect/keepalive-miss/disconnect transition.
-                for vantage in pm.peer_ids() {
-                    pm.watch_prefix(
-                        &mut window.watch,
-                        &vantage,
-                        crate::peer_liveness::peer_status_prefix(&vantage),
-                    );
-                }
+                // The KERNEL liveness surface the known-device rows render from
+                // — the authoritative read-model. See the helper for why the
+                // subscription is load-bearing and why it is every vantage.
+                crate::peer_liveness::watch_all_vantages(pm, &mut window.watch);
                 Box::new(window)
             },
         }
@@ -290,6 +282,18 @@ impl WindowView for PeerConnectionsWindow {
                         let notice = match crate::rendezvous::Mode::parse(mode, input)
                             .and_then(|m| self.model.start_meet(peers, m))
                         {
+                            // Started — but a meet hands strangers THIS peer's
+                            // id, and the §6.5 establisher is primary-only while
+                            // this window binds the *user-selected* peer. Without
+                            // one, discovery succeeds and the connect back can
+                            // never be attempted, so the counterpart is left
+                            // holding an unreachable id with nothing said. Warn
+                            // rather than refuse: the meet itself is legitimate,
+                            // and the user may be introducing two other peers.
+                            Ok(()) if !peers.peer_has_webrtc(&self.peer_id) => Some((
+                                crate::i18n::t("peerconn.meet_no_establisher", &[]),
+                                true,
+                            )),
                             Ok(()) => None,
                             // A refusal (no connector selected, a mode with
                             // nothing to meet at) must be sayable, or Meet is a
@@ -341,7 +345,12 @@ impl WindowView for PeerConnectionsWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.model.render_output(peers, &ctx.dial_markers, &ctx.connect_attempt);
+        let output = self.model.render_output(
+            peers,
+            &ctx.dial_markers,
+            &ctx.connect_attempt,
+            ctx.provisioning_drifted,
+        );
         crate::dom::peer_connections::render(container, &output, ctx);
     }
 }

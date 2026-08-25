@@ -223,6 +223,9 @@ async fn paint(loc: Location, origin: String) {
         dial_markers: crate::dial_markers::DialMarkers::default(),
         // No connect surface on this path — a default (empty) slot.
         connect_attempt: crate::connect_attempt::ConnectAttempt::default(),
+        // Pre-peer: nothing has resolved provisioning yet, and this path
+        // renders no connector surface — never a pending reload.
+        provisioning_drifted: false,
     };
     // `render` clears the container first; show the site surface now that we
     // have content (only on success — a failed fetch leaves chrome as-is).

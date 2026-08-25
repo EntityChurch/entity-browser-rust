@@ -943,6 +943,13 @@ pub const EN: &[(&str, Message)] = &[
     ("chat.start_hint", Message::Simple("Connect to a peer (Peer Connections) to start a chat.")),
     ("chat.start_by_id_placeholder", Message::Simple("…or paste a peer id, then Enter")),
     ("chat.invalid_peer_id", Message::Simple("Not a valid peer id — paste the peer’s full id.")),
+    (
+        "chat.no_establisher",
+        Message::Simple(
+            "This peer can’t be reached back — they can find you, but nothing can \
+             connect to you. Switch this window to your main peer.",
+        ),
+    ),
     ("window.chain_trace", Message::Simple("Chain Trace")),
     ("window.path_tap", Message::Simple("Path Tap")),
     ("window.wire_recorder", Message::Simple("Wire Recorder")),
@@ -1278,6 +1285,12 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.connector_none",
         Message::Simple("No connectors yet — add a signaling node to rendezvous through."),
     ),
+    (
+        "peerconn.connector_reload_pending",
+        Message::Simple(
+            "Your connector choice takes effect on reload — this session is still running on the previous one.",
+        ),
+    ),
     ("peerconn.connector_add", Message::Simple("Add connector")),
     ("peerconn.connector_use", Message::Simple("Use")),
     ("peerconn.connector_in_use", Message::Simple("In use")),
@@ -1304,6 +1317,19 @@ pub const EN: &[(&str, Message)] = &[
     (
         "peerconn.meet_needs_connector",
         Message::Simple("Select a connector first — a meet happens at a signaling node."),
+    ),
+    // The meet runs, and the peers it finds are real — but they will not be able
+    // to reach back, because this peer has no §6.5 establisher (it is installed
+    // on the primary peer only, and this window acts as the peer you selected).
+    // Worth saying at the moment of meeting: the alternative is a stranger
+    // holding an id that silently never connects.
+    (
+        "peerconn.meet_no_establisher",
+        Message::Simple(
+            "Heads up: this peer can't be connected back to — peers you meet will \
+             find you but won't reach you. Switch this window to your main peer to \
+             be reachable.",
+        ),
     ),
     ("peerconn.meet_mode", Message::Simple("Meet by")),
     ("peerconn.meet_mode_tag", Message::Simple("Label (public)")),

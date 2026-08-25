@@ -89,8 +89,12 @@ impl ChatWindow {
     /// id) — what the window paints. Pure data, so it is what the native
     /// full-flow test asserts on; `render_dom` projects the same thing to DOM.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub fn render_output(&self, peers: &Peers) -> output::ChatOutput {
-        self.model.render_output(peers)
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        dials: &crate::dial_markers::DialMarkers,
+    ) -> output::ChatOutput {
+        self.model.render_output(peers, dials)
     }
 
     pub fn window_type() -> WindowType {
@@ -108,6 +112,11 @@ impl ChatWindow {
                 for prefix in window.model.subscription_prefixes() {
                     pm.watch_prefix(&mut window.watch, &window.peer_id, prefix);
                 }
+                // The kernel liveness surface the header's reachability chips
+                // render from. Every surface that shows connection state owes
+                // this call; the reasons it is load-bearing (and silent when
+                // missed) live on the helper.
+                crate::peer_liveness::watch_all_vantages(pm, &mut window.watch);
                 Box::new(window)
             },
         }
@@ -181,7 +190,7 @@ impl WindowView for ChatWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.render_output(peers);
+        let output = self.render_output(peers, &ctx.dial_markers);
         crate::dom::chat::render(container, &output, ctx);
     }
 }

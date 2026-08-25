@@ -37,6 +37,13 @@ pub struct PeerConnectionsOutput {
     /// through, and which one is selected (`crate::connectors`). Same list the
     /// `connector` shell verb prints; this window is its localized surface.
     pub connectors: Vec<ConnectorRow>,
+    /// The selection is not what this session is running on — reload to apply.
+    ///
+    /// Not a hint rendered next to every Use button: that would be permanent
+    /// furniture, and the user cannot tell a standing caption from a live one.
+    /// This is a *state*, true only while the choice is genuinely pending, and
+    /// it clears itself on the reload that applies it.
+    pub connector_reload_pending: bool,
     /// Result of the last `Check` press (`advertise()`), or `None`. Like
     /// [`Self::last_attempt`], this exists so the action reports itself —
     /// asking a node what it serves and showing nothing is the dead-button

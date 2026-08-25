@@ -75,18 +75,10 @@ impl SystemOverviewWindow {
                     &sys_pid,
                     crate::transport_profiles::routes_prefix(&sys_pid),
                 );
-                // Watch the KERNEL liveness surface (`system/peer/status`) for
-                // every local vantage — the authoritative S↔B `connected/suspect/
-                // disconnected` the link chip now reads. Seeds the Worker-arm
-                // cache and wakes the window on a kernel transition (subscribe,
-                // don't poll).
-                for vantage in pm.peer_ids() {
-                    pm.watch_prefix(
-                        &mut window.watch,
-                        &vantage,
-                        crate::peer_liveness::peer_status_prefix(&vantage),
-                    );
-                }
+                // The KERNEL liveness surface behind the S↔B link chip — the
+                // authoritative `connected/suspect/disconnected` (subscribe,
+                // don't poll). See the helper for why it is every vantage.
+                crate::peer_liveness::watch_all_vantages(pm, &mut window.watch);
                 // The app-owned `Dialing` transient (a dial in flight, before the
                 // kernel writes any status) is an in-memory marker now
                 // (`crate::dial_markers`), not a tree entity — nothing to watch.

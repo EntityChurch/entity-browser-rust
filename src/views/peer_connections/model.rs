@@ -163,6 +163,7 @@ impl PeerConnectionsModel {
         peers: &Peers,
         dials: &crate::dial_markers::DialMarkers,
         attempt: &crate::connect_attempt::ConnectAttempt,
+        connector_reload_pending: bool,
     ) -> PeerConnectionsOutput {
         let kind = PeerDisplay::classify(peers, &self.peer_id);
         let ws_addr = crate::listener_state::read_address(peers);
@@ -353,6 +354,7 @@ impl PeerConnectionsModel {
             last_attempt: attempt.read(),
             qr_payload,
             connectors,
+            connector_reload_pending,
             connector_notice: self.connector_notice.lock().unwrap().clone(),
             meet,
         }
@@ -498,6 +500,7 @@ mod tests {
             &peers,
             &crate::dial_markers::DialMarkers::new(),
             &crate::connect_attempt::ConnectAttempt::new(),
+            false,
         );
 
         assert_eq!(out.known_peers.len(), 1, "the remembered peer surfaces");
@@ -527,6 +530,7 @@ mod tests {
             &peers,
             &crate::dial_markers::DialMarkers::new(),
             &crate::connect_attempt::ConnectAttempt::new(),
+            false,
         );
 
         assert!(
@@ -565,6 +569,7 @@ mod tests {
             &peers,
             &crate::dial_markers::DialMarkers::new(),
             &crate::connect_attempt::ConnectAttempt::new(),
+            false,
         );
 
         let row = out
@@ -605,7 +610,7 @@ mod tests {
         // Nothing pressed yet ⇒ nothing claimed.
         let attempt = ConnectAttempt::new();
         assert_eq!(
-            model.render_output(&peers, &dials, &attempt).last_attempt,
+            model.render_output(&peers, &dials, &attempt, false).last_attempt,
             None,
             "an untouched window must not assert an outcome it never had"
         );
@@ -613,7 +618,7 @@ mod tests {
         // A failure carries its reason all the way to the renderer.
         attempt.set_failed("ws://10.0.0.9:4041", "connection refused");
         assert_eq!(
-            model.render_output(&peers, &dials, &attempt).last_attempt,
+            model.render_output(&peers, &dials, &attempt, false).last_attempt,
             Some((
                 "ws://10.0.0.9:4041".to_string(),
                 ConnectOutcome::Failed("connection refused".to_string())
@@ -623,7 +628,7 @@ mod tests {
         // …and so does a success, which is the case that used to vanish.
         attempt.set_connected("ws://192.168.68.55:4041", "system-backend");
         assert_eq!(
-            model.render_output(&peers, &dials, &attempt).last_attempt,
+            model.render_output(&peers, &dials, &attempt, false).last_attempt,
             Some((
                 "ws://192.168.68.55:4041".to_string(),
                 ConnectOutcome::Connected("system-backend".to_string())
@@ -646,6 +651,7 @@ mod tests {
             &peers,
             &crate::dial_markers::DialMarkers::new(),
             &crate::connect_attempt::ConnectAttempt::new(),
+            false,
         );
         assert!(!out.meet.has_connector, "the form says why it can't run");
         assert!(out.meet.status.is_none(), "and no search is claimed to be running");
@@ -702,7 +708,7 @@ mod tests {
         for _ in 0..2000 {
             let changed = model.pump_meet(&peers);
             let settled = model
-                .render_output(&peers, &dials, &attempt)
+                .render_output(&peers, &dials, &attempt, false)
                 .meet
                 .status
                 .is_some_and(|s| !s.searching);
@@ -766,7 +772,7 @@ mod tests {
 
         let dials = crate::dial_markers::DialMarkers::new();
         let attempt = crate::connect_attempt::ConnectAttempt::new();
-        let render = || model.render_output(&peers, &dials, &attempt);
+        let render = || model.render_output(&peers, &dials, &attempt, false);
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut row_seen = false;

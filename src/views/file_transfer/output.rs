@@ -16,8 +16,19 @@ pub struct FileTransferOutput {
     /// this peer's connection pool — never via the local peer registry
     /// (remote peers aren't registered locally).
     pub peer_id: String,
-    /// Connected remote peers that can be transfer targets, pre-built with
-    /// the `selected` flag. Empty when nothing is connected yet.
+    /// **Remembered** remote peers that can be transfer targets, pre-built with
+    /// the `selected` flag. Empty until this app has connected to something at
+    /// least once.
+    ///
+    /// This used to say "connected", which was wrong and quietly load-bearing:
+    /// the source is `connections::read_connections`, the petname/authz registry
+    /// whose presence means *"we have connected to this peer at least once"* —
+    /// never that it is up now (`MODEL-REMOTE-PEER-FACTS` §1). Offering a
+    /// long-offline device as a target is correct (you may pick it, then
+    /// connect); calling it connected was not. [`target_reach`] is the axis that
+    /// answers the other question.
+    ///
+    /// [`target_reach`]: FileTransferOutput::target_reach
     pub target_options: Vec<TargetOption>,
     /// The currently-selected target peer id (empty when none connected).
     pub selected_target: String,
@@ -38,9 +49,30 @@ pub struct FileTransferOutput {
     pub selected_full_path: Option<String>,
     /// Last browse error, surfaced loudly (D13).
     pub browse_error: Option<String>,
-    /// True when at least one remote peer is connected — drives the
-    /// role-aware hint ("connect a backend peer first" vs. the controls).
+    /// True when at least one remote peer is **remembered** — drives the
+    /// role-aware hint ("connect a backend peer first" vs. the controls). Same
+    /// correction as [`target_options`]: the registry is an ever-connected set,
+    /// not a liveness signal.
+    ///
+    /// [`target_options`]: FileTransferOutput::target_options
     pub has_target: bool,
+    /// Can we reach the **effective target** right now? The kernel read-model,
+    /// in the app's one connection vocabulary — the same `conn_display`
+    /// resolution Peer Connections and Chat render, so the three cannot
+    /// disagree about the same link.
+    ///
+    /// **Independent of [`access`], and that is the point.** Authorization and
+    /// reachability are orthogonal facts about a target, and only one of them
+    /// used to be shown. `classify_target_access` deliberately skips transport
+    /// errors (never manufacture a denial from silence — correct), so an
+    /// unreachable peer landed in `TargetAccess::Unknown`, whose whole meaning
+    /// is *"nothing tried yet — do not alarm"*. A device that cannot be reached
+    /// at all therefore looked exactly like one you had not used yet. This is
+    /// the axis that tells them apart. (Same shape as AP22: two independent
+    /// facts where only one failed loudly.)
+    ///
+    /// [`access`]: FileTransferOutput::access
+    pub target_reach: crate::peer_liveness::ConnDisplay,
     /// Access status of the **effective target** — what drives the status chip
     /// and the (only-when-real) authorize affordance. File Transfer is a pure
     /// *consumer* of authorization (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §2.1`);

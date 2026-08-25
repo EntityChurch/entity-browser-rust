@@ -893,6 +893,20 @@ impl ShellModel {
         push(ScrollbackEntry::Info(format!(
             "meeting at {describe} via {short} — searching…" // i18n-ignore — dev-facing CLI
         )));
+        // A meet hands strangers THIS peer's id, and a browser peer with no §6.5
+        // establisher has no way to be connected back to — the discovery half
+        // succeeds completely and the connect half can never be attempted. The
+        // establisher is primary-only, while this dispatches from the *bound*
+        // peer, so on any shell bound to a second local peer the meet "works" and
+        // the counterpart is left holding an unreachable id. Say it here rather
+        // than let the failure land on their side later.
+        if !peers.peer_has_webrtc(&self.peer_id) {
+            push(ScrollbackEntry::ErrorText(
+                "warning: this peer has no WebRTC establisher — peers you meet \
+                 cannot connect back to it. Bind the shell to your primary peer." // i18n-ignore — dev-facing CLI
+                    .into(),
+            ));
+        }
     }
 
     /// Advance the running `meet` one frame and report what changed.
@@ -1299,6 +1313,85 @@ impl ShellModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A meet from a peer that cannot be connected back to says so — and one
+    /// that can, does not.
+    ///
+    /// The trap this guards: `meet` announces the shell's **bound** peer, but
+    /// the §6.5 establisher is installed on the **primary** only. On a
+    /// single-peer boot those are the same peer and the gap is invisible; add a
+    /// second local peer, bind a shell to it, and the meet succeeds completely —
+    /// discovery is an ordinary WebSocket call to the node — while the
+    /// counterpart walks away with an id that has no way to reach us. Nothing
+    /// anywhere said so.
+    ///
+    /// Both directions are asserted deliberately: native has no WebRTC, so a
+    /// guard that fired unconditionally would pass a one-sided test and be
+    /// indistinguishable from a correct one.
+    #[tokio::test]
+    async fn a_meet_from_a_peer_with_no_establisher_warns_and_otherwise_does_not() {
+        use crate::connectors::{self, Connector};
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        async fn meet_scrollback(with_establisher: bool) -> Vec<String> {
+            let registry = MemoryTransportRegistry::new();
+            let mut peers = Peers::new_direct_with_connector(std::sync::Arc::new(
+                MemoryConnector::new(registry),
+            ));
+            let pid = peers.primary_peer_id().to_string();
+            let sys = peers.system_peer_id().to_string();
+            if with_establisher {
+                peers.mark_webrtc_peer_for_test(&pid);
+            }
+            // A node nobody answers: the meet still *starts*, which is all this
+            // assertion needs — the warning is pushed at start, beside the
+            // "meeting at …" line, not after a round trip.
+            let node = Connector {
+                node_peer_id: "2KNobodyHome".to_string(),
+                node_addr: "memory://2KNobodyHome".to_string(),
+                label: String::new(),
+            };
+            connectors::add_connector(&peers, &sys, &node).expect("add");
+            for _ in 0..400 {
+                let _ = connectors::select_connector(&peers, &sys, "2KNobodyHome");
+                if connectors::selected_connector(&peers, &sys).is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+
+            let model = ShellModel::new(1, pid);
+            model.handle_submit("meet tag chess", &peers, 1, flag());
+            model
+                .state_snapshot()
+                .scrollback
+                .iter()
+                .map(|e| e.render_text())
+                .collect()
+        }
+
+        let warned = meet_scrollback(false).await;
+        assert!(
+            warned.iter().any(|t| t.contains("meeting at")),
+            "the meet must still start — the warning is advice, not a refusal: {warned:?}"
+        );
+        assert!(
+            warned.iter().any(|t| t.contains("cannot connect back")),
+            "a meet from a peer with no establisher must say the counterpart \
+             cannot reach it: {warned:?}"
+        );
+
+        let quiet = meet_scrollback(true).await;
+        assert!(
+            quiet.iter().any(|t| t.contains("meeting at")),
+            "the meet still starts: {quiet:?}"
+        );
+        assert!(
+            !quiet.iter().any(|t| t.contains("cannot connect back")),
+            "a peer that DOES have an establisher must not be warned about — \
+             a guard that always fires teaches users to ignore it: {quiet:?}"
+        );
+    }
 
     #[test]
     fn initial_state_seeds_welcome_line() {

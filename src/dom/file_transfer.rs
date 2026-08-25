@@ -34,6 +34,18 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     util::set_text(&h2, &title_for(output));
     util::append(&header, &h2);
     if output.has_target {
+        // TWO chips, not one, because they answer different questions: can we
+        // reach this device, and are we allowed to read from it. A target can be
+        // authorized and offline, or up and refusing. Reachability first — it is
+        // the precondition, so it reads left-to-right as the user's own
+        // troubleshooting order.
+        //
+        // `Unknown` renders no chip (the shared `from_display` contract): a
+        // remembered peer nobody has dialed this session has no honest status,
+        // and "Offline" would be a claim the kernel never made.
+        if let Some(state) = components::ConnState::from_display(output.target_reach) {
+            util::append(&header, &components::conn_chip(state));
+        }
         util::append(&header, &components::auth_chip(auth_state(&output.access)));
     }
     util::append(&wrapper, &header);
