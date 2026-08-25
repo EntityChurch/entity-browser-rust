@@ -552,6 +552,19 @@ select optgroup {
     box-sizing: border-box;
 }
 
+/* The kind selector — same flex-in-row reasons as `.peer-create-alias`
+   (theme::SELECT is block/width:100% and would collapse here). */
+.peer-create-kind {
+    flex: 0 1 auto;
+    background: var(--input-bg, #0e0e1e);
+    color: var(--text, #e0e0e0);
+    border: 1px solid var(--border-strong, #444);
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 3px;
+    box-sizing: border-box;
+}
+
 .peer-table-wrap {
     overflow-x: auto;
 }
@@ -599,6 +612,22 @@ select optgroup {
 
 .peer-table td.addr-list {
     color: #aaa;
+}
+
+/* Group-label row — sets System peers apart from user-created peers. */
+.peer-table tr.peer-group td {
+    padding: 12px 10px 4px;
+    color: var(--text-dim, #888);
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border, #333);
+}
+.peer-group-sub {
+    color: var(--text-faint, #666);
+    text-transform: none;
+    letter-spacing: 0;
+    margin-left: 8px;
 }
 
 /* Per-row badge — color comes from kind modifier. */
@@ -669,6 +698,10 @@ select optgroup {
     .peer-create-alias {
         flex: 1 1 100%;
         min-width: 0;
+    }
+
+    .peer-create-kind {
+        flex: 1 1 100%;
     }
 
     .peer-create-panel button {

@@ -49,16 +49,36 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
         return;
     }
 
-    // Mini create panel: an alias input + one button per peer mode.
-    // The alias feeds the already-existing `label` param (was always
-    // None); blank = no label (falls back to short-pid on display).
-    // Each button reads the input at click time so the typed alias
-    // applies to whichever mode is chosen.
+    // Create form: ONE kind selector (where it runs · how it persists) + an
+    // optional alias + a single Add button — replaces the button-per-combo, so a
+    // new configuration is one more option, not another button. Both fields live
+    // in their DOM elements and are read at click time (never tree-backed: a
+    // per-change `tree.put` would rebuild the panel and drop focus/selection).
     let create_panel = util::create_element_with_class("div", "peer-create-panel");
+
+    // Kind selector. Option value = `PeerMode::persist_key` (round-trips via
+    // `from_persist_key`); the one special value `native` → CreateBackendPeer.
+    // The native option only appears where a native process is available (Tauri).
+    let kind_select = util::create_element_with_class("select", "peer-create-kind");
+    let mut kinds: Vec<(&str, &str)> = vec![
+        ("frontend", "Main thread · in-memory"),
+        ("backend-memory", "Worker · in-memory"),
+        ("backend-opfs", "Worker · OPFS"),
+    ];
+    if output.show_backend_create {
+        kinds.push(("native", "Native process · native store"));
+    }
+    for (value, label) in kinds {
+        let opt = util::create_element("option");
+        util::set_attr(&opt, "value", value);
+        util::set_text(&opt, label);
+        util::append(&kind_select, &opt);
+    }
+    util::append(&create_panel, &kind_select);
 
     // Class-styled (NOT theme::INPUT): theme::INPUT is
     // display:block;width:100%, which collapses to a sliver inside the
-    // button flex row on narrow screens. `.peer-create-alias` keeps a
+    // flex row on narrow screens. `.peer-create-alias` keeps a
     // usable min-width and goes full-width when the panel wraps.
     let alias_input = util::create_element_with_class("input", "peer-create-alias");
     util::set_attr(&alias_input, "type", "text");
@@ -66,50 +86,32 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     util::set_attr(&alias_input, "data-field", "peer-alias");
     util::append(&create_panel, &alias_input);
 
-    // Labels say where the peer runs + how it persists — "frontend"/"backend"
-    // are retired (they conflated three different runtimes). Phase 2 replaces
-    // this button-per-combo with a single form (runtime + storage selectors).
-    // Frontend = main thread + in-memory; Backend (Memory) = worker + in-memory;
-    // Backend (OPFS) = worker + OPFS-persisted.
     use crate::peer_mode::PeerMode;
-    let create_buttons: [(&str, PeerMode, &str); 3] = [
-        ("+ Main thread (memory)", PeerMode::Frontend, theme::BTN_PRIMARY),
-        ("+ Worker (memory)", PeerMode::BackendMemory, theme::BTN_SECONDARY),
-        ("+ Worker (OPFS)", PeerMode::BackendOpfs, theme::BTN_SECONDARY),
-    ];
-    for (label, mode, style) in create_buttons {
-        let btn = util::create_element("button");
-        util::set_text(&btn, label);
-        util::set_attr(&btn, "style", style);
+    let add_btn = util::create_element("button");
+    util::set_text(&add_btn, "Add peer");
+    util::set_attr(&add_btn, "style", theme::BTN_PRIMARY);
+    {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
-        let input_ref = alias_input.clone();
-        ctx.listen(&btn, "click", move |_| {
-            let label = read_alias(&input_ref);
-            actions
-                .borrow_mut()
-                .push(Action::CreatePeerWithMode { label, mode });
+        let alias_ref = alias_input.clone();
+        let select_ref = kind_select.clone();
+        ctx.listen(&add_btn, "click", move |_| {
+            let label = read_alias(&alias_ref);
+            let kind = read_select_value(&select_ref);
+            let action = if kind == "native" {
+                Action::CreateBackendPeer { label }
+            } else if let Some(mode) = PeerMode::from_persist_key(&kind) {
+                Action::CreatePeerWithMode { label, mode }
+            } else {
+                // Unknown option value — should be impossible; ignore rather
+                // than default-create the wrong kind of peer.
+                return;
+            };
+            actions.borrow_mut().push(action);
             rp();
         });
-        util::append(&create_panel, &btn);
     }
-
-    if output.show_backend_create {
-        let backend_btn = util::create_element("button");
-        util::set_text(&backend_btn, "+ Native peer");
-        util::set_attr(&backend_btn, "style", theme::BTN_SECONDARY);
-        let actions = ctx.actions.clone();
-        let rp = ctx.repaint.clone();
-        let input_ref = alias_input.clone();
-        ctx.listen(&backend_btn, "click", move |_| {
-            let label = read_alias(&input_ref);
-            actions
-                .borrow_mut()
-                .push(Action::CreateBackendPeer { label });
-            rp();
-        });
-        util::append(&create_panel, &backend_btn);
-    }
+    util::append(&create_panel, &add_btn);
 
     util::append(&header, &create_panel);
     util::append(container, &header);
@@ -131,13 +133,43 @@ fn render_table(container: &Element, output: &PeerManagementOutput, ctx: &DomCtx
     util::append(&thead, &hrow);
     util::append(&table, &thead);
 
+    // Group the roster: System peers (always-on infrastructure — one in a
+    // browser, two on desktop once the native peer is up) are set apart from
+    // user-created peers (UI standard S2: bounded, labeled groups). Role comes
+    // straight off the descriptor.
+    let (system_rows, user_rows): (Vec<&PeerRow>, Vec<&PeerRow>) = output
+        .rows
+        .iter()
+        .partition(|r| r.descriptor.role == PeerRole::System);
+
     let tbody = util::create_element("tbody");
-    for row in &output.rows {
-        render_row(&tbody, row, ctx);
+    // There is always ≥1 system peer; the "Your peers" group only appears once
+    // the user has created one (the create form above is how they do it).
+    append_group(&tbody, "System peers", "always-on", &system_rows, ctx);
+    if !user_rows.is_empty() {
+        append_group(&tbody, "Your peers", "created by you", &user_rows, ctx);
     }
     util::append(&table, &tbody);
     util::append(&wrap, &table);
     util::append(container, &wrap);
+}
+
+/// Emit a labeled group of peer rows: a full-width group-label row (title +
+/// faint subtitle) followed by the rows themselves.
+fn append_group(tbody: &Element, title: &str, subtitle: &str, rows: &[&PeerRow], ctx: &DomCtx) {
+    let label_tr = util::create_element_with_class("tr", "peer-group");
+    let td = util::create_element("td");
+    util::set_attr(&td, "colspan", "5");
+    util::set_text(&td, title);
+    let sub = util::create_element_with_class("span", "peer-group-sub");
+    util::set_text(&sub, subtitle);
+    util::append(&td, &sub);
+    util::append(&label_tr, &td);
+    util::append(tbody, &label_tr);
+
+    for row in rows {
+        render_row(tbody, row, ctx);
+    }
 }
 
 fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
@@ -271,6 +303,14 @@ fn render_footer(container: &Element, output: &PeerManagementOutput) {
     };
     util::set_text(&footer, &text);
     util::append(container, &footer);
+}
+
+/// Read the current value of a `<select>` (the chosen option's `value`).
+fn read_select_value(select: &Element) -> String {
+    select
+        .dyn_ref::<web_sys::HtmlSelectElement>()
+        .map(|s| s.value())
+        .unwrap_or_default()
 }
 
 /// Read + trim the alias input. Empty → `None` (no label; display
