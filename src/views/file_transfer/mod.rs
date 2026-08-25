@@ -112,6 +112,17 @@ impl FileTransferWindow {
                     &sys_pid,
                     crate::app_paths::connections_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // `read_connections` resolves each peer's address from the
+                // KERNEL's route entity — the single durable home of an address
+                // (`MODEL-REMOTE-PEER-FACTS` §1). On the Worker arm a tree read
+                // hits a cache mirror populated only for subscribed prefixes, so
+                // without this watch every address reads empty for peers that
+                // are perfectly reachable.
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::transport_profiles::routes_prefix(&sys_pid),
+                );
                 // read_connections joins the sibling authz mirror; watch it too
                 // so the Worker-arm get_entity cache is seeded for the join and
                 // the affordance repaints when authorization changes

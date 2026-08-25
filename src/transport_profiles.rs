@@ -156,6 +156,35 @@ pub fn publish_dialed(
     writer.put(path, profile_entity(remote_peer_id, address, advertised_at));
 }
 
+/// The prefix every published route for `local_peer_id` lives under.
+///
+/// **Worker-arm subscription target.** A tree read on the Worker arm hits a
+/// main-thread cache mirror populated only for *subscribed* prefixes, so any
+/// surface calling [`address_for`] must watch this or every address reads
+/// `None` for peers that are perfectly reachable. One prefix, one place to get
+/// it right (`MODEL-REMOTE-PEER-FACTS` §4).
+pub fn routes_prefix(local_peer_id: &str) -> String {
+    format!("/{local_peer_id}/system/peer/transport/")
+}
+
+/// The address `local_peer_id` last reached `remote_peer_id` at, read from the
+/// kernel's own route entity — **the single durable home of a peer's address**
+/// (`MODEL-REMOTE-PEER-FACTS` §1).
+///
+/// `None` when no route is published: never connected, a SHA-256-form PeerID
+/// whose hex we cannot derive, or (Worker arm) the prefix is not subscribed.
+/// All three mean "we cannot say how to reach this peer", which is the honest
+/// answer — the app must not substitute a remembered guess.
+pub fn address_for(peers: &crate::peers::Peers, local_peer_id: &str, remote_peer_id: &str) -> Option<String> {
+    let hex = remote_hex(remote_peer_id)?;
+    let path = profile_path(local_peer_id, &hex, PROFILE_ID_PRIMARY);
+    let entity = peers.get_entity(local_peer_id, &path)?;
+    TcpProfileData::from_entity(&entity)
+        .ok()
+        .map(|p| p.endpoint_url)
+        .filter(|u| !u.is_empty())
+}
+
 /// Drop the published route to `remote_peer_id` from `local_peer_id`'s tree.
 ///
 /// **Forget must forget the route, not just the row.** Before profiles existed,

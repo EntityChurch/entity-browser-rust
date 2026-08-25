@@ -123,6 +123,13 @@ pub fn delete_theme(peers: &Peers, name: &str) -> Result<(), String> {
         }
     }
     theme_tokens::unregister_user_theme(name);
+    // AUDIT-THEME-DELETE-STALE-DROPDOWN Pass A: the registry is correct from
+    // here on. Anything that puts `name` back is the bug (§3 H-B).
+    tracing::info!(
+        theme = %name,
+        registry = ?theme_tokens::user_theme_names(),
+        "user-themes: delete — unregistered locally, remove dispatched"
+    );
     peers.dispatch_remove(&pid, app_paths::user_theme_path(app_paths::APP_ID, &pid, name));
     Ok(())
 }
@@ -157,6 +164,10 @@ impl UserThemes {
 
         let mut tree_names: Vec<String> = Vec::new();
         let mut registered_n = 0usize;
+        // AUDIT-THEME-DELETE-STALE-DROPDOWN Pass A: which names, not just how
+        // many — a resurrect+remove pair is invisible in the counts alone.
+        let mut registered_names: Vec<String> = Vec::new();
+        let mut removed_names: Vec<String> = Vec::new();
         for entry in peers.tree_listing(&pid, &prefix) {
             let Some(name) = entry.path.strip_prefix(&prefix).filter(|n| !n.contains('/')) else {
                 continue;
@@ -177,7 +188,10 @@ impl UserThemes {
                 continue; // identical to the registered one — skip the re-leak.
             }
             match theme_tokens::register_user_theme(spec) {
-                Ok(()) => registered_n += 1,
+                Ok(()) => {
+                    registered_n += 1;
+                    registered_names.push(name.to_string());
+                }
                 Err(reason) => {
                     tracing::warn!(name = %name, %reason, "persisted user theme rejected — skipped")
                 }
@@ -189,8 +203,22 @@ impl UserThemes {
             if !tree_names.iter().any(|n| n == name) {
                 theme_tokens::unregister_user_theme(name);
                 removed_n += 1;
+                removed_names.push(name.to_string());
             }
         }
+
+        // AUDIT-THEME-DELETE-STALE-DROPDOWN Pass A: log EVERY dirty reconcile,
+        // including the no-op ones — the question is what the listing said at
+        // each tick, and a tick that re-registers nothing is itself evidence
+        // (§3 H-C: no removal Change ever arrives). Dirty ticks are rare, so
+        // this is not a frame-path cost.
+        tracing::info!(
+            listing = ?tree_names,
+            registered = ?registered_names,
+            removed = ?removed_names,
+            registry = ?theme_tokens::user_theme_names(),
+            "user-themes: reconcile"
+        );
 
         if registered_n + removed_n > 0 {
             tracing::info!(

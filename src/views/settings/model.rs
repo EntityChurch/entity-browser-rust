@@ -406,7 +406,7 @@ impl SettingsModel {
         // Registry-driven: one option per registered theme — built-ins plus
         // user-defined (`theme_tokens::all_themes`). Adding a built-in is one
         // entry in THEMES; a user theme appears the moment it registers.
-        let themes = crate::theme_tokens::all_themes()
+        let themes: Vec<ThemeOption> = crate::theme_tokens::all_themes()
             .into_iter()
             .map(|t| ThemeOption {
                 value: t.name,
@@ -414,6 +414,16 @@ impl SettingsModel {
                 selected: state.theme == t.name,
             })
             .collect();
+
+        // AUDIT-THEME-DELETE-STALE-DROPDOWN Pass A (§3 H-A): the dropdown is a
+        // pure projection of the registry, and this is the instant it is read.
+        // Interleaved with the "user-themes: reconcile" line, the log shows
+        // whether the render that paints the options ran BEFORE the reconcile
+        // that corrects them — and whether any render follows the correction.
+        tracing::info!(
+            options = ?themes.iter().map(|t| t.value).collect::<Vec<_>>(),
+            "settings: theme options built"
+        );
 
         // Language: registry-driven, one option per locale in the roster
         // (`i18n::available_locales`) — real locales + the pseudo-locale. Adding

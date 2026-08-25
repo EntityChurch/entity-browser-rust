@@ -2329,6 +2329,27 @@ impl EntityApp {
             }
         }
 
+        // Reconcile the user-theme registry from the tree — BEFORE the render
+        // that reads it. One atomic check when the themes prefix hasn't
+        // changed (frame-path rule: cheap probe in front of any
+        // storage-derived work).
+        //
+        // The order is load-bearing, not stylistic. The registry is a
+        // projection of the themes prefix and the Settings theme dropdown is a
+        // pure read of it, but the two are driven by *separate* watches on that
+        // one prefix — and the render CONSUMES its dirty flag
+        // (`dom/mod.rs`, `take_dirty`). Reconciling afterwards meant the render
+        // painted the pre-reconcile registry and the correction had no signal
+        // left to repaint with: `register_user_theme` / `unregister_user_theme`
+        // mutate a thread-local and dirty nothing. The surface stayed stale
+        // permanently — not briefly — which is why polling it never helped.
+        //
+        // e2e Phase 26.9 is the gate: it deletes a theme straight from the tree
+        // (Shell `rm`), so no optimistic local unregister can mask the path.
+        // With this call below the render it fails deterministically.
+        // AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13 §8 F1.
+        self.user_themes.sync(&self.peer_manager);
+
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
             dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt);
@@ -2344,12 +2365,21 @@ impl EntityApp {
         // (sync create, async worker create/delete landing on a later
         // frame, backend registration). This is the *only*
         // peer-membership reactivity mechanism.
+        // This sits after the render and that is CORRECT — it is not the shape
+        // the user-theme registry was just moved out of, despite looking like
+        // it. Checked deliberately (AUDIT-THEME-DELETE-STALE-DROPDOWN §9 C2).
+        //
+        // The theme bug needed an in-memory structure that the render reads
+        // directly and that carries no dirty signal of its own, so correcting
+        // it after the render stranded the correction. This sync has no such
+        // structure: it is a *writer*. It derives records from the live `Peers`
+        // and `handle.put`s them into the TREE, and every consumer reads them
+        // back through a subscription — which dirties on the write. `written`
+        // is only a content-hash cache to skip redundant writes, never a render
+        // input. So running after the render costs at most one frame before the
+        // write lands, and the subscription paints it. Ordering is not
+        // load-bearing here; don't "fix" it for symmetry.
         self.peer_registry.sync(&self.peer_manager);
-
-        // Reconcile the user-theme registry from the tree — one atomic
-        // check when the themes prefix hasn't changed (frame-path rule:
-        // cheap probe in front of any storage-derived work).
-        self.user_themes.sync(&self.peer_manager);
 
         // Reflect Site Mode (overlay vs chrome) into the DOM. The mode
         // class / toggle apply only on change; the overlay content
@@ -3065,7 +3095,7 @@ impl EntityApp {
             // Record the address that just worked so this backend is
             // remembered + one-tap reconnectable (§13.2). `addr` was moved
             // in for exactly this.
-            connections.add(&remote_pid, &addr);
+            connections.add(&remote_pid);
             // Prune stale identities that were remembered at this same address
             // (a re-provisioned / wiped backend). The address just answered as
             // `remote_pid`, so any other id here is dead — drop it so the
@@ -4104,8 +4134,11 @@ impl EntityApp {
             return;
         }
 
-        // Pass 2 — resolve addresses and fire. Addresses come from the durable
-        // registry (the "ever connected" record, keyed by remote pid).
+        // Pass 2 — resolve addresses and fire. The address comes from the
+        // KERNEL's route entity, resolved inside `read_connections`; the app
+        // row itself carries no address any more (`MODEL-REMOTE-PEER-FACTS`
+        // §1). Reached only when `ready` is non-empty, so the extra per-row
+        // read costs nothing in the steady state where every pair is `done`.
         let addressed: std::collections::HashMap<String, String> =
             crate::connections::read_connections(&self.peer_manager)
                 .into_iter()
