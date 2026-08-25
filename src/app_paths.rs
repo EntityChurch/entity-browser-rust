@@ -186,6 +186,22 @@ pub fn connection_entry_path(app_id: &str, peer_id: &str, remote_pid: &str) -> S
     format!("/{}/app/{}/connections/{}", peer_id, app_id, remote_pid)
 }
 
+/// Prefix for the app's per-peer authorization mirror. Each authorized
+/// remote peer is recorded as one entity here holding the granted
+/// **profile name** (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §4`). Kept
+/// separate from [`connections_prefix`] so the fire-and-forget connect
+/// path (which overwrites the whole connection entity) can never clobber
+/// the authorization state.
+pub fn authz_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/authz/", peer_id, app_id)
+}
+
+/// Path for a specific authorization mirror entry, keyed by remote peer
+/// id. Written only by the authorize/revoke action, never by connect.
+pub fn authz_entry_path(app_id: &str, peer_id: &str, remote_pid: &str) -> String {
+    format!("/{}/app/{}/authz/{}", peer_id, app_id, remote_pid)
+}
+
 /// Path for the WebSocket listener's published state (current listen
 /// address, when bound).
 pub fn listener_state_path(app_id: &str, peer_id: &str) -> String {

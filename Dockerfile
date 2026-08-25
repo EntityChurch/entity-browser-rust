@@ -52,6 +52,7 @@ RUN apt-get update \
         librsvg2-dev \
         libssl-dev \
         pkg-config \
+        python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # The wasm browser target + the components the repo's rust-toolchain.toml

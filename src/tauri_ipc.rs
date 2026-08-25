@@ -88,10 +88,20 @@ pub async fn create_backend_peer(label: Option<String>) -> Result<BackendPeerInf
 }
 
 /// Start a stopped backend peer — boots Peer + WS listener.
-pub async fn start_backend_peer(peer_id: &str) -> Result<BackendPeerInfo, String> {
+pub async fn start_backend_peer(
+    peer_id: &str,
+    manager_peer_id: &str,
+) -> Result<BackendPeerInfo, String> {
     let args = js_sys::Object::new();
     js_sys::Reflect::set(&args, &JsValue::from_str("peerId"), &JsValue::from_str(peer_id))
         .map_err(|_| "failed to set peerId arg")?;
+    // The managing system peer (S) — B self-seeds its manager grant from this.
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("managerPeerId"),
+        &JsValue::from_str(manager_peer_id),
+    )
+    .map_err(|_| "failed to set managerPeerId arg")?;
     let result = invoke("start_backend_peer", &args.into()).await?;
     BackendPeerInfo::from_js(&result).ok_or("invalid start response".into())
 }

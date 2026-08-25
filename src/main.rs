@@ -20,6 +20,7 @@ mod capabilities;
 mod inspect_router;
 mod connections;
 mod content_site;
+mod peer_auth;
 #[cfg(target_arch = "wasm32")]
 mod dom;
 mod event_log_cache;
