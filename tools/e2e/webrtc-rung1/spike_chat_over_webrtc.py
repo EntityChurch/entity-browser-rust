@@ -117,6 +117,58 @@ for(const sec of r.querySelectorAll('section.window')){
 return '(no-chat-window)';
 """
 
+# ── the node in force is a listed row, and its one button has to work ────────
+#
+# THIS RIG IS THE ONLY ONE IN THE TREE THAT PROVISIONS BY URL, which is the
+# state where the bug lived: `?webrtc_node=…` installs a working establisher and
+# writes NOTHING to the connector registry, so the row Peer Connections lists as
+# *in use* is synthesized. `Check` resolved its node out of the registry alone
+# and answered "no connector with peer-id …" about the node the same window had
+# just labelled in use — reported by the operator off a real two-machine run,
+# and invisible to every gate here, because none of them had ever pressed it.
+#
+# The button is asserted on the RENDERED notice, not on an exit code: the whole
+# defect was a correct round trip refused before it started, and only the
+# sentence on screen can tell the two apart (AP25).
+OPEN_PEERS = r"""
+const l=document.getElementById('dom-layer');const r=l.shadowRoot||l;
+for(const b of r.querySelectorAll('button.spawn-btn')){
+  if(b.textContent.trim()==='+ Peer Connections'){b.click();return 'clicked';}}
+return 'no-peers-btn';
+"""
+
+CLICK_CHECK = r"""
+const l=document.getElementById('dom-layer');const r=l.shadowRoot||l;
+for(const sec of r.querySelectorAll('section.window')){
+  const h=sec.querySelector('header h3');
+  if(h&&h.textContent.trim()==='Peer Connections'){
+    for(const b of sec.querySelectorAll('button')){
+      if(b.textContent.trim()==='Check'){b.click();return 'clicked';}}
+    return 'no-check-button';
+  }
+}
+return 'no-peers-window';
+"""
+
+# Leaf nodes only: a container's textContent would sweep up the form's help text
+# and match on any word we look for.
+CHECK_NOTICE = r"""
+const l=document.getElementById('dom-layer');const r=l.shadowRoot||l;
+for(const sec of r.querySelectorAll('section.window')){
+  const h=sec.querySelector('header h3');
+  if(h&&h.textContent.trim()==='Peer Connections'){
+    const hits=[];
+    for(const p of sec.querySelectorAll('p,div,span')){
+      const s=(p.textContent||'').trim();
+      if(p.children.length===0&&(s.includes('serves')||s.includes('no connector')||
+         s.includes('asking')||s.includes('could not')))hits.push(s);
+    }
+    return hits.join(' || ');
+  }
+}
+return '(no-peers-window)';
+"""
+
 HEADER = r"""
 const l=document.getElementById('dom-layer');const r=l.shadowRoot||l;
 for(const sec of r.querySelectorAll('section.window')){
@@ -227,9 +279,26 @@ def main():
             print("\n  final A messages:", repr(ex(A_BASE, sa, MESSAGES)))
             print("  final B messages:", repr(ex(B_BASE, sb, MESSAGES)))
 
+        # ── the node in force answers its own Check ──────────────────────────
+        print("\nopen Peer Connections on A:", ex(A_BASE, sa, OPEN_PEERS))
+        time.sleep(2)
+        print("  click Check:", ex(A_BASE, sa, CLICK_CHECK))
+        notice = ""
+        for i in range(25):
+            time.sleep(1)
+            notice = ex(A_BASE, sa, CHECK_NOTICE) or ""
+            # "asking …" is the in-flight line; wait for what it settles to.
+            if notice and "asking" not in notice:
+                break
+        print(f"  notice after {i+1}s: {notice!r}")
+        # Both halves: it must NOT be the refusal, and it must be the answer.
+        # Asserting only the absence would pass on a button that does nothing.
+        checked = "serves" in notice and "no connector" not in notice
+
         print("\n── chat-over-webrtc gate ─────────────────────")
         print(f"   A->B delivered: {got_b}   B->A delivered: {got_a}")
-        ok = got_b and got_a
+        print(f"   Check answered for the node in force: {checked}")
+        ok = got_b and got_a and checked
         print(f"\nRESULT: {'PASS ✅ bidirectional chat over one WebRTC channel' if ok else 'FAIL ❌'}")
         return 0 if ok else 1
     finally:

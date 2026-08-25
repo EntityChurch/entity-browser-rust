@@ -87,28 +87,29 @@ pub fn render(
         return;
     }
 
-    // --- Three cards, each answering ONE question ---
+    // --- Two cards, each answering ONE question ---
+    //
+    //   A. This device    — what am I, and where do my files go
+    //   B. Other devices  — the switches, each with the string it produces
     //
     // This was one "Status" card carrying identity facts, three service
     // switches and the pairing lines as identical `label: value` rows. Every
     // row was individually correct and nothing told you which KIND of row you
     // were reading, so finding "the address to type on the laptop" meant
-    // scanning eleven rows and knowing which two to combine. The split is the
-    // whole fix:
+    // scanning eleven rows and knowing which two to combine.
     //
-    //   A. This device                     — what am I, and where do my files go
-    //   B. What other devices can do here  — the switches
-    //   C. Connect another device          — the strings you carry elsewhere
-    //
-    // The order is causal: B changes what C can offer, and C renders nothing at
-    // all until B is on. Do not fold them back together, and do not add a row
-    // to one that answers another's question — that is how this became a pile
-    // the first time.
+    // The first fix split it three ways and gave the carry-strings their own
+    // card. That was better and still wrong in a way the operator named
+    // immediately: turning a switch on and finding out what it produced were
+    // two separate reading tasks, in two boxes, with nothing connecting them.
+    // The strings live **under the switch that produces them** now, so flipping
+    // one visibly yields the thing you carry. Do not re-separate them, and do
+    // not add a row here that answers card A's question — that is how this
+    // became a pile the first time.
     match &output.backend {
         Some(b) => {
             render_device_card(&wrapper, output, b);
             render_services_card(&wrapper, output, b, ctx);
-            render_connect_card(&wrapper, output, b, ctx);
         }
         None => {
             // Non-content states (S5): still loading vs genuinely absent. One
@@ -190,6 +191,22 @@ fn render_device_card(parent: &Element, output: &SystemOverviewOutput, b: &Backe
         None,
         None,
     );
+    // **Every address this process holds, in the card whose question is "what
+    // am I".** The switches say what they DO and the connect card says what to
+    // CARRY; neither answers *which port is this thing on*, and that question
+    // is asked constantly — a desktop that has run Tori before does not get
+    // 4041, it gets an ephemeral port, and with two of them up "which one am I
+    // even talking to" is unanswerable from the UI. It is answerable from here.
+    add_row(
+        &card,
+        &crate::i18n::t("sysoverview.app_addr", &[]),
+        output
+            .app_server
+            .url()
+            .unwrap_or(&crate::i18n::t("sysoverview.app_not_serving", &[])),
+        None,
+        None,
+    );
     // Link status via the shared connection vocabulary (S4). Honest liveness:
     // "Connected" only when the auth read actually succeeded over the transport
     // (the real probe) — a remembered-but-stale link (read failing) shows
@@ -214,46 +231,32 @@ fn render_device_card(parent: &Element, output: &SystemOverviewOutput, b: &Backe
     util::append(parent, &card);
 }
 
-/// **Card B — What other devices can do here.** The three switches, and nothing
-/// else.
+/// **Card B — Other devices.** The three switches, each carrying the string it
+/// produces.
 ///
-/// Each row is `what it is: what that means for other devices`, with a button
-/// that says only which way it goes. The address a person types is deliberately
-/// **not** here — it is card C's job — because mixing "what this switch does"
-/// with "the string to carry" is what made every one of these rows read as the
-/// same undifferentiated fact.
-fn render_services_card(
-    parent: &Element,
-    output: &SystemOverviewOutput,
-    b: &BackendStatusView,
-    ctx: &DomCtx,
-) {
-    let card = components::card(&crate::i18n::t("sysoverview.card_services", &[]));
-    // Rendezvous: whether browsers on this LAN can meet through this desktop.
-    // Two browsers need no STUN and no TURN on one LAN (`e2e-webrtc-lan`) — but
-    // they do need somewhere to exchange the offer, and this is the only thing
-    // that can be it without anyone running server infrastructure.
-    render_rendezvous_row(&card, b, ctx);
-    // Directly under the rendezvous, because the unprovisioned state of this
-    // row is fixed by the row above it and its own string says so.
-    render_app_server_row(&card, b, &output.app_server, ctx);
-    render_port_mapping_row(&card, b, ctx);
-    util::append(parent, &card);
-}
-
-/// **Card C — Connect another device.** The strings a person carries to another
-/// machine, best first.
+/// Every row is one [`components::service_row`]: name, state chip, the control
+/// that changes it, a sentence saying what that state means for other devices,
+/// and underneath it whatever a person is meant to carry to the other machine.
 ///
-/// Rendered only when there is something to carry. An empty version of this
-/// card is a question with no answer, and the remedy — the switches — is
-/// already on screen directly above it.
+/// # Which string belongs to which switch
 ///
-/// The composition (which steps, in what order, and whether the URL claims to
-/// be the finished flow) lives in
+/// The composition — which steps exist, whether the URL claims to be the
+/// finished flow, whether a pairing line may be printed at all — stays in
 /// [`connect_steps`](crate::views::system_overview::output::connect_steps),
-/// where native tests can read it. What would be wrong here is the ORDER, and
-/// that is not observable from inside `create_element` calls.
-fn render_connect_card(
+/// where native tests read it; this only *distributes* the result. The mapping
+/// is not arbitrary: the URL is produced by the app server, the LAN pairing line
+/// by the rendezvous (it is that node's own address), and the internet one by
+/// the router that forwarded it.
+///
+/// # Why the app server is first now
+///
+/// `connect_steps` puts the URL before the command it replaces, because the URL
+/// needs nothing typed on the far end — an operator who reads only the first
+/// thing must have read the better one. With the strings distributed to their
+/// switches, that ordering decision becomes the ROW order, so the row producing
+/// the URL leads. The "turn on Rendezvous" pointer in the unprovisioned state
+/// points **down** accordingly.
+fn render_services_card(
     parent: &Element,
     output: &SystemOverviewOutput,
     b: &BackendStatusView,
@@ -261,38 +264,26 @@ fn render_connect_card(
 ) {
     use crate::views::system_overview::output::{connect_steps, ConnectStep};
 
+    let card = components::card(&crate::i18n::t("sysoverview.card_services", &[]));
     let steps = connect_steps(b, &output.app_server);
-    if steps.is_empty() {
-        return;
-    }
-    let card = components::card(&crate::i18n::t("sysoverview.card_connect", &[]));
-    for step in steps {
-        match step {
-            // The URL gets a copy button for the pairing line's reason: it is
-            // going to be typed on a *different* device, and every character
-            // retyped by hand is a chance to produce a failure that reads as
-            // connectivity.
-            ConnectStep::OpenUrl { url, provisioned } => {
-                let hint = if provisioned {
-                    crate::i18n::t("sysoverview.connect_url_hint", &[])
-                } else {
-                    crate::i18n::t("sysoverview.connect_url_hint_unprovisioned", &[])
-                };
-                add_chip_row(
-                    &card,
-                    &crate::i18n::t("sysoverview.connect_url", &[]),
-                    components::copy_code(ctx, &url, Some(&hint)),
-                );
-            }
-            ConnectStep::PasteCommand { scope, command } => {
-                let label = match scope {
-                    PairScope::Lan => crate::i18n::t("sysoverview.pair_lan", &[]),
-                    PairScope::Internet => crate::i18n::t("sysoverview.pair_wan", &[]),
-                };
-                add_command_row(&card, &label, &command, ctx);
-            }
-        }
-    }
+    let pair_line = |want: PairScope| {
+        steps.iter().find_map(|s| match s {
+            ConnectStep::PasteCommand { scope, command } if *scope == want => Some(command.clone()),
+            _ => None,
+        })
+    };
+    let url_step = steps.iter().find_map(|s| match s {
+        ConnectStep::OpenUrl { url, provisioned } => Some((url.clone(), *provisioned)),
+        _ => None,
+    });
+
+    render_app_server_row(&card, b, &output.app_server, url_step, ctx);
+    // Rendezvous: whether browsers on this LAN can meet through this desktop.
+    // Two browsers need no STUN and no TURN on one LAN (`e2e-webrtc-lan`) — but
+    // they do need somewhere to exchange the offer, and this is the only thing
+    // that can be it without anyone running server infrastructure.
+    render_rendezvous_row(&card, b, pair_line(PairScope::Lan), ctx);
+    render_port_mapping_row(&card, b, pair_line(PairScope::Internet), ctx);
     util::append(parent, &card);
 }
 
@@ -350,55 +341,71 @@ fn add_row(parent: &Element, label: &str, value: &str, title: Option<&str>, colo
 /// (`system/signaling` mounts on `PeerBuilder`; there is no live add). That is
 /// cheap — a node holds nothing durable (§1.3) — but it drops in-flight
 /// connections, and a control that silently hangs up deserves to say so.
-fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
-    // Built from the card's own two row helpers rather than hand-rolled markup,
-    // so this surface adds no raw styles to the `ui-lint` baseline — the state
-    // reads as a normal `label: value` row and the control sits under it in the
-    // value column.
-    let (text, color) = if b.signaling_node {
+fn render_rendezvous_row(
+    parent: &Element,
+    b: &BackendStatusView,
+    pair_lan: Option<String>,
+    ctx: &DomCtx,
+) {
+    let (state, text) = if b.signaling_node {
         // The address is the actionable half: "it is on" is not something a
         // user can do anything with, and this is the string the other browser
         // types into `connector add`.
         let addr = b.ws_addr.clone().unwrap_or_default();
         (
+            components::ServiceState::On,
             crate::i18n::t("sysoverview.rendezvous_on", &[("addr", addr.as_str())]),
-            crate::theme_tokens::STATUS_OK,
         )
     } else {
         (
+            components::ServiceState::Off,
             crate::i18n::t("sysoverview.rendezvous_off", &[]),
-            "var(--text-muted, #c0c0c0)",
         )
     };
-    add_row(
-        parent,
+    let row = components::service_row(
         &crate::i18n::t("sysoverview.rendezvous", &[]),
+        state,
         &text,
-        Some(&crate::i18n::t("sysoverview.rendezvous_hint", &[])),
-        Some(color),
+        switch(b, b.signaling_node, "sb_set_signaling_node", ctx),
     );
+    row.set_attribute("title", &crate::i18n::t("sysoverview.rendezvous_hint", &[])).ok();
+    // The LAN pairing line belongs to this switch: the address in it is this
+    // node's own, and `pairing_commands` refuses to print the line at all when
+    // the rendezvous is off — so it can only ever appear under a row that is on.
+    if let Some(command) = pair_lan {
+        util::append(
+            &row,
+            &components::carry_line(
+                ctx,
+                &crate::i18n::t("sysoverview.pair_lan", &[]),
+                &command,
+                Some(&crate::i18n::t("sysoverview.pair_hint", &[])),
+            ),
+        );
+    }
+    util::append(parent, &row);
+}
 
-    // `\x1f`-packed: WHICH backend and WHICH direction. The row is the only
-    // place that knows both, and the handler must not have to re-derive the
-    // current state to work out what the click meant — a toggle that reads
-    // "the opposite of whatever I last painted" flips the wrong way whenever a
-    // poll lands between the render and the click.
-    let want = if b.signaling_node { "0" } else { "1" };
-    let label = if b.signaling_node {
+/// The on/off control for a service row.
+///
+/// `\x1f`-packed: WHICH backend and WHICH direction. The row is the only place
+/// that knows both, and the handler must not have to re-derive the current
+/// state to work out what the click meant — a toggle that reads "the opposite
+/// of whatever I last painted" flips the wrong way whenever a poll lands
+/// between the render and the click.
+fn switch(b: &BackendStatusView, on: bool, event: &str, ctx: &DomCtx) -> Element {
+    let label = if on {
         crate::i18n::t("label.turn_off", &[])
     } else {
         crate::i18n::t("label.turn_on", &[])
     };
-    let btn = components::button_value(
+    components::button_value(
         ctx,
         &label,
         components::ButtonKind::Small,
-        "sb_set_signaling_node",
-        &format!("{}\u{1f}{}", b.peer_id, want),
-    );
-    // Empty label: the control belongs to the row above, aligned under its
-    // value rather than introducing a second key nobody needs to read.
-    add_chip_row(parent, "", btn);
+        event,
+        &format!("{}\u{1f}{}", b.peer_id, if on { "0" } else { "1" }),
+    )
 }
 
 /// The **serve-the-app** row: can another device on this network load Tori from
@@ -427,54 +434,61 @@ fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) 
 /// a lease bound to this run's port. The button says so, because the other two
 /// buttons here warn that they *do*, and an unexplained difference between three
 /// adjacent controls is read as an oversight.
-fn render_app_server_row(parent: &Element, b: &BackendStatusView, s: &AppServerView, ctx: &DomCtx) {
+fn render_app_server_row(
+    parent: &Element,
+    b: &BackendStatusView,
+    s: &AppServerView,
+    url_step: Option<(String, bool)>,
+    ctx: &DomCtx,
+) {
     // The URL is deliberately NOT interpolated into these sentences: it is
     // rendered below as a copyable code row, because it is going to be typed on
     // a different device and a string inside a sentence cannot be copied.
-    let (text, color) = match s {
+    let (state, text) = match s {
         AppServerView::Serving { .. } => (
+            components::ServiceState::On,
             crate::i18n::t("sysoverview.appserver_on", &[]),
-            crate::theme_tokens::STATUS_OK,
         ),
+        // Serving and not useful yet: the visitor gets a working app and no way
+        // to reach anybody. `Incomplete` is the state that exists for exactly
+        // this, and the sentence points at the row that fixes it.
         AppServerView::ServingUnprovisioned { .. } => (
+            components::ServiceState::Incomplete,
             crate::i18n::t("sysoverview.appserver_unprovisioned", &[]),
-            crate::theme_tokens::STATUS_WARN,
         ),
         AppServerView::Off => (
+            components::ServiceState::Off,
             crate::i18n::t("sysoverview.appserver_off", &[]),
-            "var(--text-muted, #c0c0c0)",
         ),
     };
-    add_row(
-        parent,
+    let row = components::service_row(
         &crate::i18n::t("sysoverview.appserver", &[]),
+        state,
         &text,
-        Some(&crate::i18n::t("sysoverview.appserver_hint", &[])),
-        Some(color),
+        switch(b, s.is_serving(), "sb_set_app_server", ctx),
     );
-
-    // The URL is NOT rendered here — it lives in the "Connect another device"
-    // card below, whose whole job is the strings you carry to another machine.
-    // It used to sit under this row, which meant the one thing a person came to
-    // this window for was buried among three switches and six identity rows.
-
-    // `\x1f`-packed backend id + wanted direction, for `render_rendezvous_row`'s
-    // reason: the handler must not re-derive the current state, or a poll
-    // landing between render and click flips the wrong way.
-    let want = if s.is_serving() { "0" } else { "1" };
-    let label = if s.is_serving() {
-        crate::i18n::t("label.turn_off", &[])
-    } else {
-        crate::i18n::t("label.turn_on", &[])
-    };
-    let btn = components::button_value(
-        ctx,
-        &label,
-        components::ButtonKind::Small,
-        "sb_set_app_server",
-        &format!("{}\u{1f}{}", b.peer_id, want),
-    );
-    add_chip_row(parent, "", btn);
+    row.set_attribute("title", &crate::i18n::t("sysoverview.appserver_hint", &[])).ok();
+    // The URL this switch produces, right under it — and it carries the copy
+    // button for the pairing line's reason: it is going to be typed on a
+    // *different* device, and every character retyped by hand is a chance to
+    // produce a failure that reads as connectivity.
+    if let Some((url, provisioned)) = url_step {
+        let hint = if provisioned {
+            crate::i18n::t("sysoverview.connect_url_hint", &[])
+        } else {
+            crate::i18n::t("sysoverview.connect_url_hint_unprovisioned", &[])
+        };
+        util::append(
+            &row,
+            &components::carry_line(
+                ctx,
+                &crate::i18n::t("sysoverview.connect_url", &[]),
+                &url,
+                Some(&hint),
+            ),
+        );
+    }
+    util::append(parent, &row);
 }
 
 // (`render_pairing_row` retired — the pairing lines are steps in
@@ -483,28 +497,11 @@ fn render_app_server_row(parent: &Element, b: &BackendStatusView, s: &AppServerV
 // facts* is now `pairing_commands`' own doc, and *why two addresses and never
 // silently one* is enforced by that function's tests.)
 
-/// One `label: <code>command</code> [Copy]` row.
-///
-/// Built from the card's own row helper plus the shared identity-code style, so
-/// it adds no raw styles to the `ui-lint` baseline and reads like the peer-id
-/// row in Peer Connections — which is the other place in the app that exists to
-/// get a long string onto another device.
-fn add_command_row(parent: &Element, label: &str, command: &str, ctx: &DomCtx) {
-    // The shared affordance (`components::copy_code`) — this row and Peer
-    // Connections' device rows are the two places in the app whose job is
-    // getting a long string onto another machine, and they had one copy button
-    // between them.
-    //
-    // The hint names the RELOAD as well as the address: the node is read once
-    // at boot, so a paste that stops at "added connector" leaves a correct
-    // registry doing nothing.
-    let holder = components::copy_code(
-        ctx,
-        command,
-        Some(&crate::i18n::t("sysoverview.pair_hint", &[])),
-    );
-    add_chip_row(parent, label, holder);
-}
+// (`add_command_row` retired — a pairing line is a `components::carry_line`
+// under the switch that produced it, not a `label: value` row in a card of its
+// own. The hint it carried survives on that atom: it names the RELOAD as well
+// as the address, because the node is read once at boot and a paste that stops
+// at "added connector" leaves a correct registry doing nothing.)
 
 /// The port-mapping row: whether a router is forwarding this backend from the
 /// internet, and the address if so.
@@ -516,57 +513,79 @@ fn add_command_row(parent: &Element, label: &str, command: &str, ctx: &DomCtx) {
 /// carrier-grade NAT*. Collapsing them into "not reachable" would be the
 /// one-sentence failure the reachability work exists to end, rebuilt on a
 /// different surface.
-fn render_port_mapping_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
-    let (text, color) = match (&b.external_addr, b.port_mapping) {
+fn render_port_mapping_row(
+    parent: &Element,
+    b: &BackendStatusView,
+    pair_wan: Option<String>,
+    ctx: &DomCtx,
+) {
+    // The four states get four CHIPS as well as four sentences. That is the
+    // point of the vocabulary having `Pending` and `Refused` as separate words:
+    // "still asking" and "your router said no" are the same absence of an
+    // address and completely different things to do next.
+    let (state, text) = match (&b.external_addr, b.port_mapping) {
         // A door is open. The address is the actionable half — it is what
         // someone off this network puts into `connector add`.
         (Some(addr), _) => (
+            components::ServiceState::On,
             crate::i18n::t("sysoverview.portmap_on", &[("addr", addr.as_str())]),
-            crate::theme_tokens::STATUS_OK,
         ),
         // Asking, no answer yet. Deliberately NOT the note: the backend sends
         // none while probing, and inventing "checking…" as a failure string
         // would report a refusal that has not happened.
         (None, true) => match &b.port_mapping_note {
             Some(note) => (
+                components::ServiceState::Refused,
                 crate::i18n::t("sysoverview.portmap_none", &[("why", note.as_str())]),
-                "var(--text-muted, #c0c0c0)",
             ),
             None => (
+                components::ServiceState::Pending,
                 crate::i18n::t("sysoverview.portmap_asking", &[]),
-                "var(--text-muted, #c0c0c0)",
             ),
         },
         (None, false) => (
+            components::ServiceState::Off,
             crate::i18n::t("sysoverview.portmap_off", &[]),
-            "var(--text-muted, #c0c0c0)",
         ),
     };
-    add_row(
-        parent,
-        &crate::i18n::t("sysoverview.portmap", &[]),
-        &text,
-        Some(&crate::i18n::t("sysoverview.portmap_hint", &[])),
-        Some(color),
-    );
-
-    // Same `\x1f`-packed which-backend + which-direction as the row above, and
-    // for the same reason: a handler that reads "the opposite of what I last
-    // painted" flips the wrong way when a poll lands between render and click.
-    let want = if b.port_mapping { "0" } else { "1" };
+    // This switch's verbs are its own ("Ask my router" / "Stop asking"), not the
+    // shared on/off pair: you do not turn a router on, you ask it for something
+    // it may refuse — which is exactly what the `Refused` state above reports.
     let label = if b.port_mapping {
         crate::i18n::t("sysoverview.portmap_stop", &[])
     } else {
         crate::i18n::t("sysoverview.portmap_start", &[])
     };
-    let btn = components::button_value(
+    let control = components::button_value(
         ctx,
         &label,
         components::ButtonKind::Small,
         "sb_set_port_mapping",
-        &format!("{}\u{1f}{}", b.peer_id, want),
+        &format!("{}\u{1f}{}", b.peer_id, if b.port_mapping { "0" } else { "1" }),
     );
-    add_chip_row(parent, "", btn);
+    let row = components::service_row(
+        &crate::i18n::t("sysoverview.portmap", &[]),
+        state,
+        &text,
+        control,
+    );
+    row.set_attribute("title", &crate::i18n::t("sysoverview.portmap_hint", &[])).ok();
+    // The internet pairing line belongs here: `pairing_commands` emits it only
+    // when `external_addr` is `Some`, which is exactly *a door is open* and
+    // never *asked* or *refused* — so it cannot appear under a row reporting a
+    // refusal.
+    if let Some(command) = pair_wan {
+        util::append(
+            &row,
+            &components::carry_line(
+                ctx,
+                &crate::i18n::t("sysoverview.pair_wan", &[]),
+                &command,
+                Some(&crate::i18n::t("sysoverview.pair_hint", &[])),
+            ),
+        );
+    }
+    util::append(parent, &row);
 }
 
 /// A `label:` row whose value is an element (e.g. a status chip) rather than

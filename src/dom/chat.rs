@@ -233,6 +233,7 @@ fn reachability_message_key(v: crate::reachability::Reachability) -> Option<&'st
     use crate::reachability::Reachability as R;
     match v {
         R::Unknown | R::Connected => None,
+        R::NoCounterpart => Some("chat.reach_no_counterpart"),
         R::NoReflector => Some("chat.reach_no_reflector"),
         R::ReflectorUnreachable => Some("chat.reach_reflector_unreachable"),
         R::NoDirectPath => Some("chat.reach_no_direct_path"),

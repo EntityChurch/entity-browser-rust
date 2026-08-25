@@ -490,6 +490,164 @@ pub fn collapsible_header(ctx: &util::DomCtx, label: &str, open: bool, event: &s
     h
 }
 
+/// A native `<details>` disclosure with the app's summary look — returns
+/// `(details, body)`. Append the section's content to `body`, then `details` to
+/// your card. Closed on first render.
+///
+/// **Not a replacement for [`collapsible_header`], and the difference decides
+/// which to use.** That one holds `open` in the model, so a subscription firing
+/// mid-entry cannot collapse the section under you — which is what you need for
+/// a form somebody is *typing into*. A `<details>` re-renders closed on every
+/// repaint, which is exactly right for a section that is closed by default and
+/// costs something to open (a camera, a QR render) or that holds fields most
+/// people never touch.
+///
+/// It exists as an atom because three surfaces had hand-rolled the same
+/// `<details>` + inline-styled `<summary>` (the QR scanner, the QR display, the
+/// connector form's advanced fields), which is how the same affordance ends up
+/// three slightly different shades of blue.
+pub fn disclosure(label: &str) -> (Element, Element) {
+    let details = util::create_element("details");
+    details
+        .set_attribute("style", &format!("margin-top:{}", theme::SP_2))
+        .ok();
+
+    let summary = util::create_element("summary");
+    summary
+        .set_attribute(
+            "style",
+            &format!(
+                "cursor:pointer;font-size:12px;padding:{} 0;color:var(--accent-2,#c0c0e0)",
+                theme::SP_1
+            ),
+        )
+        .ok();
+    util::set_text(&summary, label);
+    util::append(&details, &summary);
+
+    let body = util::create_element("div");
+    body.set_attribute("style", &format!("margin-top:{}", theme::SP_2)).ok();
+    util::append(&details, &body);
+    (details, body)
+}
+
+// --- Services this device offers (S4, third vocabulary) ---------------------
+
+/// Whether a service this device offers is doing anything for other devices.
+///
+/// The third §S4 vocabulary beside [`ConnState`] and [`AuthState`], and a
+/// genuinely different axis: those describe a *peer*, this describes a *switch
+/// on this machine*. Five states, not two, because collapsing them rebuilds the
+/// one-sentence failure the reachability work exists to end — a person who is
+/// told "not reachable" cannot tell whether to wait, to flip another switch, to
+/// reconfigure a router, or to give up:
+///
+/// - [`On`](Self::On) — asked for, and working.
+/// - [`Incomplete`](Self::Incomplete) — on, but something *else* is missing
+///   before it does the job you wanted (the app server serving without a
+///   rendezvous: a visitor gets a working app and still cannot reach anybody).
+/// - [`Pending`](Self::Pending) — asked, no answer yet. Never a failure string:
+///   inventing one reports a refusal that has not happened.
+/// - [`Refused`](Self::Refused) — asked, and told no. Someone said no; the
+///   reason belongs in the row's detail line.
+/// - [`Off`](Self::Off) — not asked for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ServiceState {
+    On,
+    Incomplete,
+    Pending,
+    Refused,
+    Off,
+}
+
+impl ServiceState {
+    fn parts(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            // Distinct GLYPHS as well as colors: color alone is not a state
+            // anyone can read on a bad monitor, and these five sit in one column.
+            ServiceState::On => ("\u{25cf}", "chip.service_on", "var(--status-ok,#4c4)"), // ●
+            ServiceState::Incomplete => {
+                ("\u{25d0}", "chip.service_incomplete", "var(--status-warn,#fc9)")
+            } // ◐
+            ServiceState::Pending => ("\u{25cc}", "chip.service_pending", "var(--text-dim,#888)"), // ◌
+            ServiceState::Refused => ("\u{26a0}", "chip.service_refused", "var(--status-warn,#fc9)"), // ⚠
+            ServiceState::Off => ("\u{25cb}", "chip.service_off", "var(--text-dim,#888)"), // ○
+        }
+    }
+}
+
+/// Service-state chip (S4). Use everywhere a switch on this device is shown.
+pub fn service_chip(state: ServiceState) -> Element {
+    let (g, w, c) = state.parts();
+    chip(g, w, c)
+}
+
+/// **One service this device offers**, as a block rather than a `label: value`
+/// line: its name and state, the control that changes it, what that state means
+/// for other devices, and room underneath for the string it produces.
+///
+/// Append the carry-strings (a [`copy_code`]) to the returned element — that
+/// placement is the point. These rows used to be an undifferentiated stack of
+/// dim `label: value` text, with the strings a person came here for collected in
+/// a separate card further down; so "turn this on" and "here is what to type on
+/// the other machine" were two unconnected reading tasks. Attaching the string
+/// to the switch that produced it makes flipping a switch visibly *yield* the
+/// thing you carry.
+pub fn service_row(name: &str, state: ServiceState, detail: &str, control: Element) -> Element {
+    let row = util::create_element("div");
+    row.set_attribute(
+        "style",
+        &format!(
+            "padding:{} 0;border-top:1px solid var(--border,#333)",
+            theme::SP_3
+        ),
+    )
+    .ok();
+
+    // Name + chip on the left, the control hard right — so the switches line up
+    // as a column you can run an eye down, whatever the detail text does.
+    let head = util::create_element("div");
+    head.set_attribute("style", theme::HEADER_ROW).ok();
+    let left = util::create_element("div");
+    left.set_attribute("style", theme::ROW_INLINE).ok();
+    let title = util::create_element("span");
+    title
+        .set_attribute("style", "font-size:13px;font-weight:600")
+        .ok();
+    util::set_text(&title, name);
+    util::append(&left, &title);
+    util::append(&left, &service_chip(state));
+    util::append(&head, &left);
+    util::append(&head, &control);
+    util::append(&row, &head);
+
+    if !detail.is_empty() {
+        let p = util::create_element("p");
+        p.set_attribute(
+            "style",
+            &format!("font-size:12px;color:var(--text-muted,#c0c0c0);margin:{} 0 0 0", theme::SP_1),
+        )
+        .ok();
+        util::set_text(&p, detail);
+        util::append(&row, &p);
+    }
+    row
+}
+
+/// A labelled string to carry to another device, sitting under the
+/// [`service_row`] that produced it. The arrow marks it as an *output* of the
+/// switch above rather than another fact about it.
+pub fn carry_line(ctx: &util::DomCtx, label: &str, value: &str, hint: Option<&str>) -> Element {
+    let wrap = util::create_element("div");
+    wrap.set_attribute("style", &format!("margin-top:{}", theme::SP_2)).ok();
+    let cap = util::create_element("div");
+    cap.set_attribute("style", theme::HINT).ok();
+    util::set_text(&cap, &format!("\u{2192} {label}"));
+    util::append(&wrap, &cap);
+    util::append(&wrap, &copy_code(ctx, value, hint));
+    wrap
+}
+
 // --- Tables (S7) ------------------------------------------------------------
 // Repeated records render as an aligned, header-labelled table so a list is
 // scannable (read down a column) instead of a wall of free-form rows. Build

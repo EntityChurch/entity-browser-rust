@@ -8,7 +8,7 @@ src/dom/file_transfer.rs atoms=1 styles=2 hex=0
 src/dom/games.rs atoms=1 styles=13 hex=0
 src/dom/knowledge_base.rs atoms=0 styles=11 hex=0
 src/dom/mod.rs atoms=2 styles=11 hex=0
-src/dom/peer_connections.rs atoms=0 styles=7 hex=0
+src/dom/peer_connections.rs atoms=0 styles=2 hex=0
 src/dom/peer_management.rs atoms=0 styles=2 hex=0
 src/dom/query_console.rs atoms=0 styles=1 hex=0
 src/dom/scanner.rs atoms=1 styles=16 hex=0

@@ -108,6 +108,43 @@ func main() {
 			author: wb.AuthorLife,
 		},
 		{
+			// INTERACTIVE LIFE — the same automaton you can steer: a d-pad
+			// moves a cursor, one action toggles the cell under it, one
+			// regenerates the soup, one pauses. It is a SEPARATE program from
+			// `life` (root `app/life-edit`), not a mode of it, so both ship.
+			//
+			// The seed must be non-zero — `AuthorLifeInteractive` refuses zero,
+			// because state₀ has to be reproducible. 0x5eed5 is the value
+			// workbench-go's own Avalonia bridge authors with; matching it keeps
+			// two implementations bootable from the same starting board.
+			//
+			// EVERY PRESS IS FOLLOWED BY AN EXPLICIT RELEASE, and that is not
+			// decoration. A scheduled input PERSISTS until the next one, and the
+			// program edge-detects against its own `pkeys` — so pressing pause
+			// at tick 8 and "pressing" it again at tick 11 with the bit never
+			// cleared is ONE press held for three ticks, and the resume never
+			// happens. Releasing between presses is unambiguous under both
+			// edge-triggered and level-triggered readings, which is what makes
+			// this schedule proof of the controls rather than of one reading of
+			// them.
+			name: "life-edit", root: wb.LifeEditRoot, seed: 0x5eed5, ticks: 16,
+			author: wb.AuthorLifeInteractive,
+			inputs: []scheduledInput{
+				{tick: 2, port: "keys", field: "keys", value: 1 << 3}, // right
+				{tick: 3, port: "keys", field: "keys", value: 0},
+				{tick: 4, port: "keys", field: "keys", value: 1 << 1}, // down
+				{tick: 5, port: "keys", field: "keys", value: 0},
+				{tick: 6, port: "keys", field: "keys", value: 1 << 4}, // toggle the cell
+				{tick: 7, port: "keys", field: "keys", value: 0},
+				{tick: 8, port: "keys", field: "keys", value: 1 << 6}, // pause
+				{tick: 9, port: "keys", field: "keys", value: 0},
+				{tick: 11, port: "keys", field: "keys", value: 1 << 6}, // resume
+				{tick: 12, port: "keys", field: "keys", value: 0},
+				{tick: 13, port: "keys", field: "keys", value: 1 << 5}, // regen the soup
+				{tick: 14, port: "keys", field: "keys", value: 0},
+			},
+		},
+		{
 			name: "snake", root: wb.SnakeRoot, seed: 12345, ticks: 12,
 			author: wb.AuthorSnake,
 			inputs: []scheduledInput{

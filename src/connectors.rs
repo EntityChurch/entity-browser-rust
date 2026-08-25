@@ -431,6 +431,85 @@ pub fn selected_connector(peers: &Peers, peer_id: &str) -> Option<Connector> {
     found
 }
 
+/// A node resolved by peer-id for an action that wants to *talk to* it, plus
+/// the one thing that action has to know: whether there is a durable row behind
+/// it.
+///
+/// # Why this exists
+///
+/// `Check` (both surfaces) resolved its node out of [`read_connectors`] alone
+/// and refused with *"no connector with peer-id …"* when it found none. That
+/// refusal was written when the list only ever showed registry rows, and it
+/// stopped being true the moment the node **in force** became a listed row:
+/// a browser that arrived by the link a desktop serves has a working
+/// rendezvous, a row on screen marked *in use*, and nothing in the registry —
+/// so the only button that row offers answered *"no connector with peer-id"*
+/// about the node it had just named. Reported from a real two-machine run.
+///
+/// The two arms are separate variants rather than a bool because they differ in
+/// what a caller may **write**: a registry row is the legitimate home for what a
+/// node advertised ([`record_advertised_reflectors`]), and a synthesized one has
+/// no home at all — writing it back would materialize a connector the user never
+/// added, which is exactly what [`node_in_force`] promises not to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedNode {
+    /// A durable registry row. Talking to it and writing back to it are both
+    /// legitimate.
+    Row(Connector),
+    /// The node this session is rendezvousing through, with no row behind it
+    /// (URL query or build knob). Talk to it; never write to it.
+    Session(Connector),
+}
+
+impl ResolvedNode {
+    /// The node itself — everything an ask needs (its address, to dial it).
+    pub fn node(&self) -> &Connector {
+        match self {
+            Self::Row(c) | Self::Session(c) => c,
+        }
+    }
+
+    /// The durable row, when there is one. `None` is the *"nowhere to record
+    /// this"* answer, not an error.
+    pub fn row(&self) -> Option<&Connector> {
+        match self {
+            Self::Row(c) => Some(c),
+            Self::Session(_) => None,
+        }
+    }
+}
+
+/// Resolve `node_peer_id` for an action that talks to that node.
+///
+/// Registry first, then the node in force — the same order [`node_in_force`]
+/// itself uses, so the two cannot disagree about which node a given id names.
+pub fn resolve_node(peers: &Peers, peer_id: &str, node_peer_id: &str) -> Option<ResolvedNode> {
+    resolve_node_from(
+        read_connectors(peers, peer_id),
+        node_in_force(peers, peer_id),
+        node_peer_id,
+    )
+}
+
+/// The rule itself, over its inputs.
+///
+/// A free function for the same reason [`crate::views::peer_connections::model::connector_rows`]
+/// is one: the interesting case is unreachable from `make test`, because
+/// [`node_in_force`] synthesizes only on wasm32 and its native shadow is exactly
+/// [`selected_connector`] — so through `&Peers` the `Session` arm never fires
+/// natively.
+pub fn resolve_node_from(
+    rows: Vec<Connector>,
+    in_force: Option<Connector>,
+    node_peer_id: &str,
+) -> Option<ResolvedNode> {
+    if let Some(c) = rows.into_iter().find(|c| c.node_peer_id == node_peer_id) {
+        return Some(ResolvedNode::Row(c));
+    }
+    let n = in_force?;
+    (n.node_peer_id == node_peer_id).then_some(ResolvedNode::Session(n))
+}
+
 /// What [`add_connector`] did beyond writing the row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AddOutcome {
@@ -439,6 +518,55 @@ pub struct AddOutcome {
     /// exactly the kind of helpfulness that must be stated, not inferred
     /// [AP25].
     pub selected: bool,
+}
+
+/// What to do with this desktop's own adopted rendezvous row, given whatever is
+/// already stored for that node. See [`plan_self_adoption`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdoptPlan {
+    /// The stored row already points at this address — leave it alone. Writing
+    /// anyway would be a dispatched write per backend poll, forever.
+    Unchanged,
+    /// Write the row: either it is new, or the backend has moved and the row is
+    /// pointing somewhere it no longer listens. `label` is what to store.
+    Write { label: String },
+}
+
+/// **A label is the user's; an address is the backend's.**
+///
+/// This desktop adopts its own backend as a connector row so the process
+/// *running* the rendezvous can also *find* it. The row used to be left
+/// completely alone once it existed, to protect a label the user had edited —
+/// and that produced a real failure on any machine that has run Tori twice.
+///
+/// The backend **identity is durable** (`~/.entity/backend-peers/{peer_id}`
+/// survives restarts) while its **port is not**: the `4041` bind falls back to
+/// an ephemeral port whenever 4041 is taken, and an earlier Tori still running
+/// is exactly what takes it. So the row kept a port from a previous run, the
+/// desktop rendezvoused at a bucket belonging to a process that had moved, and
+/// browsers reaching the live node met each other perfectly while the desktop
+/// met nobody. Measured: a row reading `:33697` (a 20-hour-old process) against
+/// a live backend on `:40805` — same peer-id, `Check` disagreeing with the
+/// table it sat under.
+///
+/// Both halves matter and they pull in opposite directions, which is why this
+/// is one function and not a condition at the call site: **take the address
+/// every time, keep the label whenever there is one.**
+pub fn plan_self_adoption(
+    existing: Option<(&str, &str)>,
+    addr: &str,
+    default_label: &str,
+) -> AdoptPlan {
+    match existing {
+        // Nothing moved. Note this compares the ADDRESS, not "does a row
+        // exist" — that distinction is the entire bug.
+        Some((prev_addr, _)) if prev_addr == addr => AdoptPlan::Unchanged,
+        // The backend moved. Keep an edited label; default a blank one.
+        Some((_, prev_label)) if !prev_label.trim().is_empty() => {
+            AdoptPlan::Write { label: prev_label.to_string() }
+        }
+        _ => AdoptPlan::Write { label: default_label.to_string() },
+    }
 }
 
 /// Add (or overwrite) a connector. Keyed by node peer-id, so re-adding the same
@@ -468,19 +596,61 @@ pub struct AddOutcome {
 /// — so the validating path would refuse the row it is being asked about. Here
 /// the row is known to exist because we are the one writing it.
 pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<AddOutcome, String> {
+    let write = plan_write(&add_context(peers, peer_id), c)?;
+    let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &write.row.node_peer_id);
+    peers.dispatch_write(peer_id, path, connector_to_entity(&write.row));
+    if write.select {
+        let sel = app_paths::connector_selection_path(app_paths::APP_ID, peer_id);
+        peers.dispatch_write(peer_id, sel, selection_to_entity(&write.row.node_peer_id));
+    }
+    Ok(AddOutcome { selected: write.select })
+}
+
+/// What the registry looked like just before an add, snapshotted so the decision
+/// can be made — and the write performed — from a task holding no `&Peers`.
+///
+/// The discovering add ([`add_connector_by_address`]) learns the node's peer-id
+/// from a dial, which means its write happens **after** an `.await`, where the
+/// borrow is long gone. Reading these two facts up front is what lets both add
+/// paths share one [`plan_write`] instead of one of them re-deriving the rules
+/// in a spawned future.
+#[derive(Debug, Clone)]
+pub struct AddContext {
+    existing: Vec<Connector>,
+    had_selection: bool,
+}
+
+/// Snapshot [`AddContext`] from the live registry.
+pub fn add_context(peers: &Peers, peer_id: &str) -> AddContext {
+    AddContext {
+        existing: read_connectors(peers, peer_id),
+        // The *marker*, not the resolved connector: a selection left dangling by
+        // a removed node is still a choice, and repointing it at whatever gets
+        // added next is the silent substitution `selected_connector` exists to
+        // refuse.
+        had_selection: selection_marker(peers, peer_id).is_some(),
+    }
+}
+
+/// What an add must write: the normalized row, and whether it also becomes the
+/// selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddWrite {
+    pub row: Connector,
+    pub select: bool,
+}
+
+/// **The add rules, in one pure function.** Both surfaces (the window's Add, the
+/// shell's `connector add`) and both paths (peer-id typed, peer-id discovered)
+/// resolve through here, so none of them can drift on validation, on
+/// normalization, on preserving what a node advertised, or on the
+/// adding-the-first-node-selects-it rule.
+pub fn plan_write(ctx: &AddContext, c: &Connector) -> Result<AddWrite, String> {
     validate_node_peer_id(&c.node_peer_id)?;
     if c.node_addr.trim().is_empty() {
         return Err("a connector needs an address to dial".to_string());
     }
-    // Refuse a malformed reflector list HERE — at the surface where it was
-    // typed and can be corrected (D13). Downstream the same value only warns,
-    // because by then there is no user to tell; that split is deliberate.
-    crate::session_config::parse_ice_urls(&c.ice)?;
-    // Same posture, one field along: refuse a half-configured relay HERE, where
-    // the person who typed it can fix it. A relay URL with no credentials builds
-    // an `RTCIceServer` that looks configured and gathers no relay candidates —
-    // the silent-nothing failure this whole area keeps producing.
-    crate::session_config::parse_relay(&c.relay, &c.relay_username, &c.relay_credential)?;
+    validate_optional_fields(&c.ice, &c.relay, &c.relay_username, &c.relay_credential)?;
     // `ice_advertised` is preserved from the existing row and the caller's value
     // is IGNORED — `record_advertised_reflectors` is its only writer, and this
     // is what makes that true structurally rather than by everyone remembering.
@@ -488,34 +658,237 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<AddO
     // address) is the common case, and clearing what that node told us would
     // silently drop a provisioned session back to host-only until the next
     // successful advertise — a NAT regression from editing a label.
-    let learned = read_connectors(peers, peer_id)
-        .into_iter()
+    let learned = ctx
+        .existing
+        .iter()
         .find(|e| e.node_peer_id == c.node_peer_id.trim())
-        .map(|e| e.ice_advertised)
+        .map(|e| e.ice_advertised.clone())
         .unwrap_or_default();
-    let normalized = Connector {
-        node_peer_id: c.node_peer_id.trim().to_string(),
-        node_addr: c.node_addr.trim().to_string(),
-        label: c.label.trim().to_string(),
-        ice: c.ice.trim().to_string(),
-        ice_advertised: learned,
-        relay: c.relay.trim().to_string(),
-        relay_username: c.relay_username.trim().to_string(),
-        relay_credential: c.relay_credential.trim().to_string(),
-    };
-    // Read the pre-existing selection BEFORE writing, so the answer is about
-    // what the user had chosen and not about the row going in. The *marker*,
-    // not the resolved connector: a selection left dangling by a removed node
-    // is still a choice, and repointing it at whatever gets added next is the
-    // silent substitution `selected_connector` exists to refuse.
-    let had_selection = selection_marker(peers, peer_id).is_some();
-    let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &normalized.node_peer_id);
-    peers.dispatch_write(peer_id, path, connector_to_entity(&normalized));
-    if !had_selection {
-        let sel = app_paths::connector_selection_path(app_paths::APP_ID, peer_id);
-        peers.dispatch_write(peer_id, sel, selection_to_entity(&normalized.node_peer_id));
+    Ok(AddWrite {
+        row: Connector {
+            node_peer_id: c.node_peer_id.trim().to_string(),
+            node_addr: c.node_addr.trim().to_string(),
+            label: c.label.trim().to_string(),
+            ice: c.ice.trim().to_string(),
+            ice_advertised: learned,
+            relay: c.relay.trim().to_string(),
+            relay_username: c.relay_username.trim().to_string(),
+            relay_credential: c.relay_credential.trim().to_string(),
+        },
+        select: !ctx.had_selection,
+    })
+}
+
+/// The half of the validation that does not need to know who is at the address.
+///
+/// Split out so a discovering add can refuse a malformed reflector list
+/// **before** spending a dial on it: a typo in a `stun:` URI reported after a
+/// connection timeout reads as "the node is down".
+///
+/// Both refusals happen HERE, at the surface where the value was typed and can
+/// be corrected (D13). Downstream the same values only warn, because by then
+/// there is no user to tell; that split is deliberate.
+fn validate_optional_fields(
+    ice: &str,
+    relay: &str,
+    relay_username: &str,
+    relay_credential: &str,
+) -> Result<(), String> {
+    crate::session_config::parse_ice_urls(ice)?;
+    // Same posture, one field along: a relay URL with no credentials builds an
+    // `RTCIceServer` that looks configured and gathers no relay candidates —
+    // the silent-nothing failure this whole area keeps producing.
+    crate::session_config::parse_relay(relay, relay_username, relay_credential)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Adding a connector you only have an address for
+// ---------------------------------------------------------------------------
+
+/// A connector as the user described it, **before** anyone knows who is at the
+/// address.
+///
+/// # Why the peer-id stopped being something you type
+///
+/// The registry keys on the node's peer-id, so until now adding a node meant
+/// typing a Base58 string — read off another machine's screen, carried across a
+/// room, retyped by hand. That is the transcription error that presents as a
+/// connectivity failure, and it was being demanded for a value **the node
+/// itself tells us the moment we dial it**: `Peers::connect_peer` resolves to
+/// the id of whoever answered. The address was always the only irreducible
+/// input.
+///
+/// # An id you *do* type is an expectation, not an input
+///
+/// [`Self::expect_peer_id`] is optional and means something different from what
+/// the old required field meant: *this connector must be that peer, and if
+/// somebody else answers, it is not who I think it is.* That is a real thing to
+/// want — it is the difference between "I'll use whatever rendezvous service
+/// lives at this address" and "I am pinning my friend's node" — and it is
+/// checked against the dial rather than trusted, which the typed field never
+/// was.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectorDraft {
+    pub node_addr: String,
+    pub label: String,
+    /// Empty = whoever answers. Set = refuse the add unless it is this peer.
+    pub expect_peer_id: String,
+    pub ice: String,
+    pub relay: String,
+    pub relay_username: String,
+    pub relay_credential: String,
+}
+
+/// Everything about a draft that can be judged without dialing: a non-empty
+/// address, parseable reflectors, a complete relay, and a path-safe expectation
+/// if one was given. Returns the expectation.
+///
+/// Separate from the dial so a surface reports a typo **immediately** instead of
+/// after a connection timeout.
+pub fn validate_draft(draft: &ConnectorDraft) -> Result<Option<String>, String> {
+    if draft.node_addr.trim().is_empty() {
+        return Err("a connector needs an address to dial".to_string());
     }
-    Ok(AddOutcome { selected: !had_selection })
+    validate_optional_fields(
+        &draft.ice,
+        &draft.relay,
+        &draft.relay_username,
+        &draft.relay_credential,
+    )?;
+    let expect = draft.expect_peer_id.trim();
+    if expect.is_empty() {
+        return Ok(None);
+    }
+    validate_node_peer_id(expect)?;
+    Ok(Some(expect.to_string()))
+}
+
+/// Add a connector we have only an address for: dial it, take the peer-id from
+/// whoever answers, and write the row.
+///
+/// Returns `Err` **synchronously** for anything judgeable without the network
+/// (see [`validate_draft`]), and a future for the rest — so a form reports a bad
+/// reflector URI the instant it is submitted, and only a genuine
+/// who-is-at-this-address question costs a round trip.
+///
+/// The dial is not overhead the old path avoided: `learn_node_reflectors` dials
+/// the node immediately after every add anyway (§4.5.1's automatic half), so the
+/// connection this needs is one the add was going to open regardless. What is
+/// new is that we now *use* its answer.
+///
+/// **A node that does not answer is still addable when you named it.** The
+/// peer-id has two sources — the dial and
+/// [`ConnectorDraft::expect_peer_id`] — and requiring the first would mean you
+/// could only add a rendezvous that happens to be up at that moment. See the
+/// match inside.
+pub fn add_connector_by_address(
+    peers: &Peers,
+    peer_id: &str,
+    draft: &ConnectorDraft,
+) -> Result<impl std::future::Future<Output = Result<AddOutcome, String>> + 'static, String> {
+    let expect = validate_draft(draft)?;
+    let handle = peers
+        .dispatch_handle(peer_id)
+        .ok_or_else(|| "the registry peer has no dispatcher".to_string())?;
+    let ctx = add_context(peers, peer_id);
+    let addr = draft.node_addr.trim().to_string();
+    // The dial rides the SAME peer the registry lives on, which is the peer
+    // every other node call in this module dispatches from (`reach_node`,
+    // `advertise`). A node reached from one peer and recorded by another would
+    // publish its route under a peer that never uses it.
+    let dial = peers.connect_peer(peer_id, addr.clone());
+    let draft = draft.clone();
+    let owner = peer_id.to_string();
+    Ok(async move {
+        // **The peer-id has two sources, and only one of them has to work.**
+        //
+        // The dial is the ordinary one and the reason the field is optional.
+        // But a node that is merely *down right now* still has a peer-id — the
+        // one you typed — and refusing to record it would mean you can only add
+        // a rendezvous you can reach this second. So a failed dial is fatal
+        // only when nothing else supplied the key, and the refusal says which
+        // field would have avoided it.
+        let learned = match (dial.await, &expect) {
+            // The expectation is CHECKED against the dial, never assumed — the
+            // whole value of having typed one. Same shape and same reason as
+            // `reach_node`'s mismatch refusal: rendezvousing through a node that
+            // is not the one you named puts you in a bucket at a stranger's pool.
+            (Ok(reached), Some(expected)) if expected != &reached => {
+                return Err(format!(
+                    "connector: {addr} answered as {reached}, not the {expected} you expected"
+                ))
+            }
+            (Ok(reached), _) => reached,
+            (Err(e), Some(expected)) => {
+                tracing::info!(
+                    node = %expected,
+                    address = %addr,
+                    error = %e,
+                    "connector: adding a node that did not answer — the peer-id was given"
+                );
+                expected.clone()
+            }
+            (Err(e), None) => {
+                return Err(format!(
+                    "connector: {addr} did not answer ({e}) — if the node is not \
+                     running yet, give its peer ID under Advanced"
+                ))
+            }
+        };
+        let write = plan_write(
+            &ctx,
+            &Connector {
+                node_peer_id: learned,
+                node_addr: addr,
+                label: draft.label,
+                ice: draft.ice,
+                // Ignored by `plan_write` — a node's own advertisement is
+                // learned, never typed.
+                ice_advertised: String::new(),
+                relay: draft.relay,
+                relay_username: draft.relay_username,
+                relay_credential: draft.relay_credential,
+            },
+        )?;
+        let path = app_paths::connector_path(app_paths::APP_ID, &owner, &write.row.node_peer_id);
+        handle.put(path.clone(), connector_to_entity(&write.row)).await?;
+        if write.select {
+            let sel = app_paths::connector_selection_path(app_paths::APP_ID, &owner);
+            handle
+                .put(sel, selection_to_entity(&write.row.node_peer_id))
+                .await?;
+        }
+        // §4.5.1's automatic half, on this path too — and **after** the outcome
+        // is decided, not before it. Learning what the node advertises is
+        // enrichment (`learn_node_reflectors` says why it is fire-and-forget);
+        // awaiting it here would make every Add wait on a second round trip
+        // before reporting an add that has already succeeded, and a node that
+        // does not answer would look like an add that failed.
+        //
+        // The dial has already happened, so unlike `learn_node_reflectors` this
+        // needs no `reach_node` — the route exists by construction.
+        spawn(async move {
+            match advertise_via(&handle, &write.row.node_peer_id).await {
+                Ok(ad) => {
+                    if let Some(updated) = advertised_update(&write.row, &ad.reflection_endpoints) {
+                        tracing::info!(
+                            node = %updated.node_peer_id,
+                            reflectors = %ad.reflection_endpoints.join(" "),
+                            "connector: learned the node's own reflectors (§4.5.1)"
+                        );
+                        handle.put(path, connector_to_entity(&updated)).await.ok();
+                    }
+                }
+                Err(e) => tracing::debug!(
+                    node = %write.row.node_peer_id,
+                    error = %e,
+                    "connector: the node did not advertise"
+                ),
+            }
+        });
+        Ok(AddOutcome { selected: write.select })
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -797,38 +1170,82 @@ pub fn advertise(
     local_peer_id: &str,
     node_peer_id: &str,
 ) -> impl std::future::Future<Output = Result<entity_signaling::Advertisement, String>> + 'static {
-    // Same empty-map params the extension's own client sends.
-    let params = Entity::new(
-        "system/signaling/empty",
-        entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![])),
-    );
-    let uri = format!("entity://{}/{}", node_peer_id, entity_signaling::PATTERN);
-    let node = node_peer_id.to_string();
-    let fut = params.map(|params| {
+    let fut = advertise_params().map(|params| {
         peers.execute(
             local_peer_id,
-            uri,
+            advertise_uri(node_peer_id),
             entity_signaling::OP_ADVERTISE.to_string(),
             params,
             entity_handler::ExecuteOptions::default(),
         )
     });
+    let node = node_peer_id.to_string();
     async move {
-        let result = match fut {
-            Ok(f) => f.await?,
-            Err(e) => return Err(format!("advertise: encoding empty params failed: {e}")),
-        };
-        // A node that answers with a non-OK status is refusing, not advertising
-        // — surface the status rather than trying to decode the body.
-        if result.status != entity_handler::STATUS_OK {
-            return Err(format!(
-                "advertise: node {node} refused with status {}",
-                result.status
-            ));
+        match fut {
+            Ok(f) => advertise_reply(&node, f.await?),
+            Err(e) => Err(e),
         }
-        entity_signaling::data::advertisement_from_params(&result.result.data)
-            .map_err(|e| format!("advertise: node {node} sent an undecodable advertisement: {e}"))
     }
+}
+
+/// [`advertise`] for a caller that is already inside a spawned task and holds a
+/// [`DispatchHandle`](crate::dispatch_handle::DispatchHandle) instead of
+/// `&Peers` — the discovering add, which cannot go back for a borrow after its
+/// dial resolves.
+///
+/// The two entry points share the params, the URI and the reply decoding, so
+/// the only thing that differs between them is which dispatcher carries the
+/// call. Nothing about the wire can drift between the surfaces.
+pub fn advertise_via(
+    handle: &crate::dispatch_handle::DispatchHandle,
+    node_peer_id: &str,
+) -> impl std::future::Future<Output = Result<entity_signaling::Advertisement, String>> + 'static {
+    let fut = advertise_params().map(|params| {
+        handle.execute(
+            advertise_uri(node_peer_id),
+            entity_signaling::OP_ADVERTISE.to_string(),
+            params,
+            entity_handler::ExecuteOptions::default(),
+        )
+    });
+    let node = node_peer_id.to_string();
+    async move {
+        match fut {
+            Ok(f) => advertise_reply(&node, f.await?),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// The empty-map params the extension's own client sends.
+fn advertise_params() -> Result<Entity, String> {
+    Entity::new(
+        "system/signaling/empty",
+        entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![])),
+    )
+    .map_err(|e| format!("advertise: encoding empty params failed: {e}"))
+}
+
+/// A node is addressed by `entity://` URI like any other remote peer.
+fn advertise_uri(node_peer_id: &str) -> String {
+    format!("entity://{}/{}", node_peer_id, entity_signaling::PATTERN)
+}
+
+/// Decode what the node answered, or say why we cannot.
+fn advertise_reply(
+    node: &str,
+    result: entity_handler::HandlerResult,
+) -> Result<entity_signaling::Advertisement, String> {
+    // A node that answers with a non-OK status is refusing, not advertising
+    // — surface the status rather than trying to decode the body.
+    if result.status != entity_handler::STATUS_OK {
+        return Err(format!(
+            "advertise: node {node} refused with status {}",
+            result.status
+        ));
+    }
+    entity_signaling::data::advertisement_from_params(&result.result.data)
+        .map_err(|e| format!("advertise: node {node} sent an undecodable advertisement: {e}"))
 }
 
 /// Make sure `local_peer_id` can actually reach `c`, dialing the node's
@@ -1560,6 +1977,44 @@ pub(crate) mod tests {
         assert!(provisioning_from_registry(&peers, &me).is_none());
     }
 
+    /// The bug an operator hit on a real two-machine run: a browser provisioned
+    /// by the link a desktop serves has a node **in force** with no registry row
+    /// behind it, that node is a listed row, and its only button — `Check` —
+    /// answered *"no connector with peer-id …"* about the node the same list had
+    /// just labelled *in use*.
+    ///
+    /// The `row()` half is the other side of the same rule and is what keeps the
+    /// fix from writing a connector the user never added.
+    #[test]
+    fn the_node_in_force_is_checkable_even_with_no_row_behind_it() {
+        let row = conn("2KRow", "ws://row:1");
+        let session = conn("2KSession", "ws://session:1");
+
+        // A registry row: talk to it, and record what it advertises.
+        let r = resolve_node_from(vec![row.clone()], None, "2KRow").expect("the row resolves");
+        assert_eq!(r.node().node_addr, "ws://row:1");
+        assert!(r.row().is_some(), "a durable row is a legitimate write-back target");
+
+        // The node in force with nothing durable behind it: askable, not
+        // writable. This is the arm that was refused.
+        let s = resolve_node_from(vec![], Some(session.clone()), "2KSession")
+            .expect("the node in force resolves by its own id");
+        assert_eq!(s.node().node_addr, "ws://session:1");
+        assert!(
+            s.row().is_none(),
+            "nothing to write back to — materializing a row here is what `node_in_force` refuses"
+        );
+
+        // The registry wins when both could answer, so one id never names two
+        // different nodes depending on who asked.
+        let both = resolve_node_from(vec![row.clone()], Some(row.clone()), "2KRow").unwrap();
+        assert!(both.row().is_some());
+
+        // And an id that is neither is still refused — the refusal was not too
+        // strict, it was looking in one place.
+        assert!(resolve_node_from(vec![row], Some(session), "2KStranger").is_none());
+    }
+
     #[tokio::test]
     async fn the_registry_resolves_to_provisioning_through_the_shared_rule() {
         let peers = Peers::new_direct();
@@ -1715,6 +2170,202 @@ pub(crate) mod tests {
         node_handle.abort();
     }
 
+    /// **An address is enough — the node tells us who it is.**
+    ///
+    /// The peer-id used to be a required text field, which meant carrying a
+    /// Base58 string off another machine's screen and retyping it. It is the
+    /// dial's own answer, and this is the whole feature: nothing is typed but
+    /// `memory://{node}`, and the row lands keyed by the id the node actually
+    /// presented.
+    ///
+    /// Mutation check: have the future write `expect_peer_id` (or any constant)
+    /// instead of `learned` and the key assertion fails.
+    #[tokio::test]
+    async fn an_address_alone_is_enough_because_the_node_says_who_it_is() {
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        let registry = MemoryTransportRegistry::new();
+        let (node_pid, node_handle) = spawn_signaling_node(registry.clone(), "pool-seven");
+        let peers = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let me = peers.primary_peer_id().to_string();
+        tokio::task::yield_now().await;
+
+        let outcome = add_connector_by_address(
+            &peers,
+            &me,
+            &ConnectorDraft {
+                node_addr: format!("memory://{node_pid}"),
+                label: "the node".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("nothing judgeable offline is wrong with this draft")
+        .await
+        .expect("the dial succeeds and the row is written");
+
+        let list = read_connectors(&peers, &me);
+        assert_eq!(list.len(), 1, "one row, got {list:?}");
+        assert_eq!(
+            list[0].node_peer_id, node_pid,
+            "the row is keyed by the id the NODE presented, not by anything typed"
+        );
+        assert_eq!(list[0].label, "the node", "the one thing the user did type survives");
+        // The first node added is the selection — the same rule the typed path
+        // has, reached through the same `plan_write`, which is why it cannot
+        // drift between the two paths.
+        assert!(outcome.selected);
+        assert_eq!(
+            selected_connector(&peers, &me).map(|c| c.node_peer_id),
+            Some(node_pid)
+        );
+
+        node_handle.abort();
+    }
+
+    /// A typed peer-id is an **expectation checked against the dial**, and a
+    /// mismatch writes nothing.
+    ///
+    /// This is what the optional field is for: *this connector must be that
+    /// peer.* The old required field asserted the same thing and verified none
+    /// of it — whatever you typed became the key, so a wrong id produced a row
+    /// pointing at a node that would never answer under that name.
+    #[tokio::test]
+    async fn an_expectation_the_node_does_not_meet_is_refused_and_writes_nothing() {
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        let registry = MemoryTransportRegistry::new();
+        let (node_pid, node_handle) = spawn_signaling_node(registry.clone(), "pool-seven");
+        let peers = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let me = peers.primary_peer_id().to_string();
+        tokio::task::yield_now().await;
+
+        let err = add_connector_by_address(
+            &peers,
+            &me,
+            &ConnectorDraft {
+                node_addr: format!("memory://{node_pid}"),
+                expect_peer_id: "2KSomebodyElse".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("a well-formed expectation passes the offline checks")
+        .await
+        .expect_err("the node answers as itself, not as the expected peer");
+        assert!(err.contains("2KSomebodyElse"), "name what was expected: {err}");
+        assert!(err.contains(&node_pid), "and name who actually answered: {err}");
+        assert!(read_connectors(&peers, &me).is_empty(), "a refusal writes nothing");
+
+        // The control: the same draft with the expectation the node meets.
+        add_connector_by_address(
+            &peers,
+            &me,
+            &ConnectorDraft {
+                node_addr: format!("memory://{node_pid}"),
+                expect_peer_id: node_pid.clone(),
+                ..Default::default()
+            },
+        )
+        .expect("offline checks pass")
+        .await
+        .expect("a met expectation adds the row");
+        assert_eq!(read_connectors(&peers, &me).len(), 1);
+
+        node_handle.abort();
+    }
+
+    /// **A node that is not running yet is still addable — if you name it.**
+    ///
+    /// The peer-id has two sources and only one has to work. Requiring the dial
+    /// would mean a rendezvous can only be added while it happens to be up,
+    /// which is not a rule anybody would choose: the address is durable, the
+    /// node's uptime is not. The refusal in the other direction is what makes
+    /// this safe to allow — with no id typed there is genuinely no registry key,
+    /// so the add cannot proceed, and the message names the field that would
+    /// have let it.
+    #[tokio::test]
+    async fn an_unreachable_node_is_added_when_named_and_refused_when_not() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let dead = "ws://127.0.0.1:9".to_string(); // discard port: nothing listens
+
+        let err = add_connector_by_address(
+            &peers,
+            &me,
+            &ConnectorDraft { node_addr: dead.clone(), ..Default::default() },
+        )
+        .expect("offline checks pass")
+        .await
+        .expect_err("nothing answered and nothing named the node");
+        assert!(
+            err.contains("Advanced"),
+            "the refusal must name the field that would have worked: {err}"
+        );
+        assert!(read_connectors(&peers, &me).is_empty());
+
+        let outcome = add_connector_by_address(
+            &peers,
+            &me,
+            &ConnectorDraft {
+                node_addr: dead.clone(),
+                expect_peer_id: "2KNodeThatIsOffRightNow".to_string(),
+                label: "my box".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("offline checks pass")
+        .await
+        .expect("a named node is addable while it is down");
+        let list = read_connectors(&peers, &me);
+        assert_eq!(list.len(), 1, "{list:?}");
+        assert_eq!(list[0].node_peer_id, "2KNodeThatIsOffRightNow");
+        assert_eq!(list[0].node_addr, dead);
+        assert!(outcome.selected, "and it is still the first-node selection");
+    }
+
+    /// Everything judgeable without the network is refused **before** the dial.
+    ///
+    /// A typo in a `stun:` URI reported after a connection timeout reads as
+    /// "the node is down" — the wrong diagnosis, about the wrong field, minutes
+    /// late. `add_connector_by_address` returns those refusals from its
+    /// synchronous half, so the form answers instantly and no dial is spent.
+    ///
+    /// Mutation check: move `validate_draft` inside the returned future and
+    /// every `is_err()` below flips to a future nobody has awaited.
+    #[test]
+    fn a_draft_that_cannot_be_right_is_refused_without_dialing_anything() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let draft = |f: fn(&mut ConnectorDraft)| {
+            let mut d = ConnectorDraft {
+                node_addr: "memory://somewhere".to_string(),
+                ..Default::default()
+            };
+            f(&mut d);
+            add_connector_by_address(&peers, &me, &d).err()
+        };
+
+        assert!(draft(|d| d.node_addr = String::new()).is_some(), "no address");
+        assert!(draft(|d| d.ice = "http://not-a-reflector".into()).is_some(), "bad reflector");
+        assert!(
+            draft(|d| d.relay = "turn:relay.example:3478".into()).is_some(),
+            "a relay with no credentials looks configured and gathers nothing"
+        );
+        assert!(
+            draft(|d| d.expect_peer_id = "has/slash".into()).is_some(),
+            "an expectation that could not be a registry key"
+        );
+        // The control — a draft with nothing wrong offline returns a future,
+        // even though the address will never answer. Otherwise the four
+        // assertions above would pass against a function that refuses
+        // everything.
+        assert!(draft(|_| {}).is_none(), "a well-formed draft gets as far as the dial");
+        assert!(read_connectors(&peers, &me).is_empty());
+    }
+
     /// A node that isn't there fails as an error the caller can report, rather
     /// than hanging or resolving to a default advertisement.
     #[tokio::test]
@@ -1868,5 +2519,67 @@ pub(crate) mod tests {
         assert!(unpack_mirror("2KNodeOnly").is_none(), "an id with no address");
         assert!(unpack_mirror("2KNode\u{1f}").is_none(), "an address that is blank");
         assert!(unpack_mirror("\u{1f}ws://n:9").is_none(), "an address with no id");
+    }
+}
+
+#[cfg(test)]
+mod self_adoption_tests {
+    use super::*;
+
+    const DEFAULT: &str = "This desktop";
+
+    /// **The bug, in one assertion.** The backend's identity is durable and its
+    /// port is not, so the same node peer-id legitimately answers at a new
+    /// address after a restart — and the old code, which asked only "does a row
+    /// exist", left the desktop rendezvousing at a port belonging to a process
+    /// that had moved. Measured on a real box: row `:33697` (20-hour-old
+    /// process) against a live backend on `:40805`, same peer-id.
+    #[test]
+    fn a_backend_that_moved_ports_repoints_its_row() {
+        assert_eq!(
+            plan_self_adoption(Some(("ws://192.168.1.10:33697", "This desktop")), "ws://192.168.1.10:40805", DEFAULT),
+            AdoptPlan::Write { label: "This desktop".into() },
+        );
+    }
+
+    /// …and the half that made the old behaviour tempting: an edited label is
+    /// the user's and survives the repoint. Both halves in one function
+    /// precisely because they pull opposite ways — a call site that got to
+    /// choose would eventually choose one.
+    #[test]
+    fn repointing_keeps_a_label_the_user_edited() {
+        assert_eq!(
+            plan_self_adoption(Some(("ws://host:1", "Kitchen Mac")), "ws://host:2", DEFAULT),
+            AdoptPlan::Write { label: "Kitchen Mac".into() },
+            "the address tracks the backend; the label does not",
+        );
+        // A blank stored label is not an edit — default it rather than write an
+        // empty row that renders as an unnamed connector.
+        assert_eq!(
+            plan_self_adoption(Some(("ws://host:1", "   ")), "ws://host:2", DEFAULT),
+            AdoptPlan::Write { label: DEFAULT.into() },
+        );
+    }
+
+    /// Unchanged means the ADDRESS is unchanged — not merely that a row exists.
+    /// This is the assertion that fails if anyone reinstates the old check, and
+    /// the one that keeps the steady state cheap: this drains on every backend
+    /// poll, so a needless `Write` is a dispatched write forever.
+    #[test]
+    fn an_unmoved_backend_writes_nothing() {
+        assert_eq!(
+            plan_self_adoption(Some(("ws://host:4041", "This desktop")), "ws://host:4041", DEFAULT),
+            AdoptPlan::Unchanged,
+        );
+    }
+
+    /// A desktop that has never been configured gets the row and the default
+    /// name — the original case, still working.
+    #[test]
+    fn a_first_adoption_writes_the_default_label() {
+        assert_eq!(
+            plan_self_adoption(None, "ws://host:4041", DEFAULT),
+            AdoptPlan::Write { label: DEFAULT.into() },
+        );
     }
 }

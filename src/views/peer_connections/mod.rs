@@ -125,6 +125,59 @@ impl PeerConnectionsWindow {
         self.watch.mark_dirty();
     }
 
+    /// **Add a rendezvous node from what the form collected.**
+    ///
+    /// The add is asynchronous now — the node's peer-id comes from dialing it
+    /// ([`crate::connectors::add_connector_by_address`]) — so this owes the user
+    /// three things it did not before:
+    ///
+    /// 1. Anything wrong *offline* is reported instantly, from the synchronous
+    ///    half. A bad reflector URI must not cost a connection timeout and then
+    ///    be reported as if the node were down.
+    /// 2. An in-flight state, because a press that goes quiet for the length of
+    ///    a dial is indistinguishable from a dead button — the failure this
+    ///    window has now fixed for Connect, Check and Meet.
+    /// 3. A success line. The old sync add said nothing on success and got away
+    ///    with it because the row appeared in the same frame; the row now
+    ///    appears seconds later, and silence in between is not an answer.
+    fn add_node(&self, peers: &Peers, draft: crate::connectors::ConnectorDraft) {
+        let sys = peers.system_peer_id().to_string();
+        let addr = draft.node_addr.trim().to_string();
+        let fut = match crate::connectors::add_connector_by_address(peers, &sys, &draft) {
+            Ok(fut) => fut,
+            // A refusal (no address, a malformed reflector, a half-configured
+            // relay, an unusable expectation) must be sayable — otherwise Add is
+            // a dead button.
+            Err(e) => return self.set_connector_notice(Some((e, true))),
+        };
+        self.set_connector_notice(Some((
+            crate::i18n::t("peerconn.connector_asking", &[("addr", &addr)]),
+            false,
+        )));
+        let slot = self.model.connector_notice_handle();
+        let dirty = self.watch.flag();
+        crate::views::peer_connections::spawn_check(async move {
+            let notice = match fut.await {
+                // The selection half needs no word of its own: selecting the
+                // first node is exactly what makes `connector_reload_pending`
+                // fire, so the one thing the user must now do is already on
+                // screen in a translated string.
+                Ok(_) => crate::views::peer_connections::output::ConnectorNotice {
+                    text: crate::i18n::t("peerconn.connector_added", &[("addr", &addr)]),
+                    is_error: false,
+                },
+                Err(e) => crate::views::peer_connections::output::ConnectorNotice {
+                    text: e,
+                    is_error: true,
+                },
+            };
+            if let Ok(mut s) = slot.lock() {
+                *s = Some(notice);
+            }
+            dirty.mark();
+        });
+    }
+
     /// `Check` — ask the node what it actually serves (`advertise()`).
     ///
     /// Async, so the result lands off-frame into the shared notice slot and
@@ -134,18 +187,26 @@ impl PeerConnectionsWindow {
         // Dial first when nothing has: a connector the user just added has no
         // route at all, and the EXECUTE would fail with "no transport profile"
         // — which reads as "the node is down" when we simply never called it
-        // (`connectors::reach_node`). The address is in the registry row, which
-        // is why this resolves the row rather than trusting the id alone.
-        let Some(row) = crate::connectors::read_connectors(peers, &sys)
-            .into_iter()
-            .find(|c| c.node_peer_id == node_peer_id)
-        else {
+        // (`connectors::reach_node`). The address is in the row, which is why
+        // this resolves the node rather than trusting the id alone.
+        //
+        // **`resolve_node`, not `read_connectors`.** The node in force is a
+        // listed row now, and on a URL-provisioned session it is not in the
+        // registry — a registry-only lookup answered "no connector with peer-id
+        // …" about the node the same window had just labelled *in use*. That is
+        // what the operator hit.
+        let Some(resolved) = crate::connectors::resolve_node(peers, &sys, node_peer_id) else {
             self.set_connector_notice(Some((
                 format!("no connector with peer-id {node_peer_id}"), // i18n-ignore — unreachable via the UI (the button rides a row)
                 true,
             )));
             return;
         };
+        let row = resolved.node().clone();
+        // Only a durable row can carry what the node advertised. A synthesized
+        // one has nowhere to put it, and writing it anyway would materialize a
+        // connector the user never added.
+        let writable_row = resolved.row().cloned();
         let reach = crate::connectors::reach_node(peers, &sys, &row);
         let fut = crate::connectors::advertise(peers, &sys, node_peer_id);
         let slot = self.model.connector_notice_handle();
@@ -160,11 +221,13 @@ impl PeerConnectionsWindow {
                 Ok(()) => fut.await,
                 Err(e) => Err(e),
             };
-            if let (Ok(ad), Some(w)) = (&outcome, writer.as_ref()) {
+            if let (Ok(ad), Some(w), Some(row)) =
+                (&outcome, writer.as_ref(), writable_row.as_ref())
+            {
                 crate::connectors::record_advertised_reflectors(
                     w,
                     &sys_for_write,
-                    &row,
+                    row,
                     &ad.reflection_endpoints,
                 );
             }
@@ -247,49 +310,26 @@ impl WindowView for PeerConnectionsWindow {
                     // provisioning reads it from the system peer.
                     "connector_add" => {
                         // Packed
-                        // "{peer_id}\x1f{addr}\x1f{label}\x1f{ice}\x1f{relay}\x1f{user}\x1f{cred}"
+                        // "{addr}\x1f{label}\x1f{expect}\x1f{ice}\x1f{relay}\x1f{user}\x1f{cred}"
                         // — the app's multi-field convention, so one event
-                        // carries the form. `splitn(7, ..)` so a credential
-                        // containing the separator would be preserved whole
-                        // rather than truncated (it cannot contain `\x1f` from a
-                        // text input, but the last field is the right place for
-                        // the remainder either way).
+                        // carries the form. Address FIRST, because it is the
+                        // only required field now. `splitn(7, ..)` so a
+                        // credential containing the separator would be preserved
+                        // whole rather than truncated (it cannot contain `\x1f`
+                        // from a text input, but the last field is the right
+                        // place for the remainder either way).
                         let mut parts = value.splitn(7, '\x1f');
-                        let c = crate::connectors::Connector {
-                            node_peer_id: parts.next().unwrap_or("").to_string(),
-                            node_addr: parts.next().unwrap_or("").to_string(),
-                            label: parts.next().unwrap_or("").to_string(),
-                            ice: parts.next().unwrap_or("").to_string(),
-                            // Ignored by `add_connector` — a node's own advertisement is
-                                // learned, never typed.
-                                ice_advertised: String::new(),
-                            relay: parts.next().unwrap_or("").to_string(),
-                            relay_username: parts.next().unwrap_or("").to_string(),
-                            relay_credential: parts.next().unwrap_or("").to_string(),
-                            };
-                        let sys = peers.system_peer_id().to_string();
-                        self.set_connector_notice(
-                            match crate::connectors::add_connector(peers, &sys, &c) {
-                                // `AddOutcome.selected` needs no notice of its
-                                // own here: the row list marks the selection
-                                // with the same glyph it always has, and
-                                // selecting the first node is exactly what
-                                // makes `connector_reload_pending` fire — so
-                                // the one thing the user must now do is already
-                                // on screen, in a string that is translated.
-                                Ok(_) => {
-                                    // Learn what this node serves (§4.5.1) —
-                                    // adding it is the moment to ask, and the
-                                    // user should not have to press Check to
-                                    // get the reflectors it publishes.
-                                    crate::connectors::learn_node_reflectors(peers, &sys, &c);
-                                    None
-                                }
-                                // A refusal (missing half, unsafe id) must be
-                                // sayable — otherwise Add is a dead button.
-                                Err(e) => Some((e, true)),
-                            },
-                        );
+                        let mut next = || parts.next().unwrap_or("").to_string();
+                        let draft = crate::connectors::ConnectorDraft {
+                            node_addr: next(),
+                            label: next(),
+                            expect_peer_id: next(),
+                            ice: next(),
+                            relay: next(),
+                            relay_username: next(),
+                            relay_credential: next(),
+                        };
+                        self.add_node(peers, draft);
                         false
                     }
                     "connector_use" => {

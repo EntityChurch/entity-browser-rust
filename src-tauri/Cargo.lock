@@ -1078,6 +1078,7 @@ dependencies = [
  "tokio",
  "toml 0.8.2",
  "tracing-subscriber",
+ "webkit2gtk",
 ]
 
 [[package]]

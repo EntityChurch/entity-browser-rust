@@ -1182,6 +1182,99 @@ async fn autostart_listener(
     Ok((response.peer_id, ws_addr))
 }
 
+/// **Ask the WebView for WebRTC.** Necessary on any WebKit that has it — and
+/// **measured inert on every Linux WebKitGTK we can currently get**, which is
+/// the finding this function exists to carry.
+///
+/// # What is actually true, measured rather than reasoned
+///
+/// `WebKitSettings:enable-webrtc` is **default FALSE** and `wry` sets neither it
+/// nor `enable-media-stream` (`webrtc` has **zero occurrences** in
+/// `wry-0.55.1/src`). That is real, and it is *not* the whole story: turning it
+/// on changes nothing, because the distro builds do not compile the bindings in
+/// at all. Probed with PyGObject against a real `WebKitWebView` on a **secure**
+/// origin, three ways of setting the property (off / after construction / at
+/// construction):
+///
+/// | build | `enable-webrtc` | `RTCPeerConnection` | `MediaStream` | `navigator.mediaDevices` |
+/// |---|---|---|---|---|
+/// | Debian 2.50.6 (our image) | False → True | **undefined** | function | object |
+/// | Fedora 43 2.50.5 (this host) | False → True | **undefined** | function | object |
+///
+/// `MediaStream` and `mediaDevices` being present is what makes this diagnosable
+/// rather than confusing: media-stream IS compiled in, WebRTC is not. (An
+/// earlier probe on an `http://` origin showed `mediaDevices` undefined too and
+/// nearly sent this the wrong way — WebKit gates it on a secure context, and the
+/// Tauri WebView's origin *is* secure. Measure on the origin the app uses.)
+///
+/// So this call is kept because it is required the moment a WebKit build with
+/// WebRTC appears, and because Tauri's macOS/Windows WebViews are a different
+/// engine entirely — but **it does not, today, give a Linux desktop WebRTC.**
+/// What the user gets instead is the truth: `readiness::warn_if_no_webrtc_api`
+/// puts a red banner on the screen at boot.
+///
+/// # Why this took three sessions to find
+///
+/// **Nothing fails loudly, and the half that keeps working is the half you look
+/// at.** `meet` is an ordinary WebSocket call to the rendezvous node, so two
+/// devices find each other, exchange peer-ids and *appear* paired; then every
+/// establishment fails, in both directions, for a reason no surface mentioned.
+/// Reported as three separate bugs — *"that device didn't answer"* in the
+/// browser's chat, *"no transport profile for peer"* from the desktop's file
+/// transfer, and a File Transfer window that never lists anything. One cause.
+/// Every WebRTC gate we own is browser↔browser, so none of them could see it.
+///
+/// The app's own preflight was right all along: `readiness`'s `webrtc-api` row
+/// reads `RTCPeerConnection` and reports `FAIL` when it is absent. Nobody ran
+/// `net` on the desktop — the standing lesson about a diagnostic nobody is
+/// pointed at, arriving from the other side.
+///
+/// # The GStreamer half, also necessary and also not sufficient
+///
+/// WebKit's WebRTC backend is GStreamer and needs `webrtcbin` / `nice` / `dtls`
+/// / `srtp`. The image shipped `-plugins-base` and `-plugins-good` only
+/// (measured: `libgstrtpmanager.so` and none of the rest), so the `Dockerfile`
+/// grew `-plugins-bad` + `-nice` in the same commit. Inert until the bindings
+/// exist, and listed here so nobody has to rediscover which half was missing.
+#[cfg(target_os = "linux")]
+fn enable_webview_webrtc(app: &tauri::App) {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    let Some(window) = app.webview_windows().values().next().cloned() else {
+        log::warn!("webrtc: no webview window to configure");
+        return;
+    };
+    // `with_webview` runs on the UI thread; the closure must be `Send`, so it
+    // carries nothing but the setting it flips.
+    let result = window.with_webview(|platform| {
+        let webview = platform.inner();
+        let settings = WebViewExt::settings(&webview);
+        match settings {
+            Some(s) => {
+                let before = s.enables_webrtc();
+                s.set_enable_webrtc(true);
+                // Implied by `enable-webrtc` per the property docs, set anyway:
+                // relying on an implication we do not control is how this
+                // regresses silently on a WebKit that changes its mind.
+                s.set_enable_media_stream(true);
+                log::info!(
+                    "webrtc: WebView enable-webrtc {} -> {} (was off by default; \
+                     without it RTCPeerConnection does not exist and no peer can \
+                     ever connect to this desktop)",
+                    before,
+                    s.enables_webrtc(),
+                );
+            }
+            None => log::error!("webrtc: the WebView exposed no settings object"),
+        }
+    });
+    if let Err(e) = result {
+        // Loud: everything peer-to-peer on this device depends on it, and the
+        // failure is otherwise indistinguishable from a NAT problem.
+        log::error!("webrtc: could not reach the WebView to enable it: {e}");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Capture the backend peer's `tracing` output → stdout. Without this the
@@ -1293,6 +1386,15 @@ pub fn run() {
                     Err(e) => log::error!("app-server: could not restore: {e}"),
                 }
             }
+            // **Ask the WebView for WebRTC, and log what we get.** The
+            // property is off by default and nothing in our stack turned it on
+            // — but see `enable_webview_webrtc`: on the Linux WebKit builds
+            // that exist today the bindings are not compiled in either way, so
+            // this is the necessary half of a fix whose other half is not ours.
+            // The user-visible half is the boot banner in `readiness`.
+            #[cfg(target_os = "linux")]
+            enable_webview_webrtc(app);
+
             // Inject console bridge as early as possible, retrying until the
             // Tauri JS API is available. The bridge also installs global error
             // handlers to catch WASM crashes.

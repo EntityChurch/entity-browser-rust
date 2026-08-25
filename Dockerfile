@@ -73,6 +73,23 @@ RUN apt-get update \
         pkg-config \
         python3 \
         fonts-noto-color-emoji \
+        # **WebKitGTK's WebRTC backend is GStreamer, and these are the elements
+        # it needs**: `webrtcbin` + `dtls` + `srtp` live in -plugins-bad and the
+        # ICE agent (`nice`) in gstreamer1.0-nice. Measured before adding: the
+        # image carried -plugins-base and -plugins-good only
+        # (`libgstrtpmanager.so` and none of the rest).
+        #
+        # **INERT TODAY, and kept deliberately.** Debian's and Fedora's
+        # libwebkit2gtk-4.1 both ship WITHOUT the WebRTC bindings —
+        # `RTCPeerConnection` is `undefined` on a secure origin whatever
+        # `enable-webrtc` is set to (probed on 2.50.6 and 2.50.5; see
+        # `src-tauri/src/lib.rs::enable_webview_webrtc` for the table). So this
+        # is the half of the requirement that IS ours, recorded so the next
+        # person does not have to re-bisect which half was missing. Same class
+        # as the missing emoji font above: a runtime dependency of the WEBVIEW,
+        # invisible to `cargo build`.
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-nice \
     && rm -rf /var/lib/apt/lists/*
 
 # The wasm browser target + the components the repo's rust-toolchain.toml

@@ -42,6 +42,26 @@ pub const EMBEDDED_PROGRAMS: &[EmbeddedProgram] = &[
         description: "Conway's Game of Life — a cellular-automaton compute program.",
     },
     EmbeddedProgram {
+        // A SEPARATE program from `life`, not a mode of it — root
+        // `app/life-edit`, its own state shape (cursor/gen/pkeys/paused) and
+        // its own step. Both ship: the plain one is the automaton, this one is
+        // the automaton you can steer.
+        //
+        // It is also the first embedded program to exercise the **standard
+        // controller** end to end — four axis bits and three action bits with
+        // declared roles, glyphs and behaviours (`controls.rs`). `life` and
+        // `snake` bind no key-set at all and `asteroids` predates the roles, so
+        // before this the role parser had unit tests and no authored program
+        // that used it.
+        key: "life-edit",
+        json: include_str!("../../assets/programs/life-edit.json"),
+        name: "Interactive Life",
+        glyph: "🧫",
+        description: "Conway's Life you can steer — move the cursor, toggle cells, \
+                      regenerate the soup, pause. A compute program driven by the \
+                      standard controller.",
+    },
+    EmbeddedProgram {
         key: "snake",
         json: include_str!("../../assets/programs/snake.json"),
         name: "Snake",

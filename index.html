@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Entity Browser</title>
+    <!-- The apex is a WASM SPA, so an agent that does not run JavaScript sees an
+         empty body: no description, no links, nothing to index. A description
+         plus the <noscript> block in <body> is what gives a crawler — and a
+         person with JS off — something real and a way into the published
+         static sites, which ARE plain crawlable HTML under /sites/. -->
+    <meta name="description" content="Entity Browser — a window manager and site browser over the entity tree. Published sites are available as plain HTML." />
+    <noscript>
+        <!-- With JS off, the boot spinner would sit on "Loading Entity
+             Browser..." forever and the app shell would render as empty
+             chrome. Hide both and let the <noscript> block in <body> be the
+             page. `<noscript>` in <head> may contain only link/style/meta,
+             which is exactly what this is. -->
+        <style>
+            #loading, #app-layout { display: none !important; }
+            .noscript-landing { display: block !important; }
+        </style>
+    </noscript>
     <script>
         // Cold-start instrumentation — marks the moment HTML head finishes
         // parsing (just before the trunk-injected module script runs).
@@ -779,6 +796,45 @@
     </style>
 </head>
 <body>
+    <!-- ==================================================================
+         NO-SCRIPT / CRAWLER LANDING
+         ==================================================================
+         Served to anything that does not execute JavaScript: a search
+         crawler that does not run JS, a text browser, a reader with JS off,
+         a link-preview fetcher.
+
+         It is a LINK, not a `<meta http-equiv="refresh">`, and that is a
+         deliberate SEO choice. A refresh inside <noscript> would bounce a
+         no-JS human straight to /sites/, but to a crawler it turns the apex
+         into a redirect: the apex stops being an indexable page of its own
+         and its signal moves to the sites index. A real anchor keeps the
+         apex indexable AND hands the crawler the path in, which is both
+         halves of what we want. (One line to change if that trade ever
+         reverses — swap the anchor for a refresh meta.)
+
+         The href is RELATIVE (`sites/`), matching the decision in
+         `static_export::write_landing_redirect`, whose comment states the
+         reason: it works regardless of whether the tree is served at an
+         apex or under a `PREFIX` sub-path. `make site-dist`'s invariant is
+         that the SPA and the static tree share a root, which is exactly
+         what makes a relative href correct.
+
+         Hidden by default; the <noscript><style> in <head> reveals it. That
+         way a JS-capable visitor never sees it flash during boot. -->
+    <div class="noscript-landing" style="display:none;max-width:38rem;margin:0 auto;padding:3rem 1.5rem;font-family:system-ui,-apple-system,sans-serif;line-height:1.6;color:var(--text, #d8dee9)">
+        <h1 style="font-size:1.5rem;margin:0 0 .5rem">Entity Browser</h1>
+        <p style="margin:0 0 1.5rem;color:var(--text-faint, #9aa3b2)">
+            The interactive app needs JavaScript, which is turned off or unavailable
+            here. The published sites do not — they are plain HTML.
+        </p>
+        <p style="margin:0 0 1.5rem">
+            <a href="sites/" style="color:var(--accent, #9fb4cf)">Browse the published sites &rarr;</a>
+        </p>
+        <p style="margin:0;font-size:.9rem;color:var(--text-faint, #9aa3b2)">
+            Entity Browser is a window manager and site browser over the entity
+            tree. It runs in this page as WebAssembly, and also as a desktop app.
+        </p>
+    </div>
     <div class="loading" id="loading">
         <div style="text-align:center">
             <div id="loading-status">Loading Entity Browser...</div>
