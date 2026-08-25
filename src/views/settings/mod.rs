@@ -48,8 +48,8 @@ impl SettingsWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Settings",
-            description: "Application settings and preferences",
+            name: "Settings", // i18n-ignore — identity key; display via window.settings
+            description: "Application settings and preferences", // i18n-ignore — dead_code, never rendered
             scope: crate::window::WindowScope::System,
             create: |id, peer_id, pm| {
                 let mut window = SettingsWindow::new(id, peer_id.to_string());
@@ -128,11 +128,11 @@ impl SettingsWindow {
 
 impl WindowView for SettingsWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Settings")
+        crate::i18n::window_title("Settings") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "Settings"
+        "Settings" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

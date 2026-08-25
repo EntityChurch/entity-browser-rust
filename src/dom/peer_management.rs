@@ -74,9 +74,14 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     for spec in &output.create_options {
         let opt = util::create_element("option");
         util::set_attr(&opt, "value", spec.value);
+        // spec.label / spec.reason carry i18n keys (resolved here at the DOM
+        // boundary); spec.value stays the durable persist-key.
+        let label = crate::i18n::t(spec.label, &[]);
         let text = match spec.reason {
-            Some(r) if !spec.available => format!("{} — {r}", spec.label),
-            _ => spec.label.to_string(),
+            Some(r) if !spec.available => {
+                format!("{} — {}", label, crate::i18n::t(r, &[]))
+            }
+            _ => label,
         };
         util::set_text(&opt, &text);
         if !spec.available {
@@ -133,13 +138,13 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     // updated live on `change`. Pure DOM text — no tree write, so it never
     // triggers a snapshot rebuild that would drop the select/alias focus.
     let hint = util::create_element_with_class("span", "peer-create-hint");
-    util::set_text(&hint, kind_description("frontend"));
+    util::set_text(&hint, &kind_description("frontend"));
     {
         let hint_ref = hint.clone();
         let select_ref = kind_select.clone();
         ctx.listen(&kind_select, "change", move |_| {
             let v = read_select_value(&select_ref);
-            util::set_text(&hint_ref, kind_description(&v));
+            util::set_text(&hint_ref, &kind_description(&v));
         });
     }
     util::append(&create_panel, &hint);
@@ -155,7 +160,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
         container,
         &components::collapsible_header(
             ctx,
-            "Add a peer",
+            &crate::i18n::t("peers.add_a_peer", &[]),
             output.create_open,
             crate::views::peer_management::EV_TOGGLE_CREATE,
         ),
@@ -173,15 +178,16 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
 /// value (`PeerMode::persist_key`, or `"native"`). Describes the modes we
 /// currently wire; it does not claim other `(runtime × storage)` combos are
 /// impossible — those are an unexposed enum gap, not a substrate limit.
-fn kind_description(value: &str) -> &'static str {
-    match value {
-        "frontend" => "Main thread of this tab, in-memory. Temporary — cleared when you reload.",
-        "frontend-idb" => "Main thread of this tab, saved to IndexedDB. Survives reload.",
-        "backend-memory" => "A background Web Worker, in-memory. Temporary — cleared when you reload.",
-        "backend-opfs" => "A background Web Worker, saved to OPFS. Survives reload.",
-        "native" => "A separate native desktop process with its own on-disk store. Saved.",
-        _ => "",
-    }
+fn kind_description(value: &str) -> String {
+    let key = match value {
+        "frontend" => "peers.kind_desc.frontend",
+        "frontend-idb" => "peers.kind_desc.frontend_idb",
+        "backend-memory" => "peers.kind_desc.backend_memory",
+        "backend-opfs" => "peers.kind_desc.backend_opfs",
+        "native" => "peers.kind_desc.native",
+        _ => return String::new(),
+    };
+    crate::i18n::t(key, &[])
 }
 
 fn render_table(container: &Element, output: &PeerManagementOutput, ctx: &DomCtx) {
@@ -192,7 +198,14 @@ fn render_table(container: &Element, output: &PeerManagementOutput, ctx: &DomCtx
 
     let thead = util::create_element("thead");
     let hrow = util::create_element("tr");
-    for heading in &["Peer ID", "Kind", "Label", "Address", ""] {
+    let headings = [
+        crate::i18n::t("peers.col_peer_id", &[]),
+        crate::i18n::t("peers.col_kind", &[]),
+        crate::i18n::t("label.label", &[]),
+        crate::i18n::t("label.address", &[]),
+        String::new(),
+    ];
+    for heading in &headings {
         let th = util::create_element("th");
         util::set_text(&th, heading);
         util::append(&hrow, &th);
@@ -212,9 +225,21 @@ fn render_table(container: &Element, output: &PeerManagementOutput, ctx: &DomCtx
     let tbody = util::create_element("tbody");
     // There is always ≥1 system peer; the "Your peers" group only appears once
     // the user has created one (the create form above is how they do it).
-    append_group(&tbody, "System peers", "always-on", &system_rows, ctx);
+    append_group(
+        &tbody,
+        &crate::i18n::t("peers.group_system", &[]),
+        &crate::i18n::t("peers.group_system_sub", &[]),
+        &system_rows,
+        ctx,
+    );
     if !user_rows.is_empty() {
-        append_group(&tbody, "Your peers", "created by you", &user_rows, ctx);
+        append_group(
+            &tbody,
+            &crate::i18n::t("peers.group_user", &[]),
+            &crate::i18n::t("peers.group_user_sub", &[]),
+            &user_rows,
+            ctx,
+        );
     }
     util::append(&table, &tbody);
     util::append(&wrap, &table);
@@ -251,12 +276,12 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
     // "how it persists" chip. Replaces the single "backend (memory)"-style
     // string — three orthogonal facts, each scannable.
     let td_kind = util::create_element("td");
-    let (role_class, role_text) = match row.descriptor.role {
-        PeerRole::System => ("peer-badge system", "System"),
-        PeerRole::User => ("peer-badge user", "User"),
+    let (role_class, role_key) = match row.descriptor.role {
+        PeerRole::System => ("peer-badge system", "label.system"),
+        PeerRole::User => ("peer-badge user", "label.user"),
     };
     let badge = util::create_element_with_class("span", role_class);
-    util::set_text(&badge, role_text);
+    util::set_text(&badge, &crate::i18n::t(role_key, &[]));
     util::append(&td_kind, &badge);
 
     let runtime_chip = util::create_element_with_class("span", "peer-chip");
@@ -305,9 +330,10 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
     if row.show_open_tree {
         let open_btn = components::button_action(
             ctx,
-            "Tree",
+            &crate::i18n::t("peers.open_tree", &[]),
             components::ButtonKind::Primary,
-            Action::SpawnWindow { type_name: "Entity Tree", peer_id: Some(row.peer_id.clone()) },
+            // "Entity Tree" is the window-type identity key, not UI text.
+            Action::SpawnWindow { type_name: "Entity Tree", peer_id: Some(row.peer_id.clone()) }, // i18n-ignore
         );
         util::append(&td_actions, &open_btn);
     }
@@ -317,7 +343,7 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
             BackendButton::Stop => {
                 let stop_btn = components::button_action(
                     ctx,
-                    "Stop",
+                    &crate::i18n::t("peers.stop", &[]),
                     components::ButtonKind::Secondary,
                     Action::StopBackendPeer(row.peer_id.clone()),
                 );
@@ -326,7 +352,7 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
             BackendButton::Start => {
                 let start_btn = components::button_action(
                     ctx,
-                    "Start",
+                    &crate::i18n::t("peers.start", &[]),
                     components::ButtonKind::Primary,
                     Action::StartBackendPeer(row.peer_id.clone()),
                 );
@@ -341,7 +367,7 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
         // the preceding button.
         let del_btn = components::button_action(
             ctx,
-            "Delete",
+            &crate::i18n::t("btn.delete", &[]),
             components::ButtonKind::Destructive,
             Action::DeletePeer(row.peer_id.clone()),
         );
@@ -362,13 +388,17 @@ fn render_footer(container: &Element, output: &PeerManagementOutput) {
     // mode); slots 1+ are dedicated workers spawned for Backend(Memory)
     // / Backend(OPFS) peers.
     let dedicated = output.sdk_count.saturating_sub(1);
+    let peers = crate::i18n::t_plural(
+        "peer.count",
+        output.total_count as i64,
+        &[("n", &output.total_count.to_string())],
+    );
     let text = if dedicated == 0 {
-        format!("{} peer(s)", output.total_count)
+        peers
     } else {
-        format!(
-            "{} peer(s) — 1 boot + {} dedicated worker(s)",
-            output.total_count, dedicated
-        )
+        let workers =
+            crate::i18n::t_plural("worker.count", dedicated as i64, &[("n", &dedicated.to_string())]);
+        crate::i18n::t("peers.footer_workers", &[("peers", &peers), ("workers", &workers)])
     };
     util::set_text(&footer, &text);
     util::append(container, &footer);

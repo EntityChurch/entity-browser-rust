@@ -182,7 +182,7 @@ pub fn canonical_window_type(name: &str) -> &str {
     match name {
         // Renamed 2026-07-13: the System governance window (see
         // TERMINOLOGY-AND-WINDOWS.md).
-        "System Backend" => "System Overview",
+        "System Backend" => "System Overview", // i18n-ignore — legacy→canonical type keys, not UI
         other => other,
     }
 }

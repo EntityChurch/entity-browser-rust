@@ -34,8 +34,8 @@ impl PeerConnectionsWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Peer Connections",
-            description: "Manage peer network connections and pairing",
+            name: "Peer Connections", // i18n-ignore — identity key; display via window.peer_connections
+            description: "Manage peer network connections and pairing", // i18n-ignore — dead_code, never rendered
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = PeerConnectionsWindow::new(id, peer_id.to_string());
@@ -91,11 +91,11 @@ impl PeerConnectionsWindow {
 
 impl WindowView for PeerConnectionsWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Peer Connections")
+        crate::i18n::window_title("Peer Connections") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "Peer Connections"
+        "Peer Connections" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

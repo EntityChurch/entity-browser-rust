@@ -72,8 +72,8 @@ impl AccessLogWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Access Log",
-            description: "Live access log: who accessed what, and allow/deny outcomes",
+            name: "Access Log", // i18n-ignore — identity key; display via window.access_log
+            description: "Live access log: who accessed what, and allow/deny outcomes", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |id, peer_id, _pm| Box::new(AccessLogWindow::new(id, peer_id.to_string())),
         }
@@ -82,11 +82,11 @@ impl AccessLogWindow {
 
 impl WindowView for AccessLogWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Access Log")
+        crate::i18n::window_title("Access Log") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "Access Log"
+        "Access Log" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

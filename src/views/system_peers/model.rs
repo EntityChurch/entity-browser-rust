@@ -72,19 +72,19 @@ impl SystemPeersModel {
 /// legacy persisted key first.
 fn describe_boot_surface(surface: &BootSurface, home_site_id: &str) -> String {
     match surface {
-        BootSurface::Chrome => "Window chrome".to_string(),
+        BootSurface::Chrome => crate::i18n::t("boot_surface.chrome", &[]),
         BootSurface::Site => {
             if home_site_id.is_empty() {
-                "Content site".to_string()
+                crate::i18n::t("boot_surface.site", &[])
             } else {
-                format!("Content site: {home_site_id}")
+                crate::i18n::t("boot_surface.site_named", &[("id", home_site_id)])
             }
         }
         BootSurface::Window { window_type, .. } => {
             let label = crate::window::window_display_name(crate::window::canonical_window_type(
                 window_type,
             ));
-            format!("Window: {label}")
+            crate::i18n::t("boot_surface.window", &[("label", &label)])
         }
     }
 }

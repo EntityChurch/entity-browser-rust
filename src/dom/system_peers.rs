@@ -22,17 +22,29 @@ pub fn render_system_peers(parent: &Element, output: &SystemPeersOutput) {
     posture
         .set_attribute("style", "color:var(--text-dim, #888);font-size:13px;margin:0 0 12px")
         .ok();
+    let total_txt = crate::i18n::t_plural(
+        "peer.count",
+        output.total_peers as i64,
+        &[("n", &output.total_peers.to_string())],
+    );
     let peers_txt = if output.user_peers == 0 {
-        format!("{} peer(s)", output.total_peers)
+        total_txt
     } else {
-        format!("{} peer(s), {} yours", output.total_peers, output.user_peers)
+        format!(
+            "{}, {}",
+            total_txt,
+            crate::i18n::t("system_peers.yours", &[("n", &output.user_peers.to_string())])
+        )
     };
-    let create_txt = if output.peer_creation { "on" } else { "off" };
+    let create_txt =
+        crate::i18n::t(if output.peer_creation { "status.on" } else { "status.off" }, &[]);
     util::set_text(
         &posture,
         &format!(
-            "Startup: {}  ·  Peer creation: {}  ·  {}",
-            output.startup, create_txt, peers_txt
+            "{}  ·  {}  ·  {}",
+            crate::i18n::t("system_peers.startup_line", &[("value", &output.startup)]),
+            crate::i18n::t("system_peers.creation_line", &[("value", &create_txt)]),
+            peers_txt
         ),
     );
     util::append(parent, &posture);
