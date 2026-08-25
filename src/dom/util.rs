@@ -194,6 +194,20 @@ pub fn tracked_input(
     initial: &str,
     style: &str,
 ) -> Element {
+    let input = tracked_input_el(ctx, field_id, initial, style);
+    append(parent, &input);
+    input
+}
+
+/// Detached [`tracked_input`]: builds the draft-tracked `<input>` without
+/// appending it, so composers (`components::text_input`, `components::field`)
+/// decide where it lands. Same mechanism, same drafts contract.
+pub fn tracked_input_el(
+    ctx: &DomCtx,
+    field_id: &str,
+    initial: &str,
+    style: &str,
+) -> Element {
     let value = ctx
         .drafts
         .borrow()
@@ -226,7 +240,6 @@ pub fn tracked_input(
         &ctx.closures,
     );
 
-    append(parent, &input);
     input
 }
 

@@ -19,6 +19,9 @@ use crate::views::peer_connections::output::PeerConnectionsOutput;
 
 use web_sys::Element;
 
+/// Drafts key for the connect-address input (`components::text_input`).
+const ADDRESS_FIELD: &str = "address";
+
 pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     util::clear_children(container);
 
@@ -97,12 +100,10 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
             let wrap = util::create_element("div");
             wrap.set_attribute("style", "display:flex;gap:6px").ok();
             if !kp.addr.is_empty() && kp.liveness != Liveness::Connected {
-                let btn = util::create_element("button");
-                util::set_text(&btn, "Reconnect");
-                btn.set_attribute("style", theme::BTN_SECONDARY).ok();
-                ctx.on_action(
-                    &btn,
-                    "click",
+                let btn = components::button_action(
+                    ctx,
+                    "Reconnect",
+                    components::ButtonKind::Secondary,
                     Action::ConnectPeer {
                         peer_id: output.bound_peer.peer_id.clone(),
                         addr: kp.addr.clone(),
@@ -115,12 +116,10 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
             // operator must be able to clear those too. Forget only drops the
             // remembered entry; it doesn't sever a live transport.
             {
-                let btn = util::create_element("button");
-                util::set_text(&btn, "Forget");
-                btn.set_attribute("style", theme::BTN_SECONDARY).ok();
-                ctx.on_action(
-                    &btn,
-                    "click",
+                let btn = components::button_action(
+                    ctx,
+                    "Forget",
+                    components::ButtonKind::Secondary,
                     Action::ForgetConnection { remote_pid: kp.remote_pid.clone() },
                 );
                 util::append(&wrap, &btn);
@@ -148,32 +147,39 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
 fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     let card = components::card("Connect to a device");
 
-    let input = util::create_element("input");
-    input.set_attribute("type", "text").ok();
-    input.set_attribute("value", &output.address_input_initial).ok();
-    input.set_attribute("placeholder", "ws://192.168.1.10:4041").ok();
-    input.set_attribute("data-field", "address").ok();
-    input.set_attribute("style", theme::INPUT).ok();
-    util::append(&card, &input);
+    // Draft-tracked atom (S8): typing lands in `ctx.drafts`, so an unrelated
+    // repaint (e.g. a connection-health change) rebuilds the field with the
+    // typed value intact — the mechanism the fresh-connect "typed it, hit
+    // Connect, nothing" bug demanded (`BUGLOG-2026-07-14` B3/B4), now via the
+    // one shared input instead of a bespoke per-keystroke listener.
+    let input = components::text_input(
+        ctx,
+        ADDRESS_FIELD,
+        &output.address_input_initial,
+        "ws://192.168.1.10:4041",
+    );
+    util::append(&card, &components::field("Address", "", &input));
 
-    let btn = util::create_element("button");
-    util::set_text(&btn, "Connect");
-    btn.set_attribute("style", theme::BTN_PRIMARY).ok();
+    let btn = components::button_el("Connect", components::ButtonKind::Primary);
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
         let wid = ctx.window_id;
-        let card_ref = card.clone();
+        let drafts = ctx.drafts.clone();
+        let initial = output.address_input_initial.clone();
         let from_pid = output.bound_peer.peer_id.clone();
         ctx.listen(&btn, "click", move |_| {
-            let addr = card_ref
-                .query_selector("[data-field='address']")
-                .ok()
-                .flatten()
-                .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok())
-                .map(|inp| inp.value())
-                .unwrap_or_default();
+            // Submit-time read: the draft when the user typed (or scanned),
+            // else the render's initial (the untouched suggestion).
+            let addr = drafts
+                .borrow()
+                .get(ADDRESS_FIELD)
+                .cloned()
+                .unwrap_or_else(|| initial.clone());
             if !addr.is_empty() {
+                // Consume the draft so the repaint clears the field instead of
+                // resurrecting the just-dialed address.
+                drafts.borrow_mut().remove(ADDRESS_FIELD);
                 let mut acts = actions.borrow_mut();
                 acts.push(Action::ConnectPeer { peer_id: from_pid.clone(), addr });
                 acts.push(Action::WindowEvent {
@@ -215,14 +221,20 @@ fn render_scan_qr(card: &Element, ctx: &DomCtx) {
         let init_ref = scanner_initialized;
         let scan_closures = ctx.closures.clone();
         // Our QR payload is `{ws_addr}|{peer_id}`; take the address (before the
-        // first '|') and drop it into the connect input in this card.
+        // first '|') and drop it into the connect input in this card. Write the
+        // draft too — the input's value is rebuilt FROM `ctx.drafts` and Connect
+        // submits from it, so a DOM-only fill would vanish on the next repaint.
         let on_scan: std::rc::Rc<dyn Fn(String)> = {
             let root = card.clone();
+            let drafts = ctx.drafts.clone();
             std::rc::Rc::new(move |scanned: String| {
                 let addr = scanned.split('|').next().unwrap_or(&scanned).trim();
                 if addr.is_empty() {
                     return;
                 }
+                drafts
+                    .borrow_mut()
+                    .insert(ADDRESS_FIELD.to_string(), addr.to_string());
                 if let Ok(Some(el)) = root.query_selector("[data-field='address']") {
                     if let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() {
                         input.set_value(addr);

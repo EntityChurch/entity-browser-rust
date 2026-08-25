@@ -3,6 +3,11 @@
 //!
 //! Windows consume these so the design standard is the *default* path, not
 //! per-window discipline:
+//! - [`button`] / [`button_action`] / [`text_input`] / [`select`] / [`field`]
+//!   — the form ATOMS (S3/S8): the one way to build the highest-frequency
+//!   controls. `text_input` rides `util::tracked_input`, so typed drafts
+//!   survive snapshot rebuilds by construction — no view opts out of that
+//!   again (the B3/B4 "typed address wiped by repaint" class of bug).
 //! - [`card`] — a bounded group container (S2 common region).
 //! - [`conn_chip`] / [`auth_chip`] — the ONE status vocabulary (S4): every
 //!   window renders connection / authorization status through these, so the
@@ -10,9 +15,222 @@
 //! - [`loading`] / [`empty`] / [`error`] — the three non-content states (S5),
 //!   so no async/list surface ever ships a blank.
 
+use crate::action::Action;
 use crate::dom::theme;
 use crate::dom::util;
 use web_sys::Element;
+
+// --- Atoms (S3/S8) -----------------------------------------------------------
+// The one way to build a button / input / select / form row. A view never
+// `create_element("button")`s again — `tools/ui-lint.sh` fails a diff that
+// does (outside this file and the theme/style modules).
+
+/// Button emphasis (S3): exactly one `Primary` per group; `Destructive` is
+/// never a group's primary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // variants adopted as windows migrate (WASM render path)
+pub enum ButtonKind {
+    Primary,
+    Secondary,
+    Small,
+    Destructive,
+}
+
+impl ButtonKind {
+    fn style(self) -> &'static str {
+        match self {
+            ButtonKind::Primary => theme::BTN_PRIMARY,
+            ButtonKind::Secondary => theme::BTN_SECONDARY,
+            ButtonKind::Small => theme::BTN_SMALL,
+            ButtonKind::Destructive => theme::BTN_DESTRUCTIVE,
+        }
+    }
+}
+
+/// An unwired button in the standard look — for call sites whose click handler
+/// needs custom logic (submit-time draft reads, confirms, multi-action
+/// pushes): build with this, wire with `ctx.listen`. Prefer [`button`] /
+/// [`button_action`] when a static event or action suffices.
+pub fn button_el(label: &str, kind: ButtonKind) -> Element {
+    let b = util::create_element("button");
+    b.set_attribute("style", kind.style()).ok();
+    util::set_text(&b, label);
+    b
+}
+
+/// THE button: standard look, dispatches a `WindowEvent` on click.
+#[allow(dead_code)] // consumed as windows migrate (WASM render path)
+pub fn button(ctx: &util::DomCtx, label: &str, kind: ButtonKind, event: &str) -> Element {
+    let b = button_el(label, kind);
+    ctx.on_window_event(&b, "click", event, "");
+    b
+}
+
+/// [`button`]'s twin for a direct [`Action`] (no window-event indirection).
+pub fn button_action(ctx: &util::DomCtx, label: &str, kind: ButtonKind, action: Action) -> Element {
+    let b = button_el(label, kind);
+    ctx.on_action(&b, "click", action);
+    b
+}
+
+/// THE text input: standard look + draft-tracked value (`util::tracked_input`
+/// mechanism), so typing survives any snapshot rebuild. Read the live value at
+/// submit time from `ctx.drafts.borrow().get(field_id)` (fall back to the
+/// render's `initial` when absent — the user never touched the field).
+pub fn text_input(ctx: &util::DomCtx, field_id: &str, initial: &str, placeholder: &str) -> Element {
+    let input = util::tracked_input_el(ctx, field_id, initial, theme::INPUT);
+    if !placeholder.is_empty() {
+        input.set_attribute("placeholder", placeholder).ok();
+    }
+    input
+}
+
+/// THE select: standard look, `(value, label)` options, dispatches `event`
+/// with the selected value on change.
+#[allow(dead_code)] // consumed as windows migrate (WASM render path)
+pub fn select(ctx: &util::DomCtx, options: &[(&str, &str)], selected: &str, event: &str) -> Element {
+    let sel = util::create_element("select");
+    sel.set_attribute("style", theme::SELECT).ok();
+    for (value, label) in options {
+        let opt = util::create_element("option");
+        opt.set_attribute("value", value).ok();
+        if *value == selected {
+            opt.set_attribute("selected", "selected").ok();
+        }
+        util::set_text(&opt, label);
+        util::append(&sel, &opt);
+    }
+    ctx.on_select_change(&sel, event);
+    sel
+}
+
+/// THE checkbox row: a `LABEL_CHOICE` label wrapping the box + text, firing
+/// `event` on change. `name` is a stable DOM hook (e2e / external drivers)
+/// — always pass one.
+pub fn checkbox(
+    ctx: &util::DomCtx,
+    name: &str,
+    checked: bool,
+    event: &str,
+    label_text: &str,
+) -> Element {
+    let label = util::create_element("label");
+    label.set_attribute("style", theme::LABEL_CHOICE).ok();
+    let cb = util::create_element("input");
+    cb.set_attribute("type", "checkbox").ok();
+    cb.set_attribute("name", name).ok();
+    if checked {
+        cb.set_attribute("checked", "").ok();
+    }
+    ctx.on_window_event(&cb, "change", event, "");
+    util::append(&label, &cb);
+    let span = util::create_element("span");
+    util::set_text(&span, label_text);
+    util::append(&label, &span);
+    label
+}
+
+/// THE radio row: one option of a `group`, dispatching `event` with `value`
+/// on click. Returns `(row, input)` — the input is exposed so a caller can
+/// add its own stable hook attribute (e.g. `data-kind`).
+pub fn radio(
+    ctx: &util::DomCtx,
+    group: &str,
+    value: &str,
+    checked: bool,
+    event: &str,
+    label_text: &str,
+) -> (Element, Element) {
+    let label = util::create_element("label");
+    label.set_attribute("style", theme::LABEL_CHOICE).ok();
+    let input = util::create_element("input");
+    input.set_attribute("type", "radio").ok();
+    input.set_attribute("name", group).ok();
+    input.set_attribute("value", value).ok();
+    if checked {
+        input.set_attribute("checked", "").ok();
+    }
+    ctx.on_window_event(&input, "click", event, value);
+    util::append(&label, &input);
+    let span = util::create_element("span");
+    util::set_text(&span, label_text);
+    util::append(&label, &span);
+    (label, input)
+}
+
+/// Render a button inert: disabled attribute + dimmed look. The one way a
+/// primary "waits" (S3: a disabled primary must look disabled) — don't
+/// hand-roll opacity styles per window.
+pub fn disable(btn: &Element) {
+    btn.set_attribute("disabled", "").ok();
+    let style = btn.get_attribute("style").unwrap_or_default();
+    btn.set_attribute("style", &format!("{style};opacity:0.5;cursor:default"))
+        .ok();
+}
+
+/// One row of a lazy tree browser (S8) — a caret for directories (an aligning
+/// spacer for leaves) plus the node button, in the shared tree look
+/// (`theme::TREE_*`). Returns `(row, caret, node)` **unwired**: the caller
+/// attaches its own events (toggle on the caret, select/cd/toggle on the node)
+/// and appends `row`. Promoted when File Transfer shipped a copy of Site
+/// Editor's tree consts — the second bespoke variant; never a third.
+pub fn tree_row(
+    depth: usize,
+    is_dir: bool,
+    expanded: bool,
+    selected: bool,
+    label: &str,
+) -> (Element, Option<Element>, Element) {
+    let row = util::create_element("div");
+    row.set_attribute(
+        "style",
+        &format!("{};padding-left:{}px", theme::TREE_ROW, depth * 16),
+    )
+    .ok();
+
+    let caret = if is_dir {
+        let c = util::create_element("button");
+        c.set_attribute("style", theme::TREE_CARET).ok();
+        util::set_text(&c, if expanded { "\u{25be}" } else { "\u{25b8}" }); // ▾ / ▸
+        util::append(&row, &c);
+        Some(c)
+    } else {
+        let spacer = util::create_element("span");
+        spacer.set_attribute("style", "flex:0 0 22px").ok();
+        util::append(&row, &spacer);
+        None
+    };
+
+    let node = util::create_element("button");
+    node.set_attribute(
+        "style",
+        if selected { theme::TREE_NODE_SELECTED } else { theme::TREE_NODE },
+    )
+    .ok();
+    util::set_text(&node, label);
+    util::append(&row, &node);
+
+    (row, caret, node)
+}
+
+/// The form row (S8): label + control + optional hint (empty `hint` renders
+/// none). Append the returned row to a [`card`] — a form is a card of fields
+/// with exactly one primary (S3).
+pub fn field(label: &str, hint: &str, control: &Element) -> Element {
+    let row = util::create_element("div");
+    let l = util::create_element("label");
+    l.set_attribute("style", theme::LABEL).ok();
+    util::set_text(&l, label);
+    util::append(&row, &l);
+    util::append(&row, control);
+    if !hint.is_empty() {
+        let h = util::create_element("p");
+        h.set_attribute("style", theme::HINT).ok();
+        util::set_text(&h, hint);
+        util::append(&row, &h);
+    }
+    row
+}
 
 // --- Status vocabulary (S4) -------------------------------------------------
 // One state model per recurring status; one word, one color, one glyph each.

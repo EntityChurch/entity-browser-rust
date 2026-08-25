@@ -127,10 +127,8 @@ impl PeerConnectionsModel {
     }
 
     // -- Action methods --
-
-    pub fn set_address(&self, value: &str) {
-        self.inner.lock().unwrap().address = value.to_string();
-    }
+    // (No `set_address`: the in-progress address is a renderer-side draft —
+    // `components::text_input` + `ctx.drafts` — not model state.)
 
     pub fn clear_address(&self) {
         self.inner.lock().unwrap().address.clear();
@@ -243,7 +241,7 @@ impl PeerConnectionsModel {
 /// from the browser's network position. Substitutes loopback / wildcard
 /// hosts with `window.location.hostname`. Pure passthrough on native.
 #[cfg(target_arch = "wasm32")]
-fn rewrite_for_browser(addr: &str) -> String {
+pub(crate) fn rewrite_for_browser(addr: &str) -> String {
     let scheme_end = match addr.find("://") {
         Some(idx) => idx + 3,
         None => return addr.to_string(),
@@ -279,7 +277,7 @@ fn rewrite_for_browser(addr: &str) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn rewrite_for_browser(addr: &str) -> String {
+pub(crate) fn rewrite_for_browser(addr: &str) -> String {
     addr.to_string()
 }
 

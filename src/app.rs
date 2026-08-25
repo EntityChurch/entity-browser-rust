@@ -2634,6 +2634,18 @@ impl EntityApp {
             .map(|c| c.remote_pid)
             .collect();
 
+        // Evict any pooled connection to a peer remembered at THIS address
+        // BEFORE reconnecting. `connect_peer` ends in an insert-if-absent pool
+        // insert, so without this a repeat Connect silently keeps the existing
+        // (often dead) connection — the "shows connected, but I must reconnect,
+        // and even that's inconsistent" bug (`BUGLOG-2026-07-14` B3/B4/B5). A
+        // fresh connect (no remembered pid here) evicts nothing and is unchanged.
+        #[cfg(target_arch = "wasm32")]
+        let evictions: Vec<_> = same_addr_pids
+            .iter()
+            .map(|stale| self.peer_manager.disconnect_peer(&pid, stale))
+            .collect();
+
         let connect_future = self.peer_manager.connect_peer(&pid, addr.clone());
 
         #[cfg(target_arch = "wasm32")]
@@ -2645,6 +2657,12 @@ impl EntityApp {
 
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
+            // Drop stale pooled connections first (idempotent; absent = no-op),
+            // so the connect below actually re-handshakes instead of no-opping
+            // on insert-if-absent. Must complete before the dial.
+            for ev in evictions {
+                let _ = ev.await;
+            }
             let remote_pid = match connect_future.await {
                 Ok(p) => p,
                 Err(msg) => {
@@ -2867,16 +2885,15 @@ impl EntityApp {
 
         let uri_for_log = handler_uri.clone();
         let op_for_log = operation.clone();
-        let fut = crate::ops::execute(
-            &self.peer_manager,
-            crate::ops::ExecuteRequest {
-                peer_id: pid,
-                handler_uri,
-                operation,
-                params: custom_params,
-                resource,
-            },
-        );
+        // `ops::execute` self-heals a remote 403 / dead pooled connection
+        // (evict + reconnect + retry once) — every dispatch chokepoints there.
+        let fut = crate::ops::execute(&self.peer_manager, crate::ops::ExecuteRequest {
+            peer_id: pid,
+            handler_uri,
+            operation,
+            params: custom_params,
+            resource,
+        });
         wasm_bindgen_futures::spawn_local(async move {
             match fut.await {
                 Ok(resp) => {
@@ -2907,16 +2924,13 @@ impl EntityApp {
         // (any status) ⇒ reachable; a transport error ⇒ Unreachable.
         let health = self.connection_health_writer.clone();
         let target = entity_uri_authority(&handler_uri).map(str::to_string);
-        let fut = crate::ops::execute(
-            &self.peer_manager,
-            crate::ops::ExecuteRequest {
-                peer_id: pid,
-                handler_uri,
-                operation: "read".into(),
-                params: None,
-                resource: Some(path.clone()),
-            },
-        );
+        let fut = crate::ops::execute(&self.peer_manager, crate::ops::ExecuteRequest {
+            peer_id: pid,
+            handler_uri,
+            operation: "read".into(),
+            params: None,
+            resource: Some(path.clone()),
+        });
         wasm_bindgen_futures::spawn_local(async move {
             match fut.await {
                 Ok(resp) => {

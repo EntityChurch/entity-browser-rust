@@ -515,6 +515,23 @@ impl WorkerPeerStore {
         }
     }
 
+    /// Evict the pooled connection `peer_id → remote_peer_id` inside the
+    /// worker so the next dial re-handshakes fresh. The Worker-arm half of
+    /// [`crate::peers::Peers::disconnect_peer`]. Idempotent (absent = ok).
+    pub fn disconnect_peer(
+        &self,
+        peer_id: String,
+        remote_peer_id: String,
+    ) -> impl std::future::Future<Output = Result<(), String>> + 'static {
+        let proxy = self.proxy.clone();
+        async move {
+            proxy
+                .disconnect_peer(peer_id, remote_peer_id)
+                .await
+                .map_err(|e| format!("proxy.disconnect_peer: {e:?}"))
+        }
+    }
+
     /// Awaitable write. Returns a future that resolves only after the
     /// proxy's per-prefix mirror reflects the new entity (or after the
     /// timeout elapses). Use this when an action handler must transition

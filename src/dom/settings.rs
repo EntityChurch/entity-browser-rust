@@ -1,8 +1,14 @@
 //! Settings window DOM renderer — pure consumer of
 //! [`SettingsOutput`](crate::views::settings::output::SettingsOutput).
+//!
+//! Every group is a bounded card (S2) and every control is a shared atom
+//! (S8): `components::select` (wrapped in `field`), `components::checkbox`,
+//! `components::radio`. The `name` / `data-kind` attributes are stable DOM
+//! hooks the e2e drives — keep them when touching a control.
 
-use crate::dom::util::{self, DomCtx};
+use crate::dom::components;
 use crate::dom::theme;
+use crate::dom::util::{self, DomCtx};
 use crate::views::settings::output::SettingsOutput;
 
 use web_sys::Element;
@@ -33,97 +39,67 @@ pub fn render(container: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 }
 
 fn render_appearance(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let appearance = util::create_element("div");
-    appearance.set_attribute("style", theme::SECTION_GROUP).ok();
-    let h3 = util::create_element("h3");
-    h3.set_attribute("style", "margin:0 0 4px;font-size:14px").ok();
-    util::set_text(&h3, "Appearance");
-    util::append(&appearance, &h3);
+    let card = components::card("Appearance");
 
     // Theme dropdown (registry-driven — one <option> per registered theme).
-    let theme_label = util::create_element("label");
-    theme_label
-        .set_attribute("style", "display:block;margin-bottom:8px")
-        .ok();
-    let theme_span = util::create_element("span");
-    theme_span.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&theme_span, "Theme");
-    util::append(&theme_label, &theme_span);
-    let theme_select = util::create_element("select");
-    theme_select.set_attribute("style", theme::INPUT).ok();
+    let theme_options: Vec<(&str, &str)> =
+        output.themes.iter().map(|o| (o.value, o.label)).collect();
+    let theme_selected = output
+        .themes
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.value)
+        .unwrap_or("");
+    let theme_select = components::select(ctx, &theme_options, theme_selected, "set_theme");
     theme_select
         .set_attribute("name", &format!("theme-{}", output.window_id))
         .ok();
-    for option in &output.themes {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", option.value).ok();
-        if option.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, option.label);
-        util::append(&theme_select, &opt);
-    }
-    ctx.on_select_change(&theme_select, "set_theme");
-    util::append(&theme_label, &theme_select);
-    util::append(&appearance, &theme_label);
+    util::append(&card, &components::field("Theme", "", &theme_select));
 
     // Site appearance dropdown — how the Content Site overlay is colored,
     // independent of the chrome theme above (default: the site's own theme).
-    let site_label = util::create_element("label");
-    site_label
-        .set_attribute("style", "display:block;margin-bottom:4px")
-        .ok();
-    let site_span = util::create_element("span");
-    site_span.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&site_span, "Site appearance");
-    util::append(&site_label, &site_span);
-    let site_select = util::create_element("select");
-    site_select.set_attribute("style", theme::INPUT).ok();
+    let site_options: Vec<(&str, &str)> = output
+        .site_appearance
+        .iter()
+        .map(|o| (o.value.as_str(), o.label.as_str()))
+        .collect();
+    let site_selected = output
+        .site_appearance
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.value.as_str())
+        .unwrap_or("");
+    let site_select =
+        components::select(ctx, &site_options, site_selected, "set_site_appearance");
     site_select
         .set_attribute("name", &format!("site-appearance-{}", output.window_id))
         .ok();
-    for option in &output.site_appearance {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &option.value).ok();
-        if option.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &option.label);
-        util::append(&site_select, &opt);
-    }
-    ctx.on_select_change(&site_select, "set_site_appearance");
-    util::append(&site_label, &site_select);
-    util::append(&appearance, &site_label);
+    util::append(
+        &card,
+        &components::field(
+            "Site appearance",
+            "Controls the in-app site overlay's colors.",
+            &site_select,
+        ),
+    );
 
-    // One-line hint: the override exists because sites carry no theme of their
-    // own yet — "Match system theme" makes them read cleanly in light/dark.
-    let hint = util::create_element("div");
-    hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(&hint, "Controls the in-app site overlay's colors.");
-    util::append(&appearance, &hint);
-
-    util::append(parent, &appearance);
+    util::append(parent, &card);
 }
 
 /// "Windows" — window-manager behavior toggles.
 fn render_windows(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let group = util::create_element("div");
-    group.set_attribute("style", theme::SECTION_GROUP).ok();
-    let h3 = util::create_element("h3");
-    h3.set_attribute("style", "margin:0 0 4px;font-size:14px").ok();
-    util::set_text(&h3, "Windows");
-    util::append(&group, &h3);
-
-    checkbox_row(
-        &group,
-        ctx,
-        "singleton_windows",
-        output.singleton_windows,
-        "toggle_singleton_windows",
-        " Single-instance windows: focus an open window instead of opening a duplicate",
+    let card = components::card("Windows");
+    util::append(
+        &card,
+        &components::checkbox(
+            ctx,
+            "singleton_windows",
+            output.singleton_windows,
+            "toggle_singleton_windows",
+            " Single-instance windows: focus an open window instead of opening a duplicate",
+        ),
     );
-
-    util::append(parent, &group);
+    util::append(parent, &card);
 }
 
 /// "Site & Surface" — the UI onto the session config spine (§5). The **startup
@@ -133,89 +109,72 @@ fn render_windows(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 /// selector — the surface IS the setting.) No entity-editing (reframe §7.4).
 fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
     let s = &output.session;
-    let group = util::create_element("div");
-    group.set_attribute("style", theme::SECTION_GROUP).ok();
-    let h3 = util::create_element("h3");
-    h3.set_attribute("style", "margin:0 0 4px;font-size:14px").ok();
-    util::set_text(&h3, "Site & Surface");
-    util::append(&group, &h3);
+    let card = components::card("Site & Surface");
 
     // -- Startup surface: kind radios --
     let kind_label = util::create_element("span");
     kind_label.set_attribute("style", theme::LABEL).ok();
     util::set_text(&kind_label, "Boot into");
-    util::append(&group, &kind_label);
+    util::append(&card, &kind_label);
     let kind_row = util::create_element("div");
     kind_row.set_attribute("style", "display:flex;gap:12px;margin:2px 0 8px").ok();
     for (value, text) in [("chrome", "Chrome"), ("site", "Site"), ("window", "Window")] {
-        let label = util::create_element("label");
-        label.set_attribute("style", theme::LABEL_CHOICE).ok();
-        let radio = util::create_element("input");
-        radio.set_attribute("type", "radio").ok();
-        radio.set_attribute("name", &format!("boot_kind-{}", output.window_id)).ok();
+        let (row, radio) = components::radio(
+            ctx,
+            &format!("boot_kind-{}", output.window_id),
+            value,
+            s.boot_kind == value,
+            "set_boot_kind",
+            &format!(" {}", text),
+        );
         // Stable hook so e2e can target a specific kind regardless of window id.
         radio.set_attribute("data-kind", value).ok();
-        if s.boot_kind == value {
-            radio.set_attribute("checked", "").ok();
-        }
-        ctx.on_window_event(&radio, "click", "set_boot_kind", value);
-        util::append(&label, &radio);
-        let span = util::create_element("span");
-        util::set_text(&span, &format!(" {}", text));
-        util::append(&label, &span);
-        util::append(&kind_row, &label);
+        util::append(&kind_row, &row);
     }
-    util::append(&group, &kind_row);
+    util::append(&card, &kind_row);
 
     // Clarify this is a STARTUP setting — it changes where the next launch
     // lands, not the current view (so enabling "Site" here doesn't abruptly
     // jump you into the overlay mid-edit). Use the status-bar toggle to enter
     // Site Mode now.
     let kind_hint = util::create_element("div");
-    kind_hint
-        .set_attribute("style", "font-size:11px;color:#7a8294;margin:-4px 0 8px")
-        .ok();
+    kind_hint.set_attribute("style", theme::HINT).ok();
     util::set_text(
         &kind_hint,
         "Applies at next launch — use the status-bar toggle to enter Site Mode now.",
     );
-    util::append(&group, &kind_hint);
+    util::append(&card, &kind_hint);
 
     // -- Peer dropdown (the target peer; disabled for Chrome) --
-    let peer_label = util::create_element("label");
-    peer_label.set_attribute("style", "display:block;margin-bottom:8px").ok();
-    let peer_span = util::create_element("span");
-    peer_span.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&peer_span, "Peer");
-    util::append(&peer_label, &peer_span);
-    let peer_select = util::create_element("select");
-    peer_select.set_attribute("style", theme::INPUT).ok();
+    let peer_options: Vec<(&str, &str)> =
+        s.peers.iter().map(|p| (p.id.as_str(), p.label.as_str())).collect();
+    let peer_selected = s
+        .peers
+        .iter()
+        .find(|p| p.selected)
+        .map(|p| p.id.as_str())
+        .unwrap_or("");
+    let peer_select = components::select(ctx, &peer_options, peer_selected, "set_boot_peer");
     peer_select.set_attribute("name", "boot_peer").ok();
     if s.target_disabled {
         peer_select.set_attribute("disabled", "").ok();
     }
-    for p in &s.peers {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &p.id).ok();
-        if p.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &p.label);
-        util::append(&peer_select, &opt);
-    }
-    ctx.on_select_change(&peer_select, "set_boot_peer");
-    util::append(&peer_label, &peer_select);
-    util::append(&group, &peer_label);
+    util::append(&card, &components::field("Peer", "", &peer_select));
 
     // -- Target dropdown (site id or window type; disabled for Chrome) --
-    let target_label = util::create_element("label");
-    target_label.set_attribute("style", "display:block;margin-bottom:8px").ok();
-    let target_span = util::create_element("span");
-    target_span.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&target_span, "Target");
-    util::append(&target_label, &target_span);
-    let target_select = util::create_element("select");
-    target_select.set_attribute("style", theme::INPUT).ok();
+    let target_options: Vec<(&str, &str)> = s
+        .targets
+        .iter()
+        .map(|t| (t.value.as_str(), t.label.as_str()))
+        .collect();
+    let target_selected = s
+        .targets
+        .iter()
+        .find(|t| t.selected)
+        .map(|t| t.value.as_str())
+        .unwrap_or("");
+    let target_select =
+        components::select(ctx, &target_options, target_selected, "set_boot_target");
     target_select.set_attribute("name", "boot_target").ok();
     if s.target_disabled {
         target_select.set_attribute("disabled", "").ok();
@@ -227,21 +186,19 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
         util::set_text(&opt, "(none available)");
         util::append(&target_select, &opt);
     }
-    for t in &s.targets {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &t.value).ok();
-        if t.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &t.label);
-        util::append(&target_select, &opt);
-    }
-    ctx.on_select_change(&target_select, "set_boot_target");
-    util::append(&target_label, &target_select);
-    util::append(&group, &target_label);
+    util::append(&card, &components::field("Target", "", &target_select));
 
     // Show the chrome ↔ site toggle in the status bar.
-    checkbox_row(&group, ctx, "show_toggle", s.show_toggle, "toggle_show_toggle", " Show the site toggle in the status bar");
+    util::append(
+        &card,
+        &components::checkbox(
+            ctx,
+            "show_toggle",
+            s.show_toggle,
+            "toggle_show_toggle",
+            " Show the site toggle in the status bar",
+        ),
+    );
 
     // Fast-paint checkbox intentionally NOT rendered: the feature is a held
     // seam — gated off (`boot_fast_paint::DISABLED_FOR_CONSOLIDATION`) pending
@@ -258,82 +215,40 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     // strand themselves with a quiet checkbox.
     if s.locked {
         let note = util::create_element("p");
-        note.set_attribute("style", "color:var(--text-dim, #888);margin:4px 0 0;font-size:11px").ok();
+        note.set_attribute("style", theme::HINT).ok();
         util::set_text(&note, "Lockdown is active (set by this deployment's config).");
-        util::append(&group, &note);
+        util::append(&card, &note);
     }
 
-    util::append(parent, &group);
-}
-
-/// A labeled checkbox row that fires a `WindowEvent` on change. `name` is a
-/// stable DOM hook so e2e (and any other consumer) can target a specific
-/// checkbox rather than "all checkboxes."
-fn checkbox_row(parent: &Element, ctx: &DomCtx, name: &str, checked: bool, event: &str, label_text: &str) {
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL_CHOICE).ok();
-    let cb = util::create_element("input");
-    cb.set_attribute("type", "checkbox").ok();
-    cb.set_attribute("name", name).ok();
-    if checked {
-        cb.set_attribute("checked", "").ok();
-    }
-    ctx.on_window_event(&cb, "change", event, "");
-    util::append(&label, &cb);
-    let span = util::create_element("span");
-    util::set_text(&span, label_text);
-    util::append(&label, &span);
-    util::append(parent, &label);
+    util::append(parent, &card);
 }
 
 fn render_rendering(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let rendering = util::create_element("div");
-    rendering.set_attribute("style", theme::SECTION_GROUP).ok();
-    let h3 = util::create_element("h3");
-    h3.set_attribute("style", "margin:0 0 4px;font-size:14px").ok();
-    util::set_text(&h3, "Rendering");
-    util::append(&rendering, &h3);
-
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL_CHOICE).ok();
-    let cb = util::create_element("input");
-    cb.set_attribute("type", "checkbox").ok();
-    cb.set_attribute("name", "show_inspector").ok();
-    if output.show_inspector {
-        cb.set_attribute("checked", "").ok();
-    }
-    ctx.on_window_event(&cb, "change", "toggle_inspector", "");
-    util::append(&label, &cb);
-    let span = util::create_element("span");
-    util::set_text(&span, " Show inspector panel");
-    util::append(&label, &span);
-    util::append(&rendering, &label);
-
-    util::append(parent, &rendering);
+    let card = components::card("Rendering");
+    util::append(
+        &card,
+        &components::checkbox(
+            ctx,
+            "show_inspector",
+            output.show_inspector,
+            "toggle_inspector",
+            " Show inspector panel",
+        ),
+    );
+    util::append(parent, &card);
 }
 
 fn render_network(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let network = util::create_element("div");
-    network.set_attribute("style", theme::SECTION_GROUP).ok();
-    let h3 = util::create_element("h3");
-    h3.set_attribute("style", "margin:0 0 4px;font-size:14px").ok();
-    util::set_text(&h3, "Network");
-    util::append(&network, &h3);
-
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL_CHOICE).ok();
-    let cb = util::create_element("input");
-    cb.set_attribute("type", "checkbox").ok();
-    cb.set_attribute("name", "auto_connect").ok();
-    if output.auto_connect {
-        cb.set_attribute("checked", "").ok();
-    }
-    ctx.on_window_event(&cb, "change", "toggle_autoconnect", "");
-    util::append(&label, &cb);
-    let span = util::create_element("span");
-    util::set_text(&span, " Auto-connect to known peers on startup");
-    util::append(&label, &span);
-    util::append(&network, &label);
-
-    util::append(parent, &network);
+    let card = components::card("Network");
+    util::append(
+        &card,
+        &components::checkbox(
+            ctx,
+            "auto_connect",
+            output.auto_connect,
+            "toggle_autoconnect",
+            " Auto-connect to known peers on startup",
+        ),
+    );
+    util::append(parent, &card);
 }

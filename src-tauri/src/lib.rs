@@ -253,8 +253,26 @@ async fn start_backend_peer(
     log::info!("Starting backend peer: {}", &peer_id[..12.min(peer_id.len())]);
 
     let keypair = Keypair::from_seed(seed);
+    // ENFORCEMENT CUTOVER — machinery landed, but NOT yet the default (see
+    // BUGLOG-2026-07-14 B1/B2: the enforced flow isn't solid end-to-end in the
+    // UI — File Transfer's browse path doesn't auto-heal, and the authorize step
+    // isn't discoverable). Until that's fixed, enforcement is **opt-in**:
+    // `ENTITY_BROWSER_ENFORCE=1` turns it on for continued dev/testing; the
+    // default is the open posture so the app is usable. Flip the default back to
+    // enforced (invert this) once B1 + the authorize UX land.
+    // (`debug_open_grants` is upstream-deprecated; migrates to `with_seed_policy`
+    // when it's cut — tracked in DESIGN-ENFORCEMENT-CUTOVER.)
+    let enforce = std::env::var("ENTITY_BROWSER_ENFORCE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if enforce {
+        log::info!(
+            "ENTITY_BROWSER_ENFORCE set — backend {} ENFORCES capabilities",
+            &peer_id[..12.min(peer_id.len())]
+        );
+    }
     let config = PeerConfig {
-        debug_open_grants: true,
+        debug_open_grants: !enforce,
         ..PeerConfig::default()
     };
 
@@ -302,11 +320,13 @@ async fn start_backend_peer(
         let cfg = entity_peer::local_files::RootConfigData {
             prefix: SHARE_PREFIX.to_string(),
             filesystem_root: share_dir.to_string_lossy().into_owned(),
-            // Writable so a paired peer can BOTH pull (read) and push
-            // (write, Phase 2 upload) files in the shared folder. With
-            // debug_open_grants any connected peer may write here — that's
-            // the intended demo posture; the real per-peer put-grant is the
-            // Phase-1 hardening (DESIGN §2).
+            // The root is writable at the handler level so a paired peer CAN
+            // pull (read) and push (write). UNDER ENFORCEMENT (opt-in via
+            // `ENTITY_BROWSER_ENFORCE`) which of those a given device may do is
+            // gated by its authored grant: `FileTransfer` = list+read,
+            // `FileTransferRw` adds write+delete (`backend_auth.rs`), an ungranted
+            // peer denied outright. In the default (open) posture any connected
+            // peer may read+write — the demo behavior.
             read_only: false,
             ..Default::default()
         };
