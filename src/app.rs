@@ -2831,6 +2831,16 @@ impl EntityApp {
                     // of them may have published one.
                     let swept = self.peer_manager.forget_routes_to(remote_pid);
                     tracing::debug!(remote_pid = %remote_pid, local_peers = swept, "forgetting published routes");
+                    // And stop *being reachable to* them, which is the half a
+                    // route sweep cannot cover. `reach_keeper` intent is this
+                    // peer form's substitute for a listening socket, and it
+                    // never gives up by design — so without this the user
+                    // dismisses a peer and we keep standing at the rendezvous
+                    // for it forever, dispatching a probe every ~30s at
+                    // somebody they told us to forget. Same rule as the route
+                    // above, one direction over: teardown travels with it.
+                    let dropped = crate::reach_keeper::global().forget_remote(remote_pid);
+                    tracing::debug!(remote_pid = %remote_pid, intents = dropped, "withdrawing reach intent");
                     // Drop any in-memory dial transient — a forgotten peer must
                     // not linger as "Connecting…"/Offline in the link chip.
                     self.dial_markers.clear(remote_pid);

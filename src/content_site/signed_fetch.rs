@@ -400,6 +400,314 @@ impl SignedSession {
         }
         Err(SignedFetchError::Budget)
     }
+
+    /// **Enumerate the keys the signed root commits to — and fail rather than
+    /// return a short list.**
+    ///
+    /// The keys are *in* the nodes: `EXTENSION-TREE` §3.1's leaf is
+    /// `[key, value_hash]`, so a HAMT walk from the verified `root_hash`
+    /// recovers the whole reachable key set with no new mechanism and nothing
+    /// host-served. Passing `prefix: "system/registry/binding/by-name/"` makes
+    /// the trie's key set *be* the name set.
+    ///
+    /// **Why this is written here instead of calling upstream.**
+    /// `entity_tree::trie::collect_all_bindings` (§3.5) is the obvious reach and
+    /// is *silently short*: it skips a missing `Entry::Link` with a bare
+    /// `if let Some(..)` and returns a `BTreeMap`, not a `Result`. Measured on a
+    /// 24-name registry, withholding one interior node hid **1 name of 24** with
+    /// no error and a root hash that still verified — so a browse surface built
+    /// on it makes a shortened list indistinguishable from a small registry,
+    /// while the hidden name stays resolvable for anyone who already knows it.
+    /// Arch's D9 says a walk MUST NOT be shortened without failing; this is that
+    /// walk.
+    ///
+    /// Three properties it holds, each of which is the difference between an
+    /// enumeration and a rumour:
+    ///
+    /// 1. **A declared child that does not resolve is `IncompleteWalk`**, never
+    ///    the end of a branch. A trie node *declares* its children, so absence is
+    ///    structural and checkable — the same reasoning that closed the
+    ///    publisher's F8, applied to the consumer.
+    /// 2. **Every node is hash-verified before it is believed** (`verify_and_decode`
+    ///    on the way into the cache, exactly as [`Self::resolve`] does), so a
+    ///    tampered interior node is a verification failure and not a shorter
+    ///    answer.
+    /// 3. **A node that does not decode is a failure**, not an empty node. A
+    ///    corrupted body that happens to hash correctly cannot occur, but a body
+    ///    of the wrong *type* can, and treating it as childless is how a walk
+    ///    silently shortens.
+    ///
+    /// This does **not** make the listing authoritative about what the publisher
+    /// *knows* — only about what this root commits to. That is the honest bound,
+    /// and it is strictly stronger than the host-served `.list` artifacts, which
+    /// commit to nothing at all.
+    ///
+    /// **Bounded** — see [`Self::enumerate_bounded`], which this calls with
+    /// [`DEFAULT_ENUMERATION_BUDGET`]. A registry is not obliged to be small, and
+    /// walking one is O(the whole trie): every interior node is a fetch.
+    pub async fn enumerate<S: BinSource + ?Sized>(
+        &self,
+        src: &S,
+        prefix: &str,
+    ) -> Result<Vec<String>, SignedFetchError> {
+        self.enumerate_bounded(src, prefix, DEFAULT_ENUMERATION_BUDGET)
+            .await
+            .map(|e| e.keys)
+    }
+
+    /// [`Self::enumerate`] with an explicit budget, reporting **whether it
+    /// finished**.
+    ///
+    /// **A registry is allowed to be big, and a browser must not download one to
+    /// find that out.** Walking a signed root costs a fetch per interior node, so
+    /// enumeration is bounded on both axes a hostile *or merely large* origin can
+    /// grow: nodes fetched and keys collected.
+    ///
+    /// **The bound reports itself, and that is the whole design.** A truncated
+    /// list returned as a plain `Vec` is the same defect as the silently-short
+    /// walk this function exists to prevent — the caller cannot tell "this
+    /// registry has 40 names" from "this registry has 40,000 and I stopped".
+    /// [`Enumeration::complete`] is `false` in the second case and a surface
+    /// **must** say so rather than render a list that looks whole.
+    ///
+    /// Truncation is deliberately **not** an error: a partial listing is useful
+    /// (it is a real prefix of a real key set, every key of it verified), where a
+    /// failure would leave a large registry entirely unbrowsable. An error is
+    /// reserved for the origin failing to produce what its root declares.
+    ///
+    /// The real answer for large registries is paged/prefix-scoped navigation —
+    /// descend by trie position rather than collecting the whole key set. That is
+    /// not built; this bound is what keeps its absence honest instead of slow.
+    pub async fn enumerate_bounded<S: BinSource + ?Sized>(
+        &self,
+        src: &S,
+        prefix: &str,
+        budget: EnumerationBudget,
+    ) -> Result<Enumeration, SignedFetchError> {
+        // Same refresh-per-call contract as `resolve`: the manifest is the one
+        // mutable artifact, and re-fetching it is what keeps the `seq` floor
+        // meaningful.
+        let bytes = src
+            .get(self.pin.manifest_url(), Freshness::Mutable)
+            .await
+            .map_err(|e| SignedFetchError::Transport(format!("manifest: {e}")))?;
+        match self.manifest.lock() {
+            Ok(mut m) => *m = bytes,
+            Err(_) => return Err(SignedFetchError::Transport("manifest slot poisoned".into())),
+        }
+
+        for _ in 0..MAX_ROUNDS {
+            // `fetch_root` verifies the signature and enforces the `seq` floor,
+            // so enumeration inherits the rollback defence rather than opening a
+            // second door around it.
+            let root = match self.client.fetch_root() {
+                Ok(r) => r,
+                Err(PublishedRootError::Fetch(_)) => {
+                    // The manifest or its signature is not cached yet — drive the
+                    // pump and come back.
+                    self.pump_once(src).await?;
+                    continue;
+                }
+                Err(e) => return Err(SignedFetchError::Verify(e.to_string())),
+            };
+
+            match self.walk_keys(root.root_hash, prefix, budget)? {
+                WalkOutcome::Complete(e) => return Ok(e),
+                WalkOutcome::NeedsFetch => self.pump_once(src).await?,
+            }
+        }
+        Err(SignedFetchError::Budget)
+    }
+
+    /// One structural pass over the trie against whatever is cached.
+    ///
+    /// Returns [`WalkOutcome::NeedsFetch`] the moment a declared child is not in
+    /// hand (its hash is already in the miss log, put there by `PumpFetcher`),
+    /// and only reports `Complete` when **every** declared child was reached.
+    fn walk_keys(
+        &self,
+        root: Hash,
+        prefix: &str,
+        budget: EnumerationBudget,
+    ) -> Result<WalkOutcome, SignedFetchError> {
+        let mut keys: Vec<String> = Vec::new();
+        let mut queue = vec![root];
+        let mut seen: BTreeSet<Hash> = BTreeSet::new();
+        let mut needs_fetch = false;
+        let mut truncated = false;
+
+        while let Some(h) = queue.pop() {
+            // **Stop before the fetch, not after.** Checking the bound after
+            // draining the queue would still have walked the whole trie; the
+            // point is to not download a large registry, so an over-budget walk
+            // must stop *asking*. `truncated` then rides out on the result and
+            // the surface says so — a shorter list that does not announce itself
+            // is the defect this whole module is built against.
+            if seen.len() >= budget.max_nodes || keys.len() >= budget.max_keys {
+                truncated = true;
+                break;
+            }
+            if !seen.insert(h) {
+                continue;
+            }
+            let Some(bytes) = self.state.content.lock().ok().and_then(|c| c.get(&h).cloned())
+            else {
+                // Record the miss the same way the client's fetcher would, so the
+                // pump has something to fetch on the next round.
+                if let Ok(mut m) = self.state.content_misses.lock() {
+                    m.insert(h);
+                }
+                needs_fetch = true;
+                continue;
+            };
+            // Already hash-verified on the way into the cache; decoding here is
+            // about STRUCTURE.
+            let entity = crate::content_site::http_poll::verify_and_decode(&bytes, &h)
+                .map_err(|e| SignedFetchError::Verify(format!("node {}: {e:?}", h.to_hex())))?;
+            if entity.entity_type != entity_tree::trie::TYPE_TREE_SNAPSHOT_NODE {
+                // A leaf VALUE, not a node. Reached only when a bucket's value
+                // hash was enqueued, which this walk does not do — so this is a
+                // malformed tree rather than a normal terminus.
+                return Err(SignedFetchError::Verify(format!(
+                    "node {} is {}, not a trie node — this tree does not have the shape its \
+                     root claims",
+                    h.to_hex(),
+                    entity.entity_type
+                )));
+            }
+            let Some(node) = entity_tree::trie::SnapshotNodeData::from_cbor(&entity.data) else {
+                // **Not "an empty node".** Treating an undecodable node as
+                // childless is precisely how a walk shortens without failing.
+                return Err(SignedFetchError::Verify(format!(
+                    "trie node {} does not decode — a walk that treated this as childless would \
+                     silently drop every key beneath it",
+                    h.to_hex()
+                )));
+            };
+            for entry in &node.data {
+                match entry {
+                    entity_tree::trie::Entry::Bucket(b) => {
+                        for (k, _value_hash) in b {
+                            // **The key bound applies INSIDE a bucket too.** Checked
+                            // only between nodes, it does not bind at all on a trie
+                            // whose keys live in one fat bucket — every key lands in
+                            // a single visit and the walk reports `complete`. That
+                            // is what the first version did, and the gate caught it:
+                            // a bound that a common shape slips past is worse than
+                            // none, because it reads as enforced.
+                            if keys.len() >= budget.max_keys {
+                                truncated = true;
+                                break;
+                            }
+                            if k.starts_with(prefix) {
+                                keys.push(k.clone());
+                            }
+                        }
+                    }
+                    // A link is a DECLARED child. If it is not fetchable the walk
+                    // is incomplete — that is `IncompleteWalk`, raised by the pump
+                    // when the fetch 404s, never a shorter list here.
+                    entity_tree::trie::Entry::Link(sub) => queue.push(*sub),
+                }
+            }
+        }
+
+        // A truncated walk is DONE, not waiting: outstanding misses below the
+        // cutoff are ours to abandon, not the origin's to answer. Returning
+        // `NeedsFetch` here would fetch exactly what the bound exists to avoid.
+        if needs_fetch && !truncated {
+            return Ok(WalkOutcome::NeedsFetch);
+        }
+        keys.sort();
+        keys.dedup();
+        Ok(WalkOutcome::Complete(Enumeration {
+            keys,
+            complete: !truncated,
+            nodes_walked: seen.len(),
+        }))
+    }
+
+    /// Drain the miss logs and fetch what they name.
+    ///
+    /// Shared by `enumerate`'s two pump sites. A content miss came out of a
+    /// structure the signed root commits to, so a 404 is the origin refusing its
+    /// own committed closure — [`declared_fetch_error`] is what keeps that
+    /// terminal while a 5xx stays retryable.
+    async fn pump_once<S: BinSource + ?Sized>(
+        &self,
+        src: &S,
+    ) -> Result<(), SignedFetchError> {
+        for target in drain(&self.state.signature_misses) {
+            let bytes = fetch_signature(src, &self.pin, &target).await?;
+            if let Ok(mut c) = self.state.signatures.lock() {
+                c.insert(target, bytes);
+            }
+        }
+        for want in drain(&self.state.content_misses) {
+            let bytes = src
+                .get(self.pin.layout.content_url(&want), Freshness::Immutable)
+                .await
+                .map_err(|e| declared_fetch_error(&want.to_hex(), e))?;
+            if let Err(e) = crate::content_site::http_poll::verify_and_decode(&bytes, &want) {
+                return Err(SignedFetchError::Verify(format!(
+                    "content {}: {e:?} — the origin served bytes that do not hash to the address \
+                     its own signed root committed to",
+                    want.to_hex()
+                )));
+            }
+            if let Ok(mut c) = self.state.content.lock() {
+                c.insert(want, bytes);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether a structural pass finished or is waiting on bytes.
+enum WalkOutcome {
+    Complete(Enumeration),
+    NeedsFetch,
+}
+
+/// How much of a signed root an enumeration may walk.
+///
+/// Both axes matter and they bound different things: `max_nodes` bounds the
+/// **fetches** (one per interior node — the cost a large registry imposes on a
+/// browser), `max_keys` bounds the **result** (the cost it imposes on a surface
+/// that is about to render it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumerationBudget {
+    pub max_nodes: usize,
+    pub max_keys: usize,
+}
+
+/// Enough for the registries we publish today, small enough that pointing the
+/// browser at a large one is slow-and-honest rather than a download.
+///
+/// Deliberately not tuned to a measurement: there is no defensible constant, and
+/// the number is a stopgap for paged navigation rather than a claim about how
+/// big a registry should be. Raise it when a surface has a reason, and prefer
+/// giving that surface its own budget over moving everyone's.
+pub const DEFAULT_ENUMERATION_BUDGET: EnumerationBudget =
+    EnumerationBudget { max_nodes: 256, max_keys: 2048 };
+
+/// The result of a bounded enumeration.
+///
+/// **Read `complete` before you render `keys`.** A partial list is a real prefix
+/// of a real key set — every key in it was recovered from the signed root and
+/// nothing host-served — but it is *not* the answer to "what does this registry
+/// carry", and presenting it as one rebuilds the exact confusion this module
+/// exists to prevent: a short list that cannot be told from a small registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Enumeration {
+    /// Keys under the requested prefix, sorted and deduped.
+    pub keys: Vec<String>,
+    /// `true` when the walk visited every node the root declares. `false` means
+    /// the budget stopped it and there are more keys than these.
+    pub complete: bool,
+    /// Interior nodes visited — the fetch cost, and the useful thing to show an
+    /// operator wondering why a big registry is slow.
+    pub nodes_walked: usize,
 }
 
 /// One-shot convenience. **Prefer [`SignedSession`]** for anything that fetches
@@ -907,6 +1215,173 @@ mod tests {
                 ("other".into(), SitePage::markdown("Other", "# a different authored page")),
             ],
             assets: vec![],
+        }
+    }
+
+    /// **Enumeration is safe now: a withheld interior node FAILS the walk
+    /// instead of shortening it.**
+    ///
+    /// This is the consumer half of arch's D9 (*the absence of a node is never an
+    /// answer*) for the one operation that did not satisfy it. Resolution has
+    /// been conformant for a while — a miss re-drives the pump and a withheld
+    /// blob becomes `IncompleteWalk`. **Enumeration was the genuinely open half**,
+    /// because the obvious implementation is upstream `collect_all_bindings`,
+    /// which skips a missing `Entry::Link` with a bare `if let Some(..)` and
+    /// returns a `BTreeMap` with nowhere to report the miss. Measured next door
+    /// in `registry_publish`: 1 name of 24 hidden, silently, root hash still
+    /// verifying.
+    ///
+    /// So a browse panel built on that walk shows a short list that is
+    /// indistinguishable from a small registry, while the hidden name stays
+    /// resolvable for anyone who already knows it — the browse and the resolve
+    /// disagree and neither complains.
+    ///
+    /// Both directions, and the control is the half that keeps it honest:
+    /// - **complete** — every key the root commits to comes back;
+    /// - **withheld** — removing any single blob the enumeration declared makes
+    ///   it fail, rather than return fewer keys.
+    ///
+    /// The victim is taken from *this* walk's own fetch log, one at a time, for
+    /// the reason the sibling test records: under hash-keyed addressing "the
+    /// first node" is not a stable referent, and a victim picked by position
+    /// proves one path while reporting on all of them.
+    #[test]
+    fn enumerating_a_signed_root_fails_on_a_withheld_node_rather_than_shortening() {
+        let dir = tempfile::tempdir().unwrap();
+        let pin = publish_into(dir.path(), 0x3c, BODY);
+
+        // (a) COMPLETE — the keys the signed root commits to.
+        let warm = DirSource::new(dir.path());
+        let session = SignedSession::new(pin.clone());
+        let keys = block_on(session.enumerate(&warm, "sites/")).expect("a clean tree enumerates");
+        assert!(
+            keys.iter().any(|k| k.contains("pages/index")),
+            "the enumeration must recover real page keys, got {keys:?}"
+        );
+        let complete = keys.len();
+        assert!(complete >= 2, "the fixture publishes more than one page, got {keys:?}");
+
+        // Which blobs did the enumeration actually declare? Ask the walk, don't
+        // guess at the HAMT.
+        let declared: Vec<String> = warm
+            .fetched
+            .borrow()
+            .iter()
+            .filter(|u| u.contains("/content/"))
+            .cloned()
+            .collect();
+        assert!(!declared.is_empty(), "the walk must fetch content blobs to withhold one");
+
+        // (b) WITHHELD — each declared blob in turn. None may produce a shorter
+        // list; every one must produce an error.
+        for victim_url in &declared {
+            let victim_path = dir.path().join(victim_url.trim_start_matches('/'));
+            if !victim_path.exists() {
+                continue;
+            }
+            let withheld = std::fs::read(&victim_path).unwrap();
+            std::fs::remove_file(&victim_path).unwrap();
+
+            let src = DirSource::new(dir.path());
+            let starved = SignedSession::new(pin.clone());
+            let got = block_on(starved.enumerate(&src, "sites/"));
+
+            std::fs::write(&victim_path, &withheld).unwrap();
+
+            match got {
+                Err(_) => {}
+                Ok(short) => panic!(
+                    "withholding {victim_url} returned {} of {} keys instead of failing — this is \
+                     exactly the silent shortening the walk exists to prevent",
+                    short.len(),
+                    complete
+                ),
+            }
+        }
+
+        // Control: with everything restored it enumerates the same set again, so
+        // the failures above were the withholding and not the loop.
+        let again = SignedSession::new(pin);
+        let re = block_on(again.enumerate(&DirSource::new(dir.path()), "sites/"))
+            .expect("restored tree enumerates");
+        assert_eq!(re.len(), complete, "the control must recover the original key set");
+    }
+
+    /// **A bounded walk says it was bounded.**
+    ///
+    /// Registries are allowed to be big, and a browser must not download one to
+    /// discover that. The bound is the easy half; the half that matters is that
+    /// truncation is *reported*, because a short list returned as a plain `Vec`
+    /// is the same defect as the silently-short walk next door — the caller
+    /// cannot tell "40 names" from "40,000, and I stopped at 40".
+    ///
+    /// Also pins that truncation is **not** an error: a partial listing is a real
+    /// prefix of a real key set and is useful, where failing would make a large
+    /// registry entirely unbrowsable. Errors stay reserved for the origin failing
+    /// to produce what its root declares.
+    #[test]
+    fn a_bounded_enumeration_reports_that_it_was_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let pin = publish_into(dir.path(), 0x4d, BODY);
+
+        // Unbounded: the honest full answer, and the baseline to compare against.
+        let full = block_on(
+            SignedSession::new(pin.clone())
+                .enumerate_bounded(&DirSource::new(dir.path()), "sites/", DEFAULT_ENUMERATION_BUDGET),
+        )
+        .expect("a clean tree enumerates");
+        assert!(full.complete, "the default budget must cover the fixture");
+        assert!(full.keys.len() >= 2, "fixture must publish enough keys to truncate, got {:?}", full.keys);
+
+        // Bounded to one key: fewer keys, and `complete` must say so.
+        let tight = EnumerationBudget { max_nodes: 256, max_keys: 1 };
+        let cut = block_on(
+            SignedSession::new(pin.clone())
+                .enumerate_bounded(&DirSource::new(dir.path()), "sites/", tight),
+        )
+        .expect("truncation is not an error — a partial listing is still useful");
+        assert!(
+            !cut.complete,
+            "a walk stopped by its budget MUST report complete=false, or a surface renders a \
+             partial list as if it were the whole registry"
+        );
+        assert!(
+            cut.keys.len() < full.keys.len(),
+            "the bound must actually bind: got {} of {}",
+            cut.keys.len(),
+            full.keys.len()
+        );
+
+        // Bounding NODES stops the fetching, which is the point — the cost a big
+        // registry imposes is one fetch per interior node.
+        let one_node = EnumerationBudget { max_nodes: 1, max_keys: 2048 };
+        let shallow = block_on(
+            SignedSession::new(pin)
+                .enumerate_bounded(&DirSource::new(dir.path()), "sites/", one_node),
+        )
+        .expect("a node-bounded walk still returns what it saw");
+        assert!(
+            shallow.nodes_walked <= 1,
+            "the node bound must stop the walk asking for more, walked {}",
+            shallow.nodes_walked
+        );
+        // **`complete` is asserted against the fixture's real shape, not assumed.**
+        // This fixture's trie fits in ONE node, so a 1-node budget genuinely IS a
+        // complete walk and demanding `complete == false` would be asserting a
+        // lie — the first draft did exactly that and this caught it. The bound is
+        // only observable as incomplete when there was a second node to refuse.
+        if full.nodes_walked > 1 {
+            assert!(
+                !shallow.complete,
+                "with {} nodes in the tree, a 1-node budget must report incomplete",
+                full.nodes_walked
+            );
+        } else {
+            assert!(
+                shallow.complete,
+                "a single-node trie walked within budget is complete — reporting otherwise \
+                 would cry wolf on every small registry"
+            );
         }
     }
 

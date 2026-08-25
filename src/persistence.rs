@@ -938,6 +938,31 @@ mod tests {
     // Spec-layout tests (native only). All filesystem-touching tests
     // serialize on ENV_LOCK so the ENTITY_DATA_DIR override doesn't race
     // across cargo's parallel test threads.
+    //
+    // **THE LOCK ONLY BINDS WHOEVER TAKES IT, AND THAT IS THE TRAP.** It
+    // serializes the *writers* in this module against each other; every test
+    // elsewhere in the binary that READS `ENTITY_DATA_DIR` — `data_root()`,
+    // `publisher_keypair()`, `registry_keypair()` — runs on a parallel thread
+    // and sees whatever this module last set, including the window between
+    // `set_var` and `remove_var` where it points at a `tempfile::tempdir()`
+    // that is about to be deleted. Cargo runs tests as threads in ONE process,
+    // so an env var is genuinely shared state and a module-private mutex is a
+    // partial fix wearing a comment that reads like a total one. (Rust made
+    // `set_var` `unsafe` in the 2024 edition for exactly this.)
+    //
+    // Concretely: a publish test's `--verify` resolving its identity through a
+    // swapped-out data root looks under a peer-id nothing was written for,
+    // finds an empty tree, and — until `an_empty_tree_is_not_a_clean_tree` —
+    // reported that clean. That is how a real `--verify` hole first showed up
+    // as an intermittent test failure.
+    //
+    // Left as a module-private lock deliberately rather than promoted to a
+    // crate-wide one: the durable fix is that nothing outside this module reads
+    // the env var during tests, and the publish path already takes explicit
+    // roots (`publisher_keypair_in`) precisely so it does not have to. If you
+    // add a test here, keep the tempdir alive for the whole critical section;
+    // if you add one that READS the data root elsewhere, give it an explicit
+    // root rather than reaching for this lock.
     // -------------------------------------------------------------------
 
     #[cfg(not(target_arch = "wasm32"))]

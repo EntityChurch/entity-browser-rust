@@ -549,6 +549,20 @@ impl ContentSiteModel {
                     visit_count: prefs.visit_count,
                     last_reconciled: prov.as_ref().map(|p| p.last_reconciled).unwrap_or(0),
                     source_transport: prov.map(|p| p.source_transport).unwrap_or_default(),
+                    // **`None` — never checked — and that is not a placeholder,
+                    // it is the measured state of this path.** The Site Browser
+                    // reaches a foreign peer over `http_poll`'s two-hop and reads
+                    // no signed root, so no signature has been verified for any
+                    // site in this list. `GUIDE-SERVING-MODE` §8 requires that be
+                    // *shown*, because the alternative — neutral chrome — reads
+                    // as "fine".
+                    //
+                    // It is deliberately NOT derived from `prov.last_reconciled`:
+                    // that answers "when did WE last fetch", a fact about us, and
+                    // using it here would turn a fetch time into a verification
+                    // claim. This becomes `Some(published_at)` when the signed
+                    // path is wired in (backlog B-3) and not one moment earlier.
+                    verified_at: None,
                     peer: r.peer,
                     site: r.site,
                     owned: r.owned,

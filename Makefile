@@ -185,6 +185,35 @@ define RUN
 		sh -c '$(1)'
 endef
 
+# Refuse a publish output directory that lies outside the container's bind mount.
+# $(1) = target name (for the message) · $(2) = the path · $(3) = the var's name.
+#
+# **The failure this exists for is a SUCCESS MESSAGE.** Every publish verb runs
+# inside the image, whose only bind mount is $(PARENT). An output path outside it
+# resolves to the *container's own* ephemeral filesystem, so the emit prints
+# "registry published → …", the chained `--verify` runs in a SECOND container that
+# sees an empty directory and reports "this tree is POINTER-TRUSTED … (Not a
+# defect)", make exits **0**, and nothing whatsoever is on the host. Measured
+# 2026-08-20: `make registry REGISTRY_OUT=/tmp/seqtest2` → exit 0, no such
+# directory. `REGISTRY_OUT=/srv/www/registry` — publishing straight into a webroot,
+# the obvious thing to try — fails exactly this way, and tells the one person who
+# could fix it that it worked.
+#
+# The rule was already written down (see FED_OUT's comment, and `site-serve`'s
+# SERVE_DIR block) and enforced nowhere. `readlink -m` resolves without requiring
+# the path to exist, so a sibling repo under $(PARENT) — genuinely inside the
+# mount — is still allowed; only a path outside it is refused.
+define CHECK_IN_TREE
+	@abs=$$(readlink -m '$(2)'); parent=$$(readlink -m '$(PARENT)'); \
+	case "$$abs/" in "$$parent"/*) : ;; *) \
+	  echo "make $(1): $(3)='$(2)' is outside $$parent."; \
+	  echo "  This publish runs in a container that bind-mounts ONLY that directory."; \
+	  echo "  An outside path is written to container-ephemeral storage and is gone the"; \
+	  echo "  moment the run ends — after printing a success message and exiting 0."; \
+	  echo "  Use a repo-relative dir (e.g. $(3)=dist-mysite) and copy it where you want it."; \
+	  exit 1 ;; esac
+endef
+
 # Serve a static directory ($(1)) from inside the image, on $(PORT). Keeps the
 # "podman + make only" contract — no host python3. $(1) is resolved relative to
 # the workdir (this repo) OR may be an absolute in-container path (e.g. a mount
@@ -324,6 +353,7 @@ test-tauri: image
 # the repo — so a `/tmp` path is not available here the way it is for SERVE_DIR.
 FED_OUT ?= dist-federation
 federation: image
+	$(call CHECK_IN_TREE,federation,$(FED_OUT),FED_OUT)
 	$(call RUN,./tools/local-federation.sh $(FED_OUT))
 
 # Lint, in-container: clippy + the UI ratchet gate (raw atoms / inline style
@@ -499,6 +529,43 @@ endif
 	# forever in CI or an agent loop. --signal=KILL because a wedged podman
 	# child may not honour TERM.
 	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
+
+# The MULTI-HOST federation origin — the publisher on its own host, so a
+# consumer's fetches are real network hops rather than loopback ones. Prints the
+# two strings a consumer needs (`E2E_FED_ORIGIN`, `E2E_FED_REGISTRY`); the e2e's
+# `federation_target()` reads them and refuses a loopback origin.
+#
+# `federation-multihost` stands the rig up and prints the consumer's environment
+# (logs go to stderr, so stdout is pure `KEY=value`); `DOWN=1` tears it down.
+# `e2e-federation` is the GATE: rig up → the browser walk against it → rig down,
+# with the teardown running whatever the result, so a red run does not leave
+# three containers and a network behind.
+federation-multihost:
+	@bash tools/e2e/federation-multihost.sh $(if $(DOWN),down,up)
+
+# The multi-host gate. Deliberately NOT part of `e2e-worker`: it needs its own
+# network and its own browser, and folding it in would make the everyday suite
+# depend on both. Run it before claiming the naming chain works off loopback.
+e2e-federation: image
+	@bash tools/e2e/federation-multihost.sh up > $(FEDENV)
+	@cat $(FEDENV)
+	# The rig's stdout becomes `-e` flags, so a line that is not KEY=value becomes
+	# a bogus env var on the test container. That is not hypothetical: `podman
+	# exec -d` printed its exec ID here and shipped `-e <64-hex>` for one run.
+	# Cheap check, and it fails the gate instead of quietly mis-configuring it.
+	@grep -qvE '^[A-Z0-9_]+=' $(FEDENV) && { echo "FATAL: non-KEY=value line in $(FEDENV):"; cat $(FEDENV); exit 1; } || true
+	@set -e; trap 'bash tools/e2e/federation-multihost.sh down >/dev/null 2>&1' EXIT; \
+	 $(MAKE) --no-print-directory e2e-federation-run \
+	   EXTRA_RUN_ENV="$$(sed 's/^/-e /' $(FEDENV) | tr '\n' ' ')"
+
+FEDENV = target/federation-multihost.env
+
+# The inner half — never call directly; `e2e-federation` supplies the env.
+# `--network host` so cargo reaches the browser's published control port; the
+# browser's own fetches do not come back this way, they stay on the bridge.
+e2e-federation-run:
+	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e \
+	  --test e2e_worker a_name_resolves_cross_origin -- --nocapture --test-threads=1,--network host)
 
 # List what `T=` and `UNTIL=` accept. Reads the test source, so it can never
 # drift from what actually runs — and needs neither the image nor Selenium.
@@ -1050,6 +1117,7 @@ VERIFY ?=
 # repo-local dir, which is visible in-container via the existing parent mount.
 site: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 site: image
+	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 
@@ -1059,6 +1127,7 @@ site: image
 # `dist/static-bare`). Serve with `make serve`-style static server and open /.
 OUT_BARE ?= dist/static-bare
 site-bare: image
+	$(call CHECK_IN_TREE,site-bare,$(OUT_BARE),OUT_BARE)
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT_BARE) --bare-root $(if $(SITE),--site=$(SITE),) $(if $(LIVE),--live=$(LIVE),))
 
 # Publish a NAME REGISTRY — the second half of the naming chain, and until now
@@ -1083,6 +1152,7 @@ registry: image
 	@[ -n "$(BIND)" ] || { echo "make registry: BIND is required, e.g."; \
 	  echo "  make registry BIND='--bind=NAME=PEER_ID@ORIGIN'"; \
 	  echo "  (the @ORIGIN half is not optional — arch D10)"; exit 1; }
+	$(call CHECK_IN_TREE,registry,$(REGISTRY_OUT),REGISTRY_OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(call RUN,cargo run --quiet --bin entity-browser -- registry $(REGISTRY_OUT) $(BIND) $(if $(TTL_DAYS),--ttl-days=$(TTL_DAYS),) $(SEED))
 	@echo ""

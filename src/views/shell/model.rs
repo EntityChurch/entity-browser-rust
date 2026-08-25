@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 /// Both sides capture `Send + 'static` data (Arc<Mutex>, mpsc, etc.),
 /// so the native bound is satisfied in practice.
 #[cfg(target_arch = "wasm32")]
-pub(super) fn spawn_task<F>(task: F)
+pub(crate) fn spawn_task<F>(task: F)
 where
     F: std::future::Future<Output = ()> + 'static,
 {
@@ -33,7 +33,7 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn spawn_task<F>(task: F)
+pub(crate) fn spawn_task<F>(task: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {

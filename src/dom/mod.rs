@@ -23,6 +23,7 @@ pub mod peer_connections;
 pub mod peer_management;
 pub mod programs;
 pub mod query_console;
+pub mod registry_browser;
 pub mod scanner;
 pub mod settings;
 pub mod site_directory;
