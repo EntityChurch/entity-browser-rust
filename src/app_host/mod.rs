@@ -238,15 +238,15 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         None
     };
 
-    // The 🐞 debug overlay (compute topology + a live entity-tree dump) — a
-    // local diagnostic surface, never crossing ③α. The chip joins the meta-
-    // chrome bar; the panel sits below the status caption, hidden by default.
-    let debug_panel = debug::build(&debug::topology_text(&desc));
+    // The 🐞 debug overlay (compute wiring + live values, merged) — a local
+    // diagnostic surface, never crossing ③α. The chip joins the meta-chrome
+    // bar; the panel sits below the status caption, hidden by default. The
+    // whole panel (not just `shown`) moves into the tick-loop future below —
+    // `debug::refresh` reads its private row handles directly.
+    let (debug_panel, debug_closures) = debug::build(&peers, &peer_id, &desc, &ns);
     chrome.append_child(&debug_panel.chip)?;
     root.append_child(&debug_panel.panel)?;
-    let debug_shown = debug_panel.shown.clone();
-    let debug_tree_pre = debug_panel.tree_pre.clone();
-    LIVE.with(|v| v.borrow_mut().extend(debug_panel.closures));
+    LIVE.with(|v| v.borrow_mut().extend(debug_closures));
 
     // Clock-driven rate → ms per tick (guarded against a 0 hint). Computed here
     // (not just inside the tick loop below) because the input install below
@@ -360,15 +360,13 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
                 }
             }
         };
-        // Refresh the debug panel's live tree dump — only when it's actually
-        // shown (a `tree_listing` + N `get_entity` reads is cheap on the
-        // Direct arm, but there's no reason to pay it every tick for a
+        // Refresh the debug panel's live wiring values — only when it's
+        // actually shown (a `tree_listing` + N `get_entity` reads is cheap on
+        // the Direct arm, but there's no reason to pay it every tick for a
         // hidden panel).
         let refresh_debug = || {
-            if debug_shown.get() {
-                debug_tree_pre.set_text_content(Some(&debug::tree_dump_text(
-                    &peers, &peer_id, &ns, &desc,
-                )));
+            if debug_panel.shown.get() {
+                debug::refresh(&debug_panel, &peers, &peer_id, &ns);
             }
         };
         loop {
