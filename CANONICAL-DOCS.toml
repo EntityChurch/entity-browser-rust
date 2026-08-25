@@ -145,7 +145,16 @@ group = "How we work"
 [[doc]]
 path  = "AGENTS.md"
 title = "AGENTS.md"
-blurb = "The durable agent context and operating agreement for this repo — the repo-specific half: build/test verbs, code conventions, boundaries, and the load-bearing gotchas each earned by a shipped bug."
+blurb = "The durable agent context and operating agreement for this repo — the repo-specific half: build and test verbs, code conventions, boundaries, and an index into the gotchas reference."
+group = "How we work"
+
+# Split out of AGENTS.md so that file could stay short enough to be read in full.
+# It is the evidence half of the operating agreement — declared in the same commit
+# that created it, because AGENTS.md links into it by section.
+[[doc]]
+path  = "docs/architecture/guides/GOTCHAS.md"
+title = "Repo gotchas — the load-bearing failure modes"
+blurb = "The failure modes this codebase has actually produced, grouped by area: rendering and the frame loop, subscriptions and dirty signals, the Direct/Worker arm split, connection liveness, WebRTC and rendezvous, the publishing trust chain, content sites, apps, file transfer, packaging, the test harness, and the operator surface. Every entry was earned by a shipped bug; AGENTS.md indexes it by what you are about to change."
 group = "How we work"
 
 [[doc]]
@@ -255,9 +264,9 @@ blurb = "The WASM worker-mode migration living doc — owns the 'Phase 0–3.3' 
 group = "Design & perf detail"
 
 [[doc]]
-path  = "docs/status/STATUS.md"
+path  = "docs/STATUS.md"
 title = "Status"
-blurb = "Current project status — where the project is, recent work, backlog, and what's next."
+blurb = "Current project status — where the product is, what is proven and on what, the technical backlog, and what is next."
 group = "Overview"
 
 # ── Project / community-health files ─────────────────────────────────────────

@@ -147,6 +147,20 @@ the build will fail at dependency resolution. This layout is expected
 to evolve — eventually these will be published crates — but for now
 you need both checkouts side by side.
 
+**Nothing here needs a tag.** Every dependency on `entity-core-rust` is a
+`path =` dependency resolved from the sibling directory on disk — there is not a
+single `git`/`tag`/`rev` dependency in either manifest, and neither lockfile
+carries a `git+` source. Clone the two repos next to each other and `make test`,
+`make lint` and `make wasm` work offline against whatever revision you have
+checked out.
+
+The one place a tag appears is `CORE_RUST_REF` in
+`.github/workflows/release.yml`, and it exists for exactly one reason: a GitHub
+Actions runner has **no sibling checkout**, so the release job has to fetch one,
+and a tag is the only identifier that is both knowable in advance and publicly
+resolvable. It affects release builds only. It is not consulted by any `make`
+target, any local build, or any test.
+
 ---
 
 ## Prerequisites
@@ -247,7 +261,7 @@ make wasm          # WASM debug build → dist/    (in container)
 make wasm-release  # WASM release build → dist/  (in container)
 make test          # the native suite — unit + peer-integration (in container).
                    # For the CURRENT pass/fail count and binary count, read
-                   # docs/status/STATUS.md — it is re-measured, not quoted
+                   # docs/STATUS.md — it is re-measured, not quoted
                    # forward, because a number written here goes stale in hours.
 make lint          # clippy (in container)
 make image         # (re)build the toolchain image explicitly

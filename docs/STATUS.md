@@ -1,30 +1,14 @@
 # entity-browser-rust — status
 
-_Updated: 2026-08-24 · public: **v0.8.0** (`master`) · working branch `dev`, version **0.8.2**_
+_Updated: 2026-08-24 · version **0.9.0**_
 
-This is the tracker: where the product is, what is proven and on what, and what is open. It is a
-**published** document — so it cites files, symbols and measurements rather than commit SHAs, which
-do not resolve for a reader outside this tree (see *Commit pins* below).
+Where the product is, what is proven and on what, and what is open. It cites files, symbols and
+measurements rather than commit SHAs, which do not resolve for a reader outside this tree (see
+*Commit pins* below).
 
-> **Release posture, 2026-08-23: this repo is going out.** Gates are green and re-measured, and
-> **there are no release blockers in this tree**. What remains is either DevOps' (branch promotion,
-> tagging, the GitHub Actions platform matrix), cosmetic (icons), or waiting on hardware nobody
-> here has (a second network). Everything under *Next* was reviewed and **deliberately held** for a
-> post-release cycle, which is intended to be a short one — the items are listed there so the
-> roadmap is legible, not because they are loose ends.
+What changed for a user is in `CHANGELOG.md`.
 
-**Deeper indexes, so this file does not restate them:**
-
-| For | Read |
-|---|---|
-| Sequencing and open items, ordered | `docs/plans/PUNCHLIST-RELEASE.md` |
-| Release mechanics, matrix, open edges | `docs/RELEASE-READINESS.md` |
-| Deferred work with the reason | `docs/plans/BACKLOG.md` |
-| Connectivity open items (canonical table) | `docs/architecture/reviews/BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md` §8 |
-| What changed for a user | `CHANGELOG.md` |
-| Where the last session left off | `docs/status/HANDOFF-2026-08-24-d-the-registry-open-rail-is-closed.md` |
-
-Spot-check a row before acting on it. That table has carried stale rows, and they survived by
+Spot-check a claim before acting on it. This file has carried stale rows, and they survived by
 being read instead of run.
 
 ## Where it is
@@ -47,9 +31,9 @@ to get a build that measured a moving target):
 
 | Gate | Result |
 |---|---|
-| `make test` | **1296 / 0 / 8-ignored** across **16** test binaries — re-measured 2026-08-24 (+1 for the shared-link gate). The **1293** that stood here was one session stale: +2 for the registry-open rail fix (the Site Browser's bound peer, and the warm's provenance write). 1289/16 the previous day; 1283/15 the day before that, when a concurrent seat landed `tests/foreign_namespace_write.rs` mid-session, which is exactly how the denominator moves without anyone noticing |
+| `make test` | **1300 / 0 / 8-ignored** across **16** test binaries — re-measured 2026-08-24 at this tip. It has moved 1283 → 1289 → 1293 → 1296 → 1300 over four days, twice while a session was in progress, which is how the denominator changes without anyone noticing. Re-run it; do not quote this line |
 | `make test-tauri` | **55 / 0** across 4 binaries — **re-measured 2026-08-24**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) Unchanged since 08-23, as expected: nothing since then went near `src-tauri` |
-| `make lint` | clean, **re-measured 2026-08-24** — all seven checks, clippy **zero warnings**. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `i18n-lint` raw=24 phys=0 · `i18n-locale-check` 30 locales × 701 keys · `i18n-callsite-check` 637 call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
+| `make lint` | clean, **re-measured 2026-08-24** — all seven checks, clippy **zero warnings**. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `i18n-lint` raw=24 phys=0 · `i18n-locale-check` 30 locales × 702 keys · `i18n-callsite-check` 640 call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
 | `make e2e-worker` | **25 passed / 0 failed, 383.95 s** — unfiltered, **re-run 2026-08-24 in the release audit**, R1 green. Carries Phase 14.3 (a refused file picker must report); test COUNT is unchanged because a phase is not a test — quote the phase, not the denominator. Run against a **private Selenium grid** (`E2E_WEBDRIVER_URL`): there were **twelve** other seats' grids on the box, and `setup()` reaps *every* session on whatever grid it is pointed at, so the shared grid would both corrupt this run and take other people's work down. 368.95 s earlier the same day; 374.28 s the day before |
 
 **Read the two i18n gates as the different things they are.** `i18n-locale-check`'s *30 locales ×
@@ -109,138 +93,6 @@ peer behind another, i.e. the port-forwarding / CGNAT / symmetric-NAT half. That
 network nobody here has, so it is a post-release item waiting on hardware, not an open engineering
 task. Same-LAN is proven on real devices; off-LAN is proven only in the container NAT rigs.
 
-## Release prep — what this repo did, and where the line is
-
-**The GitHub Actions half is not this repo's to finish.** The workflow gets tweaked and proven on
-a branch by whoever owns the release pipeline; the local build is unaffected either way and works
-today (`make dist`, `make dist-web`, host needs only `make` + `podman`). What is owed *here* is
-that the tree be correct and honest before it is promoted. Done 2026-08-23:
-
-- **`CORE_RUST_REF` is `v0.9.0`** (was `v0.8.2`; **repointed 2026-08-24 on the operator's call**,
-  after the three cores went public at 0.9.0 — *"you can go up to the version 0.9.0 for now, we
-  think that's what it's gonna be"*). It names a tag that **does not exist yet**; DevOps cuts it on
-  public `master`, whose tip `3e3394e` already carries the symbols we call. A public tag, not a dev
-  SHA. Published commits are authored
-  fresh at the release boundary (ADR-0027), so an entity-core-rust `dev` SHA never resolves for
-  anyone else and no push of theirs would have rescued the old pin. The tag is anticipated: it can
-  sit in the file before it exists.
-- **`release/0.8.2` carries a reduced `release.yml`** — `web` + `assemble` — because `.github/`
-  does not exist on the public `master` at all, so a tag today would trigger nothing. `dev` keeps
-  the full platform matrix as the one home of the platform list (ADR-0023).
-  **`assemble` is kept, trimmed to `needs: [web]`, and that part is not optional:**
-  `upload-artifact` produces a *workflow artifact* (90-day expiry, attached to nothing) and
-  `gh release create` lives in `assemble` — so a `web`-only workflow with no assemble yields no
-  GitHub Release and no downloadable file, which is the bare tag the reduction exists to avoid.
-- **The notes footer and the CHANGELOG no longer advertise five installers this release does not
-  carry**, and the footer no longer links a doc the publish pipeline scrubs.
-
-## Release blockers — **none in this repo**
-
-**This repo is ready to ship.** All four gates are green, re-measured (see *Gate state*), and
-nothing below stops a tag. The list that used to sit here called four things "blockers" that are
-not this repo's work and not blocking: it is corrected below, with owners, because a false blocker
-costs the same as a missed one.
-
-| Was called a blocker | Actually |
-|---|---|
-| Branch promotion | **DevOps**, not us. Post-release the tree is reset to the public mirror on `master`, so `dev`'s relationship to it is expected to need a merge afterwards. Not an engineering task here, and not something to "fix" ahead of time |
-| `CORE_RUST_REF: v0.8.2` | **Changed shape 2026-08-24 — now an open DECISION that names this repo, not a DevOps to-do. See *The tagging decision* below.** Still CI-only: we build against the **sibling checkout on disk** by `path`, so no local build is affected |
-| Icons are a placeholder upscale | **Cosmetic, post-release.** Real art + `cargo tauri icon` whenever art exists |
-| macOS legs / Windows `.msi` / linux-arm64 unproven | **Post-release, GitHub Actions, DevOps.** Only comes back to this repo if a *code* bug turns up in Windows or macOS packaging — possible, but it is not pre-work |
-
-**One thing found on 2026-08-24 was fixed on `dev`.** The 0.8.2 CHANGELOG section said **twice**
-that TURN was unsupported while the relay fields, parser and three connector-row boxes had all
-shipped — a false statement on the page a downloader reads first. Corrected, along with the code
-doc comment it had been copied from.
-
-> **The `release/0.8.2` branch is NOT the release and is not to be treated as one.** An earlier
-> version of this paragraph read its stale CHANGELOG as a pre-tag blocker and told the next seat to
-> merge `dev` into it. That was wrong: the operator's instruction is that the branch is not real,
-> and nothing here should reason from it. **`dev` is the tree.** Left in place as a correction
-> rather than deleted, because the wrong version was published in a handoff and a reader may act
-> on it.
-
-### The tagging decision — **open, operator's, and this repo is named in it**
-
-Found 2026-08-24 in the release audit, by reading meta-systems' tree rather than ours. It is not a
-defect and nothing here is broken; it is a **coordination item that was routed to us and had no
-row on this side**, which is exactly how a cross-repo decision goes quiet.
-
-**The facts, each verified rather than taken on report:**
-
-- **The three cores went public at `0.9.0`, not `0.8.2`** — meta-systems'
-  `docs/status/HANDOFF-2026-08-24-THE-THREE-CORES-ARE-PUBLIC.md`, titled *"all three cores are
-  public at 0.9.0"*.
-- **No tags were cut.** *"**No tags.** Deferred by the operator; tracker B1 carries it, and it must
-  be settled **with browser-rust in the room** because they consume core-rust by tag and were still
-  anticipating 0.8.2."* Measured on the sibling checkout: `git tag` returns **`v0.8.0` and nothing
-  else**.
-- **Our workflow pins a tag that does not exist.** `.github/workflows/release.yml:79` is
-  `CORE_RUST_REF: v0.9.0` (repointed today; was `v0.8.2`), consumed as an `actions/checkout` `ref:` in **four** jobs (lines 107,
-  148, 217, 267). `release/0.8.2` carries the same pin at its line 94. A tag today therefore fails
-  those four jobs at checkout — **before any build runs**.
-
-**So the shape is: the local build is fine and the CI release is not.** We depend on core-rust by
-`path`, so `make test` / `lint` / `dist` are all unaffected and were green in this same audit; the
-break is confined to the tagged GitHub Actions path.
-
-**What it is NOT.** meta-systems' §4.3 row reads *"`release.yml:91` pins a `dev`-only SHA … a
-public release breaks"*. The **conclusion is right and the diagnosis is stale** — the `dev`-SHA pin
-was replaced by the `v0.8.2` tag on 2026-08-23, and line 91 is now `LATEST_ALIASES`. It breaks for a
-different reason: not an unresolvable SHA, but an unresolvable *tag*. Worth keeping as a worked
-example of the standing rule that a routed finding is a claim about a moment.
-
-**DECIDED 2026-08-24 by the operator: `v0.9.0`.** The pin is repointed
-(`.github/workflows/release.yml:79`); DevOps cuts the tag on public `master`. Recorded as
-provisional in their own words — *"we think that's what it's gonna be"* — so if the cores land on a
-different number, this pin moves with them and is the only place in this repo that has to change.
-
-**The check does not retire with the tag, and it is one command**:
-`git grep <symbol> $REF -- bindings/` must find `NegotiationReport`, `IceObserver` and
-`with_ice_observer`. A tag that resolves but predates those symbols fails later and less legibly
-than one that does not resolve at all — and this check has already caught a dead pin **twice**
-(`683a4f0`, `302b7f4`), each time because the pin was right when set and the call site moved under
-it. Public `master` at `3e3394e` satisfies it today, so a tag cut there passes; **that is a
-statement about a commit, not about a tag that does not exist yet, so re-run it at cut time.**
-
-The one thing genuinely open *in this repo's own code* is R1 below, and it is not a blocker either:
-it is a **test-harness** phase that is currently green and now self-diagnosing.
-
-1. **R1 — the display-gated Tauri WebView phase. Red 3/3 then green 13/13 on one unchanged tree,
-   2026-08-23. Open, not reproducible, and the trigger is unidentified.** Full record:
-   `docs/status/FINDING-2026-08-23-r1-is-a-stall-in-wasm-instantiate-not-a-slow-one.md`. The
-   session ended on a full unfiltered **25 / 0 in 374.28 s** with the phase green at 1088 ms.
-   - **Two candidate causes are DEAD, both killed by controls.** *Host load* — wrong: the figures
-     quoted for it were a load average not divided by 32 threads and `free` rather than
-     `available` (77 GB). *The container memory cap* — wrong: raising it looked decisive until the
-     plain-defaults control went green, then six more at defaults. **A fix a control reproduces
-     without the fix is not a fix.**
-   - **It is not the i18n round** — bisected against a pre-translation build, which fails
-     identically (+27 KB of catalogs, +78 KB of wasm, 0.27 %).
-   - **What is established is WHERE it stops, not why.** On every red the child's stdout ends at
-     the `instantiateStreaming` fallback and goes silent for 60 s, and **zero of the five boot
-     milestones the module logs from its own entry point arrive** — while the console bridge is
-     demonstrably forwarding other WebView output. So the module never begins executing: a stall
-     in `WebAssembly.instantiate`, not slow app boot and not a panic. That now rests on a
-     **positive control** — a green run reports `5/5` — rather than on reasoning from absence.
-   - **What was fixed is the diagnostic, not the product.** The phase now prints the milestone
-     trace on failure (`✓ step @ N ms` / `✗ step — never seen`, with an explicit *never started*
-     case) **and the count on success**, so the next red is readable in one line instead of a
-     session. Gate: `the_boot_milestone_trace_distinguishes_never_started_from_hung_midway`,
-     mutation-checked both ways.
-   - **The `application/wasm` question is live but not urgent.** Tauri's asset protocol serves
-     `frontendDist` without the type, which forces the non-streaming path;
-     `src-tauri/src/app_server.rs` already gets this right and has a test pinning it. The earlier
-     ruling that a 48× margin refutes it was wrong **in kind** — a margin bounds *slowness* and
-     says nothing about a path that never completes — but "plausible mechanism" is not "found".
-   - **Scope:** this is the **debug** bundle at 29.5 MB. The release bundle was **measured
-     2026-08-24** for the first time — `make dist-web` gives **7,609,107 bytes**, 3.9× smaller — so
-     if the mechanism really is a stall compiling a large module in one non-streaming pass, a
-     release desktop build is carrying a quarter of the load the failing rig does. **That is a
-     reason to re-measure, not a resolution**: no release build has ever been run on this path, and
-     "smaller" is not "does not stall". The desktop is still neither shown broken for users by a rig
-     failure against a debug artifact, nor shown fine.
-
 ## Device verification — human, not agent-doable, and **none of it gates the release**
 
 1. **Optimized bundle on Safari / iOS.** Engineering is done: the binaryen **119** pin in the
@@ -283,7 +135,7 @@ This file used to carry **15** such pins, the largest single concentration in an
 publishes. They are gone, replaced by the file, symbol, or measurement the citation was actually
 resting on. Measured exposure across the repo is **48**, of which only 18 are countable from
 `CANONICAL-DOCS.toml` — source comments and prose outside a `docs/` root are *always kept* by the
-publish filter and appear in no manifest. Detail and the numbers: `docs/RELEASE-READINESS.md`.
+publish filter and appear in no manifest.
 
 The durable form is keystone's: cite **content**, not commits.
 
@@ -347,11 +199,10 @@ dropped, because a backlog that only grows is not being read.
   because `system_peer_id()` is still an alias for `primary_peer_id`; a Site Browser on any
   non-primary peer gets `Unreachable` on a name that resolved. Same shape as the registry-pin bug.
 - **B-3 is now LOAD-BEARING rather than optional — its trigger fired 2026-08-24, and it is still not
-  release-blocking.** Routed in by meta-devops against this repo's own rule and confirmed here:
+  release-blocking.** Raised against this repo's own rule and confirmed here:
   the trigger is *"ANY path by which bytes reach the renderer from an origin the deployment did not
   supply"*, and `open_in_site_browser` now registers an origin that came from a **signed registry
-  binding**. Reply: `docs/status/ROUTING-2026-08-24-f-…`. Four things, and the third is what keeps
-  the severity honest:
+  binding**. Four things, and the third is what keeps the severity honest:
   - **The thing the rule most feared did not happen.** `verified_at` is still hard `None` with the
     reason inline, and every foreign rail row still says *not verified*. The D2 violation — a
     verified *resolution* laundering an unverified *fetch* — has not shipped.
@@ -442,7 +293,6 @@ that, not a set of loose ends.
    `E2E_RELAY*` on `e2e-webrtc-meet` as the gate.
 5. **A registry binding's `ttl` is doing two jobs, and the spec defines it both ways. Known,
    understood, and deliberately held for arch after the release** (operator's call, 2026-08-24).
-   Full routing: `docs/status/ROUTING-2026-08-24-e-ttl-is-doing-two-jobs-and-the-spec-says-so-twice.md`.
    - **The finding.** `EXTENSION-REGISTRY` §2.1 declares `ttl` a *"positive-result **cache
      hint**"*; §3 — which §2.1 itself names as canonical — says *"null = sticky until revoked"*;
      §6a.1a makes it *"the only bound on a withheld revocation"*. A cache lifetime and a validity
@@ -466,24 +316,14 @@ that, not a set of loose ends.
      (checked — only the exploration and its companion analysis exist). What we asked for is the
      narrow half: reconcile the §2.1-vs-§3 text, and confirm which job an engine must implement.
    - **The knob, and where it actually lives.** `--ttl-days=N` →
-     `make registry TTL_DAYS=N` (`Makefile:1507`) → meta-systems'
-     `REGISTRY_TTL_DAYS` (`scripts/site-pipeline.sh:77`, passed at :697). Fully wired end to end;
+     `make registry TTL_DAYS=N` (`Makefile:1507`) → the publishing pipeline's own
+     `REGISTRY_TTL_DAYS`. Fully wired end to end;
      **no code change is owed by anyone** to change the value. There is no protocol maximum — §6a.9.2
      explicitly declines to set one — and both existing ceilings (issuer-policy `max_ttl`, the
      resolver's local ceiling) bound it downward only.
-   - **Trap worth stating: our `DEFAULT_TTL_MS` is dead for production.** Their pipeline always
-     passes `TTL_DAYS` explicitly and carries **its own** default of 30, so editing our constant
-     changes nothing that ships. The effective default is theirs.
+   - **Trap worth stating: our `DEFAULT_TTL_MS` is dead for production.** The publishing pipeline
+     always passes `TTL_DAYS` explicitly and carries its own default of 30, so editing our constant
+     changes nothing that ships.
    - **What it does *not* cost when bindings lapse**, measured 2026-08-24: sites a visitor has
      already opened keep working. Origin registration persists independently of the binding, so
      expiry stops *new* name resolution and nothing else.
-
-## Waiting on
-
-- **`entity-core-rust`** — this crate uses path dependencies into `../entity-core-rust/`, so the
-  build fails at dependency resolution if that checkout is missing or at an incompatible revision.
-  SDK-tier changes belong upstream there, not here. **This is a build-time relationship with the
-  checkout on disk and is not affected by tagging**: `CORE_RUST_REF` in the release workflow is a
-  CI concern owned by DevOps, not a precondition for anything in this tree.
-- **Meta-systems' pushes** — the next session here picks up after those land, to see whether they
-  leave any work on this side. Nothing in this repo is blocked on them today.

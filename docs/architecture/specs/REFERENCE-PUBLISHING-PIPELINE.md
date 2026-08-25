@@ -36,7 +36,7 @@ origin map — see §5).
 ## 1. End-to-end flow
 
 ```
- ┌─ PAPERS TEAM ───────────┐   ┌─ THIS APP ──────────────────────────────────┐   ┌─ DEVOPS ────┐
+ ┌─ CONTENT RENDERER ──────┐   ┌─ THIS APP ──────────────────────────────────┐   ┌─ DEVOPS ────┐
  │ render/ (Go)            │   │ publish verb (Rust)                         │   │             │
  │  paper.md + figures  ─► │ ► │  ingest disk→tree ─► serialize tree→dist/   │ ►│ push dist/  │
  │  emits a site dir:      │   │   • entity-native .bin  ({peer}/sites/…)    │   │  → R2 bucket│
@@ -59,7 +59,7 @@ origin map — see §5).
 
 | Stage | Owner | Artifact in / out |
 |---|---|---|
-| Author + render content | **papers team** | `paper.md` + `output/figures/*` → a site dir (`site.manifest.json`, `pages/`, `assets/figures/`) |
+| Author + render content | **your renderer** | `paper.md` + `output/figures/*` → a site dir (`site.manifest.json`, `pages/`, `assets/figures/`) |
 | Ingest + publish | **this app** (`make site-papers`) | site dir → `dist/` (static) |
 | Push to CDN | **DevOps** (not yet wired) | `dist/` → R2 bucket behind a CDN |
 | Run the site | **the browser** | static files → live SPA |
