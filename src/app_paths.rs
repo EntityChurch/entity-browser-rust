@@ -221,6 +221,21 @@ pub fn backend_auth_entry_path(app_id: &str, peer_id: &str, backend_pid: &str) -
     format!("/{}/app/{}/backend-auth/{}", peer_id, app_id, backend_pid)
 }
 
+/// Prefix for the **connection-health** mirror on the local system peer — a
+/// subscribable "is this remote reachable" signal, one entity per remote peer,
+/// written from the connection/dispatch signals we already have (connect
+/// success, the backend-auth probe). Windows watch this prefix so a live/stale
+/// change repaints reactively, instead of a manual reconnect + refresh. (A real
+/// transport-close event from the SDK can later feed the same entity.)
+pub fn connection_health_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/conn-health/", peer_id, app_id)
+}
+
+/// Path for one remote peer's health entity, keyed by its peer id.
+pub fn connection_health_entry_path(app_id: &str, peer_id: &str, remote_pid: &str) -> String {
+    format!("/{}/app/{}/conn-health/{}", peer_id, app_id, remote_pid)
+}
+
 /// Path for the WebSocket listener's published state (current listen
 /// address, when bound).
 pub fn listener_state_path(app_id: &str, peer_id: &str) -> String {

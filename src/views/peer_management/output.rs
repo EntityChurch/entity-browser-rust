@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use crate::peer_display::PeerDisplay;
+use crate::peer_display::{PeerDescriptor, PeerDisplay};
 
 #[derive(Debug, Clone)]
 pub struct PeerManagementOutput {
@@ -26,12 +26,11 @@ pub struct PeerManagementOutput {
 pub struct PeerRow {
     pub peer_id: String,
     pub short_pid: String,
+    /// Structural classification (which SDK hosts it) — drives badge color.
     pub kind: PeerDisplay,
-    /// Role/type glyph (★ system · ● frontend · ◆ backend-mem · ◆⛁ backend-opfs).
-    /// Resolved truthfully from the peer's actual mode.
-    pub role_glyph: String,
-    /// Human role name, paired with `role_glyph`.
-    pub role_name: String,
+    /// The truthful role · runtime · storage facets, replacing the old single
+    /// "backend (memory)"-style role string. Rendered as a glyph + chips.
+    pub descriptor: PeerDescriptor,
     pub label: Option<String>,
     pub persisted: bool,
     pub address: AddressDisplay,

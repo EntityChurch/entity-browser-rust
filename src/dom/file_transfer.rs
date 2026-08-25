@@ -10,6 +10,7 @@
 use wasm_bindgen::JsCast;
 
 use crate::action::Action;
+use crate::dom::components::{self, AuthState};
 use crate::dom::event_log;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
@@ -23,15 +24,17 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     let wrapper = util::create_element_with_class("div", "file-transfer");
     wrapper.set_attribute("style", theme::SECTION).ok();
 
-    // Header row: title + a live access chip on the right.
+    // Header row: the job (named for the connected device) + the ONE access
+    // chip on the right (S4 — the single source of authorization status; no
+    // window below restates it).
     let header = util::create_element("div");
     header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
     h2.set_attribute("style", "margin:0;font-size:16px").ok();
-    util::set_text(&h2, "File Transfer");
+    util::set_text(&h2, &title_for(output));
     util::append(&header, &h2);
     if output.has_target {
-        util::append(&header, &access_chip(&output.access));
+        util::append(&header, &components::auth_chip(auth_state(&output.access)));
     }
     util::append(&wrapper, &header);
 
@@ -41,20 +44,24 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
         return;
     }
 
-    // Peer + access.
-    let peer_group = section_group();
-    render_target_selector(&peer_group, output, ctx);
-    render_access(&peer_group, output, ctx);
-    util::append(&wrapper, &peer_group);
+    // Which device (only surfaced when there's a choice) + the actionable
+    // "not authorized" path. The status itself is the header chip.
+    if output.target_options.len() > 1 || matches!(output.access, TargetAccess::Denied) {
+        let peer_group = components::card("Device");
+        if output.target_options.len() > 1 {
+            render_target_selector(&peer_group, output, ctx);
+        }
+        render_access(&peer_group, output, ctx);
+        util::append(&wrapper, &peer_group);
+    }
 
-    // Browse the share as a tree, then pull a file.
-    let get_group = section_group();
+    // Get: browse the share as a tree, then pull a file.
+    let get_group = components::card("Shared files");
     render_file_browser(&get_group, output, ctx);
     util::append(&wrapper, &get_group);
 
-    // Send files (push).
-    let send_group = section_group();
-    subheading(&send_group, "Send a file");
+    // Send: push a file up.
+    let send_group = components::card("Send a file");
     render_upload_controls(&send_group, output, ctx);
     util::append(&wrapper, &send_group);
 
@@ -63,48 +70,26 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     util::append(container, &wrapper);
 }
 
-/// A bordered group container that visually separates the window's sections.
-fn section_group() -> Element {
-    let g = util::create_element("div");
-    g.set_attribute(
-        "style",
-        "margin:10px 0;padding:10px;border-radius:6px;\
-         border:1px solid var(--border, #333);background:var(--surface-sunken, #0a0a1a)",
-    )
-    .ok();
-    g
+/// The window's job, named for the connected device (S6 — human terms). Falls
+/// back to a plain title when nothing is connected.
+fn title_for(output: &FileTransferOutput) -> String {
+    if !output.has_target {
+        return "File Transfer".to_string();
+    }
+    match output.target_options.iter().find(|o| o.selected) {
+        Some(o) if !o.label.is_empty() => format!("Files — {}", o.label),
+        _ => "File Transfer".to_string(),
+    }
 }
 
-fn subheading(parent: &Element, text: &str) {
-    let h = util::create_element("h3");
-    h.set_attribute(
-        "style",
-        "margin:0 0 8px;font-size:12px;text-transform:uppercase;\
-         letter-spacing:0.05em;color:var(--text-dim, #888)",
-    )
-    .ok();
-    util::set_text(&h, text);
-    util::append(parent, &h);
-}
-
-/// A compact status pill for the header reflecting the target's access.
-fn access_chip(access: &TargetAccess) -> Element {
-    let (label, fg, border) = match access {
-        TargetAccess::Authorized(_) => ("✓ Authorized", "var(--status-ok, #4c4)", "var(--status-ok, #4c4)"),
-        TargetAccess::Denied => ("⛔ Not authorized", "var(--status-err, #f66)", "var(--status-err, #f66)"),
-        TargetAccess::Unknown => ("• Access unverified", "var(--text-dim, #888)", "var(--border, #444)"),
-    };
-    let chip = util::create_element("span");
-    chip.set_attribute(
-        "style",
-        &format!(
-            "font-size:11px;padding:2px 8px;border-radius:10px;white-space:nowrap;\
-             color:{fg};border:1px solid {border}"
-        ),
-    )
-    .ok();
-    util::set_text(&chip, label);
-    chip
+/// Map the target's access to the shared authorization vocabulary (S4). File
+/// Transfer is a read-only *reflection* of authorization, never its own words.
+fn auth_state(access: &TargetAccess) -> AuthState {
+    match access {
+        TargetAccess::Authorized(_) => AuthState::Authorized,
+        TargetAccess::Denied => AuthState::NotAuthorized,
+        TargetAccess::Unknown => AuthState::Unverified,
+    }
 }
 
 fn render_no_target_hint(parent: &Element) {
@@ -147,52 +132,32 @@ fn render_target_selector(parent: &Element, output: &FileTransferOutput, ctx: &D
 /// authorized" claim from an empty local mirror. It is a *consumer* of
 /// authorization; it never authors grants inline.
 fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    match &output.access {
-        TargetAccess::Denied => {
-            let notice = util::create_element("div");
-            notice
-                .set_attribute(
-                    "style",
-                    "margin:8px 0 2px;padding:8px;border-radius:4px;\
-                     border:1px solid var(--status-err, #a44);\
-                     background:var(--surface, #2a1a1a)",
-                )
-                .ok();
+    // The header chip is the single source of authorization *status* (S4). Here
+    // we add only the actionable *path* when access is refused — no restatement.
+    if matches!(output.access, TargetAccess::Denied) {
+        let msg = util::create_element("p");
+        msg.set_attribute("style", &format!("margin:{} 0;font-size:13px", theme::SP_2)).ok();
+        util::set_text(
+            &msg,
+            "The exposing device must authorize this one before transfers succeed.",
+        );
+        util::append(parent, &msg);
 
-            let msg = util::create_element("p");
-            msg.set_attribute("style", "margin:0 0 6px;font-size:13px").ok();
-            msg.set_inner_html(
-                "<span style='color:var(--status-err, #f66)'>This device isn't authorized \
-                 for file transfer.</span> The exposing device must authorize it before \
-                 transfers succeed.",
-            );
-            util::append(&notice, &msg);
-
-            // Deep-link to the authority surface (§2.1) — focuses the singleton
-            // Peer Connections window (or spawns it) where the grant is made.
-            let btn = util::create_element("button");
-            util::set_text(&btn, "Authorize in Peer Connections");
-            btn.set_attribute("style", theme::BTN_PRIMARY).ok();
-            let actions = ctx.actions.clone();
-            let rp = ctx.repaint.clone();
-            ctx.listen(&btn, "click", move |_| {
-                actions.borrow_mut().push(Action::SpawnWindow {
-                    type_name: "Peer Connections",
-                    peer_id: None,
-                });
-                rp();
+        // Deep-link to the authority surface — focuses the singleton Peer
+        // Connections window (or spawns it) where the grant is made.
+        let btn = util::create_element("button");
+        util::set_text(&btn, "Authorize this device");
+        btn.set_attribute("style", theme::BTN_PRIMARY).ok();
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        ctx.listen(&btn, "click", move |_| {
+            actions.borrow_mut().push(Action::SpawnWindow {
+                type_name: "Peer Connections",
+                peer_id: None,
             });
-            util::append(&notice, &btn);
-            util::append(parent, &notice);
-        }
-        TargetAccess::Unknown => {
-            let hint = util::create_element("p");
-            hint.set_attribute("style", theme::HINT).ok();
-            util::set_text(&hint, "Access not verified yet — List shared files to check.");
-            util::append(parent, &hint);
-        }
-        // Authorized: the header chip already says so — keep the body quiet.
-        TargetAccess::Authorized(_) => {}
+            rp();
+        });
+        util::append(parent, &btn);
     }
 }
 
@@ -214,45 +179,37 @@ const NODE_BTN_SELECTED: &str = "flex:1 1 auto;text-align:left;\
 /// for the selected file. Directories lazy-load on expand; nothing here reaches
 /// the tree directly — it renders `output.tree_rows`.
 fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let header = util::create_element("div");
-    header.set_attribute("style", theme::HEADER_ROW).ok();
-    let title = util::create_element("h3");
-    title
-        .set_attribute(
-            "style",
-            "margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;\
-             color:var(--text-dim, #888)",
-        )
-        .ok();
-    util::set_text(&title, "Shared files");
-    util::append(&header, &title);
+    // The card already titles this group ("Shared files"); here we only offer a
+    // Refresh once the share is listed — right-aligned (external changes only;
+    // our own writes re-list themselves per S5).
     if output.root_listed {
+        let header = util::create_element("div");
+        header
+            .set_attribute("style", "display:flex;justify-content:flex-end;margin-bottom:8px")
+            .ok();
         let refresh = util::create_element("button");
         util::set_text(&refresh, "Refresh");
         refresh.set_attribute("style", theme::BTN_SMALL).ok();
         ctx.on_window_event(&refresh, "click", "ft_refresh", "");
         util::append(&header, &refresh);
+        util::append(parent, &header);
     }
-    util::append(parent, &header);
 
+    // Error state (S5) — loud, specific.
     if let Some(err) = &output.browse_error {
-        let e = util::create_element("p");
-        e.set_attribute("style", "color:var(--status-err, #f66);font-size:12px;margin:4px 0").ok();
-        util::set_text(&e, &format!("✗ {err}"));
-        util::append(parent, &e);
+        util::append(parent, &components::error(err));
     }
 
     if !output.root_listed {
-        let el = util::create_element(if output.root_loading { "p" } else { "button" });
         if output.root_loading {
-            el.set_attribute("style", theme::HINT).ok();
-            util::set_text(&el, "Loading…");
+            util::append(parent, &components::loading("")); // "Loading…"
         } else {
+            let el = util::create_element("button");
             el.set_attribute("style", theme::BTN_SECONDARY).ok();
             util::set_text(&el, "Browse shared files");
             ctx.on_window_event(&el, "click", "ft_refresh", "");
+            util::append(parent, &el);
         }
-        util::append(parent, &el);
         return;
     }
 
@@ -260,10 +217,8 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     list.set_attribute("style", "margin:4px 0;max-height:260px;overflow:auto").ok();
     list.set_attribute("data-scroll-key", "file-transfer-tree").ok();
     if output.tree_rows.is_empty() {
-        let empty = util::create_element("p");
-        empty.set_attribute("style", theme::HINT).ok();
-        util::set_text(&empty, "This share is empty.");
-        util::append(&list, &empty);
+        // Empty state (S5) — a helpful line, not a void.
+        util::append(&list, &components::empty("This share is empty."));
     } else {
         for row in &output.tree_rows {
             render_tree_row(&list, row, ctx);
@@ -380,6 +335,7 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
     let peer_id = output.peer_id.clone();
     let target = output.selected_target.clone();
     let prefix = output.share_prefix.clone();
+    let window_id = ctx.window_id;
     let input_ref = input.clone();
     ctx.listen(&input, "change", move |_| {
         if target.is_empty() {
@@ -412,6 +368,7 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
                         handler_uri,
                         path,
                         bytes,
+                        window_id,
                     });
                     rp();
                 }

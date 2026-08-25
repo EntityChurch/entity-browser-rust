@@ -124,6 +124,91 @@ pub async fn delete_backend_peer(peer_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Auto-provision the canonical system backend peer (B) and return it, started
+/// and listening. Idempotent server-side (stable `system-backend` identity), so
+/// the WebView (S) calls it unconditionally at boot. `manager_peer_id` is S —
+/// B self-seeds S's manager grant. Replaces the manual create → start dance.
+/// See `DESIGN-SYSTEM-BACKEND-PEER.md` §10.
+pub async fn ensure_system_backend(manager_peer_id: &str) -> Result<BackendPeerInfo, String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("managerPeerId"),
+        &JsValue::from_str(manager_peer_id),
+    )
+    .map_err(|_| "failed to set managerPeerId arg")?;
+    let result = invoke("ensure_system_backend", &args.into()).await?;
+    BackendPeerInfo::from_js(&result).ok_or("invalid ensure_system_backend response".into())
+}
+
+/// The backend's shared-files directory on disk (behind the `local/files/shared/`
+/// tree prefix). Shown in the System Backend window so the operator knows where
+/// shared files actually live. `None` if the share root couldn't be resolved.
+pub async fn system_backend_share_path() -> Result<Option<String>, String> {
+    let result = invoke("system_backend_share_path", &JsValue::undefined()).await?;
+    Ok(result.as_string())
+}
+
+/// Set the backend's `tracing` level at runtime (`off`/`error`/…/`trace`) from
+/// the System Backend window's level control.
+pub async fn set_backend_log_level(level: &str) -> Result<(), String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("level"),
+        &JsValue::from_str(level),
+    )
+    .map_err(|_| "failed to set level arg")?;
+    invoke("set_backend_log_level", &args.into()).await?;
+    Ok(())
+}
+
+/// The backend's current `tracing` level, so the window can pre-select its level
+/// control on open.
+pub async fn get_backend_log_level() -> Result<String, String> {
+    let result = invoke("get_backend_log_level", &JsValue::undefined()).await?;
+    Ok(result.as_string().unwrap_or_default())
+}
+
+/// Result of a `backend_log_tail` poll: the new log lines (text only — the
+/// server's per-line `seq` is redundant for the consumer, which advances by
+/// `cursor`) plus the cursor to poll with next time (`{ lines, cursor }`).
+#[derive(Debug, Clone, Default)]
+pub struct BackendLogTail {
+    pub lines: Vec<String>,
+    pub cursor: u64,
+}
+
+/// Tail the backend peer's captured `tracing` output for the System Backend
+/// window's live log stream. `after` is the last cursor seen (0 for a fresh
+/// poll); pass back the returned `cursor` each time. In-memory only server-side.
+pub async fn backend_log_tail(after: u64) -> Result<BackendLogTail, String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("after"),
+        &JsValue::from_f64(after as f64),
+    )
+    .map_err(|_| "failed to set after arg")?;
+    let result = invoke("backend_log_tail", &args.into()).await?;
+    let cursor = js_sys::Reflect::get(&result, &JsValue::from_str("cursor"))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(after as f64) as u64;
+    let mut lines = Vec::new();
+    if let Some(arr) = js_sys::Reflect::get(&result, &JsValue::from_str("lines"))
+        .ok()
+        .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
+    {
+        for entry in arr.iter() {
+            if let Some(text) = get_string(&entry, "text") {
+                lines.push(text);
+            }
+        }
+    }
+    Ok(BackendLogTail { lines, cursor })
+}
+
 /// List all managed backend peers (running + stopped).
 pub async fn list_backend_peers() -> Result<Vec<BackendPeerInfo>, String> {
     let result = invoke("list_backend_peers", &JsValue::undefined()).await?;

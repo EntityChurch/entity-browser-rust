@@ -686,9 +686,9 @@ mod tests {
         let s = model.render_output(&pm).session;
         assert_eq!(s.boot_kind, "window");
         assert!(!s.target_disabled);
-        // On the system peer ALL 20 window types are valid targets, and exactly
+        // On the system peer ALL 21 window types are valid targets, and exactly
         // one is pre-selected (the default the mutator picked).
-        assert_eq!(s.targets.len(), 20, "system peer hosts every window type");
+        assert_eq!(s.targets.len(), 21, "system peer hosts every window type");
         assert_eq!(s.targets.iter().filter(|t| t.selected).count(), 1);
     }
 

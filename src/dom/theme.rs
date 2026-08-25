@@ -4,6 +4,22 @@
 //! The Shadow DOM stylesheet (style.rs) handles class-based layout; these
 //! handle widget-level styling that's shared across window views.
 
+// --- Spacing scale (REFERENCE-UI-DESIGN S1) ---------------------------------
+// One constrained scale, base 4px. Use these instead of ad-hoc pixel values so
+// spacing is consistent across windows. Rule of thumb: tight WITHIN a group
+// (SP_1/SP_2), loose BETWEEN groups (SP_3/SP_4).
+pub const SP_1: &str = "4px";
+pub const SP_2: &str = "8px";
+pub const SP_3: &str = "12px";
+// The larger steps are part of the published scale; consumers adopt them as
+// windows migrate off ad-hoc pixel values (S1). Kept so the scale is complete.
+#[allow(dead_code)]
+pub const SP_4: &str = "16px";
+#[allow(dead_code)]
+pub const SP_5: &str = "24px";
+#[allow(dead_code)]
+pub const SP_6: &str = "32px";
+
 /// Window section padding wrapper.
 pub const SECTION: &str = "padding:12px";
 

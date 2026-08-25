@@ -98,6 +98,29 @@ fn chrome_override() -> bool {
         .unwrap_or(false)
 }
 
+/// Auto-connect bookkeeping for the canonical system backend peer (Phase 1c,
+/// `DESIGN-SYSTEM-BACKEND-PEER.md` §10). The boot IPC fills `target` with the
+/// ensured backend's id + WS address; `drain_system_backend_connect` (each
+/// frame) dials it from S with backoff, iff it isn't already connected, and
+/// clears `target` once connected or after the attempt cap — so the frontend
+/// system peer connects to the backend with zero user action.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct SystemBackendConnect {
+    /// The ensured backend (id + ws addr). `None` until the boot IPC returns;
+    /// then it stays armed for the session so `drain_system_backend_connect`
+    /// can **re-dial on a dropped link** (self-healing) — the drain idles while
+    /// the connection is live (per real health) and re-dials when it goes
+    /// Unreachable.
+    target: Option<crate::tauri_ipc::BackendPeerInfo>,
+    /// Connect attempts issued so far — the cap guards against a backend that
+    /// never accepts (D13: give up loudly, don't spin forever).
+    attempts: u32,
+    /// Frames to wait before the next attempt. Backoff covers a dial that
+    /// races the (async) listener bind or a transient connect failure.
+    cooldown: u32,
+}
+
 /// Main application state. Only instantiated by the WASM frontend
 /// (browser / Tauri WebView); the native binary is a deprecation stub.
 #[cfg(target_arch = "wasm32")]
@@ -115,6 +138,10 @@ pub struct EntityApp {
     /// (`Action::RefreshBackendAuth`) so the Peer Connections window can render
     /// them synchronously (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`).
     backend_auth_writer: crate::backend_auth::BackendAuthWriter,
+    /// Local, subscribable connection-health mirror — written from connect
+    /// success + the backend-auth probe, read by windows for reactive
+    /// connected/stale state (`crate::connection_health`).
+    connection_health_writer: crate::connection_health::ConnectionHealthWriter,
     /// Tree-backed publisher for the WS listener's bound address.
     /// Cloned into the listener-bind spawned task; only used on native.
     #[cfg(feature = "native-ws")]
@@ -131,6 +158,12 @@ pub struct EntityApp {
     /// Drained each frame in WASM mode.
     #[cfg(target_arch = "wasm32")]
     pending_backend_peers: Arc<std::sync::Mutex<Vec<crate::tauri_ipc::BackendPeerInfo>>>,
+    /// System backend auto-connect state (Phase 1c). Filled by the boot IPC
+    /// (`ensure_system_backend`) from an async context, consumed by
+    /// `drain_system_backend_connect` each frame. `Arc<Mutex>` for the
+    /// async fill. `DESIGN-SYSTEM-BACKEND-PEER.md` §10.
+    #[cfg(target_arch = "wasm32")]
+    system_backend_connect: Arc<std::sync::Mutex<SystemBackendConnect>>,
     /// Pending Worker-SDK attachments from async `WorkerProxy::spawn`
     /// completions (Stage 2B). Drained each frame and integrated into
     /// `peer_manager` via `attach_worker_sdk`. Uses `Rc<RefCell<...>>`
@@ -854,6 +887,8 @@ impl EntityApp {
         tracing::info!("EntityApp initialized (WASM, DOM-only)");
 
         let pending_backend_peers = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let system_backend_connect =
+            Arc::new(std::sync::Mutex::new(SystemBackendConnect::default()));
         let event_log_writer = EventLogWriter::new(&peer_manager);
         // Sprint #4: route uncaught browser-level errors / unhandled rejections
         // into the in-app Event Log so production failures are visible, not
@@ -861,6 +896,8 @@ impl EntityApp {
         crate::diagnostics::install_main_thread(event_log_writer.clone());
         let connections_writer = ConnectionsWriter::new(&peer_manager);
         let backend_auth_writer = crate::backend_auth::BackendAuthWriter::new(&peer_manager);
+        let connection_health_writer =
+            crate::connection_health::ConnectionHealthWriter::new(&peer_manager);
         let mut peer_registry = PeerRegistry::new(&peer_manager);
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
@@ -882,6 +919,45 @@ impl EntityApp {
                     Err(e) => {
                         tracing::error!(error = %e, "failed to list backend peers");
                         log.log(format!("Failed to list backend peers: {}", e));
+                    }
+                }
+            });
+
+            // Auto-provision the canonical system backend peer (B) and arm the
+            // S→B auto-connect (Phase 1c). `ensure_system_backend` is idempotent
+            // server-side (stable `system-backend` identity), so a reload just
+            // re-dials the persisted backend. S is passed as the manager so B
+            // self-seeds S's manager grant. This replaces the manual
+            // create → start → connect dance. DESIGN-SYSTEM-BACKEND-PEER §10.
+            let pending = pending_backend_peers.clone();
+            let connect = system_backend_connect.clone();
+            let log = event_log_writer.clone();
+            let manager_pid = peer_manager.system_peer_id().to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::tauri_ipc::ensure_system_backend(&manager_pid).await {
+                    Ok(info) => {
+                        tracing::info!(
+                            peer_id = %info.peer_id,
+                            ws_addr = ?info.ws_addr,
+                            "system backend ensured"
+                        );
+                        log.log(format!(
+                            "System backend up: {}",
+                            info.ws_addr.as_deref().unwrap_or("?")
+                        ));
+                        // Register its (running) metadata so it shows in Peers,
+                        // then arm the auto-connect (dialed from the frame loop).
+                        if let Ok(mut q) = pending.lock() {
+                            q.push(info.clone());
+                        }
+                        if let Ok(mut c) = connect.lock() {
+                            c.target = Some(info);
+                        }
+                    }
+                    Err(e) => {
+                        // D13 — surface loudly; never a silent "no target".
+                        tracing::error!(error = %e, "system backend failed to start");
+                        log.log(format!("System backend didn't start: {}", e));
                     }
                 }
             });
@@ -955,9 +1031,11 @@ impl EntityApp {
             event_log_writer,
             connections_writer,
             backend_auth_writer,
+            connection_health_writer,
             peer_registry,
             dom,
             pending_backend_peers,
+            system_backend_connect,
             pending_sdk_attachments,
             xworker_broker,
             boot_control_port: stashed_boot_port,
@@ -1735,6 +1813,10 @@ impl EntityApp {
     pub fn frame(&mut self) {
         // Register any backend peers that were created via async Tauri IPC.
         self.drain_pending_backend_peers();
+        // Dial the auto-provisioned system backend from S (Phase 1c) — once B
+        // is registered above, connect to it with backoff, iff not already
+        // connected. Zero user action; replaces the manual Connect click.
+        self.drain_system_backend_connect();
         // Attach any new Worker SDKs spawned for backend-mode peer creation.
         self.drain_pending_sdk_attachments();
 
@@ -2296,9 +2378,9 @@ impl EntityApp {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, "Action::DownloadFile");
                     self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone());
                 }
-                Action::UploadFile { peer_id, handler_uri, path, bytes } => {
+                Action::UploadFile { peer_id, handler_uri, path, bytes, window_id } => {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, len = bytes.len(), "Action::UploadFile");
-                    self.handle_upload_file(peer_id.clone(), handler_uri.clone(), path.clone(), bytes.clone());
+                    self.handle_upload_file(peer_id.clone(), handler_uri.clone(), path.clone(), bytes.clone(), *window_id);
                 }
                 Action::Query { peer_id, expression } => {
                     tracing::info!(peer = %peer_id, expr_type = %expression.entity_type, "Action::Query");
@@ -2342,6 +2424,7 @@ impl EntityApp {
         let pid = peer_id;
         let log = self.event_log_writer.clone();
         let connections = self.connections_writer.clone();
+        let health = self.connection_health_writer.clone();
 
         log.log(format!("Connecting to {}...", addr));
 
@@ -2368,6 +2451,9 @@ impl EntityApp {
             // remembered + one-tap reconnectable (§13.2). `addr` was moved
             // in for exactly this.
             connections.add(&remote_pid, &addr);
+            // Reactive liveness: a fresh handshake ⇒ Connected. Windows watching
+            // the conn-health mirror repaint without a manual refresh.
+            health.record(&remote_pid, crate::connection_health::Liveness::Connected, None);
             log.log(format!("Connected to {}", remote_pid));
 
             let uri = format!("entity://{}/system/tree", remote_pid);
@@ -2601,6 +2687,10 @@ impl EntityApp {
         let log = self.event_log_writer.clone();
         log.log(format!("↓ pulling {}...", path));
 
+        // Feed the dispatch outcome into the connection-health mirror: an answer
+        // (any status) ⇒ reachable; a transport error ⇒ Unreachable.
+        let health = self.connection_health_writer.clone();
+        let target = entity_uri_authority(&handler_uri).map(str::to_string);
         let fut = crate::ops::execute(
             &self.peer_manager,
             crate::ops::ExecuteRequest {
@@ -2614,6 +2704,7 @@ impl EntityApp {
         wasm_bindgen_futures::spawn_local(async move {
             match fut.await {
                 Ok(resp) => {
+                    mark_health(&health, &target, Ok(()));
                     // A handler-level error (e.g. 404) comes back as Ok with a
                     // non-OK status; surface it loudly rather than trying to
                     // reassemble an error entity.
@@ -2626,7 +2717,10 @@ impl EntityApp {
                         Err(e) => log.log(format!("✗ save {} → {}", filename, e)),
                     }
                 }
-                Err(e) => log.log(format!("✗ pull {} → {}", path, e)),
+                Err(e) => {
+                    mark_health(&health, &target, Err(e.clone()));
+                    log.log(format!("✗ pull {} → {}", path, e));
+                }
             }
         });
     }
@@ -2635,10 +2729,23 @@ impl EntityApp {
     /// The handler chunks the bytes and writes the file to the peer's
     /// disk (DOMAIN-LOCAL-FILES §4.3) — the phone→desktop upload. WASM-only.
     #[cfg(target_arch = "wasm32")]
-    fn handle_upload_file(&self, pid: String, handler_uri: String, path: String, bytes: Vec<u8>) {
+    fn handle_upload_file(&self, pid: String, handler_uri: String, path: String, bytes: Vec<u8>, window_id: crate::window::WindowId) {
         let log = self.event_log_writer.clone();
         let len = bytes.len();
         log.log(format!("↑ uploading {} ({} bytes)...", path, len));
+
+        // S5 write-refresh: on a confirmed upload, re-list the initiating
+        // window's share so the new file appears without a manual Refresh. We
+        // enqueue a `ft_refresh` WindowEvent into the shared action sink (drained
+        // next frame) rather than touching the view here — same mechanism the
+        // window's own Refresh button uses.
+        let refresh_handle = self
+            .dom
+            .as_ref()
+            .map(|d| (d.action_sink(), d.repaint_handle()));
+        // Dispatch outcome → connection-health (same as pull).
+        let health = self.connection_health_writer.clone();
+        let target = entity_uri_authority(&handler_uri).map(str::to_string);
 
         // Write params: a single `bytes` field the handler decodes via
         // WriteRequestData::from_params. The params entity type is not
@@ -2681,11 +2788,27 @@ impl EntityApp {
             },
         );
         wasm_bindgen_futures::spawn_local(async move {
-            match write_fut.await {
+            let write_result = write_fut.await;
+            mark_health(
+                &health,
+                &target,
+                write_result.as_ref().map(|_| ()).map_err(|e| e.clone()),
+            );
+            match write_result {
                 Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
                     let msg = format!("✓ FILE-XFER uploaded {} ({} bytes) — backend confirmed", path, len);
                     tracing::info!("{}", msg);
                     log.log(msg);
+                    // S5 write-refresh: the file just landed — re-list the share
+                    // so it shows up without the user hitting Refresh.
+                    if let Some((sink, repaint)) = &refresh_handle {
+                        sink.borrow_mut().push(crate::action::Action::WindowEvent {
+                            window_id,
+                            event: "ft_refresh".into(),
+                            value: String::new(),
+                        });
+                        repaint();
+                    }
                     // Now prove it's really there.
                     match verify_fut.await {
                         Ok(v) if v.result.status == entity_handler::STATUS_OK => {
@@ -2730,6 +2853,7 @@ impl EntityApp {
     #[cfg(target_arch = "wasm32")]
     fn handle_refresh_backend_auth(&self, local_pid: String, backend_pid: String) {
         let (session_fut, policy_fut) = self.backend_auth_read_futures(&local_pid, &backend_pid);
+        let prev = self.backend_auth_prev(&backend_pid);
         wasm_bindgen_futures::spawn_local(derive_and_record_backend_auth(
             session_fut,
             policy_fut,
@@ -2737,7 +2861,24 @@ impl EntityApp {
             self.event_log_writer.clone(),
             self.peer_manager.system_peer_id().to_string(),
             backend_pid,
+            prev,
+            self.connection_health_writer.clone(),
         ));
+    }
+
+    /// The mirror's current observation for a backend (for dedupe at record
+    /// time). Reads the local backend-auth mirror on the system peer.
+    #[cfg(target_arch = "wasm32")]
+    fn backend_auth_prev(
+        &self,
+        backend_pid: &str,
+    ) -> Option<crate::backend_auth::BackendAuthObservation> {
+        let sys = self.peer_manager.system_peer_id().to_string();
+        let path =
+            crate::app_paths::backend_auth_entry_path(crate::app_paths::APP_ID, &sys, backend_pid);
+        self.peer_manager
+            .get_entity(&sys, &path)
+            .map(|e| crate::backend_auth::BackendAuthObservation::from_entity(&e))
     }
 
     /// Build the two `'static` remote-read futures for a backend-auth refresh:
@@ -2831,6 +2972,8 @@ impl EntityApp {
         // runs in the same task once the grant has landed — no self needed.
         let (session_fut, policy_fut) = self.backend_auth_read_futures(&local_pid, &backend_pid);
         let refresh_log = log.clone();
+        let prev = self.backend_auth_prev(&backend_pid);
+        let health = self.connection_health_writer.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
             match configure_fut.await {
@@ -2848,6 +2991,8 @@ impl EntityApp {
                         refresh_log,
                         system_pid,
                         backend_pid,
+                        prev,
+                        health,
                     )
                     .await;
                 }
@@ -3197,6 +3342,81 @@ impl EntityApp {
         );
     }
 
+    /// Dial the auto-provisioned system backend from S (Phase 1c,
+    /// `DESIGN-SYSTEM-BACKEND-PEER.md` §10.2/§10.3). Fires at most once per
+    /// cooldown window, only while `target` is armed and B isn't already in the
+    /// connections registry, and stops after a successful connect (clears
+    /// `target`) or the attempt cap (gives up loudly, D13). Backoff covers a
+    /// dial that races the (async) listener bind. Guard reads the connections
+    /// registry directly — reliable on the Tauri IDB arm this path runs under.
+    #[cfg(target_arch = "wasm32")]
+    fn drain_system_backend_connect(&mut self) {
+        // ~1s between tries at 60fps; a burst of attempts, then a slow retry.
+        const MAX_ATTEMPTS: u32 = 8;
+        const BACKOFF_FRAMES: u32 = 60;
+        const RETRY_COOLDOWN: u32 = 600; // ~10s slow-retry after a failed burst
+
+        // Snapshot the armed target without holding the lock across the dial.
+        let target = {
+            let Ok(mut c) = self.system_backend_connect.lock() else {
+                return;
+            };
+            let Some(info) = c.target.clone() else {
+                return;
+            };
+            if c.cooldown > 0 {
+                c.cooldown -= 1;
+                return;
+            }
+            if c.attempts >= MAX_ATTEMPTS {
+                // Don't give up permanently — back off and keep retrying so a
+                // backend that comes back later self-heals without a reload.
+                c.attempts = 0;
+                c.cooldown = RETRY_COOLDOWN;
+                drop(c);
+                tracing::warn!("system backend unreachable after {MAX_ATTEMPTS} tries — backing off, will retry");
+                return;
+            }
+            info
+        };
+
+        let Some(ws_addr) = target.ws_addr.clone() else {
+            // No address to dial — clear so we don't spin.
+            if let Ok(mut c) = self.system_backend_connect.lock() {
+                c.target = None;
+            }
+            return;
+        };
+
+        // Live connection? Trust the real connection-health signal, not the
+        // remembered registry — the registry stays "connected" forever after
+        // the first dial, so guarding on it means we never re-dial a *dropped*
+        // link (the stale-connection bug). Registered + not-Unreachable ⇒
+        // treat as up (idle, keep the target armed + reset the budget so a
+        // later drop gets a fresh set of attempts). A definitive Unreachable ⇒
+        // re-dial even though it's remembered — self-healing.
+        let registered = crate::connections::read_connections(&self.peer_manager)
+            .iter()
+            .any(|p| p.remote_pid == target.peer_id);
+        let unreachable = crate::connection_health::read(&self.peer_manager, &target.peer_id)
+            == crate::connection_health::Liveness::Unreachable;
+        if registered && !unreachable {
+            if let Ok(mut c) = self.system_backend_connect.lock() {
+                c.attempts = 0;
+            }
+            return;
+        }
+
+        // Dial from S (the frontend system peer) — the same "from" peer as the
+        // manual backend-connect affordance.
+        let system_pid = self.peer_manager.system_peer_id().to_string();
+        self.handle_connect_peer(system_pid, ws_addr);
+        if let Ok(mut c) = self.system_backend_connect.lock() {
+            c.attempts += 1;
+            c.cooldown = BACKOFF_FRAMES;
+        }
+    }
+
     fn drain_pending_backend_peers(&mut self) {
         let pending: Vec<crate::tauri_ipc::BackendPeerInfo> = {
             let mut q = self.pending_backend_peers.lock().unwrap();
@@ -3244,6 +3464,14 @@ async fn derive_and_record_backend_auth(
     log: EventLogWriter,
     system_pid: String,
     backend_pid: String,
+    // The mirror's current observation, captured at trigger time. Used to
+    // dedupe: an identical result (same rows, or the same failure) is neither
+    // re-logged nor re-written — so the reactive periodic refresh is silent when
+    // nothing changed, and a persistently-dead link logs its error once.
+    prev: Option<crate::backend_auth::BackendAuthObservation>,
+    // The auth read doubles as B's liveness probe — feed its outcome into the
+    // subscribable connection-health mirror (the writer dedupes internally).
+    health: crate::connection_health::ConnectionHealthWriter,
 ) {
     let session_keys = match session_fut.await {
         Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
@@ -3255,6 +3483,8 @@ async fn derive_and_record_backend_auth(
                 &log,
                 &backend_pid,
                 format!("session read returned status {}", resp.result.status),
+                &prev,
+                &health,
             )
         }
         Err(e) => {
@@ -3262,7 +3492,9 @@ async fn derive_and_record_backend_auth(
                 &writer,
                 &log,
                 &backend_pid,
-                format!("no manager capability? ({})", e),
+                format!("the backend link isn't ready ({})", e),
+                &prev,
+                &health,
             )
         }
     };
@@ -3276,6 +3508,8 @@ async fn derive_and_record_backend_auth(
                 &log,
                 &backend_pid,
                 format!("policy read returned status {}", resp.result.status),
+                &prev,
+                &health,
             )
         }
         Err(e) => {
@@ -3284,6 +3518,8 @@ async fn derive_and_record_backend_auth(
                 &log,
                 &backend_pid,
                 format!("policy read failed ({})", e),
+                &prev,
+                &health,
             )
         }
     };
@@ -3303,6 +3539,16 @@ async fn derive_and_record_backend_auth(
         .iter()
         .filter(|r| r.state == crate::peer_auth::AuthState::Pending)
         .count();
+    // The read reached B and came back — B is live. Feed the health mirror
+    // (deduped) regardless of whether the auth rows themselves changed.
+    health.record(&backend_pid, crate::connection_health::Liveness::Connected, None);
+    let obs = crate::backend_auth::BackendAuthObservation::ok(&backend_pid, rows);
+    // Dedupe: unchanged since the last read → stay silent (no event-log line, no
+    // mirror rewrite → no needless repaint). Keeps the reactive periodic refresh
+    // quiet when nothing's new.
+    if prev.as_ref() == Some(&obs) {
+        return;
+    }
     log.log(format!(
         "✓ auth-refresh {} → {} connected, {} authorized, {} pending",
         backend_pid,
@@ -3310,7 +3556,33 @@ async fn derive_and_record_backend_auth(
         authorized.len(),
         pending
     ));
-    writer.record(&crate::backend_auth::BackendAuthObservation::ok(&backend_pid, rows));
+    writer.record(&obs);
+}
+
+/// The remote-peer authority from an `entity://{pid}/...` handler URI (the
+/// dispatch target), or `None` for a non-`entity` / local URI.
+#[cfg(target_arch = "wasm32")]
+fn entity_uri_authority(uri: &str) -> Option<&str> {
+    let rest = uri.strip_prefix("entity://")?;
+    let authority = rest.split('/').next()?;
+    (!authority.is_empty()).then_some(authority)
+}
+
+/// Fold a dispatch outcome into the connection-health mirror for a target: any
+/// answer (`Ok`) ⇒ the peer is reachable (`Connected`); a transport `Err` ⇒
+/// `Unreachable`. No-op when the target isn't a resolvable remote. The writer
+/// dedupes, so repeated same-state calls are free.
+#[cfg(target_arch = "wasm32")]
+fn mark_health(
+    health: &crate::connection_health::ConnectionHealthWriter,
+    target: &Option<String>,
+    outcome: Result<(), String>,
+) {
+    let Some(pid) = target else { return };
+    match outcome {
+        Ok(()) => health.record(pid, crate::connection_health::Liveness::Connected, None),
+        Err(e) => health.record(pid, crate::connection_health::Liveness::Unreachable, Some(e)),
+    }
 }
 
 /// Record a loud backend-auth read failure (§5): the observation mirror gets a
@@ -3322,13 +3594,28 @@ fn record_auth_failure(
     log: &EventLogWriter,
     backend_pid: &str,
     detail: String,
+    prev: &Option<crate::backend_auth::BackendAuthObservation>,
+    health: &crate::connection_health::ConnectionHealthWriter,
 ) {
-    let msg = format!("cannot read backend authorizations — {}", detail);
-    log.log(format!("✗ auth-refresh {} → {}", backend_pid, msg));
-    writer.record(&crate::backend_auth::BackendAuthObservation::failed(
+    // The probe couldn't reach/read B — mark the link Unreachable (deduped).
+    health.record(
         backend_pid,
-        msg,
+        crate::connection_health::Liveness::Unreachable,
+        Some(detail.clone()),
+    );
+    let msg = format!("cannot read backend authorizations — {}", detail);
+    let obs = crate::backend_auth::BackendAuthObservation::failed(backend_pid, msg);
+    // Dedupe: the same failure is already recorded → don't re-log or re-write
+    // (so a persistently-stale link logs its error once, not every refresh tick).
+    if prev.as_ref() == Some(&obs) {
+        return;
+    }
+    log.log(format!(
+        "✗ auth-refresh {} → {}",
+        backend_pid,
+        obs.error.as_deref().unwrap_or("")
     ));
+    writer.record(&obs);
 }
 
 /// Compose the always-on status-bar summary (`N windows · M peers · Saved`).

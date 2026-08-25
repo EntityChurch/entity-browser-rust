@@ -6,7 +6,7 @@ use wasm_bindgen::JsCast;
 use crate::action::Action;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
-use crate::peer_display::PeerDisplay;
+use crate::peer_display::PeerRole;
 use crate::views::peer_management::output::{
     AddressDisplay, BackendButton, PeerManagementOutput, PeerRow,
 };
@@ -66,13 +66,16 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     util::set_attr(&alias_input, "data-field", "peer-alias");
     util::append(&create_panel, &alias_input);
 
-    // Frontend = main-thread + in-memory; Backend Memory = worker +
-    // in-memory; Backend OPFS = worker + OPFS-persisted.
+    // Labels say where the peer runs + how it persists — "frontend"/"backend"
+    // are retired (they conflated three different runtimes). Phase 2 replaces
+    // this button-per-combo with a single form (runtime + storage selectors).
+    // Frontend = main thread + in-memory; Backend (Memory) = worker + in-memory;
+    // Backend (OPFS) = worker + OPFS-persisted.
     use crate::peer_mode::PeerMode;
     let create_buttons: [(&str, PeerMode, &str); 3] = [
-        ("+ Frontend", PeerMode::Frontend, theme::BTN_PRIMARY),
-        ("+ Backend (Memory)", PeerMode::BackendMemory, theme::BTN_SECONDARY),
-        ("+ Backend (OPFS)", PeerMode::BackendOpfs, theme::BTN_SECONDARY),
+        ("+ Main thread (memory)", PeerMode::Frontend, theme::BTN_PRIMARY),
+        ("+ Worker (memory)", PeerMode::BackendMemory, theme::BTN_SECONDARY),
+        ("+ Worker (OPFS)", PeerMode::BackendOpfs, theme::BTN_SECONDARY),
     ];
     for (label, mode, style) in create_buttons {
         let btn = util::create_element("button");
@@ -93,7 +96,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
 
     if output.show_backend_create {
         let backend_btn = util::create_element("button");
-        util::set_text(&backend_btn, "+ Tauri Backend");
+        util::set_text(&backend_btn, "+ Native peer");
         util::set_attr(&backend_btn, "style", theme::BTN_SECONDARY);
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
@@ -142,23 +145,32 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
 
     // Glyph prefix lets you scan type without reading the badge.
     let td_id = util::create_element_with_class("td", "id");
-    util::set_text(&td_id, &format!("{} {}", row.role_glyph, row.short_pid));
+    util::set_text(&td_id, &format!("{} {}", row.descriptor.glyph(), row.short_pid));
     util::append(&tr, &td_id);
 
+    // Kind cell: a System/User role badge + a "where it runs" chip + a
+    // "how it persists" chip. Replaces the single "backend (memory)"-style
+    // string — three orthogonal facts, each scannable.
     let td_kind = util::create_element("td");
-    // role_name distinguishes backend-opfs vs backend-memory, which
-    // the bare primary/local/remote kind does not.
-    let badge_kind_class = match row.kind {
-        PeerDisplay::Primary => "peer-badge primary",
-        PeerDisplay::Local => "peer-badge local",
-        PeerDisplay::Remote => "peer-badge remote",
+    let (role_class, role_text) = match row.descriptor.role {
+        PeerRole::System => ("peer-badge system", "System"),
+        PeerRole::User => ("peer-badge user", "User"),
     };
-    let badge = util::create_element_with_class("span", badge_kind_class);
-    util::set_text(&badge, &row.role_name);
+    let badge = util::create_element_with_class("span", role_class);
+    util::set_text(&badge, role_text);
     util::append(&td_kind, &badge);
+
+    let runtime_chip = util::create_element_with_class("span", "peer-chip");
+    util::set_text(&runtime_chip, row.descriptor.runtime.label());
+    util::append(&td_kind, &runtime_chip);
+
+    let storage_chip = util::create_element_with_class("span", "peer-chip");
+    util::set_text(&storage_chip, row.descriptor.storage.label());
+    util::append(&td_kind, &storage_chip);
+
     if row.persisted {
         let saved = util::create_element_with_class("span", "peer-saved");
-        util::set_text(&saved, " saved");
+        util::set_text(&saved, "saved");
         util::append(&td_kind, &saved);
     }
     util::append(&tr, &td_kind);

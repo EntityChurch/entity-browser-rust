@@ -29,6 +29,7 @@ use crate::views::{
     shell::ShellWindow,
     site_editor::SiteEditorWindow,
     storage::StorageWindow,
+    system_backend::SystemBackendWindow,
     wire_recorder::WireRecorderWindow,
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
@@ -58,6 +59,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         crate::views::content_site::ContentSiteWindow::window_type(),
         StorageWindow::window_type(),
         SiteEditorWindow::window_type(),
+        SystemBackendWindow::window_type(),
     ]
 }
 
@@ -89,7 +91,15 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
         ),
         (
             System,
-            vec!["Settings", "Peers", "Peer Connections", "File Transfer", "Key Manager", "Storage"],
+            vec![
+                "Settings",
+                "Peers",
+                "Peer Connections",
+                "System Backend",
+                "File Transfer",
+                "Key Manager",
+                "Storage",
+            ],
         ),
         (
             Developer,
@@ -125,9 +135,9 @@ mod tests {
     }
 
     #[test]
-    fn roster_is_twenty_and_settings_is_system_scoped() {
+    fn roster_is_twentyone_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
-        assert_eq!(meta.len(), 20, "the standard roster is 20 windows");
+        assert_eq!(meta.len(), 21, "the standard roster is 21 windows");
         // Spot-check the scope partition the settings filter relies on.
         let settings = meta.iter().find(|(n, _)| *n == "Settings").expect("Settings present");
         assert_eq!(settings.1, WindowScope::System);

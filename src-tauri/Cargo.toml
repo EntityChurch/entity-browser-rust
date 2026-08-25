@@ -43,7 +43,9 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # logging system was already initialized"). We don't need that bridge — the
 # backend peer uses `tracing` directly — so tauri-plugin-log keeps sole
 # ownership of the `log` crate (the webview console bridge).
-tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "ansi", "env-filter"] }
+# `registry` enables the layered subscriber + `reload` (runtime-adjustable log
+# level for the System Backend window).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "ansi", "env-filter", "registry"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -612,6 +612,20 @@ select optgroup {
 .peer-badge.primary { color: var(--peer-primary, #6b8); }
 .peer-badge.local   { color: var(--peer-local, #8ab); }
 .peer-badge.remote  { color: var(--peer-remote, #b8a); }
+/* Role: infra (System) vs user-created (User). */
+.peer-badge.system  { color: var(--peer-primary, #6b8); }
+.peer-badge.user    { color: var(--peer-local, #8ab); }
+
+/* Where-it-runs / how-it-persists chips — neutral, sit after the role badge. */
+.peer-chip {
+    font-size: 0.7em;
+    color: var(--text-faint, #999);
+    border: 1px solid var(--border, #333);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-left: 4px;
+    white-space: nowrap;
+}
 
 .peer-saved {
     font-size: 0.7em;
