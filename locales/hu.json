@@ -426,6 +426,7 @@
   "btn.collapse": "Összecsukás",
   "games.empty": "Még nincsenek elérhető játékok.",
   "apps.empty": "Még nincsenek elérhető alkalmazások.",
+  "programs.empty": "Még nincsenek elérhető programok.",
   "sitedir.filter_mine": "Sajátok",
   "sitedir.filter_all": "Összes",
   "sitedir.filter_external": "Külsők",
@@ -594,7 +595,7 @@
     "other": "{n} peer"
   },
 
-  "window.programs": "Programok",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Átvihető számítási programok — egyszer megírva (workbench-go), a leíróikból csatolva, e peer számítási motorja értékeli ki őket.",
   "programs.install": "Telepítés",
   "programs.restart": "Újraindítás",

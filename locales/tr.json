@@ -426,6 +426,7 @@
   "btn.collapse": "Daralt",
   "games.empty": "Henüz kullanılabilir oyun yok.",
   "apps.empty": "Henüz kullanılabilir uygulama yok.",
+  "programs.empty": "Henüz kullanılabilir program yok.",
   "sitedir.filter_mine": "Benim",
   "sitedir.filter_all": "Tümü",
   "sitedir.filter_external": "Harici",
@@ -594,7 +595,7 @@
     "other": "{n} peer"
   },
 
-  "window.programs": "Programlar",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Taşınabilir hesaplama programları — bir kez yazılır (workbench-go), tanımlayıcılarından bağlanır, bu eşin hesaplama motorunca değerlendirilir.",
   "programs.install": "Kur",
   "programs.restart": "Yeniden başlat",

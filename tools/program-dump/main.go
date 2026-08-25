@@ -18,9 +18,9 @@
 //
 // The input schedule writes the SEED's field name (Snake `{"dir":v}`,
 // Asteroids `{"keys":v}` — the field the step's Field() lookup reads).
-// NOTE: workbench's EncodeKeySet writes `{"bits":v}` while the shipped
-// Asteroids seed/step use `keys` — a cross-impl finding reported upstream;
-// the oracle follows the program, not the encoder.
+// The historical `bits` vs `keys` EncodeKeySet drift is resolved upstream
+// (workbench-go pinned KeySet/EncodeKeySet to `keys`, the incumbent wire
+// field — RESPONSE-GENERIC-HOST-INPUT-DEVICE-MODEL §3); `keys` here matches.
 package main
 
 import (
@@ -39,7 +39,7 @@ import (
 	"go.entitychurch.org/entity-core-go/core/types"
 
 	"entity-workbench-go/entitysdk"
-	wb "entity-workbench-go/workbench"
+	wb "entity-workbench-go/programs"
 )
 
 // DumpEntity is one authored entity, program-relative path, raw canonical

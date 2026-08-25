@@ -17,10 +17,18 @@
 use entity_entity::Entity;
 
 /// One embedded program fixture. `key` doubles as the roster identity and
-/// the e2e hook; `json` is the raw bundle file.
+/// the e2e hook; `json` is the raw bundle file. `name`/`glyph`/`description`
+/// are the launcher-grid presentation (the descriptor carries no program-level
+/// display name), so the Programs window has a single source of truth.
 pub struct EmbeddedProgram {
     pub key: &'static str,
     pub json: &'static str,
+    /// Display name for the launcher tile.
+    pub name: &'static str,
+    /// Launcher-card emoji (empty = letter fallback).
+    pub glyph: &'static str,
+    /// One-line tile subtitle.
+    pub description: &'static str,
 }
 
 /// The three POC programs, embedded at build time. Regenerate with
@@ -29,14 +37,23 @@ pub const EMBEDDED_PROGRAMS: &[EmbeddedProgram] = &[
     EmbeddedProgram {
         key: "life",
         json: include_str!("../../assets/programs/life.json"),
+        name: "Life",
+        glyph: "🧬",
+        description: "Conway's Game of Life — a cellular-automaton compute program.",
     },
     EmbeddedProgram {
         key: "snake",
         json: include_str!("../../assets/programs/snake.json"),
+        name: "Snake",
+        glyph: "🐍",
+        description: "Snake — arrow keys steer; a direction-input compute program.",
     },
     EmbeddedProgram {
         key: "asteroids",
         json: include_str!("../../assets/programs/asteroids.json"),
+        name: "Asteroids",
+        glyph: "🚀",
+        description: "Asteroids — arrows steer, Space fires; a vector-display compute program.",
     },
 ];
 
@@ -53,6 +70,9 @@ pub struct BundleEntity {
 }
 
 /// An oracle input write applied before the given tick runs.
+// The oracle-replay mirror of the bundle JSON: read by the cross-impl oracle
+// tests, not on the live render/tick path (real input comes from the drivers).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct InputEvent {
     pub tick: u64,
@@ -62,6 +82,8 @@ pub struct InputEvent {
 }
 
 /// Boundary hashes after tick `i` completes.
+// Consumed by the oracle tests (the cross-impl trust gate), not at runtime.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TickOracle {
     pub state_hash: String,
@@ -71,7 +93,11 @@ pub struct TickOracle {
 
 #[derive(Debug, Clone)]
 pub struct Bundle {
+    // program/root/inputs/oracle are the bundle-JSON mirror the oracle tests
+    // read; the live host runs off origin_peer/descriptor_path/entities.
+    #[allow(dead_code)]
     pub program: String,
+    #[allow(dead_code)]
     pub root: String,
     /// The authoring peer's id — the namespace baked into the IR's
     /// `lookup/tree` paths by the Go builder (it peer-qualifies at build
@@ -83,7 +109,9 @@ pub struct Bundle {
     pub origin_peer: String,
     pub descriptor_path: String,
     pub entities: Vec<BundleEntity>,
+    #[allow(dead_code)]
     pub inputs: Vec<InputEvent>,
+    #[allow(dead_code)]
     pub oracle: Vec<TickOracle>,
 }
 
@@ -237,7 +265,7 @@ pub fn digest_of_hash_string(s: &str) -> Result<String, String> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     (0..s.len() / 2)

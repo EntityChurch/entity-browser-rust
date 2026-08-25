@@ -29,6 +29,7 @@ pub enum PaletteMode {
     /// `Some(theme)` freezes a manifest-declared registered theme's values
     /// (S-T2, DESIGN-MANIFEST-SITE-THEME §4) — the site's *effective* own
     /// palette, so a published page matches "Site's theme" mode in-app.
+    #[allow(dead_code)] // spec'd frozen-palette mode (S-T2); not yet emitted on the wasm publish path
     Frozen(Option<&'static Theme>),
 }
 

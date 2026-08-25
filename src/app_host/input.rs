@@ -1,14 +1,34 @@
-//! app_host input drivers — keyboard → shape entity → inner-peer input port.
+//! app_host keyboard input **source** — the iframe's keyboard modality.
 //!
-//! The L5 payload is a **focusable document running its own inner peer**, so
-//! input is captured *in* the iframe and written straight to the input port via
-//! [`host::input_future`] — the identical write the native oracle test drives
-//! (`oracle_tests.rs`). It **never crosses ③α**: the host still sees only the
-//! `state` emissions, blind to the payload (P1). This is the input mirror of the
-//! display `text_driver` — **program-blind, shape-bound**: the value mapping is
-//! per shape; the entity's field name is read from the program's *seed*
-//! (`shapes::input_field_name`), never assumed (workbench's `EncodeKeySet`
-//! diverges from its shipped seed — the seed is the authority, shapes.rs §note).
+//! This module is ONE input source. It translates keydown/keyup on the payload
+//! window into the modality-neutral verbs of a program-blind
+//! [`program_host::input::InputTarget`] (`set_direction`, `press`/`release`),
+//! which owns the per-shape state, encodes the shape entity, and — via the
+//! delivery this module injects — writes it to the inner peer. The write is
+//! captured *in* the iframe and **never crosses ③α**: the host still sees only
+//! the `state` emissions, blind to the payload (P1).
+//!
+//! The split is the reuse seam: what lives HERE is keyboard- and iframe-specific
+//! — the physical-key → control-name binding (the keyboard-position convention
+//! below), the DOM listeners, and the iframe delivery (D13 stamp + `spawn_local`
+//! inner-peer write). The target ([`program_host::input`]) is source- and
+//! boundary-free, so a second source drives the SAME target — a second source,
+//! not a second code path. That second source is real now: [`install`] builds
+//! ONE `Rc<InputTarget>` per port and attaches BOTH the keyboard source here AND
+//! the on-screen pointer source ([`super::onscreen`]), so a keyboard key and an
+//! on-screen button feed one shared state (one held-key mask, one latest
+//! direction).
+//!
+//! **Program-blind keyboard-position convention.** The keyboard maps physical
+//! keys to controller POSITIONS, never to app semantics — arrows/WASD → the four
+//! directional-axis positions (`up`/`down`/`left`/`right`), and a fixed key row
+//! (Space, then Z/X/C…) → the declared actions in bit order. The program owns
+//! name↔bit (its `scene.keymap`, parsed into control bindings by
+//! [`controls`](crate::program_host::controls)); composing that with this fixed
+//! convention yields key → bit without the host ever naming an app control. This
+//! retired the old host-owned `KEY_ACTIONS` guess (no more `Space = fire` baked
+//! in — Space is just action[0]'s position). The convention is provisional
+//! pending arch ratification of the cross-host default (RESPONSE §5 item 4).
 //!
 //! Every installed `Closure` is returned to the caller, which holds it in
 //! `app_host::LIVE` for the document's lifetime — never `Closure::forget()`
@@ -16,7 +36,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
@@ -25,63 +45,80 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::KeyboardEvent;
 
 use crate::peers::Peers;
+use crate::program_host::controls::{self, ControlBinding, Role, AXIS_DOWN, AXIS_LEFT, AXIS_RIGHT, AXIS_UP};
 use crate::program_host::descriptor::{ProgramPort, SHAPE_DIRECTION, SHAPE_KEY_SET};
 use crate::program_host::host;
-use crate::program_host::shapes::{self, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP};
+use crate::program_host::input::InputTarget;
+use crate::program_host::shapes::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP};
 
-/// The input shapes this host drives. `admit()` in `run_program` is gated on
+use super::onscreen::{self, ActionFace, MomentaryGuard};
+
+/// The input shapes this source drives. `admit()` in `run_program` is gated on
 /// this plus the display shapes — a program binding an unlisted input shape is
 /// refused with the shape named, never mounted-then-mute.
 pub const SUPPORTED_INPUT_SHAPES: &[&str] = &[SHAPE_DIRECTION, SHAPE_KEY_SET];
 
-/// Everything an installed driver needs to write one input value: which port,
-/// what entity type/field, on which peer. Cloned into the keyboard closures
-/// (all `'static`).
-#[derive(Clone)]
-struct InputSink {
+/// What one input port's `install` produced: the pointer/keyboard `Closure`s the
+/// caller holds for the document's lifetime (D12), plus the two on-screen
+/// surfaces to mount in their separate homes — the thumb `pad` (the bottom
+/// overlay) and the `chips` cluster (the meta-chrome bar). Both are `None` when
+/// the port's shape has no driver.
+pub struct Installed {
+    pub closures: Vec<Closure<dyn FnMut(JsValue)>>,
+    pub pad: Option<web_sys::Element>,
+    pub chips: Option<web_sys::Element>,
+}
+
+impl Installed {
+    fn empty() -> Self {
+        Self {
+            closures: Vec::new(),
+            pad: None,
+            chips: None,
+        }
+    }
+}
+
+/// Build the iframe delivery for a port: stamp the D13 surface
+/// (`data-app-host-input = "<field>:<value>"`, same-origin, inside the iframe,
+/// never emitted to the host — P1) and spawn the inner-peer write off-loop
+/// (awaited so a following tick's `lookup/tree` observes it). Encode already
+/// happened in the target; here is only the iframe-specific delivery.
+fn iframe_deliver(
     peers: Rc<Peers>,
     peer_id: String,
     ns: String,
     port_path: String,
-    type_ref: String,
-    /// The seed's field name (`dir` for Snake, `keys` for Asteroids).
     field: String,
-    /// D13 surface: the payload element we stamp `data-app-host-input` on so the
-    /// input state has an observable surface (and the e2e can read it across the
-    /// same-origin boundary). Not `state` — this never reaches the host.
     observe: web_sys::Element,
-}
-
-impl InputSink {
-    /// Encode `value` as this port's entity and write it to the inner peer
-    /// (awaited off-loop so a following tick's `lookup/tree` observes it), then
-    /// stamp the D13 surface. Encode/write faults log loudly (never silent).
-    fn write(&self, value: u64) {
-        let entity = match shapes::encode_input(&self.type_ref, &self.field, value) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::error!(port = %self.port_path, "app-host input: encode: {e}");
-                return;
-            }
-        };
-        // D13: the input state has a surface — same-origin, inside the iframe,
-        // never emitted to the host (P1 stays intact).
-        let _ = self
-            .observe
-            .set_attribute("data-app-host-input", &format!("{}:{}", self.field, value));
-        let fut = host::input_future(&self.peers, &self.peer_id, &self.ns, &self.port_path, entity);
+) -> Box<dyn Fn(u64, entity_entity::Entity)> {
+    Box::new(move |value, entity| {
+        let _ = observe.set_attribute("data-app-host-input", &format!("{field}:{value}"));
+        let fut = host::input_future(&peers, &peer_id, &ns, &port_path, entity);
         spawn_local(async move {
             if let Err(e) = fut.await {
                 tracing::error!("app-host input: write: {e}");
             }
         });
-    }
+    })
 }
 
-/// Install the keyboard driver for one input port on the payload's own window,
-/// returning the held `Closure`s (the caller owns them for the document's
-/// lifetime — D12). An unsupported shape installs nothing and logs (admission
-/// should already have refused it, so this is defence in depth).
+/// Install ALL input sources for one input port: build ONE shared
+/// `Rc<InputTarget>`, attach the keyboard source (this module) AND the on-screen
+/// pointer source ([`super::onscreen`]) to it, and hand back both the held
+/// `Closure`s (owned by the caller for the document's lifetime — D12) and the
+/// on-screen control panel to mount. Sharing one target is what makes the two
+/// sources ONE state, not two racing copies. An unsupported shape installs
+/// nothing and logs (admission should already have refused it — defence in depth).
+///
+/// `min_hold_ms` is the program's own tick period (the same value the tick
+/// loop sleeps by, from `desc.tick.rate_hint`): a `key-set` momentary
+/// press/release (keyboard OR on-screen) delays its release by that long
+/// ([`onscreen::MomentaryGuard`]) so a tap shorter than one tick still holds
+/// long enough for the program's `step` to observe it — otherwise a fast tap
+/// landing entirely inside one tick's gap is invisible to the program (the
+/// "button sometimes does nothing" race between a momentary tap and the
+/// discrete clock).
 pub fn install(
     peers: Rc<Peers>,
     peer_id: String,
@@ -89,29 +126,84 @@ pub fn install(
     port: &ProgramPort,
     field: String,
     observe: web_sys::Element,
-) -> Vec<Closure<dyn FnMut(JsValue)>> {
-    let sink = InputSink {
+    min_hold_ms: i32,
+) -> Installed {
+    let deliver = iframe_deliver(
         peers,
         peer_id,
         ns,
-        port_path: port.path.clone(),
-        type_ref: port.type_ref.clone(),
-        field,
+        port.path.clone(),
+        field.clone(),
         observe,
-    };
-    match port.shape.as_str() {
-        SHAPE_DIRECTION => install_direction(sink),
-        SHAPE_KEY_SET => install_key_set(sink, port),
+    );
+    // Build the shared target + its two sources, per shape.
+    let (target, mut closures, layout) = match port.shape.as_str() {
+        SHAPE_DIRECTION => {
+            let target = Rc::new(InputTarget::direction(port.type_ref.clone(), field, deliver));
+            let closures = install_direction(target.clone());
+            (target, closures, onscreen::Layout::Direction)
+        }
+        SHAPE_KEY_SET => {
+            // name→bit is the PROGRAM's declaration (control ROLES, parsed by the
+            // reference parser). A parse error surfaces (a declared-but-broken
+            // control must not vanish silently); an empty keymap means the
+            // program declared no usable controls — install nothing (never guess).
+            let bindings = match controls::parse_keymap(port.scene.as_ref()) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!(port = %port.name, "app-host input: key-set keymap parse: {e}");
+                    return Installed::empty();
+                }
+            };
+            if bindings.is_empty() {
+                tracing::warn!(port = %port.name, "app-host input: key-set port has no usable keymap scene");
+                return Installed::empty();
+            }
+            let action_bit = controls::action_bit_map(&bindings);
+            let target = Rc::new(InputTarget::key_set(
+                port.type_ref.clone(),
+                field,
+                action_bit,
+                deliver,
+            ));
+            let closures = install_key_set(target.clone(), &bindings, min_hold_ms);
+            // The standard controller: directional axes → the d-pad, discrete
+            // actions → buttons (label/glyph from the program's declaration).
+            let axes: Vec<String> = bindings
+                .iter()
+                .filter(|b| b.role == Role::Axis)
+                .map(|b| b.axis.clone())
+                .collect();
+            let actions: Vec<ActionFace> = bindings
+                .iter()
+                .filter(|b| b.role == Role::Action)
+                .map(|b| ActionFace {
+                    name: b.action.clone(),
+                    label: b.label.clone(),
+                    glyph: b.effective_glyph(),
+                })
+                .collect();
+            (target, closures, onscreen::Layout::KeySet { axes, actions })
+        }
         other => {
             tracing::warn!(port = %port.name, shape = other, "app-host input: unsupported shape");
-            Vec::new()
+            return Installed::empty();
         }
+    };
+    // Attach the on-screen source to the same target.
+    let onscreen::OnscreenControls { pad, chips, closures: mut pointer_closures } =
+        onscreen::build(target, layout, min_hold_ms);
+    closures.append(&mut pointer_closures);
+    Installed {
+        closures,
+        pad: Some(pad),
+        chips: Some(chips),
     }
 }
 
-/// `direction` shape — arrow keys (and WASD) map to `DIR_*`; latest press wins.
-/// One `keydown` listener on the payload window.
-fn install_direction(sink: InputSink) -> Vec<Closure<dyn FnMut(JsValue)>> {
+/// `direction` source — arrow keys (and WASD) map to `DIR_*`; the target keeps
+/// latest-wins. One `keydown` listener on the payload window.
+fn install_direction(target: Rc<InputTarget>) -> Vec<Closure<dyn FnMut(JsValue)>> {
     let Some(window) = web_sys::window() else {
         return Vec::new();
     };
@@ -127,116 +219,157 @@ fn install_direction(sink: InputSink) -> Vec<Closure<dyn FnMut(JsValue)>> {
             _ => return,
         };
         ev.prevent_default();
-        sink.write(dir);
+        target.set_direction(dir);
     }) as Box<dyn FnMut(JsValue)>);
     let _ = window.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
     vec![cb]
 }
 
-/// `key-set` shape — a held-key bitmask snapshot. `keydown` sets a key's bit,
-/// `keyup` clears it; the current mask is written on every change. The key→bit
-/// map comes from the port's `scene.keymap` (Asteroids ships one); an absent or
-/// unrecognised keymap installs nothing and logs (admission passed the shape,
-/// but we cannot map keys without the program's own table — never guess).
-fn install_key_set(sink: InputSink, port: &ProgramPort) -> Vec<Closure<dyn FnMut(JsValue)>> {
+/// `key-set` source — `keydown` presses a key's control name, `keyup` releases
+/// it; the target maintains the shared held-mask and writes on change. This
+/// source owns only the physical-key → position convention ([`keyboard_map`]);
+/// name→bit is the program's (in the target). A key mapped to a name the program
+/// didn't declare simply no-ops in the target.
+///
+/// Each declared name gets its own [`MomentaryGuard`] so a keyboard tap
+/// (e.g. a quick Space) is subject to the same `min_hold_ms` release delay as
+/// the on-screen buttons — the tap-vs-tick-clock race is a listener-agnostic
+/// property of the transport, not an on-screen-only concern.
+///
+/// **Stuck-key guard (charter/design §200):** a held key's `keyup` only arrives
+/// if this window still has focus. When focus leaves — window `blur`, or the
+/// document going hidden (tab switch, window minimize) — the release is lost and
+/// the bit would latch forever (the "ship keeps rotating" bug). So both events
+/// `release_all()` the shared mask directly (bypassing any pending guard delay —
+/// losing focus must clear immediately, never wait out a release timer).
+/// `visibilitychange` fires on the *document*.
+fn install_key_set(
+    target: Rc<InputTarget>,
+    bindings: &[ControlBinding],
+    min_hold_ms: i32,
+) -> Vec<Closure<dyn FnMut(JsValue)>> {
     let Some(window) = web_sys::window() else {
         return Vec::new();
     };
-    let keymap = decode_keymap(port);
-    if keymap.is_empty() {
-        tracing::warn!(port = %port.name, "app-host input: key-set port has no usable keymap scene");
-        return Vec::new();
+    // key → control name, built program-blind from the declared roles.
+    let key_name = Rc::new(keyboard_map(bindings));
+    // One guard per declared name (not per key — several keys, e.g. Arrow +
+    // WASD, can name the same axis and must share one release timer).
+    let mut guards: HashMap<String, Rc<MomentaryGuard>> = HashMap::new();
+    for (_, name) in key_name.iter() {
+        guards
+            .entry(name.clone())
+            .or_insert_with(|| MomentaryGuard::new(target.clone(), name.clone()));
     }
-
-    // The live held-key bitmask, shared by the keydown/keyup closures.
-    let mask = Rc::new(Cell::new(0u64));
+    let guards = Rc::new(guards);
 
     let mk = |set: bool| {
-        let keymap = keymap.clone();
-        let mask = mask.clone();
-        let sink = sink.clone();
+        let key_name = key_name.clone();
+        let guards = guards.clone();
         Closure::wrap(Box::new(move |e: JsValue| {
             let Ok(ev) = e.dyn_into::<KeyboardEvent>() else {
                 return;
             };
-            let Some(bit) = keymap.iter().find(|(k, _)| *k == ev.key()).map(|(_, b)| *b) else {
+            let key = ev.key();
+            let Some((_, name)) = key_name.iter().find(|(k, _)| *k == key) else {
+                return;
+            };
+            let Some(guard) = guards.get(name) else {
                 return;
             };
             ev.prevent_default();
-            let cur = mask.get();
-            let next = if set { cur | bit } else { cur & !bit };
-            if next != cur {
-                mask.set(next);
-                sink.write(next);
+            if set {
+                guard.press();
+            } else {
+                guard.release(min_hold_ms);
             }
         }) as Box<dyn FnMut(JsValue)>)
     };
-
     let on_down = mk(true);
     let on_up = mk(false);
     let _ = window.add_event_listener_with_callback("keydown", on_down.as_ref().unchecked_ref());
     let _ = window.add_event_listener_with_callback("keyup", on_up.as_ref().unchecked_ref());
-    vec![on_down, on_up]
+
+    // Stuck-key guard: clear the whole held mask when we can no longer see
+    // releases. `blur` on the window, `visibilitychange` on the document.
+    let mut closures = vec![on_down, on_up];
+    let on_blur = {
+        let target = target.clone();
+        Closure::wrap(Box::new(move |_e: JsValue| target.release_all()) as Box<dyn FnMut(JsValue)>)
+    };
+    let _ = window.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref());
+    closures.push(on_blur);
+    if let Some(document) = window.document() {
+        let on_hide = {
+            let target = target.clone();
+            Closure::wrap(Box::new(move |_e: JsValue| {
+                // Clear on hide; on re-show there is nothing held to restore.
+                if web_sys::window()
+                    .and_then(|w| w.document())
+                    .map(|d| d.hidden())
+                    .unwrap_or(false)
+                {
+                    target.release_all();
+                }
+            }) as Box<dyn FnMut(JsValue)>)
+        };
+        let _ =
+            document.add_event_listener_with_callback("visibilitychange", on_hide.as_ref().unchecked_ref());
+        closures.push(on_hide);
+    }
+    closures
 }
 
-/// Physical-key → semantic action bindings. The PROGRAM owns bit↔action (its
-/// `scene.keymap`); the HOST owns which keyboard key means which action (a UI
-/// choice). Composing the two yields key → bit. An action the program doesn't
-/// declare is simply unbound. WASD mirrors the arrows; Space fires.
-const KEY_ACTIONS: &[(&str, &str)] = &[
-    ("ArrowLeft", "left"),
-    ("a", "left"),
-    ("A", "left"),
-    ("ArrowRight", "right"),
-    ("d", "right"),
-    ("D", "right"),
-    ("ArrowUp", "thrust"),
-    ("w", "thrust"),
-    ("W", "thrust"),
-    (" ", "fire"),
-    ("Spacebar", "fire"),
+/// The physical-key → control-name map for a `key-set` port, built program-blind
+/// from the declared control ROLES. Directional axes bind to the arrows + WASD
+/// (their fixed positions); discrete actions bind to a fixed key row in bit
+/// order (Space, then Z/X/C…). The host names no app control — a key resolves to
+/// a position/action-slot, and the PROGRAM's `scene.keymap` names the bit. This
+/// is the keyboard-position convention (RESPONSE §5 item 4), provisional pending
+/// arch's cross-host default; actions beyond the row are simply keyboard-unbound
+/// (still reachable on-screen — the overflow policy, item 5, is arch's).
+fn keyboard_map(bindings: &[ControlBinding]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut action_idx = 0usize;
+    for b in bindings {
+        match b.role {
+            Role::Axis => {
+                for k in axis_keys(&b.axis) {
+                    out.push((k.to_string(), b.axis.clone()));
+                }
+            }
+            Role::Action => {
+                if let Some(keys) = ACTION_KEY_ROW.get(action_idx) {
+                    for k in *keys {
+                        out.push((k.to_string(), b.action.clone()));
+                    }
+                }
+                action_idx += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The arrow + WASD keys for a directional-axis position.
+fn axis_keys(axis: &str) -> &'static [&'static str] {
+    match axis {
+        AXIS_UP => &["ArrowUp", "w", "W"],
+        AXIS_DOWN => &["ArrowDown", "s", "S"],
+        AXIS_LEFT => &["ArrowLeft", "a", "A"],
+        AXIS_RIGHT => &["ArrowRight", "d", "D"],
+        _ => &[],
+    }
+}
+
+/// The fixed action key row, indexed by an action's bit order. Slot 0 is Space
+/// (with the legacy `Spacebar` alias some engines still emit). No host-owned
+/// "Space = fire" — Space is simply action[0]'s position, whatever that action
+/// is. Actions past the row's length are keyboard-unbound (on-screen only).
+const ACTION_KEY_ROW: &[&[&str]] = &[
+    &[" ", "Spacebar"],
+    &["z", "Z"],
+    &["x", "X"],
+    &["c", "C"],
+    &["v", "V"],
 ];
-
-/// Build the `keydown`/`keyup` key → bitmask table for a `key-set` port.
-///
-/// The port's `scene.keymap` is `{ "<bit_index>": "<action>" }` (Asteroids:
-/// `{"0":"left","1":"right","2":"thrust","3":"fire"}`) — it names each BIT, it
-/// is NOT a keyboard binding. Bit `i` in the held mask is `1 << i` (confirmed
-/// against the program's own oracle input schedule: `keys=2`=bit1=right,
-/// `4`=thrust, `8`=fire). We invert it to action → bit, then compose with
-/// [`KEY_ACTIONS`] to get key → bit. An empty result installs no listener
-/// (logged) — we never guess a binding the program didn't declare.
-fn decode_keymap(port: &ProgramPort) -> Vec<(String, u64)> {
-    let Some(scene) = port.scene.as_ref() else {
-        return Vec::new();
-    };
-    let Some(map) = scene.as_map() else {
-        return Vec::new();
-    };
-    let Some(entries) = map
-        .iter()
-        .find(|(k, _)| k.as_text() == Some("keymap"))
-        .and_then(|(_, v)| v.as_map())
-    else {
-        return Vec::new();
-    };
-    // action → bit value (`1 << bit_index`).
-    let action_bit: Vec<(&str, u64)> = entries
-        .iter()
-        .filter_map(|(k, v)| {
-            let bit_index: u32 = k.as_text()?.parse().ok()?;
-            let action = v.as_text()?;
-            (bit_index < 64).then(|| (action, 1u64 << bit_index))
-        })
-        .collect();
-    // Compose physical key → bit through the shared action name.
-    KEY_ACTIONS
-        .iter()
-        .filter_map(|(key, action)| {
-            action_bit
-                .iter()
-                .find(|(a, _)| a == action)
-                .map(|(_, bit)| (key.to_string(), *bit))
-        })
-        .collect()
-}

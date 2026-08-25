@@ -98,46 +98,14 @@ fn demo_tokens(set: &str) -> &'static [Token] {
                 html: "<!doctype html><title>l5-placeholder</title>",
                 app_type: paths::APP_TYPE_L5,
             },
-            // The first real L5 app: browser-rust runs the generic compute host
-            // behind the iframe boundary and mounts Life (pure-builtin → no
-            // upstream stub). id `life` → `?app-host=life`, the embedded program.
-            Token {
-                id: "life",
-                name: "Life (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
-                description: "Conway's Life running in a WASM entity-peer inside a sandboxed iframe.", // i18n-ignore — e2e-only demo fixture
-                saves: true,
-                glyph: "🧬",
-                html: "<!doctype html><title>l5-placeholder</title>",
-                app_type: paths::APP_TYPE_L5,
-            },
-            // The first INPUT-driven L5 app: Snake is pure-builtin (runs on wasm
-            // today — the `compute/apply` stub gates only import-bearing programs)
-            // and binds the `direction` input shape. Keyboard is captured inside
-            // the iframe and written to the inner peer (never crosses ③α, P1).
-            // id `snake` → `?app-host=snake`, the embedded program.
-            Token {
-                id: "snake",
-                name: "Snake (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
-                description: "Snake running in a WASM entity-peer inside a sandboxed iframe; arrow keys steer it.", // i18n-ignore — e2e-only demo fixture
-                saves: true,
-                glyph: "🐍",
-                html: "<!doctype html><title>l5-placeholder</title>",
-                app_type: paths::APP_TYPE_L5,
-            },
-            // The vector-display L5 app: Asteroids binds the `display-list` output
-            // (rendered as inline SVG behind the boundary) and the `key-set` input
-            // (held-key bitmask; ←/→ turn, ↑ thrust, Space fires). Pure-builtin —
-            // its descriptor declares no imports, so it runs on wasm today.
-            // id `asteroids` → `?app-host=asteroids`, the embedded program.
-            Token {
-                id: "asteroids",
-                name: "Asteroids (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
-                description: "Asteroids running in a WASM entity-peer inside a sandboxed iframe; arrows steer, Space fires.", // i18n-ignore — e2e-only demo fixture
-                saves: true,
-                glyph: "🚀",
-                html: "<!doctype html><title>l5-placeholder</title>",
-                app_type: paths::APP_TYPE_L5,
-            },
+            // NOTE: the built-in COMPUTE programs (Life / Snake / Asteroids) are
+            // NOT baked here anymore. They are the production `EMBEDDED_PROGRAMS`
+            // reachable from the Programs launcher — the one honest "run a program"
+            // surface (D21). Duplicating them as Apps demo tokens meant the same
+            // `?app-host=<key>` payload had two launch surfaces AND put a "Life"
+            // card in two windows at once; the e2e L5 phases (2h.2c/d/e) launch
+            // them through the Programs window instead. Only `ping` (the L5
+            // delivery smoke) stays as an Apps fixture.
         ],
         _ => &[],
     }

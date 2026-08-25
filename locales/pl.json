@@ -429,6 +429,7 @@
   "btn.collapse": "Zwiń",
   "games.empty": "Nie ma jeszcze dostępnych gier.",
   "apps.empty": "Nie ma jeszcze dostępnych aplikacji.",
+  "programs.empty": "Nie ma jeszcze dostępnych programów.",
   "sitedir.filter_mine": "Moje",
   "sitedir.filter_all": "Wszystkie",
   "sitedir.filter_external": "Zewnętrzne",
@@ -601,7 +602,7 @@
     "many": "{n} peerów"
   },
 
-  "window.programs": "Programy",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Przenośne programy obliczeniowe — napisane raz (workbench-go), montowane z ich deskryptorów, wykonywane przez silnik obliczeniowy tego peera.",
   "programs.install": "Zainstaluj",
   "programs.restart": "Uruchom ponownie",

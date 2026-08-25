@@ -426,6 +426,7 @@
   "btn.collapse": "Reduzieren",
   "games.empty": "Noch keine Spiele verfügbar.",
   "apps.empty": "Noch keine Apps verfügbar.",
+  "programs.empty": "Noch keine Programme verfügbar.",
   "sitedir.filter_mine": "Meine",
   "sitedir.filter_all": "Alle",
   "sitedir.filter_external": "Extern",
@@ -594,7 +595,7 @@
     "other": "{n} Peers"
   },
 
-  "window.programs": "Programme",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Übertragbare Compute-Programme — einmal geschrieben (workbench-go), aus ihren Deskriptoren gemountet, von der Compute-Engine dieses Peers ausgewertet.",
   "programs.install": "Installieren",
   "programs.restart": "Neu starten",

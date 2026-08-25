@@ -117,6 +117,7 @@ pub enum PeerRuntime {
 }
 
 impl PeerRuntime {
+    #[allow(dead_code)] // display helper kept beside the enum; no current caller on the wasm path
     pub fn label(self) -> &'static str {
         match self {
             Self::MainThread => "main thread", // i18n-ignore — identity token; display twin below
@@ -154,6 +155,7 @@ pub enum PeerStorage {
 }
 
 impl PeerStorage {
+    #[allow(dead_code)] // display helper kept beside the enum; no current caller on the wasm path
     pub fn label(self) -> &'static str {
         match self {
             Self::InMemory => "in-memory",

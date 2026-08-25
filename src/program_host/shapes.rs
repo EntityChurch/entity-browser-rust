@@ -19,6 +19,7 @@ pub const TEXT_FRAME_TYPE: &str = "app/shape/text-frame";
 pub const DISPLAY_LIST_TYPE: &str = "app/shape/display-list";
 
 /// `app/shape/direction` — `{dir}`, Up=0 Right=1 Down=2 Left=3.
+#[allow(dead_code)] // shape-ABI type constant; asserted in tests, referenced by the wire, not called on the render path
 pub const DIRECTION_TYPE: &str = "app/shape/direction";
 pub const DIR_UP: u64 = 0;
 pub const DIR_RIGHT: u64 = 1;
@@ -28,6 +29,7 @@ pub const DIR_LEFT: u64 = 3;
 /// `app/shape/key-set` — a held-key bitmask snapshot. NOTE the field
 /// name is owned by the program's seed entity (`keys` for the shipped
 /// Asteroids), not assumed — see `input_field_name`.
+#[allow(dead_code)] // shape-ABI type constant; asserted in tests, referenced by the wire, not called on the render path
 pub const KEY_SET_TYPE: &str = "app/shape/key-set";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,156 +1,27 @@
-//! Programs window DOM renderer — program cards + the shape drivers.
+//! Program shape drivers + the host clock's timing helpers.
 //!
-//! Phase 0 drives the `text` shape: the display port's
-//! `app/shape/text-frame` entity rendered into a `<pre>` (a character
-//! grid IS the teletype lineage — no new rendering technology). The
-//! renderer is program-blind: it binds by the port's declared shape and
-//! never inspects program state.
+//! The display drivers bind by a port's declared **shape** and are
+//! program-blind — they never inspect program state. `text` renders an
+//! `app/shape/text-frame` into a `<pre>` character grid (the teletype lineage —
+//! no new rendering tech); `display-list` renders closed quads as inline SVG
+//! `<polygon>`s (a DOM-native vector surface — the DOM-only rule is about the
+//! window shell, and SVG *is* DOM; not a canvas path).
+//!
+//! These are `pub` so the L5 app-host ([`crate::app_host`]) renders the exact
+//! same drivers inside its sandboxed iframe — one code path for both surfaces.
+//! The Programs window itself is now a launcher ([`crate::views::programs`])
+//! that runs programs behind the L5 boundary, so it no longer renders cards
+//! here — only the drivers below survive, shared with the app-host.
 
 use web_sys::Element;
 
-use crate::dom::components::{self, ButtonKind};
+use crate::dom::components;
 use crate::dom::theme;
-use crate::dom::util::{self, DomCtx};
+use crate::dom::util;
 use crate::i18n::t;
 use crate::peers::Peers;
-use crate::program_host::descriptor::SHAPE_TEXT;
 use crate::program_host::host::qualify;
 use crate::program_host::shapes::{DisplayList, TextFrame};
-use crate::views::programs::{
-    Mount, MountStatus, ProgramsWindow, INSTALL_EVENT, RESTART_EVENT, START_EVENT, STOP_EVENT,
-};
-
-pub fn render(container: &Element, window: &ProgramsWindow, peers: &Peers, ctx: &DomCtx) {
-    util::clear_children(container);
-
-    let wrapper = util::create_element_with_class("div", "programs");
-    wrapper.set_attribute("style", theme::SECTION).ok();
-
-    let header = util::create_element("div");
-    header.set_attribute("style", theme::HEADER_ROW).ok();
-    let h2 = util::create_element("h2");
-    h2.set_attribute("style", theme::TITLE_INLINE).ok();
-    util::set_text(&h2, &t("window.programs", &[]));
-    util::append(&header, &h2);
-    util::append(&wrapper, &header);
-
-    let hint = util::create_element("p");
-    hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(&hint, &t("programs.subtitle", &[]));
-    util::append(&wrapper, &hint);
-
-    for (key, mount) in window.mounts.borrow().iter() {
-        util::append(&wrapper, &program_card(key, mount, window, peers, ctx));
-    }
-
-    util::append(container, &wrapper);
-}
-
-fn program_card(
-    key: &str,
-    mount: &Mount,
-    window: &ProgramsWindow,
-    peers: &Peers,
-    ctx: &DomCtx,
-) -> Element {
-    let card = components::card(&title_case(key));
-    // Stable per-program hook for the e2e (and any tooling) — text
-    // scans across the whole window match the wrong card.
-    card.set_attribute("data-program", key).ok();
-
-    // Status line — every state has a surface (D13).
-    let status = util::create_element("p");
-    status.set_attribute("style", theme::NOTE).ok();
-    let status_text = match &mount.status {
-        MountStatus::Absent => t("programs.status_absent", &[]),
-        MountStatus::Refused(_) => t("programs.status_refused", &[]),
-        MountStatus::Materializing { done, total } => t(
-            "programs.status_materializing",
-            &[("done", &done.to_string()), ("total", &total.to_string())],
-        ),
-        // Reuse the shared lifecycle vocabulary (peers.start/stop, status.stopped)
-        // rather than parallel programs.* keys — a program's start/stop/stopped is
-        // the same UI concept, and duplicate keys drift per locale (the i18n
-        // consistency gate). Program-specific states (materializing/refused/faulted)
-        // have no shared home and keep their own keys.
-        MountStatus::Stopped => t("status.stopped", &[]),
-        MountStatus::Running => t("programs.status_running", &[]),
-        MountStatus::Faulted(_) => t("programs.status_faulted", &[]),
-    };
-    let rate = mount
-        .descriptor
-        .as_ref()
-        .map(|d| d.tick.rate_hint)
-        .unwrap_or(0);
-    util::set_text(
-        &status,
-        &t(
-            "programs.status_line",
-            &[
-                ("status", &status_text),
-                ("ticks", &mount.ticks.to_string()),
-                ("rate", &rate.to_string()),
-            ],
-        ),
-    );
-    util::append(&card, &status);
-
-    // Refusal / fault reasons render through the shared error state.
-    if let MountStatus::Refused(reason) | MountStatus::Faulted(reason) = &mount.status {
-        util::append(&card, &components::error(reason));
-    }
-
-    // Actions — exactly one primary per state (S3).
-    let row = util::create_element("div");
-    row.set_attribute("style", theme::BTN_ROW).ok();
-    let event_btn = |label_key: &str, kind: ButtonKind, event: &str| {
-        components::button_action(
-            ctx,
-            &t(label_key, &[]),
-            kind,
-            crate::action::Action::WindowEvent {
-                window_id: window.window_id,
-                event: event.to_string(),
-                value: key.to_string(),
-            },
-        )
-    };
-    match &mount.status {
-        MountStatus::Absent | MountStatus::Faulted(_) => {
-            util::append(&row, &event_btn("programs.install", ButtonKind::Primary, INSTALL_EVENT));
-        }
-        MountStatus::Stopped => {
-            util::append(&row, &event_btn("peers.start", ButtonKind::Primary, START_EVENT));
-            util::append(&row, &event_btn("programs.restart", ButtonKind::Small, RESTART_EVENT));
-        }
-        MountStatus::Running => {
-            util::append(&row, &event_btn("peers.stop", ButtonKind::Primary, STOP_EVENT));
-            util::append(&row, &event_btn("programs.restart", ButtonKind::Small, RESTART_EVENT));
-        }
-        MountStatus::Refused(_) | MountStatus::Materializing { .. } => {}
-    }
-    util::append(&card, &row);
-
-    // Display driver — bound by shape, program-blind.
-    if matches!(mount.status, MountStatus::Stopped | MountStatus::Running) {
-        if let Some(desc) = &mount.descriptor {
-            if let Some(port) = desc.display_port() {
-                if port.shape == SHAPE_TEXT {
-                    util::append(
-                        &card,
-                        &text_driver(
-                            peers,
-                            &window.peer_id,
-                            &mount.bundle.origin_peer,
-                            &port.path,
-                        ),
-                    );
-                }
-            }
-        }
-    }
-    card
-}
 
 /// The `text` shape driver: read the port entity, decode the
 /// text-frame, render a `<pre>` character grid. `pub` so the L5 app-host
@@ -189,12 +60,21 @@ const SVG_NS: &str = "http://www.w3.org/2000/svg";
 /// seam-crossing actor renders once, not tiled. An honest visual simplification
 /// of the first browser display-list driver, not a decode gap (the reference
 /// tiles; noted for the follow-up).
+///
+/// `fill` is the program's declared [`scene.render`] intent
+/// (RESPONSE-DISPLAY-RENDERING-AND-TEXT-REBIND): `fill` paints solid coloured
+/// quads (grids — Life/Snake), the default `stroke` draws coloured wireframe
+/// (vector games — Asteroids). The host does not guess it; the manifest declares
+/// it (the same "declare presentation, don't infer it" lesson as the input roles).
+///
+/// [`scene.render`]: crate::program_host::descriptor
 pub fn display_list_driver(
     peers: &Peers,
     peer_id: &str,
     ns: &str,
     port_path: &str,
     bounds: u64,
+    fill: bool,
 ) -> Element {
     let path = qualify(ns, port_path);
     let Some(document) = web_sys::window().and_then(|w| w.document()) else {
@@ -202,14 +82,19 @@ pub fn display_list_driver(
     };
     match peers.get_entity(peer_id, &path) {
         Some(entity) => match DisplayList::decode(&entity) {
-            Ok(dl) => build_display_list_svg(&document, &dl, bounds),
+            Ok(dl) => build_display_list_svg(&document, &dl, bounds, fill),
             Err(e) => components::error(&e),
         },
         None => components::loading(&t("programs.display_waiting", &[])),
     }
 }
 
-fn build_display_list_svg(document: &web_sys::Document, dl: &DisplayList, bounds: u64) -> Element {
+fn build_display_list_svg(
+    document: &web_sys::Document,
+    dl: &DisplayList,
+    bounds: u64,
+    fill: bool,
+) -> Element {
     let make = |name: &str| document.create_element_ns(Some(SVG_NS), name);
     let Ok(svg) = make("svg") else {
         return components::error("display-list: svg unavailable"); // i18n-ignore — diagnostic fault reason (should never occur), same prose class as the host's Err strings
@@ -217,7 +102,6 @@ fn build_display_list_svg(document: &web_sys::Document, dl: &DisplayList, bounds
     let b = bounds.max(1);
     svg.set_attribute("viewBox", &format!("0 0 {b} {b}")).ok(); // i18n-ignore — SVG viewBox geometry, not UI prose
     svg.set_attribute("data-program-display", "display-list").ok();
-    svg.set_attribute("data-actor-count", &dl.quads.len().to_string()).ok();
     svg.set_attribute(
         "style",
         // Colors as var(--token, #literal) per REFERENCE-THEMING.
@@ -226,13 +110,22 @@ fn build_display_list_svg(document: &web_sys::Document, dl: &DisplayList, bounds
     )
     .ok();
     // Kind tags are colour indices (the workbench pen palette, tokenised).
+    // Kind 0 is BACKGROUND — the contract reserves it as "nothing here" and the
+    // host MUST NOT draw it. The grid projections are DENSE (a quad per cell,
+    // empties carried as kind 0), so skipping it is required, not an optimisation
+    // (drawing them paints the whole board). Asteroids is sparse and never emits
+    // kind 0, so the rule costs it nothing.
     const PENS: [&str; 4] = [
         "var(--program-kind-0, #8cdcff)",
         "var(--program-kind-1, #c8c8d2)",
         "var(--program-kind-2, #ffd278)",
         "var(--program-kind-3, #ff788c)",
     ];
+    let mut drawn = 0usize;
     for (kind, pts) in &dl.quads {
+        if *kind == 0 {
+            continue; // background — never drawn (display-list presentation contract)
+        }
         let Ok(poly) = make("polygon") else { continue };
         let points = pts
             .iter()
@@ -240,25 +133,26 @@ fn build_display_list_svg(document: &web_sys::Document, dl: &DisplayList, bounds
             .collect::<Vec<_>>()
             .join(" ");
         poly.set_attribute("points", &points).ok();
-        poly.set_attribute("fill", "none").ok();
-        poly.set_attribute("stroke", PENS[(*kind as usize) % PENS.len()]).ok();
-        // Screen-space stroke — 1 world unit at this zoom would vanish.
-        poly.set_attribute("stroke-width", "1.5").ok();
-        poly.set_attribute("vector-effect", "non-scaling-stroke").ok();
+        let pen = PENS[(*kind as usize) % PENS.len()];
+        if fill {
+            // Solid coloured cell (grids).
+            poly.set_attribute("fill", pen).ok();
+            poly.set_attribute("stroke", "none").ok();
+        } else {
+            // Coloured wireframe (vector games). Screen-space stroke — 1 world
+            // unit at this zoom would vanish.
+            poly.set_attribute("fill", "none").ok();
+            poly.set_attribute("stroke", pen).ok();
+            poly.set_attribute("stroke-width", "1.5").ok();
+            poly.set_attribute("vector-effect", "non-scaling-stroke").ok();
+        }
         svg.append_child(&poly).ok();
+        drawn += 1;
     }
+    // The count of actually-painted quads (background-skipped) — the honest
+    // "what got drawn", which the e2e reads.
+    svg.set_attribute("data-actor-count", &drawn.to_string()).ok();
     svg
-}
-
-/// Program key → display label. The key is the identity; a capitalized
-/// key is enough for the POC roster (program display names are not yet
-/// part of the descriptor contract).
-fn title_case(key: &str) -> String {
-    let mut chars = key.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
 }
 
 /// `performance.now()` — the host clock's time source.

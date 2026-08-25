@@ -426,6 +426,7 @@
   "btn.collapse": "Pienennä",
   "games.empty": "Ei vielä saatavilla olevia pelejä.",
   "apps.empty": "Ei vielä saatavilla olevia sovelluksia.",
+  "programs.empty": "Ei vielä saatavilla olevia ohjelmia.",
   "sitedir.filter_mine": "Omat",
   "sitedir.filter_all": "Kaikki",
   "sitedir.filter_external": "Ulkoiset",
@@ -594,7 +595,7 @@
     "other": "{n} vertaista"
   },
 
-  "window.programs": "Ohjelmat",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Siirrettävät laskentaohjelmat — kirjoitettu kerran (workbench-go), liitetty kuvaajistaan, tämän vertaisen laskentamoottorin suorittamia.",
   "programs.install": "Asenna",
   "programs.restart": "Käynnistä uudelleen",

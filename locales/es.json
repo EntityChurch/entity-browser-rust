@@ -426,6 +426,7 @@
   "btn.collapse": "Contraer",
   "games.empty": "Aún no hay juegos disponibles.",
   "apps.empty": "Aún no hay apps disponibles.",
+  "programs.empty": "Aún no hay programas disponibles.",
   "sitedir.filter_mine": "Míos",
   "sitedir.filter_all": "Todos",
   "sitedir.filter_external": "Externos",
@@ -594,7 +595,7 @@
     "other": "{n} pares"
   },
 
-  "window.programs": "Programas",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Programas de cómputo transferibles — creados una sola vez (workbench-go), montados desde sus descriptores, evaluados por el motor de cómputo de este par.",
   "programs.install": "Instalar",
   "programs.restart": "Reiniciar",

@@ -429,6 +429,7 @@
   "btn.collapse": "כווץ",
   "games.empty": "אין עדיין משחקים זמינים.",
   "apps.empty": "אין עדיין אפליקציות זמינות.",
+  "programs.empty": "אין עדיין תוכניות זמינות.",
   "sitedir.filter_mine": "שלי",
   "sitedir.filter_all": "הכול",
   "sitedir.filter_external": "חיצוניים",
@@ -601,7 +602,7 @@
     "other": "{n} עמיתים"
   },
 
-  "window.programs": "תוכניות",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "תוכניות חישוב ניידות — נכתבות פעם אחת (workbench-go), נטענות מהמתארים שלהן ומוערכות על ידי מנוע החישוב של עמית זה.",
   "programs.install": "התקנה",
   "programs.restart": "הפעלה מחדש",

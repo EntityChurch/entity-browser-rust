@@ -345,3 +345,30 @@ lto = true           # fat LTO across crates
 codegen-units = 1    # maximal cross-unit optimization (slower build)
 debug = false        # no debug info (wasm-opt strips the rest)
 panic = "unwind"     # REQUIRED for C1 rAF catch_unwind — do not change
+
+# SPEED-optimize the COMPUTE hot path in the SHIPPING build too. The whole binary
+# is opt-level="z" (size) above — right for one-shot UI code, WRONG for the
+# tree-walking evaluator the L5 mount contract runs on EVERY tick (`step` + every
+# projection `source`). A clock-driven game (Asteroids, 12 Hz, many actors) is
+# compute-bound and synchronous on the shared main thread, so a size-tuned
+# evaluator is felt directly as a sluggish sim — worst on a phone CPU. These are
+# the SAME crates the `[profile.dev.package.*]` block pins to opt-3/2 (that pass
+# fixed the debug sluggishness); release never got the treatment, so the artifact
+# a phone actually runs shipped a size-tuned evaluator. Pin the evaluator to
+# opt-3 (speed) and the per-tick encode/decode/hash path to opt-2; everything
+# else stays "z". Confirm the win on the live `data-app-host-compute-ms` surface.
+# (Only the compute crates grow; wasm-opt -Oz still shrinks the whole bundle.)
+[profile.release.package.entity-compute]
+opt-level = 3
+[profile.release.package.entity-ecf]
+opt-level = 2
+[profile.release.package.ciborium]
+opt-level = 2
+[profile.release.package.entity-entity]
+opt-level = 2
+[profile.release.package.entity-hash]
+opt-level = 2
+[profile.release.package.entity-tree]
+opt-level = 2
+[profile.release.package.entity-store]
+opt-level = 2

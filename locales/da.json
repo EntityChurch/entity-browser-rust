@@ -426,6 +426,7 @@
   "btn.collapse": "Fold sammen",
   "games.empty": "Ingen spil tilgængelige endnu.",
   "apps.empty": "Ingen apps tilgængelige endnu.",
+  "programs.empty": "Ingen programmer tilgængelige endnu.",
   "sitedir.filter_mine": "Mine",
   "sitedir.filter_all": "Alle",
   "sitedir.filter_external": "Eksterne",
@@ -594,7 +595,7 @@
     "other": "{n} peers"
   },
 
-  "window.programs": "Programmer",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Overførbare beregningsprogrammer — skrevet én gang (workbench-go), monteret fra deres deskriptorer, evalueret af denne peers beregningsmotor.",
   "programs.install": "Installér",
   "programs.restart": "Genstart",

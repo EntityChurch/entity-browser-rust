@@ -423,6 +423,7 @@
   "btn.collapse": "Thu gọn",
   "games.empty": "Chưa có trò chơi nào.",
   "apps.empty": "Chưa có ứng dụng nào.",
+  "programs.empty": "Chưa có chương trình nào.",
   "sitedir.filter_mine": "Của tôi",
   "sitedir.filter_all": "Tất cả",
   "sitedir.filter_external": "Bên ngoài",
@@ -587,7 +588,7 @@
     "other": "{n} điểm ngang hàng"
   },
 
-  "window.programs": "Chương trình",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Chương trình tính toán di động — viết một lần (workbench-go), gắn từ bộ mô tả của chúng, được máy tính toán của peer này đánh giá.",
   "programs.install": "Cài đặt",
   "programs.restart": "Khởi động lại",

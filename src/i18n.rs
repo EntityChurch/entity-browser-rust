@@ -1044,7 +1044,11 @@ pub const EN: &[(&str, Message)] = &[
     ),
     ("storage.refresh", Message::Simple("Refresh disk usage")),
     // -- Programs window (compute-program host) --
-    ("window.programs", Message::Simple("Programs")),
+    ("window.programs", Message::Simple("Entity Native Apps")),
+    (
+        "programs.empty",
+        Message::Simple("No programs available."),
+    ),
     (
         "programs.subtitle",
         Message::Simple(

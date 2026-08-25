@@ -429,6 +429,7 @@
   "btn.collapse": "Sbalit",
   "games.empty": "Zatím nejsou k dispozici žádné hry.",
   "apps.empty": "Zatím nejsou k dispozici žádné aplikace.",
+  "programs.empty": "Zatím nejsou k dispozici žádné programy.",
   "sitedir.filter_mine": "Moje",
   "sitedir.filter_all": "Vše",
   "sitedir.filter_external": "Externí",
@@ -601,7 +602,7 @@
     "other": "{n} peerů"
   },
 
-  "window.programs": "Programy",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Přenositelné výpočetní programy — napsané jednou (workbench-go), připojené ze svých deskriptorů, vyhodnocované výpočetním strojem tohoto peeru.",
   "programs.install": "Nainstalovat",
   "programs.restart": "Restartovat",
