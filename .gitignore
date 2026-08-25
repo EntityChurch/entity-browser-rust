@@ -13,7 +13,10 @@
 # Durable publisher identity (Makefile PUBLISH_DATA_DIR / ENTITY_DATA_DIR) — a
 # private keypair; NEVER commit it.
 /.entity-publish
-Cargo.lock
+# Cargo.lock is COMMITTED (both of them). This repo ships binaries, not a
+# library, and a release build must be reproducible: without the lockfile the
+# same tag resolves different transitive versions on different days. Un-ignored
+# 2026-08-17 as part of the release runway (RELEASE-READINESS §8).
 src-tauri/target/
 
 # Per-machine podman resource-cap overrides (RESOURCE-CAPS.md §4a) — never committed.
