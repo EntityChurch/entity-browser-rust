@@ -24,6 +24,7 @@ mod inspect_router;
 mod ansi;
 mod connections;
 mod connect_attempt;
+mod connectors;
 mod dial_markers;
 // Piece A (DESIGN-CONNECTIVITY-UX): the subscribed connection-liveness facet of
 // the unified Peer read-model. `allow(dead_code)` while it's staged — the
@@ -50,6 +51,7 @@ mod peers_worker;
 mod listener_state;
 mod peer_mode;
 mod peer_registry;
+mod rendezvous;
 mod roster;
 mod transport_profiles;
 mod window_watch;

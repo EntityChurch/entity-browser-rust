@@ -72,6 +72,22 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
     "network",
 ] }
 
+# The signaling extension, as a DIRECT edge — for its **codec and constants**
+# only (`PATTERN`, `OP_ADVERTISE`, `Advertisement`, `data::advertisement_from_params`),
+# so `connectors::advertise` decodes a node's reply with the node's own encoder
+# instead of a hand-rolled CBOR reader that could drift from it.
+#
+# Deliberately NOT for `SignalingClient`: that whole module is
+# `#[cfg(not(target_arch = "wasm32"))]`, so it does not exist in the browser at
+# all — and it wants a `&dyn Dispatcher`, which a Worker-arm peer (living in the
+# worker) cannot hand the main thread anyway. Calling a node is "an ordinary
+# EXECUTE" by that module's own description, so we dispatch through the app's
+# cross-arm router (`Peers::execute`) and keep both arms working.
+#
+# entity-peer already compiles this via its `signaling` feature but does not
+# re-export it, hence the direct edge.
+entity-signaling = { path = "../entity-core-rust/extensions/signaling" }
+
 entity-crypto = { path = "../entity-core-rust/core/crypto" }   # PEM keypair load (`persistence.rs`)
 entity-handler = { path = "../entity-core-rust/core/handler" } # `system/tree` handler resolution (`ops/`)
 entity-capability = { path = "../entity-core-rust/core/capability" } # `ResourceTarget` for `execute` (2 sites)

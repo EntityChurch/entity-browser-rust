@@ -201,6 +201,12 @@ pub struct EntityApp {
     /// `sync()` per frame is one atomic check unless the prefix changed
     /// (then it reconciles the runtime theme registry from the tree).
     user_themes: crate::user_themes::UserThemes,
+    /// Connector-registry sync: app-lifetime watch on the connectors prefix +
+    /// the selection. `sync()` per frame is one atomic check unless either
+    /// changed (then it refreshes the pre-peer localStorage mirror the next
+    /// boot provisions from). The watch is also what feeds the Worker-arm cache
+    /// mirror for this prefix — without it `read_connectors` is silently empty.
+    connectors: crate::connectors::ConnectorRegistry,
     /// Session-lived inspect sink on the system peer feeding the app-tier
     /// access log (`crate::access_log_store`) with local dispatches. Installed
     /// once at boot — app-global, not per-window — so the Access Log window is a
@@ -441,10 +447,13 @@ fn webrtc_url_query() -> String {
 
 #[cfg(target_arch = "wasm32")]
 fn webrtc_init_config() -> Option<entity_wasm_worker_protocol::WireWebRtcConfig> {
-    // Precedence: URL param (dev/showcase, dynamic, never persisted) OVER the
-    // build knob (deployment default) — the `deployment_config.rs` ordering.
-    let p = crate::session_config::webrtc_provisioning_from_query(&webrtc_url_query())
-        .or_else(crate::session_config::webrtc_provisioning_default)?;
+    // Precedence lives in ONE place — `connectors::resolve_provisioning`:
+    // URL param (dev/showcase, dynamic, never persisted) > the user's durable
+    // connector selection > the build knob (deployment default). Both
+    // provisioning sites call it, because the two arms sourcing the node
+    // differently is exactly how one ends up rendezvousing somewhere the other
+    // never looks.
+    let p = crate::connectors::resolve_provisioning(&webrtc_url_query())?;
     tracing::info!(
         node_peer_id = %p.node_peer_id,
         node_addr = %p.node_addr,
@@ -518,9 +527,7 @@ fn build_direct_webrtc_establisher(
     if !requested {
         return None;
     }
-    let p = match crate::session_config::webrtc_provisioning_from_query(&webrtc_url_query())
-        .or_else(crate::session_config::webrtc_provisioning_default)
-    {
+    let p = match crate::connectors::resolve_provisioning(&webrtc_url_query()) {
         Some(p) => p,
         None => {
             tracing::warn!(
@@ -1323,6 +1330,7 @@ impl EntityApp {
         // the observe is what feeds the cache mirror) — the watch starts
         // dirty, so the first frame's sync performs the boot load.
         let user_themes = crate::user_themes::UserThemes::new(&peer_manager);
+        let connectors = crate::connectors::ConnectorRegistry::new(&peer_manager);
 
         // If running in Tauri, fetch persisted backend peers so they
         // appear in the Peers window on startup (as stopped).
@@ -1515,6 +1523,7 @@ impl EntityApp {
             connect_attempt,
             peer_registry,
             user_themes,
+            connectors,
             access_log_sink,
             dom,
             pending_backend_peers,
@@ -2349,6 +2358,11 @@ impl EntityApp {
         // With this call below the render it fails deterministically.
         // AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13 §8 F1.
         self.user_themes.sync(&self.peer_manager);
+        // Order-independent, unlike `user_themes.sync` above: nothing in a
+        // render reads this. It refreshes the localStorage mirror that only the
+        // PRE-peer boot path reads, so its consumer is the next reload, not this
+        // frame.
+        self.connectors.sync(&self.peer_manager);
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {

@@ -413,6 +413,38 @@ impl SiteEditorModel {
     /// site.
     pub fn delete_site(&self, peers: &Peers, peer_id: &str, site_id: &str) {
         let prefix = paths::site_prefix(peer_id, site_id);
+        // The sync `tree_listing` here is DELIBERATE, and swapping it for
+        // `tree_listing_async` is a known trap — tried, measured, reverted
+        // (2026-08-13 third session). The standing advice was that an
+        // enumeration deciding a delete should be an authoritative round-trip
+        // rather than a cache read, which is true in principle; the problem is
+        // that the two are **not the same operation**:
+        //
+        //   - sync `tree_listing` → `cache_list` → `path.starts_with(prefix)`:
+        //     a RECURSIVE scan, every descendant at any depth.
+        //   - `tree_listing_async` → L1 `List` → `handle_listing`: the
+        //     IMMEDIATE CHILDREN only ("List children under prefix").
+        //
+        // A site is `…/sites/{id}/manifest` plus `…/sites/{id}/pages/**`, so
+        // the children listing returns the manifest and stops. Measured on the
+        // Worker arm via Phase 2-SE: `authoritative = 1, cached = 3` — the two
+        // pages survived, and the e2e caught it red. That converts a
+        // *hypothetical* orphan (a mirror that might be incomplete) into a
+        // *guaranteed* one, which is strictly worse.
+        //
+        // Recursing manually doesn't rescue it on this arm either: a directory
+        // child is reported with `hash: None` + `has_children: true`, and the
+        // worker wire type (`WireListingEntry` = path + content_hash) carries
+        // neither — so directory entries are structurally unrepresentable
+        // across the worker boundary and are dropped before this code could see
+        // them. Fixing this properly is an upstream change to
+        // `entity-wasm-worker-protocol` (a bindings crate — ours to fix), not
+        // a call-site swap here.
+        //
+        // The residual risk that motivated the change is real but unobserved:
+        // on the Worker arm this is a subscription mirror, so an entity the
+        // mirror never saw would not be removed. This window subscribes the
+        // whole `sites/` prefix, which is why it holds in practice.
         let paths_to_remove: Vec<String> =
             peers.tree_listing(peer_id, &prefix).into_iter().map(|e| e.path).collect();
         for path in paths_to_remove {

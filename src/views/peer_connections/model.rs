@@ -84,6 +84,17 @@ pub struct PeerConnectionsModel {
     window_id: WindowId,
     peer_id: String,
     inner: Arc<Mutex<PeerConnectionsState>>,
+    /// Outcome of the last connector `Check`. Deliberately **in-memory**, not
+    /// tree-backed: it is the result of an action in progress, meaningless
+    /// across a reload — the same reasoning that keeps `dial_markers` out of
+    /// the tree.
+    connector_notice: Arc<Mutex<Option<crate::views::peer_connections::output::ConnectorNotice>>>,
+    /// The meet in progress (`crate::rendezvous`). In memory for the same
+    /// reason as the notice above — a search is an action in progress, gone on
+    /// reload, and a tree-backed one would come back as a search nobody started.
+    meet: Arc<Mutex<Option<crate::rendezvous::MeetSession>>>,
+    /// Why the last Meet press did nothing, when it did nothing.
+    meet_notice: Arc<Mutex<Option<crate::views::peer_connections::output::ConnectorNotice>>>,
 }
 
 impl PeerConnectionsModel {
@@ -92,6 +103,9 @@ impl PeerConnectionsModel {
             window_id,
             peer_id,
             inner: Arc::new(Mutex::new(PeerConnectionsState::default())),
+            connector_notice: Arc::new(Mutex::new(None)),
+            meet: Arc::new(Mutex::new(None)),
+            meet_notice: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -274,6 +288,62 @@ impl PeerConnectionsModel {
             })
             .map(|(addr, pid)| format!("{}|{}", addr, pid));
 
+        // The connector registry lives on the SYSTEM peer (it is deployment
+        // infrastructure, not per-window state), which is also the peer
+        // `connectors::ConnectorRegistry` watches and mirrors from.
+        let sys_pid = peers.system_peer_id().to_string();
+        let selected = crate::connectors::selected_connector(peers, &sys_pid)
+            .map(|c| c.node_peer_id);
+        let connectors = crate::connectors::read_connectors(peers, &sys_pid)
+            .into_iter()
+            .map(|c| crate::views::peer_connections::output::ConnectorRow {
+                short_pid: crate::views::short_pid(&c.node_peer_id),
+                selected: Some(&c.node_peer_id) == selected.as_ref(),
+                node_peer_id: c.node_peer_id,
+                node_addr: c.node_addr,
+                label: c.label,
+            })
+            .collect();
+
+        // The Meet section. `remembered` is resolved against the rows above, so
+        // a peer already in the registry is not offered a Remember that would
+        // change nothing visible.
+        let meet = {
+            let selected_node = selected.clone();
+            let status = self.meet.lock().ok().and_then(|s| s.as_ref().map(|s| s.status()));
+            crate::views::peer_connections::output::MeetPanel {
+                has_connector: selected_node.is_some(),
+                node_short: selected_node
+                    .as_deref()
+                    .map(crate::views::short_pid)
+                    .unwrap_or_default(),
+                status: status.map(|st| {
+                    crate::views::peer_connections::output::MeetStatusRow {
+                        mode_name: st.mode_name.to_string(),
+                        mode_input: st.mode_input,
+                        searching: !st.phase.is_settled(),
+                        error: match &st.phase {
+                            crate::rendezvous::MeetPhase::Failed(e) => Some(e.clone()),
+                            _ => None,
+                        },
+                        polls: st.polls,
+                        max_polls: st.max_polls,
+                        found: st
+                            .found
+                            .into_iter()
+                            .map(|d| crate::views::peer_connections::output::MeetFoundRow {
+                                short_pid: crate::views::short_pid(&d.peer_id),
+                                remembered: known_peers.iter().any(|k| k.remote_pid == d.peer_id),
+                                peer_id: d.peer_id,
+                                verified: d.verified,
+                            })
+                            .collect(),
+                    }
+                }),
+                notice: self.meet_notice.lock().ok().and_then(|n| n.clone()),
+            }
+        };
+
         PeerConnectionsOutput {
             window_id: self.window_id,
             bound_peer,
@@ -282,7 +352,74 @@ impl PeerConnectionsModel {
             address_input_initial: self.inner.lock().unwrap().address.clone(),
             last_attempt: attempt.read(),
             qr_payload,
+            connectors,
+            connector_notice: self.connector_notice.lock().unwrap().clone(),
+            meet,
         }
+    }
+
+    // -- Meet (crate::rendezvous) --
+
+    /// Start a search at `mode` through the selected connector. Replaces any
+    /// previous one — a second press means "look for this instead".
+    ///
+    /// The connector comes from the **system** peer's registry (deployment
+    /// infrastructure) while the search runs from this window's **bound** peer:
+    /// that is the peer whose pool carries the calls, and whose id we announce,
+    /// so it is the identity a counterpart comes away with.
+    pub fn start_meet(&self, peers: &Peers, mode: crate::rendezvous::Mode) -> Result<(), String> {
+        let sys = peers.system_peer_id().to_string();
+        let node = crate::connectors::selected_connector(peers, &sys)
+            .ok_or_else(|| crate::i18n::t("peerconn.meet_needs_connector", &[]))?;
+        let session = crate::rendezvous::MeetSession::start(&self.peer_id, node, mode);
+        if let Ok(mut slot) = self.meet.lock() {
+            *slot = Some(session);
+        }
+        Ok(())
+    }
+
+    /// Publish (or clear) the meet form's refusal. `None` clears.
+    pub fn set_meet_notice(&self, notice: Option<(String, bool)>) {
+        if let Ok(mut slot) = self.meet_notice.lock() {
+            *slot = notice.map(|(text, is_error)| {
+                crate::views::peer_connections::output::ConnectorNotice { text, is_error }
+            });
+        }
+    }
+
+    /// End the search, keeping what it found.
+    pub fn stop_meet(&self) {
+        if let Ok(slot) = self.meet.lock() {
+            if let Some(s) = slot.as_ref() {
+                s.stop();
+            }
+        }
+    }
+
+    /// One frame of progress for a running meet. Called from the window's
+    /// `tick` — the frame loop is where the `&Peers` a round trip needs exists.
+    ///
+    /// Returns `true` when the visible status changed, so the caller can mark
+    /// the window dirty: a meet writes nothing to the tree, so nothing else
+    /// would ever repaint it.
+    pub fn pump_meet(&self, peers: &Peers) -> bool {
+        let Ok(mut slot) = self.meet.lock() else { return false };
+        let Some(session) = slot.as_mut() else { return false };
+        session.pump(peers);
+        // Ask the session, do NOT diff the status around the pump: nearly every
+        // change lands in a spawned round trip *between* frames, so a diff sees
+        // before == after and reports "nothing happened". That is precisely how
+        // a meet whose dial had already failed kept rendering "Searching…"
+        // (e2e Phase 14.7).
+        session.take_changed()
+    }
+
+    /// Shared handle to the `Check` outcome, so the async `advertise` landing
+    /// off-frame can publish into the next render.
+    pub fn connector_notice_handle(
+        &self,
+    ) -> Arc<Mutex<Option<crate::views::peer_connections::output::ConnectorNotice>>> {
+        self.connector_notice.clone()
     }
 
     #[cfg(test)]
@@ -492,6 +629,185 @@ mod tests {
                 ConnectOutcome::Connected("system-backend".to_string())
             ))
         );
+    }
+
+    /// A meet with no connector selected refuses **where the user can see it**,
+    /// rather than starting a search that can never reach a node.
+    #[test]
+    fn meet_without_a_connector_is_refused_not_started() {
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        let model = PeerConnectionsModel::new(7, pid);
+
+        let refused = model.start_meet(&peers, crate::rendezvous::Mode::Tag("chess".into()));
+        assert!(refused.is_err(), "no connector ⇒ no search");
+
+        let out = model.render_output(
+            &peers,
+            &crate::dial_markers::DialMarkers::new(),
+            &crate::connect_attempt::ConnectAttempt::new(),
+        );
+        assert!(!out.meet.has_connector, "the form says why it can't run");
+        assert!(out.meet.status.is_none(), "and no search is claimed to be running");
+    }
+
+    /// **A meet change that lands between frames still wakes the window.**
+    ///
+    /// A meet writes nothing to the tree, so the only thing that repaints this
+    /// window is `pump_meet` returning `true`. Nearly every change lands in a
+    /// *spawned* round trip — between pumps — so a `pump_meet` that diffed the
+    /// status before and after its own `pump` call saw them equal and reported
+    /// "nothing happened". The window then kept rendering "Searching…" for a
+    /// meet whose dial had already failed, indefinitely. e2e Phase 14.7 caught
+    /// it; this is the native gate that keeps it caught.
+    ///
+    /// Written as: on the frame the search settles, `pump_meet` must have said
+    /// so. Revert to the diff and it fails on exactly that.
+    #[tokio::test]
+    async fn a_meet_outcome_that_lands_between_frames_still_wakes_the_window() {
+        use crate::connectors::{self, Connector};
+        use crate::rendezvous::Mode;
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        let registry = MemoryTransportRegistry::new();
+        let peers =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry)));
+        let pid = peers.primary_peer_id().to_string();
+        let sys = peers.system_peer_id().to_string();
+        // A node nobody is listening on: the dial fails, and it fails inside a
+        // spawned future — which is the whole point.
+        let ghost = Connector {
+            node_peer_id: "2KNobodyHome".to_string(),
+            node_addr: "memory://2KNobodyHome".to_string(),
+            label: String::new(),
+        };
+        connectors::add_connector(&peers, &sys, &ghost).expect("add");
+        // Both halves need waiting on: `select_connector` refuses until the
+        // row it names is readable, and the selection it then writes is itself
+        // a dispatched write. Polling for the readable end covers both.
+        for _ in 0..400 {
+            let _ = connectors::select_connector(&peers, &sys, "2KNobodyHome");
+            if connectors::selected_connector(&peers, &sys).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let model = PeerConnectionsModel::new(7, pid);
+        model.start_meet(&peers, Mode::Tag("chess".into())).expect("a connector is selected");
+
+        let dials = crate::dial_markers::DialMarkers::new();
+        let attempt = crate::connect_attempt::ConnectAttempt::new();
+        let mut said_so = None;
+        for _ in 0..2000 {
+            let changed = model.pump_meet(&peers);
+            let settled = model
+                .render_output(&peers, &dials, &attempt)
+                .meet
+                .status
+                .is_some_and(|s| !s.searching);
+            if settled {
+                said_so = Some(changed);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+
+        assert_eq!(
+            said_so,
+            Some(true),
+            "the meet settled and the pump reported no change — nothing would have \
+             repainted the window, and it would still be showing 'Searching…'"
+        );
+    }
+
+    /// The panel reports the peer a real meet found, and knows whether it is
+    /// already remembered — the flag that decides whether `Remember` is offered
+    /// at all. A button that would change nothing visible is a dead button.
+    #[tokio::test]
+    async fn the_meet_panel_reports_what_the_search_found() {
+        use crate::connectors::{self, Connector};
+        use crate::rendezvous::{MeetSession, Mode};
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        let registry = MemoryTransportRegistry::new();
+        let (node_pid, node) =
+            connectors::tests::spawn_signaling_node(registry.clone(), "pool-seven");
+        let row = Connector {
+            node_peer_id: node_pid.clone(),
+            node_addr: format!("memory://{node_pid}"),
+            label: String::new(),
+        };
+
+        let peers = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let pid = peers.primary_peer_id().to_string();
+        let sys = peers.system_peer_id().to_string();
+        connectors::add_connector(&peers, &sys, &row).expect("add");
+        for _ in 0..400 {
+            let _ = connectors::select_connector(&peers, &sys, &node_pid);
+            if connectors::selected_connector(&peers, &sys).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let other = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let other_pid = other.primary_peer_id().to_string();
+        let mut other_session =
+            MeetSession::start(&other_pid, row.clone(), Mode::Tag("chess".into()));
+        tokio::task::yield_now().await;
+
+        let model = PeerConnectionsModel::new(7, pid);
+        model.start_meet(&peers, Mode::Tag("chess".into())).expect("a connector is selected");
+
+        let dials = crate::dial_markers::DialMarkers::new();
+        let attempt = crate::connect_attempt::ConnectAttempt::new();
+        let render = || model.render_output(&peers, &dials, &attempt);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut row_seen = false;
+        while std::time::Instant::now() < deadline && !row_seen {
+            for _ in 0..40 {
+                model.pump_meet(&peers);
+                other_session.pump(&other);
+            }
+            row_seen = render()
+                .meet
+                .status
+                .is_some_and(|s| s.found.iter().any(|f| f.peer_id == other_pid));
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(row_seen, "the panel never showed the peer the meet found");
+
+        let out = render();
+        let found = out.meet.status.unwrap();
+        let peer = found.found.iter().find(|f| f.peer_id == other_pid).unwrap();
+        assert!(
+            !peer.remembered,
+            "a meet remembers nothing on its own — the user decides who to keep"
+        );
+
+        // Once remembered, the row must stop offering Remember.
+        crate::connections::ConnectionsWriter::new(&peers).add(&other_pid);
+        let mut flipped = false;
+        for _ in 0..200 {
+            if render()
+                .meet
+                .status
+                .is_some_and(|s| s.found.iter().any(|f| f.peer_id == other_pid && f.remembered))
+            {
+                flipped = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(flipped, "a remembered peer's row still offered Remember");
+
+        node.abort();
     }
 
     // (The device-authorization projection tests moved with the surface to

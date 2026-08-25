@@ -147,6 +147,42 @@ pub fn user_theme_path(app_id: &str, peer_id: &str, name: &str) -> String {
     format!("{}{}", user_themes_prefix(app_id, peer_id), name)
 }
 
+/// Prefix for the **connector registry** — the durable, user-editable list of
+/// signaling nodes this deployment may rendezvous through (§5.5 of
+/// `REVIEW-CONNECTIVITY-LAYER-COHERENCE-2026-08-11`). One entity per node.
+///
+/// e.g. `connectors_prefix(APP_ID, me)` → `"/{me}/app/entity-browser/connectors/"`
+///
+/// This is a *list of peers we know how to reach*, deliberately the same shape
+/// as any other peer (peer-id + address). It is NOT an address book for data
+/// peers — routes to those are kernel-owned transport profiles
+/// (`transport_profiles.rs`). A connector is infrastructure the user chose:
+/// "my connector, or a community's".
+pub fn connectors_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/connectors/", peer_id, app_id)
+}
+
+/// Path for one connector, keyed by the **node's peer-id** — which is unique
+/// per node and already a safe single path segment (Base58, validated by
+/// [`crate::connectors::validate_node_peer_id`] before it is ever used here).
+///
+/// Keying by peer-id rather than a nickname means re-adding the same node is an
+/// idempotent overwrite instead of a duplicate row pointing at one node.
+pub fn connector_path(app_id: &str, peer_id: &str, node_peer_id: &str) -> String {
+    format!("{}{}", connectors_prefix(app_id, peer_id), node_peer_id)
+}
+
+/// The **selected** connector — which entry of the registry provisioning should
+/// use. A single entity holding one node peer-id, deliberately NOT a `selected`
+/// flag on each row: a flag makes "exactly one is selected" an invariant that
+/// two writers can break, and a half-broken selection is invisible.
+///
+/// Lives *outside* [`connectors_prefix`] so a listing of the registry never has
+/// to filter the selection entity out of its own rows.
+pub fn connector_selection_path(app_id: &str, peer_id: &str) -> String {
+    settings_path(app_id, peer_id, "connector-selection")
+}
+
 /// Build a per-window results path.
 pub fn window_results_path(app_id: &str, peer_id: &str, window_id: WindowId) -> String {
     workspace_path(app_id, peer_id, &format!("windows/{}/results", window_id))

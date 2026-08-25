@@ -21,6 +21,15 @@ use web_sys::Element;
 /// Drafts key for the connect-address input (`components::text_input`).
 const ADDRESS_FIELD: &str = "address";
 
+/// Drafts keys for the add-a-connector form.
+const CONNECTOR_ID_FIELD: &str = "connector_id";
+const CONNECTOR_ADDR_FIELD: &str = "connector_addr";
+const CONNECTOR_LABEL_FIELD: &str = "connector_label";
+
+/// Drafts keys for the meet-at-a-name form.
+const MEET_MODE_FIELD: &str = "meet_mode";
+const MEET_INPUT_FIELD: &str = "meet_input";
+
 pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     util::clear_children(container);
 
@@ -34,6 +43,8 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
     render_bound_header(&wrapper, output, ctx);
     render_known_devices(&wrapper, output, ctx);
     render_connect(&wrapper, output, ctx);
+    render_connectors(&wrapper, output, ctx);
+    render_meet(&wrapper, output, ctx);
     render_pairing_qr(&wrapper, output, ctx);
 
     util::append(container, &wrapper);
@@ -408,6 +419,346 @@ fn render_pairing_qr(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     }
     util::append(&qr_details, &qr_content);
     util::append(&card, &qr_details);
+
+    util::append(parent, &card);
+}
+
+/// The localized word for a running meet's mode, plus its input when there is
+/// one to show. The mode arrives as the protocol's English tag (`tag` /
+/// `secret` / `lobby`) precisely so this can be a locale's own word instead.
+fn meet_mode_label(status: &crate::views::peer_connections::output::MeetStatusRow) -> String {
+    let key = match status.mode_name.as_str() {
+        "secret" => "peerconn.meet_mode_secret",
+        "lobby" => "peerconn.meet_mode_lobby",
+        _ => "peerconn.meet_mode_tag",
+    };
+    let word = crate::i18n::t(key, &[]);
+    if status.mode_input.is_empty() {
+        word
+    } else {
+        format!("{word} \u{201c}{}\u{201d}", status.mode_input)
+    }
+}
+
+/// **Meet at a name** — the `lobby` / `tag` / `secret` modes
+/// (`crate::rendezvous`), the localized surface over the `meet` shell verb.
+///
+/// One bounded card (S2), the results a table (S7), shared atoms (S8). The
+/// section reports its own state throughout — searching, the reason it stopped,
+/// and an honest "nobody was there" — because a search whose state you cannot
+/// see is a spinner, and a meet writes nothing to the tree that would otherwise
+/// show for it.
+fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
+    let card = components::card(&crate::i18n::t("peerconn.meet", &[]));
+
+    // What a meet is and what it is not, said where the user types a name:
+    // rendezvous introduces and never authorizes, a tag is public by design, and
+    // a memorable "secret" is a tag in disguise. That is not decoration — it is
+    // the difference between a discovery convenience and a gate someone leans on.
+    let hint = util::create_element("p");
+    hint.set_attribute("style", theme::HINT).ok();
+    util::set_text(&hint, &crate::i18n::t("peerconn.meet_hint", &[]));
+    util::append(&card, &hint);
+
+    if !output.meet.has_connector {
+        util::append(
+            &card,
+            &components::empty(&crate::i18n::t("peerconn.meet_needs_connector", &[])),
+        );
+        util::append(parent, &card);
+        return;
+    }
+
+    // --- the form ---------------------------------------------------------
+    // Unwired select + draft-tracked input: both are read at Meet-click time, so
+    // a change can't trigger a rebuild that resets the pick or the typing.
+    let mode = components::select_el(
+        &[
+            ("tag", &crate::i18n::t("peerconn.meet_mode_tag", &[])),
+            ("secret", &crate::i18n::t("peerconn.meet_mode_secret", &[])),
+            ("lobby", &crate::i18n::t("peerconn.meet_mode_lobby", &[])),
+        ],
+        "tag",
+    );
+    mode.set_attribute("data-field", MEET_MODE_FIELD).ok();
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("peerconn.meet_mode", &[]), "", &mode),
+    );
+
+    let name = components::text_input(ctx, MEET_INPUT_FIELD, "", "");
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.name", &[]), "", &name),
+    );
+
+    let actions = util::create_element("div");
+    actions.set_attribute("style", theme::BTN_ROW).ok();
+    let go = components::button_el(
+        &crate::i18n::t("peerconn.meet_start", &[]),
+        components::ButtonKind::Primary,
+    );
+    {
+        let queue = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let drafts = ctx.drafts.clone();
+        let wid = output.window_id;
+        let mode_ref = mode.clone();
+        ctx.listen(&go, "click", move |_| {
+            let chosen = mode_ref
+                .clone()
+                .dyn_into::<web_sys::HtmlSelectElement>()
+                .map(|s| s.value())
+                .unwrap_or_else(|_| "tag".to_string());
+            let input = drafts.borrow().get(MEET_INPUT_FIELD).cloned().unwrap_or_default();
+            // Dispatch even when the input is empty: `Mode::parse` reports what
+            // is wrong (a tag with nothing to meet at, a lobby with a stray
+            // input) and the notice shows it — a silently ignored press is the
+            // dead-button disease.
+            queue.borrow_mut().push(Action::WindowEvent {
+                window_id: wid,
+                event: "meet_start".to_string(),
+                value: format!("{chosen}\u{1f}{input}"),
+            });
+            rp();
+        });
+    }
+    util::append(&actions, &go);
+
+    if output.meet.status.as_ref().is_some_and(|s| s.searching) {
+        let stop = components::button_el(
+            &crate::i18n::t("peerconn.meet_stop", &[]),
+            components::ButtonKind::Secondary,
+        );
+        ctx.on_window_event(&stop, "click", "meet_stop", "");
+        util::append(&actions, &stop);
+    }
+    util::append(&card, &actions);
+
+    // A refused press reports here, next to the button that caused it.
+    if let Some(notice) = &output.meet.notice {
+        let el = if notice.is_error {
+            components::error(&notice.text)
+        } else {
+            components::success(&notice.text)
+        };
+        util::append(&card, &el);
+    }
+
+    // --- what the search is doing ----------------------------------------
+    let Some(status) = &output.meet.status else {
+        util::append(parent, &card);
+        return;
+    };
+
+    if let Some(error) = &status.error {
+        util::append(&card, &components::error(error));
+    } else if status.searching {
+        let line = util::create_element("p");
+        line.set_attribute("style", theme::HINT).ok();
+        util::set_text(
+            &line,
+            &crate::i18n::t(
+                "peerconn.meet_searching",
+                &[
+                    ("mode", &meet_mode_label(status)),
+                    ("node", &output.meet.node_short),
+                    ("polls", &status.polls.to_string()),
+                    ("max", &status.max_polls.to_string()),
+                ],
+            ),
+        );
+        util::append(&card, &line);
+    }
+
+    if status.found.is_empty() {
+        if !status.searching && status.error.is_none() {
+            util::append(&card, &components::empty(&crate::i18n::t("peerconn.meet_none", &[])));
+        }
+        util::append(parent, &card);
+        return;
+    }
+
+    let (table, tbody) = components::table(&[
+        &crate::i18n::t("label.peer_id", &[]),
+        "",
+        "",
+    ]);
+    for found in &status.found {
+        // The id in full beside the short form: this is the value the user
+        // hands to `connect` or a Chat, and a truncated id is not one.
+        let id_cell = components::td_text(&format!("{}  {}", found.short_pid, found.peer_id));
+        let claim = if found.verified {
+            components::td_text("")
+        } else {
+            // Not a warning banner: an unverified claim is the *normal* case for
+            // the bare framing, and it is checked at the handshake. Saying which
+            // is which is the honest amount.
+            components::td_text(&crate::i18n::t("peerconn.meet_unverified", &[]))
+        };
+        let action = if found.remembered {
+            components::td_text(&crate::i18n::t("peerconn.meet_remembered", &[]))
+        } else {
+            let btn = components::button_el(
+                &crate::i18n::t("peerconn.meet_remember", &[]),
+                components::ButtonKind::Secondary,
+            );
+            ctx.on_window_event(&btn, "click", "meet_remember", &found.peer_id);
+            components::td(&btn)
+        };
+        util::append(&tbody, &components::tr(vec![id_cell, claim, action]));
+    }
+    util::append(&card, &table);
+
+    util::append(parent, &card);
+}
+
+/// The **connector registry** — signaling nodes this peer may rendezvous
+/// through, and which one provisioning uses.
+///
+/// Same four operations as the `connector` shell verb (add / use / rm / check),
+/// driving the same [`crate::connectors`] functions: one model, two surfaces.
+/// The rows are a table (S7 — repeated records), the whole thing one bounded
+/// card (S2), and the actions are the shared button atoms (S8).
+fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
+    let card = components::card(&crate::i18n::t("peerconn.connectors", &[]));
+
+    // What a connector *is*, said where the user picks one: it introduces peers
+    // and then gets out of the way. That property is what makes running a
+    // community node safe to offer, so it belongs next to the choice rather
+    // than in a doc nobody opens.
+    let hint = util::create_element("p");
+    // `theme::HINT`, not an inline style string — tokens are the rule and
+    // ui-lint ratchets the inline count DOWN, never up.
+    hint.set_attribute("style", theme::HINT).ok();
+    util::set_text(&hint, &crate::i18n::t("peerconn.connectors_hint", &[]));
+    util::append(&card, &hint);
+
+    if output.connectors.is_empty() {
+        util::append(&card, &components::empty(&crate::i18n::t("peerconn.connector_none", &[])));
+    } else {
+        let (table, tbody) = components::table(&[
+            &crate::i18n::t("label.peer_id", &[]),
+            &crate::i18n::t("label.address", &[]),
+            &crate::i18n::t("label.label", &[]),
+            "",
+        ]);
+        for c in &output.connectors {
+            // `●` marks the selection — the same glyph `connector ls` prints,
+            // so the two surfaces read identically. The text label rides
+            // alongside it rather than relying on the glyph alone.
+            let id_cell = if c.selected {
+                components::td_text(&format!(
+                    "\u{25cf} {}  ({})",
+                    c.short_pid,
+                    crate::i18n::t("peerconn.connector_in_use", &[])
+                ))
+            } else {
+                components::td_text(&c.short_pid)
+            };
+
+            let actions = util::create_element("div");
+            actions.set_attribute("style", theme::BTN_ROW).ok();
+            if !c.selected {
+                let use_btn = components::button_el(
+                    &crate::i18n::t("peerconn.connector_use", &[]),
+                    components::ButtonKind::Primary,
+                );
+                ctx.on_window_event(&use_btn, "click", "connector_use", &c.node_peer_id);
+                util::append(&actions, &use_btn);
+            }
+            // `Check` asks the node what it actually serves — the lobby constant
+            // especially, which a peer must not assume (a node may override it,
+            // and deriving from the default then meets nobody, silently).
+            let check_btn = components::button_el(
+                &crate::i18n::t("peerconn.connector_check", &[]),
+                components::ButtonKind::Secondary,
+            );
+            ctx.on_window_event(&check_btn, "click", "connector_check", &c.node_peer_id);
+            util::append(&actions, &check_btn);
+
+            let rm_btn = components::button_el(
+                &crate::i18n::t("btn.delete", &[]),
+                components::ButtonKind::Destructive,
+            );
+            ctx.on_window_event(&rm_btn, "click", "connector_rm", &c.node_peer_id);
+            util::append(&actions, &rm_btn);
+
+            util::append(
+                &tbody,
+                &components::tr(vec![
+                    id_cell,
+                    components::td_text(&c.node_addr),
+                    components::td_text(&c.label),
+                    components::td(&actions),
+                ]),
+            );
+        }
+        util::append(&card, &table);
+    }
+
+    // The outcome of the last Check (or a refused Add/Use). Without it, asking a
+    // node what it serves and showing nothing is the dead-button disease Phase
+    // 14.5 exists to catch.
+    if let Some(notice) = &output.connector_notice {
+        let el = if notice.is_error {
+            components::error(&notice.text)
+        } else {
+            components::success(&notice.text)
+        };
+        util::append(&card, &el);
+    }
+
+    // --- add a connector -------------------------------------------------
+    // Draft-tracked atoms (S8): typing survives an unrelated repaint, and the
+    // values are read at SUBMIT time, so no per-keystroke event churns the tree.
+    let id_input =
+        components::text_input(ctx, CONNECTOR_ID_FIELD, "", "2K…");
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.peer_id", &[]), "", &id_input),
+    );
+    let addr_input =
+        components::text_input(ctx, CONNECTOR_ADDR_FIELD, "", "wss://node.example:9000");
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.address", &[]), "", &addr_input),
+    );
+    let label_input = components::text_input(ctx, CONNECTOR_LABEL_FIELD, "", "");
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.label", &[]), "", &label_input),
+    );
+
+    let add_btn = components::button_el(
+        &crate::i18n::t("peerconn.connector_add", &[]),
+        components::ButtonKind::Primary,
+    );
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let drafts = ctx.drafts.clone();
+        let wid = output.window_id;
+        ctx.listen(&add_btn, "click", move |_| {
+            let read = |k: &str| drafts.borrow().get(k).cloned().unwrap_or_default();
+            let (id, addr, label) = (
+                read(CONNECTOR_ID_FIELD),
+                read(CONNECTOR_ADDR_FIELD),
+                read(CONNECTOR_LABEL_FIELD),
+            );
+            // Both halves are required, and the model says so with a notice —
+            // submitting the empty form must not look like a dead button, so we
+            // dispatch and let `add_connector` report the refusal.
+            actions.borrow_mut().push(Action::WindowEvent {
+                window_id: wid,
+                event: "connector_add".to_string(),
+                // The app's multi-field packing, so one event carries the form.
+                value: format!("{id}\u{1f}{addr}\u{1f}{label}"),
+            });
+            rp();
+        });
+    }
+    util::append(&card, &add_btn);
 
     util::append(parent, &card);
 }

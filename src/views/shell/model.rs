@@ -229,6 +229,22 @@ impl ShellState {
 fn all_verbs() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = entity_shell::dispatcher::VERBS.to_vec();
     v.push("clear");
+    v.push("connector");
+    v.push("meet");
+    v
+}
+
+/// Sub-commands of the app-local `connector` verb. Kept next to
+/// [`all_verbs`] so completion and dispatch can't drift.
+const CONNECTOR_SUBS: &[&str] = &["ls", "add", "rm", "use", "check"];
+
+/// Sub-commands of the app-local `meet` verb — the three naming modes plus
+/// `stop`. The modes are spelled by [`crate::rendezvous::Mode::NAMES`], which
+/// spells them from the upstream constants, so this list cannot drift from what
+/// `Mode::parse` accepts.
+fn meet_subs() -> Vec<&'static str> {
+    let mut v = crate::rendezvous::Mode::NAMES.to_vec();
+    v.push("stop");
     v
 }
 
@@ -457,6 +473,21 @@ pub struct ShellModel {
     /// records each entry here; verbs read it (`tails`) and flip
     /// the flag on cancel (`untail`).
     pub(super) tails: Arc<Mutex<Vec<TailEntry>>>,
+    /// The `meet` in progress, if any (`crate::rendezvous`).
+    ///
+    /// **In memory, never in the tree** — a meet is an action in progress, like
+    /// a dial marker: it is meaningless across a reload, and a tree-backed one
+    /// would come back as a search nobody started.
+    pub(super) meet: Arc<Mutex<Option<MeetRun>>>,
+}
+
+/// A running `meet` plus what this shell has already told the user about it, so
+/// the per-frame pump reports each peer once rather than on every poll.
+#[derive(Debug)]
+pub(super) struct MeetRun {
+    session: crate::rendezvous::MeetSession,
+    reported: std::collections::HashSet<String>,
+    settled: bool,
 }
 
 impl ShellModel {
@@ -468,6 +499,7 @@ impl ShellModel {
             inner: Arc::new(Mutex::new(state)),
             pending_out: Arc::new(Mutex::new(Vec::new())),
             tails: Arc::new(Mutex::new(Vec::new())),
+            meet: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -567,12 +599,351 @@ impl ShellModel {
         let verb = trimmed.split_whitespace().next().unwrap_or("");
         match verb {
             "clear" => self.clear(),
+            // App-local verb: the connector registry lives in this app
+            // (`crate::connectors`), not in the shell crate's vocabulary, so it
+            // is handled here rather than upstream. The crate dispatcher
+            // returned `None` for it, which is exactly the extension point.
+            //
+            // The Peer Connections window drives the SAME functions with the
+            // same names (add / use / rm / check) — one model, two surfaces,
+            // the way `connect` and that window already relate.
+            "connector" => self.connector_verb(trimmed, peers, &dirty),
+            // The naming modes, over the same registry the `connector` verb
+            // manages. Also app-local, for the same reason: the registry it
+            // meets through lives in this app.
+            "meet" => self.meet_verb(trimmed, peers),
             other => {
                 self.inner
                     .lock()
                     .unwrap()
                     .push(ScrollbackEntry::ErrorText(format!("unknown verb: {}", other)));
             }
+        }
+    }
+
+    /// `connector` — manage the signaling-node registry (`crate::connectors`).
+    ///
+    /// ```text
+    /// connector ls                              list; ● marks the selected one
+    /// connector add <peer-id> <addr> [label…]   add or overwrite
+    /// connector rm  <peer-id>                   remove (clears the selection)
+    /// connector use <peer-id>                   select for provisioning
+    /// connector check [peer-id]                 advertise(): endpoint + lobby
+    /// ```
+    ///
+    /// Output is plain scrollback text and deliberately **not** localized — the
+    /// shell is a CLI surface and this module makes no `i18n::t` calls at all.
+    /// The Peer Connections window is the localized surface over the same
+    /// operations.
+    fn connector_verb(
+        &self,
+        line: &str,
+        peers: &Peers,
+        dirty: &crate::window_watch::DirtyFlag,
+    ) {
+        use crate::connectors;
+
+        // The registry lives on the **system** peer — it is deployment
+        // infrastructure, it is where provisioning reads its node, and it is
+        // where the Peer Connections window reads and writes. This verb used to
+        // use the shell's *bound* peer, so on a shell bound to anything else the
+        // two surfaces quietly managed two different registries: a `connector
+        // add` here left the window's list empty and provisioning unchanged.
+        // The dispatching peer below stays the bound one — that is the peer
+        // whose pool and grants a call to the node rides.
+        let registry_pid = peers.system_peer_id().to_string();
+
+        let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let push = |e: ScrollbackEntry| self.inner.lock().unwrap().push(e);
+        let usage = || {
+            ScrollbackEntry::ErrorText(
+                "usage: connector ls | add <peer-id> <addr> [label…] | \
+                 rm <peer-id> | use <peer-id> | check [peer-id]" // i18n-ignore — dev-facing CLI
+                    .to_string(),
+            )
+        };
+        let Some(sub) = args.first().copied() else {
+            push(usage());
+            return;
+        };
+
+        match sub {
+            "ls" => {
+                let list = connectors::read_connectors(peers, &registry_pid);
+                let selected = connectors::selected_connector(peers, &registry_pid)
+                    .map(|c| c.node_peer_id);
+                if list.is_empty() {
+                    push(ScrollbackEntry::Info(
+                        "no connectors — add one with `connector add <peer-id> <addr>`".into(), // i18n-ignore — dev-facing CLI
+                    ));
+                    return;
+                }
+                for c in list {
+                    // `●` marks the selection, the same glyph the window uses,
+                    // so the two surfaces read the same way.
+                    let mark = if Some(&c.node_peer_id) == selected.as_ref() { "●" } else { " " };
+                    let label = if c.label.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {}", c.label)
+                    };
+                    push(ScrollbackEntry::Info(format!(
+                        "{mark} {}  {}{}",
+                        crate::views::short_pid(&c.node_peer_id),
+                        c.node_addr,
+                        label
+                    )));
+                }
+            }
+            "add" => {
+                let (Some(id), Some(addr)) = (args.get(1), args.get(2)) else {
+                    push(usage());
+                    return;
+                };
+                let c = connectors::Connector {
+                    node_peer_id: (*id).to_string(),
+                    node_addr: (*addr).to_string(),
+                    label: args[3..].join(" "),
+                };
+                match connectors::add_connector(peers, &registry_pid, &c) {
+                    Ok(()) => push(ScrollbackEntry::Info(format!(
+                        "added connector {}", // i18n-ignore — dev-facing CLI
+                        crate::views::short_pid(id)
+                    ))),
+                    Err(e) => push(ScrollbackEntry::ErrorText(e)),
+                }
+            }
+            "rm" => {
+                let Some(id) = args.get(1) else {
+                    push(usage());
+                    return;
+                };
+                connectors::remove_connector(peers, &registry_pid, id);
+                push(ScrollbackEntry::Info(format!(
+                    "removed connector {}", // i18n-ignore — dev-facing CLI
+                    crate::views::short_pid(id)
+                )));
+            }
+            "use" => {
+                let Some(id) = args.get(1) else {
+                    push(usage());
+                    return;
+                };
+                match connectors::select_connector(peers, &registry_pid, id) {
+                    Ok(()) => push(ScrollbackEntry::Info(format!(
+                        "selected {}", // i18n-ignore — dev-facing CLI
+                        crate::views::short_pid(id)
+                    ))),
+                    Err(e) => push(ScrollbackEntry::ErrorText(e)),
+                }
+            }
+            // The one async sub-command: it dials the node. Resolves into
+            // scrollback and flips `dirty` so the panel repaints without
+            // waiting for the next keystroke — the same shape the async `exec`
+            // verb uses.
+            "check" => {
+                // The row, not just the id: asking a node anything needs a
+                // route to it, and a connector nobody has dialed has none
+                // (`connectors::reach_node`). The address is in the row.
+                let target = match args.get(1) {
+                    Some(id) => connectors::read_connectors(peers, &registry_pid)
+                        .into_iter()
+                        .find(|c| c.node_peer_id == **id),
+                    None => connectors::selected_connector(peers, &registry_pid),
+                };
+                let Some(node_row) = target else {
+                    push(ScrollbackEntry::ErrorText(
+                        "no such connector — `connector ls`, then `connector check <peer-id>` \
+                         or `connector use <peer-id>`" // i18n-ignore — dev-facing CLI
+                            .into(),
+                    ));
+                    return;
+                };
+                let node = node_row.node_peer_id.clone();
+                push(ScrollbackEntry::Info(format!(
+                    "asking {} what it serves…", // i18n-ignore — dev-facing CLI
+                    crate::views::short_pid(&node)
+                )));
+                let reach = connectors::reach_node(peers, &self.peer_id, &node_row);
+                let fut = connectors::advertise(peers, &self.peer_id, &node);
+                let inner = self.inner.clone();
+                let dirty = dirty.clone();
+                let short = crate::views::short_pid(&node);
+                spawn_task(async move {
+                    let entry = match reach.await {
+                        Err(e) => ScrollbackEntry::ErrorText(e),
+                        Ok(()) => match fut.await {
+                            Ok(ad) => ScrollbackEntry::Info(format!(
+                                "{short}  endpoint {}  lobby {}  ttl {}s  max-blob {}B", // i18n-ignore — dev-facing CLI
+                                ad.endpoint,
+                                connectors::lobby_constant_for(&ad),
+                                ad.limits.ttl_seconds,
+                                ad.limits.max_blob_bytes,
+                            )),
+                            Err(e) => ScrollbackEntry::ErrorText(e),
+                        },
+                    };
+                    if let Ok(mut s) = inner.lock() {
+                        s.push(entry);
+                    }
+                    dirty.mark();
+                });
+            }
+            other => push(ScrollbackEntry::ErrorText(format!(
+                "unknown connector sub-command: {other} (try: {})", // i18n-ignore — dev-facing CLI
+                CONNECTOR_SUBS.join(", ")
+            ))),
+        }
+    }
+
+    /// `meet` — find a peer by **name** instead of by its 44-character id
+    /// (`crate::rendezvous`).
+    ///
+    /// ```text
+    /// meet tag <label>       anyone who knows the label — public, not a gate
+    /// meet secret <string>   anyone who knows the string — as strong as its entropy
+    /// meet lobby             anyone at the node's lobby, right now
+    /// meet                   how the current search is going
+    /// meet stop              end it, keeping what was found
+    /// ```
+    ///
+    /// The search runs through the **selected connector** (`connector use`),
+    /// from this shell's **bound peer** — that peer's pool carries the calls,
+    /// and its id is the one we announce, so it is the identity a counterpart
+    /// comes away with.
+    ///
+    /// Output is plain scrollback and deliberately not localized, like the rest
+    /// of this module; the Peer Connections window is the localized surface over
+    /// the same operations.
+    fn meet_verb(&self, line: &str, peers: &Peers) {
+        use crate::rendezvous::{MeetSession, Mode};
+
+        let args: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let push = |e: ScrollbackEntry| self.inner.lock().unwrap().push(e);
+
+        // Bare `meet` reports the run in progress rather than starting one — the
+        // status is otherwise only visible in the window, and a search you
+        // cannot see the state of is a spinner.
+        let Some(sub) = args.first().copied() else {
+            match self.meet.lock().ok().and_then(|m| m.as_ref().map(|r| r.session.status())) {
+                Some(st) => {
+                    push(ScrollbackEntry::Info(format!(
+                        "meeting at {} via {} — {:?}, poll {}/{}, {} found", // i18n-ignore — dev-facing CLI
+                        st.mode,
+                        crate::views::short_pid(&st.node_peer_id),
+                        st.phase,
+                        st.polls,
+                        st.max_polls,
+                        st.found.len()
+                    )));
+                }
+                None => push(ScrollbackEntry::ErrorText(format!(
+                    "usage: meet {} <input> | meet lobby | meet stop", // i18n-ignore — dev-facing CLI
+                    meet_subs().join(" | ")
+                ))),
+            }
+            return;
+        };
+
+        if sub == "stop" {
+            match self.meet.lock() {
+                Ok(mut slot) => match slot.take() {
+                    Some(run) => {
+                        run.session.stop();
+                        push(ScrollbackEntry::Info("meet stopped".into())); // i18n-ignore — dev-facing CLI
+                    }
+                    None => push(ScrollbackEntry::ErrorText("no meet running".into())), // i18n-ignore — dev-facing CLI
+                },
+                Err(_) => push(ScrollbackEntry::ErrorText("meet state unavailable".into())), // i18n-ignore — dev-facing CLI
+            }
+            return;
+        }
+
+        // Everything after the mode is the input, joined — a tag may have
+        // spaces, and splitting it would meet at a different label than the one
+        // the user typed (silently, since nothing errors).
+        let input = args[1..].join(" ");
+        let mode = match Mode::parse(sub, &input) {
+            Ok(m) => m,
+            Err(e) => {
+                push(ScrollbackEntry::ErrorText(e));
+                return;
+            }
+        };
+
+        let registry_pid = peers.system_peer_id().to_string();
+        let Some(node) = crate::connectors::selected_connector(peers, &registry_pid) else {
+            push(ScrollbackEntry::ErrorText(
+                "no connector selected — `connector add <peer-id> <addr>` then \
+                 `connector use <peer-id>`" // i18n-ignore — dev-facing CLI
+                    .into(),
+            ));
+            return;
+        };
+
+        let describe = mode.describe();
+        let short = crate::views::short_pid(&node.node_peer_id);
+        if let Ok(mut slot) = self.meet.lock() {
+            *slot = Some(MeetRun {
+                session: MeetSession::start(&self.peer_id, node, mode),
+                reported: std::collections::HashSet::new(),
+                settled: false,
+            });
+        }
+        push(ScrollbackEntry::Info(format!(
+            "meeting at {describe} via {short} — searching…" // i18n-ignore — dev-facing CLI
+        )));
+    }
+
+    /// Advance the running `meet` one frame and report what changed.
+    ///
+    /// Called from [`super::ShellWindow::tick`], which is where the `&Peers` a
+    /// round trip needs actually exists — see `crate::rendezvous`'s module doc
+    /// on why the session is frame-pumped rather than a spawned loop.
+    ///
+    /// Reports each peer **once** (a bucket re-serves the same messages every
+    /// poll) and the outcome once, then leaves the finished run in place so
+    /// `meet` can still print its result.
+    pub fn pump_meet(&self, peers: &Peers, dirty: &crate::window_watch::DirtyFlag) {
+        let Ok(mut slot) = self.meet.lock() else { return };
+        let Some(run) = slot.as_mut() else { return };
+        run.session.pump(peers);
+        let status = run.session.status();
+
+        let mut changed = false;
+        for found in &status.found {
+            if run.reported.insert(found.peer_id.clone()) {
+                let mark = if found.verified { "" } else { "  (unverified claim)" }; // i18n-ignore — dev-facing CLI
+                self.inner.lock().unwrap().push(ScrollbackEntry::Info(format!(
+                    "met {}  {}{}", // i18n-ignore — dev-facing CLI
+                    crate::views::short_pid(&found.peer_id),
+                    found.peer_id,
+                    mark
+                )));
+                changed = true;
+            }
+        }
+        if status.phase.is_settled() && !run.settled {
+            run.settled = true;
+            let entry = match &status.phase {
+                crate::rendezvous::MeetPhase::Failed(e) => {
+                    ScrollbackEntry::ErrorText(format!("meet failed: {e}")) // i18n-ignore — dev-facing CLI
+                }
+                _ if status.found.is_empty() => ScrollbackEntry::Info(
+                    "meet finished — nobody else was there. Both sides have to be \
+                     searching at the same name, at the same node." // i18n-ignore — dev-facing CLI
+                        .into(),
+                ),
+                _ => ScrollbackEntry::Info(format!(
+                    "meet finished — {} peer(s). Connect with `connect` or open a Chat on the id.", // i18n-ignore — dev-facing CLI
+                    status.found.len()
+                )),
+            };
+            self.inner.lock().unwrap().push(entry);
+            changed = true;
+        }
+        if changed {
+            dirty.mark();
         }
     }
 
@@ -2254,7 +2625,166 @@ mod tests {
     fn verb_completion_includes_peer_and_connect() {
         // Verb registry covers the new verbs.
         assert_eq!(complete_verb("pee"), Some("peer".into()));
-        assert_eq!(complete_verb("con"), Some("connect ".into()));
+        // `connect` and `connector` share a prefix, so "con" is now AMBIGUOUS
+        // and expands to the longest common prefix with no trailing space —
+        // the same rule that already stops "c" at "c" for cd/cat/clear, and a
+        // second Tab walks further. This assertion previously expected
+        // "connect " because `connect` was the only match; the change is the
+        // documented behaviour for a shared prefix, not a regression.
+        assert_eq!(complete_verb("con"), Some("connect".into()));
+        // Past the fork each one completes uniquely again.
+        assert_eq!(complete_verb("connecto"), Some("connector ".into()));
+    }
+
+    /// `meet tag <label>` finds a peer whose id this shell never had.
+    ///
+    /// The whole point of the naming modes, driven the way a user drives them:
+    /// the counterpart is searching at the same label through the same node, and
+    /// the shell prints the id it came away with. A real `entity-peer` signaling
+    /// node, not a stub.
+    ///
+    /// The pump is called by hand here because `ShellWindow::tick` is the frame
+    /// loop's job; this asserts the model half, which is where the reporting
+    /// lives.
+    #[tokio::test]
+    async fn meet_at_a_tag_reports_a_peer_this_shell_never_knew() {
+        use crate::connectors::{self, Connector};
+        use crate::rendezvous::{MeetSession, Mode};
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        let registry = MemoryTransportRegistry::new();
+        let (node_pid, node) =
+            connectors::tests::spawn_signaling_node(registry.clone(), "pool-seven");
+        let row = Connector {
+            node_peer_id: node_pid.clone(),
+            node_addr: format!("memory://{node_pid}"),
+            label: String::new(),
+        };
+
+        // The shell's peer, with the node in its registry and selected.
+        let peers =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry.clone())));
+        let pid = peers.primary_peer_id().to_string();
+        let sys = peers.system_peer_id().to_string();
+        connectors::add_connector(&peers, &sys, &row).expect("add");
+        // Poll for the selection to be READABLE, not merely accepted: both the
+        // row and the selection are dispatched writes, and `meet` reads the
+        // selection the moment it is typed.
+        for _ in 0..400 {
+            let _ = connectors::select_connector(&peers, &sys, &node_pid);
+            if connectors::selected_connector(&peers, &sys).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        // The counterpart: another peer searching at the same label.
+        let other =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry.clone())));
+        let other_pid = other.primary_peer_id().to_string();
+        let mut other_session =
+            MeetSession::start(&other_pid, row.clone(), Mode::Tag("chess".into()));
+        tokio::task::yield_now().await;
+
+        let model = ShellModel::new(1, pid.clone());
+        model.handle_submit("meet tag chess", &peers, 1, flag());
+        assert!(
+            model.state_snapshot().scrollback.iter().any(|l| l.text_contains("searching")),
+            "the verb says it started"
+        );
+
+        let dirty = flag();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut met = false;
+        while std::time::Instant::now() < deadline && !met {
+            // A frame's worth of pumps on both sides; the session polls the
+            // bucket every N frames, so pumping in bursts keeps the test fast
+            // without changing the production cadence.
+            for _ in 0..40 {
+                model.pump_meet(&peers, &dirty);
+                other_session.pump(&other);
+            }
+            met = model
+                .state_snapshot()
+                .scrollback
+                .iter()
+                .any(|l| l.text_contains(&other_pid));
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        assert!(
+            met,
+            "the shell never reported the peer it met; scrollback: {:?}",
+            model
+                .state_snapshot()
+                .scrollback
+                .iter()
+                .map(|l| l.render_text())
+                .collect::<Vec<_>>()
+        );
+
+        model.handle_submit("meet stop", &peers, 1, flag());
+        assert!(model.state_snapshot().scrollback.iter().any(|l| l.text_contains("meet stopped")));
+
+        node.abort();
+    }
+
+    /// A meet with no connector selected refuses where the user can see it,
+    /// rather than starting a search that can never reach anything.
+    #[test]
+    fn meet_without_a_selected_connector_says_so() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let model = ShellModel::new(1, pid);
+
+        model.handle_submit("meet tag chess", &peers, 1, flag());
+        let s = model.state_snapshot();
+        assert!(
+            s.scrollback.iter().any(|l| l.is_error() && l.text_contains("connector")),
+            "got {:?}",
+            s.scrollback.iter().map(|l| l.render_text()).collect::<Vec<_>>()
+        );
+
+        // And a mode that needs an input refuses too — `meet tag` with nothing
+        // to meet at would otherwise derive a key from the empty string.
+        model.handle_submit("meet tag", &peers, 1, flag());
+        assert!(model.state_snapshot().scrollback.iter().any(|l| l.is_error()));
+    }
+
+    /// The `connector` verb is app-local: the crate dispatcher does not know
+    /// it (it is not in `entity_shell::dispatcher::VERBS`), so it must fall
+    /// through to this model's own match arm rather than erroring as unknown.
+    #[test]
+    fn connector_verb_is_app_local_and_lists_what_it_adds() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let model = ShellModel::new(1, pid);
+
+        model.handle_submit("connector ls", &peers, 1, flag());
+        let s = model.state_snapshot();
+        assert!(
+            s.scrollback.iter().any(|l| l.text_contains("no connectors")),
+            "an empty registry says so instead of falling through to `unknown verb`"
+        );
+
+        model.handle_submit("connector add 2KNodeSeven ws://box:9000 my box", &peers, 1, flag());
+        let s = model.state_snapshot();
+        assert!(s.scrollback.iter().any(|l| l.text_contains("added connector")));
+
+        // A refusal is reported, not silently swallowed.
+        model.handle_submit("connector use 2KGhost", &peers, 1, flag());
+        let s = model.state_snapshot();
+        assert!(
+            s.scrollback.iter().any(|l| l.is_error() && l.text_contains("2KGhost")),
+            "selecting an unknown node reports the refusal"
+        );
+
+        model.handle_submit("connector frobnicate", &peers, 1, flag());
+        let s = model.state_snapshot();
+        assert!(s
+            .scrollback
+            .iter()
+            .any(|l| l.is_error() && l.text_contains("unknown connector sub-command")));
     }
 
     #[test]
