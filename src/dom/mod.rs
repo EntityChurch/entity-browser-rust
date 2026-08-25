@@ -158,7 +158,7 @@ impl DomRenderer {
 
     fn try_new(repaint: RepaintFn) -> Result<Self, String> {
         let dom_layer = util::get_element_by_id("dom-layer")
-            .ok_or("could not find #dom-layer element")?;
+            .ok_or("could not find #dom-layer element")?; // i18n-ignore — fatal boot, never rendered
 
         let shadow_init = ShadowRootInit::new(ShadowRootMode::Open);
         let shadow_root = dom_layer
@@ -318,7 +318,7 @@ impl DomRenderer {
         // the full-screen promotion correct regardless.)
         for (id, state) in self.window_sections.iter() {
             let is_max = maximized == Some(*id);
-            let want = if is_max { "window maximized" } else { "window" };
+            let want = if is_max { "window maximized" } else { "window" }; // i18n-ignore — CSS class names
             if state.section_el.class_name() != want {
                 state.section_el.set_class_name(want);
             }
@@ -331,7 +331,11 @@ impl DomRenderer {
                 util::set_attr(
                     &state.max_btn,
                     "title",
-                    if is_max { "Restore window" } else { "Maximize window" },
+                    &if is_max {
+                    crate::i18n::t("tooltip.restore_window", &[])
+                } else {
+                    crate::i18n::t("tooltip.maximize_window", &[])
+                },
                 );
             }
         }
@@ -487,7 +491,7 @@ impl DomRenderer {
         // Symbol + count instead of the word "Windows" — the word truncated to
         // "Window…" in the narrow (~25%) slot. ⧉ (two joined squares) reads as
         // "windows" without saying it; the count rides alongside.
-        util::set_text(&windows_toggle, &format!("\u{29c9} {open_count}"));
+        util::set_text(&windows_toggle, &format!("\u{29c9} {open_count}")); // i18n-ignore — glyph + count, language-neutral
         util::set_attr(&windows_toggle, "title", &crate::i18n::t("tooltip.open_windows", &[]));
         // Nothing to open at zero — disable so a tap is a no-op (no empty-panel
         // jitter). Re-enabled on the next rebuild once a window exists.
@@ -517,7 +521,7 @@ impl DomRenderer {
         let body = util::create_element_with_class("div", "palette-body");
         // A little header bar (mobile-only via CSS) so when both panels are open
         // it's obvious where the menu ends and the windows list begins.
-        util::append(&body, &panel_head("Menu"));
+        util::append(&body, &panel_head(&crate::i18n::t("windows.menu", &[])));
         util::append(&shell, &body);
         util::append(&self.palette, &shell);
 
@@ -589,7 +593,7 @@ impl DomRenderer {
         // Active windows live in their own panel (own mobile toggle); on desktop
         // it sits below the spawn menu in the sidebar, as before.
         let windows = util::create_element_with_class("div", "palette-windows");
-        util::append(&windows, &panel_head("Open Windows"));
+        util::append(&windows, &panel_head(&crate::i18n::t("windows.open_windows", &[])));
         self.append_active_windows(&windows, window_manager);
         util::append(&shell, &windows);
     }
@@ -951,7 +955,11 @@ impl DomRenderer {
             util::set_attr(
                 &max_btn,
                 "title",
-                if is_max { "Restore window" } else { "Maximize window" },
+                &if is_max {
+                    crate::i18n::t("tooltip.restore_window", &[])
+                } else {
+                    crate::i18n::t("tooltip.maximize_window", &[])
+                },
             );
             {
                 let actions_rc = pending_actions.clone();
@@ -998,7 +1006,7 @@ impl DomRenderer {
             // rebuild; also reconciled every frame below as a safety net.
             state
                 .section_el
-                .set_class_name(if is_max { "window maximized" } else { "window" });
+                .set_class_name(if is_max { "window maximized" } else { "window" }); // i18n-ignore — CSS class names
 
             // Window content — call the view's render_dom with a
             // DomCtx that captures THIS section's closures.
@@ -1143,7 +1151,7 @@ fn build_empty_state() -> Element {
         util::set_text(&name, &crate::i18n::t("windows.open_windows", &[]));
         util::append(&row, &name);
         let desc = util::create_element("span");
-        util::set_text(&desc, " — jump to or close your active windows");
+        util::set_text(&desc, &format!(" {}", crate::i18n::t("windows.open_windows_hint", &[])));
         util::append(&row, &desc);
         util::append(&legend, &row);
     }

@@ -48,13 +48,13 @@ impl DirectionFilter {
         }
     }
 
-    /// Human label for the option.
+    /// i18n key for the option label (resolved via `t()` at the DOM boundary).
     pub fn label(self) -> &'static str {
         match self {
-            DirectionFilter::All => "All",
-            DirectionFilter::Outbound => "→ Outbound (you called a peer)",
-            DirectionFilter::Inbound => "← Inbound (a peer called this device)",
-            DirectionFilter::Local => "· Local (this app's own peer)",
+            DirectionFilter::All => "accesslog.filter_all",
+            DirectionFilter::Outbound => "accesslog.filter_outbound",
+            DirectionFilter::Inbound => "accesslog.filter_inbound",
+            DirectionFilter::Local => "accesslog.filter_local",
         }
     }
 
@@ -123,10 +123,11 @@ impl AccessView {
             _ => AccessView::Activity,
         }
     }
+    /// i18n key for the tab label (resolved via `t()` at the DOM boundary).
     pub fn label(self) -> &'static str {
         match self {
-            AccessView::Activity => "Activity (live log)",
-            AccessView::Capabilities => "Observed capabilities",
+            AccessView::Activity => "accesslog.tab_activity",
+            AccessView::Capabilities => "accesslog.tab_capabilities",
         }
     }
     pub const ALL: [AccessView; 2] = [AccessView::Activity, AccessView::Capabilities];

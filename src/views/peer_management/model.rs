@@ -140,7 +140,7 @@ fn build_create_options(direct: bool) -> Vec<CreateOption> {
     vec![
         CreateOption {
             value: "frontend",
-            label: "This tab · temporary",
+            label: "peers.kind_label.frontend",
             available: true,
             reason: None,
         },
@@ -149,33 +149,33 @@ fn build_create_options(direct: bool) -> Vec<CreateOption> {
             // IndexedDB store (survives reload). Direct posture only — under a
             // Worker primary there is no main-thread SDK to host it.
             value: "frontend-idb",
-            label: "This tab · saved",
+            label: "peers.kind_label.frontend_idb",
             available: direct,
-            reason: (!direct).then_some("not available in worker mode"),
+            reason: (!direct).then_some("peers.kind_unavail.worker_mode"),
         },
         CreateOption {
             value: "backend-memory",
-            label: "Background · temporary",
+            label: "peers.kind_label.backend_memory",
             available: worker,
-            reason: (!worker).then_some("needs Web Worker support"),
+            reason: (!worker).then_some("peers.kind_unavail.web_worker"),
         },
         CreateOption {
             value: "backend-opfs",
-            label: "Background · saved",
+            label: "peers.kind_label.backend_opfs",
             available: worker && opfs,
             reason: if !worker {
-                Some("needs Web Worker support")
+                Some("peers.kind_unavail.web_worker")
             } else if !opfs {
-                Some("needs OPFS storage")
+                Some("peers.kind_unavail.opfs")
             } else {
                 None
             },
         },
         CreateOption {
             value: "native",
-            label: "Native app · saved",
+            label: "peers.kind_label.native",
             available: native,
-            reason: (!native).then_some("desktop app only"),
+            reason: (!native).then_some("peers.kind_unavail.desktop"),
         },
     ]
 }

@@ -20,3 +20,7 @@ src-tauri/target/
 caps.local.mk
 .tauri-home/
 .cache/
+
+# Python bytecode from tooling scripts
+__pycache__/
+*.pyc

@@ -452,7 +452,7 @@ fn spawn_worker_sdk_for_peer_into(
                 // The persisted keypair is orphaned (the worker can't
                 // boot it on reload either), so clean it up.
                 let err_str = format!("{:?}", err);
-                let is_opfs_gap = err_str.contains("OPFS unavailable")
+                let is_opfs_gap = err_str.contains("OPFS unavailable") // i18n-ignore — Debug-format match key
                     || err_str.contains("storage.getDirectory");
                 if is_opfs_gap {
                     crate::persistence::delete_peer(&peer_id_for_log);
@@ -3545,7 +3545,7 @@ impl EntityApp {
     #[cfg(target_arch = "wasm32")]
     fn create_frontend_idb_peer(&self, label: Option<String>) {
         if self.peer_manager.primary_as_direct().is_none() {
-            let reason = "persistent this-tab peers require the Direct arm";
+            let reason = "persistent this-tab peers require the Direct arm"; // i18n-ignore — internal arm invariant, dev log detail
             tracing::warn!(reason, "frontend-idb create refused");
             self.event_log_writer
                 .log(format!("Cannot create peer: {reason}"));
@@ -3719,7 +3719,7 @@ impl EntityApp {
                 self.connection_health_writer.record(
                     &info.peer_id,
                     crate::connection_health::Liveness::Unreachable,
-                    Some("backend unreachable — backing off, will retry".into()),
+                    Some("backend unreachable — backing off, will retry".into()), // i18n-ignore — connection-health diagnostic detail (dev log surface)
                 );
                 tracing::warn!("system backend unreachable after {MAX_ATTEMPTS} tries — backing off, will retry");
                 return;
@@ -3841,7 +3841,7 @@ async fn derive_and_record_backend_auth(
                 &writer,
                 &log,
                 &backend_pid,
-                format!("session read returned status {}", resp.result.status),
+                format!("session read returned status {}", resp.result.status), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
                 &health,
             )
@@ -3866,7 +3866,7 @@ async fn derive_and_record_backend_auth(
                 &writer,
                 &log,
                 &backend_pid,
-                format!("policy read returned status {}", resp.result.status),
+                format!("policy read returned status {}", resp.result.status), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
                 &health,
             )
@@ -3962,7 +3962,7 @@ fn record_auth_failure(
         crate::connection_health::Liveness::Unreachable,
         Some(detail.clone()),
     );
-    let msg = format!("cannot read backend authorizations — {}", detail);
+    let msg = format!("cannot read backend authorizations — {}", detail); // i18n-ignore — auth-failure diagnostic detail (dev log surface)
     let obs = crate::backend_auth::BackendAuthObservation::failed(backend_pid, msg);
     // Dedupe: the same failure is already recorded → don't re-log or re-write
     // (so a persistently-stale link logs its error once, not every refresh tick).
@@ -3982,10 +3982,13 @@ fn record_auth_failure(
 /// a DOM. Called from the wasm-only [`EntityApp::update_status_bar`].
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn status_summary(windows: usize, peers: usize, can_persist: bool) -> String {
-    let win_word = if windows == 1 { "window" } else { "windows" };
-    let peer_word = if peers == 1 { "peer" } else { "peers" };
-    let durability = if can_persist { "Saved" } else { "Not saved" };
-    format!("{windows} {win_word} · {peers} {peer_word} · {durability}")
+    let win = crate::i18n::t_plural("window.count", windows as i64, &[("n", &windows.to_string())]);
+    let peer = crate::i18n::t_plural("peer.count", peers as i64, &[("n", &peers.to_string())]);
+    let durability = crate::i18n::t(
+        if can_persist { "statusbar.saved" } else { "statusbar.not_saved" },
+        &[],
+    );
+    format!("{win} · {peer} · {durability}") // i18n-ignore — slot-only composition; parts localized above
 }
 
 #[cfg(test)]
@@ -3994,8 +3997,19 @@ mod status_summary_tests {
 
     #[test]
     fn pluralizes_and_labels_durability() {
-        assert_eq!(status_summary(1, 1, true), "1 window · 1 peer · Saved");
-        assert_eq!(status_summary(3, 2, true), "3 windows · 2 peers · Saved");
-        assert_eq!(status_summary(0, 0, false), "0 windows · 0 peers · Not saved");
+        // Counts route through t_plural, which bidi-isolates the {n} arg
+        // (U+2068 … U+2069) so numbers render correctly in RTL locales too.
+        assert_eq!(
+            status_summary(1, 1, true),
+            "\u{2068}1\u{2069} window · \u{2068}1\u{2069} peer · Saved"
+        );
+        assert_eq!(
+            status_summary(3, 2, true),
+            "\u{2068}3\u{2069} windows · \u{2068}2\u{2069} peers · Saved"
+        );
+        assert_eq!(
+            status_summary(0, 0, false),
+            "\u{2068}0\u{2069} windows · \u{2068}0\u{2069} peers · Not saved"
+        );
     }
 }

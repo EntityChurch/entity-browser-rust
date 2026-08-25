@@ -72,8 +72,8 @@ impl EventCategory {
     #[allow(dead_code)]
     pub fn classify(msg: &str) -> Self {
         if msg.starts_with('\u{2190}') // ←
-            || msg.starts_with("Connected")
-            || msg.starts_with("Remote types")
+            || msg.starts_with("Connected") // i18n-ignore — log-prefix match key, not UI text
+            || msg.starts_with("Remote types") // i18n-ignore — log-prefix match key, not UI text
             || msg.contains(" OK:")
         {
             Self::Success
@@ -84,9 +84,9 @@ impl EventCategory {
         {
             Self::Failure
         } else if msg.starts_with('\u{2192}') // →
-            || msg.starts_with("Connecting")
-            || msg.starts_with("Listening")
-            || msg.starts_with("Fetching")
+            || msg.starts_with("Connecting") // i18n-ignore — log-prefix match key, not UI text
+            || msg.starts_with("Listening") // i18n-ignore — log-prefix match key, not UI text
+            || msg.starts_with("Fetching") // i18n-ignore — log-prefix match key, not UI text
         {
             Self::Info
         } else {

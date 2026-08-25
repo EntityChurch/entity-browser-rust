@@ -82,7 +82,14 @@ pub fn render(container: &Element, output: &AccessLogOutput, view: AccessView, c
 
     let scroll = util::create_element("div");
     scroll.set_attribute("style", TABLE_SCROLL).ok();
-    let (tbl, body) = components::table(&["", "Peer", "Actor", "Target", "Operation", "Result"]);
+    let (tbl, body) = components::table(&[
+        "",
+        &crate::i18n::t("label.peer", &[]),
+        &crate::i18n::t("accesslog.col_actor", &[]),
+        &crate::i18n::t("label.target", &[]),
+        &crate::i18n::t("execute.operation", &[]),
+        &crate::i18n::t("accesslog.col_result", &[]),
+    ]);
     for entry in &output.entries {
         util::append(&body, &row(entry, &output.backend_key, &output.labels));
     }
@@ -155,8 +162,11 @@ fn capability_section(peer: &PeerCapabilities) -> Element {
     heading.set_attribute("data-field", "capability-peer").ok();
     util::set_text(
         &heading,
-        &format!("{} — {} capabilit{} observed", peer.actor_label, peer.grants.len(),
-            if peer.grants.len() == 1 { "y" } else { "ies" }),
+        &crate::i18n::t_plural(
+            "accesslog.capabilities_observed",
+            peer.grants.len() as i64,
+            &[("actor", &peer.actor_label), ("n", &peer.grants.len().to_string())],
+        ),
     );
     util::append(&section, &heading);
 
@@ -164,7 +174,13 @@ fn capability_section(peer: &PeerCapabilities) -> Element {
     // reads to decide whether the profile matches reality.
     util::append(&section, &authorized_line(peer));
 
-    let (tbl, body) = components::table(&["Target", "Handler", "Operation", "Resource", "Uses"]);
+    let (tbl, body) = components::table(&[
+        &crate::i18n::t("label.target", &[]),
+        &crate::i18n::t("execute.handler", &[]),
+        &crate::i18n::t("execute.operation", &[]),
+        &crate::i18n::t("execute.resource", &[]),
+        &crate::i18n::t("accesslog.col_uses", &[]),
+    ]);
     for g in &peer.grants {
         util::append(&body, &capability_row(g));
     }
@@ -201,11 +217,13 @@ fn authorized_line(peer: &PeerCapabilities) -> Element {
             bits.set_attribute("style", theme::HINT).ok();
             util::set_text(
                 &bits,
-                &format!(
-                    "grants — handlers: {} · operations: {} · paths: {}",
-                    join_or_dash(&a.handlers),
-                    join_or_dash(&a.operations),
-                    join_or_dash(&a.resources),
+                &crate::i18n::t(
+                    "accesslog.grants_summary",
+                    &[
+                        ("handlers", &join_or_dash(&a.handlers)),
+                        ("operations", &join_or_dash(&a.operations)),
+                        ("paths", &join_or_dash(&a.resources)),
+                    ],
                 ),
             );
             util::append(&line, &bits);
@@ -239,7 +257,9 @@ fn capability_row(g: &ObservedGrant) -> Element {
         g.count.to_string()
     };
     let cells = vec![
-        components::td_text(g.target_label.as_deref().unwrap_or("— (own peer)")),
+        components::td_text(
+            &g.target_label.clone().unwrap_or_else(|| crate::i18n::t("accesslog.own_peer", &[])),
+        ),
         components::td_text(&g.handler),
         components::td_text(&g.operation),
         components::td_text(g.resource.as_deref().unwrap_or("—")),
@@ -261,7 +281,7 @@ fn window_header(wrapper: &Element, view: AccessView, ctx: &DomCtx) {
 
     let switch = compact_select("access-log-view");
     for v in AccessView::ALL {
-        append_option(&switch, v.as_value(), v.label(), v == view);
+        append_option(&switch, v.as_value(), &crate::i18n::t(v.label(), &[]), v == view);
     }
     ctx.on_select_change(&switch, "set_access_view");
     util::append(&bar, &switch);
@@ -280,10 +300,15 @@ fn controls_bar(output: &AccessLogOutput, ctx: &DomCtx) -> Element {
     .ok();
 
     // --- Peer filter ---
-    util::append(&bar, &field_label("Peer:"));
+    util::append(&bar, &field_label(&crate::i18n::t("accesslog.peer_filter_label", &[])));
     let peer_select = compact_select("access-log-peer");
     // "All peers" first, then each subject present.
-    append_option(&peer_select, "", "All peers", output.peer_filter.is_empty());
+    append_option(
+        &peer_select,
+        "",
+        &crate::i18n::t("accesslog.all_peers", &[]),
+        output.peer_filter.is_empty(),
+    );
     for opt in &output.peer_options {
         append_option(&peer_select, &opt.key, &opt.label, opt.key == output.peer_filter);
     }
@@ -294,7 +319,7 @@ fn controls_bar(output: &AccessLogOutput, ctx: &DomCtx) -> Element {
     util::append(&bar, &field_label("Direction:"));
     let dir_select = compact_select("access-log-direction");
     for opt in DirectionFilter::ALL {
-        append_option(&dir_select, opt.as_value(), opt.label(), opt == output.direction);
+        append_option(&dir_select, opt.as_value(), &crate::i18n::t(opt.label(), &[]), opt == output.direction);
     }
     ctx.on_select_change(&dir_select, "set_direction_filter");
     util::append(&bar, &dir_select);
@@ -359,14 +384,14 @@ fn peer_label(entry: &AccessEntry, backend_key: &str, labels: &HashMap<String, S
 /// out), `←` inbound (someone called me), `·` a local dispatch on my own peer.
 /// The full word is the hover tooltip.
 fn direction_glyph(entry: &AccessEntry) -> Element {
-    let (glyph, title) = match entry.direction {
-        AccessDirection::Outbound => ("→", "Outbound — this app called a remote peer"),
-        AccessDirection::Inbound => ("←", "Inbound — a remote peer called this device"),
-        AccessDirection::Local => ("·", "Local — a dispatch on this app's own peer"),
+    let (glyph, title_key) = match entry.direction {
+        AccessDirection::Outbound => ("→", "accesslog.dir_outbound"),
+        AccessDirection::Inbound => ("←", "accesslog.dir_inbound"),
+        AccessDirection::Local => ("·", "accesslog.dir_local"),
     };
     let span = util::create_element("span");
     span.set_attribute("style", "font-variant-numeric:tabular-nums").ok();
-    span.set_attribute("title", title).ok();
+    span.set_attribute("title", &crate::i18n::t(title_key, &[])).ok();
     util::set_text(&span, glyph);
     span
 }
@@ -390,7 +415,7 @@ fn target_label(entry: &AccessEntry) -> String {
         }
         None => {
             if entry.handler.is_empty() {
-                "(local)".to_string()
+                crate::i18n::t("accesslog.target_local", &[])
             } else {
                 entry.handler.clone()
             }
@@ -409,11 +434,12 @@ fn operation_label(entry: &AccessEntry) -> String {
 
 /// A small colored chip for the outcome; the raw detail is a hover tooltip.
 fn outcome_chip(entry: &AccessEntry) -> Element {
-    let (label, color) = match entry.outcome {
-        AccessOutcome::Allowed => ("Allowed", theme_tokens::STATUS_OK),
-        AccessOutcome::Denied => ("Denied", theme_tokens::STATUS_ERR),
-        AccessOutcome::Error => ("Error", theme_tokens::STATUS_WARN),
+    let (label_key, color) = match entry.outcome {
+        AccessOutcome::Allowed => ("accesslog.result_allowed", theme_tokens::STATUS_OK),
+        AccessOutcome::Denied => ("accesslog.result_denied", theme_tokens::STATUS_ERR),
+        AccessOutcome::Error => ("accesslog.result_error", theme_tokens::STATUS_WARN),
     };
+    let label = crate::i18n::t(label_key, &[]);
     let chip = util::create_element("span");
     chip.set_attribute(
         "style",
@@ -421,6 +447,6 @@ fn outcome_chip(entry: &AccessEntry) -> Element {
     )
     .ok();
     chip.set_attribute("title", &entry.detail).ok();
-    util::set_text(&chip, label);
+    util::set_text(&chip, &label);
     chip
 }

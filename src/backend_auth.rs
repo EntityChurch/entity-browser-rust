@@ -231,7 +231,7 @@ pub fn build_authorize_params(
         (text("peer_pattern"), text(target_pid)),
     ]));
     Entity::new(TYPE_CAP_POLICY_ENTRY, data)
-        .map_err(|e| format!("authorize params construction failed: {e}"))
+        .map_err(|e| format!("authorize params construction failed: {e}")) // i18n-ignore: internal error
 }
 
 // ---------------------------------------------------------------------------

@@ -315,12 +315,14 @@ pub const EN: &[(&str, Message)] = &[
     ("label.peer", Message::Simple("Peer")),
     ("label.target", Message::Simple("Target")),
     ("label.address", Message::Simple("Address")),
+    ("label.device", Message::Simple("Device")),
     ("label.name", Message::Simple("Name")),
     ("label.label", Message::Simple("Label")),
     ("label.level", Message::Simple("Level")),
     ("label.results", Message::Simple("Results")),
     ("label.content", Message::Simple("Content")),
     ("label.system", Message::Simple("System")),
+    ("label.user", Message::Simple("User")),
     ("label.state_path", Message::Simple("State: {path}")),
     // Transient status glyphs.
     ("status.copied", Message::Simple("Copied ✓")),
@@ -328,6 +330,13 @@ pub const EN: &[(&str, Message)] = &[
     ("status.saved", Message::Simple("saved")),
     ("status.stopped", Message::Simple("stopped")),
     ("status.granted", Message::Simple("granted")),
+    // Status-bar durability label (capitalized, sentence position — distinct
+    // from status.saved "saved" used as an inline chip).
+    ("statusbar.saved", Message::Simple("Saved")),
+    ("statusbar.not_saved", Message::Simple("Not saved")),
+    // Inline on/off state words (system-peers posture line).
+    ("status.on", Message::Simple("on")),
+    ("status.off", Message::Simple("off")),
     // -- status chips (components::conn_chip / auth_chip) --
     ("chip.connected", Message::Simple("Connected")),
     ("chip.connecting", Message::Simple("Connecting…")),
@@ -354,11 +363,73 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Scan this from another device to connect it here."),
     ),
     ("peers.show_qr", Message::Simple("Show QR code")),
+    ("peers.reconnect", Message::Simple("Reconnect")),
+    ("peers.forget", Message::Simple("Forget")),
+    // -- peer management window --
+    ("peers.add_a_peer", Message::Simple("Add a peer")),
+    ("peers.col_peer_id", Message::Simple("Peer ID")),
+    ("peers.col_kind", Message::Simple("Kind")),
+    ("peers.group_system", Message::Simple("System peers")),
+    ("peers.group_system_sub", Message::Simple("always-on")),
+    ("peers.group_user", Message::Simple("Your peers")),
+    ("peers.group_user_sub", Message::Simple("created by you")),
+    ("peers.open_tree", Message::Simple("Tree")),
+    ("peers.start", Message::Simple("Start")),
+    ("peers.stop", Message::Simple("Stop")),
+    ("peers.footer_workers", Message::Simple("{peers} — 1 boot + {workers}")),
+    // create-peer kind one-line descriptions (S6). Keep the technical acronyms
+    // (IndexedDB/OPFS/Web Worker) verbatim; translate the surrounding prose.
+    (
+        "peers.kind_desc.frontend",
+        Message::Simple("Main thread of this tab, in-memory. Temporary — cleared when you reload."),
+    ),
+    (
+        "peers.kind_desc.frontend_idb",
+        Message::Simple("Main thread of this tab, saved to IndexedDB. Survives reload."),
+    ),
+    (
+        "peers.kind_desc.backend_memory",
+        Message::Simple("A background Web Worker, in-memory. Temporary — cleared when you reload."),
+    ),
+    (
+        "peers.kind_desc.backend_opfs",
+        Message::Simple("A background Web Worker, saved to OPFS. Survives reload."),
+    ),
+    (
+        "peers.kind_desc.native",
+        Message::Simple("A separate native desktop process with its own on-disk store. Saved."),
+    ),
+    // create-peer kind short labels + unavailability reasons.
+    ("peers.kind_label.frontend", Message::Simple("This tab · temporary")),
+    ("peers.kind_label.frontend_idb", Message::Simple("This tab · saved")),
+    ("peers.kind_label.backend_memory", Message::Simple("Background · temporary")),
+    ("peers.kind_label.backend_opfs", Message::Simple("Background · saved")),
+    ("peers.kind_label.native", Message::Simple("Native app · saved")),
+    (
+        "peers.kind_unavail.worker_mode",
+        Message::Simple("not available in worker mode"),
+    ),
+    (
+        "peers.kind_unavail.web_worker",
+        Message::Simple("needs Web Worker support"),
+    ),
+    ("peers.kind_unavail.opfs", Message::Simple("needs OPFS storage")),
+    ("peers.kind_unavail.desktop", Message::Simple("desktop app only")),
+    // -- system peers window: posture line + boot-surface descriptions --
+    ("system_peers.yours", Message::Simple("{n} yours")),
+    ("system_peers.startup_line", Message::Simple("Startup: {value}")),
+    ("system_peers.creation_line", Message::Simple("Peer creation: {value}")),
+    ("boot_surface.chrome", Message::Simple("Window chrome")),
+    ("boot_surface.site", Message::Simple("Content site")),
+    ("boot_surface.site_named", Message::Simple("Content site: {id}")),
+    ("boot_surface.window", Message::Simple("Window: {label}")),
     // -- window-chrome tooltips (title attrs) --
     ("tooltip.close_window", Message::Simple("Close window")),
     ("tooltip.open_windows", Message::Simple("Open windows")),
     ("tooltip.fill_window", Message::Simple("Fill the window")),
     ("tooltip.restore_size", Message::Simple("Back to normal size")),
+    ("tooltip.maximize_window", Message::Simple("Maximize window")),
+    ("tooltip.restore_window", Message::Simple("Restore window")),
     ("tooltip.menu", Message::Simple("Menu")),
     ("tooltip.back", Message::Simple("Back")),
     ("tooltip.site_home", Message::Simple("Go to site home")),
@@ -438,6 +509,33 @@ pub const EN: &[(&str, Message)] = &[
         "settings.lockdown_active",
         Message::Simple("Lockdown is active (set by this deployment's config)."),
     ),
+    ("settings.site_appearance", Message::Simple("Site appearance")),
+    (
+        "settings.site_appearance.hint",
+        Message::Simple("Controls the in-app site overlay's colors."),
+    ),
+    (
+        "settings.singleton_windows",
+        Message::Simple(
+            "Single-instance windows: focus an open window instead of opening a duplicate",
+        ),
+    ),
+    (
+        "settings.boot_hint",
+        Message::Simple(
+            "Applies at next launch — use the status-bar toggle to enter Site Mode now.",
+        ),
+    ),
+    (
+        "settings.show_toggle",
+        Message::Simple("Show the site toggle in the status bar"),
+    ),
+    ("settings.show_inspector", Message::Simple("Show inspector panel")),
+    (
+        "settings.auto_connect",
+        Message::Simple("Auto-connect to known peers on startup"),
+    ),
+    ("settings.no_targets", Message::Simple("(none available)")),
     // -- theme editor surface --
     ("theme.themes", Message::Simple("Themes")),
     ("theme.new_from", Message::Simple("New theme from")),
@@ -519,12 +617,74 @@ pub const EN: &[(&str, Message)] = &[
     // -- window switcher / desktop chrome --
     ("windows.none_open", Message::Simple("No windows open")),
     ("windows.open_windows", Message::Simple("Open Windows")),
+    ("windows.menu", Message::Simple("Menu")),
+    (
+        "windows.open_windows_hint",
+        Message::Simple("— jump to or close your active windows"),
+    ),
     // -- access log surface --
     ("accesslog.operations", Message::Simple("operations: {n}")),
     (
         "accesslog.authorized_head",
         Message::Simple("Authorized: {profile} — {summary}"),
     ),
+    // activity table + capability table columns
+    ("accesslog.col_actor", Message::Simple("Actor")),
+    ("accesslog.col_result", Message::Simple("Result")),
+    ("accesslog.col_uses", Message::Simple("Uses")),
+    // capability section: "<actor> — N capabilit{y,ies} observed"
+    (
+        "accesslog.capabilities_observed",
+        Message::Plural(&[
+            (PluralCategory::One, "{actor} — {n} capability observed"),
+            (PluralCategory::Other, "{actor} — {n} capabilities observed"),
+        ]),
+    ),
+    (
+        "accesslog.grants_summary",
+        Message::Simple("grants — handlers: {handlers} · operations: {operations} · paths: {paths}"),
+    ),
+    ("accesslog.own_peer", Message::Simple("— (own peer)")),
+    ("accesslog.target_local", Message::Simple("(local)")),
+    ("accesslog.all_peers", Message::Simple("All peers")),
+    ("accesslog.peer_filter_label", Message::Simple("Peer:")),
+    // direction tooltips (full words behind the → ← · glyphs)
+    (
+        "accesslog.dir_outbound",
+        Message::Simple("Outbound — this app called a remote peer"),
+    ),
+    (
+        "accesslog.dir_inbound",
+        Message::Simple("Inbound — a remote peer called this device"),
+    ),
+    (
+        "accesslog.dir_local",
+        Message::Simple("Local — a dispatch on this app's own peer"),
+    ),
+    // outcome chips
+    ("accesslog.result_allowed", Message::Simple("Allowed")),
+    ("accesslog.result_denied", Message::Simple("Denied")),
+    ("accesslog.result_error", Message::Simple("Error")),
+    // direction filter <select> options
+    ("accesslog.filter_all", Message::Simple("All")),
+    (
+        "accesslog.filter_outbound",
+        Message::Simple("→ Outbound (you called a peer)"),
+    ),
+    (
+        "accesslog.filter_inbound",
+        Message::Simple("← Inbound (a peer called this device)"),
+    ),
+    (
+        "accesslog.filter_local",
+        Message::Simple("· Local (this app's own peer)"),
+    ),
+    // view switcher
+    ("accesslog.tab_activity", Message::Simple("Activity (live log)")),
+    ("accesslog.tab_capabilities", Message::Simple("Observed capabilities")),
+    // system actor display names
+    ("accesslog.actor_system_backend", Message::Simple("System backend")),
+    ("accesslog.actor_system_peer", Message::Simple("System peer")),
     (
         "mod.learn_more",
         Message::Simple("Learn more and get involved at "),
@@ -535,7 +695,7 @@ pub const EN: &[(&str, Message)] = &[
     ("scanner.photo_capture", Message::Simple("Photo Capture")),
     ("scanner.photo_hint", Message::Simple("Take a photo of a QR code")),
     ("scanner.take_photo", Message::Simple("Take Photo")),
-    ("scanner.processing", Message::Simple("Processing...")),
+    ("scanner.processing", Message::Simple("Processing…")),
     (
         "scanner.no_detector",
         Message::Simple("No BarcodeDetector — enter code manually"),
@@ -552,20 +712,34 @@ pub const EN: &[(&str, Message)] = &[
     ("scanner.stopped", Message::Simple("Stopped")),
     ("scanner.camera_unavailable", Message::Simple("Camera not available")),
     ("scanner.camera_denied", Message::Simple("Camera denied")),
-    ("scanner.starting_camera", Message::Simple("Starting camera...")),
+    ("scanner.starting_camera", Message::Simple("Starting camera…")),
     ("scanner.stream_error", Message::Simple("Stream error")),
-    ("scanner.scanning", Message::Simple("Scanning...")),
+    ("scanner.scanning", Message::Simple("Scanning…")),
     ("scanner.detector_failed", Message::Simple("Detector failed")),
     ("scanner.scan_detect_error", Message::Simple("Scan {n} — detect error")),
-    ("scanner.found_continuing", Message::Simple("Found! Continuing scan...")),
-    ("scanner.scan_n", Message::Simple("Scan {n}...")),
+    ("scanner.found_continuing", Message::Simple("Found! Continuing scan…")),
+    ("scanner.scan_n", Message::Simple("Scan {n}…")),
     ("scanner.scan_error", Message::Simple("Scan {n} — error")),
-    // -- a plural example: proves the selector round-trips (not yet consumed) --
+    // -- count plurals: the status-bar summary ("N windows · M peers · …") --
     (
         "peer.count",
         Message::Plural(&[
             (PluralCategory::One, "{n} peer"),
             (PluralCategory::Other, "{n} peers"),
+        ]),
+    ),
+    (
+        "window.count",
+        Message::Plural(&[
+            (PluralCategory::One, "{n} window"),
+            (PluralCategory::Other, "{n} windows"),
+        ]),
+    ),
+    (
+        "worker.count",
+        Message::Plural(&[
+            (PluralCategory::One, "{n} dedicated worker"),
+            (PluralCategory::Other, "{n} dedicated workers"),
         ]),
     ),
 ];
@@ -589,7 +763,7 @@ pub struct EmbeddedLocale {
 }
 
 // Generated by build.rs at compile time. Defines:
-//   pub static EMBEDDED_LOCALES: &[EmbeddedLocale] = &[ ... ];
+//   pub static EMBEDDED_LOCALES: &[EmbeddedLocale] = &[ … ];
 include!(concat!(env!("OUT_DIR"), "/embedded_locales.rs"));
 
 /// The embedded overlay catalogs as `id → (key → &Message)`, built once. Empty

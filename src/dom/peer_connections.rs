@@ -75,7 +75,12 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
         return;
     }
     let card = components::card(&crate::i18n::t("peers.known_devices", &[]));
-    let (tbl, body) = components::table(&["Device", "Status", "Address", ""]);
+    let (tbl, body) = components::table(&[
+        &crate::i18n::t("label.device", &[]),
+        &crate::i18n::t("label.status", &[]),
+        &crate::i18n::t("label.address", &[]),
+        "",
+    ]);
 
     for kp in &output.known_peers {
         // Live status chip (S4). Unknown → a quiet dash (we've paired but have
@@ -102,7 +107,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
             if !kp.addr.is_empty() && kp.liveness != Liveness::Connected {
                 let btn = components::button_action(
                     ctx,
-                    "Reconnect",
+                    &crate::i18n::t("peers.reconnect", &[]),
                     components::ButtonKind::Secondary,
                     Action::ConnectPeer {
                         peer_id: output.bound_peer.peer_id.clone(),
@@ -118,7 +123,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
             {
                 let btn = components::button_action(
                     ctx,
-                    "Forget",
+                    &crate::i18n::t("peers.forget", &[]),
                     components::ButtonKind::Secondary,
                     Action::ForgetConnection { remote_pid: kp.remote_pid.clone() },
                 );

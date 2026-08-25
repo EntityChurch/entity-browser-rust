@@ -12,11 +12,13 @@ pub struct CreateOption {
     /// Option value = `PeerMode::persist_key`, or `"native"` — durable contract,
     /// what the e2e drives by; never localize this.
     pub value: &'static str,
-    /// Human "where · persistence" label (S6).
+    /// i18n key for the "where · persistence" label (S6); resolved via `t()`
+    /// at the DOM boundary.
     pub label: &'static str,
     /// Creatable in this runtime?
     pub available: bool,
-    /// Why not (appended to the label) when `!available`; `None` when available.
+    /// i18n key for the "why not" reason (appended to the label) when
+    /// `!available`; `None` when available.
     pub reason: Option<&'static str>,
 }
 

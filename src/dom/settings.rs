@@ -108,8 +108,8 @@ fn render_appearance(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
     util::append(
         &card,
         &components::field(
-            "Site appearance",
-            "Controls the in-app site overlay's colors.",
+            &crate::i18n::t("settings.site_appearance", &[]),
+            &crate::i18n::t("settings.site_appearance.hint", &[]),
             &site_select,
         ),
     );
@@ -127,7 +127,7 @@ fn render_windows(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
             "singleton_windows",
             output.singleton_windows,
             "toggle_singleton_windows",
-            " Single-instance windows: focus an open window instead of opening a duplicate",
+            &format!(" {}", crate::i18n::t("settings.singleton_windows", &[])),
         ),
     );
     util::append(parent, &card);
@@ -174,10 +174,7 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     // Site Mode now.
     let kind_hint = util::create_element("div");
     kind_hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &kind_hint,
-        "Applies at next launch — use the status-bar toggle to enter Site Mode now.",
-    );
+    util::set_text(&kind_hint, &crate::i18n::t("settings.boot_hint", &[]));
     util::append(&card, &kind_hint);
 
     // -- Peer dropdown (the target peer; disabled for Chrome) --
@@ -221,7 +218,7 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
         // Empty target list → nothing to arm (e.g. no sites on the peer).
         let opt = util::create_element("option");
         opt.set_attribute("disabled", "").ok();
-        util::set_text(&opt, "(none available)");
+        util::set_text(&opt, &crate::i18n::t("settings.no_targets", &[]));
         util::append(&target_select, &opt);
     }
     util::append(
@@ -237,7 +234,7 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
             "show_toggle",
             s.show_toggle,
             "toggle_show_toggle",
-            " Show the site toggle in the status bar",
+            &format!(" {}", crate::i18n::t("settings.show_toggle", &[])),
         ),
     );
 
@@ -273,7 +270,7 @@ fn render_rendering(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
             "show_inspector",
             output.show_inspector,
             "toggle_inspector",
-            " Show inspector panel",
+            &format!(" {}", crate::i18n::t("settings.show_inspector", &[])),
         ),
     );
     util::append(parent, &card);
@@ -288,7 +285,7 @@ fn render_network(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
             "auto_connect",
             output.auto_connect,
             "toggle_autoconnect",
-            " Auto-connect to known peers on startup",
+            &format!(" {}", crate::i18n::t("settings.auto_connect", &[])),
         ),
     );
     util::append(parent, &card);

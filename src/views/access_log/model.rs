@@ -247,10 +247,10 @@ fn label_for(
     // the frontend peer is the "System peer"; the native backend is the
     // "System backend". One name each, used on every surface.
     if key == SYSTEM_BACKEND_KEY || Some(key) == backend_pid {
-        return "System backend".to_string();
+        return crate::i18n::t("accesslog.actor_system_backend", &[]);
     }
     if key == system_pid {
-        return "System peer".to_string();
+        return crate::i18n::t("accesslog.actor_system_peer", &[]);
     }
     let d = crate::peer_display::PeerDescriptor::describe(peers, key, modes);
     format!("{} · {}", d.role_name(), crate::views::short_pid(key))
