@@ -44,6 +44,12 @@ pub struct AppEntry {
     pub glyph: Option<String>,
     pub icon: Option<String>,
     pub size: Option<AppSize>,
+    /// The entity-apps `type` string (`canvas-game`, `tool`, an L5
+    /// [`super::paths::APP_TYPE_L5`], …). Used at ingest to split apps into sets
+    /// ([`super::paths::set_for_type`]) and retained here so the host can pick
+    /// the delivery mode per app (an L5 WASM-peer payload loads via `src`, not
+    /// `srcdoc`). `None` on older catalogs that predate the field.
+    pub app_type: Option<String>,
 }
 
 /// The app catalog — the list rendered as the launcher grid.
@@ -122,6 +128,11 @@ fn encode_entry(e: &AppEntry) -> entity_ecf::Value {
         }
         fields.push((entity_ecf::Value::Text("size".into()), entity_ecf::Value::Map(axes)));
     }
+    // Appended LAST + only when present, so a catalog without it encodes
+    // byte-identically to the pre-`app_type` format (no content-hash churn).
+    if let Some(t) = &e.app_type {
+        fields.push((entity_ecf::Value::Text("type".into()), entity_ecf::text(t)));
+    }
     entity_ecf::Value::Map(fields)
 }
 
@@ -138,6 +149,7 @@ fn decode_entry(item: &ciborium::Value) -> AppEntry {
                 Some("glyph") => e.glyph = v.as_text().map(str::to_string),
                 Some("icon") => e.icon = v.as_text().map(str::to_string),
                 Some("size") => e.size = decode_size(v),
+                Some("type") => e.app_type = v.as_text().map(str::to_string),
                 _ => {}
             }
         }
@@ -276,6 +288,7 @@ mod tests {
                     glyph: Some("🎛️".into()),
                     icon: Some("<path d='M6 4v16'/>".into()),
                     size: Some(AppSize { width: Some(460), height: Some(600) }),
+                    app_type: Some("tool".into()),
                 },
                 // width-only cap (height fills), and no hints at all.
                 AppEntry {

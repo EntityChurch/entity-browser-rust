@@ -2,10 +2,12 @@
 //! running a self-contained entity-app bundle, with the entity-apps postMessage
 //! protocol and save-state persisted to the tree.
 //!
-//! The bundle runs with `sandbox="allow-scripts"` (and **not**
-//! `allow-same-origin`): an opaque origin that can run JS but can't reach our
-//! DOM, storage, or origin. `postMessage` is the only channel. See
-//! the upstream contract in `entity-apps/docs/EMBEDDING.md`.
+//! A third-party JS app bundle runs `sandbox="allow-scripts"` (and **not**
+//! `allow-same-origin`): an opaque origin that can run JS but can't reach our DOM,
+//! storage, or origin — `postMessage` is the only channel. An **L5 app** (an
+//! `AppDelivery::Src` payload — our own trusted stripped browser-rust) additionally
+//! gets `allow-same-origin` so it can load its own wasm; see [`render_player`] for
+//! the trust-tiered rationale. Upstream contract: `entity-apps/docs/EMBEDDING.md`.
 //!
 //! Protocol (app `source:'entity-app'` ↔ host `source:'entity-host'`):
 //! - app `ready-for-init` → host `init {state, locale, dir}` (saved object or
@@ -359,6 +361,21 @@ fn sanitize_svg(root: &Element) {
     }
 }
 
+/// How the bundle reaches the sandboxed iframe. Most apps are self-contained HTML
+/// inlined as `srcdoc`; an L5 app (a WASM entity-peer payload) is a multi-MB wasm
+/// that can't practically be base64-inlined, so it is served from a URL via `src`
+/// (review G1). The variant also selects the sandbox trust tier in
+/// [`render_player`] — `Srcdoc` stays opaque `allow-scripts`; `Src` (our own
+/// trusted payload) adds `allow-same-origin` so it can load its wasm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppDelivery {
+    /// Inline `bundle_html` as the iframe `srcdoc` (self-contained apps; default).
+    Srcdoc,
+    /// Load the bundle from `url` via the iframe `src`. Same-origin under `dist/`
+    /// in the deployed browser; the loader shell fetches its wasm from there.
+    Src(String),
+}
+
 /// Fixed inputs the host loop needs for one loaded app.
 pub struct GamesHostConfig {
     /// The peer whose tree holds this app's save-state.
@@ -375,8 +392,11 @@ pub struct GamesHostConfig {
     pub game_id: String,
     /// Display name for the player header.
     pub game_name: String,
-    /// The self-contained bundle HTML (the iframe `srcdoc`).
+    /// The self-contained bundle HTML — used as the iframe `srcdoc` when
+    /// `delivery` is [`AppDelivery::Srcdoc`]; ignored for [`AppDelivery::Src`].
     pub bundle_html: String,
+    /// How `bundle_html` (or a served URL) reaches the iframe. See [`AppDelivery`].
+    pub delivery: AppDelivery,
     /// The opaque saved-state JSON read at render time (empty = none).
     pub init_state: String,
     /// Content hash of the live save read at open, if any — seeds the
@@ -473,12 +493,30 @@ pub fn render_player(
     util::set_attr(&stage, "style", &stage_style(cfg.size, cfg.set == GAMES_SET));
 
     let frame = util::create_element("iframe");
-    // allow-scripts ONLY — opaque origin; no same-origin, no reach into our page.
-    util::set_attr(&frame, "sandbox", "allow-scripts");
+    // Sandbox by delivery / trust:
+    //  - Srcdoc (a third-party JS app bundle): `allow-scripts` ONLY — opaque
+    //    origin, no reach into our page/storage. Untrusted content stays walled.
+    //  - Src (an L5 app = OUR stripped browser-rust payload): additionally
+    //    `allow-same-origin`, so it can load its own multi-MB wasm without the
+    //    opaque-origin CORS/CSP friction (which otherwise blocks it under the
+    //    browser AND Tauri's `'self'` CSP). Safe here: the payload is our own
+    //    code and its inner peer is memory-only (opens no IndexedDB). When L5
+    //    hosts *untrusted* apps, this returns to opaque origin behind the
+    //    sub-peer capability model (D21).
+    let sandbox = match &cfg.delivery {
+        AppDelivery::Srcdoc => "allow-scripts",
+        AppDelivery::Src(_) => "allow-scripts allow-same-origin",
+    };
+    util::set_attr(&frame, "sandbox", sandbox);
     util::set_attr(&frame, "title", &cfg.game_id);
     util::set_attr(&frame, "class", "gm-frame");
-    // srcdoc keeps the whole bundle same-document (no extra fetch).
-    util::set_attr(&frame, "srcdoc", &cfg.bundle_html);
+    // Delivery: srcdoc keeps a self-contained bundle same-document (no fetch);
+    // src loads a served loader shell that fetches its own (multi-MB) wasm — the
+    // only way to carry an L5 WASM-entity-peer payload (review G1).
+    match &cfg.delivery {
+        AppDelivery::Srcdoc => util::set_attr(&frame, "srcdoc", &cfg.bundle_html),
+        AppDelivery::Src(url) => util::set_attr(&frame, "src", url),
+    }
     util::append(&stage, &frame);
     util::append(&stage_area, &stage);
 
@@ -585,6 +623,13 @@ pub fn render_player(
         })
     };
 
+    // D13 surface: count `state` messages received from the app and stamp the
+    // running total on the iframe (`data-app-state-seq`). Cheap, program-blind,
+    // and the only cross-boundary observable that an app running in a *sandboxed*
+    // iframe (whose document we can't read) is emitting evolving state — the L5
+    // app-host e2e reads it to prove the inner peer's tick loop advances.
+    let state_seq = Rc::new(Cell::new(0u32));
+
     let closure = Closure::wrap(Box::new(move |e: web_sys::Event| {
         let msg_event: MessageEvent = match e.dyn_into() {
             Ok(m) => m,
@@ -688,6 +733,10 @@ pub fn render_player(
                     return;
                 };
                 if let Some(s) = json.as_string() {
+                    // D13: bump + stamp the received-state counter (see state_seq).
+                    let seq = state_seq.get().wrapping_add(1);
+                    state_seq.set(seq);
+                    let _ = frame_iframe.set_attribute("data-app-state-seq", &seq.to_string());
                     *pending.borrow_mut() = Some(s);
                     schedule();
                 }

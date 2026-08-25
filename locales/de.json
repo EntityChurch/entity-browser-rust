@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} Peer",
     "other": "{n} Peers"
-  }
+  },
+
+  "window.programs": "Programme",
+  "programs.subtitle": "Übertragbare Compute-Programme — einmal geschrieben (workbench-go), aus ihren Deskriptoren gemountet, von der Compute-Engine dieses Peers ausgewertet.",
+  "programs.install": "Installieren",
+  "programs.restart": "Neu starten",
+  "programs.status_absent": "nicht installiert",
+  "programs.status_refused": "kann nicht gemountet werden",
+  "programs.status_materializing": "Installation {done}/{total}…",
+  "programs.status_running": "läuft",
+  "programs.status_faulted": "fehlgeschlagen",
+  "programs.status_line": "{status} · Tick {ticks} · {rate}/s",
+  "programs.display_waiting": "warte auf das erste Bild"
 }

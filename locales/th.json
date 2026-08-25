@@ -585,5 +585,17 @@
 
   "peer.count": {
     "other": "{n} เพียร์"
-  }
+  },
+
+  "window.programs": "โปรแกรม",
+  "programs.subtitle": "โปรแกรมประมวลผลแบบพกพา — เขียนครั้งเดียว (workbench-go) เมานต์จากตัวบรรยาย และประเมินโดยเอนจินประมวลผลของเพียร์นี้",
+  "programs.install": "ติดตั้ง",
+  "programs.restart": "เริ่มใหม่",
+  "programs.status_absent": "ยังไม่ได้ติดตั้ง",
+  "programs.status_refused": "เมานต์ไม่ได้",
+  "programs.status_materializing": "กำลังติดตั้ง {done}/{total}…",
+  "programs.status_running": "กำลังทำงาน",
+  "programs.status_faulted": "ขัดข้อง",
+  "programs.status_line": "{status} · ติ๊ก {ticks} · {rate}/วินาที",
+  "programs.display_waiting": "กำลังรอเฟรมแรก"
 }

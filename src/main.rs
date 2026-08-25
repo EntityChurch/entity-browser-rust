@@ -11,6 +11,8 @@ mod access_log_store;
 mod action;
 mod action_event;
 mod app;
+#[cfg(target_arch = "wasm32")]
+mod app_host;
 mod app_paths;
 mod apps;
 mod boot;
@@ -198,6 +200,24 @@ fn system_recovery_requested() -> bool {
     false
 }
 
+/// `?app-host=<program>` — the stripped-startup "L5 app" boot mode: boot minimal
+/// inside a sandboxed iframe and run one compute program behind the entity-apps
+/// ③α boundary (see [`crate::app_host`]). Returns the requested program id, or
+/// `None` for a normal boot. Empty (`?app-host` / `?app-host=`) is treated as
+/// absent, not a program named "".
+#[cfg(target_arch = "wasm32")]
+fn app_host_program() -> Option<String> {
+    let window = web_sys::window()?;
+    let search = window.location().search().ok()?;
+    for pair in search.trim_start_matches('?').split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if parts.next() == Some("app-host") {
+            return parts.next().filter(|p| !p.is_empty()).map(str::to_string);
+        }
+    }
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
 fn worker_url_override() -> Option<bool> {
     let window = web_sys::window()?;
@@ -295,6 +315,16 @@ pub async fn start() -> Result<(), JsValue> {
             "?systemrecovery=1 — skipping WASM boot; System Recovery (L1) owns the page"
         );
         return Ok(());
+    }
+
+    // Stripped-startup "L5 app" boot (?app-host=<program>): boot minimal as a
+    // compute-program payload behind the entity-apps ③α boundary — NO
+    // window-manager, NO peer roster, NO durable storage. Branch before any of
+    // that machinery (theme install, fast-paint, peer host-mode selection). The
+    // embedding host owns the page chrome; we own only this iframe's document.
+    if let Some(program) = app_host_program() {
+        tracing::info!(program = %program, "?app-host — stripped app-host boot");
+        return app_host::run(&program).await;
     }
 
     // Hide loading indicator.

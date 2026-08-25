@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"
-  }
+  },
+
+  "window.programs": "Programmer",
+  "programs.subtitle": "Overførbare beregningsprogrammer — skrevet én gang (workbench-go), monteret fra deres deskriptorer, evalueret af denne peers beregningsmotor.",
+  "programs.install": "Installér",
+  "programs.restart": "Genstart",
+  "programs.status_absent": "ikke installeret",
+  "programs.status_refused": "kan ikke monteres",
+  "programs.status_materializing": "installerer {done}/{total}…",
+  "programs.status_running": "kører",
+  "programs.status_faulted": "fejlet",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "venter på første billede"
 }

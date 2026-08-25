@@ -592,5 +592,17 @@
   "peer.count": {
     "one": "{n} par",
     "other": "{n} pares"
-  }
+  },
+
+  "window.programs": "Programas",
+  "programs.subtitle": "Programas de cómputo transferibles — creados una sola vez (workbench-go), montados desde sus descriptores, evaluados por el motor de cómputo de este par.",
+  "programs.install": "Instalar",
+  "programs.restart": "Reiniciar",
+  "programs.status_absent": "no instalado",
+  "programs.status_refused": "no se puede montar",
+  "programs.status_materializing": "instalando {done}/{total}…",
+  "programs.status_running": "en ejecución",
+  "programs.status_faulted": "con fallo",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "esperando el primer fotograma"
 }

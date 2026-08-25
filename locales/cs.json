@@ -599,5 +599,17 @@
     "one": "{n} peer",
     "few": "{n} peery",
     "other": "{n} peerů"
-  }
+  },
+
+  "window.programs": "Programy",
+  "programs.subtitle": "Přenositelné výpočetní programy — napsané jednou (workbench-go), připojené ze svých deskriptorů, vyhodnocované výpočetním strojem tohoto peeru.",
+  "programs.install": "Nainstalovat",
+  "programs.restart": "Restartovat",
+  "programs.status_absent": "nenainstalováno",
+  "programs.status_refused": "nelze připojit",
+  "programs.status_materializing": "instalace {done}/{total}…",
+  "programs.status_running": "běží",
+  "programs.status_faulted": "selhalo",
+  "programs.status_line": "{status} · tik {ticks} · {rate}/s",
+  "programs.display_waiting": "čekání na první snímek"
 }

@@ -585,5 +585,17 @@
 
   "peer.count": {
     "other": "{n} 個のピア"
-  }
+  },
+
+  "window.programs": "プログラム",
+  "programs.subtitle": "転送可能なコンピュートプログラム — 一度だけ記述され（workbench-go）、ディスクリプタからマウントされ、このピアの計算エンジンで評価されます。",
+  "programs.install": "インストール",
+  "programs.restart": "再起動",
+  "programs.status_absent": "未インストール",
+  "programs.status_refused": "マウントできません",
+  "programs.status_materializing": "インストール中 {done}/{total}…",
+  "programs.status_running": "実行中",
+  "programs.status_faulted": "障害",
+  "programs.status_line": "{status} · ティック {ticks} · {rate}/s",
+  "programs.display_waiting": "最初のフレームを待っています"
 }

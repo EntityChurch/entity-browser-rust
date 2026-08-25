@@ -15,7 +15,7 @@ use crate::i18n::t;
 use crate::peers::Peers;
 use crate::program_host::descriptor::SHAPE_TEXT;
 use crate::program_host::host::qualify;
-use crate::program_host::shapes::TextFrame;
+use crate::program_host::shapes::{DisplayList, TextFrame};
 use crate::views::programs::{
     Mount, MountStatus, ProgramsWindow, INSTALL_EVENT, RESTART_EVENT, START_EVENT, STOP_EVENT,
 };
@@ -68,7 +68,12 @@ fn program_card(
             "programs.status_materializing",
             &[("done", &done.to_string()), ("total", &total.to_string())],
         ),
-        MountStatus::Stopped => t("programs.status_stopped", &[]),
+        // Reuse the shared lifecycle vocabulary (peers.start/stop, status.stopped)
+        // rather than parallel programs.* keys — a program's start/stop/stopped is
+        // the same UI concept, and duplicate keys drift per locale (the i18n
+        // consistency gate). Program-specific states (materializing/refused/faulted)
+        // have no shared home and keep their own keys.
+        MountStatus::Stopped => t("status.stopped", &[]),
         MountStatus::Running => t("programs.status_running", &[]),
         MountStatus::Faulted(_) => t("programs.status_faulted", &[]),
     };
@@ -115,11 +120,11 @@ fn program_card(
             util::append(&row, &event_btn("programs.install", ButtonKind::Primary, INSTALL_EVENT));
         }
         MountStatus::Stopped => {
-            util::append(&row, &event_btn("programs.start", ButtonKind::Primary, START_EVENT));
+            util::append(&row, &event_btn("peers.start", ButtonKind::Primary, START_EVENT));
             util::append(&row, &event_btn("programs.restart", ButtonKind::Small, RESTART_EVENT));
         }
         MountStatus::Running => {
-            util::append(&row, &event_btn("programs.stop", ButtonKind::Primary, STOP_EVENT));
+            util::append(&row, &event_btn("peers.stop", ButtonKind::Primary, STOP_EVENT));
             util::append(&row, &event_btn("programs.restart", ButtonKind::Small, RESTART_EVENT));
         }
         MountStatus::Refused(_) | MountStatus::Materializing { .. } => {}
@@ -148,8 +153,10 @@ fn program_card(
 }
 
 /// The `text` shape driver: read the port entity, decode the
-/// text-frame, render a `<pre>` character grid.
-fn text_driver(peers: &Peers, peer_id: &str, ns: &str, port_path: &str) -> Element {
+/// text-frame, render a `<pre>` character grid. `pub` so the L5 app-host
+/// (`crate::app_host`) renders the same program display inside its iframe —
+/// the identical program-blind, shape-bound driver, one code path.
+pub fn text_driver(peers: &Peers, peer_id: &str, ns: &str, port_path: &str) -> Element {
     let path = qualify(ns, port_path);
     match peers.get_entity(peer_id, &path) {
         Some(entity) => match TextFrame::decode(&entity) {
@@ -164,6 +171,83 @@ fn text_driver(peers: &Peers, peer_id: &str, ns: &str, port_path: &str) -> Eleme
         },
         None => components::loading(&t("programs.display_waiting", &[])),
     }
+}
+
+/// The SVG namespace — `display-list` renders as inline SVG (a DOM-native
+/// vector surface; the repo's DOM-only rule is about the window shell, and SVG
+/// *is* DOM). Not a canvas path.
+const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
+/// The `display-list` shape driver: read the port entity, decode the closed
+/// quads, render an inline `<svg>` of `<polygon>`s in a world-sized viewBox.
+/// **Program-blind**, exactly as the workbench `VectorControl`: a `kind` is a
+/// colour index, never an object type. `bounds` is the world square
+/// (`scene.bounds`); the SVG viewport clips to it. `pub` so the L5 app-host
+/// renders the identical driver behind the iframe boundary — one code path.
+///
+/// `scene.wrap` (torus seam-tiling) is intentionally NOT applied here yet: a
+/// seam-crossing actor renders once, not tiled. An honest visual simplification
+/// of the first browser display-list driver, not a decode gap (the reference
+/// tiles; noted for the follow-up).
+pub fn display_list_driver(
+    peers: &Peers,
+    peer_id: &str,
+    ns: &str,
+    port_path: &str,
+    bounds: u64,
+) -> Element {
+    let path = qualify(ns, port_path);
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return components::error("no document"); // i18n-ignore — diagnostic fault reason (should never occur), same prose class as the host's Err strings
+    };
+    match peers.get_entity(peer_id, &path) {
+        Some(entity) => match DisplayList::decode(&entity) {
+            Ok(dl) => build_display_list_svg(&document, &dl, bounds),
+            Err(e) => components::error(&e),
+        },
+        None => components::loading(&t("programs.display_waiting", &[])),
+    }
+}
+
+fn build_display_list_svg(document: &web_sys::Document, dl: &DisplayList, bounds: u64) -> Element {
+    let make = |name: &str| document.create_element_ns(Some(SVG_NS), name);
+    let Ok(svg) = make("svg") else {
+        return components::error("display-list: svg unavailable"); // i18n-ignore — diagnostic fault reason (should never occur), same prose class as the host's Err strings
+    };
+    let b = bounds.max(1);
+    svg.set_attribute("viewBox", &format!("0 0 {b} {b}")).ok(); // i18n-ignore — SVG viewBox geometry, not UI prose
+    svg.set_attribute("data-program-display", "display-list").ok();
+    svg.set_attribute("data-actor-count", &dl.quads.len().to_string()).ok();
+    svg.set_attribute(
+        "style",
+        // Colors as var(--token, #literal) per REFERENCE-THEMING.
+        "width:100%;max-width:420px;aspect-ratio:1/1;height:auto;display:block;\
+         background:var(--program-display-bg, #0a0c10);border-radius:6px",
+    )
+    .ok();
+    // Kind tags are colour indices (the workbench pen palette, tokenised).
+    const PENS: [&str; 4] = [
+        "var(--program-kind-0, #8cdcff)",
+        "var(--program-kind-1, #c8c8d2)",
+        "var(--program-kind-2, #ffd278)",
+        "var(--program-kind-3, #ff788c)",
+    ];
+    for (kind, pts) in &dl.quads {
+        let Ok(poly) = make("polygon") else { continue };
+        let points = pts
+            .iter()
+            .map(|(x, y)| format!("{x},{y}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        poly.set_attribute("points", &points).ok();
+        poly.set_attribute("fill", "none").ok();
+        poly.set_attribute("stroke", PENS[(*kind as usize) % PENS.len()]).ok();
+        // Screen-space stroke — 1 world unit at this zoom would vanish.
+        poly.set_attribute("stroke-width", "1.5").ok();
+        poly.set_attribute("vector-effect", "non-scaling-stroke").ok();
+        svg.append_child(&poly).ok();
+    }
+    svg
 }
 
 /// Program key → display label. The key is the identity; a capitalized

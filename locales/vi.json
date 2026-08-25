@@ -585,5 +585,17 @@
 
   "peer.count": {
     "other": "{n} điểm ngang hàng"
-  }
+  },
+
+  "window.programs": "Chương trình",
+  "programs.subtitle": "Chương trình tính toán di động — viết một lần (workbench-go), gắn từ bộ mô tả của chúng, được máy tính toán của peer này đánh giá.",
+  "programs.install": "Cài đặt",
+  "programs.restart": "Khởi động lại",
+  "programs.status_absent": "chưa cài đặt",
+  "programs.status_refused": "không thể gắn",
+  "programs.status_materializing": "đang cài {done}/{total}…",
+  "programs.status_running": "đang chạy",
+  "programs.status_faulted": "lỗi",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "đang chờ khung hình đầu tiên"
 }

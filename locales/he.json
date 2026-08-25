@@ -599,5 +599,17 @@
     "one": "{n} עמית",
     "two": "{n} עמיתים",
     "other": "{n} עמיתים"
-  }
+  },
+
+  "window.programs": "תוכניות",
+  "programs.subtitle": "תוכניות חישוב ניידות — נכתבות פעם אחת (workbench-go), נטענות מהמתארים שלהן ומוערכות על ידי מנוע החישוב של עמית זה.",
+  "programs.install": "התקנה",
+  "programs.restart": "הפעלה מחדש",
+  "programs.status_absent": "לא מותקנת",
+  "programs.status_refused": "לא ניתן לטעון",
+  "programs.status_materializing": "מתקין {done}/{total}…",
+  "programs.status_running": "פועלת",
+  "programs.status_faulted": "תקולה",
+  "programs.status_line": "{status} · טיק {ticks} · {rate}/שנ׳",
+  "programs.display_waiting": "ממתין לפריים הראשון"
 }

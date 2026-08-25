@@ -55,6 +55,10 @@ struct Token {
     /// Launcher-card emoji (empty = letter fallback).
     glyph: &'static str,
     html: &'static str,
+    /// entity-apps `type` (empty = ordinary `srcdoc` app). [`paths::APP_TYPE_L5`]
+    /// marks an L5 app the host delivers via `src` (`?app-host={id}`); its `html`
+    /// is an unused placeholder (the payload is browser-rust in stripped mode).
+    app_type: &'static str,
 }
 
 /// The minimal baked token(s) for a set (e2e-only; see [`Token`]). One small
@@ -69,15 +73,72 @@ fn demo_tokens(set: &str) -> &'static [Token] {
             saves: true,
             glyph: "🃏",
             html: include_str!("fixtures/war.html"),
+            app_type: "",
         }],
-        paths::APPS_SET => &[Token {
-            id: "calculator",
-            name: "Calculator", // i18n-ignore — e2e-only demo fixture, not in production builds
-            description: "A standard four-function calculator: +, −, ×, ÷, %, ±. Tap or type.", // i18n-ignore — e2e-only demo fixture
-            saves: false,
-            glyph: "🧮",
-            html: include_str!("fixtures/calculator.html"),
-        }],
+        paths::APPS_SET => &[
+            Token {
+                id: "calculator",
+                name: "Calculator", // i18n-ignore — e2e-only demo fixture, not in production builds
+                description: "A standard four-function calculator: +, −, ×, ÷, %, ±. Tap or type.", // i18n-ignore — e2e-only demo fixture
+                saves: false,
+                glyph: "🧮",
+                html: include_str!("fixtures/calculator.html"),
+                app_type: "",
+            },
+            // L5 delivery smoke: browser-rust booted in stripped `?app-host=ping`
+            // mode inside the sandboxed iframe, proving a WASM-peer payload can
+            // round-trip `state` to the host (review G1/§4). `html` is an unused
+            // placeholder — delivery is `src`, not `srcdoc`.
+            Token {
+                id: "ping",
+                name: "Ping (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
+                description: "L5 delivery smoke: a stripped browser-rust peer in a sandboxed iframe.", // i18n-ignore — e2e-only demo fixture
+                saves: true,
+                glyph: "🛰",
+                html: "<!doctype html><title>l5-placeholder</title>",
+                app_type: paths::APP_TYPE_L5,
+            },
+            // The first real L5 app: browser-rust runs the generic compute host
+            // behind the iframe boundary and mounts Life (pure-builtin → no
+            // upstream stub). id `life` → `?app-host=life`, the embedded program.
+            Token {
+                id: "life",
+                name: "Life (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
+                description: "Conway's Life running in a WASM entity-peer inside a sandboxed iframe.", // i18n-ignore — e2e-only demo fixture
+                saves: true,
+                glyph: "🧬",
+                html: "<!doctype html><title>l5-placeholder</title>",
+                app_type: paths::APP_TYPE_L5,
+            },
+            // The first INPUT-driven L5 app: Snake is pure-builtin (runs on wasm
+            // today — the `compute/apply` stub gates only import-bearing programs)
+            // and binds the `direction` input shape. Keyboard is captured inside
+            // the iframe and written to the inner peer (never crosses ③α, P1).
+            // id `snake` → `?app-host=snake`, the embedded program.
+            Token {
+                id: "snake",
+                name: "Snake (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
+                description: "Snake running in a WASM entity-peer inside a sandboxed iframe; arrow keys steer it.", // i18n-ignore — e2e-only demo fixture
+                saves: true,
+                glyph: "🐍",
+                html: "<!doctype html><title>l5-placeholder</title>",
+                app_type: paths::APP_TYPE_L5,
+            },
+            // The vector-display L5 app: Asteroids binds the `display-list` output
+            // (rendered as inline SVG behind the boundary) and the `key-set` input
+            // (held-key bitmask; ←/→ turn, ↑ thrust, Space fires). Pure-builtin —
+            // its descriptor declares no imports, so it runs on wasm today.
+            // id `asteroids` → `?app-host=asteroids`, the embedded program.
+            Token {
+                id: "asteroids",
+                name: "Asteroids (L5)", // i18n-ignore — e2e-only demo fixture, not in production builds
+                description: "Asteroids running in a WASM entity-peer inside a sandboxed iframe; arrows steer, Space fires.", // i18n-ignore — e2e-only demo fixture
+                saves: true,
+                glyph: "🚀",
+                html: "<!doctype html><title>l5-placeholder</title>",
+                app_type: paths::APP_TYPE_L5,
+            },
+        ],
         _ => &[],
     }
 }
@@ -101,6 +162,7 @@ pub fn ensure_demo_set(peers: &Peers, peer_id: &str, set: &str) {
                 description: t.description.to_string(),
                 saves: t.saves,
                 glyph: (!t.glyph.is_empty()).then(|| t.glyph.to_string()),
+                app_type: (!t.app_type.is_empty()).then(|| t.app_type.to_string()),
                 ..Default::default()
             })
             .collect(),
@@ -576,6 +638,16 @@ impl WindowView for AppWindow {
             .map(|e| AppSave::from_entity(&e).state)
             .unwrap_or_default();
 
+        // Delivery: an L5 app (WASM-entity-peer payload) can't inline its wasm as
+        // `srcdoc`, so it loads browser-rust in stripped mode via `src`
+        // (`index.html?app-host={id}`, the app id as the program), same-origin
+        // under `dist/`. Everything else stays self-contained `srcdoc`. (review G1)
+        let delivery = if entry.map(|e| paths::is_l5_app(e.app_type.as_deref())).unwrap_or(false) {
+            crate::dom::games::AppDelivery::Src(format!("index.html?app-host={selected}"))
+        } else {
+            crate::dom::games::AppDelivery::Srcdoc
+        };
+
         let cfg = crate::dom::games::GamesHostConfig {
             peer_id: self.peer_id.clone(),
             set: self.set.to_string(),
@@ -586,6 +658,7 @@ impl WindowView for AppWindow {
             game_id: selected.clone(),
             game_name: name,
             bundle_html: bundle.html,
+            delivery,
             init_state,
             init_save_hash,
         };
