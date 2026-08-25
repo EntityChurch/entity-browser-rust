@@ -130,32 +130,39 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KB_DOCS_MAX_BYTES");
     println!("cargo:rerun-if-env-changed=KB_DOCS_MAX_AGE_DAYS");
 
-    // ---- Build-time deployment profile (reframe §5) --------------------
-    // `ENTITY_PROFILE` bakes the COLD-BOOT default posture into this binary:
-    // `full` (today's default) / `tutorial` / `strict-site`. It only seeds the
-    // default when no durable session config exists — a persisted config
-    // always wins on a warm boot. Validated here so a typo fails the build
-    // loudly instead of silently booting Full. Read back via
-    // `Profile::build_default()` (`option_env!("ENTITY_PROFILE")`).
-    println!("cargo:rerun-if-env-changed=ENTITY_PROFILE");
-    let profile = env::var("ENTITY_PROFILE").unwrap_or_else(|_| "full".to_string());
-    match profile.as_str() {
-        "full" | "tutorial" | "strict-site" => {}
+    // ---- Build-time startup surface (reframe §5) -----------------------
+    // `ENTITY_STARTUP_SURFACE` bakes the COLD-BOOT default surface into this
+    // binary: `chrome` (today's default) / `site` / `window`, with
+    // `ENTITY_STARTUP_WINDOW_TYPE` naming the window type when surface=window.
+    // This replaced the old opaque `ENTITY_PROFILE` presets — only the surface
+    // AXIS is baked; the granular posture (`site_mode`, `peer_creation_enabled`)
+    // is a per-domain `/entity-deployment.json` concern (a locked kiosk lives
+    // there, not the build). It only seeds the default when no durable session
+    // config exists — a persisted config always wins on a warm boot. Validated
+    // here so a typo fails the build loudly. Read back via `boot_default()`
+    // (`option_env!("ENTITY_STARTUP_SURFACE")`).
+    println!("cargo:rerun-if-env-changed=ENTITY_STARTUP_SURFACE");
+    println!("cargo:rerun-if-env-changed=ENTITY_STARTUP_WINDOW_TYPE");
+    let surface = env::var("ENTITY_STARTUP_SURFACE").unwrap_or_else(|_| "chrome".to_string());
+    match surface.as_str() {
+        "chrome" | "site" | "window" => {}
         other => panic!(
-            "ENTITY_PROFILE='{other}' is not a known deployment profile \
-             (expected: full | tutorial | strict-site)"
+            "ENTITY_STARTUP_SURFACE='{other}' is not a known startup surface \
+             (expected: chrome | site | window)"
         ),
     }
-    println!("cargo:rustc-env=ENTITY_PROFILE={profile}");
-    println!("cargo:warning=deployment profile: {profile} (cold-boot default posture)");
+    let startup_window_type = env::var("ENTITY_STARTUP_WINDOW_TYPE").unwrap_or_default();
+    println!("cargo:rustc-env=ENTITY_STARTUP_SURFACE={surface}");
+    println!("cargo:rustc-env=ENTITY_STARTUP_WINDOW_TYPE={startup_window_type}");
+    println!("cargo:warning=startup surface: {surface} (cold-boot default surface)");
 
     // ---- Build-time home site (boot-closure cut 2a) --------
     // `ENTITY_HOME_*` bakes the COLD-BOOT default `home_site` — the startup
     // page a CDN-deployed instance points at — into this binary. It is the
     // build-time DEFAULT / TEST path for a thin-lens remote deployment; the
     // production knob is the per-domain `/entity-deployment.json` fetch (cut
-    // 2b). Like `ENTITY_PROFILE`, it only seeds the absent-config case — a
-    // persisted session config always wins on a warm boot. Unset (the default
+    // 2b). Like `ENTITY_STARTUP_SURFACE`, it only seeds the absent-config case —
+    // a persisted session config always wins on a warm boot. Unset (the default
     // build) ⇒ all empty ⇒ the bundled local demo, byte-identical to before.
     //   * ENTITY_HOME_PEER   — the hosting peer-id ("" = local/system peer)
     //   * ENTITY_HOME_SITE   — the site id (default "demo")

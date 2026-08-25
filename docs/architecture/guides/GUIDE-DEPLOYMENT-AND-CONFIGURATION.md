@@ -2,8 +2,8 @@
 
 **Audience:** anyone deploying Entity Browser to a domain (DevOps, the deploy
 tool, content/site authors). **Scope:** how a published deployment is shaped —
-peer identity, the per-domain config file, the posture profiles, the publish
-command surface, and the concrete recipes (deploy a site / lock a kiosk /
+peer identity, the per-domain config file, the startup surface & posture, the
+publish command surface, and the concrete recipes (deploy a site / lock a kiosk /
 apps-only with no site overlay).
 
 This is the **quick, self-contained reference**. The deeper authoritative docs
@@ -15,10 +15,13 @@ this guide and those overlap, those win.
 >   `/entity-deployment.json`, fetched at boot. **No per-domain rebuild.**
 > - The **published peer-id is deterministic** — stable across re-publishes.
 >   You don't manage or rotate it.
-> - The **`profile`** field sets the cold-boot posture: `full` (chrome-first,
->   **no site overlay**), `tutorial` (site overlay, escapable), `strict-site`
->   (locked kiosk).
-> - **To deploy apps with no forced site overlay:** `profile: "full"` plus
+> - The **`surface`** field sets the cold-boot surface directly (no preset
+>   names): `chrome` (the workspace), `window` (a maximized window — e.g. a Site
+>   Browser — via `window_type`), or `site` (the full-viewport overlay). The
+>   granular posture (`site_mode`, `peer_creation_enabled`) is set alongside it,
+>   not bundled behind a preset. A **locked kiosk** = `surface: "site"` +
+>   `site_mode.locked: true` + `peer_creation_enabled: false`.
+> - **To deploy apps with no forced site:** `surface: "chrome"` plus
 >   `site_mode: { "enabled": false, "show_toggle": false }`. Games/Apps work
 >   normally; users land on chrome, never the site.
 
@@ -74,17 +77,26 @@ sites/{peer_id}/{site}/…          ← legacy-web .html projection
 {peer_id}/apps/{set}/…            ← embedded apps (games/tools)
 ```
 
-That `peer_id` is derived from a **32-byte system seed** — the same hex form as
-the runtime `entity_system_seed`. **You supply it per publish** with
-`--identity-seed=<64-hex>` (Makefile: `IDENTITY_SEED=<hex>`), so each
-site/deployment publishes under **its own** identity. With no `--identity-seed`,
-publish falls back to the fixed demo publisher seed (the first-push default):
+That `peer_id` is derived from the publisher's keypair. **By default the publish
+identity is DURABLE**: `make publish` loads-or-generates a keypair under
+`{ENTITY_DATA_DIR}/publish/keypair` (`persistence::publisher_keypair`), so the
+**first** publish mints a stable identity and every later publish reuses it — the
+peer-id is the site address, so it must not drift per run. Three ways to pick it:
 
-```rust
-// src/content_site/publish.rs
-const DEMO_PUBLISH_SEED: [u8; 32] = *b"entity-demo-publisher-seed-v1\0\0\0";
-fn publish_identity_keypair(seed: [u8; 32]) -> Keypair { Keypair::from_seed(seed) }
-```
+| How | Identity |
+|---|---|
+| *(default)* | the durable `{ENTITY_DATA_DIR}/publish/keypair` — minted once, reused |
+| `IDENTITY_SEED=<64-hex>` (`--identity-seed=`) | a SPECIFIC 32-byte system seed (same hex form as `entity_system_seed`), so each site/deployment gets its own stable peer-id |
+| `DEMO_IDENTITY=1` (`--demo-identity`) | the fixed demo publisher seed (`2KEB3…`) — dev/testing only |
+
+> **Container gotcha (already wired):** the containerized `make publish` runs
+> `podman run --rm`, so `~/.entity` inside it is ephemeral and the durable key
+> would regenerate every run. The Makefile points `ENTITY_DATA_DIR` at the
+> repo-local, gitignored `PUBLISH_DATA_DIR` (default `.entity-publish/`, visible
+> in-container via the parent mount) for **both** `publish` and `publish-serve`,
+> so the identity persists and both modes publish under the same peer-id.
+> Override the location with `PUBLISH_DATA_DIR=…`. **Treat `.entity-publish/` like
+> a private key — it is one; never commit it.**
 
 **For a given seed the peer-id is deterministic** — re-running `make publish`
 with the same `IDENTITY_SEED` re-emits the same `sites/{peer_id}/…` layout, so
@@ -104,11 +116,13 @@ is **auto-keyed** to the derived peer-id (`home_site.peer` + the `origins` key),
 so the config and the content always agree. The build also prints the peer-id if
 you need it for a hand-written config or cross-site `origins`.
 
-> **Forward note (seam):** the publisher still seeds the bundled demo site set
-> when you don't `--ingest` real content. When the durable native-peer-load path
-> lands, the seam can additionally accept a persisted peer *directory* (load its
-> own durable keypair) instead of a raw seed — same stable-peer-id guarantee,
-> just a different way to point at the identity. Nothing downstream changes.
+> **Forward note (seam):** the publish *identity* is now durable (the
+> load-or-generate keypair above), but the publisher still seeds the bundled demo
+> site *content* when you don't `--ingest` real content. The remaining seam is
+> loading a full persisted peer **directory** (its durable keypair AND its real
+> pre-seeded content/tree) instead of ingesting a folder — same stable-peer-id
+> guarantee, just sourcing the content from a live peer store. Nothing downstream
+> changes.
 
 ### 2.2 The runtime per-browser peer-id — *each visitor's own identity*
 
@@ -146,7 +160,8 @@ what it names and inherits the rest. Unknown keys are ignored.
 
 ```json
 {
-  "profile": "full",
+  "surface": "chrome",
+  "window_type": "Site Browser",
   "home_site": { "peer": "<published-peer-id>", "site": "<site-id>", "loc": "" },
   "origins": { "<published-peer-id>": "" },
   "site_mode": { "enabled": true, "show_toggle": true, "locked": false },
@@ -157,23 +172,24 @@ what it names and inherits the rest. Unknown keys are ignored.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `profile` | `"full" \| "tutorial" \| "strict-site"` | Cold-boot **posture preset** (see [§4](#4-profiles--posture)). Swaps in the whole preset; other fields below then *merge on top*. |
-| `home_site` | `{ peer, site, loc }` | The startup site — where a `Site` boot lands and the home toggle opens. `peer` = the published peer-id; `site` = a site id that exists in the publish; `loc` = optional page/path within the site (`""` = the site's index). |
+| `surface` | `"chrome" \| "site" \| "window"` | Cold-boot **surface** — the primary axis (see [§4](#4-surface--posture)). Set the surface directly; the granular posture fields below are set alongside it, not bundled behind a preset name. Absent ⇒ inherit the build-time default surface. |
+| `window_type` | `string` | Only for `surface: "window"` — which window type to boot maximized (e.g. `"Site Browser"`, `"Games"`, `"Apps"`, `"Entity Tree"`). Must be a registered window type. |
+| `home_site` | `{ peer, site, loc }` | The startup site — where a maximized Site Browser (`surface: "window"`) or the site overlay (`surface: "site"`) lands, and what the home toggle opens. `peer` = the published peer-id; `site` = a site id that exists in the publish; `loc` = optional page/path within the site (`""` = the site's index). |
 | `origins` | `{ peerId: originString }` | Where each hosting peer's published artifacts live, so the resolver can HTTP-poll them. **`""` = same origin** (the SPA expands it to `window.location.origin` at runtime — the common CDN case). A root-relative `"/sub"` = same origin under a prefix. A concrete `"https://host"` = cross-origin. |
 | `site_mode.enabled` | `bool` | Whether site mode exists at all. `false` ⇒ no overlay, no toggle, ever. |
 | `site_mode.show_toggle` | `bool` | Whether the ⛶ site toggle appears in the status bar. The toggle shows iff `show_toggle && enabled`. |
-| `site_mode.locked` | `bool` | Kiosk lock — `true` removes every chrome↔site escape. |
+| `site_mode.locked` | `bool` | Kiosk lock — `true` removes every chrome↔site escape (the escapable⇄locked axis). |
 | `fast_paint` | `bool` | Phase-1 fast-paint kill switch (paints the site shell before peers boot, for site-first deployments). Leave default unless debugging a paint flash. |
-| `peer_creation_enabled` | `bool` | Capability gate — set `false` to forbid minting new peers **independent of profile** (so a `full` chrome deployment can still disable creation without becoming a locked site). |
+| `peer_creation_enabled` | `bool` | Capability gate — set `false` to forbid minting new peers **independent of surface** (so a `chrome` deployment can still disable creation, and a locked kiosk sets it `false` here). |
 
 ### 3.2 Precedence (highest wins)
 
 ```
-1. URL overrides            ?site=…  ?boot_window=…  ?chrome=1     (dev/showcase, never persisted)
-2. Durable persisted config a returning user's own saved settings  ← always wins on a warm boot
-3. THIS fetched config      /entity-deployment.json                ← shapes a COLD boot
-4. Build-time env defaults  ENTITY_PROFILE / ENTITY_HOME_*         (baked fallback)
-5. Hard default             Full (chrome-first, local demo)
+1. URL overrides            ?site=…  ?boot_window=…  ?chrome=1        (dev/showcase, never persisted)
+2. Durable persisted config a returning user's own saved settings     ← always wins on a warm boot
+3. THIS fetched config      /entity-deployment.json                   ← shapes a COLD boot
+4. Build-time env defaults  ENTITY_STARTUP_SURFACE / ENTITY_HOME_*    (baked fallback)
+5. Hard default             chrome (workspace, local demo)
 ```
 
 The deployment config shapes a **cold** boot only — the SPA fetches it just
@@ -183,27 +199,67 @@ fresh profile — your own previous session is winning at level 2.)
 
 ---
 
-## 4. Profiles → posture
+## 4. Surface → posture
 
-`profile` selects one of three presets (`src/session_config.rs::Profile::preset`):
+There is **no profile preset layer** anymore. A startup posture *is* a **surface**
+plus a **granular posture**, set directly — you configure exactly the surface and
+the fields you mean, not an opaque preset name.
 
-| `profile` | boots into | Site Overlay on boot? | ⛶ site toggle | peer creation | typical use |
-|---|---|---|---|---|---|
-| **`full`** | chrome (empty-state) | **NO** — chrome-first | shown* | yes | the workspace; **apps-only deployments** |
-| **`tutorial`** | the site overlay | **YES**, fully **escapable** (toggle back to chrome) | shown | yes | a content site you want users in by default but free to explore the chrome |
-| **`strict-site`** | the site overlay | **YES**, **locked kiosk** | hidden | no | a locked public content site / kiosk |
+### 4.0 The three boot surfaces (what "boots into" means)
 
-\* the toggle only appears when `site_mode.exposes_toggle()` = `show_toggle && enabled`.
+The `surface` field maps 1:1 to `boot_surface`
+(`src/session_config.rs::BootSurface`) — three kinds, all applied in
+`app.rs::boot_load`:
 
-`full` lands on the chrome (now the first-run empty-state tutorial, no auto-opened
-window). `tutorial` and `strict-site` boot straight into the site overlay; the
-difference is the escape: `tutorial` keeps the toggle and is unlocked,
-`strict-site` hides the toggle and sets `locked: true`.
+| `surface` | What you see | CSS | Notes |
+|---|---|---|---|
+| `"chrome"` | the windowed workspace (status bar + windows) | `mode-dom` | the full explorable browser; **apps-only deployments** land here |
+| `"window"` | **one named window (`window_type`), spawned + maximized** | `mode-dom` | still normal chrome underneath — un-maximize, open other windows. General: a Site Browser, Games, Apps, Entity Tree, … |
+| `"site"` | the **site overlay** (a single site, full-viewport) | `mode-site` | the locked/kiosk surface — fragile, no window chrome |
 
-> **Escape hatch (all profiles, incl. locked):** appending **`?chrome=1`** to the
+The surface is **config, not an architecture fork** — the system peer always
+exists regardless. At boot, `boot_load` derives the runtime `active`
+(is-the-overlay-showing) purely from `surface` — only `"site"` lights the overlay
+— so boot lands per config, never per a previous session's toggle.
+
+### 4.1 The two axes
+
+Set them independently:
+
+- **Surface** (above) — `chrome` / `window` (+ `window_type`) / `site`.
+- **Escapable ⇄ locked** — `site_mode.locked` (and `show_toggle`): an escapable
+  surface keeps the chrome↔site toggle; a locked one removes every escape.
+- Plus the orthogonal **capability** gate `peer_creation_enabled` (MAP §5) — may
+  the user mint peers here — independent of the surface.
+
+The three postures people usually want, spelled out as explicit fields:
+
+| Goal | `surface` | `site_mode` | `peer_creation_enabled` |
+|---|---|---|---|
+| **The workspace** (apps-only, or an explorable browser) | `"chrome"` | `{ enabled: false, show_toggle: false }` (apps-only) or defaults | `true` |
+| **Show my site, forgiving** (maximized Site Browser, escapable) | `"window"` + `window_type: "Site Browser"` | `{ enabled: true, show_toggle: true, locked: false }` | `true` |
+| **Locked kiosk** (full-viewport overlay, no escape) | `"site"` | `{ enabled: true, show_toggle: false, locked: true }` | `false` |
+
+- A **`"window"`** surface hydrates the window to `home_site` on open
+  (`ContentSiteState::initialize`), so the user lands *on the home site* — but
+  inside the normal chrome: they can un-maximize, open other windows, browse the
+  directory rail. Deliberately **not** the site overlay — the overlay is
+  kiosk-like and fragile; a maximized window is intuitive and forgiving for the
+  everyday "show my sites" deployment. And `window_type` is general — a
+  single-app kiosk (e.g. one Game maximized) is just `surface: "window"` with a
+  different type.
+- A **`"site"`** surface boots the **site overlay** (`BootSurface::Site`) — that
+  overlay *is* the kiosk surface. Add `site_mode.locked: true` +
+  `peer_creation_enabled: false` for a true locked kiosk; leave
+  `show_toggle: true` for an escapable overlay (a non-kiosk full-viewport site).
+
+> **Escape hatch (any surface, incl. locked):** appending **`?chrome=1`** to the
 > URL forces the chrome surface and re-exposes the toggle — the operator escape
 > out of a locked kiosk, e.g. if you lock yourself out during testing. It is
-> ephemeral (never persisted).
+> ephemeral (never persisted). (A user-facing "enter locked mode" control in
+> Settings is intentionally **not** shipped yet — it awaits a deliberate,
+> confirmed flow with a documented recovery story, so a tester can't strand
+> themselves.)
 
 ---
 
@@ -218,7 +274,7 @@ work normally (apps ride every publish — see [§7](#7-embedded-apps--games)).
 
 ```json
 {
-  "profile": "full",
+  "surface": "chrome",
   "site_mode": { "enabled": false, "show_toggle": false }
 }
 ```
@@ -228,7 +284,7 @@ suppresses the ⛶ toggle (`exposes_toggle()` ⇒ `false`). `home_site`/`origins
 unnecessary here. Emit it with:
 
 ```bash
-make publish OUT=dist DEPLOY_CONFIG=1 CONFIG_PROFILE=full \
+make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=chrome \
      --ingest-apps=../entity-apps/dist
 ```
 
@@ -237,14 +293,19 @@ the deploy tool write `entity-deployment.json` directly (every field optional).
 
 > **Note:** a publish currently requires **at least one site** in the tree
 > (`"no sites found — nothing to publish"`). For an apps-only deployment you
-> still publish a site (the demo seed is fine), but `profile: full` +
+> still publish a site (the demo seed is fine), but `surface: "chrome"` +
 > `site_mode.enabled: false` means users never see it.
 
 ### 5.2 A content site, escapable (users can reach the workspace)
 
+Boots into a **maximized Site Browser window** landed on `home_site` — the
+everyday "show my sites" deployment. Users start on the site but keep the full
+chrome (un-maximize, open other windows, browse the rail). See [§4.1](#41-the-two-axes).
+
 ```json
 {
-  "profile": "tutorial",
+  "surface": "window",
+  "window_type": "Site Browser",
   "home_site": { "peer": "<published-peer-id>", "site": "<site-id>", "loc": "" },
   "origins": { "<published-peer-id>": "" },
   "site_mode": { "enabled": true, "show_toggle": true, "locked": false }
@@ -252,25 +313,35 @@ the deploy tool write `entity-deployment.json` directly (every field optional).
 ```
 
 ```bash
-make publish OUT=dist DEPLOY_CONFIG=1 CONFIG_PROFILE=tutorial CONFIG_SITE=<site-id>
+make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=window WINDOW_TYPE="Site Browser" CONFIG_SITE=<site-id>
 ```
+
+(This is the publish default — `SURFACE`/`WINDOW_TYPE` unset gives exactly this.)
+
+> Want the full-viewport **site overlay** for a non-kiosk site instead of the
+> windowed browser? Use `SURFACE=site` **without** `LOCKED` (overlay + an escape
+> toggle), or set the durable `boot_surface` to `Site` in Settings → Startup
+> surface.
 
 ### 5.3 A locked public site / kiosk
 
 ```json
 {
-  "profile": "strict-site",
+  "surface": "site",
   "home_site": { "peer": "<published-peer-id>", "site": "<site-id>", "loc": "" },
   "origins": { "<published-peer-id>": "" },
-  "site_mode": { "enabled": true, "show_toggle": false, "locked": true }
+  "site_mode": { "enabled": true, "show_toggle": false, "locked": true },
+  "peer_creation_enabled": false
 }
 ```
 
 ```bash
-make publish OUT=dist DEPLOY_CONFIG=1 CONFIG_PROFILE=strict-site CONFIG_SITE=<site-id>
+make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=site LOCKED=1 CONFIG_SITE=<site-id>
 ```
 
-(`?chrome=1` still lets an operator escape — see [§4](#4-profiles--posture).)
+`--locked` (from `LOCKED=1`) emits the explicit `site_mode` lock **and**
+`peer_creation_enabled: false` — the kiosk posture, spelled out (no preset).
+(`?chrome=1` still lets an operator escape — see [§4](#4-surface--posture).)
 
 ### 5.4 Bare static site (no SPA, no entity chrome at all)
 
@@ -302,15 +373,17 @@ ingests its sites + apps, reads them back off the tree, and projects them to
 | `LIVE=<origin>` | empty (same-origin) | The "open in live entity browser" banner target + the deployment-config origin. **Empty = same-origin** (relative — the same `dist/` works at localhost and on any CDN root, no rebuild). Set a concrete `https://host` only for a deliberate cross-origin pin. **Never `LIVE=http://localhost` for a shipped bundle** (guarded — it bakes a loopback that serves a content-less shell off your machine). |
 | `HTML_ONLY=1` | both forms | Skip the entity-native `.bin` content data (dumb-CDN-only — no live overlay, just the static `.html`). |
 | `DEPLOY_CONFIG=1` | off | Also emit `/entity-deployment.json` so a generic SPA on this origin boots into the published home. |
-| `CONFIG_PROFILE=<full\|tutorial\|strict-site>` | **`tutorial`** | The profile written into the emitted config. A typo **fails the build**. |
+| `SURFACE=<chrome\|site\|window>` | **`window`** | The startup surface written into the emitted config. A typo **fails the build**. |
+| `WINDOW_TYPE=<name>` | **`Site Browser`** | For `SURFACE=window`, which window type to boot maximized (must be a registered type). Ignored otherwise. |
+| `LOCKED=1` | off | For `SURFACE=site`, emit the kiosk lock (`site_mode` no-toggle-locked + `peer_creation_enabled: false`). Rejected for other surfaces. |
 | `CONFIG_SITE=<id>` | demo site | The home site written into the emitted config. Must be among the published sites or the build **fails**. |
 | `IDENTITY_SEED=<64-hex>` | demo publisher seed | The **system identity** to publish under (the same hex seed form as the runtime `entity_system_seed`) → its own stable peer-id under `sites/{peer}/…`. Generate with e.g. `openssl rand -hex 32`; reuse per deployment. A malformed seed **fails the build**. See [§2.1](#21-the-published-peer-id--you-choose-the-identity-stable-per-seed). |
 
-> ⚠️ **Default profile gotcha:** with `DEPLOY_CONFIG=1` and **no**
-> `CONFIG_PROFILE`, the emitted profile defaults to **`tutorial`** (boots into
-> the site, escapable). Always pass `CONFIG_PROFILE` explicitly so the posture is
-> intentional. *(The Makefile comment that says "default strict-site" is stale —
-> the CLI default in `src/content_site/publish.rs` is `tutorial`.)*
+> ⚠️ **Default surface gotcha:** with `DEPLOY_CONFIG=1` and **no** `SURFACE`, the
+> emitted surface defaults to **`window`** + `WINDOW_TYPE="Site Browser"` (boots
+> into a maximized, escapable Site Browser). Pass `SURFACE` explicitly when you
+> want a different posture (e.g. `SURFACE=chrome` apps-only, or
+> `SURFACE=site LOCKED=1` for a kiosk).
 
 Higher-level convenience targets:
 
@@ -339,7 +412,7 @@ entity-apps' `index.json`).
   asset, over the same origin as the sites.
 
 So an **apps-only deployment** ([§5.1](#51-apps-only--no-site-overlay-the-just-the-apps-deployment))
-is: publish with `--ingest-apps`, set `profile: full` + `site_mode` off. Users
+is: publish with `--ingest-apps`, set `surface: "chrome"` + `site_mode` off. Users
 open the Apps / Games windows from the menu.
 
 ---
@@ -367,9 +440,15 @@ dist/
   `origins[peer]` then points at `/{PREFIX}` so the resolver finds the content.
 - **Publishing into a populated `dist/` is safe** — publish cleans only the
   roots it owns (under the prefix) and never touches `index.html` or the bundle.
-- DevOps deploy = `aws s3 sync dist/ → bucket` (or R2 equivalent). With the
-  default same-origin (`LIVE` empty), the same `dist/` works at any domain root
-  with **no rebuild**.
+- DevOps deploy = `aws s3 sync --delete dist/ → bucket` (or R2 equivalent). With
+  the default same-origin (`LIVE` empty), the same `dist/` works at any domain
+  root with **no rebuild**.
+- **Re-publishing an existing deployment** (edit / add / delete a page, or the
+  incremental-update mechanics + the CDN-sync strategy) has its own guide:
+  [`GUIDE-REPUBLISH-AND-INCREMENTAL.md`](./GUIDE-REPUBLISH-AND-INCREMENTAL.md).
+  Short version: content-addressed + path-stable ⇒ `aws s3 sync --delete` is
+  correct and near-incremental; **keep the durable publisher keypair** so the
+  peer-id (the site address) never churns.
 
 > **Subdirectory caveat:** portability is guaranteed at the domain **root**
 > only. A subdirectory deploy (`host/sub/`) is known, deliberate debt — see
@@ -383,17 +462,23 @@ dist/
   (precedence level 2) beats the deployment config. To test a config change,
   clear site storage / use a fresh profile, or open the System Recovery console
   (`?systemrecovery=1`) to inspect/clear state.
-- **`DEPLOY_CONFIG=1` defaults to `tutorial`** if `CONFIG_PROFILE` is unset —
-  always set it explicitly ([§6](#6-the-make-publish-command-surface)).
+- **`DEPLOY_CONFIG=1` defaults to `SURFACE=window` (Site Browser)** if `SURFACE`
+  is unset — set it explicitly for a different posture ([§6](#6-the-make-publish-command-surface)).
 - **`?chrome=1`** escapes any locked deployment (operator break-glass).
 - **`?site=<peer>/<site>/<page>`** deep-links the overlay to a specific page
   (ephemeral, never persisted) — useful for showcase links.
 - **Never bake a loopback origin** (`LIVE=http://localhost…`) into a shipped
   bundle — publish warns loudly, but it serves a content-less shell.
 - **A publish needs at least one site** — apps-only deployments still publish a
-  (possibly demo) site, hidden via `profile: full` + `site_mode` off.
-- **A bad `CONFIG_PROFILE` or a `CONFIG_SITE` not among published sites fails
-  the build** — by design, so a broken config never ships.
+  (possibly demo) site, hidden via `surface: "chrome"` + `site_mode` off.
+- **A bad `SURFACE` or a `CONFIG_SITE` not among published sites fails the
+  build** — by design, so a broken config never ships.
+- **Deleting a page needs a manifest edit too.** Removing a `pages/*.md` file
+  and republishing prunes the page cleanly, but the site's **nav** is authored
+  separately in `site.manifest.json` — leave the nav entry and you ship
+  **dangling 404 links** (publish does *not* warn). Remove the `nav` entry (+ any
+  inline links) as well. Full workflow:
+  [`GUIDE-REPUBLISH-AND-INCREMENTAL.md` §5](./GUIDE-REPUBLISH-AND-INCREMENTAL.md#5-case-d--delete-a-page-and-the-dangling-link-gotcha).
 - **Config failures are silent at boot** — a missing/garbled
   `entity-deployment.json` falls through to defaults; it never wedges boot
   (D16). The flip side: a typo'd field is simply ignored, so verify the served

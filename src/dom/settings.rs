@@ -126,10 +126,11 @@ fn render_windows(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
     util::append(parent, &group);
 }
 
-/// "Site & Surface" — the UI onto the session config spine (§5). Profile
-/// preset + the **startup surface**: a (peer, kind, target) triple. One
-/// declarative row — pick the peer, the kind (Chrome / Site / Window), and the
-/// target; it's stored and boot honors it. No entity-editing (reframe §7.4).
+/// "Site & Surface" — the UI onto the session config spine (§5). The **startup
+/// surface** directly: a (peer, kind, target) triple. One declarative row —
+/// pick the peer, the kind (Chrome / Site / Window), and the target; it's
+/// stored and boot honors it. (This replaced the old opaque profile-preset
+/// selector — the surface IS the setting.) No entity-editing (reframe §7.4).
 fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
     let s = &output.session;
     let group = util::create_element("div");
@@ -138,28 +139,6 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     h3.set_attribute("style", "margin:0 0 4px;font-size:14px").ok();
     util::set_text(&h3, "Site & Surface");
     util::append(&group, &h3);
-
-    // Profile preset selector.
-    let profile_label = util::create_element("label");
-    profile_label.set_attribute("style", "display:block;margin-bottom:8px").ok();
-    let plabel_span = util::create_element("span");
-    plabel_span.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&plabel_span, "Profile");
-    util::append(&profile_label, &plabel_span);
-    let select = util::create_element("select");
-    select.set_attribute("style", theme::INPUT).ok();
-    for p in &s.profiles {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", p.value).ok();
-        if p.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, p.label);
-        util::append(&select, &opt);
-    }
-    ctx.on_select_change(&select, "set_profile");
-    util::append(&profile_label, &select);
-    util::append(&group, &profile_label);
 
     // -- Startup surface: kind radios --
     let kind_label = util::create_element("span");
@@ -272,12 +251,15 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     // preserved so it can be re-surfaced when the seam reopens. `s.fast_paint`
     // is still read by tests.
 
-    // Lockdown is a held seam — surface it read-only so it's visible, but no
-    // control flips it yet (§4-C).
+    // Lockdown is surfaced read-only so it's visible — it's set by the
+    // per-domain deployment config (`site_mode.locked`), not a control here. A
+    // user-facing locked toggle waits on the locked-surface SAFETY work (a
+    // deliberate, confirmed action with documented recovery), so a tester can't
+    // strand themselves with a quiet checkbox.
     if s.locked {
         let note = util::create_element("p");
         note.set_attribute("style", "color:var(--text-dim, #888);margin:4px 0 0;font-size:11px").ok();
-        util::set_text(&note, "Lockdown is active (set by profile).");
+        util::set_text(&note, "Lockdown is active (set by this deployment's config).");
         util::append(&group, &note);
     }
 

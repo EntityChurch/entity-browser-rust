@@ -84,7 +84,7 @@ $PAPERS_REPO/render --site billslab --repo . --skip-stage0 --output /tmp/papers-
 cargo run --bin entity-browser -- publish dist \
     --ingest=/tmp/papers-render/billslab \
     --deployment-config --config-site=billslab-main \
-    --config-profile=tutorial --live=
+    --surface=window --window-type="Site Browser" --live=
 # 5. serve dist/ statically (dev only; R2 replaces this in prod)
 python3 -m http.server 8081 --directory dist
 ```
@@ -97,7 +97,9 @@ python3 -m http.server 8081 --directory dist
 | `--ingest=<dir>` | read a site dir tree from disk into the tree first (else publishes the seeded demo set) |
 | `--deployment-config` | also emit `entity-deployment.json` (home site, origins, posture) |
 | `--config-site=<id>` | the SPA's **home site** (what it boots into) |
-| `--config-profile=<full\|tutorial\|strict-site>` | cold-boot posture baked into the deployment config |
+| `--surface=<chrome\|site\|window>` | cold-boot **surface** baked into the deployment config (default `window`) |
+| `--window-type=<name>` | for `--surface=window`, the maximized window type (default `Site Browser`) |
+| `--locked` | for `--surface=site`, emit the kiosk lock (no toggle, no peer creation) |
 | `--live=<origin>` | the HTTP origin the SPA fetches content from. **Empty ⇒ same-origin** (portable; see §5/§7) |
 | `--prefix=<p>` | host many isolated peers under one domain at `/{prefix}` (multi-tenant; empty ⇒ root) |
 | `--html-only` | emit only legacy static `.html`, skip the entity-native `.bin` data |
@@ -141,10 +143,11 @@ per-domain difference. Fetched at boot (`src/deployment_config.rs`), precedence
 
 ```json
 {
-  "home_site": { "peer": "2KEB3…", "site": "billslab-main", "loc": "" },
-  "origins":   { "2KEB3…": "http://localhost:8081" },
-  "profile":   "tutorial",
-  "site_mode": { "enabled": true, "locked": false, "show_toggle": true }
+  "home_site":   { "peer": "2KEB3…", "site": "billslab-main", "loc": "" },
+  "origins":     { "2KEB3…": "http://localhost:8081" },
+  "surface":     "window",
+  "window_type": "Site Browser",
+  "site_mode":   { "enabled": true, "locked": false, "show_toggle": true }
 }
 ```
 
@@ -154,7 +157,9 @@ per-domain difference. Fetched at boot (`src/deployment_config.rs`), precedence
   `window.location.origin` and fetches content from **whatever host served it**.
   An explicit absolute value (`--live=https://host`) is a **deliberate pin** —
   rarely needed. It is **NOT** a cross-domain federation mechanism (see below).
-- **`profile` / `site_mode`** — cold-boot posture (overlay on/locked/toggle).
+- **`surface` (+ `window_type`) / `site_mode`** — cold-boot surface + posture
+  (chrome/window/site; overlay on/locked/toggle). A locked kiosk also emits
+  `peer_creation_enabled: false`.
 
 **Portability — the contract (DevOps):** publish with **empty `--live`** (the
 default of `make publish-papers` / `publish-serve`). The `origins` value is `""`,
@@ -197,7 +202,10 @@ entity system — used explicitly, not the default.
 ## 7. CDN / R2 deployment (the one un-wired step)
 
 `dist/` is a static directory. To go live, DevOps:
-1. `aws s3 sync dist/ s3://<r2-bucket>/ --endpoint <r2>` (or rclone/wrangler).
+1. `aws s3 sync --delete dist/ s3://<r2-bucket>/ --endpoint <r2>` (or rclone/wrangler).
+   `--delete` prunes orphans on a **re**-publish (deleted pages, swapped-out
+   blobs). For the full edit/add/delete/identity-churn republish mechanics, see
+   [`../guides/GUIDE-REPUBLISH-AND-INCREMENTAL.md`](../guides/GUIDE-REPUBLISH-AND-INCREMENTAL.md).
 2. Front it with the CDN; serve `index.html` for the SPA route, byte-serve the rest.
 3. **Content-type matters**: `.wasm` → `application/wasm`, `.json` → `application/json`,
    the `.bin` files are opaque (`application/octet-stream` is fine — the SPA reads them).
@@ -313,7 +321,7 @@ hardening if a corpus ever ships escaping relative links.
 | Publish billslab + serve locally | `make publish-papers` (portable, same-origin) |
 | Portable bundle for any CDN/R2 **root** | the default — **empty `--live`** (same-origin); drop `dist/` anywhere at the root |
 | Deliberately pin the banner/config to one origin | `--live=https://<public-url>` (rare; not for cross-domain nav — that's registry/resolver) |
-| Locked content-site deployment | `--config-profile=strict-site` |
+| Locked content-site deployment | `--surface=site --locked` |
 | Multi-tenant (many peers, one domain) | `--prefix=<tenant>` per peer; never mix with a root peer |
 | One site at the domain root (SSG) | `--bare-root` |
 | Legacy HTML only | `--html-only` |

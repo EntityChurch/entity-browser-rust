@@ -33,6 +33,16 @@ CARGO_CACHE := $(HOME)/.cache/cargo-entity-browser
 # download happens once. (wasm-opt is baked into the image, not downloaded.)
 TRUNK_CACHE := $(HOME)/.cache/cargo-entity-browser-trunk
 
+# Durable publisher identity dir (gitignored). The publish flow loads-or-generates
+# `{ENTITY_DATA_DIR}/publish/keypair` so every publish lands under ONE stable
+# peer-id (the peer-id is the site address — it must not drift per run). The
+# containerized `publish` target runs `podman run --rm`, so `~/.entity` inside the
+# container is ephemeral and the key would regenerate every run — we point
+# ENTITY_DATA_DIR at this repo-local dir (which rides the existing parent mount) so
+# the identity persists. `publish-serve` (host) uses the same dir, so both modes
+# publish under the same identity. Override per-machine with PUBLISH_DATA_DIR=…
+PUBLISH_DATA_DIR ?= .entity-publish
+
 # Output isolation — so two builds can run AT THE SAME TIME against the same
 # source without clobbering each other. `DIST` = trunk's WASM output dir;
 # `TARGET_DIR` = cargo's build dir. Both default to the canonical locations,
@@ -114,6 +124,7 @@ define RUN
 		-v $(CARGO_CACHE):/usr/local/cargo/registry:z \
 		-v $(TRUNK_CACHE):/root/.cache:z \
 		-e CARGO_TARGET_DIR=$(TARGET_DIR) \
+		$(EXTRA_RUN_ENV) \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		sh -c '$(1)'
@@ -286,16 +297,27 @@ build-serve: wasm-release
 #   HTML_ONLY=1     skip the .bin content data (dumb-CDN-only).
 #   DEPLOY_CONFIG=1 also emit /entity-deployment.json (cut 2b) so a GENERIC SPA
 #                   bundle served from this origin boots into the published home
-#                   site — no per-domain WASM rebuild. CONFIG_PROFILE=<full|
-#                   tutorial|strict-site> (default tutorial), CONFIG_SITE=<id>
-#                   (default demo). Origin = LIVE if set, else same-origin.
-#                   full = chrome-first, no site overlay (apps-only); tutorial =
-#                   site overlay, escapable; strict-site = locked kiosk. Details:
+#                   site — no per-domain WASM rebuild. SURFACE=<chrome|site|
+#                   window> (default window), WINDOW_TYPE=<name> (default
+#                   "Site Browser", used when SURFACE=window), LOCKED=1 (kiosk,
+#                   SURFACE=site only), CONFIG_SITE=<id> (default demo). Origin =
+#                   LIVE if set, else same-origin. chrome = the workspace;
+#                   window = maximized window (default a Site Browser), escapable;
+#                   site = full-viewport overlay (add LOCKED=1 for a kiosk).
+#                   Details:
 #                   docs/architecture/guides/GUIDE-DEPLOYMENT-AND-CONFIGURATION.md
 #   IDENTITY_SEED=<64-hex>  publish under a SPECIFIC system identity (any
 #                   `entity_system_seed`-form hex seed) so each site/deployment
-#                   gets its own stable peer-id. Empty (default) = the fixed demo
-#                   publisher identity (the first-push default). Bad seed fails.
+#                   gets its own stable peer-id. Bad seed fails the build.
+#                   Default (empty) = the DURABLE publisher identity, load-or-
+#                   generated once under PUBLISH_DATA_DIR (see below) and reused
+#                   across runs — the peer-id is the site address, so it must not
+#                   drift. DEMO_IDENTITY=1 uses the fixed demo seed (dev/testing).
+#   PUBLISH_DATA_DIR=<dir>  where the durable publisher keypair lives
+#                   (default .entity-publish/, gitignored). Both `publish`
+#                   (in-container, via the parent mount) and `publish-serve`
+#                   (host) point ENTITY_DATA_DIR here, so both publish under the
+#                   SAME identity even though publish runs `podman run --rm`.
 # === Apps — the second publish mode: point at a pre-built dist directory ===
 # Apps are opaque, self-contained HTML iframe bundles + an `index.json` catalog
 # (the entity-apps `dist/` shape). The tool knows nothing app-specific — it just
@@ -310,12 +332,20 @@ build-serve: wasm-release
 #                     cargo and accepts any path. e.g.
 #   make publish-serve INGEST=examples/demo-site APPS_DIST=~/path/to/entity-apps/dist
 APPS_DIST ?=
-# Deployment-config boot posture (used by publish / publish-serve when
-# DEPLOY_CONFIG is set): full | tutorial | strict-site. Ignored without a config.
-CONFIG_PROFILE ?= tutorial
+# Deployment-config startup surface (used by publish / publish-serve when
+# DEPLOY_CONFIG is set): chrome | site | window (default window + a Site Browser
+# window type). LOCKED=1 makes a SURFACE=site overlay a kiosk. Ignored without a
+# config; the publish binary supplies the defaults when these are empty.
+SURFACE ?=
+WINDOW_TYPE ?=
+LOCKED ?=
 OUT ?= dist/static-demo
+# Persist the publisher identity across `--rm` runs: point ENTITY_DATA_DIR at the
+# repo-local dir, which is visible in-container via the existing parent mount.
+publish: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 publish: image
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(CONFIG_PROFILE),--config-profile=$(CONFIG_PROFILE),) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),))
+	@mkdir -p $(PUBLISH_DATA_DIR)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 
 # Bare-root SSG: render ONE site at the domain root (no sites/{peer}/{site}/
 # prefix, no entity branding) — the "just a site generator" output. Pick the
@@ -387,7 +417,8 @@ publish-serve: TARGET_DIR := target-publish
 publish-serve: DEPLOY_CONFIG := 1
 publish-serve: wasm
 	$(snapshot_serve_dir)
-	CARGO_TARGET_DIR=$(TARGET_DIR) cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(CONFIG_PROFILE),--config-profile=$(CONFIG_PROFILE),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),)
+	@mkdir -p $(PUBLISH_DATA_DIR)
+	ENTITY_DATA_DIR=$(CURDIR)/$(PUBLISH_DATA_DIR) CARGO_TARGET_DIR=$(TARGET_DIR) cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="
 	@echo "  ▶ live entity browser (SPA):  http://localhost:$(PORT)/"

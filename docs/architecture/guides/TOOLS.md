@@ -95,7 +95,7 @@ Override per-machine via env (`CAP_MEM=4g make build`) or an untracked, gitignor
 
 Because of these, **`make tauri-run` (uses `dist`/`target`) and `make publish-serve` (uses `dist-publish`/`target-publish`) can run at the same time** without clobbering each other. The cargo registry (`$HOME/.cache/cargo-entity-browser`) and trunk tool cache (`$HOME/.cache/cargo-entity-browser-trunk`, mounted at `/root/.cache`) are **shared, persistent volumes** — so deps and the version-matched `wasm-bindgen-cli` download once, not per build. Build into any isolated pair with e.g. `make wasm DIST=dist-x TARGET_DIR=target-x`.
 
-Publish / serve variables (see the Makefile header comments for the full set): `OUT`, `OUT_BARE`, `PREFIX`, `LIVE`, `HTML_ONLY`, `INGEST`, `APPS_DIST`, `DEPLOY_CONFIG`, `CONFIG_PROFILE`, `CONFIG_SITE`, `IDENTITY_SEED`, `SITE`, `PORT`, `SERVE_DIR`.
+Publish / serve variables (see the Makefile header comments for the full set): `OUT`, `OUT_BARE`, `PREFIX`, `LIVE`, `HTML_ONLY`, `INGEST`, `APPS_DIST`, `DEPLOY_CONFIG`, `SURFACE`, `WINDOW_TYPE`, `LOCKED`, `CONFIG_SITE`, `IDENTITY_SEED`, `SITE`, `PORT`, `SERVE_DIR`.
 
 ---
 
@@ -121,7 +121,9 @@ entity-browser publish [OUT_DIR] [flags]
 | `--live=<origin>` | Add the dismissible "open in live peer" banner; deep-links each page to `{origin}/?site=…`. Empty/absent = same-origin (portable). |
 | `--html-only` | Skip the entity-native `.bin` content data (dumb-CDN only). Projection mode emits both `.html` + `.bin` by default. |
 | `--deployment-config` | Also emit `/entity-deployment.json` so a **generic** SPA bundle served from this origin boots into the published home site (projection mode only). |
-| `--config-profile=<full\|tutorial\|strict-site>` | Boot posture for the deployment config (default `tutorial`). Validated — a typo fails the build. |
+| `--surface=<chrome\|site\|window>` | Startup surface for the deployment config (default `window`). Validated — a typo fails the build. |
+| `--window-type=<name>` | For `--surface=window`, which window type to boot maximized (default `Site Browser`). |
+| `--locked` | For `--surface=site`, emit the kiosk lock (no toggle, no peer creation). Rejected for other surfaces. |
 | `--config-site=ID` | Home site for the deployment config (default demo / first published). |
 | `--ingest=<dir>` | Source the tree from a content-team `render/` emit (disk→tree) instead of the bundled demo seed. |
 | `--ingest-apps=<dir>` | Source embedded apps (games + tools) from an entity-apps `dist/` (split into `games`/`apps` by entry type). Alias: `--ingest-games=`. |
@@ -134,11 +136,12 @@ Authoritative pipeline doc: [`../specs/REFERENCE-PUBLISHING-PIPELINE.md`](../spe
 ## 5. Build-time knobs (environment, read by `build.rs`)
 
 All are **opt-in**; the default build (all unset) is byte-identical to the
-local demo. A typo in a profile/origin **fails the build loudly**.
+local demo. A typo in a surface/origin **fails the build loudly**.
 
 | Env var | Effect |
 |---|---|
-| `ENTITY_PROFILE=<full\|tutorial\|strict-site>` | Bakes the cold-boot default posture into the binary (only seeds the absent-config case; a persisted session config wins on warm boot). Default `full`. |
+| `ENTITY_STARTUP_SURFACE=<chrome\|site\|window>` | Bakes the cold-boot default **surface** into the binary (only seeds the absent-config case; a persisted session config wins on warm boot). Default `chrome`. The granular posture (locked kiosk, etc.) is a per-domain `/entity-deployment.json` concern, not baked. |
+| `ENTITY_STARTUP_WINDOW_TYPE=<name>` | For `ENTITY_STARTUP_SURFACE=window`, which window type boots maximized. |
 | `ENTITY_HOME_PEER` | Hosting peer-id for a thin-lens remote-home build (`""` = local/system peer). |
 | `ENTITY_HOME_SITE` | Home site id (default `demo`). |
 | `ENTITY_HOME_LOC` | Landing page within the site (`""` = root). |
@@ -159,7 +162,7 @@ Set on the browser URL (`?param=value`) at boot:
 | Param | Effect |
 |---|---|
 | `?worker=1` | Opt into the Worker + OPFS arm (default is the main-thread IndexedDB system peer). |
-| `?chrome=1` | Escape a `strict-site` kiosk deployment back to full chrome. |
+| `?chrome=1` | Escape a locked-site kiosk deployment back to full chrome. |
 | `?site={peer}/{site}/{page}` | Deep-link boot directly into a site overlay (`self` = the local system peer / same-origin). Ephemeral, never persisted. |
 | `?boot_window=<WindowType>` | Boot into a maximized window as the base surface (override; spawn-only, never persisted). |
 | `?log=<level>` | Tracing level for this tab (`trace`/`debug`/`info`/`warn`/`error`). |

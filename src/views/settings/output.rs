@@ -57,10 +57,9 @@ pub struct SiteAppearanceOption {
 /// it, it's stored, boot honors it (handoff §5).
 #[derive(Debug, Clone)]
 pub struct SessionSettings {
-    /// Profile preset options (pre-flagged with `selected`).
-    pub profiles: Vec<ProfileOption>,
     /// The boot-surface kind discriminant: `"chrome"` / `"site"` / `"window"`.
-    /// Drives the radio group and which target list is shown.
+    /// The primary axis — drives the radio group and which target list is shown
+    /// (it replaced the old profile-preset selector: pick the surface directly).
     pub boot_kind: &'static str,
     /// The peer dropdown — every reachable peer, the configured boot target
     /// pre-`selected`, default the system peer. Mirrors the command palette.
@@ -76,16 +75,11 @@ pub struct SessionSettings {
     /// over HTTP while the peer boots. User-flippable kill switch.
     pub fast_paint: bool,
     /// Whether the overlay is locked (lockdown posture). Read-only in the UI
-    /// for now — a **held seam** (§4-C "hold the seam, defer the feature"):
-    /// surfaced so it's visible, but no UI control flips it yet.
+    /// for now — set by the per-domain deployment config (`site_mode.locked`).
+    /// A user-facing locked toggle is deferred until it can be a deliberate,
+    /// confirmed action (temp-password + documented recovery) so a tester can't
+    /// strand themselves — the locked-surface SAFETY work, not this cut.
     pub locked: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProfileOption {
-    pub value: &'static str,
-    pub label: &'static str,
-    pub selected: bool,
 }
 
 /// One peer in the startup-target dropdown.

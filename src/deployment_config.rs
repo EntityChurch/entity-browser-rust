@@ -11,9 +11,9 @@
 //! 1. URL overrides (`?site=`, `?boot_window=` — dev/showcase, never persisted).
 //! 2. **Durable persisted session config** (a returning user's own settings).
 //! 3. **This fetched config** (the per-domain deployment posture).
-//! 4. **Build-time defaults** (`ENTITY_PROFILE` + `ENTITY_HOME_*` — cut 2a,
-//!    the testing path).
-//! 5. Hard default (`Full`, local demo).
+//! 4. **Build-time defaults** (`ENTITY_STARTUP_SURFACE` + `ENTITY_HOME_*` —
+//!    cut 2a, the testing path).
+//! 5. Hard default (chrome, local demo).
 //!
 //! So a fetched config only shapes a **cold** boot (no durable config yet);
 //! a returning user's persisted config always wins ([`crate::app::EntityApp::boot_load`]
@@ -34,7 +34,8 @@
 use std::collections::BTreeMap;
 
 use crate::session_config::{
-    boot_default, home_origin_default, home_site_default, Profile, SessionConfig, SiteRef,
+    boot_default, boot_surface_from, home_origin_default, home_site_default, BootSurface,
+    SessionConfig, SiteRef,
 };
 
 /// Well-known origin path the SPA fetches at boot. Emitted by
@@ -42,8 +43,8 @@ use crate::session_config::{
 pub const DEPLOYMENT_CONFIG_PATH: &str = "/entity-deployment.json";
 
 /// A partial site-mode posture override — only the fields the deployment
-/// config actually specified. Merged onto the profile preset's posture in
-/// [`DeploymentConfig::apply_to`] (absent field = inherit the preset).
+/// config actually specified. Merged onto the base config's posture in
+/// [`DeploymentConfig::apply_to`] (absent field = inherit the base).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SiteModeOverride {
     pub enabled: Option<bool>,
@@ -62,8 +63,13 @@ impl SiteModeOverride {
 /// from the build-time defaults below it in the precedence chain).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeploymentConfig {
-    /// Deployment posture preset (`full` / `tutorial` / `strict-site`).
-    pub profile: Option<Profile>,
+    /// The startup **surface** (`chrome` / `site` / `window`) — the primary
+    /// axis that replaced the old `profile` preset. Absent = inherit the base
+    /// (build-time) surface. Paired with `window_type` when `surface == "window"`.
+    pub surface: Option<String>,
+    /// The window type to boot maximized when `surface == "window"` (e.g.
+    /// `"Site Browser"`). Ignored for other surfaces.
+    pub window_type: Option<String>,
     /// The startup site — where a `Site` boot lands / the home toggle opens.
     pub home_site: Option<SiteRef>,
     /// `target-peer-id → HTTP origin` — where each hosting peer's published
@@ -76,9 +82,9 @@ pub struct DeploymentConfig {
     /// Phase-1 fast-paint kill switch override.
     pub fast_paint: Option<bool>,
     /// Capability-posture override (MAP §10 item 1b): force peer creation
-    /// on/off independent of the profile, so a `full` (chrome) deployment can
-    /// still disable creation without becoming a locked site. Merges onto the
-    /// profile preset like `site_mode`.
+    /// on/off independent of the surface, so a `chrome` deployment can still
+    /// disable creation without becoming a locked site. Merges onto the base
+    /// config like `site_mode`.
     pub peer_creation_enabled: Option<bool>,
 }
 
@@ -93,8 +99,21 @@ impl DeploymentConfig {
         let obj = value.as_object()?;
         let mut cfg = DeploymentConfig::default();
 
-        if let Some(p) = obj.get("profile").and_then(|v| v.as_str()) {
-            cfg.profile = Profile::from_str(p.trim());
+        // The surface axis (`chrome` / `site` / `window`) + its window type.
+        // Kept as strings and validated at apply time (`boot_surface_from` is
+        // garbage-tolerant → unknown falls back to Chrome), mirroring how every
+        // other field here is tolerant of partial/unknown input.
+        if let Some(s) = obj.get("surface").and_then(|v| v.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                cfg.surface = Some(s.to_string());
+            }
+        }
+        if let Some(w) = obj.get("window_type").and_then(|v| v.as_str()) {
+            let w = w.trim();
+            if !w.is_empty() {
+                cfg.window_type = Some(w.to_string());
+            }
         }
 
         if let Some(hs) = obj.get("home_site").and_then(|v| v.as_object()) {
@@ -134,7 +153,8 @@ impl DeploymentConfig {
     /// Whether this config carries anything actionable. An object that parsed
     /// but named nothing we understand is treated as "no config."
     pub fn is_empty(&self) -> bool {
-        self.profile.is_none()
+        self.surface.is_none()
+            && self.window_type.is_none()
             && self.home_site.is_none()
             && self.origins.is_empty()
             && self.site_mode.is_empty()
@@ -143,19 +163,23 @@ impl DeploymentConfig {
     }
 
     /// Apply this deployment config over a `base` session config (the build
-    /// default), producing the cold-boot config. A named `profile` swaps in its
-    /// **posture** preset (boot surface + overlay posture); a named `home_site`
-    /// overrides the startup site; `site_mode` fields merge onto the posture;
-    /// `fast_paint` overrides the kill switch. Anything the config doesn't name
-    /// is inherited from `base`. The caller re-derives the runtime `active`
-    /// flag from the resulting `boot_surface`, so we leave it.
+    /// default), producing the cold-boot config. A named `surface` sets the boot
+    /// surface (with `window_type` for `window`); a named `home_site` overrides
+    /// the startup site; `site_mode` fields merge onto the base posture;
+    /// `fast_paint` / `peer_creation_enabled` override their fields. Anything the
+    /// config doesn't name is inherited from `base` — there is no preset bundling
+    /// anymore, so a locked kiosk spells out `surface`+`site_mode`+
+    /// `peer_creation_enabled` explicitly (what publish emits). The caller
+    /// re-derives the runtime `active` flag from the resulting `boot_surface`.
     pub fn apply_to(&self, base: SessionConfig) -> SessionConfig {
-        // A named profile re-seeds posture (and its env-default home); an
-        // unnamed one keeps the build default's posture/home.
-        let mut cfg = match self.profile {
-            Some(p) => p.preset(),
-            None => base,
-        };
+        let mut cfg = base;
+        // A named surface sets the boot surface directly; an unnamed one keeps
+        // the build default's. The target peer is "" (system, resolved at boot)
+        // — a per-domain config can't bake a runtime peer-id.
+        if let Some(kind) = &self.surface {
+            let wt = self.window_type.clone().unwrap_or_default();
+            cfg.boot_surface = boot_surface_from(kind, "", &wt);
+        }
         if let Some(home) = &self.home_site {
             cfg.home_site = home.clone();
         }
@@ -203,13 +227,12 @@ pub fn resolve_home_origin(deployment: Option<&DeploymentConfig>, peer_id: &str)
 }
 
 /// Whether the effective deployment boots into the site overlay — the
-/// deployment config's profile posture, else the build-time profile's
-/// (`boot_default`). This is what lets a **generic `Full` bundle** fast-paint
-/// the site when the per-domain config says `strict-site`/`tutorial`, without a
-/// rebuild.
+/// deployment config's `surface`, else the build-time surface (`boot_default`).
+/// This is what lets a **generic chrome bundle** fast-paint the site when the
+/// per-domain config says `surface: "site"`, without a rebuild.
 pub fn resolve_boots_into_site(deployment: Option<&DeploymentConfig>) -> bool {
-    match deployment.and_then(|d| d.profile) {
-        Some(p) => p.preset().active_from_boot_surface(),
+    match deployment.and_then(|d| d.surface.as_deref()) {
+        Some(kind) => boot_surface_from(kind, "", "") == BootSurface::Site,
         None => boot_default().active_from_boot_surface(),
     }
 }
@@ -271,7 +294,7 @@ pub async fn fetch() -> Option<DeploymentConfig> {
     match DeploymentConfig::parse(&text) {
         Some(cfg) if !cfg.is_empty() => {
             tracing::info!(
-                profile = ?cfg.profile.map(|p| p.as_str()),
+                surface = ?cfg.surface.as_deref(),
                 home_site = ?cfg.home_site.as_ref().map(|h| h.id.as_str()),
                 origins = cfg.origins.len(),
                 "deployment-config: applied {DEPLOYMENT_CONFIG_PATH}"
@@ -296,15 +319,18 @@ mod tests {
 
     #[test]
     fn parse_full_config() {
+        // A locked-kiosk config now spells out surface + site_mode +
+        // peer_creation_enabled explicitly (no preset bundling).
         let json = r#"{
-            "profile": "strict-site",
+            "surface": "site",
             "home_site": { "peer": "labs-peer", "site": "labs", "loc": "intro" },
             "origins": { "labs-peer": "https://labs.example" },
             "site_mode": { "enabled": true, "show_toggle": false, "locked": true },
+            "peer_creation_enabled": false,
             "fast_paint": false
         }"#;
         let cfg = DeploymentConfig::parse(json).unwrap();
-        assert_eq!(cfg.profile, Some(Profile::StrictSite));
+        assert_eq!(cfg.surface.as_deref(), Some("site"));
         assert_eq!(
             cfg.home_site,
             Some(SiteRef { peer_id: "labs-peer".into(), id: "labs".into(), loc: "intro".into() })
@@ -312,15 +338,24 @@ mod tests {
         assert_eq!(cfg.origins.get("labs-peer").map(String::as_str), Some("https://labs.example"));
         assert_eq!(cfg.site_mode.show_toggle, Some(false));
         assert_eq!(cfg.site_mode.locked, Some(true));
+        assert_eq!(cfg.peer_creation_enabled, Some(false));
         assert_eq!(cfg.fast_paint, Some(false));
     }
 
     #[test]
-    fn parse_is_tolerant_of_partial_and_unknown() {
-        // Only a profile; unknown keys ignored; empty home_site site dropped.
-        let json = r#"{ "profile": "tutorial", "mystery": 7, "home_site": { "peer": "p" } }"#;
+    fn parse_window_surface_carries_window_type() {
+        let json = r#"{ "surface": "window", "window_type": "Site Browser" }"#;
         let cfg = DeploymentConfig::parse(json).unwrap();
-        assert_eq!(cfg.profile, Some(Profile::Tutorial));
+        assert_eq!(cfg.surface.as_deref(), Some("window"));
+        assert_eq!(cfg.window_type.as_deref(), Some("Site Browser"));
+    }
+
+    #[test]
+    fn parse_is_tolerant_of_partial_and_unknown() {
+        // Only a surface; unknown keys ignored; empty home_site site dropped.
+        let json = r#"{ "surface": "window", "mystery": 7, "home_site": { "peer": "p" } }"#;
+        let cfg = DeploymentConfig::parse(json).unwrap();
+        assert_eq!(cfg.surface.as_deref(), Some("window"));
         assert!(cfg.home_site.is_none(), "home_site with no site id is dropped");
         assert!(cfg.origins.is_empty());
         assert!(cfg.site_mode.is_empty());
@@ -336,71 +371,63 @@ mod tests {
     }
 
     #[test]
-    fn apply_profile_swaps_posture() {
-        // A strict-site deployment config over a Full build default = locked,
-        // boots-into-site posture (the generic-bundle-on-a-strict-domain case).
+    fn apply_surface_sets_boot_surface_and_site_mode_merges() {
+        // A locked-site config over a chrome build default = boots-into-site,
+        // locked (the generic-bundle-on-a-locked-domain case). site_mode is now
+        // explicit (no preset), and it merges onto the base — an unnamed field
+        // (`enabled`) stays the base's `true`.
         let cfg = DeploymentConfig {
-            profile: Some(Profile::StrictSite),
+            surface: Some("site".into()),
+            site_mode: SiteModeOverride { show_toggle: Some(false), locked: Some(true), ..Default::default() },
             ..Default::default()
         };
         let out = cfg.apply_to(SessionConfig::default());
         assert_eq!(out.boot_surface, BootSurface::Site);
-        assert!(!out.site_mode.show_toggle);
-        assert!(out.site_mode.locked);
+        assert!(!out.site_mode.show_toggle, "explicit override");
+        assert!(out.site_mode.locked, "explicit override");
+        assert!(out.site_mode.enabled, "unnamed field inherited from base");
     }
 
     #[test]
-    fn apply_overrides_home_and_site_mode_merge() {
-        // Profile sets the posture; site_mode names ONE field (show_toggle) and
-        // must merge, not replace — `locked` stays the strict-site preset's.
+    fn apply_window_surface_carries_type() {
         let cfg = DeploymentConfig {
-            profile: Some(Profile::StrictSite),
-            home_site: Some(SiteRef { peer_id: "h".into(), id: "labs".into(), loc: String::new() }),
-            site_mode: SiteModeOverride { show_toggle: Some(true), ..Default::default() },
+            surface: Some("window".into()),
+            window_type: Some("Site Browser".into()),
             ..Default::default()
         };
         let out = cfg.apply_to(SessionConfig::default());
-        assert_eq!(out.home_site.id, "labs");
-        assert_eq!(out.home_site.peer_id, "h");
-        assert!(out.site_mode.show_toggle, "merged override");
-        assert!(out.site_mode.locked, "untouched preset field preserved");
+        assert_eq!(
+            out.boot_surface,
+            BootSurface::Window { peer_id: String::new(), window_type: "Site Browser".into() }
+        );
     }
 
     #[test]
-    fn peer_creation_override_merges_independent_of_profile() {
-        // A `full` (chrome) deployment that still disables peer creation —
-        // capability is orthogonal to surface (MAP §5).
-        let json = r#"{ "profile": "full", "peer_creation_enabled": false }"#;
+    fn peer_creation_override_merges_independent_of_surface() {
+        // A `chrome` deployment that still disables peer creation — capability is
+        // orthogonal to surface (MAP §5).
+        let json = r#"{ "surface": "chrome", "peer_creation_enabled": false }"#;
         let cfg = DeploymentConfig::parse(json).unwrap();
         assert_eq!(cfg.peer_creation_enabled, Some(false));
         let out = cfg.apply_to(SessionConfig::default());
         assert_eq!(out.boot_surface, BootSurface::Chrome, "still chrome-first");
         assert!(!out.peer_creation_enabled, "creation disabled by override");
 
-        // Absent override on a strict-site profile inherits the preset's `false`.
-        let strict = DeploymentConfig { profile: Some(Profile::StrictSite), ..Default::default() };
-        assert!(!strict.apply_to(SessionConfig::default()).peer_creation_enabled);
-
-        // And an explicit `true` override can RE-ENABLE creation on a strict
-        // profile (operator opt-in).
-        let relaxed = DeploymentConfig {
-            profile: Some(Profile::StrictSite),
-            peer_creation_enabled: Some(true),
-            ..Default::default()
-        };
-        assert!(relaxed.apply_to(SessionConfig::default()).peer_creation_enabled);
+        // Absent override → inherits the base's `true` (no preset to seed false).
+        let site = DeploymentConfig { surface: Some("site".into()), ..Default::default() };
+        assert!(site.apply_to(SessionConfig::default()).peer_creation_enabled);
     }
 
     #[test]
-    fn apply_without_profile_keeps_base_posture() {
-        // No profile → base posture untouched; only home_site overridden.
+    fn apply_without_surface_keeps_base_posture() {
+        // No surface → base surface untouched; only home_site overridden.
         let cfg = DeploymentConfig {
             home_site: Some(SiteRef { peer_id: "h".into(), id: "labs".into(), loc: String::new() }),
             ..Default::default()
         };
-        let base = SessionConfig::default(); // Full → Chrome
+        let base = SessionConfig::default(); // chrome-first
         let out = cfg.apply_to(base.clone());
-        assert_eq!(out.boot_surface, base.boot_surface, "posture inherited from base");
+        assert_eq!(out.boot_surface, base.boot_surface, "surface inherited from base");
         assert_eq!(out.home_site.id, "labs");
     }
 
@@ -433,7 +460,7 @@ mod tests {
         // the right one per target peer (boot_load registers them all). The home
         // is on one peer; another peer's site cross-links in from a third origin.
         let json = r#"{
-            "profile": "strict-site",
+            "surface": "site",
             "home_site": { "peer": "peer-a", "site": "labs", "loc": "" },
             "origins": {
                 "peer-a": "https://a.example",
@@ -470,12 +497,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_boots_into_site_from_profile() {
-        let strict = DeploymentConfig { profile: Some(Profile::StrictSite), ..Default::default() };
-        assert!(resolve_boots_into_site(Some(&strict)), "strict-site boots into the site");
-        let full = DeploymentConfig { profile: Some(Profile::Full), ..Default::default() };
-        assert!(!resolve_boots_into_site(Some(&full)), "full is chrome-first");
-        // No config → the build default's posture (Full on a default build).
+    fn resolve_boots_into_site_from_surface() {
+        let site = DeploymentConfig { surface: Some("site".into()), ..Default::default() };
+        assert!(resolve_boots_into_site(Some(&site)), "surface=site boots into the site");
+        let chrome = DeploymentConfig { surface: Some("chrome".into()), ..Default::default() };
+        assert!(!resolve_boots_into_site(Some(&chrome)), "chrome is not the overlay");
+        let window = DeploymentConfig { surface: Some("window".into()), ..Default::default() };
+        assert!(!resolve_boots_into_site(Some(&window)), "window is a non-overlay surface");
+        // No config → the build default's posture (chrome on a default build).
         assert_eq!(resolve_boots_into_site(None), boot_default().active_from_boot_surface());
     }
 }

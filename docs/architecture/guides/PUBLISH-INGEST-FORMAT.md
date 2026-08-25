@@ -156,9 +156,9 @@ cargo run --bin entity-browser -- publish dist/my-site --ingest=path/to/site-roo
 
 Useful flags (full list in TOOLS.md §4): `--live=<origin>` (live banner),
 `--prefix=<path>` (multi-tenant hosting scope), `--html-only` (skip `.bin`),
-`--deployment-config` + `--config-site=<id>` + `--config-profile=<…>` (boot a
-generic SPA into the published home), `--bare-root --site=<id>` (single site at
-the domain root, no entity branding).
+`--deployment-config` + `--config-site=<id>` + `--surface=<…>` (boot a generic
+SPA into the published home), `--bare-root --site=<id>` (single site at the
+domain root, no entity branding).
 
 Without `--ingest`, `publish` emits a **bundled demo site set** (a built-in
 demo/SSG generator) — handy for testing the pipeline with zero inputs.

@@ -106,7 +106,7 @@ so a warm-durable boot is never re-seeded as cold) and carried into the owned
 2. Optional **Phase-1 fast paint** (`src/boot_fast_paint.rs`) — peer-free HTTP
    paint of a configured site overlay before the peer spins up.
 3. Resolve the durable session config (a persisted config always wins on a warm
-   boot; otherwise the build-time `ENTITY_PROFILE` / per-domain
+   boot; otherwise the build-time `ENTITY_STARTUP_SURFACE` / per-domain
    `/entity-deployment.json` seeds the absent-config case — `put_if_absent`, so
    it never clobbers).
 4. Bring up the **primary SDK** and the durable store arm (IDB by default; see
