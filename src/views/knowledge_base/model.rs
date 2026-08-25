@@ -534,7 +534,7 @@ impl KnowledgeBaseModel {
     ) -> Result<(String, String, Entity), String> {
         let title = title.trim().to_string();
         if title.is_empty() {
-            return Err("Title cannot be empty".into());
+            return Err(crate::i18n::t("kb.err_title_empty", &[]));
         }
 
         let target_slug = {
@@ -543,17 +543,15 @@ impl KnowledgeBaseModel {
                 ViewMode::New => {
                     let s = slug_from_title(&title);
                     if s.is_empty() {
-                        return Err(
-                            "Title must contain at least one alphanumeric character".into(),
-                        );
+                        return Err(crate::i18n::t("kb.err_title_alnum", &[]));
                     }
                     s
                 }
                 ViewMode::Editor => match &inner.state.current_slug {
                     Some(s) => s.clone(),
-                    None => return Err("No article selected to edit".into()),
+                    None => return Err(crate::i18n::t("kb.err_no_selection", &[])),
                 },
-                _ => return Err("Not in editable mode".into()),
+                _ => return Err(crate::i18n::t("kb.err_not_editable", &[])),
             }
         };
 

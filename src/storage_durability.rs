@@ -240,7 +240,7 @@ fn inject_banner_with_id(id: &str, msg: &str, bg: &str, border: &str) {
         let _ = banner.append_child(&text);
     }
     if let Ok(btn) = doc.create_element("button") {
-        btn.set_text_content(Some("Dismiss"));
+        btn.set_text_content(Some(&crate::i18n::t("btn.dismiss", &[])));
         let _ = btn.set_attribute(
             "style",
             "padding:3px 10px;cursor:pointer;background:transparent;color:#eee;\

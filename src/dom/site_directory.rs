@@ -60,11 +60,14 @@ pub fn render(rail: &Element, dir: &SiteDirectory, ctx: &DomCtx, window_id: Wind
         // A filtered-but-empty view is different from "no sites at all".
         util::set_text(
             &empty,
-            match dir.filter {
-                RailFilter::All => "No sites yet.",
-                RailFilter::Mine => "No sites you own.",
-                RailFilter::External => "No external sites cached.",
-            },
+            &crate::i18n::t(
+                match dir.filter {
+                    RailFilter::All => "sitedir.empty_all",
+                    RailFilter::Mine => "sitedir.empty_mine",
+                    RailFilter::External => "sitedir.empty_external",
+                },
+                &[],
+            ),
         );
         util::set_attr(
             &empty,
@@ -90,13 +93,15 @@ fn filter_toggle(active: RailFilter, ctx: &DomCtx, window_id: WindowId) -> Eleme
         "style",
         "display:flex;gap:4px;padding:0 4px 8px;",
     );
-    for (label, filter) in
-        [("My", RailFilter::Mine), ("All", RailFilter::All), ("External", RailFilter::External)]
-    {
+    for (label_key, filter) in [
+        ("sitedir.filter_mine", RailFilter::Mine),
+        ("sitedir.filter_all", RailFilter::All),
+        ("sitedir.filter_external", RailFilter::External),
+    ] {
         let on = filter == active;
         let btn = util::create_element("button");
         util::set_attr(&btn, "type", "button");
-        util::set_text(&btn, label);
+        util::set_text(&btn, &crate::i18n::t(label_key, &[]));
         util::set_attr(
             &btn,
             "style",
@@ -147,7 +152,10 @@ fn site_row(entry: &SiteEntry, ctx: &DomCtx, window_id: WindowId) -> Element {
     util::set_attr(
         &star,
         "title",
-        if entry.bookmarked { "Remove bookmark" } else { "Bookmark this site" },
+        &crate::i18n::t(
+            if entry.bookmarked { "sitedir.bookmark_remove" } else { "sitedir.bookmark_add" },
+            &[],
+        ),
     );
     util::set_attr(
         &star,
@@ -215,11 +223,10 @@ fn site_row(entry: &SiteEntry, ctx: &DomCtx, window_id: WindowId) -> Element {
         util::set_attr(
             &keep,
             "title",
-            if entry.keep_offline {
-                "Kept offline (full cache) — click to make manifest-pinned"
-            } else {
-                "Manifest-pinned — click to keep the full site offline"
-            },
+            &crate::i18n::t(
+                if entry.keep_offline { "sitedir.keep_full" } else { "sitedir.keep_pinned" },
+                &[],
+            ),
         );
         util::set_attr(
             &keep,
@@ -249,11 +256,11 @@ fn site_row(entry: &SiteEntry, ctx: &DomCtx, window_id: WindowId) -> Element {
 /// `· N×` visit-count tail once the site has been opened from here.
 fn subline(entry: &SiteEntry) -> String {
     let mut s = if entry.owned {
-        "owned".to_string()
+        crate::i18n::t("sitedir.sub_owned", &[])
     } else {
         match host_of(&entry.source_transport) {
-            Some(host) => format!("cached \u{00b7} {host}"),
-            None => "cached".to_string(),
+            Some(host) => crate::i18n::t("sitedir.sub_cached_from", &[("host", &host)]),
+            None => crate::i18n::t("sitedir.sub_cached", &[]),
         }
     };
     if entry.visit_count > 0 {

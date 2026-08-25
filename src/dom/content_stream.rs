@@ -33,7 +33,7 @@ pub fn render(container: &Element, output: &ContentStreamOutput, _ctx: &DomCtx) 
     util::set_text(
         &counters,
         &format!(
-            "facts: dispatch={} wire={} binding={}",
+            "facts: dispatch={} wire={} binding={}", // i18n-ignore — diagnostic counters (e2e probe)
             output.counts.dispatch, output.counts.wire, output.counts.binding
         ),
     );

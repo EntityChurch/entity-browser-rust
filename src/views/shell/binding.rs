@@ -77,9 +77,9 @@ impl<'a> PeerBinding for PeersBinding<'a> {
 
     fn primary_arm(&self) -> &'static str {
         if self.peers.primary_as_direct().is_some() {
-            "Direct"
+            "Direct" // i18n-ignore — SDK arm identifier, not UI text
         } else {
-            "Worker"
+            "Worker" // i18n-ignore — SDK arm identifier, not UI text
         }
     }
 
@@ -122,11 +122,11 @@ impl<'a> PeerBinding for PeersBinding<'a> {
         // Empty body becomes a CBOR null.
         let data = match params_text {
             Some(text) => super::model::parse_json_to_ecf(&text)
-                .map_err(|e| format!("invalid JSON body: {}", e))?,
+                .map_err(|e| format!("invalid JSON body: {}", e))?, // i18n-ignore — shell command error (§6)
             None => entity_ecf::to_ecf(&entity_ecf::Value::Null),
         };
         let entity = entity_entity::Entity::new(entity_type, data)
-            .map_err(|e| format!("entity construction failed: {}", e))?;
+            .map_err(|e| format!("entity construction failed: {}", e))?; // i18n-ignore — shell command error (§6)
         self.peers.dispatch_write(peer_id, path.to_string(), entity);
         Ok(())
     }
@@ -201,7 +201,7 @@ impl<'a> PeerBinding for PeersBinding<'a> {
             Some(text) => match super::model::parse_json_params(&text) {
                 Ok(entity) => Some(entity),
                 Err(e) => {
-                    return Box::pin(async move { Err(format!("invalid JSON params: {}", e)) });
+                    return Box::pin(async move { Err(format!("invalid JSON params: {}", e)) }); // i18n-ignore — shell command error (§6)
                 }
             },
         };
@@ -378,7 +378,7 @@ impl<'a> PeerBinding for PeersBinding<'a> {
             Ok(c) => c,
             Err(_) => {
                 return Box::pin(async move {
-                    Err("bootstrap: not supported on Worker-arm peer".into())
+                    Err("bootstrap: not supported on Worker-arm peer".into()) // i18n-ignore — shell command error (§6)
                 })
             }
         };
@@ -408,7 +408,7 @@ impl<'a> PeerBinding for PeersBinding<'a> {
             rows.push(("quorum".into(), short_hash(&q)));
         }
         if let Some(p) = s.peer_config_path {
-            rows.push(("peer config".into(), p));
+            rows.push(("peer config".into(), p)); // i18n-ignore — diagnostic table row key (§6)
         }
         rows
     }
@@ -417,7 +417,7 @@ impl<'a> PeerBinding for PeersBinding<'a> {
         let ctx = self
             .peers
             .direct_peer_context(peer_id)
-            .map_err(|_| "bootstrap export: not supported on Worker-arm peer".to_string())?;
+            .map_err(|_| "bootstrap export: not supported on Worker-arm peer".to_string())?; // i18n-ignore — shell command error (§6)
         let bundle = ctx.identity().export_bundle().map_err(|e| e.to_string())?;
         bundle.to_cbor().map_err(|e| e.to_string())
     }
@@ -438,7 +438,7 @@ impl<'a> PeerBinding for PeersBinding<'a> {
             Ok(c) => c,
             Err(_) => {
                 return Box::pin(async move {
-                    Err("bootstrap import: not supported on Worker-arm peer".into())
+                    Err("bootstrap import: not supported on Worker-arm peer".into()) // i18n-ignore — shell command error (§6)
                 })
             }
         };
@@ -471,7 +471,7 @@ fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
 fn format_compute_eval_result(r: entity_sdk::ComputeEvalResult) -> String {
     use entity_sdk::ComputeValue;
     let v = match &r.value {
-        ComputeValue::Null => "Null".to_string(),
+        ComputeValue::Null => "Null".to_string(), // i18n-ignore — value rendering, not UI text
         ComputeValue::Bool(b) => format!("Bool({})", b),
         ComputeValue::Int(n) => format!("Int({})", n),
         ComputeValue::Uint(n) => format!("Uint({})", n),
@@ -486,7 +486,7 @@ fn format_compute_eval_result(r: entity_sdk::ComputeEvalResult) -> String {
         ComputeValue::Error(e) => format!("Error({})", e.entity_type),
     };
     format!(
-        "  value: {}\n  entity type: {}",
+        "  value: {}\n  entity type: {}", // i18n-ignore — shell value dump (§6)
         v, r.result_entity.entity_type
     )
 }
@@ -511,7 +511,7 @@ fn format_bootstrap_result(r: entity_sdk::BootstrapResult) -> Vec<(String, Strin
                 ("identity".into(), short_hash(&identity_hash)),
                 ("quorum".into(), short_hash(&quorum_id)),
                 ("controller cert".into(), short_hash(&controller_cert)),
-                ("peer config".into(), peer_config_path),
+                ("peer config".into(), peer_config_path), // i18n-ignore — diagnostic table row key (§6)
             ];
             if !issued_caps.is_empty() {
                 rows.push((
@@ -581,7 +581,7 @@ impl<'a> AppActionSink for ShellActionSink<'a> {
                 // SpawnWindow's `type_name` is `&'static str` — look
                 // up the crate-resolved name against our static list.
                 let resolved = resolve_static_window_name(&type_name)
-                    .unwrap_or("Shell");
+                    .unwrap_or("Shell"); // i18n-ignore — identity key; mirrors WindowType.name
                 crate::action::Action::SpawnWindow {
                     type_name: resolved,
                     peer_id,

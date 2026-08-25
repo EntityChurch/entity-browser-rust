@@ -34,8 +34,8 @@ impl ExecuteConsoleWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Execute Console",
-            description: "Execute handler operations on local or remote peers",
+            name: "Execute Console", // i18n-ignore — identity key; display via window.execute_console
+            description: "Execute handler operations on local or remote peers", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = ExecuteConsoleWindow::new(id, peer_id.to_string());
@@ -75,11 +75,11 @@ impl ExecuteConsoleWindow {
 
 impl WindowView for ExecuteConsoleWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Execute Console")
+        crate::i18n::window_title("Execute Console") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Execute Console"
+        "Execute Console" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

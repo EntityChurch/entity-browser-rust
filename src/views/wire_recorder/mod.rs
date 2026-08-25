@@ -44,8 +44,8 @@ impl WireRecorderWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Wire Recorder",
-            description: "Inspect: live wire-frame stream for the bound peer",
+            name: "Wire Recorder", // i18n-ignore — identity key; display via window.wire_recorder
+            description: "Inspect: live wire-frame stream for the bound peer", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = WireRecorderWindow::new(id, peer_id.to_string());
@@ -77,11 +77,11 @@ impl WireRecorderWindow {
 
 impl WindowView for WireRecorderWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Wire Recorder")
+        crate::i18n::window_title("Wire Recorder") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Wire Recorder"
+        "Wire Recorder" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

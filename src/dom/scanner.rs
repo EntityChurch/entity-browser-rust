@@ -14,7 +14,7 @@ use crate::window::ClosureVec;
 fn has_barcode_detector() -> bool {
     js_sys::Reflect::get(
         &wasm_bindgen::JsValue::from(web_sys::window().unwrap()),
-        &"BarcodeDetector".into(),
+        &"BarcodeDetector".into(), // i18n-ignore — JS global name, not UI text
     )
     .map(|v| !v.is_undefined())
     .unwrap_or(false)
@@ -23,7 +23,7 @@ fn has_barcode_detector() -> bool {
 fn make_detector() -> Option<wasm_bindgen::JsValue> {
     let class = js_sys::Reflect::get(
         &wasm_bindgen::JsValue::from(web_sys::window().unwrap()),
-        &"BarcodeDetector".into(),
+        &"BarcodeDetector".into(), // i18n-ignore — JS global name, not UI text
     ).ok()?;
     let formats = js_sys::Array::new();
     formats.push(&"qr_code".into());

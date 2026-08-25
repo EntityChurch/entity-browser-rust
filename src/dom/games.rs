@@ -456,7 +456,7 @@ pub fn render_player(
     // NO action / dirty-mark / rebuild, so the running iframe (and the game's
     // in-memory state) is never torn down. Wired after `stage_area` exists.
     let expand_btn = util::create_element_with_class("button", "gm-expand-btn");
-    util::set_text(&expand_btn, "⤢ Expand");
+    util::set_text(&expand_btn, &format!("⤢ {}", crate::i18n::t("btn.expand", &[])));
     util::set_attr(&expand_btn, "type", "button");
     util::set_attr(&expand_btn, "title", &crate::i18n::t("tooltip.fill_window", &[]));
     util::append(&bar, &expand_btn);
@@ -492,11 +492,11 @@ pub fn render_player(
             let expanded = area.class_name().contains("gm-expanded");
             if expanded {
                 area.set_class_name("gm-stage-area");
-                util::set_text(&btn, "⤢ Expand");
+                util::set_text(&btn, &format!("⤢ {}", crate::i18n::t("btn.expand", &[])));
                 util::set_attr(&btn, "title", &crate::i18n::t("tooltip.fill_window", &[]));
             } else {
                 area.set_class_name("gm-stage-area gm-expanded");
-                util::set_text(&btn, "⤡ Collapse");
+                util::set_text(&btn, &format!("⤡ {}", crate::i18n::t("btn.collapse", &[])));
                 util::set_attr(&btn, "title", &crate::i18n::t("tooltip.restore_size", &[]));
             }
         });

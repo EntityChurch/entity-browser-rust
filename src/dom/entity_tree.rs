@@ -67,13 +67,20 @@ fn render_tree_panel(container: &Element, output: &EntityTreeOutput, ctx: &DomCt
     }
 
     let footer = util::create_element("footer");
-    util::set_text(
-        &footer,
-        &format!(
-            "{} entities, {} paths",
-            output.footer.entity_count, output.footer.path_count
-        ),
+    // Two independent counts, each pluralized in its own locale rules, then
+    // joined by the app's language-neutral separator (same shape as the status
+    // bar's `status_summary`).
+    let entities = crate::i18n::t_plural(
+        "entitytree.entity_count",
+        output.footer.entity_count as i64,
+        &[("n", &output.footer.entity_count.to_string())],
     );
+    let paths = crate::i18n::t_plural(
+        "entitytree.path_count",
+        output.footer.path_count as i64,
+        &[("n", &output.footer.path_count.to_string())],
+    );
+    util::set_text(&footer, &format!("{entities} · {paths}")); // i18n-ignore — slot-only composition; parts localized above
     util::append(container, &footer);
 
     // Single delegated click handler. Distinguishes:
@@ -250,7 +257,10 @@ fn render_document_panel(container: &Element, view: &DocumentView) {
             util::append(&article, &h1);
 
             let p_type = util::create_element_with_class("p", "entity-type");
-            util::set_text(&p_type, &format!("Type: {}", entity_type));
+            util::set_text(
+                &p_type,
+                &crate::i18n::t("entitytree.type_line", &[("type", entity_type)]),
+            );
             util::append(&article, &p_type);
 
             let hr = util::create_element("hr");

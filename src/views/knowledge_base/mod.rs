@@ -69,8 +69,8 @@ impl KnowledgeBaseWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Knowledge Base",
-            description: "Browse, read, and edit knowledge articles",
+            name: "Knowledge Base", // i18n-ignore — identity key; display via window.knowledge_base
+            description: "Browse, read, and edit knowledge articles", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = KnowledgeBaseWindow::new(id, peer_id.to_string());
@@ -105,11 +105,11 @@ impl KnowledgeBaseWindow {
 
 impl WindowView for KnowledgeBaseWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Knowledge Base")
+        crate::i18n::window_title("Knowledge Base") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Knowledge Base"
+        "Knowledge Base" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

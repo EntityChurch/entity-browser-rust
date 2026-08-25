@@ -44,7 +44,7 @@ fn classify_target_access(messages: &[String], target: &str) -> Option<bool> {
         let lower = msg.to_ascii_lowercase();
         if msg.contains("status=403")
             || msg.contains("status=401")
-            || lower.contains("not authorized")
+            || lower.contains("not authorized") // i18n-ignore — log-message match key, not UI text
             || lower.contains("forbidden")
             || lower.contains("unauthorized")
         {
@@ -206,7 +206,10 @@ impl FileTransferModel {
             .iter()
             .map(|p| TargetOption {
                 value: p.remote_pid.clone(),
-                label: format!("Remote: {}", crate::views::display_name(peers, &p.remote_pid)),
+                label: crate::i18n::t(
+                    "label.remote_option",
+                    &[("name", &crate::views::display_name(peers, &p.remote_pid))],
+                ),
                 selected: p.remote_pid == effective_target,
             })
             .collect();

@@ -55,8 +55,8 @@ impl EntityTreeWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Entity Tree",
-            description: "Navigate entity tree, inspect content and metadata",
+            name: "Entity Tree", // i18n-ignore — identity key; display via window.entity_tree
+            description: "Navigate entity tree, inspect content and metadata", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = EntityTreeWindow::new(id, peer_id.to_string());
@@ -83,11 +83,11 @@ impl EntityTreeWindow {
 
 impl WindowView for EntityTreeWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Entity Tree")
+        crate::i18n::window_title("Entity Tree") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Entity Tree"
+        "Entity Tree" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

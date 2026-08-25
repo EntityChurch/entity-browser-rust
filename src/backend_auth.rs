@@ -115,27 +115,25 @@ impl GrantProfile {
         }
     }
 
-    /// Human-legible label for the profile picker.
+    /// Catalog **key** for the profile picker's human-legible label. Returns a
+    /// key, not prose — the caller resolves it with `t()` at render time, the
+    /// same enum-to-catalog shape the Access Log's view/direction enums use.
     pub fn label(&self) -> &'static str {
         match self {
-            GrantProfile::FileTransfer => "File transfer (pull only)",
-            GrantProfile::FileTransferRw => "File transfer (two-way)",
-            GrantProfile::Trusted => "Trusted (full access)",
+            GrantProfile::FileTransfer => "backend_auth.profile_file_transfer",
+            GrantProfile::FileTransferRw => "backend_auth.profile_file_transfer_rw",
+            GrantProfile::Trusted => "backend_auth.profile_trusted",
         }
     }
 
-    /// A plain-English summary of *what* the profile actually permits — the
-    /// legibility answer to "what did I grant this device?". Kept beside the
+    /// Catalog **key** for the summary of *what* the profile actually permits —
+    /// the legibility answer to "what did I grant this device?". Kept beside the
     /// `grants()` definition so the words never drift from the scope they name.
     pub fn scope_summary(&self) -> &'static str {
         match self {
-            GrantProfile::FileTransfer => "Can list and read files in the shared folder.",
-            GrantProfile::FileTransferRw => {
-                "Can list, read, write, and delete files in the shared folder."
-            }
-            GrantProfile::Trusted => {
-                "Full access — every handler, path, and operation on this backend."
-            }
+            GrantProfile::FileTransfer => "backend_auth.scope_file_transfer",
+            GrantProfile::FileTransferRw => "backend_auth.scope_file_transfer_rw",
+            GrantProfile::Trusted => "backend_auth.scope_trusted",
         }
     }
 

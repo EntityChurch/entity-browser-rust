@@ -309,6 +309,10 @@ pub const EN: &[(&str, Message)] = &[
     ("btn.find", Message::Simple("Find")),
     ("btn.count", Message::Simple("Count")),
     ("btn.trace", Message::Simple("Trace")),
+    ("btn.dismiss", Message::Simple("Dismiss")),
+    ("btn.clear", Message::Simple("Clear")),
+    ("btn.expand", Message::Simple("Expand")),
+    ("btn.collapse", Message::Simple("Collapse")),
     // Field/section labels — common nouns shared across windows.
     ("label.status", Message::Simple("Status")),
     ("label.title", Message::Simple("Title")),
@@ -324,6 +328,8 @@ pub const EN: &[(&str, Message)] = &[
     ("label.system", Message::Simple("System")),
     ("label.user", Message::Simple("User")),
     ("label.state_path", Message::Simple("State: {path}")),
+    // Target-selector option shared by File Transfer + Execute Console.
+    ("label.remote_option", Message::Simple("Remote: {name}")),
     // Transient status glyphs.
     ("status.copied", Message::Simple("Copied ✓")),
     ("status.loading", Message::Simple("Loading…")),
@@ -446,6 +452,16 @@ pub const EN: &[(&str, Message)] = &[
     ("filetransfer.results", Message::Simple("Results")),
     ("filetransfer.pull_selected", Message::Simple("\u{2b07} Pull selected file")),
     ("filetransfer.upload_file", Message::Simple("Upload a file")),
+    ("filetransfer.title_files", Message::Simple("Files — {label}")),
+    (
+        "filetransfer.needs_auth",
+        Message::Simple(
+            "The exposing device must authorize this one before transfers succeed.",
+        ),
+    ),
+    ("filetransfer.authorize_device", Message::Simple("Authorize this device")),
+    ("filetransfer.browse_shared", Message::Simple("Browse shared files")),
+    ("filetransfer.share_empty", Message::Simple("This share is empty.")),
     // -- site editor surface --
     ("siteeditor.create_site", Message::Simple("Create site")),
     ("siteeditor.delete_site", Message::Simple("Delete site")),
@@ -459,6 +475,128 @@ pub const EN: &[(&str, Message)] = &[
     (
         "siteeditor.confirm_move_unsaved",
         Message::Simple("This page has unsaved changes that will be lost when it moves. Move anyway?"),
+    ),
+    // site editor — list / create / navigator / editor chrome
+    ("siteeditor.your_sites", Message::Simple("Your sites")),
+    ("siteeditor.new_site", Message::Simple("New site")),
+    (
+        "siteeditor.no_sites",
+        Message::Simple("(none yet — use \u{201c}New site\u{201d} below)"),
+    ),
+    ("siteeditor.renders_ok", Message::Simple("Renders in the browser")),
+    ("siteeditor.wont_render", Message::Simple("Won't render: {reason}")),
+    (
+        "siteeditor.site_id_placeholder",
+        Message::Simple("new site-id (letters, digits, - _)"),
+    ),
+    (
+        "siteeditor.confirm_delete_site",
+        Message::Simple("Delete the entire site '{id}' and all its pages? This cannot be undone."),
+    ),
+    ("siteeditor.pages", Message::Simple("Pages")),
+    ("siteeditor.site_root_row", Message::Simple("\u{1f3e0} / (site root)")),
+    ("siteeditor.no_pages", Message::Simple("(no pages yet — add one below)")),
+    ("siteeditor.site_root", Message::Simple("site root")),
+    (
+        "siteeditor.page_name_placeholder",
+        Message::Simple("page or folder name"),
+    ),
+    ("siteeditor.add_page", Message::Simple("+ Add page")),
+    ("siteeditor.add_folder", Message::Simple("+ Add folder")),
+    ("siteeditor.markdown_label", Message::Simple("Markdown — {page}")),
+    ("siteeditor.unsaved", Message::Simple("\u{25cf} Unsaved changes")),
+    ("siteeditor.hide_preview", Message::Simple("Hide preview")),
+    ("siteeditor.show_preview", Message::Simple("Show preview")),
+    (
+        "siteeditor.confirm_delete_page",
+        Message::Simple("Delete the page '{page}'? This cannot be undone."),
+    ),
+    // site editor — model status notices
+    (
+        "siteeditor.site_exists",
+        Message::Simple("A site '{site_id}' already exists."),
+    ),
+    (
+        "siteeditor.default_page",
+        Message::Simple("# {title}\n\nWelcome to **{title}**.\n"),
+    ),
+    (
+        "siteeditor.site_created",
+        Message::Simple("Created site '{site_id}'."),
+    ),
+    (
+        "siteeditor.folder_note",
+        Message::Simple("Folder '{name}' — add a page here to keep it."),
+    ),
+    (
+        "siteeditor.select_site_page",
+        Message::Simple("Select a site and page first."),
+    ),
+    ("siteeditor.page_saved", Message::Simple("Saved '{page}'.")),
+    ("siteeditor.select_site", Message::Simple("Select a site first.")),
+    (
+        "siteeditor.page_exists",
+        Message::Simple("A page '{slug}' already exists."),
+    ),
+    ("siteeditor.page_added", Message::Simple("Added page '{slug}'.")),
+    ("siteeditor.page_deleted", Message::Simple("Deleted page '{slug}'.")),
+    (
+        "siteeditor.site_deleted",
+        Message::Simple("Deleted site '{site_id}'."),
+    ),
+    (
+        "siteeditor.same_path",
+        Message::Simple("New path is the same as the current one."),
+    ),
+    (
+        "siteeditor.no_page_to_move",
+        Message::Simple("No page '{from}' to move."),
+    ),
+    (
+        "siteeditor.page_moved",
+        Message::Simple("Moved '{from}' → '{to}'."),
+    ),
+    // site editor — validation errors
+    ("siteeditor.err_enter_site_id", Message::Simple("Enter a site id.")),
+    (
+        "siteeditor.err_site_id_long",
+        Message::Simple("Site id is too long (max {max})."),
+    ),
+    (
+        "siteeditor.err_site_id_chars",
+        Message::Simple("Site id may use only letters, digits, '-' and '_'."),
+    ),
+    (
+        "siteeditor.err_enter_page_name",
+        Message::Simple("Enter a page name."),
+    ),
+    (
+        "siteeditor.err_page_slashes",
+        Message::Simple("Page name must not start or end with '/'."),
+    ),
+    (
+        "siteeditor.err_page_empty_seg",
+        Message::Simple("Page name has an empty path segment ('//')."),
+    ),
+    (
+        "siteeditor.err_page_dots",
+        Message::Simple("Page name must not contain '.' or '..' segments."),
+    ),
+    (
+        "siteeditor.err_page_seg_long",
+        Message::Simple("A page-name segment is too long (max {max})."),
+    ),
+    (
+        "siteeditor.err_page_chars",
+        Message::Simple("Page name may use only letters, digits, '-', '_' and '/'."),
+    ),
+    (
+        "siteeditor.no_manifest",
+        Message::Simple("no manifest for this site"),
+    ),
+    (
+        "siteeditor.no_root_page",
+        Message::Simple("no '{root}' page — create it to make the site render"),
     ),
     // -- entity tree surface --
     ("entitytree.source_none", Message::Simple("None (manual)")),
@@ -476,6 +614,73 @@ pub const EN: &[(&str, Message)] = &[
     ("entitytree.none_selected", Message::Simple("No entity selected")),
     ("entitytree.raw_hash", Message::Simple("Raw Hash")),
     ("entitytree.no_entity_at", Message::Simple("No entity at: {path}")),
+    ("entitytree.type_line", Message::Simple("Type: {type}")),
+    // -- developer tools: the field labels / hints that are real UI, as
+    //    distinct from the command output around them (DESIGN-I18N-L10N §6) --
+    ("queryconsole.type_filter", Message::Simple("Type Filter:")),
+    (
+        "queryconsole.type_filter_hint",
+        Message::Simple("Exact type, glob (app/*), or * for all"),
+    ),
+    ("queryconsole.path_prefix", Message::Simple("Path Prefix:")),
+    (
+        "queryconsole.path_prefix_hint",
+        Message::Simple("Filter results by path prefix (optional)"),
+    ),
+    ("queryconsole.ref_filter", Message::Simple("Ref Filter (hash):")),
+    (
+        "queryconsole.ref_filter_hint",
+        Message::Simple("Find entities referencing a content hash (hex, optional)"),
+    ),
+    ("queryconsole.path_filter", Message::Simple("Path Filter:")),
+    (
+        "queryconsole.path_filter_hint",
+        Message::Simple("Find entities linking to this path (optional)"),
+    ),
+    ("queryconsole.limit", Message::Simple("Limit:")),
+    (
+        "queryconsole.include_entities",
+        // Leading space is intentional: it separates the label from its checkbox.
+        Message::Simple(" Include full entities in results"),
+    ),
+    ("queryconsole.no_results", Message::Simple("(no results yet — run a query)")),
+    (
+        "chaintrace.hint",
+        Message::Simple("Enter the chain_id to walk continuation + chain-error markers on this peer."),
+    ),
+    (
+        "pathtap.hint",
+        Message::Simple("Live dispatch facts from this peer (newest first; ring buffer)."),
+    ),
+    // Inspector field labels.
+    ("entitytree.field_path", Message::Simple("Path")),
+    ("entitytree.field_type", Message::Simple("Type")),
+    ("entitytree.field_hash", Message::Simple("Hash")),
+    ("entitytree.field_data_size", Message::Simple("Data size")),
+    ("entitytree.field_algorithm", Message::Simple("Algorithm")),
+    // Footer counts + the inspector's data-size value. Three cardinal plurals;
+    // the footer joins its two with the app's neutral separator.
+    (
+        "entitytree.entity_count",
+        Message::Plural(&[
+            (PluralCategory::One, "{n} entity"),
+            (PluralCategory::Other, "{n} entities"),
+        ]),
+    ),
+    (
+        "entitytree.path_count",
+        Message::Plural(&[
+            (PluralCategory::One, "{n} path"),
+            (PluralCategory::Other, "{n} paths"),
+        ]),
+    ),
+    (
+        "entitytree.bytes",
+        Message::Plural(&[
+            (PluralCategory::One, "{n} byte"),
+            (PluralCategory::Other, "{n} bytes"),
+        ]),
+    ),
     // -- system peers surface --
     ("syspeers.system_peer", Message::Simple("System peer")),
     ("syspeers.system_backend", Message::Simple("System backend")),
@@ -525,6 +730,22 @@ pub const EN: &[(&str, Message)] = &[
     ("kb.new_article", Message::Simple("+ New article")),
     ("kb.back_to_list", Message::Simple("← Back to list")),
     ("kb.body_placeholder", Message::Simple("Markdown body")),
+    ("kb.heading_new", Message::Simple("New Article")),
+    ("kb.heading_edit", Message::Simple("Edit Article")),
+    (
+        "kb.empty_on_peer",
+        // {button} is the "+ New article" control's own label, passed in by the
+        // caller so the sentence can never drift from the button it names.
+        Message::Simple("No articles yet on peer {peer}. Click \"{button}\" to create one."),
+    ),
+    ("kb.article_gone", Message::Simple("The selected article is no longer available.")),
+    ("kb.err_title_empty", Message::Simple("Title cannot be empty")),
+    (
+        "kb.err_title_alnum",
+        Message::Simple("Title must contain at least one alphanumeric character"),
+    ),
+    ("kb.err_no_selection", Message::Simple("No article selected to edit")),
+    ("kb.err_not_editable", Message::Simple("Not in editable mode")),
     // -- settings surface (the P1 demonstrators — wired through t()) --
     ("settings.appearance", Message::Simple("Appearance")),
     ("settings.theme", Message::Simple("Theme")),
@@ -573,6 +794,45 @@ pub const EN: &[(&str, Message)] = &[
     ("theme.new_from", Message::Simple("New theme from")),
     ("theme.scheme_dark", Message::Simple("Dark")),
     ("theme.scheme_light", Message::Simple("Light")),
+    // theme editor card
+    (
+        "theme.no_theme",
+        Message::Simple("No theme loaded — duplicate one above to start."),
+    ),
+    ("theme.edit_title", Message::Simple("Edit \"{label}\"")),
+    (
+        "theme.preview_hint",
+        Message::Simple("Edits preview live across the whole app. Save keeps them; Revert restores the real theme."),
+    ),
+    ("theme.scheme", Message::Simple("Scheme")),
+    (
+        "theme.scheme_hint",
+        Message::Simple("Not a color: browsers render native widgets (dropdown popups, scrollbars, carets) in one of exactly two modes, dark or light — pick the one your palette sits closest to so those widgets match."),
+    ),
+    ("theme.col_token", Message::Simple("Token")),
+    ("theme.col_value", Message::Simple("Value")),
+    (
+        "theme.in_use",
+        Message::Simple("This theme is in use (chrome theme or site override) — switch first to delete."),
+    ),
+    // token group section titles (section_for)
+    ("theme.section_fonts", Message::Simple("Fonts")),
+    ("theme.section_status", Message::Simple("Status")),
+    ("theme.section_peer_badges", Message::Simple("Peer badges")),
+    ("theme.section_app_cards", Message::Simple("App cards")),
+    ("theme.section_accents", Message::Simple("Accents")),
+    ("theme.section_borders", Message::Simple("Borders")),
+    ("theme.section_text", Message::Simple("Text")),
+    ("theme.section_surfaces", Message::Simple("Surfaces")),
+    // status-line outcomes
+    ("theme.status_created", Message::Simple("Created \"{name}\"")),
+    ("theme.status_saved", Message::Simple("Saved \"{name}\"")),
+    ("theme.status_reverted", Message::Simple("Reverted")),
+    ("theme.status_deleted", Message::Simple("Deleted \"{name}\"")),
+    (
+        "theme.status_unknown_base",
+        Message::Simple("Unknown base theme \"{base}\""),
+    ),
     (
         "settings.language.hint",
         Message::Simple("Sets the interface language and layout direction."),
@@ -617,12 +877,81 @@ pub const EN: &[(&str, Message)] = &[
     ("window.system_overview", Message::Simple("System Overview")),
     ("window.access_log", Message::Simple("Access Log")),
     ("window.theme_editor", Message::Simple("Theme Editor")),
+    // -- backend authorization profiles (GrantProfile::label / scope_summary
+    //    return these keys; callers resolve them) --
+    ("backend_auth.profile_file_transfer", Message::Simple("File transfer (pull only)")),
+    ("backend_auth.profile_file_transfer_rw", Message::Simple("File transfer (two-way)")),
+    ("backend_auth.profile_trusted", Message::Simple("Trusted (full access)")),
+    (
+        "backend_auth.scope_file_transfer",
+        Message::Simple("Can list and read files in the shared folder."),
+    ),
+    (
+        "backend_auth.scope_file_transfer_rw",
+        Message::Simple("Can list, read, write, and delete files in the shared folder."),
+    ),
+    (
+        "backend_auth.scope_trusted",
+        Message::Simple("Full access — every handler, path, and operation on this backend."),
+    ),
+    // -- embedded-app launchers (Games / Apps) --
+    ("games.empty", Message::Simple("No games available yet.")),
+    ("apps.empty", Message::Simple("No apps available yet.")),
     // -- site directory rail --
     ("sitedir.sites_menu", Message::Simple("Sites \u{25be}")),
     ("sitedir.sites", Message::Simple("Sites")),
+    ("sitedir.filter_mine", Message::Simple("My")),
+    ("sitedir.filter_all", Message::Simple("All")),
+    ("sitedir.filter_external", Message::Simple("External")),
+    ("sitedir.empty_all", Message::Simple("No sites yet.")),
+    ("sitedir.empty_mine", Message::Simple("No sites you own.")),
+    ("sitedir.empty_external", Message::Simple("No external sites cached.")),
+    ("sitedir.bookmark_add", Message::Simple("Bookmark this site")),
+    ("sitedir.bookmark_remove", Message::Simple("Remove bookmark")),
+    (
+        "sitedir.keep_full",
+        Message::Simple("Kept offline (full cache) — click to make manifest-pinned"),
+    ),
+    (
+        "sitedir.keep_pinned",
+        Message::Simple("Manifest-pinned — click to keep the full site offline"),
+    ),
+    // Row subline — provenance of a listed site (lowercase by design: it is a
+    // compact metadata line, not a sentence).
+    ("sitedir.sub_owned", Message::Simple("owned")),
+    ("sitedir.sub_cached", Message::Simple("cached")),
+    ("sitedir.sub_cached_from", Message::Simple("cached · {host}")),
     // -- content-site surface --
     ("contentsite.enter_peer", Message::Simple("Enter Peer")),
     ("contentsite.contents_menu", Message::Simple("Contents \u{25be}")),
+    ("contentsite.share_link", Message::Simple("Share link \u{1f517}")),
+    (
+        "contentsite.share_link_hint",
+        Message::Simple("Copy a link that re-opens this page in the live entity browser"),
+    ),
+    // Resolve states. The leading/trailing `_` are markdown emphasis — these
+    // strings are rendered through the site's markdown pipeline, so keep them.
+    ("contentsite.loading_page", Message::Simple("_Loading the live page…_")),
+    (
+        "contentsite.err_no_manifest",
+        Message::Simple("No site manifest at '{site}' (peer: {peer})."),
+    ),
+    (
+        "contentsite.err_page_not_found",
+        Message::Simple("Page '{page}' not found in site '{site}'."),
+    ),
+    (
+        "contentsite.err_unreachable",
+        Message::Simple("Couldn't reach peer '{peer}' — no route is registered for it."),
+    ),
+    (
+        "contentsite.offline_page_missing",
+        Message::Simple("_This page isn't kept for offline viewing — reconnect to load it._"),
+    ),
+    (
+        "contentsite.offline_source_unreachable",
+        Message::Simple("_This site's source is unreachable. Showing its cached outline._"),
+    ),
     // -- storage surface --
     (
         "storage.origin_disk",
@@ -639,36 +968,6 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Peer not created — {reason}"),
     ),
     ("storage.refresh", Message::Simple("Refresh disk usage")),
-    // -- Programs window (compute-program host) --
-    ("window.programs", Message::Simple("Programs")),
-    (
-        "programs.subtitle",
-        Message::Simple(
-            "Transferable compute programs — authored once (workbench-go), \
-             mounted from their descriptors, evaluated by this peer's compute engine.",
-        ),
-    ),
-    ("programs.install", Message::Simple("Install")),
-    ("programs.start", Message::Simple("Start")),
-    ("programs.stop", Message::Simple("Stop")),
-    ("programs.restart", Message::Simple("Restart")),
-    ("programs.status_absent", Message::Simple("not installed")),
-    ("programs.status_refused", Message::Simple("cannot mount")),
-    (
-        "programs.status_materializing",
-        Message::Simple("installing {done}/{total}…"),
-    ),
-    ("programs.status_stopped", Message::Simple("stopped")),
-    ("programs.status_running", Message::Simple("running")),
-    ("programs.status_faulted", Message::Simple("faulted")),
-    (
-        "programs.status_line",
-        Message::Simple("{status} · tick {ticks} · {rate}/s"),
-    ),
-    (
-        "programs.display_waiting",
-        Message::Simple("waiting for the first frame"),
-    ),
     ("storage.no_peers", Message::Simple("(no hosted peers)")),
     ("storage.used_quota", Message::Simple("Used / quota")),
     ("storage.persisted", Message::Simple("Persisted")),

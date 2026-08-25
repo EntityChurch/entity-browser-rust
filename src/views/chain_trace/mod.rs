@@ -47,8 +47,8 @@ impl ChainTraceWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Chain Trace",
-            description: "Inspect: walk a continuation chain by chain_id",
+            name: "Chain Trace", // i18n-ignore — identity key; display via window.chain_trace
+            description: "Inspect: walk a continuation chain by chain_id", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = ChainTraceWindow::new(id, peer_id.to_string());
@@ -96,11 +96,11 @@ impl ChainTraceWindow {
 
 impl WindowView for ChainTraceWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Chain Trace")
+        crate::i18n::window_title("Chain Trace") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Chain Trace"
+        "Chain Trace" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

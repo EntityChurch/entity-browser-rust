@@ -35,8 +35,8 @@ impl ShellWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Shell",
-            description: "Entity shell — verbs, paths, exec",
+            name: "Shell", // i18n-ignore — identity key; display via window.shell
+            description: "Entity shell — verbs, paths, exec", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = ShellWindow::new(id, peer_id.to_string());
@@ -101,7 +101,7 @@ impl ShellWindow {
                         ScrollbackEntry::ErrorText(format!("- {}", path))
                     }
                     crate::peers::ChangeOp::Resync => {
-                        ScrollbackEntry::Info("(tail resync — events dropped)".into())
+                        ScrollbackEntry::Info("(tail resync — events dropped)".into()) // i18n-ignore — shell console output (§6)
                     }
                 };
                 scrollback.lock().unwrap().push(entry);
@@ -112,11 +112,11 @@ impl ShellWindow {
 
 impl WindowView for ShellWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Shell")
+        crate::i18n::window_title("Shell") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Shell"
+        "Shell" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

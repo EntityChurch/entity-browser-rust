@@ -91,7 +91,10 @@ impl ShellState {
             history: Vec::new(),
             history_cursor: None,
             scrollback: vec![Arc::new(ScrollbackEntry::Info(
-                "entity-shell — type `help` for a list of verbs.".into(),
+                // Shell console output stays English (§6): the verbs it names
+                // are English identifiers, so a translated banner would name
+                // commands that do not exist in the translated form.
+                "entity-shell — type `help` for a list of verbs.".into(), // i18n-ignore
             ))],
             draft: String::new(),
             saved_draft: None,
@@ -235,20 +238,20 @@ fn all_verbs() -> Vec<&'static str> {
 /// from the model), so we mirror it here. New windows should be
 /// added in both places — caught by the e2e if missed.
 pub const WINDOW_TYPES: &[&str] = &[
-    "Shell",
-    "Entity Tree",
-    "Settings",
-    "Event Log",
-    "Key Manager",
-    "Knowledge Base",
-    "Peer Connections",
-    "Execute Console",
-    "Query Console",
-    "Peers",
-    "Chain Trace",
-    "Path Tap",
-    "Wire Recorder",
-    "Content Stream",
+    "Shell", // i18n-ignore — identity key; mirrors WindowType.name
+    "Entity Tree", // i18n-ignore — identity key; mirrors WindowType.name
+    "Settings", // i18n-ignore — identity key; mirrors WindowType.name
+    "Event Log", // i18n-ignore — identity key; mirrors WindowType.name
+    "Key Manager", // i18n-ignore — identity key; mirrors WindowType.name
+    "Knowledge Base", // i18n-ignore — identity key; mirrors WindowType.name
+    "Peer Connections", // i18n-ignore — identity key; mirrors WindowType.name
+    "Execute Console", // i18n-ignore — identity key; mirrors WindowType.name
+    "Query Console", // i18n-ignore — identity key; mirrors WindowType.name
+    "Peers", // i18n-ignore — identity key; mirrors WindowType.name
+    "Chain Trace", // i18n-ignore — identity key; mirrors WindowType.name
+    "Path Tap", // i18n-ignore — identity key; mirrors WindowType.name
+    "Wire Recorder", // i18n-ignore — identity key; mirrors WindowType.name
+    "Content Stream", // i18n-ignore — identity key; mirrors WindowType.name
 ];
 
 /// Resolve a user-supplied window name to one of the canonical

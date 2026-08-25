@@ -25,7 +25,7 @@ pub fn render(container: &Element, output: &EventLogOutput, ctx: &DomCtx) {
 
     let clear_btn = crate::dom::components::button_action(
         ctx,
-        "Clear",
+        &crate::i18n::t("btn.clear", &[]),
         crate::dom::components::ButtonKind::Small,
         Action::ClearEventLog,
     );

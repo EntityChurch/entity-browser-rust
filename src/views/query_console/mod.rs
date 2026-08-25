@@ -34,8 +34,8 @@ impl QueryConsoleWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Query Console",
-            description: "Find and count entities by type, path, and reference filters",
+            name: "Query Console", // i18n-ignore — identity key; display via window.query_console
+            description: "Find and count entities by type, path, and reference filters", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = QueryConsoleWindow::new(id, peer_id.to_string());
@@ -66,11 +66,11 @@ impl QueryConsoleWindow {
 
 impl WindowView for QueryConsoleWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Query Console")
+        crate::i18n::window_title("Query Console") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Query Console"
+        "Query Console" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

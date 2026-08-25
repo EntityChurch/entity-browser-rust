@@ -422,7 +422,7 @@ impl EntityTreeModel {
         let sel = Selection::from_entity(&entity);
         // Run-time selector-type filter ("Lego slot").
         let ty = sel.type_.as_deref().unwrap_or("");
-        if !selection_contract("Entity Tree").accepts(ty) {
+        if !selection_contract("Entity Tree").accepts(ty) { // i18n-ignore — identity key; contract-registry lookup
             return;
         }
         // Peer-scope v1: only co-orient to selections whose pointee
@@ -777,11 +777,18 @@ fn build_inspector_view(current_path: Option<&str>, entity: Option<&Entity>) -> 
         n => format!("Unknown (0x{:02x})", n),
     };
     let fields = vec![
-        ("Path".into(), path.to_string()),
-        ("Type".into(), entity.entity_type.clone()),
-        ("Hash".into(), entity.content_hash.to_string()),
-        ("Data size".into(), format!("{} bytes", entity.data.len())),
-        ("Algorithm".into(), algorithm_label),
+        (crate::i18n::t("entitytree.field_path", &[]), path.to_string()),
+        (crate::i18n::t("entitytree.field_type", &[]), entity.entity_type.clone()),
+        (crate::i18n::t("entitytree.field_hash", &[]), entity.content_hash.to_string()),
+        (
+            crate::i18n::t("entitytree.field_data_size", &[]),
+            crate::i18n::t_plural(
+                "entitytree.bytes",
+                entity.data.len() as i64,
+                &[("n", &entity.data.len().to_string())],
+            ),
+        ),
+        (crate::i18n::t("entitytree.field_algorithm", &[]), algorithm_label),
     ];
     let raw_hash_hex: String = entity
         .content_hash

@@ -38,10 +38,7 @@ fn render_input_row(parent: &Element, output: &ChainTraceOutput, ctx: &DomCtx) {
 
     let hint = util::create_element("div");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &hint,
-        "Enter the chain_id to walk continuation + chain-error markers on this peer.",
-    );
+    util::set_text(&hint, &crate::i18n::t("chaintrace.hint", &[]));
     util::append(parent, &hint);
 
     let field_id = format!("chain_trace_chain_id_{}", output.window_id);

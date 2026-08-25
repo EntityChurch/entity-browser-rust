@@ -196,14 +196,14 @@ impl PeerDescriptor {
             (PeerRole::User, PeerRuntime::Native) => "native",
             (PeerRole::User, PeerRuntime::MainThread) => {
                 if self.storage == PeerStorage::IndexedDb {
-                    "main thread (IndexedDB)"
+                    "main thread (IndexedDB)" // i18n-ignore — registry `role` data field + technical tokens; user-facing twin is peers.kind_label.*
                 } else {
                     "main thread"
                 }
             }
             (PeerRole::User, PeerRuntime::Worker) => {
                 if self.storage == PeerStorage::Opfs {
-                    "worker (OPFS)"
+                    "worker (OPFS)" // i18n-ignore — registry `role` data field + technical tokens; user-facing twin is peers.kind_label.*
                 } else {
                     "worker"
                 }

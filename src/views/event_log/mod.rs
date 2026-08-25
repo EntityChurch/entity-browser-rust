@@ -31,8 +31,8 @@ impl EventLogWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Event Log",
-            description: "Connection events, execute results, and errors",
+            name: "Event Log", // i18n-ignore — identity key; display via window.event_log
+            description: "Connection events, execute results, and errors", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |_id, _peer_id, pm| {
                 let mut window = EventLogWindow::new();
@@ -62,11 +62,11 @@ impl Default for EventLogWindow {
 
 impl WindowView for EventLogWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Event Log")
+        crate::i18n::window_title("Event Log") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Event Log"
+        "Event Log" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn watch(&self) -> &WindowWatch {

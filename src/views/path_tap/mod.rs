@@ -46,8 +46,8 @@ impl PathTapWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Path Tap",
-            description: "Inspect: live dispatch-event stream for the bound peer",
+            name: "Path Tap", // i18n-ignore — identity key; display via window.path_tap
+            description: "Inspect: live dispatch-event stream for the bound peer", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {
                 let mut window = PathTapWindow::new(id, peer_id.to_string());
@@ -84,11 +84,11 @@ impl PathTapWindow {
 
 impl WindowView for PathTapWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Path Tap")
+        crate::i18n::window_title("Path Tap") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Path Tap"
+        "Path Tap" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {
