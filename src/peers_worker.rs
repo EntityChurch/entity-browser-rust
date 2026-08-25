@@ -394,6 +394,28 @@ impl WorkerPeerStore {
     /// so palette / peer-selector reads pick it up immediately.
     /// Returns `(peer_id, keypair_seed, metadata)` so the caller can
     /// persist the seed (localStorage) — the host does NOT retain it.
+    ///
+    /// Protocol-version ladder (this repo's fail-fast map; entry accepted from
+    /// entity-core-rust's provisioning-payload co-design):
+    ///
+    /// > **v11:** `InitParams.webrtc: Option<WireWebRtcConfig>` and per-peer
+    /// > `webrtc_enabled: bool`. Provisions the §6.5 WebRTC establisher at the
+    /// > §10.3 seam: signaling-node target, ICE servers, negotiation tunables.
+    /// > Absent = unchanged v10 behaviour (no establisher installed). Enable is
+    /// > per-peer and defaults to false — never inferred from config presence,
+    /// > per the v6 lesson. v10 proxies fail fast via the `PROTOCOL_VERSION`
+    /// > handshake.
+    /// >
+    /// > **v12:** the install is *reported back*, per peer — `WireCaps.webrtc_peers`
+    /// > on `Response::Ready` (surfaced via `WorkerProxy::capabilities()`) and
+    /// > `CreatePeerOk.webrtc_enabled` here. A list/flag *derived from the install
+    /// > sites*, not recomputed from the request, so the report can be diffed
+    /// > against what was asked and cannot agree by construction. The consumer
+    /// > checks it (D13): an enabled peer absent from the report got no establisher.
+    ///
+    /// A peer created here passes `webrtc_enabled: false`: opting a
+    /// runtime-created peer into the mesh is a later, explicit UI decision, and
+    /// the wire ladder forbids inferring it from the capability being present.
     pub fn create_peer(
         &self,
         label: Option<String>,
@@ -403,9 +425,18 @@ impl WorkerPeerStore {
         let peers_mirror = self.peers.clone();
         async move {
             let ok = proxy
-                .create_peer(label.clone())
+                .create_peer(label.clone(), false)
                 .await
                 .map_err(|e| format!("proxy.create_peer: {e:?}"))?;
+            // v12: we requested `false`, so the per-peer install report must be
+            // false. A `true` here would mean the worker installed an establisher
+            // we never asked for — surface it (D13) rather than swallow it.
+            if ok.webrtc_active {
+                tracing::warn!(
+                    peer = %ok.peer_id,
+                    "webrtc: create_peer reported an establisher we did not request"
+                );
+            }
             let seed: [u8; 32] = ok.keypair_seed.as_slice().try_into().map_err(|_| {
                 format!(
                     "proxy.create_peer: keypair_seed length {} != 32",

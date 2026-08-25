@@ -323,6 +323,17 @@ build: wasm
 wasm-release: image
 	$(call RUN,trunk build --release --dist $(DIST) && ./tools/check-dist.sh $(DIST))
 
+# Execute the upstream wasm-worker-protocol crate's `#[wasm_bindgen_test]`
+# suites (v11_wire_shape, …). That crate is `#![cfg(target_arch = "wasm32")]`,
+# so `make test` cannot see these — they need a wasm runner. Charter bars Node
+# from the build toolchain, but an EPHEMERAL container may pull one purely to
+# run a test: this fetches node 22 (18 is too old for wasm-bindgen's GC glue —
+# see the script) + the version-matched runner, writes only to /tmp. Needs
+# network. Not part of the `make lint`/`make test` gate; run it when the wire
+# shape changes. Verified 2026-08-03: v11_wire_shape 8/8 green.
+wasm-test-protocol: image
+	$(call RUN,sh tools/e2e/run-protocol-wasm-tests.sh)
+
 # Deploy-staleness guard: verify dist/ is internally consistent (index.html
 # references only bundles that exist + are non-empty). Catches the class
 # `make e2e-worker` can't — see the SW-cache-and-durability review.
@@ -749,4 +760,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: program-fixtures native test lint wasm wasm-release wasm-measurement e2e-worker e2e-phases tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

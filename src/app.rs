@@ -332,6 +332,89 @@ fn partition_entries(
     (frontend, frontend_idb, backend)
 }
 
+/// Convert the app-side native [`WebRtcProvisioning`] shadow to the worker
+/// protocol's wasm-only `WireWebRtcConfig` at the `InitParams` boundary (v11).
+/// The native type is testable; this thin, branch-free mapping is the only
+/// place the wire type is named on the app side.
+///
+/// [`WebRtcProvisioning`]: crate::session_config::WebRtcProvisioning
+#[cfg(target_arch = "wasm32")]
+fn provisioning_to_wire(
+    p: &crate::session_config::WebRtcProvisioning,
+) -> entity_wasm_worker_protocol::WireWebRtcConfig {
+    use entity_wasm_worker_protocol::{WireIceServer, WireWebRtcConfig};
+    WireWebRtcConfig {
+        node_peer_id: p.node_peer_id.clone(),
+        node_addr: p.node_addr.clone(),
+        ice_servers: p
+            .ice_servers
+            .iter()
+            .map(|s| WireIceServer {
+                urls: s.urls.clone(),
+                username: s.username.clone(),
+                credential: s.credential.clone(),
+            })
+            .collect(),
+        poll_interval_ms: p.poll_interval_ms,
+        max_deadline_ms: p.max_deadline_ms,
+    }
+}
+
+/// The build-time WebRTC establisher config (the *capability*), as the wasm
+/// wire type, or `None` on a default build (v10). Shared by both worker-spawn
+/// sites so provisioning is sourced identically. Logs when present — the only
+/// D13 surface for "we asked for WebRTC" (whether it actually installed is the
+/// worker's `Response::Ready.actual_capabilities`, a proxy-tier follow-up).
+/// The raw `location.search` (`"?a=1&b=2"`), or `""`. The pre-spawn-readable
+/// dev/showcase provisioning channel (the e2e's dynamic signaling-node address
+/// arrives here — the compile-time knob can't carry a per-test port).
+#[cfg(target_arch = "wasm32")]
+fn webrtc_url_query() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn webrtc_init_config() -> Option<entity_wasm_worker_protocol::WireWebRtcConfig> {
+    // Precedence: URL param (dev/showcase, dynamic, never persisted) OVER the
+    // build knob (deployment default) — the `deployment_config.rs` ordering.
+    let p = crate::session_config::webrtc_provisioning_from_query(&webrtc_url_query())
+        .or_else(crate::session_config::webrtc_provisioning_default)?;
+    tracing::info!(
+        node_peer_id = %p.node_peer_id,
+        node_addr = %p.node_addr,
+        ice_servers = p.ice_servers.len(),
+        "webrtc: provisioning §6.5 establisher capability on this worker"
+    );
+    Some(provisioning_to_wire(&p))
+}
+
+/// Guard a per-peer `webrtc_enabled` against the provisioned capability.
+/// Enabling with no `InitParams.webrtc` present is a misconfiguration the
+/// worker-host **rejects** (co-design ruling: `create_peer(webrtc_enabled=true)`
+/// "requires the Worker to have been initialized with `InitParams.webrtc`") — so
+/// a lone enable knob would turn a trivial deployment typo into a failed worker
+/// Init and a degraded boot. Fail **closed** (disabled) and say so **loudly**
+/// (D3/D13) instead. `capability` is the same `webrtc_init_config()` the
+/// InitParams carries.
+#[cfg(target_arch = "wasm32")]
+fn webrtc_enable_guarded(
+    requested: bool,
+    capability: &Option<entity_wasm_worker_protocol::WireWebRtcConfig>,
+    context: &str,
+) -> bool {
+    if requested && capability.is_none() {
+        tracing::warn!(
+            context,
+            "webrtc: enable requested but no establisher capability is provisioned \
+             (no ENTITY_WEBRTC_NODE_* on this build) — disabling, fail closed"
+        );
+        return false;
+    }
+    requested
+}
+
 /// Free-function spawn dispatcher used by both fresh-create and reload
 /// flows, in either the pre-`EntityApp`-construction context (boot path)
 /// or the post-construction context (user clicks `+ Backend ...`).
@@ -339,6 +422,11 @@ fn partition_entries(
 /// `event_log` is optional because during boot the `EventLogWriter`
 /// doesn't exist yet — failures during pre-boot respawn just trace and
 /// the user sees a missing SDK rather than a tree-logged error.
+///
+/// `webrtc_enabled` is the explicit per-peer §6.5 opt-in (v11) — defaults to
+/// `false` at the callers (backend/hosted peers do not join the WebRTC mesh
+/// unless a deployment says so); the *capability* comes from
+/// [`webrtc_init_config`] deployment-wide.
 #[cfg(target_arch = "wasm32")]
 fn spawn_worker_sdk_for_peer_into(
     pending: std::rc::Rc<std::cell::RefCell<Vec<PendingSdkAttachment>>>,
@@ -347,6 +435,7 @@ fn spawn_worker_sdk_for_peer_into(
     keypair_seed: Vec<u8>,
     label: Option<String>,
     mode: crate::peer_mode::PeerMode,
+    webrtc_enabled: bool,
 ) {
     use entity_wasm_worker_protocol::{InitParams, PersistedPeer as WirePersistedPeer};
 
@@ -360,15 +449,22 @@ fn spawn_worker_sdk_for_peer_into(
         None
     };
 
+    // v11: the WebRTC establisher *capability* — deployment-wide, from the build
+    // knob; `None` on a default build (v10). The per-peer enable (the *decision*)
+    // is guarded against it — enabling with no capability fails closed, loudly.
+    let webrtc = webrtc_init_config();
+    let webrtc_enabled = webrtc_enable_guarded(webrtc_enabled, &webrtc, "additional-peer");
     let init = InitParams {
         primary_peer: WirePersistedPeer {
             peer_id: peer_id.clone(),
             keypair_seed,
             label: label.clone(),
+            webrtc_enabled,
         },
         additional_peers: vec![],
         handlers: vec![],
         opfs_root,
+        webrtc,
     };
 
     let peer_mirror = vec![crate::peers_worker::PeerInfo {
@@ -493,6 +589,8 @@ fn respawn_persisted_backend_peer_into(
         seed,
         entry.persisted.label,
         entry.mode,
+        // v11: a respawned backend peer does not opt into WebRTC (explicit).
+        false,
     );
 }
 
@@ -854,11 +952,26 @@ impl EntityApp {
             });
         }
 
-        let to_wire = |p: entity_sdk::PersistedPeer| WirePersistedPeer {
+        let to_wire = |p: entity_sdk::PersistedPeer, webrtc_enabled: bool| WirePersistedPeer {
             peer_id: p.keypair.peer_id().to_string(),
             keypair_seed: p.keypair.secret_key_bytes().to_vec(),
             label: p.label,
+            // v11: the explicit per-peer §6.5 opt-in (the *decision*).
+            webrtc_enabled,
         };
+        // The WebRTC establisher *capability* — deployment-wide, from the build
+        // knob; shared by every peer this worker hosts.
+        let webrtc = webrtc_init_config();
+        // Only the PRIMARY peer honors the enable decision — a returning backend
+        // peer must not silently acquire an establisher it never asked for (the
+        // v6 lesson). URL `?webrtc_enable` (dev/showcase) over the build knob,
+        // same precedence as the capability; then guarded against the capability
+        // so a lone enable fails closed loudly rather than failing Init.
+        let primary_enable_requested = crate::session_config::webrtc_enable_from_query(
+            &webrtc_url_query(),
+        )
+        .unwrap_or_else(crate::session_config::webrtc_enable_primary_default);
+        let primary_webrtc_enabled = webrtc_enable_guarded(primary_enable_requested, &webrtc, "primary");
 
         // PROTOCOL_VERSION=7: `opfs_root: Option<String>`
         // replaced `enable_opfs: bool`. The boot worker hosts the
@@ -869,10 +982,15 @@ impl EntityApp {
         // chosen on a per-worker basis, not per-peer, because all peers
         // hosted by one worker share that worker's SDK + store.
         let init = InitParams {
-            primary_peer: to_wire(primary),
-            additional_peers: persisted.into_iter().map(to_wire).collect(),
+            primary_peer: to_wire(primary, primary_webrtc_enabled),
+            // Restored peers: explicit `false` — enable is never inherited.
+            additional_peers: persisted.into_iter().map(|p| to_wire(p, false)).collect(),
             handlers: vec![],
             opfs_root: Some(format!("workers/{}", primary_peer_id)),
+            // v11: the establisher capability hoisted above (a single
+            // `webrtc_init_config()` — reused here so it logs once). `None` on a
+            // default build (v10); enable is the separate per-peer decision.
+            webrtc,
         };
 
         tracing::info!("worker bootstrap: spawning entity-worker-loader.js");
@@ -912,6 +1030,30 @@ impl EntityApp {
             spawn_ms = ?spawn_ms,
             "worker bootstrap: Ready handshake complete"
         );
+
+        // v12 (Ask 2): the establisher-install report, diffed against what we
+        // enabled. The primary is the only peer this worker can enable via the
+        // build knob; a primary we flagged but the worker's report omits got NO
+        // establisher. The host refuses Init rather than install nothing, so this
+        // shortfall is always empty today — checking keeps it a *verified*
+        // property, not a remembered one (D13). Never silent either way.
+        if primary_webrtc_enabled {
+            let installed = proxy.capabilities().map(|c| c.webrtc_peers).unwrap_or_default();
+            let missing = crate::session_config::webrtc_install_shortfall(
+                std::slice::from_ref(&primary_peer_id),
+                &installed,
+            );
+            if missing.is_empty() {
+                tracing::info!(peer = %primary_peer_id, "webrtc: §6.5 establisher confirmed on the primary");
+            } else {
+                tracing::error!(
+                    ?missing,
+                    ?installed,
+                    "webrtc: the primary was enabled but the worker installed NO establisher \
+                     (install shortfall — D13)"
+                );
+            }
+        }
 
         let store = crate::peers_worker::WorkerPeerStore::new(proxy, primary_peer_id, peer_mirror);
         let peers = Peers::new_worker(store);
@@ -3680,6 +3822,9 @@ impl EntityApp {
             keypair.secret_key_bytes().to_vec(),
             label,
             mode,
+            // v11: a newly-created backend peer does not opt into WebRTC — that
+            // is a later, explicit UI decision, never inferred here.
+            false,
         );
     }
 

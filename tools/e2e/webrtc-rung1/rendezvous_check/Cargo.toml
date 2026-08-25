@@ -1,0 +1,9 @@
+[package]
+name = "rendezvous_check"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+entity-signaling = { path = "../../../../../entity-core-rust/extensions/signaling" }
+
+[workspace]
