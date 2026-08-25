@@ -22,10 +22,126 @@ pub fn render(container: &Element, output: &ChatOutput, ctx: &DomCtx) {
         .ok();
 
     render_header(&wrapper, output);
+    if !output.bound {
+        render_start_picker(&wrapper, output, ctx);
+    }
     render_messages(&wrapper, output);
     render_compose(&wrapper, ctx);
 
     util::append(container, &wrapper);
+}
+
+/// The start-a-chat picker, shown on the default single-peer conversation: a
+/// button per connected peer that binds a 1:1 with them (`ChatStartWith`), or a
+/// hint to connect a peer first. Once bound this section disappears.
+fn render_start_picker(parent: &Element, output: &ChatOutput, ctx: &DomCtx) {
+    let bar = util::create_element("div");
+    bar.set_attribute(
+        "style",
+        "display:flex;flex-wrap:wrap;align-items:center;gap:6px;\
+         margin-bottom:8px;flex-shrink:0",
+    )
+    .ok();
+
+    if output.startable.is_empty() {
+        let hint = util::create_element("span");
+        hint.set_attribute("style", "font-size:12px;color:var(--text-faint, #666)")
+            .ok();
+        util::set_text(&hint, &crate::i18n::t("chat.start_hint", &[]));
+        util::append(&bar, &hint);
+    } else {
+        let label = util::create_element("span");
+        label
+            .set_attribute("style", "font-size:12px;color:var(--text-dim, #888)")
+            .ok();
+        util::set_text(&label, &crate::i18n::t("chat.start_prompt", &[]));
+        util::append(&bar, &label);
+
+        let window_id = ctx.window_id;
+        for peer in &output.startable {
+            let btn = crate::dom::components::button_action(
+                ctx,
+                &peer.name,
+                crate::dom::components::ButtonKind::Small,
+                Action::ChatStartWith {
+                    window_id,
+                    peer_id: peer.peer_id.clone(),
+                },
+            );
+            util::append(&bar, &btn);
+        }
+    }
+
+    // Always offer a by-id start: paste a peer id + Enter. This is the
+    // transport-agnostic bind — delivery establishes the connection (WebRTC or
+    // WebSocket) lazily on the first dispatch — and it is what the two-browser
+    // e2e drives, standing in for the not-yet-designed discovery/selection UI.
+    render_start_by_id(&bar, ctx);
+
+    util::append(parent, &bar);
+}
+
+/// The by-id start affordance: a draft-tracked peer-id input whose Enter binds a
+/// 1:1 with that peer (`ChatStartWith`). Same all-Rust `<input>` + keydown
+/// discipline as the compose box.
+fn render_start_by_id(parent: &Element, ctx: &DomCtx) {
+    let field_id = "chat-start-peer";
+    let placeholder = crate::i18n::t("chat.start_by_id_placeholder", &[]);
+    let input = crate::dom::components::text_input(ctx, field_id, "", &placeholder);
+    input
+        .set_attribute("data-field", "chat-start-peer")
+        .ok();
+
+    // Validation feedback: a malformed peer id would otherwise bind a
+    // conversation that can never deliver and fail silently (empty list, no
+    // error). The error span is populated by the handler and cleared on a valid
+    // bind. Styled via the `.chat-start-error` class (dom/style.rs), not an
+    // inline style, to keep the ui-lint atom/style ratchet flat.
+    let error = util::create_element_with_class("span", "chat-start-error");
+    error.set_attribute("data-field", "chat-start-error").ok();
+
+    let window_id = ctx.window_id;
+    let actions = ctx.actions.clone();
+    let rp = ctx.repaint.clone();
+    let drafts = ctx.drafts.clone();
+    let error_el = error.clone();
+
+    ctx.listen(&input, "keydown", move |evt: web_sys::Event| {
+        let Ok(kev) = evt.dyn_into::<KeyboardEvent>() else {
+            return;
+        };
+        if kev.key() != "Enter" {
+            return;
+        }
+        let Some(target) = kev
+            .target()
+            .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+        else {
+            return;
+        };
+        kev.prevent_default();
+        let peer_id = target.value().trim().to_string();
+        if peer_id.is_empty() {
+            return;
+        }
+        // Reject a malformed id with visible feedback rather than binding a dead
+        // conversation. Same Base58/46-char rule the write path enforces
+        // (`content_site::resolver` uses it too).
+        if !entity_entity::EntityUri::is_peer_id(&peer_id) {
+            util::set_text(&error_el, &crate::i18n::t("chat.invalid_peer_id", &[]));
+            return;
+        }
+        util::set_text(&error_el, "");
+        target.set_value("");
+        drafts.borrow_mut().remove(field_id);
+        actions
+            .borrow_mut()
+            .push(Action::ChatStartWith { window_id, peer_id });
+        rp();
+    });
+
+    util::append(parent, &input);
+    util::append(parent, &error);
 }
 
 fn render_header(parent: &Element, output: &ChatOutput) {
@@ -71,14 +187,14 @@ fn render_messages(parent: &Element, output: &ChatOutput) {
             } else {
                 ("start", "var(--text, #e0e0e0)")
             };
-            let who = short_author(&m.author);
+            let who = m.author_label.as_str();
             html.push_str(&format!(
                 "<div style='margin:3px 0;text-align:{align}'>\
                    <span style='font-size:10px;color:var(--text-dim, #888)'>{who} </span>\
-                   <span style='font-size:13px;color:{color};white-space:pre-wrap'>{body}</span>\
+                   <span style='font-size:13px;color:{color};white-space:pre-wrap;overflow-wrap:anywhere'>{body}</span>\
                  </div>",
                 align = align,
-                who = util::escape_html(&who),
+                who = util::escape_html(who),
                 color = color,
                 body = util::escape_html(&m.body),
             ));
@@ -88,13 +204,6 @@ fn render_messages(parent: &Element, output: &ChatOutput) {
 
     util::append(parent, &list);
     util::schedule_scroll_to_bottom(&list);
-}
-
-/// Abbreviate a peer-id for the byline — first 6 chars, enough to tell authors
-/// apart without a wall of Base58.
-fn short_author(author: &str) -> String {
-    let head: String = author.chars().take(6).collect();
-    format!("{}…", head)
 }
 
 fn render_compose(parent: &Element, ctx: &DomCtx) {
@@ -112,6 +221,7 @@ fn render_compose(parent: &Element, ctx: &DomCtx) {
     let field_id = "chat-input";
     let placeholder = crate::i18n::t("chat.placeholder", &[]);
     let input = crate::dom::components::text_input(ctx, field_id, "", &placeholder);
+    input.set_attribute("data-field", "chat-compose").ok();
 
     let window_id = ctx.window_id;
     let actions = ctx.actions.clone();

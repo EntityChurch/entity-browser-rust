@@ -54,6 +54,15 @@ pub trait WindowView {
     /// Peers provides tree access for entity-backed state.
     fn handle_action(&mut self, action: &Action, peers: &Peers);
 
+    /// Per-frame tick, called on every rAF frame (not gated by the dirty
+    /// flag, unlike [`render_dom`](Self::render_dom)). Default: no-op. Windows
+    /// that must make progress every frame regardless of a tree change —
+    /// draining a delivery queue, pumping an async pipeline — override this.
+    /// Keep it cheap: it runs ~60×/s. A window that changes tree state here
+    /// (e.g. caching a delivered entity) wakes its own render through the
+    /// normal subscription path, so no manual dirty-marking is needed.
+    fn tick(&mut self, _peers: &Peers) {}
+
     /// Render into a DOM container. This is THE rendering method.
     /// Every window implements this — build DOM elements, attach event
     /// handlers, set innerHTML, whatever the window needs.

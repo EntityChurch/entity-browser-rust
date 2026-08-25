@@ -2387,9 +2387,24 @@ fn direct_connect_future(
             .connect(&address)
             .await
             .map_err(|e| format!("Connect to {address} failed: {e}"))?;
-        let remote = entity_peer::remote::perform_connect(conn, &shared.keypair, shared.config.home_hash_format)
-            .await
-            .map_err(|e| format!("Handshake failed: {e}"))?;
+        // Reentry dispatch (`Some(shared)`): serve inbound EXECUTE *requests* the
+        // remote pushes back over the connection WE dialed — subscription
+        // `receive` notifications and any pushed delivery. A browser peer runs no
+        // listener, so a dialed connection is the ONLY path a push can reach it;
+        // plain `perform_connect` (reentry=None) drops those inbound EXECUTEs with
+        // a warning, which silently breaks cross-peer subscriptions (e.g. chat
+        // delivery). This mirrors `PeerContext::connect_to` (sdk.rs). Dial-by-
+        // address carries no §3 rendezvous key, so `established_via_rendezvous_key`
+        // is false (no reciprocal grant — §6.6), matching `reconnect_peer`.
+        let remote = entity_peer::remote::perform_connect_with_dispatch(
+            conn,
+            &shared.keypair,
+            shared.config.home_hash_format,
+            Some(shared.clone()),
+            false,
+        )
+        .await
+        .map_err(|e| format!("Handshake failed: {e}"))?;
         let remote_peer_id = remote.remote_peer_id.clone();
         shared.remote.insert(&remote_peer_id, remote);
         Ok(remote_peer_id)
@@ -2520,6 +2535,360 @@ mod memory_transport_tests {
             "reconnect_peer MUST replace the pooled connection — wiring Connect to \
              this is the B3/B4/B5 fix"
         );
+    }
+
+    /// THE DELIVERY PROOF: a signed chat message authored by peer A crosses a
+    /// real (memory-transport) connection and appears in peer B's §1.4 union
+    /// view — end to end, using the shipped app surface (`Peers`, `ChatModel`,
+    /// `subscribe_at`, cross-peer `system/tree:get`, `dispatch_write`).
+    ///
+    /// This is the mechanism the app's ChatDelivery will drive, proven here at
+    /// the primitive level so it isn't speculation:
+    ///   1. B connects to A (pooled connection).
+    ///   2. B **subscribes** to A's messages prefix on A's engine
+    ///      (`subscribe_at`) — notifications (path+hash) stream back over the
+    ///      connection. A remote subscription does NOT replicate content.
+    ///   3. A authors a message into A's OWN namespace (`ChatModel::send`).
+    ///   4. On each notification B **fetches** the signed entity from A
+    ///      (`execute entity://{A}/system/tree get`) and **caches** it into B's
+    ///      own store at the same `/{A}/…` path (`dispatch_write`) — the §1.4
+    ///      "cache the others' messages" step.
+    ///   5. B's `ChatModel` union render now shows A's message as **not-mine**.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn chat_message_crosses_from_a_to_b_over_the_wire() {
+        use crate::views::chat::model::{conversation_messages_prefix, ChatModel};
+        use entity_capability::ResourceTarget;
+        use entity_handler::ExecuteOptions;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        assert_ne!(pid_a, pid_b);
+        tokio::task::yield_now().await;
+
+        // (1) Establish the connection BOTH ways (as two mutually-connected chat
+        // peers have) via the REAL app path `Peers::connect_peer` — B→A carries
+        // B's subscribe + tree:get; A→B carries A's subscription-notification
+        // push. connect_peer is now reentry-wired, so each dialed connection
+        // serves the inbound `receive` the other side pushes back.
+        peers_b
+            .connect_peer(&pid_b, format!("memory://{pid_a}"))
+            .await
+            .expect("B connects to A");
+        peers_a
+            .connect_peer(&pid_a, format!("memory://{pid_b}"))
+            .await
+            .expect("A connects to B");
+
+        let conv = "room-1".to_string();
+        let prefix = conversation_messages_prefix(&pid_a, &conv);
+
+        // Baseline: B's union of this room is empty before anything is delivered.
+        let model_b =
+            ChatModel::with_conversation(pid_b.clone(), conv.clone(), vec![pid_a.clone(), pid_b.clone()]);
+        assert_eq!(
+            model_b.load_messages(&peers_b).len(),
+            0,
+            "precondition: B has none of A's messages yet"
+        );
+
+        // (2) B subscribes to A's messages prefix on A's engine. The callback
+        // just forwards each changed path; the fetch+cache runs on the test task
+        // (mirrors the app's ChatDelivery driver loop).
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let sub = {
+            let ctx_b = peers_b
+                .direct_peer_context(&pid_b)
+                .expect("B has a Direct PeerContext");
+            ctx_b.subscribe_at(pid_a.clone(), format!("{prefix}*"), move |ev| {
+                let _ = tx.send(ev.path);
+            })
+        }
+        .await
+        .expect("B subscribes to A's messages prefix");
+
+        // (3) A authors a message into its own namespace.
+        let model_a =
+            ChatModel::with_conversation(pid_a.clone(), conv.clone(), vec![pid_a.clone(), pid_b.clone()]);
+        assert!(model_a.send(&peers_a, "hello from A"));
+
+        // Wait for the remote subscription to notify B of A's write.
+        let mut paths: Vec<String> = Vec::new();
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            while let Ok(p) = rx.try_recv() {
+                paths.push(p);
+            }
+            if !paths.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            !paths.is_empty(),
+            "B must receive a subscription notification for A's write (delivery signal)"
+        );
+
+        // (4) For each notified path: fetch the signed entity from A over the
+        // connection, then cache it into B's own store at the same path.
+        for path in &paths {
+            let opts = ExecuteOptions {
+                resource: Some(ResourceTarget {
+                    targets: vec![path.clone()],
+                    exclude: vec![],
+                }),
+                ..Default::default()
+            };
+            let params =
+                Entity::new("system/empty", entity_ecf::to_ecf(&entity_ecf::Value::Null)).unwrap();
+            let hr = peers_b
+                .execute(
+                    &pid_b,
+                    format!("entity://{pid_a}/system/tree"),
+                    "get".to_string(),
+                    params,
+                    opts,
+                )
+                .await
+                .expect("cross-peer tree:get dispatches");
+            assert_eq!(hr.status, 200, "A serves the message entity (status 200)");
+            // Cache A's signed entity under /{A}/… in B's own store (§1.4).
+            peers_b.dispatch_write(&pid_b, path.clone(), hr.result);
+        }
+        // Let the cache write land.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // (5) B's union view now contains A's message, flagged not-mine.
+        let out = model_b.render_output(&peers_b);
+        assert_eq!(out.messages.len(), 1, "exactly A's one message crossed");
+        assert_eq!(out.messages[0].body, "hello from A");
+        assert!(
+            !out.messages[0].mine,
+            "A's message is authored by A, so it renders as not-mine in B's view"
+        );
+        assert_eq!(out.messages[0].author, pid_a, "authored by A");
+
+        drop(sub);
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// The same crossing, but driven by the app's `ChatDelivery` service (not
+    /// hand-rolled subscribe/fetch/cache) — proves the shipped delivery
+    /// component works: `subscribe` once, then `pump` each "frame" until A's
+    /// message lands in B's union view.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn chat_delivery_service_delivers_a_to_b() {
+        use crate::views::chat::delivery::ChatDelivery;
+        use crate::views::chat::model::ChatModel;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        // Both directions connected (subscribe + notify push).
+        peers_b
+            .connect_peer(&pid_b, format!("memory://{pid_a}"))
+            .await
+            .expect("B connects to A");
+        peers_a
+            .connect_peer(&pid_a, format!("memory://{pid_b}"))
+            .await
+            .expect("A connects to B");
+
+        let conv = "room-2".to_string();
+        let participants = vec![pid_a.clone(), pid_b.clone()];
+
+        // B's delivery service subscribes to every remote participant (A).
+        let mut delivery = ChatDelivery::new(pid_b.clone(), conv.clone(), participants.clone());
+        delivery.subscribe(&peers_b).await;
+
+        // A authors a message.
+        let model_a =
+            ChatModel::with_conversation(pid_a.clone(), conv.clone(), participants.clone());
+        assert!(model_a.send(&peers_a, "delivered by the service"));
+
+        // Drive delivery "frames": pump until B's union has the message.
+        let model_b =
+            ChatModel::with_conversation(pid_b.clone(), conv.clone(), participants.clone());
+        let mut crossed = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            delivery.pump(&peers_b);
+            if !model_b.load_messages(&peers_b).is_empty() {
+                crossed = true;
+                break;
+            }
+        }
+        assert!(crossed, "ChatDelivery must deliver A's message into B's store");
+
+        let out = model_b.render_output(&peers_b);
+        assert_eq!(out.messages.len(), 1);
+        assert_eq!(out.messages[0].body, "delivered by the service");
+        assert!(!out.messages[0].mine, "authored by A → not-mine in B's view");
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// The POLL path in isolation — the mechanism that carries delivery on the
+    /// Worker arm (`?worker=1`) and thus over the worker-only WebRTC channel,
+    /// where the reactive `subscribe_at` is unavailable. NO subscribe is called:
+    /// `pump`'s throttled `tree:get`-listing is the only discovery. It routes
+    /// over the connection pool via `execute`, so proving it over the memory
+    /// transport is evidence it works over any transport.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn chat_delivery_poll_delivers_without_subscribe() {
+        use crate::views::chat::delivery::ChatDelivery;
+        use crate::views::chat::model::ChatModel;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+        peers_b
+            .connect_peer(&pid_b, format!("memory://{pid_a}"))
+            .await
+            .expect("B connects to A");
+
+        let conv = "room-poll".to_string();
+        let participants = vec![pid_a.clone(), pid_b.clone()];
+
+        let model_a =
+            ChatModel::with_conversation(pid_a.clone(), conv.clone(), participants.clone());
+        assert!(model_a.send(&peers_a, "polled across the wire"));
+
+        // NO subscribe — poll only.
+        let mut delivery = ChatDelivery::new(pid_b.clone(), conv.clone(), participants.clone());
+        let model_b =
+            ChatModel::with_conversation(pid_b.clone(), conv.clone(), participants.clone());
+        let mut crossed = false;
+        for _ in 0..60 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            delivery.pump(&peers_b);
+            if !model_b.load_messages(&peers_b).is_empty() {
+                crossed = true;
+                break;
+            }
+        }
+        assert!(crossed, "poll-only delivery must land A's message in B's store");
+        let out = model_b.render_output(&peers_b);
+        assert_eq!(out.messages[0].body, "polled across the wire");
+        assert!(!out.messages[0].mine);
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// THE FULL FLOW through the actual Chat WINDOW: two `ChatWindow`s on two
+    /// connected peers, each bound to the well-known 1:1 conversation. A sends
+    /// via the window's `ChatSend` action; B's window `tick`s its delivery each
+    /// "frame"; A's message appears in B's window render — and B replies and it
+    /// appears in A's. This is the end-to-end app flow (window → delivery →
+    /// model → render), minus only the DOM/browser layer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_chat_windows_exchange_messages_full_flow() {
+        use crate::action::Action;
+        use crate::views::chat::ChatWindow;
+        use crate::window::WindowView;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        // Both peers connect (each subscribes to the other; each pushes to the
+        // other) — the real `connect_peer` path.
+        peers_a
+            .connect_peer(&pid_a, format!("memory://{pid_b}"))
+            .await
+            .expect("A connects to B");
+        peers_b
+            .connect_peer(&pid_b, format!("memory://{pid_a}"))
+            .await
+            .expect("B connects to A");
+
+        // A Chat window on each peer, each bound to the 1:1 with the other. Both
+        // derive the SAME well-known conversation id, so they share a room with
+        // no genesis exchange.
+        let mut win_a = ChatWindow::new(1, pid_a.clone());
+        let mut win_b = ChatWindow::new(2, pid_b.clone());
+        win_a.bind_and_subscribe(&peers_a, &pid_b).await;
+        win_b.bind_and_subscribe(&peers_b, &pid_a).await;
+
+        // A → B: A sends through the window's `ChatSend` action; drive both
+        // windows' delivery each "frame" until A's message shows in B's window.
+        win_a.handle_action(
+            &Action::ChatSend {
+                window_id: 1,
+                body: "hi B, it's A".into(),
+            },
+            &peers_a,
+        );
+        let mut saw_on_b = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            win_a.tick(&peers_a);
+            win_b.tick(&peers_b);
+            if win_b
+                .render_output(&peers_b)
+                .messages
+                .iter()
+                .any(|m| m.body == "hi B, it's A")
+            {
+                saw_on_b = true;
+                break;
+            }
+        }
+        assert!(saw_on_b, "A's message must reach B's window");
+        let out_b = win_b.render_output(&peers_b);
+        let a_msg = out_b
+            .messages
+            .iter()
+            .find(|m| m.body == "hi B, it's A")
+            .expect("A's message in B's window");
+        assert!(!a_msg.mine, "A's message is not-mine in B's window");
+        assert_eq!(a_msg.author, pid_a);
+
+        // B → A: B replies; it appears in A's window. Proves the flow is
+        // symmetric (each peer both sends and receives).
+        win_b.handle_action(
+            &Action::ChatSend {
+                window_id: 2,
+                body: "got it, A — B here".into(),
+            },
+            &peers_b,
+        );
+        let mut saw_on_a = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            win_a.tick(&peers_a);
+            win_b.tick(&peers_b);
+            if win_a
+                .render_output(&peers_a)
+                .messages
+                .iter()
+                .any(|m| m.body == "got it, A — B here")
+            {
+                saw_on_a = true;
+                break;
+            }
+        }
+        assert!(saw_on_a, "B's reply must reach A's window");
+        let out_a = win_a.render_output(&peers_a);
+        assert!(
+            out_a.messages.iter().any(|m| m.body == "hi B, it's A" && m.mine),
+            "A's own message stays mine in A's window"
+        );
+        let b_reply = out_a
+            .messages
+            .iter()
+            .find(|m| m.body == "got it, A — B here")
+            .expect("B's reply in A's window");
+        assert!(!b_reply.mine, "B's reply is not-mine in A's window");
+
+        handle_a.abort();
+        handle_b.abort();
     }
 }
 

@@ -29,6 +29,12 @@ select optgroup {
     color: var(--text, #e0e0e0);
 }
 
+.chat-start-error {
+    font-size: 12px;
+    color: var(--status-err, #f66);
+    margin-inline-start: 6px;
+}
+
 .window-manager {
     display: flex;
     width: 100%;

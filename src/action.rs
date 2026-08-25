@@ -219,6 +219,10 @@ pub enum Action {
     /// User sent a chat message (Enter in the compose box). `body` is the raw
     /// composed text; the Chat window authors it into the tree.
     ChatSend { window_id: WindowId, body: String },
+    /// User picked a connected peer to start a 1:1 chat with. The Chat window
+    /// binds the well-known 1:1 conversation with `peer_id`, subscribes to their
+    /// message log, and starts delivery.
+    ChatStartWith { window_id: WindowId, peer_id: String },
 
     // -- Shell actions (entity-shell window) --
     /// User pressed Enter in the shell prompt. `line` is the raw input.

@@ -32,6 +32,7 @@ const HOME_FILE: &str = "src/peers.rs";
 /// caller is genuinely Direct-only and degrades gracefully on Worker.
 const DIRECT_PEER_CONTEXT_ALLOWED: &[&str] = &[
     "src/views/shell/binding.rs", // shell identity ops: Direct-only, return "not supported on Worker-arm peer"
+    "src/views/chat/delivery.rs", // chat delivery subscribe_at: Direct-only (main-thread PeerContext); no-ops on Worker (proxy-routed remote subscribe is a TODO)
 ];
 
 /// Files allowed to call `Peers::direct_peer_shared` (Direct-only
