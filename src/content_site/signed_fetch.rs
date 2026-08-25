@@ -375,10 +375,14 @@ impl SignedSession {
                 // Measured on the shipped chain by S3
                 // (`a_single_flipped_byte_in_a_served_body_is_refused_as_a_
                 // verification_failure`), which is why the check is here rather
-                // than assumed. Fixing it upstream would mean giving that store
-                // a way to report a mismatch, which `ContentStore::get` has no
-                // room for — and `core/*` is the kernel, not ours. Our cache is
-                // ours, so the honest place is the moment we admit bytes to it.
+                // than assumed.
+                //
+                // **Fixed upstream too** (`core/peer` `302b7f4`): the store
+                // latches the mismatch and `resolve` checks it before believing
+                // a `None`, so every consumer of a signed root gets the honest
+                // answer, not just us. This check stays as the nearer half —
+                // it refuses the bytes at the moment we would cache them, and
+                // names the hash the origin failed to produce.
                 //
                 // Fifth appearance of one seam: "absent" and "corrupt/withheld"
                 // keep arriving as the same value.

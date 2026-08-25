@@ -1284,12 +1284,27 @@ mod tests {
                 let body = if rel.contains("..") { None } else { std::fs::read(root.join(rel)).ok() };
                 let resp = match body {
                     Some(b) => {
-                        // §2.1: mutable endpoints must not be cached, or a stale
-                        // signed root silently defeats the `seq` floor.
-                        let cache = if rel.ends_with("published-root") || rel.ends_with(".list") {
-                            "no-store"
-                        } else {
+                        // §2.1, and **opt-IN to immutable** — the same rule as
+                        // `tools/cors-serve.py`, which is the thing an operator
+                        // copies into a CDN config.
+                        //
+                        // The old shape listed the mutable endpoints and
+                        // defaulted everything else to a one-year immutable
+                        // cache, which silently covered `entity-deployment.json`
+                        // (the registry pin!), `transport-profile`, `index.html`
+                        // and `sw.js`. Only bytes whose NAME is their hash may
+                        // cache hard; a mis-cached mutable file is a deployment
+                        // that cannot be corrected for a year.
+                        let hashed_asset = rel.rsplit('/').next().is_some_and(|f| {
+                            (f.ends_with(".wasm") || f.ends_with(".js"))
+                                && f.rsplit('-').next().is_some_and(|tail| {
+                                    tail.chars().take_while(|c| c.is_ascii_hexdigit()).count() >= 8
+                                })
+                        });
+                        let cache = if rel.contains("content/") || hashed_asset {
                             "public, max-age=31536000, immutable"
+                        } else {
+                            "no-store"
                         };
                         let head = format!(
                             "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\n\
