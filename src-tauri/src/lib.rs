@@ -53,6 +53,38 @@ fn connectable_addr(listen_addr: &str) -> String {
         .replace("tcp://[::]:", &format!("tcp://{sub}:"))
 }
 
+/// Tree prefix the backend peer exposes its shared filesystem root at.
+/// A connected peer (e.g. a paired phone) lists/reads under
+/// `entity://{backend}/local/files/shared/…`. See
+/// `docs/architecture/reviews/DESIGN-CROSS-DEVICE-FILE-TRANSFER.md` §7.
+const SHARE_PREFIX: &str = "local/files/shared/";
+
+/// Ensure the demo share directory exists and always has at least one
+/// file to pull, then return its filesystem path.
+///
+/// **Slice 0 (design §7):** a single hardcoded, writable root over
+/// `~/.entity/tori-share`, seeded with `welcome.txt` so a freshly paired
+/// phone always sees something to pull. Writable so the phone can also
+/// push (upload). Folder-picking + per-peer grants are Phase 1 — this is
+/// the narrowest "prove the pipe" surface.
+fn ensure_share_root() -> Option<PathBuf> {
+    let dir = dirs::home_dir()?.join(".entity").join("tori-share");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("share root: create {:?} failed: {}", dir, e);
+        return None;
+    }
+    let welcome = dir.join("welcome.txt");
+    if !welcome.exists() {
+        let body = "Hello from Tori-native! This file crossed the network as \
+                    entities — a local/files entity + a content blob/chunks — \
+                    with no USB and no cloud.\n";
+        if let Err(e) = std::fs::write(&welcome, body) {
+            log::warn!("share root: seed welcome.txt failed: {}", e);
+        }
+    }
+    Some(dir)
+}
+
 // ---------------------------------------------------------------------------
 // Backend peer state
 //
@@ -223,6 +255,33 @@ async fn start_backend_peer(
 
     let shared = peer.shared();
     peer.start_engines(&shared);
+
+    // Mount the demo share root so a paired phone can list/read files over
+    // the connection (DESIGN-CROSS-DEVICE-FILE-TRANSFER §7, Slice 0). The
+    // handler is built into every Peer; we only add a root mapping. Failure
+    // here is non-fatal — the peer still runs, just with nothing to share.
+    if let Some(share_dir) = ensure_share_root() {
+        let cfg = entity_peer::local_files::RootConfigData {
+            prefix: SHARE_PREFIX.to_string(),
+            filesystem_root: share_dir.to_string_lossy().into_owned(),
+            // Writable so a paired peer can BOTH pull (read) and push
+            // (write, Phase 2 upload) files in the shared folder. With
+            // debug_open_grants any connected peer may write here — that's
+            // the intended demo posture; the real per-peer put-grant is the
+            // Phase-1 hardening (DESIGN §2).
+            read_only: false,
+            ..Default::default()
+        };
+        match peer.local_files_handler().add_root("shared", cfg) {
+            Ok(()) => log::info!(
+                "Backend peer {} sharing {:?} at {}",
+                &peer_id[..12.min(peer_id.len())],
+                share_dir,
+                SHARE_PREFIX
+            ),
+            Err(e) => log::warn!("Failed to mount share root: {}", e),
+        }
+    }
 
     // Bind ALL interfaces (`0.0.0.0`) by default so the listener is
     // reachable from other devices on the LAN — the reported address is
@@ -448,6 +507,20 @@ async fn autostart_listener(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Capture the backend peer's `tracing` output → stdout. Without this the
+    // entity-peer runtime (handshake, dispatch, write handling, errors) is
+    // dropped — the backend runs dark (DESIGN-SYSTEM-BACKEND-PEER §2). Default
+    // `info`; override with RUST_LOG (e.g. `RUST_LOG=info,entity_peer=debug`).
+    // Independent of tauri-plugin-log, which handles the `log` crate (the
+    // webview console bridge). `try_init` so a double-init never panics.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(true)
+        .try_init();
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()

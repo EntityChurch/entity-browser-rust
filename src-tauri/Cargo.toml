@@ -26,6 +26,18 @@ entity-peer = { path = "../../entity-core-rust/core/peer", features = [
 ] }
 entity-crypto = { path = "../../entity-core-rust/core/crypto" }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+# Capture the backend peer's `tracing` output. entity-peer logs exclusively
+# via `tracing` (handshake/dispatch/write/errors); without a subscriber in
+# this process those events are dropped — the backend peer runs dark
+# (DESIGN-SYSTEM-BACKEND-PEER §2).
+#
+# `default-features = false` deliberately DROPS the `tracing-log` feature: its
+# `try_init` installs a global `log` logger (the log→tracing bridge), which
+# then collides with `tauri-plugin-log` ("attempted to set a logger after the
+# logging system was already initialized"). We don't need that bridge — the
+# backend peer uses `tracing` directly — so tauri-plugin-log keeps sole
+# ownership of the `log` crate (the webview console bridge).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "ansi", "env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"

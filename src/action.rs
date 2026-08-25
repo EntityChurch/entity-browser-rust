@@ -58,6 +58,32 @@ pub enum Action {
         resource: Option<String>,
         params: Option<entity_entity::Entity>,
     },
+    /// Pull a file from a (typically remote) peer and materialize its
+    /// bytes onto *this* device via a browser download. Unlike
+    /// [`Action::Execute`], this captures the response — it reassembles
+    /// the `local/files:read` result's content blob and hands the bytes
+    /// to the browser as a download — rather than logging a summary.
+    /// `peer_id` is the dispatch origin (bound local peer); `handler_uri`
+    /// is the remote `entity://{target}/local/files`; `path` is the
+    /// resource (`local/files/shared/…`); `filename` the suggested name.
+    DownloadFile {
+        peer_id: String,
+        handler_uri: String,
+        path: String,
+        filename: String,
+    },
+    /// Push a file from *this* device up to a (typically remote) peer's
+    /// writable share via `local/files:write`. The browser file picker
+    /// supplies `bytes` + `filename`; the handler chunks the bytes and
+    /// writes the file to the peer's disk. `peer_id` is the dispatch
+    /// origin; `handler_uri` the remote `entity://{target}/local/files`;
+    /// `path` the destination (`local/files/shared/{filename}`).
+    UploadFile {
+        peer_id: String,
+        handler_uri: String,
+        path: String,
+        bytes: Vec<u8>,
+    },
     /// Run an L1 query via the typed `ctx.query()` helper
     /// (SDK-OPERATIONS §5.1). Carries the prebuilt
     /// `system/query/expression` entity from the calling window.

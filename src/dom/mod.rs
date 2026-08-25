@@ -12,6 +12,7 @@ pub mod event_log;
 #[cfg(target_arch = "wasm32")]
 pub mod games;
 pub mod execute_console;
+pub mod file_transfer;
 pub mod key_manager;
 pub mod knowledge_base;
 pub mod peer_connections;

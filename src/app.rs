@@ -2285,6 +2285,14 @@ impl EntityApp {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, op = %operation, resource = ?resource, "Action::Execute");
                     self.handle_execute(peer_id.clone(), handler_uri.clone(), operation.clone(), resource.clone(), params.clone());
                 }
+                Action::DownloadFile { peer_id, handler_uri, path, filename } => {
+                    tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, "Action::DownloadFile");
+                    self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone());
+                }
+                Action::UploadFile { peer_id, handler_uri, path, bytes } => {
+                    tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, len = bytes.len(), "Action::UploadFile");
+                    self.handle_upload_file(peer_id.clone(), handler_uri.clone(), path.clone(), bytes.clone());
+                }
                 Action::Query { peer_id, expression } => {
                     tracing::info!(peer = %peer_id, expr_type = %expression.entity_type, "Action::Query");
                     self.handle_query(peer_id.clone(), expression.clone());
@@ -2558,6 +2566,138 @@ impl EntityApp {
                 }
                 Err(e) => {
                     let msg = format!("✗ {} {} → {}", uri_for_log, op_for_log, e);
+                    tracing::error!("{}", msg);
+                    log.log(msg);
+                }
+            }
+        });
+    }
+
+    /// Pull a file from `handler_uri` (`local/files:read` on `path`) and
+    /// materialize its bytes onto this device via a browser download.
+    /// Reuses the same execute path as `handle_execute` but captures the
+    /// structured result (with its `included` blob/chunks) rather than
+    /// logging only a summary. WASM-only (browser download API).
+    #[cfg(target_arch = "wasm32")]
+    fn handle_download_file(&self, pid: String, handler_uri: String, path: String, filename: String) {
+        let log = self.event_log_writer.clone();
+        log.log(format!("↓ pulling {}...", path));
+
+        let fut = crate::ops::execute(
+            &self.peer_manager,
+            crate::ops::ExecuteRequest {
+                peer_id: pid,
+                handler_uri,
+                operation: "read".into(),
+                params: None,
+                resource: Some(path.clone()),
+            },
+        );
+        wasm_bindgen_futures::spawn_local(async move {
+            match fut.await {
+                Ok(resp) => {
+                    // A handler-level error (e.g. 404) comes back as Ok with a
+                    // non-OK status; surface it loudly rather than trying to
+                    // reassemble an error entity.
+                    if resp.result.status != entity_handler::STATUS_OK {
+                        log.log(format!("✗ pull {} → {}", path, resp.summary));
+                        return;
+                    }
+                    match crate::ops::download::materialize_and_download(&resp.result, &filename) {
+                        Ok(n) => log.log(format!("✓ saved {} ({} bytes)", filename, n)),
+                        Err(e) => log.log(format!("✗ save {} → {}", filename, e)),
+                    }
+                }
+                Err(e) => log.log(format!("✗ pull {} → {}", path, e)),
+            }
+        });
+    }
+
+    /// Push `bytes` up to `handler_uri` as `local/files:write` on `path`.
+    /// The handler chunks the bytes and writes the file to the peer's
+    /// disk (DOMAIN-LOCAL-FILES §4.3) — the phone→desktop upload. WASM-only.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_upload_file(&self, pid: String, handler_uri: String, path: String, bytes: Vec<u8>) {
+        let log = self.event_log_writer.clone();
+        let len = bytes.len();
+        log.log(format!("↑ uploading {} ({} bytes)...", path, len));
+
+        // Write params: a single `bytes` field the handler decodes via
+        // WriteRequestData::from_params. The params entity type is not
+        // inspected by the handler; only the fields are read.
+        let params_data = entity_ecf::to_ecf(&entity_ecf::cbor_map! {
+            "bytes" => entity_ecf::Value::Bytes(bytes)
+        });
+        let params = match entity_entity::Entity::new("app/entity-browser/upload", params_data) {
+            Ok(e) => Some(e),
+            Err(e) => {
+                log.log(format!("✗ upload {} → build params: {}", path, e));
+                return;
+            }
+        };
+
+        let write_fut = crate::ops::execute(
+            &self.peer_manager,
+            crate::ops::ExecuteRequest {
+                peer_id: pid.clone(),
+                handler_uri: handler_uri.clone(),
+                operation: "write".into(),
+                params,
+                resource: Some(path.clone()),
+            },
+        );
+        // Read-back verification: a `read` of the same path, dispatched only
+        // after the write reports OK. If the write truly landed on the peer
+        // this returns the bytes; if the "confirmed" 200 was synthetic (write
+        // not actually forwarded/persisted) this 404s — turning an ambiguous
+        // "says OK but no file" into a definitive signal. Built eagerly (the
+        // future is `'static` and dispatches at await time), awaited after.
+        let verify_fut = crate::ops::execute(
+            &self.peer_manager,
+            crate::ops::ExecuteRequest {
+                peer_id: pid,
+                handler_uri,
+                operation: "read".into(),
+                params: None,
+                resource: Some(path.clone()),
+            },
+        );
+        wasm_bindgen_futures::spawn_local(async move {
+            match write_fut.await {
+                Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
+                    let msg = format!("✓ FILE-XFER uploaded {} ({} bytes) — backend confirmed", path, len);
+                    tracing::info!("{}", msg);
+                    log.log(msg);
+                    // Now prove it's really there.
+                    match verify_fut.await {
+                        Ok(v) if v.result.status == entity_handler::STATUS_OK => {
+                            let vmsg = format!("✓ FILE-XFER verified {} readable back ({})", path, v.summary.lines().next().unwrap_or(""));
+                            tracing::info!("{}", vmsg);
+                            log.log(vmsg);
+                        }
+                        Ok(v) => {
+                            let vmsg = format!("✗ FILE-XFER VERIFY FAILED {} → write reported OK but read-back is {} — the write did NOT land on the peer", path, v.summary.lines().next().unwrap_or(""));
+                            tracing::error!("{}", vmsg);
+                            log.log(vmsg);
+                        }
+                        Err(e) => {
+                            let vmsg = format!("✗ FILE-XFER VERIFY FAILED {} → read-back errored: {}", path, e);
+                            tracing::error!("{}", vmsg);
+                            log.log(vmsg);
+                        }
+                    }
+                }
+                // A handler-level rejection (403 read_only_root, 400 missing
+                // bytes, …) comes back as Ok with a non-OK status. Surface it
+                // at error level so it stands out RED in the tauri-run terminal
+                // (greppable: "FILE-XFER") rather than getting lost in the log.
+                Ok(resp) => {
+                    let msg = format!("✗ FILE-XFER upload REJECTED {} → {}", path, resp.summary);
+                    tracing::error!("{}", msg);
+                    log.log(msg);
+                }
+                Err(e) => {
+                    let msg = format!("✗ FILE-XFER upload FAILED {} → {}", path, e);
                     tracing::error!("{}", msg);
                     log.log(msg);
                 }
