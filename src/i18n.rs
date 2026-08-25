@@ -1260,6 +1260,73 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Couldn't connect to {addr} — {reason}"),
     ),
     ("peerconn.connect_ok", Message::Simple("Connected to {peer}")),
+    // The connector registry — signaling nodes this peer may rendezvous
+    // through. The same operations the `connector` shell verb exposes.
+    ("peerconn.connectors", Message::Simple("Connectors")),
+    // Stated at the point of choosing, deliberately: a connector learns who is
+    // looking for whom and nothing else — it introduces, then gets out of the
+    // way. That property is what makes running a community node safe to offer,
+    // and REVIEW-CONNECTIVITY-LAYER-COHERENCE §5.5 asks for it to be said
+    // wherever the UI asks a user to pick one.
+    (
+        "peerconn.connectors_hint",
+        Message::Simple(
+            "Nodes that introduce peers to each other. Rendezvous only — never in the data path.",
+        ),
+    ),
+    (
+        "peerconn.connector_none",
+        Message::Simple("No connectors yet — add a signaling node to rendezvous through."),
+    ),
+    ("peerconn.connector_add", Message::Simple("Add connector")),
+    ("peerconn.connector_use", Message::Simple("Use")),
+    ("peerconn.connector_in_use", Message::Simple("In use")),
+    ("peerconn.connector_check", Message::Simple("Check")),
+    (
+        "peerconn.connector_serves",
+        Message::Simple("{node} serves {endpoint} · lobby {lobby}"),
+    ),
+    // Meet at a name — the lobby/tag/secret rendezvous modes
+    // (`crate::rendezvous`), the localized surface over the `meet` shell verb.
+    ("peerconn.meet", Message::Simple("Meet at a name")),
+    // Both halves matter and neither is decoration: what rendezvous *is*
+    // (introduction, never the data path, never authorization), and what a name
+    // is worth — a tag is public by design, and a memorable "secret" is a tag in
+    // disguise (EXTENSION-SIGNALING §2.2).
+    (
+        "peerconn.meet_hint",
+        Message::Simple(
+            "Find a peer by name instead of by its id. A label is public — anyone who knows \
+             it meets. A secret is only as strong as its randomness, and it introduces you; \
+             it never grants anything.",
+        ),
+    ),
+    (
+        "peerconn.meet_needs_connector",
+        Message::Simple("Select a connector first — a meet happens at a signaling node."),
+    ),
+    ("peerconn.meet_mode", Message::Simple("Meet by")),
+    ("peerconn.meet_mode_tag", Message::Simple("Label (public)")),
+    ("peerconn.meet_mode_secret", Message::Simple("Secret")),
+    ("peerconn.meet_mode_lobby", Message::Simple("Lobby (anyone here)")),
+    ("peerconn.meet_start", Message::Simple("Meet")),
+    ("peerconn.meet_stop", Message::Simple("Stop")),
+    (
+        "peerconn.meet_searching",
+        Message::Simple("Searching at {mode} via {node} — {polls}/{max}"),
+    ),
+    // The honest empty result, with the two things that have to be true for a
+    // meet to work — otherwise "nobody there" reads as "this is broken".
+    (
+        "peerconn.meet_none",
+        Message::Simple(
+            "Nobody else was there. Both sides have to be searching at the same name, \
+             through the same connector.",
+        ),
+    ),
+    ("peerconn.meet_unverified", Message::Simple("unverified claim")),
+    ("peerconn.meet_remember", Message::Simple("Remember")),
+    ("peerconn.meet_remembered", Message::Simple("Remembered")),
     // The caret is part of the affordance, so it lives in the value — that
     // also lets an RTL locale put it on the correct side.
     ("contentsite.more", Message::Simple("More \u{25be} ({n})")),

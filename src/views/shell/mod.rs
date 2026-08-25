@@ -180,6 +180,13 @@ impl WindowView for ShellWindow {
         }
     }
 
+    /// Drive a running `meet` (`crate::rendezvous`). This is where the round
+    /// trips a meet needs get their `&Peers`; nothing else in the shell runs per
+    /// frame. Free when no meet is running — one lock and a `None`.
+    fn tick(&mut self, peers: &Peers) {
+        self.model.pump_meet(peers, &self.watch.flag());
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn render_dom(
         &self,

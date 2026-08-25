@@ -180,6 +180,25 @@ validation, never for routing.
 | `connect` | `connect <ws://addr \| wss://addr \| xworker://peer-id \| memory://peer-id>` | Open a connection from the shell's **bound peer**. Scheme picks the connector: `ws`/`wss` → browser WebSocket / native WS; `xworker` → cross-Worker MessagePort (WASM, requires control port at boot); `memory` → in-process duplex (native). Adds the remote to the connections registry on success. |
 | `disconnect` | `disconnect <peer-or-alias>` | Per guide §4.7: idempotent against not-connected (returns Message, not error). **Phase 2 limitation:** removes from app-tier connections registry only — SDK-level transport teardown is upstream TODO (no `Peers::disconnect_peer` symmetric to `connect_peer` yet). |
 
+### Rendezvous — app-local verbs
+
+`connector` and `meet` are **not** in `entity_shell::dispatcher::VERBS`. The
+dispatcher returns `None` for a verb outside its vocabulary and the app handles
+that fallback, so a registry that lives in this app gets a verb that lives in
+this app (`src/connectors.rs`, `src/rendezvous.rs`). Their output is plain
+scrollback and not localized — the Peer Connections window is the localized
+surface over the same operations.
+
+Both edit/read the registry on the **system peer** (it is deployment
+infrastructure, and it is where provisioning and the window read it), while the
+calls to a node ride the shell's **bound peer** — that peer's pool, grants, and
+id.
+
+| Verb | Form | Notes |
+|---|---|---|
+| `connector` | `connector ls \| add <peer-id> <addr> [label…] \| rm <peer-id> \| use <peer-id> \| check [peer-id]` | The signaling nodes this app may rendezvous through, and which one is selected (`●`). `check` dials the node if nothing has, then `advertise()`s it: endpoint, lobby constant, limits. |
+| `meet` | `meet tag <label> \| meet secret <string> \| meet lobby \| meet \| meet stop` | Find a peer by **name** instead of by its 44-character id, through the selected connector. Bare `meet` reports the running search; `stop` ends it. Discovery only: it reports peer ids and remembers nothing — connect with `connect`, or open a Chat on the id. A `tag` is public by design; a `secret` is only as strong as its entropy. |
+
 ### Windows
 
 | Verb | Form | Notes |

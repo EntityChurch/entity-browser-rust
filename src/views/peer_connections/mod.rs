@@ -87,6 +87,21 @@ impl PeerConnectionsWindow {
                     &sys_pid,
                     crate::app_paths::peers_registry_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // The connector registry + its selection, both on the system
+                // peer. Without these the Worker-arm cache mirror never carries
+                // this prefix and the section renders permanently empty for a
+                // registry that is perfectly well populated — the same rule the
+                // route/authz watches above exist for.
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::connectors_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::connector_selection_path(crate::app_paths::APP_ID, &sys_pid),
+                );
                 // Subscribe the KERNEL liveness surface (`system/peer/status`)
                 // for every local vantage — the authoritative read-model the
                 // known-device rows render from. Watching seeds the Worker-arm
@@ -103,6 +118,86 @@ impl PeerConnectionsWindow {
             },
         }
     }
+}
+
+impl PeerConnectionsWindow {
+    /// Publish (or clear) the connector notice and repaint. `None` clears.
+    fn set_connector_notice(&self, notice: Option<(String, bool)>) {
+        if let Ok(mut slot) = self.model.connector_notice_handle().lock() {
+            *slot = notice.map(|(text, is_error)| {
+                crate::views::peer_connections::output::ConnectorNotice { text, is_error }
+            });
+        }
+        // A notice that changes no tree state still has to reach the screen —
+        // nothing else will dirty this window for it.
+        self.watch.mark_dirty();
+    }
+
+    /// `Check` — ask the node what it actually serves (`advertise()`).
+    ///
+    /// Async, so the result lands off-frame into the shared notice slot and
+    /// marks the window dirty; there is no tree write to wake it otherwise.
+    fn check_connector(&self, peers: &Peers, node_peer_id: &str) {
+        let sys = peers.system_peer_id().to_string();
+        // Dial first when nothing has: a connector the user just added has no
+        // route at all, and the EXECUTE would fail with "no transport profile"
+        // — which reads as "the node is down" when we simply never called it
+        // (`connectors::reach_node`). The address is in the registry row, which
+        // is why this resolves the row rather than trusting the id alone.
+        let Some(row) = crate::connectors::read_connectors(peers, &sys)
+            .into_iter()
+            .find(|c| c.node_peer_id == node_peer_id)
+        else {
+            self.set_connector_notice(Some((
+                format!("no connector with peer-id {node_peer_id}"), // i18n-ignore — unreachable via the UI (the button rides a row)
+                true,
+            )));
+            return;
+        };
+        let reach = crate::connectors::reach_node(peers, &sys, &row);
+        let fut = crate::connectors::advertise(peers, &sys, node_peer_id);
+        let slot = self.model.connector_notice_handle();
+        let dirty = self.watch.flag();
+        let short = crate::views::short_pid(node_peer_id);
+        crate::views::peer_connections::spawn_check(async move {
+            let outcome = match reach.await {
+                Ok(()) => fut.await,
+                Err(e) => Err(e),
+            };
+            let notice = match outcome {
+                Ok(ad) => crate::views::peer_connections::output::ConnectorNotice {
+                    text: crate::i18n::t(
+                        "peerconn.connector_serves",
+                        &[
+                            ("node", &short),
+                            ("endpoint", &ad.endpoint),
+                            ("lobby", crate::connectors::lobby_constant_for(&ad)),
+                        ],
+                    ),
+                    is_error: false,
+                },
+                Err(e) => crate::views::peer_connections::output::ConnectorNotice {
+                    text: e,
+                    is_error: true,
+                },
+            };
+            if let Ok(mut s) = slot.lock() {
+                *s = Some(notice);
+            }
+            dirty.mark();
+        });
+    }
+}
+
+/// Spawn the `Check` round-trip on whichever runtime we are on.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_check<F: std::future::Future<Output = ()> + Send + 'static>(f: F) {
+    tokio::spawn(f);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_check<F: std::future::Future<Output = ()> + 'static>(f: F) {
+    wasm_bindgen_futures::spawn_local(f);
 }
 
 impl WindowView for PeerConnectionsWindow {
@@ -138,6 +233,88 @@ impl WindowView for PeerConnectionsWindow {
                         self.model.clear_address();
                         true
                     }
+                    // Connector registry — the same four operations the
+                    // `connector` shell verb exposes (add / use / rm / check),
+                    // driving the same `crate::connectors` functions. One
+                    // model, two surfaces.
+                    //
+                    // These write the SYSTEM peer's registry, not this window's
+                    // bound peer: a connector is deployment infrastructure, and
+                    // provisioning reads it from the system peer.
+                    "connector_add" => {
+                        // Packed "{peer_id}\x1f{addr}\x1f{label}" — the app's
+                        // multi-field convention, so one event carries the form.
+                        let mut parts = value.splitn(3, '\x1f');
+                        let c = crate::connectors::Connector {
+                            node_peer_id: parts.next().unwrap_or("").to_string(),
+                            node_addr: parts.next().unwrap_or("").to_string(),
+                            label: parts.next().unwrap_or("").to_string(),
+                        };
+                        let sys = peers.system_peer_id().to_string();
+                        self.set_connector_notice(
+                            match crate::connectors::add_connector(peers, &sys, &c) {
+                                Ok(()) => None,
+                                // A refusal (missing half, unsafe id) must be
+                                // sayable — otherwise Add is a dead button.
+                                Err(e) => Some((e, true)),
+                            },
+                        );
+                        false
+                    }
+                    "connector_use" => {
+                        let sys = peers.system_peer_id().to_string();
+                        self.set_connector_notice(
+                            match crate::connectors::select_connector(peers, &sys, value) {
+                                Ok(()) => None,
+                                Err(e) => Some((e, true)),
+                            },
+                        );
+                        false
+                    }
+                    "connector_rm" => {
+                        let sys = peers.system_peer_id().to_string();
+                        crate::connectors::remove_connector(peers, &sys, value);
+                        self.set_connector_notice(None);
+                        false
+                    }
+                    "connector_check" => {
+                        self.check_connector(peers, value);
+                        false
+                    }
+                    // Meet at a name (`crate::rendezvous`) — the same three
+                    // modes the `meet` shell verb takes, over the same session
+                    // type. Packed "{mode}\x1f{input}", the app's multi-field
+                    // convention, so one event carries the form.
+                    "meet_start" => {
+                        let (mode, input) = value.split_once('\u{1f}').unwrap_or((value, ""));
+                        let notice = match crate::rendezvous::Mode::parse(mode, input)
+                            .and_then(|m| self.model.start_meet(peers, m))
+                        {
+                            Ok(()) => None,
+                            // A refusal (no connector selected, a mode with
+                            // nothing to meet at) must be sayable, or Meet is a
+                            // dead button. It lands in the meet card's own slot,
+                            // beside the button that caused it.
+                            Err(e) => Some((e, true)),
+                        };
+                        self.model.set_meet_notice(notice);
+                        self.watch.mark_dirty();
+                        false
+                    }
+                    "meet_stop" => {
+                        self.model.stop_meet();
+                        self.watch.mark_dirty();
+                        false
+                    }
+                    // Keep a peer we met. Deliberately a **user action**: a
+                    // public `tag` bucket is guessable by design, so anyone
+                    // posting in one would otherwise write rows into this
+                    // registry. Discovery reports; the user decides who to keep.
+                    "meet_remember" => {
+                        crate::connections::ConnectionsWriter::new(peers).add(value);
+                        self.watch.mark_dirty();
+                        false
+                    }
                     _ => false,
                 }
             }
@@ -145,6 +322,15 @@ impl WindowView for PeerConnectionsWindow {
         };
         if state_changed {
             self.model.save_state(peers);
+        }
+    }
+
+    /// Drive a running meet. A meet writes nothing to the tree, so nothing else
+    /// would ever repaint this window for it — the pump reports whether the
+    /// visible status moved and we mark dirty on that. Free when idle.
+    fn tick(&mut self, peers: &Peers) {
+        if self.model.pump_meet(peers) {
+            self.watch.mark_dirty();
         }
     }
 
