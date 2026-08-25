@@ -63,6 +63,32 @@
         })();
     </script>
     <script>
+        // Worker→main log forwarding (receiver). The entity-worker runs in its
+        // own realm with its own console; the capture above only wraps THIS
+        // realm's console, so worker-side tracing/diagnostics — the §6.5 WebRTC
+        // establisher and its seam-guard warnings among them — never reach
+        // `window.__entity_browser_log`. entity-worker-loader.js mirrors the
+        // capture in the worker and posts each line over this BroadcastChannel;
+        // drain it into the same buffer so the e2e / rung-1 spike (which greps
+        // that buffer) sees worker lines. Entries keep `source:'worker'` so they
+        // stay distinguishable. We push straight to the buffer (NOT via console)
+        // to avoid a double-capture through the wrapper above.
+        (function () {
+            try {
+                const chan = new BroadcastChannel('entity-browser-log');
+                chan.onmessage = function (evt) {
+                    try {
+                        const d = evt.data;
+                        if (!d || d.source !== 'worker' || !Array.isArray(d.args)) return;
+                        window.__entity_browser_log.push({
+                            level: d.level || 'log', args: d.args, source: 'worker',
+                        });
+                    } catch (_) { /* swallow */ }
+                };
+            } catch (_) { /* BroadcastChannel absent — worker lines stay worker-side */ }
+        })();
+    </script>
+    <script>
         // L1 "BIOS" — System Recovery / Storage Inventory console.
         // Activated by ?systemrecovery=1 (or bare ?systemrecovery). Pure JS,
         // runs INSTEAD of the WASM app (main.rs start() bails on the same
