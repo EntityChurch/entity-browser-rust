@@ -5,12 +5,21 @@
 #   make tauri-run    — desktop build (DOM in WebView + native backend peer)
 #
 # Release paths (see docs/RELEASE-READINESS.md):
-#   make wasm-release — size-optimized browser SPA → dist/ (deploy to a CDN)
-#   make publish …    — emit sites/apps content alongside the SPA (CDN deploy)
+#   make dist          — SHIPPABLE installers for this host → artifacts/
+#                        (linux: .deb + .rpm + .AppImage · macOS: .dmg ·
+#                        windows: .msi + .exe). ADR-0023 Mode 1.
+#   make dist-web      — the browser SPA as a release tarball → artifacts/
+#   make dist-native   — the same, on the host toolchain (= NATIVE=1). The ONLY
+#                        path on macOS/Windows (Tauri's bundler needs the host).
+#   make wasm-release  — size-optimized browser SPA → dist/ (unpackaged)
+#   make site …        — emit sites/apps content alongside the SPA (CDN deploy)
 #   make tauri-bundle  — content-baked desktop app (sites+apps embedded, offline)
-#   NOTE: the tauri* targets produce a DEBUG test binary, NOT installers;
-#         packaging (.deb/.AppImage/.dmg/.msi via `tauri build`) is unwired — see
-#         RELEASE-READINESS §3.
+#   make appimage      — portable RELEASE .AppImage (also emitted by `dist`)
+#   NOTE: `make tauri` / `tauri-run` still produce a DEBUG test binary, not an
+#         installer. `dist` is the release path — it builds --release AND
+#         packages. Cutting a release is `git tag vN` on green master
+#         (ADR-0015); the platform matrix lives in the tag workflow, NOT here.
+
 #
 # === make + podman build convention ===========================================
 # A bare machine needs ONLY `make` and `podman` (no rust/cargo/trunk on host).
@@ -25,11 +34,11 @@
 #   make wasm         — debug browser build -> dist/   (in container)
 #   make wasm-release — size-optimized release build -> dist/  (in container)
 #   make test / lint  — native unit + peer-integration tests / clippy (in container)
-#   make publish*     — pure-cargo publish targets (in container)
+#   make site*     — pure-cargo publish targets (in container)
 #
 # Host-only targets (NOT part of the bare-box gate, and depend on host services
 # or an attached display): the `python3 -m http.server` serve steps (serve /
-# build-serve / publish-serve), `e2e-worker` (external Selenium on :4444), and
+# build-serve / site-serve), `e2e-worker` (external Selenium on :4444), and
 # `tauri-run` (needs a desktop session). `make native` is a deprecation stub.
 IMAGE       := entity-browser-rust-build
 PARENT      := $(shell dirname $(CURDIR))
@@ -44,10 +53,10 @@ TRUNK_CACHE := $(HOME)/.cache/cargo-entity-browser-trunk
 # Durable publisher identity dir (gitignored). The publish flow loads-or-generates
 # `{ENTITY_DATA_DIR}/publish/keypair` so every publish lands under ONE stable
 # peer-id (the peer-id is the site address — it must not drift per run). The
-# containerized `publish` target runs `podman run --rm`, so `~/.entity` inside the
+# containerized `site` target runs `podman run --rm`, so `~/.entity` inside the
 # container is ephemeral and the key would regenerate every run — we point
 # ENTITY_DATA_DIR at this repo-local dir (which rides the existing parent mount) so
-# the identity persists. `publish-serve` (host) uses the same dir, so both modes
+# the identity persists. `site-serve` (host) uses the same dir, so both modes
 # publish under the same identity. Override per-machine with PUBLISH_DATA_DIR=…
 PUBLISH_DATA_DIR ?= .entity-publish
 
@@ -56,7 +65,7 @@ PUBLISH_DATA_DIR ?= .entity-publish
 # `TARGET_DIR` = cargo's build dir. Both default to the canonical locations,
 # so every existing target behaves exactly as before. The `publish-*` family
 # overrides them (target-specific vars below) to `dist-publish`/`target-publish`,
-# which is what lets `make tauri-run` and `make publish-serve` run concurrently.
+# which is what lets `make tauri-run` and `make site-serve` run concurrently.
 # The cargo registry + trunk tool caches stay SHARED (cargo/trunk lock them
 # safely, and they're read-mostly once warm) — only the OUTPUT splits, so the
 # isolated build is still fast (deps aren't recompiled/redownloaded, only the
@@ -99,6 +108,27 @@ PODMAN_RUN_CAPS   := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) \
 
 .PHONY: image build help fmt fmt-check check clean test-tauri
 
+# ============================================================================
+# ADR-0019 native opt-in — `NATIVE=1` binds a release recipe to the HOST
+# toolchain instead of the container. It is a RUNNER, not a different verb:
+# `make dist-native` is exactly `make dist NATIVE=1`, same recipe.
+#
+# Only the `dist*` family honors it; everything else stays container-only,
+# because on Linux the container IS the reproducible answer. The reason the
+# switch has to exist at all is macOS and Windows: Tauri's bundler shells out
+# to the host's own packaging tools (`hdiutil`/`codesign` for .dmg, WiX/NSIS
+# for .msi), so a .dmg can only be built ON macOS and a .msi ON Windows. No
+# Linux container can produce them — on those two platforms the native runner
+# is the ONLY path, not a convenience.
+NATIVE ?=
+ifeq ($(NATIVE),1)
+DIST_IMAGE_DEP :=
+DIST_RUN = CARGO_TARGET_DIR=$(TARGET_DIR) sh -c '$(1)'
+else
+DIST_IMAGE_DEP := image
+DIST_RUN = $(call RUN,$(1))
+endif
+
 .DEFAULT_GOAL := help
 
 # ADR-0019 Tier-1 verbs: help build test lint fmt check clean. `build` (alias of
@@ -124,8 +154,14 @@ help:
 	@echo "    tauri-run            run the app; HOST_HOME=1 uses your real \$$HOME,"
 	@echo "                         SHARE_DIR=<dir> shares a host folder over local/files"
 	@echo "    host-run             run the container-built binary NATIVE (mutable hosts only)"
-	@echo "    appimage             portable self-contained AppImage (release artifact)"
-	@echo "  release: wasm-release · publish · tauri-bundle (see docs/RELEASE-READINESS.md)"
+	@echo "    appimage             portable self-contained AppImage (single bundle)"
+	@echo "  dist (ADR-0023 Mode 1 — the shippable artifacts):"
+	@echo "    dist        installers for THIS host → artifacts/  (linux: deb+rpm+AppImage)"
+	@echo "    dist-web    the browser SPA tarball → artifacts/    (host-independent)"
+	@echo "    dist-native same recipes on the host toolchain (= NATIVE=1; the only"
+	@echo "                path on macOS/Windows). Cutting a release = tag it; CI fans"
+	@echo "                out the platform matrix. See docs/RELEASE-READINESS.md."
+	@echo "  content: site · site-bare · site-serve · tauri-bundle"
 	@echo "  — see the Makefile header for the full target catalogue."
 
 # Build the toolchain image (rust 1.94.1 + wasm32 + trunk + binaryen + webkit2gtk).
@@ -152,7 +188,7 @@ endef
 # Serve a static directory ($(1)) from inside the image, on $(PORT). Keeps the
 # "podman + make only" contract — no host python3. $(1) is resolved relative to
 # the workdir (this repo) OR may be an absolute in-container path (e.g. a mount
-# supplied via the $(2) extra-flags param — see publish-serve's SERVE_DIR).
+# supplied via the $(2) extra-flags param — see site-serve's SERVE_DIR).
 # `--network host`: the container binds the host port directly (rootless `-p`
 # port-forwarding resets connections under pasta/slirp; host-net is reliable and
 # is what a local dev server wants). Foreground; Ctrl-C stops it.
@@ -293,7 +329,7 @@ check: lint test test-tauri
 # Cleaned: SPA bundles (dist*), the desktop app's isolated profile+cache
 # (.tauri-home, .cache), and the AppImage/bundle output.
 clean:
-	rm -rf dist/ dist-publish/ .tauri-home/ .cache/ src-tauri/target/release/bundle/
+	rm -rf dist/ dist-publish/ .tauri-home/ .cache/ src-tauri/target/release/bundle/ $(ARTIFACTS)/
 	-podman rmi $(IMAGE)
 
 # DEMO bakes the `demo-apps` fixtures (War, Calculator, and the L5 demos **Ping**
@@ -321,9 +357,13 @@ wasm: image
 # Alias — `make build` is the conventional bare-box entry point across the repo group.
 build: wasm
 
-# WASM release build → dist/
+# WASM release build → dist/. Factored into a variable because `dist` and
+# `dist-web` run the SAME frontend build through the NATIVE-aware runner —
+# one definition, so a release artifact can never be built from a different
+# frontend command than `make wasm-release` produces.
+WASM_RELEASE_CMD := trunk build --release --dist $(DIST) && ./tools/check-dist.sh $(DIST)
 wasm-release: image
-	$(call RUN,trunk build --release --dist $(DIST) && ./tools/check-dist.sh $(DIST))
+	$(call RUN,$(WASM_RELEASE_CMD))
 
 # Execute the upstream wasm-worker-protocol crate's `#[wasm_bindgen_test]`
 # suites (v11_wire_shape, …). That crate is `#![cfg(target_arch = "wasm32")]`,
@@ -518,6 +558,37 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet: PASS"; else echo ">>> e2e-webrtc-meet: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
+# FILE OVER WEBRTC — the stretch goal's payload. Same ladder as e2e-webrtc-meet
+# (nothing handed to the browsers; they add the node, reload, meet at a name),
+# but the last phase transfers a FILE instead of a chat message: A `offer`s
+# deterministic multi-chunk bytes, B `offers` A to see the manifest, B `pull`s
+# and must report the same byte count AND the same content id.
+#
+# What it proves that the chat gates cannot: a **browser served it**. Every
+# other transfer path targets `entity://{peer}/local/files`, whose handler is
+# native-only, so two browsers had nobody to receive; this runs over
+# `system/content` + an offer manifest, which every peer has. And the payload is
+# multi-chunk on purpose — a single-chunk file passes with the receiver's
+# closure walk deleted.
+#
+# Neither browser is ever given the other's address, so there is no WebSocket
+# between them to fall back to: bytes that arrive crossed the §6.5 data channel.
+FILE_SIZE ?= 700000
+e2e-webrtc-file:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-file SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-file BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-file: two browsers meet at a name, then one SERVES a file ($(FILE_SIZE) bytes)"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; FILE_SIZE="$(FILE_SIZE)" SPIKE=spike_file_over_webrtc.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-file: PASS — a file crossed between two browsers"; \
+	 else echo ">>> e2e-webrtc-file: FAIL (rc=$$rc) — read which phase failed: offer (serving), offers (the manifest crossing), or pull (the closure walk)"; fi; \
+	 exit $$rc
+
 # §4.5.1's AUTOMATIC half: the node is started serving a reflector and PUBLISHES
 # it in `advertise`; the browsers are handed nothing and type nothing. They add
 # the connector, ask the node what it serves, store the answer on the row, and
@@ -607,6 +678,44 @@ endif
 	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-traverse: PASS — media crossed two NATs (the traversal gate)"; \
 	 else echo ">>> e2e-webrtc-traverse: FAIL (rc=$$rc) — read the '§6.5 establishment' block: the FIRST failure per side is the informative one, the last reports consequences"; fi; \
+	 exit $$rc
+
+# `make e2e-webrtc-idle` — the OTHER half of the §10.3 seam gate.
+#
+# EXTENSION-NETWORK Amendment 14 requires the connection the seam returns to
+# survive idle ("a punched NAT mapping expires on silence and an idle punched
+# connection dies in a way no same-host test reproduces"), and §11.5's gate says
+# "a direct punched transport that SURVIVES IDLE". `e2e-webrtc-traverse` proves
+# establishment and carriage and then tears down — this runs the same rig, goes
+# quiet for longer than the routers' UDP mapping lives, and speaks again.
+#
+# The two knobs are a pair and the gate checks their ratio: IDLE_SECS must
+# exceed UDP_TIMEOUT or the mapping was never at risk and the run is refused
+# rather than reported green. Defaults 90s quiet against a 30s mapping (3x);
+# 30s is inside the range real home routers use for UDP.
+#
+# It also reports WHICH MECHANISM held the mapping open, by counting packets
+# across each router during the quiet window — because if the app chatters, the
+# mapping was refreshed by traffic and the run has tested nothing. That number
+# is the point, not a diagnostic: arch asked for it so the next substrate can
+# reuse the result.
+IDLE_SECS ?= 90
+UDP_TIMEOUT ?= 30
+e2e-webrtc-idle:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-idle SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-idle BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-idle: two NATs, $(IDLE_SECS)s of silence against a $(UDP_TIMEOUT)s UDP mapping"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; TOPOLOGY=nat SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" \
+	   IDLE_SECS=$(IDLE_SECS) UDP_TIMEOUT=$(UDP_TIMEOUT) \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-idle: PASS — the transport survived $(IDLE_SECS)s of silence (read the 'mechanism' line before quoting this)"; \
+	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-idle: INCONCLUSIVE — the transport behaved correctly; the RUN could not establish that it was tested. Read the 'mechanism' line: today this exits 2 because the chat poll keeps the link busy at ~50 pkt/s/side, so nothing goes idle. That is a finding, not a failure."; \
+	 else echo ">>> e2e-webrtc-idle: FAIL (rc=$$rc) — idle survival genuinely broke (no delivery, or the channel was rebuilt). This is the state that means a regression"; fi; \
 	 exit $$rc
 
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
@@ -706,7 +815,7 @@ appimage: wasm-release
 # server, fully offline). The ordering is load-bearing and is exactly why plain
 # `make tauri` can't do it: wasm-release FIRST (trunk WIPES dist/), THEN publish
 # INTO dist/ (cleans only its own roots — sites/content/{peer} — leaving the SPA),
-# THEN embed. Same publish knobs as `make publish`
+# THEN embed. Same publish knobs as `make site`
 # (INGEST / APPS_DIST / CONFIG_SITE / SURFACE / WINDOW_TYPE / LOCKED / IDENTITY_SEED);
 # --deployment-config is implied (a baked bundle must boot into its content).
 #
@@ -788,7 +897,7 @@ build-serve: wasm-release
 # CDN / permalink projection). Headless native, no browser: builds a peer,
 # reads its sites off the tree ([A] reader), projects them to
 # `dist/static-demo/sites/{peer}/{site}/…` ([B1] emitter). Override the
-# output dir: `make publish OUT=path/to/dir`. OUT must stay UNDER the repo tree
+# output dir: `make site OUT=path/to/dir`. OUT must stay UNDER the repo tree
 # (the default is repo-relative): publish runs in-container with only the parent
 # meta dir bind-mounted, so an absolute OUT like `/tmp/x` writes to the
 # container's throwaway /tmp and the result never reaches the host. Today the source is a fresh
@@ -803,7 +912,7 @@ build-serve: wasm-release
 #                   any generator's output OR a hand-authored folder — instead of
 #                   the bundled demo seed. One site dir, or a parent of many.
 #                   Format: docs/architecture/guides/PUBLISH-INGEST-FORMAT.md;
-#                   worked example: examples/demo-site/ (make publish INGEST=…).
+#                   worked example: examples/demo-site/ (make site INGEST=…).
 #   PREFIX=<path>   the per-peer HOSTING SCOPE: nest everything (.html, .bin,
 #                   deployment-config origin) under {OUT}/{PREFIX}/… so a domain
 #                   can host many isolated peers side by side. Empty (default) =
@@ -830,8 +939,8 @@ build-serve: wasm-release
 #                   across runs — the peer-id is the site address, so it must not
 #                   drift. DEMO_IDENTITY=1 uses the fixed demo seed (dev/testing).
 #   PUBLISH_DATA_DIR=<dir>  where the durable publisher keypair lives
-#                   (default .entity-publish/, gitignored). Both `publish`
-#                   (in-container, via the parent mount) and `publish-serve`
+#                   (default .entity-publish/, gitignored). Both `site`
+#                   (in-container, via the parent mount) and `site-serve`
 #                   (host) point ENTITY_DATA_DIR here, so both publish under the
 #                   SAME identity even though publish runs `podman run --rm`.
 # === Apps — the second publish mode: point at a pre-built dist directory ===
@@ -843,12 +952,12 @@ build-serve: wasm-release
 #   APPS_DIST=<dir>   a pre-built apps dist directory to ingest alongside content.
 #                     Empty (default) = the bundled demo app seed baked into the
 #                     publish binary. Like INGEST/OUT: for the containerized
-#                     `publish` target the dir must live UNDER the repo tree (only
-#                     the meta dir is bind-mounted); `publish-serve` runs host
+#                     `site` target the dir must live UNDER the repo tree (only
+#                     the meta dir is bind-mounted); `site-serve` runs host
 #                     cargo and accepts any path. e.g.
-#   make publish-serve INGEST=examples/demo-site APPS_DIST=~/path/to/entity-apps/dist
+#   make site-serve INGEST=examples/demo-site APPS_DIST=~/path/to/entity-apps/dist
 APPS_DIST ?=
-# Deployment-config startup surface (used by publish / publish-serve when
+# Deployment-config startup surface (used by publish / site-serve when
 # DEPLOY_CONFIG is set): chrome | site | window (default window + a Site Browser
 # window type). LOCKED=1 makes a SURFACE=site overlay a kiosk. Ignored without a
 # config; the publish binary supplies the defaults when these are empty.
@@ -858,8 +967,8 @@ LOCKED ?=
 OUT ?= dist/static-demo
 # Persist the publisher identity across `--rm` runs: point ENTITY_DATA_DIR at the
 # repo-local dir, which is visible in-container via the existing parent mount.
-publish: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
-publish: image
+site: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
+site: image
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 
@@ -868,7 +977,7 @@ publish: image
 # site with `SITE=<id>` (default: the demo site). Output dir = OUT (default
 # `dist/static-bare`). Serve with `make serve`-style static server and open /.
 OUT_BARE ?= dist/static-bare
-publish-bare: image
+site-bare: image
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT_BARE) --bare-root $(if $(SITE),--site=$(SITE),) $(if $(LIVE),--live=$(LIVE),))
 
 # === THE standard "build everything fresh, publish, and serve" command ===
@@ -900,7 +1009,7 @@ publish-bare: image
 #                  (it serves a content-less shell off your machine — guarded).
 PORT ?= 8081
 LIVE ?=
-# The serving target (publish-serve) publishes into an ISOLATED
+# The serving target (site-serve) publishes into an ISOLATED
 # copy of the SPA bundle here — NOT the shared, git-ignored `dist/`. `make wasm`
 # and `make e2e-worker` rebuild/republish `dist/` as a side effect, which would
 # otherwise wipe a running deployment out from under you. SERVE_DIR lives under
@@ -924,18 +1033,18 @@ endef
 # Output-isolated from the canonical dist/ + target/ so this can run
 # CONCURRENTLY with `make tauri-run` (which keeps dist/ + target/). Override
 # DIST=/TARGET_DIR= to relocate. See the DIST/TARGET_DIR header note.
-publish-serve: DIST       := dist-publish
-publish-serve: TARGET_DIR := target-publish
+site-serve: DIST       := dist-publish
+site-serve: TARGET_DIR := target-publish
 # Durable publisher identity, translated to its in-container path (SERVE_DIR is
 # mounted below; PUBLISH_DATA_DIR rides the existing parent mount). Mirrors the
-# `publish` / `tauri-bundle` targets so all three publish under ONE identity.
-publish-serve: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
-# publish-serve emits the deployment-config by DEFAULT, so the served SPA
+# `site` / `tauri-bundle` targets so all three publish under ONE identity.
+site-serve: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
+# site-serve emits the deployment-config by DEFAULT, so the served SPA
 # cold-boots into the published content (registers the publish peer's origin +
 # lands on its home site) — otherwise the SPA shows only its own boot seed and
 # your published sites appear missing. Turn it off with DEPLOY_CONFIG=0.
-publish-serve: DEPLOY_CONFIG := 1
-publish-serve: wasm
+site-serve: DEPLOY_CONFIG := 1
+site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
@@ -947,4 +1056,227 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat e2e-webrtc-advertised e2e-webrtc-traverse tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+# ============================================================================
+# === dist — ADR-0023 Mode 1: the shippable artifact for THIS host ===========
+# ============================================================================
+# `make dist` produces the end-user installers for the host you are standing
+# on. `make dist-web` produces the browser SPA tarball (host-independent).
+# Both land in $(ARTIFACTS)/ under the fleet-wide filename scheme
+# `{name}_{version}_{os}_{arch}.{ext}` (ADR-0023).
+#
+# WHERE THE PLATFORM MATRIX LIVES — read this before adding a target here.
+# It is NOT in this file. ADR-0023 gives the matrix exactly ONE home so it
+# cannot drift, and for this repo that home is the tag-triggered workflow's
+# `strategy.matrix` (.github/workflows/release.yml). There is deliberately no
+# `dist-linux` / `dist-windows` / `dist-macos` family (ADR-0023 rejects it as
+# the industry least-favored, drift-prone shape) and no `make release`
+# (a release is an ACT — `git tag vN` on green master, ADR-0015). Adding a
+# platform is a one-line add to that matrix. `make` only ever knows the host.
+#
+# There is also no `dist-all`: ADR-0023 permits one as a local dry-run escape
+# hatch, but it assumes GoReleaser's cross-compiler. We bundle with Tauri
+# (docs/adr/0002 — a .dmg needs macOS, a .msi needs Windows), so a `dist-all`
+# on a Linux box could only ever produce the Linux third of a release while
+# its name promised the whole thing. A verb that lies is worse than no verb.
+DIST_NAME    ?= entity-browser
+# Single source of truth for the version: the crate. src-tauri/Cargo.toml and
+# tauri.conf.json carry the same string — `make dist` FAILS if they disagree
+# (see the version-coherence guard below), so a release can't ship a binary
+# whose installer metadata claims a different version.
+DIST_VERSION ?= $(shell sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+ARTIFACTS    ?= artifacts
+
+# Host detection. `_host_*` is what this machine IS and is never overridden;
+# `DIST_*` is what you are asking for and defaults to the host. Overriding
+# DIST_OS is how you cross-build: `make dist DIST_OS=windows`.
+_uname_s := $(shell uname -s)
+_uname_m := $(shell uname -m)
+ifeq ($(_uname_s),Linux)
+  _host_os := linux
+endif
+ifeq ($(_uname_s),Darwin)
+  _host_os := macos
+endif
+ifneq (,$(findstring MINGW,$(_uname_s))$(findstring MSYS,$(_uname_s))$(findstring CYGWIN,$(_uname_s)))
+  _host_os := windows
+endif
+_host_os ?= unknown
+ifneq (,$(filter x86_64 amd64,$(_uname_m)))
+  _host_arch := x64
+endif
+ifneq (,$(filter aarch64 arm64,$(_uname_m)))
+  _host_arch := arm64
+endif
+_host_arch ?= $(_uname_m)
+
+DIST_OS   ?= $(_host_os)
+DIST_ARCH ?= $(_host_arch)
+
+# Which bundle formats, keyed on the REQUESTED os — not the host, or asking for
+# windows on Linux would try to build .deb.
+ifeq ($(DIST_OS),linux)
+  # Tauri bundles all three natively on Linux — no host dpkg/rpmbuild needed.
+  DIST_BUNDLES ?= deb,rpm,appimage
+endif
+ifeq ($(DIST_OS),macos)
+  DIST_BUNDLES ?= dmg,app
+endif
+ifeq ($(DIST_OS),windows)
+  ifeq ($(_host_os),windows)
+    DIST_BUNDLES ?= msi,nsis
+  else
+    # Cross-building: NSIS only. `.msi` is WiX, and tauri-bundler gates
+    # `PackageType::WindowsMsi` behind `#[cfg(target_os = "windows")]` — off a
+    # Windows host that arm does not exist and the request is silently
+    # *ignored* ("ignoring msi"), so asking for it would hand you a release
+    # that is quietly missing a file. NSIS is deliberately NOT gated; the
+    # bundler's own comment says "don't restrict to windows as NSIS installers
+    # can be built in linux+macOS using cargo-xwin".
+    DIST_BUNDLES ?= nsis
+  endif
+endif
+DIST_BUNDLES ?=
+
+# --- Cross-building ---------------------------------------------------------
+# Empty when building for the host, which is the normal case.
+#
+# Windows-from-Linux WORKS and is proven here: cargo-xwin supplies the MSVC
+# CRT/SDK, clang+lld link the PE, and Tauri drives makensis. What you get is
+# `_setup.exe`, not `.msi` (see above).
+#
+# macOS is NOT cross-buildable and this is not a licence quibble: in
+# tauri-bundler `mod macos` is itself `#[cfg(target_os = "macos")]`, so the
+# `.app`/`.dmg` bundlers are compiled OUT of the binary on any other host —
+# there is no code to call. (Underneath that, linking Cocoa/WebKit needs
+# Apple's SDK, whose licence restricts use to Apple hardware.) macOS artifacts
+# come from a macOS runner; the release workflow uses GitHub's free ones.
+DIST_TARGET :=
+DIST_CROSS  :=
+_cross_unsupported :=
+ifneq ($(DIST_OS),$(_host_os))
+  ifeq ($(DIST_OS),windows)
+    ifeq ($(DIST_ARCH),arm64)
+      DIST_TARGET := aarch64-pc-windows-msvc
+    else
+      DIST_TARGET := x86_64-pc-windows-msvc
+    endif
+    DIST_CROSS := --runner cargo-xwin --target $(DIST_TARGET)
+  else
+    _cross_unsupported := 1
+  endif
+endif
+
+# cargo puts a cross build under target/<triple>/, a host build directly under
+# target/ — the staging step has to be told which.
+DIST_BUNDLE_ROOT := src-tauri/$(TARGET_DIR)$(if $(DIST_TARGET),/$(DIST_TARGET),)/release/bundle
+
+# cargo-xwin downloads Microsoft's CRT and Windows SDK headers, which is a
+# licence you accept, not one we can accept on your behalf in a committed file.
+# One env var, once.
+XWIN_ACCEPT_LICENSE ?=
+define check_cross_supported
+	@if [ -n "$(_cross_unsupported)" ]; then \
+	  echo "make dist: cannot build $(DIST_OS) artifacts on a $(_host_os) host."; \
+	  echo "  tauri-bundler compiles its macOS bundlers out entirely off a macOS host"; \
+	  echo "  (\`mod macos\` is #[cfg(target_os = \"macos\")]) — there is nothing to call."; \
+	  echo "  Use a macOS machine or the macos leg of .github/workflows/release.yml."; \
+	  exit 1; \
+	fi
+	@if [ -n "$(DIST_CROSS)" ] && [ -z "$(XWIN_ACCEPT_LICENSE)" ]; then \
+	  echo "Cross-building Windows needs Microsoft's CRT + Windows SDK headers,"; \
+	  echo "which cargo-xwin downloads under Microsoft's licence. Accept it explicitly:"; \
+	  echo ""; \
+	  echo "    make dist DIST_OS=windows XWIN_ACCEPT_LICENSE=1"; \
+	  echo ""; \
+	  exit 1; \
+	fi
+endef
+
+# Guard: the version string lives in three files that a release must agree on.
+# Cheap to check, and the failure it prevents (an installer that advertises
+# 0.8.0 while the binary is 0.9.0) is invisible until a user reports it.
+define check_dist_version
+	@v='$(DIST_VERSION)'; [ -n "$$v" ] || { echo "dist: could not read version from Cargo.toml"; exit 1; }; \
+	t=$$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' src-tauri/Cargo.toml | head -1); \
+	j=$$(sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1); \
+	[ "$$v" = "$$t" ] && [ "$$v" = "$$j" ] || { \
+	  echo "dist: version mismatch — Cargo.toml=$$v src-tauri/Cargo.toml=$$t tauri.conf.json=$$j"; \
+	  echo "      all three must match before a release can be built."; exit 1; }
+endef
+
+# Preflight for the native runner: in the container these are guaranteed by
+# the image, on a host they are the contributor's to install, and the error
+# cargo gives ("no such subcommand: tauri") does not say how to fix it.
+define check_native_toolchain
+	@if [ "$(NATIVE)" = "1" ]; then \
+	  command -v cargo >/dev/null 2>&1 || { echo "dist-native needs a host Rust toolchain (rustup.rs); or drop NATIVE=1 to build in the container."; exit 1; }; \
+	  cargo tauri --version >/dev/null 2>&1 || { echo "dist-native needs the Tauri CLI:  cargo install --locked tauri-cli --version '^2'"; exit 1; }; \
+	  command -v trunk >/dev/null 2>&1 || { echo "dist-native needs Trunk:  cargo install --locked trunk@0.21.14  (+ rustup target add wasm32-unknown-unknown)"; exit 1; }; \
+	fi
+endef
+
+# The desktop installers for this host. Ships the GENERIC app (no baked site
+# content) — that is the thing an end user installs. A content-baked
+# distributable is a different product: publish into dist/ first, exactly as
+# `tauri-bundle` does, then bundle.
+#
+# NO_STRIP=1 + APPIMAGE_EXTRACT_AND_RUN=1 are inherited from the proven
+# `appimage` target: the container has no FUSE, so linuxdeploy/appimagetool
+# must self-extract, and its strip pass is unreliable there.
+# Preflight is its OWN prerequisite, ahead of `image`, so an impossible request
+# (macOS from Linux) is refused in a second instead of after a container build.
+dist-preflight:
+	@[ -n "$(DIST_BUNDLES)" ] || { echo "make dist: unrecognized target '$(DIST_OS)/$(DIST_ARCH)' (host $(_uname_s)/$(_uname_m))."; \
+	  echo "  Set them explicitly:  make dist DIST_OS=linux DIST_ARCH=x64 DIST_BUNDLES=deb,rpm,appimage"; exit 1; }
+	$(check_cross_supported)
+
+dist: dist-preflight $(DIST_IMAGE_DEP)
+	$(check_dist_version)
+	$(check_native_toolchain)
+	@echo "==> dist $(DIST_NAME) $(DIST_VERSION) — $(DIST_OS)/$(DIST_ARCH) [$(DIST_BUNDLES)]$(if $(DIST_TARGET), cross → $(DIST_TARGET),)$(if $(NATIVE), (native runner),)"
+	$(call DIST_RUN,$(WASM_RELEASE_CMD))
+	$(call DIST_RUN,touch src-tauri/src/lib.rs && cd src-tauri && APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 XWIN_ACCEPT_LICENSE=$(XWIN_ACCEPT_LICENSE) cargo tauri build $(DIST_CROSS) --bundles $(DIST_BUNDLES))
+	@./tools/dist-stage.sh "$(DIST_NAME)" "$(DIST_VERSION)" "$(DIST_OS)" "$(DIST_ARCH)" "$(DIST_BUNDLE_ROOT)" "$(ARTIFACTS)"
+
+# The browser SPA as a release artifact — the static bundle you drop on a CDN
+# or any static origin. Host-independent (it is wasm), so CI builds it ONCE
+# rather than per matrix leg, and its filename carries no os/arch.
+dist-web: $(DIST_IMAGE_DEP)
+	$(check_dist_version)
+	$(check_native_toolchain)
+	@mkdir -p $(ARTIFACTS)
+	$(call DIST_RUN,$(WASM_RELEASE_CMD))
+	$(call DIST_RUN,tar -czf $(ARTIFACTS)/$(DIST_NAME)_$(DIST_VERSION)_web.tar.gz -C $(DIST) .)
+	@echo ""
+	@echo "=== web SPA artifact ==="
+	@ls -lh $(ARTIFACTS)/$(DIST_NAME)_$(DIST_VERSION)_web.tar.gz | awk '{print "  " $$9 "  (" $$5 ")"}'
+
+# ADR-0019's `-native` opt-in spelled as a verb. Same recipes, host toolchain.
+dist-native:
+	@$(MAKE) dist NATIVE=1
+dist-web-native:
+	@$(MAKE) dist-web NATIVE=1
+
+# --- ADR-0023 Amendment 1: `publish` is a RESERVED verb ---------------------
+# It means ONE thing fleet-wide — push a built package to its language's
+# native registry (crates.io/npm/…). This repo has no such package, so it does
+# not define the verb; what used to live here (emit a content site to a
+# directory) is now `site` / `site-bare` / `site-serve`.
+#
+# These stubs exist ONLY to convert stale muscle memory and stale scripts into
+# a readable message instead of "No rule to make target". Delete them after
+# one release. NOTE the app's own CLI is a separate namespace and is
+# UNCHANGED: `entity-browser publish <dir>` is still the command, and
+# PUBLISH_DATA_DIR/PUBLISH-INGEST-FORMAT still name it — the reservation
+# governs `make` verbs only.
+publish publish-bare publish-serve:
+	@echo 'make $@ was renamed — "publish" is a reserved verb (ADR-0023 Amendment 1).'
+	@echo ''
+	@echo '    make $(patsubst publish%,site%,$@)'
+	@echo ''
+	@echo '  Same recipe, same knobs, new name. The app CLI is a different'
+	@echo '  namespace and did NOT change: entity-browser publish <dir>'
+	@exit 1
+
+.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle
+

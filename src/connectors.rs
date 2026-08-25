@@ -1,6 +1,16 @@
 //! The **connector registry** — the durable, user-editable list of signaling
 //! nodes this app may rendezvous through, and the selection among them.
 //!
+//! **"Registry" here is local, and it is NOT `EXTENSION-REGISTRY`.** This file
+//! is a list of signaling nodes kept on the system peer of *this* app; it
+//! performs no `:resolve`, holds no signed service-advertisement set, and knows
+//! nothing of §3b. Nothing in `src/` resolves an `EXTENSION-REGISTRY` name
+//! registry at all — which is exactly why the connector-entered-by-URL path
+//! (`SIGNALING` §13 item 5b) is the one the spec has to serve separately. The
+//! two senses collided on that seam and cost arch a re-read
+//! (`ROUTING-2026-08-16-d` §4); the name stays because it is right inside this
+//! crate, so the disambiguation lives here instead.
+//!
 //! *"I run my own connector, or a community runs one; once I'm on it I connect
 //! by peer id."* That intuition is `EXTENSION-SIGNALING` §2.2 and it is already
 //! implemented upstream; what was missing at the app tier is somewhere to *put*

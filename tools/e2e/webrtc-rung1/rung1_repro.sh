@@ -24,6 +24,9 @@ NET=entity-rtc-spike
 # containers are on one subnet, where host candidates always work. That is the
 # claim this split mode exists to bound.
 TOPOLOGY="${TOPOLOGY:-shared}"
+# The spike reads it too — `survives idle` is only meaningful with a NAT in path
+# and refuses to claim anything without one, so it has to know which rig it is in.
+export TOPOLOGY
 NET_A=entity-rtc-nat-a
 NET_B=entity-rtc-nat-b
 CORE=../entity-core-rust
@@ -80,7 +83,10 @@ if [ "$TOPOLOGY" = "nat" ]; then
   # its own external address, plus a self-hosted STUN responder. See
   # nat_topology.sh for what kind of NAT this is and why that bounds the claim.
   echo ">> TOPOLOGY=nat — two peers, two routers, two external addresses"
-  bash "$SCRATCH/nat_topology.sh" up
+  # UDP_TIMEOUT rides through to the routers' conntrack. The idle gate lowers it
+  # so its quiet window can outlast a mapping; everything else takes the default.
+  UDP_TIMEOUT="${UDP_TIMEOUT:-180}" bash "$SCRATCH/nat_topology.sh" up
+  export UDP_TIMEOUT="${UDP_TIMEOUT:-180}"
 elif [ "$TOPOLOGY" = "split" ]; then
   echo ">> TOPOLOGY=split — one ISOLATED network per browser (the NAT negative control)"
   podman network exists "$NET_A" || podman network create --opt isolate=true "$NET_A" >/dev/null
