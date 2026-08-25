@@ -297,7 +297,9 @@ fn controls_bar(output: &AccessLogOutput, ctx: &DomCtx) -> Element {
 /// `width:100%`, which in the flex controls bar would make each dropdown claim a
 /// whole line and stack. The trailing `width:auto` (last-wins) keeps them inline.
 fn compact_select(data_field: &str) -> Element {
-    let select = util::create_element("select");
+    // The shared unwired select atom, inline-sized (width:auto last-wins) so
+    // the filter row stays compact; options are appended by the caller.
+    let select = crate::dom::components::select_el(&[], "");
     select
         .set_attribute("style", &format!("{};width:auto", theme::SELECT))
         .ok();

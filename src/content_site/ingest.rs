@@ -408,7 +408,13 @@ mod tests {
         let site = super::super::read::read_site(&peers, &pid, "lab").expect("reads back");
         assert_eq!(site.manifest.title, "Bill's Lab");
         assert_eq!(site.manifest.root(), "index");
+        // `"theme": "lab"` is a deliberately UNKNOWN theme name: ingest copies
+        // the field verbatim (no validation at this layer — the render/export
+        // consumers validate against the registry and warn loudly, S-T2), so
+        // the params bag must carry it unchanged…
         assert_eq!(site.manifest.params.get("theme").map(String::as_str), Some("lab"));
+        // …and the registry consumer must reject it (no silent dark restyle).
+        assert_eq!(crate::theme_tokens::site_container_block("lab"), None);
 
         let slugs: Vec<&str> = site.pages.iter().map(|(s, _)| s.as_str()).collect();
         assert!(slugs.contains(&"index"));
@@ -484,6 +490,31 @@ mod tests {
         let refs = crate::content_site::embed::embed_refs(&index.1.body);
         assert!(refs.contains(&"assets/figures/landscape.svg".to_string()), "refs: {refs:?}");
         assert!(refs.contains(&"assets/figures/topology.png".to_string()));
+    }
+
+    #[test]
+    fn ingests_a_registered_theme_name_that_resolves() {
+        // The S-T2 happy path: a manifest declaring a REGISTERED theme name
+        // ingests verbatim and resolves through the registry to a container
+        // block (the render/export consumers apply it in "Site's theme" mode).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(
+            dir,
+            "site.manifest.json",
+            r#"{ "site_id": "lit", "title": "Lit", "theme": "light",
+                 "nav": [ { "title": "Home", "path": "pages/index.md" } ] }"#,
+        );
+        write(dir, "pages/index.md", "+++\ntitle = \"Home\"\n+++\n\nBody.\n");
+
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        ingest_path(&peers, &pid, dir).expect("ingest");
+        let site = super::super::read::read_site(&peers, &pid, "lit").expect("reads back");
+        assert_eq!(site.manifest.params.get("theme").map(String::as_str), Some("light"));
+        let block = crate::theme_tokens::site_container_block("light")
+            .expect("registered name resolves");
+        assert!(block.contains("--site-bg:"), "container block: {block}");
     }
 
     #[test]

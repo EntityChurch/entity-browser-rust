@@ -615,9 +615,19 @@ mod wasm {
             .collect()
     }
 
+    /// The raw persisted-vault string (empty when absent). The cheap
+    /// change probe [`super::peer_modes`] keys its cache on — a
+    /// localStorage `getItem` is an in-process map read, so per-frame
+    /// callers can compare this instead of re-parsing + re-deriving
+    /// keypairs every frame.
+    pub fn raw_vault_string() -> String {
+        get_storage()
+            .and_then(|s| s.get_item(STORAGE_KEY).ok().flatten())
+            .unwrap_or_default()
+    }
+
     pub fn load_all_peer_entries() -> Vec<PersistedPeerEntry> {
-        let Some(storage) = get_storage() else { return Vec::new() };
-        let data = storage.get_item(STORAGE_KEY).ok().flatten().unwrap_or_default();
+        let data = raw_vault_string();
         let (_version, entries) = vault_codec::parse(&data);
         let result: Vec<_> = entries.into_iter()
             .map(|e| PersistedPeerEntry {
@@ -629,9 +639,9 @@ mod wasm {
                 mode: e.mode,
             })
             .collect();
-        // DEBUG: this is called by `peer_modes()` from every section
-        // rebuild (badges, palette signature) — at INFO it floods the
-        // log during normal interaction.
+        // Event-driven callers only (boot paths, lifecycle ops, and
+        // `peer_modes` on a vault CHANGE — its cache absorbs the frame
+        // loop), so this line marks real vault activity, not frames.
         tracing::debug!(count = result.len(), "loaded persisted peer entries from localStorage");
         result
     }
@@ -808,11 +818,43 @@ pub use wasm::{
 /// and resolve roles against it.
 ///
 /// [`PeerMode`]: crate::peer_mode::PeerMode
+///
+/// **Frame-safe:** `peer_registry.sync()` calls this at the end of every
+/// frame (the peer-membership reactivity mechanism), so on wasm the map is
+/// memoized against the raw vault string — an unchanged vault costs one
+/// localStorage `getItem` + string compare; the parse, the per-entry
+/// Ed25519 `Keypair::from_seed`, and the load log run only when the vault
+/// actually changed (this tab or another). Native (tests/tools, no frame
+/// loop) stays uncached.
 pub fn peer_modes() -> std::collections::HashMap<String, crate::peer_mode::PeerMode> {
-    load_all_peer_entries()
-        .into_iter()
-        .map(|e| (e.persisted.keypair.peer_id().to_string(), e.mode))
-        .collect()
+    let derive = || {
+        load_all_peer_entries()
+            .into_iter()
+            .map(|e| (e.persisted.keypair.peer_id().to_string(), e.mode))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::cell::RefCell;
+        type Cached = (String, std::collections::HashMap<String, crate::peer_mode::PeerMode>);
+        thread_local! {
+            static CACHE: RefCell<Option<Cached>> = const { RefCell::new(None) };
+        }
+        let raw = wasm::raw_vault_string();
+        CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            match c.as_ref() {
+                Some((cached_raw, map)) if *cached_raw == raw => map.clone(),
+                _ => {
+                    let map = derive();
+                    *c = Some((raw, map.clone()));
+                    map
+                }
+            }
+        })
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    derive()
 }
 
 #[cfg(test)]

@@ -31,11 +31,12 @@ use crate::views::{
     site_editor::SiteEditorWindow,
     storage::StorageWindow,
     system_overview::SystemOverviewWindow,
+    theme_editor::ThemeEditorWindow,
     wire_recorder::WireRecorderWindow,
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
 
-/// The 22 standard window types, in registration order. The single source —
+/// The 23 standard window types, in registration order. The single source —
 /// `build_wasm_app` registers exactly these, and the settings UI reads their
 /// metadata from the same list. Add a window here and it shows up in both.
 /// (Was 22 until the standalone "System Overview" window was merged into the
@@ -65,6 +66,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         SiteEditorWindow::window_type(),
         SystemOverviewWindow::window_type(),
         AccessLogWindow::window_type(),
+        ThemeEditorWindow::window_type(),
     ]
 }
 
@@ -99,6 +101,7 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
             vec![
                 "System Overview",
                 "Settings",
+                "Theme Editor",
                 "Peers",
                 "Peer Connections",
                 "File Transfer",
@@ -143,7 +146,7 @@ mod tests {
     #[test]
     fn roster_is_twentytwo_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
-        assert_eq!(meta.len(), 22, "the standard roster is 22 windows");
+        assert_eq!(meta.len(), 23, "the standard roster is 23 windows");
         // Spot-check the scope partition the settings filter relies on.
         let settings = meta.iter().find(|(n, _)| *n == "Settings").expect("Settings present");
         assert_eq!(settings.1, WindowScope::System);

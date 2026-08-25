@@ -61,6 +61,17 @@ impl SettingsWindow {
                 // in Worker mode via the Peers facade.
                 let path = crate::app_paths::settings_path(crate::app_paths::APP_ID, &window.peer_id, SETTINGS_PATH);
                 pm.watch_prefix(&mut window.watch, &window.peer_id, path);
+                // The Theme + Site-appearance dropdowns render the theme
+                // registry (built-ins + user themes), and user themes are a
+                // projection of the themes prefix — watch it, or a theme
+                // created/deleted in the Theme Editor (or another tab) leaves
+                // these dropdowns stale (the rebuild-guard lesson: every
+                // input to a render must be able to dirty it).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &window.peer_id,
+                    crate::app_paths::user_themes_prefix(crate::app_paths::APP_ID, &window.peer_id),
+                );
                 // Also watch the session config entity (Site & Surface
                 // section) so a change here — or from boot / the status-bar
                 // toggle — re-renders. On the Worker arm the cache mirror only

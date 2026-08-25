@@ -4,6 +4,7 @@
 use wasm_bindgen::JsCast;
 
 use crate::action::Action;
+use crate::dom::components;
 use crate::dom::event_log;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
@@ -45,25 +46,25 @@ fn render_mode_toggle(parent: &Element, output: &ExecuteConsoleOutput, ctx: &Dom
         .set_attribute("style", "margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px")
         .ok();
 
-    let guided_btn = util::create_element("button");
+    // Toggle pair — the atoms' look comes from theme::TOGGLE_*; built on the
+    // shared button_el so the element itself isn't hand-rolled.
+    let guided_btn = components::button_el("Guided", components::ButtonKind::Small);
     guided_btn
         .set_attribute(
             "style",
             if is_guided { theme::TOGGLE_ACTIVE } else { theme::TOGGLE_INACTIVE },
         )
         .ok();
-    util::set_text(&guided_btn, "Guided");
     ctx.on_window_event(&guided_btn, "click", "set_mode", "guided");
     util::append(&mode_div, &guided_btn);
 
-    let raw_btn = util::create_element("button");
+    let raw_btn = components::button_el("Raw", components::ButtonKind::Small);
     raw_btn
         .set_attribute(
             "style",
             if is_guided { theme::TOGGLE_INACTIVE } else { theme::TOGGLE_ACTIVE },
         )
         .ok();
-    util::set_text(&raw_btn, "Raw");
     ctx.on_window_event(&raw_btn, "click", "set_mode", "raw");
     util::append(&mode_div, &raw_btn);
 
@@ -71,103 +72,76 @@ fn render_mode_toggle(parent: &Element, output: &ExecuteConsoleOutput, ctx: &Dom
 }
 
 fn render_peer_selector(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&label, "Peer:");
-    util::append(parent, &label);
-
-    let select = util::create_element("select");
-    select.set_attribute("style", theme::SELECT).ok();
-    for option in &output.peer_options {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &option.value).ok();
-        if option.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &option.label);
-        util::append(&select, &opt);
-    }
-    ctx.on_select_change(&select, "select_peer");
-    util::append(parent, &select);
+    let options: Vec<(&str, &str)> = output
+        .peer_options
+        .iter()
+        .map(|o| (o.value.as_str(), o.label.as_str()))
+        .collect();
+    let selected = output
+        .peer_options
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.value.as_str())
+        .unwrap_or("");
+    let select = components::select(ctx, &options, selected, "select_peer");
+    util::append(parent, &components::field("Peer", "", &select));
 }
 
 fn render_guided(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
     let Some(guided) = &output.guided else { return };
 
-    let h_label = util::create_element("label");
-    h_label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&h_label, "Handler:");
-    util::append(parent, &h_label);
+    let h_values: Vec<String> = guided.handlers.iter().map(|h| h.index.to_string()).collect();
+    let h_options: Vec<(&str, &str)> = h_values
+        .iter()
+        .zip(&guided.handlers)
+        .map(|(v, h)| (v.as_str(), h.label.as_str()))
+        .collect();
+    let h_selected = h_values
+        .iter()
+        .zip(&guided.handlers)
+        .find(|(_, h)| h.selected)
+        .map(|(v, _)| v.as_str())
+        .unwrap_or("");
+    let h_select = components::select(ctx, &h_options, h_selected, "select_handler");
+    util::append(parent, &components::field("Handler", "", &h_select));
 
-    let h_select = util::create_element("select");
-    h_select.set_attribute("style", theme::SELECT).ok();
-    for h in &guided.handlers {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &h.index.to_string()).ok();
-        if h.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &h.label);
-        util::append(&h_select, &opt);
-    }
-    ctx.on_select_change(&h_select, "select_handler");
-    util::append(parent, &h_select);
-
-    let op_label = util::create_element("label");
-    op_label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&op_label, "Operation:");
-    util::append(parent, &op_label);
-
-    let op_select = util::create_element("select");
-    op_select.set_attribute("style", theme::SELECT).ok();
-    for op in &guided.operations {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &op.index.to_string()).ok();
-        if op.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &op.name);
-        util::append(&op_select, &opt);
-    }
-    ctx.on_select_change(&op_select, "select_operation");
-    util::append(parent, &op_select);
+    let op_values: Vec<String> = guided.operations.iter().map(|o| o.index.to_string()).collect();
+    let op_options: Vec<(&str, &str)> = op_values
+        .iter()
+        .zip(&guided.operations)
+        .map(|(v, o)| (v.as_str(), o.name.as_str()))
+        .collect();
+    let op_selected = op_values
+        .iter()
+        .zip(&guided.operations)
+        .find(|(_, o)| o.selected)
+        .map(|(v, _)| v.as_str())
+        .unwrap_or("");
+    let op_select = components::select(ctx, &op_options, op_selected, "select_operation");
+    util::append(parent, &components::field("Operation", "", &op_select));
 }
 
 fn render_raw(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
     let Some(raw) = &output.raw else { return };
 
-    let uri_label = util::create_element("label");
-    uri_label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&uri_label, "Handler URI:");
-    util::append(parent, &uri_label);
+    // Draft-tracked atoms — typing persists across section rebuilds (exec
+    // completion + event log subscription used to clobber the value mid-edit).
+    // The data-field attribute (matching the execute button's query_selector)
+    // comes with the atom.
+    let uri = components::text_input(ctx, "raw_uri", &raw.handler_uri_initial, "");
+    util::append(parent, &components::field("Handler URI", "", &uri));
 
-    // `tracked_input` persists typing across section rebuilds — exec
-    // completion + event log subscription used to clobber the value
-    // mid-edit before this. The data-field attribute (matches the
-    // execute button's query_selector) is set by the helper.
-    util::tracked_input(parent, ctx, "raw_uri", &raw.handler_uri_initial, theme::INPUT);
-
-    let op_label = util::create_element("label");
-    op_label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&op_label, "Operation:");
-    util::append(parent, &op_label);
-
-    util::tracked_input(parent, ctx, "raw_op", &raw.operation_initial, theme::INPUT);
+    let op = components::text_input(ctx, "raw_op", &raw.operation_initial, "");
+    util::append(parent, &components::field("Operation", "", &op));
 }
 
 fn render_resource(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&label, "Resource:");
-    util::append(parent, &label);
-
-    util::tracked_input(parent, ctx, "resource", &output.resource_initial, theme::INPUT);
+    let resource = components::text_input(ctx, "resource", &output.resource_initial, "");
+    util::append(parent, &components::field("Resource", "", &resource));
 }
 
 fn render_execute_button(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
-    let exec_btn = util::create_element("button");
-    util::set_text(&exec_btn, "Execute");
-    exec_btn.set_attribute("style", theme::BTN_PRIMARY).ok();
+    let exec_btn = components::button_el("Execute", components::ButtonKind::Primary);
 
     let actions = ctx.actions.clone();
     let rp = ctx.repaint.clone();

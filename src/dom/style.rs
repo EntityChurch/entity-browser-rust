@@ -592,7 +592,7 @@ select optgroup {
     text-align: left;
     padding: 8px 10px;
     border-bottom: 2px solid var(--border-bold, #555);
-    color: #999;
+    color: var(--text-dim, #999);
     font-size: 0.8em;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -615,7 +615,7 @@ select optgroup {
 
 .peer-table td.addr-stopped {
     font-size: 0.85em;
-    color: #886;
+    color: var(--text-faint, #886);
 }
 
 .peer-table td.addr-list,
@@ -625,7 +625,7 @@ select optgroup {
 }
 
 .peer-table td.addr-list {
-    color: #aaa;
+    color: var(--text-muted, #aaa);
 }
 
 /* System Overview — the peer identity line inside each card. */
@@ -705,7 +705,7 @@ select optgroup {
 .peer-conn-backend-info {
     font-family: var(--font-mono, monospace);
     font-size: 0.85em;
-    color: #aaa;
+    color: var(--text-muted, #aaa);
 }
 
 /* ---- Responsive: narrow screens / portrait mobile ---- */

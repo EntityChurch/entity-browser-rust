@@ -26,6 +26,7 @@
 
 pub mod cache;
 pub mod discovery;
+pub mod doc_css;
 pub mod embed;
 pub mod format;
 pub mod http_poll;

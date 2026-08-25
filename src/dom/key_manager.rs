@@ -24,7 +24,7 @@ fn build_html(output: &KeyManagerOutput) -> String {
     );
     for key in &output.keys {
         html.push_str(&format!(
-            "<tr style='border-bottom:1px solid #222'>\
+            "<tr style='border-bottom:1px solid var(--border, #222)'>\
              <td style='padding:4px'>{}</td>\
              <td style='padding:4px;font-family:monospace'>{}</td>\
              <td style='padding:4px'>{}</td></tr>",

@@ -50,6 +50,7 @@ mod selection;
 mod session_config;
 mod selection_source;
 mod theme_tokens;
+mod user_themes;
 #[cfg(target_arch = "wasm32")]
 mod opfs_cleanup;
 #[cfg(target_arch = "wasm32")]

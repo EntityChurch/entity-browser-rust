@@ -152,6 +152,10 @@ pub struct EntityApp {
     /// the single peer-membership reactivity mechanism — there is no separate
     /// signal or manual dirty-mark.
     peer_registry: PeerRegistry,
+    /// User-theme registry sync: app-lifetime watch on the themes prefix;
+    /// `sync()` per frame is one atomic check unless the prefix changed
+    /// (then it reconciles the runtime theme registry from the tree).
+    user_themes: crate::user_themes::UserThemes,
     /// Session-lived inspect sink on the system peer feeding the app-tier
     /// access log (`crate::access_log_store`) with local dispatches. Installed
     /// once at boot — app-global, not per-window — so the Access Log window is a
@@ -1012,6 +1016,10 @@ impl EntityApp {
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
         peer_registry.sync(&peer_manager);
+        // User-theme registry: subscribe the themes prefix now (Worker arm:
+        // the observe is what feeds the cache mirror) — the watch starts
+        // dirty, so the first frame's sync performs the boot load.
+        let user_themes = crate::user_themes::UserThemes::new(&peer_manager);
 
         // If running in Tauri, fetch persisted backend peers so they
         // appear in the Peers window on startup (as stopped).
@@ -1198,6 +1206,7 @@ impl EntityApp {
             backend_auth_writer,
             connection_health_writer,
             peer_registry,
+            user_themes,
             access_log_sink,
             dom,
             pending_backend_peers,
@@ -2006,6 +2015,11 @@ impl EntityApp {
         // frame, backend registration). This is the *only*
         // peer-membership reactivity mechanism.
         self.peer_registry.sync(&self.peer_manager);
+
+        // Reconcile the user-theme registry from the tree — one atomic
+        // check when the themes prefix hasn't changed (frame-path rule:
+        // cheap probe in front of any storage-derived work).
+        self.user_themes.sync(&self.peer_manager);
 
         // Reflect Site Mode (overlay vs chrome) into the DOM. The mode
         // class / toggle apply only on change; the overlay content

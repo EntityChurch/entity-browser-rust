@@ -130,6 +130,23 @@ pub fn site_index_path(app_id: &str, peer_id: &str) -> String {
     format!("/{}/app/{}/site-index", peer_id, app_id)
 }
 
+/// Prefix for the **user-defined themes** — one entity per theme, keyed by
+/// its registered name, on the system peer. The runtime theme registry
+/// (`theme_tokens`) is a rebuildable projection of this prefix, synced by
+/// the app-level watch in [`crate::user_themes`] (a Worker-arm reader needs
+/// that subscription for the cache mirror to feed the listing).
+/// e.g. `user_themes_prefix(APP_ID, me)` → `"/{me}/app/entity-browser/themes/"`
+pub fn user_themes_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/themes/", peer_id, app_id)
+}
+
+/// Path for one user theme entity, keyed by theme name (validated
+/// `[a-z0-9-]` — see `theme_tokens::validate_theme_name` — so it is always
+/// a safe single path segment).
+pub fn user_theme_path(app_id: &str, peer_id: &str, name: &str) -> String {
+    format!("{}{}", user_themes_prefix(app_id, peer_id), name)
+}
+
 /// Build a per-window results path.
 pub fn window_results_path(app_id: &str, peer_id: &str, window_id: WindowId) -> String {
     workspace_path(app_id, peer_id, &format!("windows/{}/results", window_id))

@@ -98,7 +98,31 @@ pub fn output_from_resolved(
         // Populated by `render_output` (which knows the configured home); the
         // fast-paint boot path that calls this directly falls back to `/`.
         home_target: String::new(),
+        site_theme_css: site_theme_css(
+            &rp.manifest,
+            &crate::theme_tokens::site_appearance_current(),
+        ),
     }
+}
+
+/// Resolve the manifest's declared theme to the container-scoped `--site-*`
+/// block, gated on the effective "Site appearance" `mode` (S-T2). Pure —
+/// `mode` is a parameter so native tests drive every mode; the production
+/// caller passes `theme_tokens::site_appearance_current()`.
+///
+/// Validation happens BEFORE the mode gate on purpose: an unknown theme name
+/// warns (once per session) even for a user in "Always X" mode, so a
+/// publisher debugging their manifest doesn't need to flip appearance modes
+/// to see the error. The manifest applies only in `"site"` mode — in
+/// `"system"` and strict modes the user's choice wins, and the container
+/// block must be ABSENT (it would override the inherited `:root` layer).
+fn site_theme_css(
+    manifest: &crate::content_site::SiteManifest,
+    mode: &str,
+) -> Option<String> {
+    let name = manifest.params.get("theme").filter(|s| !s.is_empty())?;
+    let block = crate::theme_tokens::site_container_block(name)?;
+    (mode == "site").then_some(block)
 }
 
 fn nav_link(item: &NavItem, loc: &Location, cur_site: &str, cur_page: &str) -> NavLink {
@@ -931,6 +955,54 @@ mod tests {
         assert!(out.breadcrumbs.is_empty(), "root page has no trail");
         assert!(out.error.is_none() && !out.loading);
         assert!(out.body_html.contains("Welcome"), "body rendered: {}", out.body_html);
+    }
+
+    #[test]
+    fn site_theme_css_gates_on_registry_and_mode() {
+        // S-T2: the manifest theme applies ONLY when (a) the name is a
+        // registered theme and (b) the effective appearance mode is "site".
+        // The mode gate is load-bearing for "the user's override always
+        // wins" — a container block present in strict mode would defeat the
+        // `:root` override (see SiteRenderOutput::site_theme_css).
+        use crate::content_site::SiteManifest;
+        let mut m = SiteManifest::new("labs", "Labs", "index", vec![]);
+
+        // No theme declared → nothing, in every mode.
+        assert_eq!(site_theme_css(&m, "site"), None);
+        assert_eq!(site_theme_css(&m, "dark"), None);
+
+        // A registered theme applies in "site" mode with that theme's values…
+        m.params.insert("theme".into(), "light".into());
+        let block = site_theme_css(&m, "site").expect("declared registered theme applies");
+        let light_bg = crate::theme_tokens::site_token_value(&crate::theme_tokens::LIGHT, "--site-bg");
+        assert!(block.contains(&format!("--site-bg:{light_bg};")), "light palette: {block}");
+        assert!(!block.contains("var("), "frozen literals only: {block}");
+        // …and yields to the user's choice in every other mode.
+        assert_eq!(site_theme_css(&m, "system"), None, "follow-system wins");
+        assert_eq!(site_theme_css(&m, "dark"), None, "strict override wins");
+        assert_eq!(site_theme_css(&m, "light"), None, "strict wins even when same theme");
+
+        // An unknown name never applies (warned once, renders as today).
+        m.params.insert("theme".into(), "lab".into());
+        assert_eq!(site_theme_css(&m, "site"), None);
+
+        // The production entry point: native site_appearance_current() is
+        // "site", so a resolved themed page carries the block on its output.
+        use crate::content_site::resolver::ResolvedPage;
+        use crate::content_site::{Location, SitePage};
+        m.params.insert("theme".into(), "light".into());
+        let rp = ResolvedPage {
+            location: Location {
+                peer_id: Some("labs-host".into()),
+                site_id: "labs".into(),
+                page: "index".into(),
+            },
+            manifest: m,
+            page: SitePage::markdown("Home", "# Hi"),
+            assets: Vec::new(),
+        };
+        let out = output_from_resolved(&rp, &rp.location, false, vec![]);
+        assert!(out.site_theme_css.is_some(), "output carries the container block");
     }
 
     #[test]

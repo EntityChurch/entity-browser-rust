@@ -23,7 +23,7 @@
 use wasm_bindgen::JsCast;
 use web_sys::Element;
 
-use crate::dom::{theme, util, DomCtx};
+use crate::dom::{components, theme, util, DomCtx};
 use crate::views::knowledge_base::output::{
     DraftInitial, KbTreeRow, KnowledgeBaseOutput, ViewMode,
 };
@@ -54,22 +54,17 @@ fn render_list_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx
     // Title on its own line.
     let h2 = util::create_element("h2");
     util::set_text(&h2, "Knowledge Base");
-    util::set_attr(&h2, "style", "margin:0 0 12px 0");
+    util::set_attr(&h2, "style", theme::HEADING);
     util::append(parent, &h2);
 
     // Action button row on its own line.
     let actions_row = util::create_element("div");
-    util::set_attr(&actions_row, "style", "margin:0 0 16px 0");
-
-    let new_btn = util::create_element("button");
-    util::set_text(&new_btn, "+ New article");
-    util::set_attr(&new_btn, "style", theme::BTN_PRIMARY);
-    ctx.on_window_event(&new_btn, "click", "new", "");
+    util::set_attr(&actions_row, "style", theme::BTN_ROW);
+    let new_btn = components::button(ctx, "+ New article", components::ButtonKind::Primary, "new");
     util::append(&actions_row, &new_btn);
-
     util::append(parent, &actions_row);
 
-    // Empty state.
+    // Empty state (S5) — a helpful line with the next action named.
     if output.articles.is_empty() {
         let empty = util::create_element("div");
         util::set_attr(
@@ -91,11 +86,7 @@ fn render_list_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx
 
     // Article count.
     let count = util::create_element("div");
-    util::set_attr(
-        &count,
-        "style",
-        "font-size:11px;color:var(--text-dim, #888);margin:0 0 8px 0",
-    );
+    util::set_attr(&count, "style", theme::HINT);
     util::set_text(
         &count,
         &format!(
@@ -113,7 +104,7 @@ fn render_list_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx
         &tree,
         "style",
         "border:1px solid var(--border, #333);border-radius:3px;overflow:auto;\
-         max-height:70vh;font-family:monospace;font-size:13px;",
+         max-height:70vh;font-family:var(--font-mono,monospace);font-size:13px;",
     );
     for row in &output.tree_rows {
         render_tree_row(&tree, row, ctx);
@@ -128,6 +119,10 @@ fn render_tree_row(parent: &Element, row: &KbTreeRow, ctx: &DomCtx) {
     // `.kb-tree-row` is the universal row selector; article leaves
     // also get `.has-entry` (mirrors the entity_tree convention so
     // CSS/tests can distinguish navigable leaves from folder nodes).
+    //
+    // Deliberately NOT `components::tree_row`: these are whole-row
+    // clickable text lines (a doc index), not caret + node-button
+    // controls — a different affordance, themed via tokens below.
     let class = if row.has_entry {
         "kb-tree-row has-entry"
     } else {
@@ -139,7 +134,7 @@ fn render_tree_row(parent: &Element, row: &KbTreeRow, ctx: &DomCtx) {
         "style",
         &format!(
             "padding:5px 8px;padding-left:{}px;cursor:pointer;\
-             border-bottom:1px solid #1a1a2a;white-space:nowrap;\
+             border-bottom:1px solid var(--border, #1a1a2a);white-space:nowrap;\
              overflow:hidden;text-overflow:ellipsis;",
             8 + row.depth * INDENT_PX
         ),
@@ -149,18 +144,18 @@ fn render_tree_row(parent: &Element, row: &KbTreeRow, ctx: &DomCtx) {
         // Directory node: ▼/▶ toggle glyph, name, collapsed count.
         let glyph = util::create_element("span");
         util::set_text(&glyph, if row.expanded { "▼ " } else { "▶ " });
-        util::set_attr(&glyph, "style", "color:#7a7");
+        util::set_attr(&glyph, "style", "color:var(--status-ok, #7a7)");
         util::append(&item, &glyph);
 
         let name = util::create_element("span");
         util::set_text(&name, &row.segment);
-        util::set_attr(&name, "style", "color:#cdf;font-weight:bold");
+        util::set_attr(&name, "style", "color:var(--accent-2, #cdf);font-weight:bold");
         util::append(&item, &name);
 
         if let Some(n) = row.leaf_count {
             let hint = util::create_element("span");
             util::set_text(&hint, &format!("  ({})", n));
-            util::set_attr(&hint, "style", "color:#777;font-size:11px");
+            util::set_attr(&hint, "style", "color:var(--text-dim, #777);font-size:11px");
             util::append(&item, &hint);
         }
 
@@ -173,7 +168,7 @@ fn render_tree_row(parent: &Element, row: &KbTreeRow, ctx: &DomCtx) {
 
         let name = util::create_element("span");
         util::set_text(&name, &row.segment);
-        util::set_attr(&name, "style", "color:#dde");
+        util::set_attr(&name, "style", "color:var(--text, #dde)");
         util::append(&item, &name);
 
         ctx.on_window_event(&item, "click", "select", &row.path);
@@ -186,26 +181,33 @@ fn render_tree_row(parent: &Element, row: &KbTreeRow, ctx: &DomCtx) {
 // Reader view
 // ---------------------------------------------------------------------------
 
+/// The dim mono slug line under a title (S6: raw ids ride below the human
+/// name, never replace it).
+fn slug_line(text: &str) -> Element {
+    let line = util::create_element("div");
+    util::set_text(&line, text);
+    util::set_attr(
+        &line,
+        "style",
+        "color:var(--text-dim, #888);font-family:var(--font-mono,monospace);\
+         font-size:11px;margin:0 0 16px 0",
+    );
+    line
+}
+
 fn render_reader_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx) {
     let detail = match &output.current {
         Some(d) => d,
         None => {
-            // Selected article disappeared (race or external delete).
-            let warn = util::create_element("div");
-            util::set_attr(
-                &warn,
-                "style",
-                "padding:12px;color:#f99;border:1px solid #a44;\
-                 border-radius:3px;margin-bottom:12px;",
+            // Selected article disappeared (race or external delete) —
+            // loud error state (S5) + the way back.
+            util::append(
+                parent,
+                &components::error("The selected article is no longer available."),
             );
-            util::set_text(&warn, "The selected article is no longer available.");
-            util::append(parent, &warn);
-
             let row = util::create_element("div");
-            let btn = util::create_element("button");
-            util::set_text(&btn, "← Back to list");
-            util::set_attr(&btn, "style", theme::BTN_SMALL);
-            ctx.on_window_event(&btn, "click", "show_list", "");
+            let btn =
+                components::button(ctx, "← Back to list", components::ButtonKind::Small, "show_list");
             util::append(&row, &btn);
             util::append(parent, &row);
             return;
@@ -215,54 +217,22 @@ fn render_reader_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomC
     // Title on its own line.
     let h2 = util::create_element("h2");
     util::set_text(&h2, &detail.title);
-    util::set_attr(&h2, "style", "margin:0 0 4px 0");
+    util::set_attr(&h2, "style", theme::HEADING);
     util::append(parent, &h2);
 
     // Slug line on its own line.
-    let slug_line = util::create_element("div");
-    util::set_text(&slug_line, &detail.slug);
-    util::set_attr(
-        &slug_line,
-        "style",
-        "color:var(--text-dim, #888);font-family:monospace;font-size:11px;margin:0 0 16px 0",
-    );
-    util::append(parent, &slug_line);
+    util::append(parent, &slug_line(&detail.slug));
 
-    // Action button row on its own line.
+    // Action button row on its own line — one navigational, one secondary,
+    // and the destructive delete in the shared destructive look (S3).
     let row = util::create_element("div");
-    util::set_attr(&row, "style", "margin:0 0 16px 0");
-
-    let back_btn = util::create_element("button");
-    util::set_text(&back_btn, "← Back");
-    util::set_attr(
-        &back_btn,
-        "style",
-        &format!("{};margin-right:8px", theme::BTN_SMALL),
+    util::set_attr(&row, "style", theme::BTN_ROW);
+    util::append(&row, &components::button(ctx, "← Back", components::ButtonKind::Small, "show_list"));
+    util::append(&row, &components::button(ctx, "Edit", components::ButtonKind::Secondary, "edit"));
+    util::append(
+        &row,
+        &components::button(ctx, "Delete", components::ButtonKind::Destructive, "delete"),
     );
-    ctx.on_window_event(&back_btn, "click", "show_list", "");
-    util::append(&row, &back_btn);
-
-    let edit_btn = util::create_element("button");
-    util::set_text(&edit_btn, "Edit");
-    util::set_attr(
-        &edit_btn,
-        "style",
-        &format!("{};margin-right:8px", theme::BTN_SECONDARY),
-    );
-    ctx.on_window_event(&edit_btn, "click", "edit", "");
-    util::append(&row, &edit_btn);
-
-    let delete_btn = util::create_element("button");
-    util::set_text(&delete_btn, "Delete");
-    util::set_attr(
-        &delete_btn,
-        "style",
-        "background:#3a1a1a;color:#f99;border:1px solid #a44;\
-         padding:6px 16px;border-radius:3px;cursor:pointer;font-size:13px",
-    );
-    ctx.on_window_event(&delete_btn, "click", "delete", "");
-    util::append(&row, &delete_btn);
-
     util::append(parent, &row);
 
     // Body content.
@@ -270,10 +240,10 @@ fn render_reader_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomC
     util::set_attr(
         &body,
         "style",
-        "background:var(--surface-sunken, #0a0a1a);color:#dde;padding:12px;border-radius:4px;\
-         font-family:monospace;font-size:13px;line-height:1.5;\
+        "background:var(--surface-sunken, #0a0a1a);color:var(--text, #dde);padding:12px;\
+         border-radius:4px;font-family:var(--font-mono,monospace);font-size:13px;line-height:1.5;\
          white-space:pre-wrap;word-wrap:break-word;margin:0;\
-         max-height:60vh;overflow:auto;border:1px solid #222;",
+         max-height:60vh;overflow:auto;border:1px solid var(--border, #222);",
     );
     util::set_text(&body, &detail.content);
     util::append(parent, &body);
@@ -309,39 +279,18 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
 
     // Slug line (Editor mode only).
     if let Some(slug) = &draft.editing_slug {
-        let slug_line = util::create_element("div");
-        util::set_text(&slug_line, slug);
-        util::set_attr(
-            &slug_line,
-            "style",
-            "color:var(--text-dim, #888);font-family:monospace;font-size:11px;margin:0 0 16px 0",
-        );
-        util::append(parent, &slug_line);
+        util::append(parent, &slug_line(slug));
     } else {
         let spacer = util::create_element("div");
         util::set_attr(&spacer, "style", "margin-bottom:16px");
         util::append(parent, &spacer);
     }
 
-    // Title field block.
-    let title_label = util::create_element("label");
-    util::set_text(&title_label, "Title");
-    util::set_attr(&title_label, "style", theme::LABEL);
-    util::append(parent, &title_label);
-
-    // `tracked_input` preserves typing across section rebuilds —
-    // the previous `set_value`-on-rebuild pattern still clobbered
-    // anything not in the model's `initial_title`. Live keystroke
-    // tracking via per-section drafts map fixes it.
-    let title_input =
-        util::tracked_input(parent, ctx, "title", &draft.initial_title, theme::INPUT);
-    util::set_attr(&title_input, "placeholder", "Article title");
+    // Title field — the draft-tracked atom preserves typing across section
+    // rebuilds (the previous set_value-on-rebuild pattern clobbered edits).
+    let title_input = components::text_input(ctx, "title", &draft.initial_title, "Article title");
     util::set_attr(&title_input, "autofocus", "");
-
-    // Spacer between title input and content label.
-    let spacer = util::create_element("div");
-    util::set_attr(&spacer, "style", "margin-top:12px");
-    util::append(parent, &spacer);
+    util::append(parent, &components::field("Title", "", &title_input));
 
     // Content field block.
     let content_label = util::create_element("label");
@@ -349,29 +298,14 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
     util::set_attr(&content_label, "style", theme::LABEL);
     util::append(parent, &content_label);
 
-    let textarea = util::tracked_textarea(
-        parent,
-        ctx,
-        "content",
-        &draft.initial_content,
-        "display:block;width:100%;min-height:300px;background:var(--input-bg, #0e0e1e);\
-         color:var(--text, #e0e0e0);border:1px solid var(--border-strong, #444);padding:8px;font-size:13px;\
-         font-family:monospace;line-height:1.5;border-radius:3px;\
-         box-sizing:border-box;margin:2px 0 0 0;resize:vertical;",
-    );
+    let textarea = util::tracked_textarea(parent, ctx, "content", &draft.initial_content, theme::TEXTAREA);
     util::set_attr(&textarea, "placeholder", "Markdown body");
 
     // Button row on its own line, below the form.
     let row = util::create_element("div");
-    util::set_attr(&row, "style", "margin:16px 0 0 0");
+    util::set_attr(&row, "style", theme::BTN_ROW);
 
-    let save_btn = util::create_element("button");
-    util::set_text(&save_btn, "Save");
-    util::set_attr(
-        &save_btn,
-        "style",
-        &format!("{};margin-right:8px", theme::BTN_PRIMARY),
-    );
+    let save_btn = components::button_el("Save", components::ButtonKind::Primary);
     // The save handler reads both DOM values at click time and
     // dispatches a single packed action — no per-keystroke writes.
     {
@@ -393,10 +327,7 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
     }
     util::append(&row, &save_btn);
 
-    let cancel_btn = util::create_element("button");
-    util::set_text(&cancel_btn, "Cancel");
-    util::set_attr(&cancel_btn, "style", theme::BTN_SMALL);
-    ctx.on_window_event(&cancel_btn, "click", "cancel", "");
+    let cancel_btn = components::button(ctx, "Cancel", components::ButtonKind::Small, "cancel");
     util::append(&row, &cancel_btn);
 
     util::append(parent, &row);

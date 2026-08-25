@@ -97,9 +97,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     util::append(&create_panel, &alias_input);
 
     use crate::peer_mode::PeerMode;
-    let add_btn = util::create_element("button");
-    util::set_text(&add_btn, "Add peer");
-    util::set_attr(&add_btn, "style", theme::BTN_PRIMARY);
+    let add_btn = components::button_el("Add peer", components::ButtonKind::Primary);
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
@@ -305,16 +303,11 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
     let td_actions = util::create_element_with_class("td", "actions");
 
     if row.show_open_tree {
-        let open_btn = util::create_element("button");
-        util::set_text(&open_btn, "Tree");
-        util::set_attr(&open_btn, "style", theme::BTN_PRIMARY);
-        ctx.on_action(
-            &open_btn,
-            "click",
-            Action::SpawnWindow {
-                type_name: "Entity Tree",
-                peer_id: Some(row.peer_id.clone()),
-            },
+        let open_btn = components::button_action(
+            ctx,
+            "Tree",
+            components::ButtonKind::Primary,
+            Action::SpawnWindow { type_name: "Entity Tree", peer_id: Some(row.peer_id.clone()) },
         );
         util::append(&td_actions, &open_btn);
     }
@@ -322,30 +315,37 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
     if let Some(button) = row.backend_button {
         match button {
             BackendButton::Stop => {
-                let stop_btn = util::create_element("button");
-                util::set_text(&stop_btn, "Stop");
-                util::set_attr(&stop_btn, "style", theme::BTN_SECONDARY);
-                ctx.on_action(&stop_btn, "click", Action::StopBackendPeer(row.peer_id.clone()));
+                let stop_btn = components::button_action(
+                    ctx,
+                    "Stop",
+                    components::ButtonKind::Secondary,
+                    Action::StopBackendPeer(row.peer_id.clone()),
+                );
                 util::append(&td_actions, &stop_btn);
             }
             BackendButton::Start => {
-                let start_btn = util::create_element("button");
-                util::set_text(&start_btn, "Start");
-                util::set_attr(&start_btn, "style", theme::BTN_PRIMARY);
-                ctx.on_action(&start_btn, "click", Action::StartBackendPeer(row.peer_id.clone()));
+                let start_btn = components::button_action(
+                    ctx,
+                    "Start",
+                    components::ButtonKind::Primary,
+                    Action::StartBackendPeer(row.peer_id.clone()),
+                );
                 util::append(&td_actions, &start_btn);
             }
         }
     }
 
     if row.show_delete {
-        // theme::BTN_SECONDARY for the button itself, plus the
-        // peer-action-delete class for the margin-left offset from
+        // Destructive look (S3 — a delete is never dressed as a neutral
+        // action); the peer-action-delete class keeps the margin offset from
         // the preceding button.
-        let del_btn = util::create_element_with_class("button", "peer-action-delete");
-        util::set_text(&del_btn, "Delete");
-        util::set_attr(&del_btn, "style", theme::BTN_SECONDARY);
-        ctx.on_action(&del_btn, "click", Action::DeletePeer(row.peer_id.clone()));
+        let del_btn = components::button_action(
+            ctx,
+            "Delete",
+            components::ButtonKind::Destructive,
+            Action::DeletePeer(row.peer_id.clone()),
+        );
+        del_btn.set_class_name("peer-action-delete");
         util::append(&td_actions, &del_btn);
     }
 

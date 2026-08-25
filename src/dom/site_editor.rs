@@ -36,7 +36,10 @@ const TEXTAREA: &str = "display:block;width:100%;min-height:420px;box-sizing:bor
     background:var(--input-bg,#0e0e1e);color:var(--text,#e0e0e0);border:1px solid \
     var(--border,#2a2a4e);border-radius:4px;padding:10px;font-family:monospace;font-size:15px;\
     line-height:1.5";
-const PREVIEW: &str = "min-height:420px;background:var(--surface-sunken,#0a0a1a);\
+// The preview pane paints the SITE background (not chrome tokens) and pairs
+// with the `.cs-doc` class + the shared doc stylesheet, so it matches the
+// overlay / a published page instead of a chrome-styled approximation.
+const PREVIEW: &str = "min-height:420px;background:var(--site-bg, #101018);\
     border:1px solid var(--border,#2a2a4e);border-radius:4px;padding:10px;overflow:auto";
 // (Destructive buttons use theme::BTN_DESTRUCTIVE — promoted from the local
 // BTN_DANGER. Tree rows use components::tree_row / theme::TREE_* — promoted
@@ -480,7 +483,26 @@ fn page_editor(
 
         let prev_pane = util::create_element("div");
         prev_pane.set_attribute("style", PANE).ok();
-        let preview = util::create_element("div");
+        // The preview renders in the SAME content-document context as the
+        // overlay and a published page: the `.cs-doc` class + the shared
+        // rule table (`content_site::doc_css`, live form) + the site
+        // background — so what you preview is what the site shows (S-T1).
+        // The <style> is per-render inside the shadow root, like the
+        // overlay's; `--site-*` inherits through, so the preview follows
+        // the "Site appearance" setting exactly as the overlay does.
+        static DOC_CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let doc_style = util::create_element("style");
+        util::set_text(
+            &doc_style,
+            DOC_CSS.get_or_init(|| {
+                crate::content_site::doc_css::doc_css(
+                    ".cs-doc",
+                    crate::content_site::doc_css::PaletteMode::Live,
+                )
+            }),
+        );
+        util::append(&prev_pane, &doc_style);
+        let preview = util::create_element_with_class("div", "cs-doc");
         preview.set_attribute("style", PREVIEW).ok();
         preview.set_inner_html(&crate::content_site::render_page_body("markdown", &buffer));
         util::append(&prev_pane, &preview);

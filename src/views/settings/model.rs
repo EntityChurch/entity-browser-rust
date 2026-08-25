@@ -135,14 +135,46 @@ impl SettingsModel {
     }
 
     /// Ensure the global settings entity exists in the tree (writes
-    /// defaults if absent). Uses `dispatch_write` (fire-and-forget L1)
-    /// so the path works in both Direct and Worker modes. The default
-    /// state arrives on the next subscription event after the put
-    /// round-trips — first render falls back to `SettingsState::default()`.
+    /// defaults if absent). First render falls back to
+    /// `SettingsState::default()` until the seed round-trips.
+    ///
+    /// Arm split matters here: on the Worker arm (the browser's durable
+    /// default) **the cache mirror may be unseeded at window create** — a
+    /// `get_entity` miss does NOT mean absent, and the old
+    /// get-then-`dispatch_write` here silently overwrote persisted settings
+    /// with defaults on every fresh Settings spawn (the chrome theme reset
+    /// to "dark" after a reload — caught by e2e Phase 26.8). So on wasm,
+    /// BOTH arms go through the durable L1 `put_if_absent` (itself
+    /// arm-routed: sync store check on Direct, worker round-trip on
+    /// Worker) — no arm probe here at all; the first fix probed the arm
+    /// with `has_peer_context`, which is `true` for Worker-hosted peers
+    /// too (AP4), and kept clobbering while native tests stayed green.
     pub fn ensure_state(&self, peers: &Peers) {
         let path = self.state_path(peers);
-        if peers.get_entity(&self.peer_id, &path).is_none() {
-            peers.dispatch_write(&self.peer_id, path, SettingsState::default().to_entity());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Native is Direct-only: the in-process store is authoritative
+            // and callers (tests) expect the seed synchronously dispatched.
+            if peers.get_entity(&self.peer_id, &path).is_none() {
+                peers.dispatch_write(&self.peer_id, path, SettingsState::default().to_entity());
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let fut = peers.put_if_absent(
+                &self.peer_id,
+                path,
+                SettingsState::default().to_entity(),
+                5_000,
+            );
+            wasm_bindgen_futures::spawn_local(async move {
+                match fut.await {
+                    // D13: `seeded=true` on a profile that SHOULD have settings
+                    // is the clobber signature — keep it visible.
+                    Ok(seeded) => tracing::info!(seeded, "settings ensure_state (durable check)"),
+                    Err(e) => tracing::warn!(error = %e, "settings ensure_state: durable seed failed"),
+                }
+            });
         }
     }
 
@@ -369,10 +401,11 @@ impl SettingsModel {
         let state = self.read_state(peers);
         let state_path = self.state_path(peers);
 
-        // Registry-driven: one radio per registered theme
-        // (`theme_tokens::THEMES`). Adding a theme is one entry there.
-        let themes = crate::theme_tokens::THEMES
-            .iter()
+        // Registry-driven: one option per registered theme — built-ins plus
+        // user-defined (`theme_tokens::all_themes`). Adding a built-in is one
+        // entry in THEMES; a user theme appears the moment it registers.
+        let themes = crate::theme_tokens::all_themes()
+            .into_iter()
             .map(|t| ThemeOption {
                 value: t.name,
                 label: t.label,
@@ -659,7 +692,7 @@ mod tests {
         model.ensure_state(&pm);
 
         let out = model.render_output(&pm);
-        assert_eq!(out.themes.len(), 2);
+        assert_eq!(out.themes.len(), crate::theme_tokens::THEMES.len());
         assert!(out.themes[0].selected); // "dark"
         assert!(!out.themes[1].selected);
         assert!(out.show_inspector);
@@ -690,9 +723,9 @@ mod tests {
         let s = model.render_output(&pm).session;
         assert_eq!(s.boot_kind, "window");
         assert!(!s.target_disabled);
-        // On the system peer ALL 22 window types are valid targets, and exactly
+        // On the system peer ALL 23 window types are valid targets, and exactly
         // one is pre-selected (the default the mutator picked).
-        assert_eq!(s.targets.len(), 22, "system peer hosts every window type");
+        assert_eq!(s.targets.len(), 23, "system peer hosts every window type");
         assert_eq!(s.targets.iter().filter(|t| t.selected).count(), 1);
     }
 

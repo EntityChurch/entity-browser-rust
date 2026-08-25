@@ -41,6 +41,20 @@ pub const INPUT: &str = "display:block;width:100%;background:var(--input-bg,#0e0
     font-family:var(--font-mono,monospace);font-size:12px;\
     border-radius:3px;box-sizing:border-box;margin:2px 0 6px 0";
 
+/// Multi-line text area (markdown/content editors). Pair with
+/// `util::tracked_textarea` so typing survives rebuilds.
+/// Native color-picker swatch (`<input type=color>`) — compact square sized
+/// to sit beside a text input in a token-editor row.
+pub const COLOR_SWATCH: &str = "width:28px;height:24px;padding:0;\
+    border:1px solid var(--border-strong,#444);border-radius:3px;\
+    background:var(--input-bg,#0e0e1e);cursor:pointer;flex:0 0 auto";
+
+pub const TEXTAREA: &str = "display:block;width:100%;min-height:300px;\
+    background:var(--input-bg,#0e0e1e);color:var(--text,#e0e0e0);\
+    border:1px solid var(--border-strong,#444);padding:8px;font-size:13px;\
+    font-family:var(--font-mono,monospace);line-height:1.5;border-radius:3px;\
+    box-sizing:border-box;margin:2px 0 0 0;resize:vertical";
+
 /// Select dropdown.
 pub const SELECT: &str = "display:block;width:100%;background:var(--input-bg,#0e0e1e);\
     color:var(--text,#e0e0e0);border:1px solid var(--border-strong,#444);padding:4px 8px;\

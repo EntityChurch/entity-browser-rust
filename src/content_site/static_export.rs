@@ -298,9 +298,27 @@ fn render_page(
          <main class=\"page\">\n{body}\n</main>\n\
          {footer}\n\
          </body>\n</html>\n",
-        css = PAGE_CSS,
+        css = page_css(site_theme(site.manifest)),
         home = esc(&home_href),
     )
+}
+
+/// The site's effective own palette for export: its manifest-declared theme
+/// when it names a **registered** theme, else `None` (the `SITE_TOKENS`
+/// defaults). Mirrors the live "Site's theme" mode resolution (S-T2) — a
+/// published page looks the way that mode shows the site in-app. Unknown
+/// names warn loudly (the publish CLI's console) and export as today.
+fn site_theme(manifest: &SiteManifest) -> Option<&'static crate::theme_tokens::Theme> {
+    let name = manifest.params.get("theme").filter(|s| !s.is_empty())?;
+    let theme = crate::theme_tokens::registered(name);
+    if theme.is_none() {
+        tracing::warn!(
+            theme = %name,
+            site = %manifest.site_id,
+            "manifest declares unknown theme — exporting with the default site palette"
+        );
+    }
+    theme
 }
 
 /// Render the dismissable "open in live peer" banner ([F2]). No-JS: the
@@ -548,11 +566,12 @@ fn write_root_index(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>Published sites</title>\n<style>{PAGE_CSS}</style>\n</head>\n<body>\n\
+         <title>Published sites</title>\n<style>{css}</style>\n</head>\n<body>\n\
          <header class=\"site-header\"><span class=\"site-title\">Published sites</span></header>\n\
          <main class=\"page\">{live}<ul class=\"site-list\">{items}</ul></main>\n\
          <footer class=\"site-footer\">Static export · entity content-site projection</footer>\n\
          </body>\n</html>\n",
+        css = page_css(None),
     );
     let dir = super::paths::prefixed_root(out_dir, prefix).join(SITE_URL_PREFIX);
     fs::create_dir_all(&dir)?;
@@ -625,12 +644,13 @@ fn write_peer_index(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>Sites — {peer}</title>\n<style>{PAGE_CSS}</style>\n</head>\n<body>\n\
+         <title>Sites — {peer}</title>\n<style>{css}</style>\n</head>\n<body>\n\
          <header class=\"site-header\"><span class=\"site-title\">Sites hosted by {peer}</span></header>\n\
          <main class=\"page\"><ul class=\"site-list\">{items}</ul></main>\n\
          <footer class=\"site-footer\">Static export · entity content-site projection</footer>\n\
          </body>\n</html>\n",
         peer = esc(peer_id),
+        css = page_css(None),
     );
     let path = super::paths::prefixed_root(out_dir, prefix)
         .join(SITE_URL_PREFIX)
@@ -652,51 +672,60 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Self-contained dark stylesheet, matching the app palette (`dom/theme`).
-const PAGE_CSS: &str = "\
-:root{color-scheme:dark}\
-*{box-sizing:border-box}\
-body{margin:0;background:#0e0e1e;color:#e0e0e0;font:15px/1.6 system-ui,sans-serif}\
-a{color:#a6c0de;text-decoration:none}a:hover{text-decoration:underline}\
-.site-header{display:flex;flex-wrap:wrap;align-items:baseline;gap:16px;\
-padding:14px 20px;background:#0a0a1a;border-bottom:1px solid #333}\
-.site-title{font-size:18px;font-weight:700;color:#e0e0e0}\
-.site-nav ul{list-style:none;display:flex;flex-wrap:wrap;gap:12px;margin:0;padding:0}\
-.site-nav li{display:flex;gap:12px;align-items:baseline}\
-.site-nav a.active{color:#c0e0c0;font-weight:600}\
-.nav-section{color:#888;font-size:12px;text-transform:uppercase;letter-spacing:.05em}\
-main.page{max-width:760px;margin:0 auto;padding:28px 20px;font-size:16px}\
-main.page>*:first-child{margin-top:0}main.page>*:last-child{margin-bottom:0}\
-main.page h1,main.page h2,main.page h3,main.page h4{margin:24px 0 16px;font-weight:600;line-height:1.25}\
-main.page h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid #333}\
-main.page h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid #333}\
-main.page h3{font-size:1.25em}main.page h4{font-size:1em}\
-main.page p,main.page ul,main.page ol,main.page blockquote,main.page table,main.page pre{margin:0 0 16px}\
-main.page ul,main.page ol{padding-left:2em}main.page li+li{margin-top:.25em}\
-main.page code{background:#0a0a1a;padding:.2em .4em;border-radius:6px;font-size:85%}\
-main.page pre{background:#0a0a1a;padding:14px 16px;border-radius:6px;overflow:auto;\
-line-height:1.45;border:1px solid #333}\
-main.page pre code{background:none;padding:0;font-size:100%}\
-main.page blockquote{padding:0 1em;color:#9aa2b1;border-left:.25em solid #3a3a52;margin-left:0}\
-main.page table{border-collapse:collapse;display:block;width:max-content;max-width:100%;overflow:auto}\
-main.page td,main.page th{border:1px solid #3a3a52;padding:6px 13px}\
-main.page th{font-weight:600;background:#1b1b28;text-align:left}\
-main.page tr:nth-child(2n) td{background:rgba(140,150,180,0.06)}\
-main.page img{max-width:100%;height:auto}\
-main.page hr{height:.25em;border:0;margin:24px 0;background:#333}\
-.site-list{list-style:none;padding:0}.site-list li{margin:8px 0;font-size:17px}\
-.muted{color:#777;font-size:13px}\
-.site-footer{max-width:760px;margin:0 auto;padding:20px;color:#666;font-size:12px;\
-border-top:1px solid #222}\
-.live-banner-toggle{position:absolute;opacity:0;pointer-events:none}\
-.live-banner{display:flex;align-items:center;justify-content:center;gap:14px;\
-padding:8px 16px;background:#16213e;border-bottom:1px solid #2a3a5e;\
-color:#cdd6f4;font-size:13px}\
-.live-banner a{color:#a6c0de;font-weight:600}\
-.live-banner-dismiss{cursor:pointer;color:#8892b0;font-size:18px;line-height:1;\
-padding:0 4px;user-select:none}\
-.live-banner-toggle:checked + .live-banner{display:none}\
-";
+/// Self-contained stylesheet for exported pages: the page chrome (header /
+/// nav / footer) with its palette **derived** from the site's effective own
+/// palette (`doc_css::frozen` — the `SITE_TOKENS` defaults, or a
+/// manifest-declared registered theme's resolved values), plus the shared
+/// content-document rules (`doc_css::doc_css`) in their frozen-literal form
+/// — the SAME rule table the live overlay renders as `var(--site-*, …)`, so
+/// a published page and the in-app overlay cannot drift (S-T1/S-T2).
+/// Published sites carry the site's own palette to other people's browsers;
+/// no runtime token layer. Index pages (cross-site surfaces, not any one
+/// site's) pass `None` — the default palette.
+///
+/// The live-mirror banner keeps its own fixed palette — a deliberately
+/// distinct notice surface (own bg + own text), not part of the site theme.
+fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
+    use super::doc_css::{doc_css, PaletteMode};
+    let frozen = |token: &str| super::doc_css::frozen(theme, token);
+    format!(
+        ":root{{color-scheme:{scheme}}}\
+         *{{box-sizing:border-box}}\
+         body{{margin:0;background:{bg};color:{text};font:15px/1.6 system-ui,sans-serif}}\
+         a{{color:{link};text-decoration:none}}a:hover{{text-decoration:underline}}\
+         .site-header{{display:flex;flex-wrap:wrap;align-items:baseline;gap:16px;\
+         padding:14px 20px;background:{nav_bg};border-bottom:1px solid {border}}}\
+         .site-title{{font-size:18px;font-weight:700;color:{text}}}\
+         .site-nav ul{{list-style:none;display:flex;flex-wrap:wrap;gap:12px;margin:0;padding:0}}\
+         .site-nav li{{display:flex;gap:12px;align-items:baseline}}\
+         .site-nav a.active{{color:{accent};font-weight:600}}\
+         .nav-section{{color:{muted2};font-size:12px;text-transform:uppercase;letter-spacing:.05em}}\
+         main.page{{max-width:760px;margin:0 auto;padding:28px 20px}}\
+         {doc}\
+         .site-list{{list-style:none;padding:0}}.site-list li{{margin:8px 0;font-size:17px}}\
+         .muted{{color:{muted2};font-size:13px}}\
+         .site-footer{{max-width:760px;margin:0 auto;padding:20px;color:{faint2};font-size:12px;\
+         border-top:1px solid {border}}}\
+         .live-banner-toggle{{position:absolute;opacity:0;pointer-events:none}}\
+         .live-banner{{display:flex;align-items:center;justify-content:center;gap:14px;\
+         padding:8px 16px;background:#16213e;border-bottom:1px solid #2a3a5e;\
+         color:#cdd6f4;font-size:13px}}\
+         .live-banner a{{color:{link};font-weight:600}}\
+         .live-banner-dismiss{{cursor:pointer;color:#8892b0;font-size:18px;line-height:1;\
+         padding:0 4px;user-select:none}}\
+         .live-banner-toggle:checked + .live-banner{{display:none}}",
+        scheme = theme.map(|t| t.scheme).unwrap_or("dark"),
+        bg = frozen("--site-bg"),
+        text = frozen("--site-text"),
+        link = frozen("--site-link"),
+        nav_bg = frozen("--site-nav-bg"),
+        border = frozen("--site-border"),
+        accent = frozen("--site-accent"),
+        muted2 = frozen("--site-text-muted-2"),
+        faint2 = frozen("--site-text-faint-2"),
+        doc = doc_css("main.page", PaletteMode::Frozen(theme)),
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -832,6 +861,53 @@ mod tests {
         // Per-peer multi-site index lists both sites.
         let peer_index = fs::read_to_string(dir.join("sites/PEER1/index.html")).unwrap();
         assert!(peer_index.contains("Entity Demo") && peer_index.contains("Entity Info"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manifest_theme_freezes_that_palette_per_site() {
+        // S-T2 export parity: a site whose manifest declares a registered
+        // theme exports with THAT theme's frozen palette; a sibling site
+        // without one keeps the default; the cross-site index pages (not any
+        // one site's surface) keep the default too. Values must equal the
+        // live strict-override resolution (`site_token_value` — one rule).
+        use crate::theme_tokens::{site_token_value, LIGHT};
+        let (mut dm, dp, im, ip) = two_demo_sites();
+        dm.params.insert("theme".into(), "light".into());
+        let sites = [
+            ExportSite { peer_id: "PEER1", site_id: "demo", manifest: &dm, pages: &dp, assets: &[] },
+            ExportSite { peer_id: "PEER1", site_id: "entity-info", manifest: &im, pages: &ip, assets: &[] },
+        ];
+
+        let dir = std::env::temp_dir().join("entity-browser-manifest-theme-test");
+        let _ = fs::remove_dir_all(&dir);
+        export_site_set(&dir, &sites, "", None).expect("export writes");
+
+        let light_bg = site_token_value(&LIGHT, "--site-bg");
+        let light_scheme = format!("color-scheme:{}", LIGHT.scheme);
+        let default_bg =
+            format!("background:{}", crate::content_site::doc_css::frozen(None, "--site-bg"));
+
+        let themed = fs::read_to_string(dir.join("sites/PEER1/demo/index.html")).unwrap();
+        assert!(themed.contains(&format!("background:{light_bg}")), "themed site: light bg");
+        assert!(themed.contains(&light_scheme), "themed site: light color-scheme");
+        assert!(!themed.contains("var("), "exported CSS stays self-contained");
+
+        let plain = fs::read_to_string(dir.join("sites/PEER1/entity-info/index.html")).unwrap();
+        assert!(plain.contains(&default_bg), "unthemed sibling keeps the default palette");
+
+        let peer_index = fs::read_to_string(dir.join("sites/PEER1/index.html")).unwrap();
+        assert!(peer_index.contains(&default_bg), "index pages keep the default palette");
+
+        // An UNKNOWN theme name exports as today (warn is log-side).
+        dm.params.insert("theme".into(), "lab".into());
+        let sites =
+            [ExportSite { peer_id: "PEER1", site_id: "demo", manifest: &dm, pages: &dp, assets: &[] }];
+        let _ = fs::remove_dir_all(&dir);
+        export_site_set(&dir, &sites, "", None).expect("export writes");
+        let fallback = fs::read_to_string(dir.join("sites/PEER1/demo/index.html")).unwrap();
+        assert!(fallback.contains(&default_bg), "unknown theme falls back to the default");
 
         let _ = fs::remove_dir_all(&dir);
     }

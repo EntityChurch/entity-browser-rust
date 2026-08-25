@@ -62,10 +62,24 @@ token is invisible (renders the original color), never a blank.
   badges, the harmonized `--status-*` family, fonts).
 - **`LIGHT`** — same token keys, re-tuned for dark-text-on-light
   (accents/status darkened for contrast).
-- **`THEMES: &[Theme] = &[DARK, LIGHT]`** — the registry. `DARK` is
-  first = the default. **Adding a theme is one entry here** (§7).
-- **`lookup(name) -> &Theme`** — unknown id → `DARK`.
-- **`root_block(theme) -> String`** — builds `:root{ … }`.
+- **`THEMES: &[Theme] = &[DARK, LIGHT, SEPIA, NEON]`** — the **built-in**
+  registry. `DARK` is first = the default; `SEPIA` (warm paper) and
+  `NEON` (green-phosphor terminal, mono UI font) are worked examples of
+  §7's retune-every-key rule (a test now pins every builtin to DARK's
+  exact key set + order). **Adding a built-in is one entry here** (§7).
+  Beside it sits the **user-theme runtime registry** (§7.1): user
+  themes are `Box::leak`ed on registration into true `&'static Theme`s
+  (bounded — one leak per explicit Save), so the whole `&'static`
+  resolution layer (`site_token_value`, `doc_css::Frozen`, the exporter)
+  is untouched. **Iterate `all_themes()`** (built-ins + user, sorted),
+  never `THEMES` directly, or user themes are skipped.
+- **`lookup(name) -> &Theme`** — built-in or user; unknown id → `DARK`.
+- **`root_block(theme) -> String`** — builds `:root{ … }`. Besides the
+  token values it emits two plain properties: `color-scheme` (native
+  `<select>` popup / scrollbars / caret render in the theme's scheme —
+  the WebKitGTK dropdown trap) and `accent-color: var(--accent)` (native
+  **checkbox/radio glyphs** follow the theme accent instead of the UA
+  default blue). Both are inherited, so `:root` covers the shadow root.
 - **`install_root(name)`** *(wasm)* — inject/rewrite `<style id="theme-vars">`
   in `<head>` (idempotent: reuses the element).
 - **`boot_choice() -> String`** *(wasm)* — read the localStorage mirror
@@ -126,6 +140,51 @@ directory rail carry their own palette — they never receive
 Because `--site-*` is defined on `:root` (head), it inherits into **both**
 the light-DOM overlay and the shadow-DOM window rail — one block, both
 surfaces.
+
+### 3.1 Manifest site theme — the container-scope precedence rule (S-T2)
+
+A site's manifest may declare its **own** theme: `"theme": "<registered
+name>"` (`PUBLISH-INGEST-FORMAT.md` §2). It only ever defines *what
+"Site's theme" means for that site* — the three modes above keep exactly
+their meaning, and the user's explicit choice always wins:
+
+| Mode | Without manifest theme | With manifest theme |
+|---|---|---|
+| `"site"` *(default)* | the `var()` fallbacks | **that theme's frozen `--site-*` values** (unknown name → warn once, fallbacks) |
+| `"system"` / strict | as above | **unchanged — the manifest is ignored** |
+
+Mechanics (`DESIGN-MANIFEST-SITE-THEME.md` is the full rationale):
+
+- **`registered(name) -> Option<&Theme>`** — strict registry lookup; unlike
+  `lookup` it does **not** fall back to `DARK` (a manifest name is outside
+  input; unknown must degrade to today's look, loudly, never restyle).
+- **`site_token_value(theme, site_token)`** — the ONE resolution rule
+  (theme's value for the aliased app token, else the site default) shared
+  by the strict-override `:root` block, the manifest container block, and
+  the static exporter — the three can never disagree on a color.
+- **`site_container_block(name) -> Option<String>`** — bare `--site-X:v;…`
+  declarations for a registered name; `None` + a **once-per-session warn**
+  for an unknown one.
+- The block installs as **inline custom properties on the site's own
+  wrapper element**, *never* `:root` — container properties override
+  inherited `:root` values, which is exactly why the install is **gated on
+  mode `"site"`** and why the gate lives in the *render output*
+  (`SiteRenderOutput::site_theme_css`), not the renderer: the overlay
+  rebuilds only on output-equality change, so the mode must be part of the
+  output or a Settings flip would leave stale container vars defeating the
+  strict override. `site_appearance_current()` (the LS mirror, read per
+  frame) supplies the mode.
+- Container scope also means two differently-themed sites coexist, the
+  window's directory rail keeps the default palette, and cleanup is
+  structural (the wrapper is rebuilt per render).
+- **Static export parity:** the exporter freezes the site's *effective own*
+  palette — the manifest theme's values when declared & registered, else
+  the `SITE_TOKENS` defaults — through the same S-T1 rule table
+  (`doc_css::PaletteMode::Frozen(Option<&Theme>)`). Index pages (cross-site
+  surfaces) keep the default. User appearance modes never export.
+- Site-supplied CSS / raw palette values stay **out** (security posture,
+  §10): the manifest string is only a *key into the app's own table* — no
+  site-supplied byte ever reaches a stylesheet.
 
 ---
 
@@ -202,8 +261,72 @@ default). For a new chrome role, add a `(token, value)` pair to *both*
 2. Add it to `THEMES`.
 
 That's it. The chrome dropdown, the Site-appearance dropdown's strict
-"Always X" override, `lookup`, and the e2e all pick it up from the
+"Always X" override, `lookup`, the **manifest site-theme field** (a site
+can declare `"theme": "foo"` the moment `FOO` is registered — §3.1), the
+static exporter's frozen palette, and the e2e all pick it up from the
 registry. No renderer or wiring changes.
+
+## 7.1 User-defined themes (the Theme Editor)
+
+Landed 2026-07-15 — `DESIGN-USER-THEMES.md` is the decision record.
+
+- **In-app path:** the **Theme Editor** window (System menu group):
+  duplicate any registered theme under a new name, edit every token in
+  grouped tables (hex values get a native color-picker swatch synced into
+  the authoritative text field; fonts are three more rows — the fonts
+  control rider), **live preview** on every keystroke, then Save. Delete
+  is refused with the reason while the theme is the current chrome theme
+  or site override.
+- **Mechanics:** an owned `UserThemeSpec` is validated
+  (`validate_theme_name`: `[a-z0-9-]`, ≤40 chars, and **reserved**:
+  built-in names + the appearance modes `site`/`system`) and leaked into
+  the runtime registry (`register_user_theme` / `unregister_user_theme` /
+  `user_theme_names` / `all_themes`). Everything downstream — dropdowns,
+  "Always X", manifest addressability, static export — flows from the
+  registry exactly as §7 promises.
+- **Persistence:** one entity per theme at
+  `app/entity-browser/themes/{name}` (`user_themes.rs`: CBOR round-trip,
+  `save_theme`/`delete_theme`), written L1 on the system peer. The
+  registry is a **rebuildable projection** of that prefix: the app holds
+  one lifetime watch (`UserThemes::sync`, a per-frame atomic check) that
+  reconciles register/unregister on change, warn-and-skips malformed
+  entities, and then `reinstall_current()` re-derives both live surfaces
+  (edited theme recolors live; a theme deleted elsewhere falls back dark).
+- **No-flash boot:** a user theme isn't registered until the tree syncs,
+  so `apply_and_persist`/`apply_site_appearance` also mirror the
+  **computed CSS** to localStorage (`entity_theme_css` /
+  `entity_site_theme_css`); `install_root`/`install_site_root` install
+  the mirror verbatim for an unregistered name, and the first registry
+  sync self-heals it. The mirror is a paint hint, never the record.
+- **Live preview** never touches the registry or the tree:
+  `install_preview` rebuilds `#theme-vars` from the DOM draft
+  (`root_block_from_pairs`); save/revert/load re-install the real theme.
+- Editor **edit buffers live in the DOM** (`data-token` inputs, read back
+  at preview/save); only structural state (loaded theme, status, draft
+  revision) persists at the window-state path.
+
+### 7.2 Where themes live — built-in vs user (the storage model)
+
+Two kinds, two homes, deliberately NOT merged:
+
+| | Built-in (`dark`/`light`/`sepia`/`neon`) | User-defined |
+|---|---|---|
+| Storage | **compiled into the app** (`THEMES` in `theme_tokens.rs`) | **tree entities** on the system peer (`app/entity-browser/themes/{name}`) |
+| Scope | every profile, every deployment, identical | this profile only (travels with the peer's store) |
+| Updates | app update replaces them | user edits them |
+| Delete / rename | impossible (names reserved) | Theme Editor |
+| Boot availability | frame one, always | after the themes-prefix sync (CSS mirror covers the gap) |
+
+Built-ins are **never seeded into the tree** — on purpose. Seeding
+defaults as tree entities would fork them per profile (an app update
+couldn't fix a shipped palette), invite edit-the-builtin drift, and
+create a migration/version-skew problem for zero gain. "Customize a
+built-in" is instead **duplicate-and-edit** in the Theme Editor: the
+copy is a normal user theme, owned by the profile, and the pristine
+built-in stays selectable beside it. The `scheme` field is the one
+non-color: browsers render native widgets in exactly two modes
+(dark/light), so every theme — built-in or user — declares which mode
+its palette sits closest to.
 
 ---
 
@@ -217,9 +340,13 @@ registry. No renderer or wiring changes.
 
 **Intentionally raw (NOT bugs — documented decisions):**
 - **Emitted static-export CSS** — `src/content_site/static_export.rs`
-  `PAGE_CSS` + the demo SVG. Published sites carry their **own** theme to
-  *other people's* browsers; they don't use our runtime `--site-*` layer.
-  Deferred (own palette, publish-time concern).
+  `page_css()` + the demo SVG. Published sites carry their **own** palette
+  to *other people's* browsers with no runtime token layer — but since the
+  S-T1 reconciliation the emitted literals are **derived** from the same
+  sources the app uses (`doc_css` frozen form + `SITE_TOKENS` defaults via
+  `doc_css::frozen`), not a parallel hand-maintained sheet. Only the
+  live-mirror banner keeps its own fixed palette (a distinct notice
+  surface, self-contained by design).
 - **Semantic icon accents** — the directory rail's bookmark gold
   (`#e8c34a`) and keep-offline green (`#5fc27e`) **on-states**; their
   off-states *are* tokenized (`--site-text-faint-2`). Like syntax colors,
@@ -229,10 +356,16 @@ registry. No renderer or wiring changes.
   background, so its `#bbb` text reads on any page theme. (The fast-paint
   *content* render uses the tokenized `content_site::render` path; the
   feature is also gated off today.)
-- **Window-internal accents left raw last session** (chrome pass): severity
-  banner hues (update/storage/watchdog), knowledge-base syntax colors,
-  shell `#9ac`/`#cb8`/`#bbb`. A future "tokenize the long tail" pass.
+- **Pre-boot / self-contained surfaces** (`index.html`): the recovery
+  page, the crash screen, and the update banner carry their **own** fixed
+  dark palette (own bg + own text, so they read on any theme) — they can
+  render before the theme system exists, like the fast-paint toast.
 - **QR codes** (`#000`/`#fff`) — never theme (scannability).
+
+The window-internal "long tail" (shell prompt/listing colors, scanner,
+event/chain/wire log text, peer badges, peer-table grays) was tokenized in
+the 2026-07 theming-reconciliation pass — `tools/ui-lint.sh` holds raw hex
+at the documented survivors above; anything new fails `make lint`.
 
 ---
 
@@ -249,8 +382,30 @@ registry. No renderer or wiring changes.
   to "light" **and** the Site-appearance dropdown to "system", then asserts
   `#site-theme-vars` contains `--site-bg:var(--overlay-bg)` — the full
   delivery path (dropdown → action → model → install → live DOM).
-- Verified green this arc: native (526+) · clippy · wasm(-release) ·
-  e2e-worker 11/11.
+- **Manifest site theme (S-T2)** — native: `site_container_block`
+  registered/unknown + value-identity with the strict `:root` block
+  (`theme_tokens.rs`); mode gating (`views/content_site/model.rs
+  site_theme_css_gates_on_registry_and_mode`); exporter per-site freeze +
+  index default + unknown fallback (`static_export.rs`); themed frozen
+  doc rules structural-equal to live (`doc_css.rs`); ingest carries
+  registered and unknown names verbatim (`ingest.rs`). e2e (Phase 19c-t,
+  the bundled demo-notes site declares `"theme": "light"`): light paints
+  the companion's wrapper while the primary demo stays default, strict
+  "Always Dark" wins live over the open themed site, "Site's theme"
+  restores it — with clean-panic asserts throughout.
+- **User themes (§7.1)** — native: registry register/replace/unregister +
+  reserved-name validation + `site_token_value` through a user theme
+  (`theme_tokens.rs`); entity round-trip (order-preserving CBOR array),
+  boot-load / deleted-drop / malformed-skip sync, delete-refused-while-
+  in-use (`user_themes.rs`); editor lifecycle create→save→delete, packed
+  save parse, in-use flag, revision bump (`views/theme_editor/model.rs`).
+  e2e (Phase 26.8): editor create → live preview rewrites `#theme-vars`
+  from the draft → save → the Settings dropdown offers + applies it →
+  the CSS boot mirror is written → **reload** (registry re-syncs from the
+  tree on the Worker arm; selection + palette survive) → load in a fresh
+  editor → delete propagates to every registry-driven dropdown.
+- Verified green (S-T2 landing): native (788) · clippy + ui-lint · wasm ·
+  e2e-worker 13/13.
 
 ---
 
@@ -258,19 +413,57 @@ registry. No renderer or wiring changes.
 
 - **Fonts as a control** — the tokens exist (`--font-ui`/`--font-mono`/
   `--fs-base`); no UI to change them independent of the theme yet.
-- **Per-site themes** — a site shipping its own CSS via its manifest. The
-  `--site-*` layer is exactly the seam: a future renderer could populate
-  `--site-*` from a site manifest instead of the appearance setting.
-- **Custom / user themes** — `THEMES` is a static registry today; a
-  user-defined theme would be a tree-persisted `Theme` merged into the
-  registry. The "Always X" strict-override catalog already generalizes to
-  any number of registered themes.
-- **Dev-guide "Theming" pattern note** — a short section in
-  `DEVELOPER-GUIDE.md` so new windows use `var(--token)` /
-  `theme_tokens::STATUS_*`, never raw hex. (Small, pending.)
+- ~~**Per-site themes**~~ — **landed** (S-T2, 2026-07-15): the manifest
+  `theme` field names a registered theme, applied container-scoped in
+  "Site's theme" mode — §3.1 is the precedence rule;
+  `docs/architecture/reviews/DESIGN-MANIFEST-SITE-THEME.md` the rationale.
+  Site-supplied CSS stays out permanently. The still-open extension is
+  shape (b) of that design — site-supplied token *values* — which slots in
+  behind the same field without breaking any published site.
+- ~~**Custom / user themes**~~ — **landed** (2026-07-15): tree-persisted
+  themes merged into the registry via leak-on-save, with a Theme Editor
+  window — §7.1; `DESIGN-USER-THEMES.md` is the rationale. The "Always X"
+  catalog generalized exactly as anticipated.
+- ~~**Dev-guide "Theming" pattern note**~~ — landed: DEVELOPER-GUIDE
+  "Styling & theming a window" points here; the boundary rule is §11.
 - **Boot tree→theme reconcile** — the LS mirror covers the normal flow; a
   cross-browser / imported profile shows the default until re-selected.
   Optional: read `SettingsState.theme`/`.site_appearance` once peers boot
-  and re-install.
-- **Tokenize the window-internal long tail** (§8) — the raw accents left
-  in individual windows.
+  and re-install. *(Partially absorbed by §7.1: for user themes the
+  registry sync re-installs + re-mirrors after every tree change; the
+  built-in-theme half of the gap remains.)*
+- ~~**Tokenize the window-internal long tail**~~ — done in the 2026-07
+  theming-reconciliation pass (§8); `tools/ui-lint.sh` holds the line.
+
+---
+
+## 11. The style-system boundary — where a style lives (the ONE rule)
+
+Four styling homes exist **by design**; the ambiguity between them was
+itself the reinvention driver (UI audit G2). This section is the boundary.
+When adding or changing any style, it goes in exactly one place:
+
+| Home | Owns | Never holds |
+|---|---|---|
+| **`src/theme_tokens.rs`** | color/font/scheme **values**: the `THEMES` registry, `SITE_TOKENS`, `STATUS_*`. The only file where a themable value is *defined*. | selectors, layout, widget styles |
+| **`src/dom/style.rs`** (`DOM_STYLES`) | chrome **layout classes** for the shadow root: window frames, palette, grid/flex scaffolding, responsive rules — things addressed by *class*. | color literals (reference `var(--token, #literal)`), per-widget one-offs |
+| **`src/dom/theme.rs`** | shared **widget-level inline-style consts** (`BTN_*`, `INPUT`, `SELECT`, `TREE_*`, the `SP_*` spacing scale) consumed by `dom/components.rs` atoms and views. | new colors (tokens only), window-specific styles |
+| **`src/content_site/doc_css.rs`** | the **content-document** rules (`.cs-doc` family) — one table rendering the live overlay/preview form AND the exporter's frozen form. | chrome styles of any kind |
+
+**Views hold only bespoke, fully-tokenized one-offs** — a style that is
+genuinely singular to that window, with every color a
+`var(--token, #literal)` and every spacing step from `theme::SP_*`. The
+moment a second window wants it, it is promoted to `theme.rs` /
+`components.rs` (the `tree_row` rule: never a third copy).
+`tools/ui-lint.sh` ratchets the tail (`make lint` fails on new raw atoms,
+style literals above baseline, or raw hex).
+
+Decision path for "where does this style go?":
+
+1. A **color/font value** → a token (`theme_tokens.rs`), then reference it.
+2. Styling **rendered markdown/content** → `doc_css.rs`.
+3. A **widget look** (button, input, row, chip) → an existing atom
+   (`components.rs` + `theme.rs`); extend the atom, don't fork it.
+4. Chrome **layout** addressed by class → `style.rs`.
+5. Truly window-specific → inline in the view, fully tokenized, ready for
+   promotion.
