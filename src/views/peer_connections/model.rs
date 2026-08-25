@@ -14,7 +14,7 @@ use crate::peers::Peers;
 use crate::peer_display::PeerDisplay;
 use crate::window::WindowId;
 
-use super::output::{BackendPeer, BoundPeerInfo, PeerConnectionsOutput};
+use super::output::{BackendPeer, BoundPeerInfo, KnownPeer, PeerConnectionsOutput};
 
 /// Persisted per-window state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,7 +153,17 @@ impl PeerConnectionsModel {
             ws_listen_addr: if kind == PeerDisplay::Primary { ws_addr.clone() } else { None },
         };
 
-        let connected: Vec<String> = crate::connections::read_connected(peers);
+        // Known peers = the remembered-peer registry, enriched with a
+        // reconnect address (§13.2). Display name resolved per entry.
+        let known_peers: Vec<KnownPeer> = crate::connections::read_connections(peers)
+            .into_iter()
+            .map(|r| KnownPeer {
+                display: crate::views::display_name(peers, &r.remote_pid),
+                remote_pid: r.remote_pid,
+                addr: r.addr,
+                last_seen: r.last_seen,
+            })
+            .collect();
 
         let all_pids = peers.peer_ids();
         let mut backend_peers = Vec::new();
@@ -204,7 +214,7 @@ impl PeerConnectionsModel {
         PeerConnectionsOutput {
             window_id: self.window_id,
             bound_peer,
-            connected,
+            known_peers,
             backend_peers,
             address_input_initial: self.inner.lock().unwrap().address.clone(),
             qr_payload,
@@ -259,6 +269,29 @@ fn rewrite_for_browser(addr: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn rewrite_for_browser(addr: &str) -> String {
     addr.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connections::ConnectionsWriter;
+
+    #[test]
+    fn known_peers_surface_the_remembered_registry_with_reconnect_addr() {
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
+
+        let model = PeerConnectionsModel::new(7, pid);
+        let out = model.render_output(&peers);
+
+        assert_eq!(out.known_peers.len(), 1, "the remembered peer surfaces");
+        assert_eq!(out.known_peers[0].remote_pid, "REMOTE_B");
+        assert_eq!(
+            out.known_peers[0].addr, "ws://10.0.0.9:4041",
+            "reconnect address carried through for one-tap reconnect"
+        );
+    }
 }
 
 /// Generate an SVG for the given QR payload. Pure utility — used by
