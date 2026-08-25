@@ -55,7 +55,7 @@ having no config system at all.
 Two artifacts therefore make up a deployment:
 
 1. **The SPA bundle** (`dist/` — `index.html`, `*.wasm`, `*.js`, `sw.js`).
-2. **The published content + config** written alongside it by `make publish`
+2. **The published content + config** written alongside it by `make site`
    (`sites/…`, `content/…`, `{peer}/…`, and optionally `entity-deployment.json`).
 
 DevOps drops the whole `dist/` directory on a CDN / R2 bucket at the domain
@@ -69,7 +69,7 @@ There are **two distinct peer-ids**. Don't conflate them.
 
 ### 2.1 The published peer-id — *you choose the identity; stable per seed*
 
-When you `make publish`, all content is keyed under a single peer-id:
+When you `make site`, all content is keyed under a single peer-id:
 
 ```
 sites/{peer_id}/{site}/…          ← legacy-web .html projection
@@ -78,7 +78,7 @@ sites/{peer_id}/{site}/…          ← legacy-web .html projection
 ```
 
 That `peer_id` is derived from the publisher's keypair. **By default the publish
-identity is DURABLE**: `make publish` loads-or-generates a keypair under
+identity is DURABLE**: `make site` loads-or-generates a keypair under
 `{ENTITY_DATA_DIR}/publish/keypair` (`persistence::publisher_keypair`), so the
 **first** publish mints a stable identity and every later publish reuses it — the
 peer-id is the site address, so it must not drift per run. Three ways to pick it:
@@ -89,16 +89,16 @@ peer-id is the site address, so it must not drift per run. Three ways to pick it
 | `IDENTITY_SEED=<64-hex>` (`--identity-seed=`) | a SPECIFIC 32-byte system seed (same hex form as `entity_system_seed`), so each site/deployment gets its own stable peer-id |
 | `DEMO_IDENTITY=1` (`--demo-identity`) | the fixed demo publisher seed (`2KEB3…`) — dev/testing only |
 
-> **Container gotcha (already wired):** the containerized `make publish` runs
+> **Container gotcha (already wired):** the containerized `make site` runs
 > `podman run --rm`, so `~/.entity` inside it is ephemeral and the durable key
 > would regenerate every run. The Makefile points `ENTITY_DATA_DIR` at the
 > repo-local, gitignored `PUBLISH_DATA_DIR` (default `.entity-publish/`, visible
-> in-container via the parent mount) for **both** `publish` and `publish-serve`,
+> in-container via the parent mount) for **both** `site` and `site-serve`,
 > so the identity persists and both modes publish under the same peer-id.
 > Override the location with `PUBLISH_DATA_DIR=…`. **Treat `.entity-publish/` like
 > a private key — it is one; never commit it.**
 
-**For a given seed the peer-id is deterministic** — re-running `make publish`
+**For a given seed the peer-id is deterministic** — re-running `make site`
 with the same `IDENTITY_SEED` re-emits the same `sites/{peer_id}/…` layout, so
 deep-links, `origins` entries in `entity-deployment.json`, and cross-site
 references keyed to that peer-id keep working across deploys. **A malformed seed
@@ -284,7 +284,7 @@ suppresses the ⛶ toggle (`exposes_toggle()` ⇒ `false`). `home_site`/`origins
 unnecessary here. Emit it with:
 
 ```bash
-make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=chrome \
+make site OUT=dist DEPLOY_CONFIG=1 SURFACE=chrome \
      --ingest-apps=../entity-apps/dist
 ```
 
@@ -313,7 +313,7 @@ chrome (un-maximize, open other windows, browse the rail). See [§4.1](#41-the-t
 ```
 
 ```bash
-make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=window WINDOW_TYPE="Site Browser" CONFIG_SITE=<site-id>
+make site OUT=dist DEPLOY_CONFIG=1 SURFACE=window WINDOW_TYPE="Site Browser" CONFIG_SITE=<site-id>
 ```
 
 (This is the publish default — `SURFACE`/`WINDOW_TYPE` unset gives exactly this.)
@@ -336,7 +336,7 @@ make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=window WINDOW_TYPE="Site Browser" 
 ```
 
 ```bash
-make publish OUT=dist DEPLOY_CONFIG=1 SURFACE=site LOCKED=1 CONFIG_SITE=<site-id>
+make site OUT=dist DEPLOY_CONFIG=1 SURFACE=site LOCKED=1 CONFIG_SITE=<site-id>
 ```
 
 `--locked` (from `LOCKED=1`) emits the explicit `site_mode` lock **and**
@@ -350,7 +350,7 @@ pure SSG output — use bare-root mode. One site rendered at the domain root, no
 `sites/{peer}/{site}/` prefix, no branding, no WASM:
 
 ```bash
-make publish-bare SITE=<site-id> OUT_BARE=dist-bare
+make site-bare SITE=<site-id> OUT_BARE=dist-bare
 ```
 
 This is the "Entity Browser is also just a site generator" output. No
@@ -363,7 +363,7 @@ content-addressed store (`content/{aa}/{bb}/{hex}` + the `{peer}/…​.bin`
 pointers) is emitted **only** by the entity-native `.bin` form, which exists so a
 live WASM peer can ingest + hash-verify the site. Consequences worth knowing:
 
-- **The default `make publish` writes the site TWICE** — `.html` *and* `.bin`
+- **The default `make site` writes the site TWICE** — `.html` *and* `.bin`
   (the two representations serve different consumers: dumb CDN vs. live peer).
   That double-write is inherent to the default, not a bug. For a pure static
   site, `HTML_ONLY=1` (or bare-root, always HTML-only) skips the `.bin` entirely
@@ -377,9 +377,9 @@ live WASM peer can ingest + hash-verify the site. Consequences worth knowing:
 
 ---
 
-## 6. The `make publish` command surface
+## 6. The `make site` command surface
 
-`make publish` is headless/native (no browser): it builds a peer, seeds or
+`make site` is headless/native (no browser): it builds a peer, seeds or
 ingests its sites + apps, reads them back off the tree, and projects them to
 `OUT`. Knobs:
 
@@ -406,13 +406,13 @@ ingests its sites + apps, reads them back off the tree, and projects them to
 
 Higher-level convenience targets:
 
-- **`make publish-serve`** — rebuild the SPA, publish sites (the bundled demo, or
+- **`make site-serve`** — rebuild the SPA, publish sites (the bundled demo, or
   `INGEST=<dir>`) + optional apps (`APPS_DIST=<dir>`) into an isolated `/tmp` copy,
   and serve on one origin (`:8081`). The one-command end-to-end round-trip on your
   machine. Serves the SPA at `/` and the static sites at `/sites/`. Add
   `DEPLOY_CONFIG=1 CONFIG_SITE=<id>` to boot the SPA into a published site as a
   cache-backed foreign-site overlay (the real remote-peer path).
-- **`make publish-bare`** — bare static site ([§5.4](#54-bare-static-site-no-spa-no-entity-chrome-at-all)).
+- **`make site-bare`** — bare static site ([§5.4](#54-bare-static-site-no-spa-no-entity-chrome-at-all)).
 
 ---
 
@@ -438,7 +438,7 @@ open the Apps / Games windows from the menu.
 
 ## 8. The `dist/` layout (what DevOps ships)
 
-After `make publish OUT=dist DEPLOY_CONFIG=1 …` (empty `PREFIX`, the standard
+After `make site OUT=dist DEPLOY_CONFIG=1 …` (empty `PREFIX`, the standard
 single-tenant root deploy):
 
 ```

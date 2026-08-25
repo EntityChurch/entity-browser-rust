@@ -16,6 +16,7 @@
   "label.address": "Adresă",
   "label.name": "Nume",
   "label.label": "Etichetă",
+  "label.ice_servers": "Reflectoare (STUN)",
 
   "status.copied": "Copiat ✓",
 
@@ -577,6 +578,7 @@
   "peerconn.connectors": "Conectori",
   "peerconn.connectors_hint": "Noduri care prezintă partenerii unii altora. Doar întâlnire — niciodată pe calea datelor.",
   "peerconn.connector_none": "Niciun conector încă — adăugați un nod de semnalizare.",
+  "peerconn.ice_help": "Opțional. Necesar pentru conectarea între rețele diferite; lăsați gol pentru aceeași rețea.",
   "peerconn.connector_add": "Adăugare conector",
   "peerconn.connector_reload_pending": "Alegerea conectorului intră în vigoare la reîncărcare — această sesiune folosește încă pe cel anterior.",
   "peerconn.connector_use": "Folosește",

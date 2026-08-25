@@ -16,6 +16,7 @@
   "label.address": "Địa chỉ",
   "label.name": "Tên",
   "label.label": "Nhãn",
+  "label.ice_servers": "Bộ phản chiếu (STUN)",
 
   "status.copied": "Đã sao chép ✓",
 
@@ -565,6 +566,7 @@
   "peerconn.connectors": "Bộ kết nối",
   "peerconn.connectors_hint": "Các nút giới thiệu các đầu mối với nhau. Chỉ để gặp gỡ — không bao giờ nằm trên đường dữ liệu.",
   "peerconn.connector_none": "Chưa có bộ kết nối — hãy thêm một nút báo hiệu để gặp gỡ qua đó.",
+  "peerconn.ice_help": "Tùy chọn. Cần thiết để kết nối giữa các mạng khác nhau; để trống nếu chỉ dùng cùng một mạng.",
   "peerconn.connector_add": "Thêm bộ kết nối",
   "peerconn.connector_reload_pending": "Lựa chọn connector có hiệu lực khi tải lại — phiên này vẫn đang chạy cái trước đó.",
   "peerconn.connector_use": "Dùng",

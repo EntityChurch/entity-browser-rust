@@ -105,7 +105,7 @@ fn main() -> std::process::ExitCode {
     eprintln!("entity-browser: there is no native UI build.");
     eprintln!();
     eprintln!("Native commands:");
-    eprintln!("  entity-browser publish [OUT_DIR]  — render the site set to static HTML (make publish)");
+    eprintln!("  entity-browser publish [OUT_DIR]  — render the site set to static HTML (make site)");
     eprintln!("      [--ingest=<dir>]              — source sites from a content-team render/ emit (disk→tree)");
     eprintln!();
     eprintln!("Active build targets:");

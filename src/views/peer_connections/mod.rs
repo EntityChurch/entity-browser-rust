@@ -234,13 +234,15 @@ impl WindowView for PeerConnectionsWindow {
                     // bound peer: a connector is deployment infrastructure, and
                     // provisioning reads it from the system peer.
                     "connector_add" => {
-                        // Packed "{peer_id}\x1f{addr}\x1f{label}" — the app's
-                        // multi-field convention, so one event carries the form.
-                        let mut parts = value.splitn(3, '\x1f');
+                        // Packed "{peer_id}\x1f{addr}\x1f{label}\x1f{ice}" — the
+                        // app's multi-field convention, so one event carries the
+                        // form.
+                        let mut parts = value.splitn(4, '\x1f');
                         let c = crate::connectors::Connector {
                             node_peer_id: parts.next().unwrap_or("").to_string(),
                             node_addr: parts.next().unwrap_or("").to_string(),
                             label: parts.next().unwrap_or("").to_string(),
+                            ice: parts.next().unwrap_or("").to_string(),
                         };
                         let sys = peers.system_peer_id().to_string();
                         self.set_connector_notice(

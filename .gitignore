@@ -24,3 +24,6 @@ caps.local.mk
 # Python bytecode from tooling scripts
 __pycache__/
 *.pyc
+
+# Release artifacts (make dist / dist-web) — built, never committed.
+/artifacts

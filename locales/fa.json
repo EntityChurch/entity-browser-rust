@@ -16,6 +16,7 @@
   "label.address": "نشانی",
   "label.name": "نام",
   "label.label": "برچسب",
+  "label.ice_servers": "بازتاب‌دهنده‌ها (STUN)",
 
   "status.copied": "کپی شد ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "رابط‌ها",
   "peerconn.connectors_hint": "گره‌هایی که همتاها را به یکدیگر معرفی می‌کنند. فقط قرار ملاقات — هرگز در مسیر داده نیستند.",
   "peerconn.connector_none": "هنوز رابطی نیست — یک گره سیگنالینگ برای ملاقات اضافه کنید.",
+  "peerconn.ice_help": "اختیاری. برای اتصال میان شبکه‌های مختلف لازم است؛ برای شبکهٔ یکسان خالی بگذارید.",
   "peerconn.connector_add": "افزودن رابط",
   "peerconn.connector_reload_pending": "انتخاب رابط شما پس از بارگذاری مجدد اعمال می‌شود — این نشست هنوز با قبلی کار می‌کند.",
   "peerconn.connector_use": "استفاده",

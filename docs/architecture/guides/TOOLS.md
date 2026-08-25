@@ -42,7 +42,7 @@ build invokes. If you can type it or set it, it should be here.
 |---|---|
 | `make tauri` | Build release WASM, then `cargo build` the Tauri backend (`src-tauri/`). The cargo build runs in-container; **launching** needs a desktop session. |
 | `make tauri-run` | `make tauri` then launch `./src-tauri/target/debug/entity-browser-tauri` with stdout logs. |
-| `make tauri-bundle` / `tauri-bundle-run` | **Content-baked** desktop build: wasm-release → publish sites/apps INTO `dist/` → embed, so the binary ships the content offline (served same-origin by the WebView). Same knobs as `publish` (`CONFIG_SITE` / `INGEST` / `APPS_DIST` — any path, auto-staged). Do **not** use plain `make tauri` for baked content (its wasm-release wipes `dist/`). See [Deployment Guide §8.1](./GUIDE-DEPLOYMENT-AND-CONFIGURATION.md#81-bundling-content-into-the-tauri-desktop-app). |
+| `make tauri-bundle` / `tauri-bundle-run` | **Content-baked** desktop build: wasm-release → publish sites/apps INTO `dist/` → embed, so the binary ships the content offline (served same-origin by the WebView). Same knobs as `site` (`CONFIG_SITE` / `INGEST` / `APPS_DIST` — any path, auto-staged). Do **not** use plain `make tauri` for baked content (its wasm-release wipes `dist/`). See [Deployment Guide §8.1](./GUIDE-DEPLOYMENT-AND-CONFIGURATION.md#81-bundling-content-into-the-tauri-desktop-app). |
 
 ### Serve (host — needs `python3`)
 
@@ -55,9 +55,9 @@ build invokes. If you can type it or set it, it should be here.
 
 | Target | Does | Where it runs |
 |---|---|---|
-| `make publish` | Render the site set to static `.html` (legacy-web) **and** `.bin` (entity-native) → `OUT` (default `dist/static-demo`). See §4 for the underlying CLI + flags. | in-container |
-| `make publish-bare` | Render **one** site at the domain root (bare SSG, no entity branding) → `OUT_BARE`. | in-container |
-| `make publish-serve` | Rebuild SPA + publish sites (bundled demo, or `INGEST=<dir>`) + optional apps (`APPS_DIST=<dir>`) into an isolated `/tmp` dir + serve one origin (`:8081`). Accepts the same projection flags as `publish` (`DEPLOY_CONFIG`, `CONFIG_SITE`, …). | host (python3) |
+| `make site` | Render the site set to static `.html` (legacy-web) **and** `.bin` (entity-native) → `OUT` (default `dist/static-demo`). See §4 for the underlying CLI + flags. | in-container |
+| `make site-bare` | Render **one** site at the domain root (bare SSG, no entity branding) → `OUT_BARE`. | in-container |
+| `make site-serve` | Rebuild SPA + publish sites (bundled demo, or `INGEST=<dir>`) + optional apps (`APPS_DIST=<dir>`) into an isolated `/tmp` dir + serve one origin (`:8081`). Accepts the same projection flags as `site` (`DEPLOY_CONFIG`, `CONFIG_SITE`, …). | host (python3) |
 
 ### E2E (host — needs an external Selenium-firefox container on `:4444`)
 
@@ -94,7 +94,7 @@ Override per-machine via env (`CAP_MEM=4g make build`) or an untracked, gitignor
 | `DIST` | `dist` | Trunk's WASM output dir (`trunk build --dist`). The `publish-*` family overrides it to `dist-publish`. |
 | `TARGET_DIR` | `target` | Cargo build dir (`CARGO_TARGET_DIR`). The `publish-*` family overrides it to `target-publish`. |
 
-Because of these, **`make tauri-run` (uses `dist`/`target`) and `make publish-serve` (uses `dist-publish`/`target-publish`) can run at the same time** without clobbering each other. The cargo registry (`$HOME/.cache/cargo-entity-browser`) and trunk tool cache (`$HOME/.cache/cargo-entity-browser-trunk`, mounted at `/root/.cache`) are **shared, persistent volumes** — so deps and the version-matched `wasm-bindgen-cli` download once, not per build. Build into any isolated pair with e.g. `make wasm DIST=dist-x TARGET_DIR=target-x`.
+Because of these, **`make tauri-run` (uses `dist`/`target`) and `make site-serve` (uses `dist-publish`/`target-publish`) can run at the same time** without clobbering each other. The cargo registry (`$HOME/.cache/cargo-entity-browser`) and trunk tool cache (`$HOME/.cache/cargo-entity-browser-trunk`, mounted at `/root/.cache`) are **shared, persistent volumes** — so deps and the version-matched `wasm-bindgen-cli` download once, not per build. Build into any isolated pair with e.g. `make wasm DIST=dist-x TARGET_DIR=target-x`.
 
 Publish / serve variables (see the Makefile header comments for the full set): `OUT`, `OUT_BARE`, `PREFIX`, `LIVE`, `HTML_ONLY`, `INGEST`, `APPS_DIST`, `DEPLOY_CONFIG`, `SURFACE`, `WINDOW_TYPE`, `LOCKED`, `CONFIG_SITE`, `IDENTITY_SEED`, `SITE`, `PORT`, `SERVE_DIR`.
 
@@ -103,7 +103,7 @@ Publish / serve variables (see the Makefile header comments for the full set): `
 ## 4. The `entity-browser publish` CLI
 
 The publish pipeline runs through the **native** `entity-browser` binary (no
-browser needed). `make publish` / `publish-bare` / `publish-serve` all wrap it.
+browser needed). `make site` / `site-bare` / `site-serve` all wrap it.
 
 > The `--ingest=<dir>` format is **tool-agnostic** — any generator is just one
 > producer. To publish your own content (by hand or from any script), see
@@ -205,5 +205,5 @@ their own repo/tool; you hand the publish pipeline the output:
 
 | Input | Consumed by | Note |
 |---|---|---|
-| a content ingest dir (`INGEST=<dir>`) | `publish` / `publish-serve` | Any generator's output or a hand-authored folder in the ingest format (`PUBLISH-INGEST-FORMAT.md`). Worked example: `examples/demo-site/`. Empty → the bundled demo site seed. |
-| a pre-built apps dist (`APPS_DIST=<dir>`) | `publish` / `publish-serve` | The entity-apps `dist/` shape (self-contained `*.html` + `index.json`), ingested via `--ingest-apps`. Building it is the app repo's concern. Empty → the bundled demo app seed. |
+| a content ingest dir (`INGEST=<dir>`) | `site` / `site-serve` | Any generator's output or a hand-authored folder in the ingest format (`PUBLISH-INGEST-FORMAT.md`). Worked example: `examples/demo-site/`. Empty → the bundled demo site seed. |
+| a pre-built apps dist (`APPS_DIST=<dir>`) | `site` / `site-serve` | The entity-apps `dist/` shape (self-contained `*.html` + `index.json`), ingested via `--ingest-apps`. Building it is the app repo's concern. Empty → the bundled demo app seed. |

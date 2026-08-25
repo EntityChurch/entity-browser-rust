@@ -1,0 +1,430 @@
+# Tag-triggered release — ADR-0023 Mode 1 (binary release).
+#
+# A RELEASE IS AN ACT, NOT A BUTTON: you cut one by tagging green `master`
+# (`git tag v0.9.0 && git push github v0.9.0`) — ADR-0015. There is no
+# `make release`, and nothing here runs on an ordinary push.
+#
+# THIS FILE IS THE ONE HOME OF THE PLATFORM MATRIX (ADR-0023). The Makefile
+# deliberately knows only the host it is standing on; adding or dropping a
+# platform is a one-entry edit to `strategy.matrix` below and nowhere else.
+#
+# Every leg runs the SAME `make dist` a contributor runs locally — CI is the
+# fan-out, not a second build system. On Linux that is the containerized
+# default (byte-for-byte the local build); on macOS/Windows it is `NATIVE=1`,
+# because Tauri's bundler shells out to host packaging tools and no Linux
+# container can produce a .dmg or a .msi. See docs/adr/0002-*.
+#
+# Per-platform-failure policy is ALL-OR-NOTHING (ADR-0023): `assemble` needs
+# every build leg, so a single failed platform means no release is published.
+# `fail-fast: false` is deliberate — it does not weaken that; it just lets you
+# see every broken platform in one run instead of one per re-run.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Dry run: build everything, publish nothing. Use this before a real tag.
+  workflow_dispatch:
+    inputs:
+      core_rust_ref:
+        description: "entity-core-rust ref to build against (overrides the pin below)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # This repo's crates are path-deps on the SIBLING entity-core-rust checkout
+  # (`../entity-core-rust/core/...`), so every job checks out both side by side
+  # under $GITHUB_WORKSPACE and builds from the inner one — the same layout a
+  # contributor has on disk, which is what the Makefile's parent bind-mount
+  # assumes.
+  #
+  # PIN THIS BEFORE CUTTING A RELEASE. There is no cross-repo lockfile: a
+  # floating `master` means the same tag of this repo can produce two different
+  # binaries. Set it to the exact entity-core-rust commit the release was
+  # tested against; `master` is the convenience default for dry runs.
+  CORE_RUST_REF: master
+  CORE_RUST_REPO: EntityChurch/entity-core-rust
+
+  # Publish each artifact a second time without the version in its name, so
+  # /releases/latest/download/<file> stays a valid link forever. See the step.
+  LATEST_ALIASES: 'true'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux — containerized, i.e. the reproducible default path (ADR-0019).
+  # ---------------------------------------------------------------------------
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: entity-browser-rust
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_RUST_REPO }}
+          ref: ${{ inputs.core_rust_ref || env.CORE_RUST_REF }}
+          path: entity-core-rust
+
+      # Fail loudly and early if the runner image ever drops podman, rather
+      # than 20 minutes later inside a recipe that assumes it.
+      - name: Preflight
+        run: podman --version && make --version | head -1
+
+      - name: make dist
+        working-directory: entity-browser-rust
+        # CAP_CPUS/CAP_MEM default to this project's local dev ceilings; a
+        # hosted runner is smaller than the dev box, and podman would rather be
+        # told the truth than over-provisioned.
+        run: make dist DIST_OS=linux DIST_ARCH=${{ matrix.arch }} CAP_CPUS=4 CAP_MEM=8g
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.arch }}
+          path: entity-browser-rust/artifacts/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # macOS — NATIVE runner. .dmg can only be built on macOS.
+  # ---------------------------------------------------------------------------
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13   # Intel
+            arch: x64
+          - runner: macos-14   # Apple silicon
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: entity-browser-rust
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_RUST_REPO }}
+          ref: ${{ inputs.core_rust_ref || env.CORE_RUST_REF }}
+          path: entity-core-rust
+
+      # No toolchain action needed: rust-toolchain.toml pins the channel
+      # (1.94.1) AND the wasm32 target, and rustup honors it automatically on
+      # the first cargo invocation. Installing a toolchain here would just be a
+      # second place for the pin to drift.
+      - name: Toolchain
+        working-directory: entity-browser-rust
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo install --locked trunk@0.21.14
+          cargo install --locked tauri-cli --version '^2'
+
+      # wasm-opt must be binaryen >= 119 on ANY platform whose WebView is
+      # JavaScriptCore — which is exactly macOS. Older binaryen mis-optimizes
+      # the reference-types funcref table under -Oz and the release frontend
+      # throws "Table.prototype.grow could not grow the table" at boot. That is
+      # the same trap the Dockerfile pins around; it is a property of the WASM
+      # we ship, not of Linux, so it has to be pinned here too.
+      - name: Pinned binaryen (wasm-opt)
+        run: |
+          set -eux
+          VER=version_119
+          case "${{ matrix.arch }}" in
+            arm64) ASSET="binaryen-${VER}-arm64-macos.tar.gz" ;;
+            x64)   ASSET="binaryen-${VER}-x86_64-macos.tar.gz" ;;
+          esac
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${VER}/${ASSET}" | tar -xz -C "$HOME"
+          echo "$HOME/binaryen-${VER}/bin" >> "$GITHUB_PATH"
+
+      - name: Verify wasm-opt pin
+        run: wasm-opt --version
+
+      - name: make dist (native)
+        working-directory: entity-browser-rust
+        run: make dist NATIVE=1 DIST_OS=macos DIST_ARCH=${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-${{ matrix.arch }}
+          path: entity-browser-rust/artifacts/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Windows — a REAL Windows runner, and the reason is the `.msi`.
+  #
+  # The NSIS `_setup.exe` does not need this job: it cross-builds from the Linux
+  # container (`make dist DIST_OS=windows`), which is how a contributor with no
+  # Windows machine builds it. But `.msi` is WiX, gated
+  # `#[cfg(target_os = "windows")]` in tauri-bundler — and asking for it off
+  # Windows does not fail, it logs "ignoring msi" and moves on. A release that
+  # silently drops an artifact is worse than one that fails, so the `.msi` is
+  # built where it can actually be built. Tauri downloads WiX and NSIS itself.
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        # Git Bash. The recipes are POSIX sh; this is the shell that makes
+        # `make` behave the same way it does everywhere else.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: entity-browser-rust
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_RUST_REPO }}
+          ref: ${{ inputs.core_rust_ref || env.CORE_RUST_REF }}
+          path: entity-core-rust
+
+      # `make` is not on PATH in the Windows runner image (it is the one tool
+      # this ecosystem's whole build interface assumes).
+      - name: Install make
+        run: choco install make --no-progress -y
+
+      - name: Toolchain
+        working-directory: entity-browser-rust
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo install --locked trunk@0.21.14
+          cargo install --locked tauri-cli --version '^2'
+
+      - name: Pinned binaryen (wasm-opt)
+        run: |
+          set -eux
+          VER=version_119
+          curl -fsSL -o binaryen.tar.gz \
+            "https://github.com/WebAssembly/binaryen/releases/download/${VER}/binaryen-${VER}-x86_64-windows.tar.gz"
+          tar -xzf binaryen.tar.gz -C "$HOME"
+          echo "$HOME/binaryen-${VER}/bin" >> "$GITHUB_PATH"
+
+      - name: Verify wasm-opt pin
+        run: wasm-opt --version
+
+      - name: make dist (native)
+        working-directory: entity-browser-rust
+        run: make dist NATIVE=1 DIST_OS=windows DIST_ARCH=x64 DIST_BUNDLES=msi,nsis
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-x64
+          path: entity-browser-rust/artifacts/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # The browser SPA. Host-independent (it is wasm), so it is built ONCE rather
+  # than once per platform leg.
+  # ---------------------------------------------------------------------------
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: entity-browser-rust
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_RUST_REPO }}
+          ref: ${{ inputs.core_rust_ref || env.CORE_RUST_REF }}
+          path: entity-core-rust
+
+      - name: make dist-web
+        working-directory: entity-browser-rust
+        run: make dist-web CAP_CPUS=4 CAP_MEM=8g
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-web
+          path: entity-browser-rust/artifacts/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Assemble, sign, publish. Runs only if EVERY platform succeeded.
+  # ---------------------------------------------------------------------------
+  assemble:
+    needs: [linux, macos, windows, web]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # create the GitHub Release
+      id-token: write      # cosign keyless — the OIDC token IS the identity
+      attestations: write  # SLSA build provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+          merge-multiple: true
+
+      - name: Collect
+        run: |
+          set -eux
+          mkdir -p release
+          find staged -type f -exec mv -t release {} +
+          ls -lh release
+
+      # Unversioned copies, so a download page can hard-code a link that never
+      # goes stale:  /releases/latest/download/entity-browser_linux_x64.deb
+      # GitHub's `latest/download` shortcut matches on exact filename, and
+      # ADR-0023 requires the version to BE in the filename — publishing each
+      # file under both names is the only way to have both properties.
+      #
+      # This runs BEFORE checksums and attestation deliberately: an artifact
+      # nobody can verify is worse than one nobody can bookmark, so the aliases
+      # have to be covered by both.
+      #
+      # Costs upload bandwidth (the AppImage is ~100MB, so it doubles) — set
+      # LATEST_ALIASES to 'false' above to turn it off.
+      - name: Unversioned "latest" aliases
+        if: env.LATEST_ALIASES == 'true'
+        working-directory: release
+        run: |
+          set -eu
+          ver="${GITHUB_REF_NAME#v}"
+          for f in *; do
+            # Substring replace, not sed: the version is full of dots, which
+            # sed would read as "any character" and match the wrong filenames.
+            alias_name="${f/_${ver}_/_}"
+            [ "$alias_name" = "$f" ] && continue
+            cp -f "$f" "$alias_name"
+            echo "  alias  $f  ->  $alias_name"
+          done
+          ls -lh
+
+      # One checksums file over every artifact, and the SIGNATURE IS OVER THAT
+      # FILE, not over each artifact — sign one thing, verify everything
+      # through it (ADR-0023). Sorted so the file is byte-stable across reruns.
+      # A tiny version manifest, so an installed app can tell the user "there is
+      # a newer version" WITHOUT any machinery that could install it for them.
+      #
+      # This is deliberately NOT Tauri's updater `latest.json`. That format
+      # carries per-platform signatures because the app installs the update
+      # itself — which means the key holder can push code to every machine.
+      # We publish a fact ("0.9.0 exists, here is where to get it") and let the
+      # human decide. No signing key exists, so no such authority exists.
+      #
+      # Reachable at a permanent URL thanks to the aliases above:
+      #   /releases/latest/download/update.json
+      #
+      # Generated FROM the files actually staged, so it cannot claim a download
+      # that was not published.
+      - name: Version manifest
+        working-directory: release
+        run: |
+          set -eu
+          python3 - "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" <<'PY'
+          import json, os, sys, datetime
+          tag, repo = sys.argv[1], sys.argv[2]
+          version = tag[1:] if tag.startswith("v") else tag
+          base = f"https://github.com/{repo}/releases/latest/download"
+          downloads = {}
+          for f in sorted(os.listdir(".")):
+              # The unversioned aliases are the stable links, so those are what
+              # we advertise; the versioned twins would pin users to this release.
+              if version in f or f.startswith("checksums") or f == "update.json":
+                  continue
+              key = f.removeprefix("entity-browser_")
+              downloads[key] = f"{base}/{f}"
+          manifest = {
+              "version": version,
+              "tag": tag,
+              "pub_date": datetime.datetime.now(datetime.timezone.utc)
+                              .strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "release_notes": f"https://github.com/{repo}/releases/tag/{tag}",
+              "downloads": downloads,
+          }
+          with open("update.json", "w") as fh:
+              json.dump(manifest, fh, indent=2)
+              fh.write("\n")
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Checksums
+        working-directory: release
+        run: sha256sum $(ls | sort) > checksums.txt && cat checksums.txt
+
+      - uses: sigstore/cosign-installer@v3
+
+      # Keyless: no private key exists to leak or rotate. The signing identity
+      # is this workflow, proven by the runner's OIDC token and logged in the
+      # public Rekor transparency log.
+      #
+      # Verify a download with:
+      #   cosign verify-blob checksums.txt \
+      #     --signature checksums.txt.sig --certificate checksums.txt.pem \
+      #     --certificate-identity-regexp '^https://github.com/EntityChurch/entity-browser-rust/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      #   sha256sum --check checksums.txt
+      - name: Sign the checksums (cosign keyless)
+        working-directory: release
+        run: |
+          cosign sign-blob --yes checksums.txt \
+            --output-signature checksums.txt.sig \
+            --output-certificate checksums.txt.pem
+
+      # SLSA build provenance — a signed statement of WHICH workflow, at which
+      # commit, produced each file. The cosign signature above proves the
+      # checksums came from us; this proves how the artifacts were built. Free,
+      # first-party, and verifiable with `gh attestation verify <file>
+      # --repo EntityChurch/entity-browser-rust`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*
+
+
+      # Release notes = this version's CHANGELOG section (ADR-0009 Keep a
+      # Changelog — the durable human narrative, ADR-0027) plus the bits a
+      # downloader needs and cannot infer: how to verify, and the fact that
+      # the macOS/Windows artifacts carry no OS-level code signature yet.
+      - name: Compose release notes
+        run: |
+          set -eu
+          ver="${GITHUB_REF_NAME#v}"
+          {
+            if [ -f CHANGELOG.md ]; then
+              awk -v v="$ver" '
+                $0 ~ "^## \\[" v "\\]" {p=1; next}
+                p && /^## \[/ {exit}
+                p {print}
+              ' CHANGELOG.md
+            fi
+            cat .github/release-notes-footer.md
+          } > notes.md
+          cat notes.md
+
+      # NOT on workflow_dispatch: a dry run builds and signs but publishes
+      # nothing, so you can prove the matrix is green BEFORE the tag exists.
+      - name: Publish the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            --verify-tag \
+            release/*
+
+      - name: Dry-run summary
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          {
+            echo "### Dry run — nothing was published"
+            echo ""
+            echo '```'
+            ls -lh release
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -323,6 +323,7 @@ pub const EN: &[(&str, Message)] = &[
     ("label.device", Message::Simple("Device")),
     ("label.name", Message::Simple("Name")),
     ("label.label", Message::Simple("Label")),
+    ("label.ice_servers", Message::Simple("Reflectors (STUN)")),
     ("label.role", Message::Simple("Role")),
     ("label.peer_id", Message::Simple("Peer ID")),
     ("label.level", Message::Simple("Level")),
@@ -1289,6 +1290,12 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.connector_reload_pending",
         Message::Simple(
             "Your connector choice takes effect on reload — this session is still running on the previous one.",
+        ),
+    ),
+    (
+        "peerconn.ice_help",
+        Message::Simple(
+            "Optional. Needed to connect across different networks; leave empty for same-network only.",
         ),
     ),
     ("peerconn.connector_add", Message::Simple("Add connector")),

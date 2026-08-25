@@ -299,10 +299,19 @@ def until_listed(base, sid, cmd, marker, tries=10):
             return True
     return False
 
+# Reflectors for the connector row, when the rig is driving a NAT topology.
+# Empty (the default) reproduces every gate exactly as before: host candidates
+# only, which is what a shared bridge needs and all any gate has ever used.
+E2E_ICE = os.environ.get("E2E_ICE", "").strip()
+
 def provision(base, sid, node_peer, label):
     """Add + select the connector through the Shell — the user's own surface."""
     open_shell(base, sid, label)
-    ok_add = until_listed(base, sid, f"connector add {node_peer} {NODE_WS} rung1",
+    # `ice=` rides the SAME `connector add` a user types. Deliberately not
+    # injected by URL: the durable registry row is the shipped path, and it is
+    # the one that has to carry reflectors all the way to the ICE agent.
+    ice_arg = f" ice={E2E_ICE}" if E2E_ICE else ""
+    ok_add = until_listed(base, sid, f"connector add {node_peer} {NODE_WS}{ice_arg} rung1",
                           short_pid(node_peer))
     # `connector ls` marks the selection with ●.
     ok_use = until_listed(base, sid, f"connector use {node_peer}", "●")
@@ -375,6 +384,32 @@ def main():
         checks["provisioning resolves from the durable registry"] = reg_a and reg_b
         checks["an establisher installs with no enable knob"] = est_a and est_b
 
+        # Reflectors reached the ICE agent, when the rig is driving a NAT
+        # topology. Asserted on the establisher-install line, which is where
+        # provisioning meets the agent — a count read anywhere earlier would
+        # prove the row was stored, not that the agent was configured. When
+        # E2E_ICE is unset this asserts the LAN posture instead (0), so the
+        # shared-bridge gates keep proving they add no third party.
+        want_ice = 1 if E2E_ICE else 0
+        ice_a = [l for l in log_lines(A_BASE, sa) if "establisher" in l and "ice_servers" in l]
+        ice_b = [l for l in log_lines(B_BASE, sb) if "establisher" in l and "ice_servers" in l]
+        # Format-agnostic on purpose: the field reaches this log as
+        # `ice_servers=0`, `"ice_servers":0`, or `\"ice_servers\":0` depending
+        # on how the entry was serialized on its way to `__entity_browser_log`.
+        # Matching the NUMBER rather than one spelling keeps the assertion about
+        # the ICE agent instead of about the logger.
+        ice_re = re.compile(r'ice_servers\D{0,4}(\d+)')
+        def got(ls):
+            vals = [int(m.group(1)) for l in ls for m in [ice_re.search(l)] if m]
+            return bool(vals) and all(v == want_ice for v in vals)
+        print(f"  A/B establisher ice_servers == {want_ice}: {got(ice_a)}/{got(ice_b)}"
+              + (f"   (E2E_ICE={E2E_ICE})" if E2E_ICE else "   (host-only, no reflector)"))
+        if not ice_a or not ice_b:
+            print("  !! no establisher line carried an ice_servers field — cannot classify")
+        checks[f"the ICE agent is configured with {want_ice} reflector(s)"] = (
+            bool(ice_a) and bool(ice_b) and got(ice_a) and got(ice_b)
+        )
+
         open_shell(A_BASE, sa, "A"); open_shell(B_BASE, sb, "B")
         pa = bound_peer_id(A_BASE, sa, "A")
         pb = bound_peer_id(B_BASE, sb, "B")
@@ -419,6 +454,7 @@ def main():
 
         # ── 5. chat over the discovered id ───────────────────────────────────
         print("\n── 5. chat, bound to the DISCOVERED id ────────")
+        chat_t0 = time.time()
         ex(A_BASE, sa, spawn_script("Chat")); ex(B_BASE, sb, spawn_script("Chat"))
         time.sleep(1.5)
         # Each side binds the id its OWN meet handed it — nothing passed in.
@@ -474,11 +510,73 @@ def main():
                 "can’t be reached back" not in reach
             )
 
+        # The establishment diagnostic, printed on EVERY run rather than only in
+        # the negative control. `WebRtcError::Timeout` carries the two facts a
+        # bare failure cannot — did we offer/answer, and did trickled candidates
+        # reach the peer connection (posted/fed) — and without printing it a
+        # failed traversal is indistinguishable from a failed rendezvous. Cost
+        # is two log reads; the run that motivated this had all of it in the
+        # browser and none of it on screen.
+        print("\n── §6.5 establishment (last failure per side) ─")
+        for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+            fails = [l for l in log_lines(base, sid) if "negotiation to" in l and "failed" in l]
+            if not fails:
+                print(f"  {lbl}: no negotiation failures logged")
+                continue
+            # FIRST and last, because they answer different questions and the
+            # last one lies about the first. Once a bucket fills or a retry
+            # storm sets in, every later failure reports the consequence; only
+            # the first negotiation ran against a clean rendezvous, so it is the
+            # one that says whether a path existed. (Learned here: the last line
+            # read `429 bucket_full` on a run whose real question was ICE.)
+            print(f"  {lbl}: {len(fails)} failed")
+            print(f"     first: {fails[0][:400]}")
+            if len(fails) > 1:
+                print(f"     last:  {fails[-1][:400]}")
+            # And the distinct failure classes, so a mixed run is not read as
+            # whichever class happened to land last.
+            classes = {}
+            for f in fails:
+                for k in ("bucket_full", "Timeout", "no live path", "refused", "verification"):
+                    if k in f:
+                        classes[k] = classes.get(k, 0) + 1
+            if classes:
+                print("     classes: " + ", ".join(f"{k}={v}" for k, v in sorted(classes.items())))
+
         print("\n── meet-then-chat gate ───────────────────────")
         for k, v in checks.items():
             print(f"   {'✅' if v else '❌'}  {k}")
 
+        # ── 7. WHICH retry shape? (EXTENSION-SIGNALING §13 item 6) ───────────
+        # The node sees ~970 offer deposits per side against an unreachable
+        # pair and cannot tell two very different causes apart, because deposits
+        # key on (caller, rendezvous_key) and every retry reuses the key:
+        #
+        #   (a) ONE establishment retrying without bound, or
+        #   (b) MANY bounded establishments, each re-triggered by a caller.
+        #
+        # From here it is directly observable. Each `establish_live` that fails
+        # emits exactly one "negotiation to '<peer>' failed" console line
+        # (main_thread_establish.rs), so counting those lines counts COMPLETED
+        # negotiations. Deposits ÷ negotiations is then the per-negotiation
+        # deposit count — the number §11.5 bounds.
         if EXPECT_NO_MEDIA:
+            elapsed = max(time.time() - chat_t0, 1e-9)
+            print("\n── 7. retry shape (§13 item 6) ───────────────")
+            print(f"  chat window open for {elapsed:.0f}s")
+            for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+                lines = log_lines(base, sid)
+                failed = [l for l in lines if "negotiation to" in l and "failed" in l]
+                # Tell the two failure classes apart: a policy refusal (mixed
+                # build) is NOT a NAT result and would invalidate the reading.
+                policy = [l for l in failed if "policy" in l]
+                rate = len(failed) / elapsed
+                print(f"  {lbl}: NEGOTIATION_ATTEMPTS={len(failed)} policy_refusals={len(policy)} "
+                      f"rate={rate:.1f}/s")
+                if policy:
+                    print(f"  {lbl}: !! policy refusals present — mixed build, not a NAT result")
+
+
             # NEGATIVE CONTROL (the split-network rig). Inverted on purpose, and
             # only for the media half: rendezvous rides the signaling node, which
             # both peers reach through the host, so it MUST still work. The data

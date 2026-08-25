@@ -39,7 +39,7 @@ use crate::session_config::{
 };
 
 /// Well-known origin path the SPA fetches at boot. Emitted by
-/// `make publish --deployment-config` next to the published content.
+/// `make site --deployment-config` next to the published content.
 pub const DEPLOYMENT_CONFIG_PATH: &str = "/entity-deployment.json";
 
 /// A partial site-mode posture override — only the fields the deployment
@@ -249,11 +249,11 @@ pub fn same_origin() -> Option<String> {
 
 /// Expand a configured origin to a concrete fetch base. An empty string or the
 /// literal `self` means "this SPA's own origin" — the portable same-origin CDN
-/// case (`make publish --deployment-config` emits `""` when no cross-origin
+/// case (`make site --deployment-config` emits `""` when no cross-origin
 /// `--live` is given), expanded here to `window.location.origin` at runtime. A
 /// **root-relative** origin (`/{prefix}`) is the same-origin case **with a
 /// hosting prefix**: a peer published under `{PREFIX}` on this very domain — so
-/// it expands to `{own-origin}/{prefix}` (`make publish --prefix=… ` without
+/// it expands to `{own-origin}/{prefix}` (`make site --prefix=… ` without
 /// `--live`). Any other value (a concrete `https://…`, e.g. a cross-origin host
 /// or `{https://host}/{prefix}`) passes through. `None` only if same-origin is
 /// wanted but unavailable.

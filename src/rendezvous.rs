@@ -832,6 +832,7 @@ mod tests {
             node_peer_id: node_pid.to_string(),
             node_addr: format!("memory://{node_pid}"),
             label: "test node".to_string(),
+            ice: String::new(),
         };
         (peers, me, connector)
     }
@@ -1077,6 +1078,7 @@ mod tests {
             node_peer_id: "2KNobodyHome".to_string(),
             node_addr: "memory://2KNobodyHome".to_string(),
             label: String::new(),
+            ice: String::new(),
         };
         let mut s = MeetSession::start(&me, ghost, Mode::Tag("chess".into())).with_cadence(1, 10);
 

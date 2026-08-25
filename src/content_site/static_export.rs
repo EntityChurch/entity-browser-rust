@@ -585,7 +585,7 @@ fn write_root_index(
 /// - **Bare-dir preview / SSG projection** (e.g. `make publish-papers` into an
 ///   empty dir): without a root page, `/` falls through to the dev server's
 ///   directory listing. This lands the visitor on the sites index instead.
-/// - **One-origin `publish-serve`** (publish INTO the SPA's `dist/`): the WASM
+/// - **One-origin `site-serve`** (publish INTO the SPA's `dist/`): the WASM
 ///   build already wrote `dist/index.html`, so this is a **no-op** — the SPA
 ///   keeps `/`. The guard is what makes that safe; we never clobber the SPA.
 ///
@@ -795,7 +795,7 @@ mod tests {
 
         // A real (Direct-arm, in-memory) peer tree — a live tree, just not
         // durable. Seed the demo site SET (bundled deep demo + a second site
-        // cross-linking into it) via the same seeder `make publish` uses, so
+        // cross-linking into it) via the same seeder `make site` uses, so
         // the emitter and the CLI exercise identical data.
         let peers = Peers::new_direct();
         let pid = peers.primary_peer_id().to_string();

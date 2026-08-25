@@ -16,6 +16,7 @@
   "label.address": "地址",
   "label.name": "名称",
   "label.label": "标签",
+  "label.ice_servers": "反射服务器 (STUN)",
 
   "status.copied": "已复制 ✓",
 
@@ -565,6 +566,7 @@
   "peerconn.connectors": "连接器",
   "peerconn.connectors_hint": "将对等端相互介绍的节点。仅用于会合——绝不参与数据传输。",
   "peerconn.connector_none": "尚无连接器——添加一个信令节点以便会合。",
+  "peerconn.ice_help": "可选。跨不同网络连接时需要；仅在同一网络内可留空。",
   "peerconn.connector_add": "添加连接器",
   "peerconn.connector_reload_pending": "连接器选择将在重新加载后生效——此会话仍在使用之前的连接器。",
   "peerconn.connector_use": "使用",

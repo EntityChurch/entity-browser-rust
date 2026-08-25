@@ -16,6 +16,7 @@
   "label.address": "Adress",
   "label.name": "Namn",
   "label.label": "Etikett",
+  "label.ice_servers": "Reflektorer (STUN)",
 
   "status.copied": "Kopierat ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Förbindelsenoder",
   "peerconn.connectors_hint": "Noder som presenterar parter för varandra. Endast mötesplats — aldrig i datavägen.",
   "peerconn.connector_none": "Inga förbindelsenoder ännu — lägg till en signalnod att mötas via.",
+  "peerconn.ice_help": "Valfritt. Behövs för att ansluta mellan olika nätverk; lämna tomt för samma nätverk.",
   "peerconn.connector_add": "Lägg till förbindelsenod",
   "peerconn.connector_reload_pending": "Ditt val av connector börjar gälla vid omladdning — den här sessionen kör fortfarande på den föregående.",
   "peerconn.connector_use": "Använd",

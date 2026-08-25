@@ -16,6 +16,7 @@
   "label.address": "العنوان",
   "label.name": "الاسم",
   "label.label": "التسمية",
+  "label.ice_servers": "عاكسات (STUN)",
 
   "status.copied": "تم النسخ ✓",
 
@@ -595,6 +596,7 @@
   "peerconn.connectors": "الموصّلات",
   "peerconn.connectors_hint": "عُقد تُعرّف النظائر ببعضها. للالتقاء فقط — ليست أبدًا في مسار البيانات.",
   "peerconn.connector_none": "لا توجد موصّلات بعد — أضف عقدة إشارات للالتقاء عبرها.",
+  "peerconn.ice_help": "اختياري. مطلوب للاتصال عبر شبكات مختلفة؛ اتركه فارغًا للشبكة نفسها فقط.",
   "peerconn.connector_add": "إضافة موصّل",
   "peerconn.connector_reload_pending": "يبدأ سريان اختيارك للمُعرِّف عند إعادة التحميل — لا تزال هذه الجلسة تعمل بالسابق.",
   "peerconn.connector_use": "استخدام",

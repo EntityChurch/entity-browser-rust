@@ -686,6 +686,7 @@ mod tests {
             node_peer_id: "2KNobodyHome".to_string(),
             node_addr: "memory://2KNobodyHome".to_string(),
             label: String::new(),
+            ice: String::new(),
         };
         connectors::add_connector(&peers, &sys, &ghost).expect("add");
         // Both halves need waiting on: `select_connector` refuses until the
@@ -743,6 +744,7 @@ mod tests {
             node_peer_id: node_pid.clone(),
             node_addr: format!("memory://{node_pid}"),
             label: String::new(),
+            ice: String::new(),
         };
 
         let peers = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(

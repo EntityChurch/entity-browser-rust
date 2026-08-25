@@ -37,6 +37,7 @@ teardown() {
   podman rm -f rtc-a rtc-b >/dev/null 2>&1 || true
   podman network rm "$NET" >/dev/null 2>&1 || true
   podman network rm "$NET_A" "$NET_B" >/dev/null 2>&1 || true
+  bash "$(dirname "$0")/nat_topology.sh" down >/dev/null 2>&1 || true
   pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
   pkill -f "http.server $DISTPORT" 2>/dev/null || true
   echo ">> done"
@@ -74,7 +75,13 @@ echo "   this same core-rust checkout. To debug rung-1 under the tolerant"
 echo "   posture, revert Require upstream (one line) and rebuild both."
 echo "──────────────────────────────────────────────────────────────"
 
-if [ "$TOPOLOGY" = "split" ]; then
+if [ "$TOPOLOGY" = "nat" ]; then
+  # The positive traversal rig: two peers behind two SEPARATE NATs, each with
+  # its own external address, plus a self-hosted STUN responder. See
+  # nat_topology.sh for what kind of NAT this is and why that bounds the claim.
+  echo ">> TOPOLOGY=nat — two peers, two routers, two external addresses"
+  bash "$SCRATCH/nat_topology.sh" up
+elif [ "$TOPOLOGY" = "split" ]; then
   echo ">> TOPOLOGY=split — one ISOLATED network per browser (the NAT negative control)"
   podman network exists "$NET_A" || podman network create --opt isolate=true "$NET_A" >/dev/null
   podman network exists "$NET_B" || podman network create --opt isolate=true "$NET_B" >/dev/null
@@ -106,7 +113,9 @@ probe_a_to_b() {
 }
 echo ">> probing the A->B path (the rig's own control)"
 PROBE=$(probe_a_to_b)
-if [ "$TOPOLOGY" = "split" ]; then
+if [ "$TOPOLOGY" = "nat" ]; then
+  : # already probed above; probe_a_to_b is informational here
+elif [ "$TOPOLOGY" = "split" ]; then
   if [ "$PROBE" = "200" ]; then
     echo "!! ISOLATION LEAKED: rtc-a reached rtc-b at $B_IP (HTTP 200)."
     echo "   The split rig would measure nothing — a media path exists that a"
@@ -143,6 +152,21 @@ sleep 0.5
 nohup python3 -m http.server $DISTPORT --directory dist >/tmp/dist_repro.log 2>&1 &
 sleep 1
 
+if [ "$TOPOLOGY" = "nat" ]; then
+  # The NAT control runs HERE, not at topology bring-up: one of its properties
+  # is "each peer reaches the host-served dist through its own NAT", and the
+  # dist server is started a few lines above. Probing earlier tested an address
+  # nothing was listening on and reported a broken NAT that was not broken.
+  echo ">> NAT topology control (no direct path, two external addresses, host reachable)"
+  bash "$SCRATCH/nat_topology.sh" probe || {
+    echo "!! the NAT topology failed its own control — refusing to report a traversal"
+    exit 1
+  }
+  # Hand the spike the reflector, through the SAME connector row a user types.
+  export E2E_ICE="stun:$(cat /tmp/entity-rtc-stun-addr)"
+  echo "   reflectors for the connector row: $E2E_ICE"
+fi
+
 echo ">> driving integration spike"
 BEFORE=$(wc -l < /tmp/sig_repro.out)
 # The spike is the GATE: `main()` returns 0 only on a BIDIRECTIONAL pass (both
@@ -158,8 +182,9 @@ SPIKE_ARGS="${SPIKE_ARGS-get 30}"
 set +e
 echo ">> spike: $SPIKE $NODE $SPIKE_ARGS"
 # shellcheck disable=SC2086
-python3 "$SCRATCH/$SPIKE" "$NODE" $SPIKE_ARGS
-DRIVE_RC=$?
+SPIKE_OUT=/tmp/spike_out_$$.txt
+python3 "$SCRATCH/$SPIKE" "$NODE" $SPIKE_ARGS 2>&1 | tee "$SPIKE_OUT"
+DRIVE_RC=${PIPESTATUS[0]}
 set -e
 echo ""
 echo ">> NODE VANTAGE — signaling offer/collect by (caller, rendezvous_key) during run:"
@@ -214,6 +239,30 @@ if [ "$TOPOLOGY" = "split" ]; then
   echo "      script): establishment cannot complete, so this counts retries"
   echo "      over the run, not one establishment. Measured rate is the finding:"
   echo "      ${MAX_DEPOSITS} deposits/side against a permanently unreachable peer."
+
+  # --- §13 item 6: WHICH retry shape --------------------------------------
+  # The node cannot tell "one unbounded retry" from "many bounded ones", because
+  # deposits key on (caller, rendezvous_key) and every retry reuses the key. The
+  # PEER can: each failed `establish_live` logs exactly one "negotiation to …
+  # failed" line, so that count is completed negotiations, and deposits ÷
+  # negotiations is the per-negotiation figure §11.5 actually bounds.
+  NEG=$(grep -oE 'NEGOTIATION_ATTEMPTS=[0-9]+' "$SPIKE_OUT" 2>/dev/null \
+        | cut -d= -f2 | sort -rn | head -1)
+  NEG="${NEG:-0}"
+  echo "   -- §13 item 6: retry shape --"
+  if [ "$NEG" -gt 0 ]; then
+    PER=$(awk -v d="$MAX_DEPOSITS" -v n="$NEG" 'BEGIN{printf "%.1f", d/n}')
+    echo "      completed negotiations (peer vantage) : ${NEG}"
+    echo "      deposits / negotiation                : ${PER}"
+    echo "      => MANY BOUNDED negotiations, re-triggered by the caller —"
+    echo "         NOT one unbounded retry. The establisher runs ONE negotiation"
+    echo "         and never retries it (main_thread_establish.rs, §7.2.1"
+    echo "         caller_owns_retry); the repetition is the caller's."
+  else
+    echo "      no negotiation-failure lines found — cannot classify this run."
+    echo "      (Expected >0 in split topology; if 0, the establisher never ran"
+    echo "      and the deposit count means something else entirely.)"
+  fi
 elif [ "$MAX_DEPOSITS" -gt "$SIG_DEPOSIT_BOUND" ]; then
   echo "   ❌ §11.5 FAIL: ${MAX_DEPOSITS} OFFER deposits/side exceeds the O(1) bound"
   echo "      ${SIG_DEPOSIT_BOUND} — establishment is brute-force (obligation-5 single-flight"

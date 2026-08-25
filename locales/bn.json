@@ -16,6 +16,7 @@
   "label.address": "ঠিকানা",
   "label.name": "নাম",
   "label.label": "লেবেল",
+  "label.ice_servers": "রিফ্লেক্টর (STUN)",
 
   "status.copied": "কপি হয়েছে ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "কানেক্টর",
   "peerconn.connectors_hint": "যে নোডগুলি পিয়ারদের একে অপরের সাথে পরিচয় করায়। কেবল মিলনস্থল — কখনও ডেটা পথে নয়।",
   "peerconn.connector_none": "এখনও কোনো কানেক্টর নেই — মিলনের জন্য একটি সিগন্যালিং নোড যোগ করুন।",
+  "peerconn.ice_help": "ঐচ্ছিক। বিভিন্ন নেটওয়ার্কের মধ্যে সংযোগের জন্য প্রয়োজন; একই নেটওয়ার্কের ক্ষেত্রে খালি রাখুন।",
   "peerconn.connector_add": "কানেক্টর যোগ করুন",
   "peerconn.connector_reload_pending": "আপনার কানেক্টর পছন্দ রিলোডের পর কার্যকর হবে — এই সেশনটি এখনও আগেরটিতেই চলছে।",
   "peerconn.connector_use": "ব্যবহার করুন",

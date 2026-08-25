@@ -16,6 +16,7 @@
   "label.address": "Adresse",
   "label.name": "Navn",
   "label.label": "Etiket",
+  "label.ice_servers": "Reflektorer (STUN)",
 
   "status.copied": "Kopieret ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Forbindelsesnoder",
   "peerconn.connectors_hint": "Noder, der introducerer peers for hinanden. Kun mødested — aldrig i datastien.",
   "peerconn.connector_none": "Ingen forbindelsesnoder endnu — tilføj en signalnode at mødes via.",
+  "peerconn.ice_help": "Valgfrit. Nødvendigt for at forbinde på tværs af forskellige netværk; lad stå tomt for samme netværk.",
   "peerconn.connector_add": "Tilføj forbindelsesnode",
   "peerconn.connector_reload_pending": "Dit valg af connector træder i kraft ved genindlæsning — denne session kører stadig på den forrige.",
   "peerconn.connector_use": "Brug",

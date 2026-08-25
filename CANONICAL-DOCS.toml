@@ -159,7 +159,7 @@ group = "App references"
 [[doc]]
 path  = "docs/architecture/guides/GUIDE-DEPLOYMENT-AND-CONFIGURATION.md"
 title = "Deployment & configuration guide"
-blurb = "The operator/DevOps quick-ref: persistent PIDs, the /entity-deployment.json schema + precedence, the three profiles (full/tutorial/strict-site), deployment recipes, the make publish knob table, dist/ layout, and gotchas."
+blurb = "The operator/DevOps quick-ref: persistent PIDs, the /entity-deployment.json schema + precedence, the three profiles (full/tutorial/strict-site), deployment recipes, the make site knob table, dist/ layout, and gotchas."
 group = "App references"
 
 # ── Design & performance detail (the Stage/Phase glossary's owning docs) ──────

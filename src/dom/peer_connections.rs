@@ -25,6 +25,7 @@ const ADDRESS_FIELD: &str = "address";
 const CONNECTOR_ID_FIELD: &str = "connector_id";
 const CONNECTOR_ADDR_FIELD: &str = "connector_addr";
 const CONNECTOR_LABEL_FIELD: &str = "connector_label";
+const CONNECTOR_ICE_FIELD: &str = "connector_ice";
 
 /// Drafts keys for the meet-at-a-name form.
 const MEET_MODE_FIELD: &str = "meet_mode";
@@ -740,6 +741,19 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
         &card,
         &components::field(&crate::i18n::t("label.label", &[]), "", &label_input),
     );
+    // Reflectors. Optional, and the help text says what leaving it empty means —
+    // "host candidates only" is a real deployment (a LAN), not a broken one, and
+    // the user should not have to guess which they are running.
+    let ice_input =
+        components::text_input(ctx, CONNECTOR_ICE_FIELD, "", "stun:stun.example.org:3478");
+    util::append(
+        &card,
+        &components::field(
+            &crate::i18n::t("label.ice_servers", &[]),
+            &crate::i18n::t("peerconn.ice_help", &[]),
+            &ice_input,
+        ),
+    );
 
     let add_btn = components::button_el(
         &crate::i18n::t("peerconn.connector_add", &[]),
@@ -752,10 +766,11 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
         let wid = output.window_id;
         ctx.listen(&add_btn, "click", move |_| {
             let read = |k: &str| drafts.borrow().get(k).cloned().unwrap_or_default();
-            let (id, addr, label) = (
+            let (id, addr, label, ice) = (
                 read(CONNECTOR_ID_FIELD),
                 read(CONNECTOR_ADDR_FIELD),
                 read(CONNECTOR_LABEL_FIELD),
+                read(CONNECTOR_ICE_FIELD),
             );
             // Both halves are required, and the model says so with a notice —
             // submitting the empty form must not look like a dead button, so we
@@ -764,7 +779,7 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
                 window_id: wid,
                 event: "connector_add".to_string(),
                 // The app's multi-field packing, so one event carries the form.
-                value: format!("{id}\u{1f}{addr}\u{1f}{label}"),
+                value: format!("{id}\u{1f}{addr}\u{1f}{label}\u{1f}{ice}"),
             });
             rp();
         });

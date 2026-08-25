@@ -625,7 +625,7 @@ impl ShellModel {
     ///
     /// ```text
     /// connector ls                              list; ● marks the selected one
-    /// connector add <peer-id> <addr> [label…]   add or overwrite
+    /// connector add <peer-id> <addr> [ice=<stun:…>] [label…]   add or overwrite
     /// connector rm  <peer-id>                   remove (clears the selection)
     /// connector use <peer-id>                   select for provisioning
     /// connector check [peer-id]                 advertise(): endpoint + lobby
@@ -687,11 +687,21 @@ impl ShellModel {
                     } else {
                         format!("  {}", c.label)
                     };
+                    // Say which reachability posture this row is in. "Why does
+                    // it never connect across networks" is invisible otherwise —
+                    // host-only is legal and silent, and silence is what makes
+                    // it hard to diagnose.
+                    let ice = if c.ice.trim().is_empty() {
+                        "  [host-only]".to_string()
+                    } else {
+                        format!("  [ice {}]", c.ice.trim())
+                    };
                     push(ScrollbackEntry::Info(format!(
-                        "{mark} {}  {}{}",
+                        "{mark} {}  {}{}{}",
                         crate::views::short_pid(&c.node_peer_id),
                         c.node_addr,
-                        label
+                        label,
+                        ice
                     )));
                 }
             }
@@ -700,10 +710,27 @@ impl ShellModel {
                     push(usage());
                     return;
                 };
+                // `ice=<urls>` may appear anywhere after the address; whatever
+                // is left is the label. A flag rather than a positional because
+                // the label is free text and already eats the tail — a fourth
+                // position would make `connector add id addr my box` ambiguous.
+                let rest = &args[3..];
+                let ice = rest
+                    .iter()
+                    .find_map(|a| a.strip_prefix("ice="))
+                    .unwrap_or("")
+                    .to_string();
+                let label = rest
+                    .iter()
+                    .filter(|a| !a.starts_with("ice="))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let c = connectors::Connector {
                     node_peer_id: (*id).to_string(),
                     node_addr: (*addr).to_string(),
-                    label: args[3..].join(" "),
+                    label,
+                    ice,
                 };
                 match connectors::add_connector(peers, &registry_pid, &c) {
                     Ok(()) => push(ScrollbackEntry::Info(format!(
@@ -1350,6 +1377,7 @@ mod tests {
                 node_peer_id: "2KNobodyHome".to_string(),
                 node_addr: "memory://2KNobodyHome".to_string(),
                 label: String::new(),
+                ice: String::new(),
             };
             connectors::add_connector(&peers, &sys, &node).expect("add");
             for _ in 0..400 {
@@ -2752,6 +2780,7 @@ mod tests {
             node_peer_id: node_pid.clone(),
             node_addr: format!("memory://{node_pid}"),
             label: String::new(),
+            ice: String::new(),
         };
 
         // The shell's peer, with the node in its registry and selected.

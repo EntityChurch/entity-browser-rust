@@ -16,6 +16,7 @@
   "label.address": "ที่อยู่",
   "label.name": "ชื่อ",
   "label.label": "ป้ายกำกับ",
+  "label.ice_servers": "รีเฟล็กเตอร์ (STUN)",
 
   "status.copied": "คัดลอกแล้ว ✓",
 
@@ -565,6 +566,7 @@
   "peerconn.connectors": "ตัวเชื่อม",
   "peerconn.connectors_hint": "โหนดที่แนะนำเพียร์ให้รู้จักกัน ใช้เพื่อนัดพบเท่านั้น — ไม่เคยอยู่ในเส้นทางข้อมูล",
   "peerconn.connector_none": "ยังไม่มีตัวเชื่อม — เพิ่มโหนดสัญญาณเพื่อใช้นัดพบ",
+  "peerconn.ice_help": "ไม่บังคับ จำเป็นสำหรับการเชื่อมต่อข้ามเครือข่ายที่ต่างกัน เว้นว่างไว้หากใช้เครือข่ายเดียวกัน",
   "peerconn.connector_add": "เพิ่มตัวเชื่อม",
   "peerconn.connector_reload_pending": "ตัวเลือกคอนเนกเตอร์จะมีผลเมื่อโหลดใหม่ — เซสชันนี้ยังใช้ตัวก่อนหน้าอยู่",
   "peerconn.connector_use": "ใช้",
