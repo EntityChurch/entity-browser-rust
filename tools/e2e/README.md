@@ -32,6 +32,20 @@ podman run -d --rm --name e2e-firefox --network=host \
 # Terminal 2: build wasm + run the test.
 make e2e-worker            # = `make wasm` then `cargo test --test e2e_worker -- --nocapture`
 
+**On a machine WITH a display, first build the Tauri binary** — Phase 14 spawns
+`./src-tauri/target/debug/entity-browser-tauri` for the ConnectPeer test and
+**hard-errors** if it is missing (headless it self-skips instead, so this only
+bites on a desktop). `make e2e-worker` does not build it:
+
+```bash
+make tauri                 # builds the binary Phase 14 needs (slow, one-time)
+```
+
+Without it the run dies at Phase 14 and **every later phase is silently never
+exercised** — which is exactly how two stale assertions after it went unnoticed
+for several commits. If you are changing anything the later phases cover, build
+it.
+
 # When done:
 podman stop e2e-firefox
 ```
@@ -64,6 +78,20 @@ said 8081 / "don't run make serve in parallel" — no longer true.)
   per-phase `println!`s must survive for diagnosis.
 - A failure deep in a later phase still means earlier phases passed —
   read the progress prints to see how far it got.
+
+- **Known intermittent (pre-`2026-07-21`, unfixed):** the Phase-2 Site Editor
+  `delete site` assertion occasionally reports `still_lists: true` even though
+  the assertion now polls for 10 s. The delete itself measures ~160 ms when it
+  works, and the failure reproduces on older commits, so it is not fallout from
+  the i18n pass. Re-run to confirm before investigating anything else; the
+  suspicion is a race in which site is selected when `Delete site` fires.
+
+- **Matching localized text:** `t()`/`t_plural()` wrap every interpolated arg in
+  Unicode bidi isolates (FSI `\u2066` … PDI `\u2069`). `sec.textContent` therefore
+  contains invisible marks *between the number and its noun*, and a regex like
+  `/\d+ peers/` will not match. Strip them first:
+  `text.replace(/[\u2066-\u2069]/g, '')`. This silently broke the Peers-footer
+  parse; see the comment at `read_sdk_count_script`.
 
 ## Visual / mobile verification (screenshots)
 
