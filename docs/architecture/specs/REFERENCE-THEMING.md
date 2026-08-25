@@ -62,9 +62,11 @@ token is invisible (renders the original color), never a blank.
   badges, the harmonized `--status-*` family, fonts).
 - **`LIGHT`** — same token keys, re-tuned for dark-text-on-light
   (accents/status darkened for contrast).
-- **`THEMES: &[Theme] = &[DARK, LIGHT, SEPIA, NEON]`** — the **built-in**
-  registry. `DARK` is first = the default; `SEPIA` (warm paper) and
-  `NEON` (green-phosphor terminal, mono UI font) are worked examples of
+- **`THEMES`** — the **built-in** registry: `DARK, LIGHT, SEPIA, NEON`
+  followed by the community palettes `SOLARIZED_DARK, SOLARIZED_LIGHT,
+  NORD, NORD_LIGHT, DRACULA, GRUVBOX_DARK, GRUVBOX_LIGHT, MONOKAI`
+  (attribution: §7.3). `DARK` is first = the default; `SEPIA` (warm paper)
+  and `NEON` (green-phosphor terminal, mono UI font) are worked examples of
   §7's retune-every-key rule (a test now pins every builtin to DARK's
   exact key set + order). **Adding a built-in is one entry here** (§7).
   Beside it sits the **user-theme runtime registry** (§7.1): user
@@ -309,7 +311,7 @@ Landed 2026-07-15 — `DESIGN-USER-THEMES.md` is the decision record.
 
 Two kinds, two homes, deliberately NOT merged:
 
-| | Built-in (`dark`/`light`/`sepia`/`neon`) | User-defined |
+| | Built-in (`dark`/`light`/`sepia`/`neon` + community palettes §7.3) | User-defined |
 |---|---|---|
 | Storage | **compiled into the app** (`THEMES` in `theme_tokens.rs`) | **tree entities** on the system peer (`app/entity-browser/themes/{name}`) |
 | Scope | every profile, every deployment, identical | this profile only (travels with the peer's store) |
@@ -327,6 +329,29 @@ built-in stays selectable beside it. The `scheme` field is the one
 non-color: browsers render native widgets in exactly two modes
 (dark/light), so every theme — built-in or user — declares which mode
 its palette sits closest to.
+
+### 7.3 Community color schemes (attribution)
+
+Eight of the built-ins reproduce well-known open-source editor palettes,
+mapped onto this app's token set (§7's retune-every-key rule). They are
+included **for familiarity** — many users already recognize these looks —
+and are **not affiliated with or endorsed by** their authors. Color values
+are not themselves copyrightable; we credit the originators as a courtesy
+and name the themes canonically so users can find the look they know.
+
+| Theme(s) | Author | License | Source |
+|---|---|---|---|
+| Solarized Dark / Light | Ethan Schoonover | MIT | <https://ethanschoonover.com/solarized/> |
+| Nord / Nord Light | Arctic Ice Studio & Sven Greb | MIT | <https://www.nordtheme.com/> |
+| Dracula | Zeno Rocha & contributors | MIT | <https://draculatheme.com/> |
+| Gruvbox Dark / Light | Pavel Pertsev (morhetz) | MIT | <https://github.com/morhetz/gruvbox> |
+| Monokai | Wimer Hazenberg | community scheme, reproduced widely | — |
+
+Nord Light and Gruvbox Light are the light inversions of their respective
+palettes (Nord's is a community variant; the original Nord is dark-only).
+The same list, with the palette hex origins, is a code comment above the
+theme consts in `theme_tokens.rs`. If this app ever grows an in-app
+"About / Credits" surface, this table is what it should carry.
 
 ---
 

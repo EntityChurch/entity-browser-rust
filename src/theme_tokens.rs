@@ -285,6 +285,487 @@ pub const NEON: Theme = Theme {
     ],
 };
 
+// ---------------------------------------------------------------------------
+// Community color schemes (attribution)
+// ---------------------------------------------------------------------------
+//
+// The themes below reproduce well-known open-source editor palettes, mapped
+// onto this app's token set. They're included for FAMILIARITY — many users
+// already recognize these palettes — and are NOT affiliated with or endorsed
+// by their authors. Color values are not themselves copyrightable; we credit
+// the originators as a courtesy and name them canonically so users can find
+// the look they know. Upstream palettes (all MIT except Monokai, a
+// long-standing community scheme reproduced by convention):
+//
+//   Solarized — © Ethan Schoonover, MIT        https://ethanschoonover.com/solarized/
+//   Nord      — © Arctic Ice Studio & Sven Greb, MIT  https://www.nordtheme.com/
+//   Dracula   — © Zeno Rocha & contributors, MIT      https://draculatheme.com/
+//   Gruvbox   — © Pavel Pertsev (morhetz), MIT        https://github.com/morhetz/gruvbox
+//   Monokai   — original scheme by Wimer Hazenberg; palette reproduced widely
+//
+// Same note in prose: REFERENCE-THEMING.md §7.3. Each carries DARK's exact
+// token key set (the parity test enforces it); the mapping picks each
+// palette's own bg/fg for surfaces+text (guaranteed-readable baseline) and
+// its signature hue for --accent.
+
+/// Solarized Dark — Ethan Schoonover's low-contrast palette on base03.
+pub const SOLARIZED_DARK: Theme = Theme {
+    name: "solarized-dark",
+    label: "Solarized Dark",
+    scheme: "dark",
+    vars: &[
+        // -- surfaces (base03 / base02) --
+        ("--bg", "#002b36"),
+        ("--bg-body", "#00212b"),
+        ("--surface", "#073642"),
+        ("--surface-header", "#05303b"),
+        ("--surface-hover", "#0a4453"),
+        ("--surface-sunken", "#00212b"),
+        ("--surface-max", "#032f39"),
+        ("--input-bg", "#00252e"),
+        ("--overlay-bg", "#002028"),
+        ("--selected-bg", "#0a4a5c"),
+        // -- text (base0 / base1 / base01) --
+        ("--text", "#93a1a1"),
+        ("--text-muted", "#839496"),
+        ("--text-dim", "#657b83"),
+        ("--text-faint", "#586e75"),
+        ("--title-muted", "#2aa198"),
+        // -- borders --
+        ("--border", "#073642"),
+        ("--border-strong", "#0e4b5a"),
+        ("--border-bold", "#586e75"),
+        // -- accents (solarized blue) --
+        ("--accent", "#268bd2"),
+        ("--accent-text", "#001217"), // deep base for chip-label contrast on the blue fill
+        ("--accent-green", "#a6c98f"),
+        ("--accent-2", "#9aa8c9"),
+        ("--btn-primary-bg", "#0e3b30"),
+        ("--btn-primary-border", "#859900"),
+        ("--btn-secondary-border", "#6c71c4"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#859900"),
+        ("--peer-local", "#2aa198"),
+        ("--peer-remote", "#6c71c4"),
+        // -- semantic status --
+        ("--status-ok", "#859900"),
+        ("--status-err", "#dc322f"),
+        ("--status-info", "#268bd2"),
+        ("--status-warn", "#b58900"),
+        // -- app/game launcher card accents (dark) --
+        ("--app-card-s", "70%"),
+        ("--app-card-l", "68%"),
+        ("--app-card-tint-s", "60%"),
+        ("--app-card-tint-l", "55%"),
+        ("--app-card-tint-a", "0.16"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Solarized Light — the same accents on base3 (its light twin).
+pub const SOLARIZED_LIGHT: Theme = Theme {
+    name: "solarized-light",
+    label: "Solarized Light",
+    scheme: "light",
+    vars: &[
+        // -- surfaces (base3 / base2) --
+        ("--bg", "#fdf6e3"),
+        ("--bg-body", "#f4edda"),
+        ("--surface", "#eee8d5"),
+        ("--surface-header", "#e8e1cd"),
+        ("--surface-hover", "#e0d8c2"),
+        ("--surface-sunken", "#f2ecd8"),
+        ("--surface-max", "#fffbf0"),
+        ("--input-bg", "#fffdf6"),
+        ("--overlay-bg", "#faf3e0"),
+        ("--selected-bg", "#d4e5ef"),
+        // -- text (base01 / base00 / base0 / base1) --
+        ("--text", "#586e75"),
+        ("--text-muted", "#657b83"),
+        ("--text-dim", "#839496"),
+        ("--text-faint", "#93a1a1"),
+        ("--title-muted", "#386f8c"),
+        // -- borders --
+        ("--border", "#ddd6c1"),
+        ("--border-strong", "#c9c2ad"),
+        ("--border-bold", "#93a1a1"),
+        // -- accents (solarized blue) --
+        ("--accent", "#268bd2"),
+        ("--accent-text", "#001217"), // dark label reads better on the blue fill than cream
+        ("--accent-green", "#4e6b00"),
+        ("--accent-2", "#52489f"),
+        ("--btn-primary-bg", "#e2ebc8"),
+        ("--btn-primary-border", "#859900"),
+        ("--btn-secondary-border", "#6c71c4"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#5a6b00"),
+        ("--peer-local", "#2aa198"),
+        ("--peer-remote", "#8f3f9c"),
+        // -- semantic status (re-tuned for light bg) --
+        ("--status-ok", "#6b8000"),
+        ("--status-err", "#dc322f"),
+        ("--status-info", "#268bd2"),
+        ("--status-warn", "#b58900"),
+        // -- app/game launcher card accents (light) --
+        ("--app-card-s", "55%"),
+        ("--app-card-l", "42%"),
+        ("--app-card-tint-s", "50%"),
+        ("--app-card-tint-l", "58%"),
+        ("--app-card-tint-a", "0.15"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Nord — Arctic Ice Studio's polar palette (Polar Night + Snow Storm + Frost).
+pub const NORD: Theme = Theme {
+    name: "nord",
+    label: "Nord",
+    scheme: "dark",
+    vars: &[
+        // -- surfaces (Polar Night nord0..3) --
+        ("--bg", "#2e3440"),
+        ("--bg-body", "#272c36"),
+        ("--surface", "#3b4252"),
+        ("--surface-header", "#353b49"),
+        ("--surface-hover", "#434c5e"),
+        ("--surface-sunken", "#252932"),
+        ("--surface-max", "#2b313c"),
+        ("--input-bg", "#292e38"),
+        ("--overlay-bg", "#2a2f3a"),
+        ("--selected-bg", "#3b4a5c"),
+        // -- text (Snow Storm nord4..6) --
+        ("--text", "#eceff4"),
+        ("--text-muted", "#d8dee9"),
+        ("--text-dim", "#8892a4"),
+        ("--text-faint", "#6a7484"),
+        ("--title-muted", "#88c0d0"),
+        // -- borders --
+        ("--border", "#3b4252"),
+        ("--border-strong", "#434c5e"),
+        ("--border-bold", "#4c566a"),
+        // -- accents (Frost nord8) --
+        ("--accent", "#88c0d0"),
+        ("--accent-text", "#2e3440"),
+        ("--accent-green", "#a3be8c"),
+        ("--accent-2", "#81a1c1"),
+        ("--btn-primary-bg", "#3b4a3e"),
+        ("--btn-primary-border", "#a3be8c"),
+        ("--btn-secondary-border", "#5e81ac"),
+        // -- categorical peer badges (Aurora) --
+        ("--peer-primary", "#a3be8c"),
+        ("--peer-local", "#88c0d0"),
+        ("--peer-remote", "#b48ead"),
+        // -- semantic status (Aurora) --
+        ("--status-ok", "#a3be8c"),
+        ("--status-err", "#bf616a"),
+        ("--status-info", "#81a1c1"),
+        ("--status-warn", "#ebcb8b"),
+        // -- app/game launcher card accents (dark) --
+        ("--app-card-s", "70%"),
+        ("--app-card-l", "68%"),
+        ("--app-card-tint-s", "60%"),
+        ("--app-card-tint-l", "55%"),
+        ("--app-card-tint-a", "0.16"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Nord Light — Snow Storm surfaces, Polar Night text (community light variant).
+pub const NORD_LIGHT: Theme = Theme {
+    name: "nord-light",
+    label: "Nord Light",
+    scheme: "light",
+    vars: &[
+        // -- surfaces (Snow Storm) --
+        ("--bg", "#eceff4"),
+        ("--bg-body", "#e5e9f0"),
+        ("--surface", "#e5e9f0"),
+        ("--surface-header", "#dde3ec"),
+        ("--surface-hover", "#d8dee9"),
+        ("--surface-sunken", "#f0f3f7"),
+        ("--surface-max", "#ffffff"),
+        ("--input-bg", "#ffffff"),
+        ("--overlay-bg", "#e9edf3"),
+        ("--selected-bg", "#d3e0e6"),
+        // -- text (Polar Night) --
+        ("--text", "#2e3440"),
+        ("--text-muted", "#3b4252"),
+        ("--text-dim", "#4c566a"),
+        ("--text-faint", "#7b8494"),
+        ("--title-muted", "#5e81ac"),
+        // -- borders --
+        ("--border", "#d8dee9"),
+        ("--border-strong", "#c2cad6"),
+        ("--border-bold", "#a5b0c0"),
+        // -- accents (Frost nord10) --
+        ("--accent", "#5e81ac"),
+        ("--accent-text", "#14171c"), // deep Polar Night for chip-label contrast
+
+        ("--accent-green", "#4a7a3a"),
+        ("--accent-2", "#5e81ac"),
+        ("--btn-primary-bg", "#d6e4cc"),
+        ("--btn-primary-border", "#7a9a63"),
+        ("--btn-secondary-border", "#81a1c1"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#4a7a3a"),
+        ("--peer-local", "#3a7a8a"),
+        ("--peer-remote", "#8a5a8a"),
+        // -- semantic status (re-tuned for light bg) --
+        ("--status-ok", "#5a8a4a"),
+        ("--status-err", "#bf616a"),
+        ("--status-info", "#5e81ac"),
+        ("--status-warn", "#b58e4a"),
+        // -- app/game launcher card accents (light) --
+        ("--app-card-s", "55%"),
+        ("--app-card-l", "42%"),
+        ("--app-card-tint-s", "50%"),
+        ("--app-card-tint-l", "58%"),
+        ("--app-card-tint-a", "0.15"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Dracula — Zeno Rocha's purple-forward dark palette.
+pub const DRACULA: Theme = Theme {
+    name: "dracula",
+    label: "Dracula",
+    scheme: "dark",
+    vars: &[
+        // -- surfaces (bg / current-line) --
+        ("--bg", "#282a36"),
+        ("--bg-body", "#21222c"),
+        ("--surface", "#343746"),
+        ("--surface-header", "#2b2d3a"),
+        ("--surface-hover", "#44475a"),
+        ("--surface-sunken", "#1e1f28"),
+        ("--surface-max", "#24252f"),
+        ("--input-bg", "#21222c"),
+        ("--overlay-bg", "#22232e"),
+        ("--selected-bg", "#44475a"),
+        // -- text (foreground / comment) --
+        ("--text", "#f8f8f2"),
+        ("--text-muted", "#d4d4cf"),
+        ("--text-dim", "#6272a4"),
+        ("--text-faint", "#4d5578"),
+        ("--title-muted", "#bd93f9"),
+        // -- borders --
+        ("--border", "#343746"),
+        ("--border-strong", "#44475a"),
+        ("--border-bold", "#565971"),
+        // -- accents (dracula purple / green / pink) --
+        ("--accent", "#bd93f9"),
+        ("--accent-text", "#282a36"),
+        ("--accent-green", "#50fa7b"),
+        ("--accent-2", "#ff79c6"),
+        ("--btn-primary-bg", "#1f3d2d"),
+        ("--btn-primary-border", "#50fa7b"),
+        ("--btn-secondary-border", "#ff79c6"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#50fa7b"),
+        ("--peer-local", "#8be9fd"),
+        ("--peer-remote", "#ff79c6"),
+        // -- semantic status --
+        ("--status-ok", "#50fa7b"),
+        ("--status-err", "#ff5555"),
+        ("--status-info", "#8be9fd"),
+        ("--status-warn", "#ffb86c"),
+        // -- app/game launcher card accents (dark) --
+        ("--app-card-s", "75%"),
+        ("--app-card-l", "70%"),
+        ("--app-card-tint-s", "65%"),
+        ("--app-card-tint-l", "55%"),
+        ("--app-card-tint-a", "0.18"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Gruvbox Dark — Pavel Pertsev's warm retro-groove palette.
+pub const GRUVBOX_DARK: Theme = Theme {
+    name: "gruvbox-dark",
+    label: "Gruvbox Dark",
+    scheme: "dark",
+    vars: &[
+        // -- surfaces (bg0..bg2) --
+        ("--bg", "#282828"),
+        ("--bg-body", "#1d2021"),
+        ("--surface", "#3c3836"),
+        ("--surface-header", "#32302f"),
+        ("--surface-hover", "#504945"),
+        ("--surface-sunken", "#1d2021"),
+        ("--surface-max", "#262626"),
+        ("--input-bg", "#232323"),
+        ("--overlay-bg", "#242423"),
+        ("--selected-bg", "#504945"),
+        // -- text (fg1..fg3 / gray) --
+        ("--text", "#ebdbb2"),
+        ("--text-muted", "#d5c4a1"),
+        ("--text-dim", "#bdae93"),
+        ("--text-faint", "#928374"),
+        ("--title-muted", "#fabd2f"),
+        // -- borders --
+        ("--border", "#3c3836"),
+        ("--border-strong", "#504945"),
+        ("--border-bold", "#665c54"),
+        // -- accents (bright yellow / green / orange) --
+        ("--accent", "#fabd2f"),
+        ("--accent-text", "#282828"),
+        ("--accent-green", "#b8bb26"),
+        ("--accent-2", "#fe8019"),
+        ("--btn-primary-bg", "#3a3d1e"),
+        ("--btn-primary-border", "#98971a"),
+        ("--btn-secondary-border", "#83a598"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#b8bb26"),
+        ("--peer-local", "#8ec07c"),
+        ("--peer-remote", "#d3869b"),
+        // -- semantic status --
+        ("--status-ok", "#b8bb26"),
+        ("--status-err", "#fb4934"),
+        ("--status-info", "#83a598"),
+        ("--status-warn", "#fabd2f"),
+        // -- app/game launcher card accents (dark) --
+        ("--app-card-s", "70%"),
+        ("--app-card-l", "68%"),
+        ("--app-card-tint-s", "60%"),
+        ("--app-card-tint-l", "55%"),
+        ("--app-card-tint-a", "0.16"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Gruvbox Light — the same warm palette inverted onto light backgrounds.
+pub const GRUVBOX_LIGHT: Theme = Theme {
+    name: "gruvbox-light",
+    label: "Gruvbox Light",
+    scheme: "light",
+    vars: &[
+        // -- surfaces (light bg0..bg2) --
+        ("--bg", "#fbf1c7"),
+        ("--bg-body", "#f2e5bc"),
+        ("--surface", "#ebdbb2"),
+        ("--surface-header", "#e6d5a8"),
+        ("--surface-hover", "#d5c4a1"),
+        ("--surface-sunken", "#f4ecc9"),
+        ("--surface-max", "#f9f5d7"),
+        ("--input-bg", "#f9f5d7"),
+        ("--overlay-bg", "#f6ecc0"),
+        ("--selected-bg", "#d5c4a1"),
+        // -- text (dark fg1..fg3 / gray) --
+        ("--text", "#3c3836"),
+        ("--text-muted", "#504945"),
+        ("--text-dim", "#665c54"),
+        ("--text-faint", "#928374"),
+        ("--title-muted", "#b57614"),
+        // -- borders --
+        ("--border", "#e0d3a2"),
+        ("--border-strong", "#d5c4a1"),
+        ("--border-bold", "#bdae93"),
+        // -- accents (dark yellow / green / orange) --
+        ("--accent", "#b57614"),
+        ("--accent-text", "#1d2021"), // dark bg0_h for chip-label contrast on the amber fill
+
+        ("--accent-green", "#79740e"),
+        ("--accent-2", "#af3a03"),
+        ("--btn-primary-bg", "#dde3b0"),
+        ("--btn-primary-border", "#79740e"),
+        ("--btn-secondary-border", "#076678"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#79740e"),
+        ("--peer-local", "#427b58"),
+        ("--peer-remote", "#8f3f71"),
+        // -- semantic status (re-tuned for light bg) --
+        ("--status-ok", "#5f7a12"),
+        ("--status-err", "#9d0006"),
+        ("--status-info", "#076678"),
+        ("--status-warn", "#b57614"),
+        // -- app/game launcher card accents (light) --
+        ("--app-card-s", "55%"),
+        ("--app-card-l", "42%"),
+        ("--app-card-tint-s", "50%"),
+        ("--app-card-tint-l", "58%"),
+        ("--app-card-tint-a", "0.15"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Monokai — Wimer Hazenberg's high-chroma scheme on warm near-black.
+pub const MONOKAI: Theme = Theme {
+    name: "monokai",
+    label: "Monokai",
+    scheme: "dark",
+    vars: &[
+        // -- surfaces (bg / selection) --
+        ("--bg", "#272822"),
+        ("--bg-body", "#1e1f1a"),
+        ("--surface", "#35362e"),
+        ("--surface-header", "#2c2d26"),
+        ("--surface-hover", "#49483e"),
+        ("--surface-sunken", "#1c1d18"),
+        ("--surface-max", "#232420"),
+        ("--input-bg", "#1f201b"),
+        ("--overlay-bg", "#212219"),
+        ("--selected-bg", "#49483e"),
+        // -- text (foreground / comment) --
+        ("--text", "#f8f8f2"),
+        ("--text-muted", "#cfcfc2"),
+        ("--text-dim", "#75715e"),
+        ("--text-faint", "#5a5748"),
+        ("--title-muted", "#66d9ef"),
+        // -- borders --
+        ("--border", "#35362e"),
+        ("--border-strong", "#49483e"),
+        ("--border-bold", "#5c5b4d"),
+        // -- accents (monokai green / cyan / pink) --
+        ("--accent", "#a6e22e"),
+        ("--accent-text", "#272822"),
+        ("--accent-green", "#a6e22e"),
+        ("--accent-2", "#66d9ef"),
+        ("--btn-primary-bg", "#33401e"),
+        ("--btn-primary-border", "#a6e22e"),
+        ("--btn-secondary-border", "#f92672"),
+        // -- categorical peer badges --
+        ("--peer-primary", "#a6e22e"),
+        ("--peer-local", "#66d9ef"),
+        ("--peer-remote", "#ae81ff"),
+        // -- semantic status --
+        ("--status-ok", "#a6e22e"),
+        ("--status-err", "#f92672"),
+        ("--status-info", "#66d9ef"),
+        ("--status-warn", "#fd971f"),
+        // -- app/game launcher card accents (dark) --
+        ("--app-card-s", "75%"),
+        ("--app-card-l", "68%"),
+        ("--app-card-tint-s", "65%"),
+        ("--app-card-tint-l", "52%"),
+        ("--app-card-tint-a", "0.18"),
+        // -- fonts --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
 /// All **built-in** themes — compiled into the app, never stored in the
 /// tree (updating the app updates them; they can't be deleted, only
 /// duplicated in the Theme Editor). Settings renders an option per
@@ -292,8 +773,22 @@ pub const NEON: Theme = Theme {
 /// first (the default). User-defined themes live in the runtime registry
 /// beside this slice — resolution goes through [`all_themes`] /
 /// [`lookup`] / [`registered`], never by iterating `THEMES` directly
-/// (that would skip user themes).
-pub const THEMES: &[Theme] = &[DARK, LIGHT, SEPIA, NEON];
+/// (that would skip user themes). The community palettes (Solarized … Monokai)
+/// are attributed above.
+pub const THEMES: &[Theme] = &[
+    DARK,
+    LIGHT,
+    SEPIA,
+    NEON,
+    SOLARIZED_DARK,
+    SOLARIZED_LIGHT,
+    NORD,
+    NORD_LIGHT,
+    DRACULA,
+    GRUVBOX_DARK,
+    GRUVBOX_LIGHT,
+    MONOKAI,
+];
 
 // ---------------------------------------------------------------------------
 // User-defined themes — the runtime registry
@@ -1171,7 +1666,27 @@ mod tests {
         register_user_theme(spec("zeta")).unwrap();
         register_user_theme(spec("alpha")).unwrap();
         let names: Vec<&str> = all_themes().iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["dark", "light", "sepia", "neon", "alpha", "zeta"]);
+        // Built-ins in THEMES order (community palettes after the originals),
+        // then user themes sorted.
+        assert_eq!(
+            names,
+            vec![
+                "dark",
+                "light",
+                "sepia",
+                "neon",
+                "solarized-dark",
+                "solarized-light",
+                "nord",
+                "nord-light",
+                "dracula",
+                "gruvbox-dark",
+                "gruvbox-light",
+                "monokai",
+                "alpha",
+                "zeta",
+            ]
+        );
     }
 
     #[test]
