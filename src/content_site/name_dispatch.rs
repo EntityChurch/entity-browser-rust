@@ -150,18 +150,72 @@ impl DispatchRule {
     }
 }
 
-/// A pattern is **broad** when it can match a name carrying no explicit authority
-/// marker — i.e. a bare name the user did not aim anywhere.
+/// **§4.1b.1** — the enumerated typed suffixes, and the whole list.
 ///
-/// Deliberately conservative: anything that does not *require* an `@`, a
-/// `scheme:` prefix or a literal suffix counts as broad. A pattern we cannot
-/// confidently classify is treated as broad, because the failure direction
-/// matters — calling a broad pattern narrow is what leaks.
+/// Admitting a suffix is a **privacy decision**: it declares that every name a
+/// user types ending in it may be disclosed to a third party. So the list grows
+/// only by spec revision — not implementation-defined, not operator-extensible,
+/// and *not inferable from a pattern's shape*, which is exactly the inference
+/// our first classifier made and the reason it was wrong (see [`is_broad`]).
+const TYPED_SUFFIXES: &[&str] = &[".eth"];
+
+/// A pattern is **broad** when it can match at least one **bare** name — one
+/// carrying no authority marker at all, which is what a user types when they
+/// have named nobody.
+///
+/// **§4.1b (v1.19). NARROW iff at least one of:**
+///
+/// | # | condition |
+/// |---|---|
+/// | a | no `*` at all — it matches exactly one name |
+/// | b | contains a literal `@` — every match carries an `@authority` |
+/// | c | the literal head before the first `*` ends in `:` — every match carries a `scheme:` |
+/// | d | ends in an enumerated typed suffix ([`TYPED_SUFFIXES`]) with no `*` after it |
+///
+/// Otherwise broad. Derived by arch from `GUIDE-RESOLUTION` §6.2 (*presence of
+/// `@` ⇒ scoped; leading `scheme:` ⇒ typed system*) over §6.1's name shapes.
+///
+/// **Our first version got two rows wrong, in both directions, and only one of
+/// them was the one arch named.** It asked "does this pattern *require* a
+/// marker", spelled as `contains('@') || contains(':') || a fixed suffix`:
+///
+/// - `a.b` and `alice.eth` came back **broad** — a literal name matches exactly
+///   one name and is the most explicit routing decision an operator can write.
+///   Harmless in effect (it refuses a rule that should be allowed) but it makes
+///   the privacy MUST reject legitimate config, which operators route around.
+/// - **`*.lab` came back NARROW, and that is the direction that leaks.** Any
+///   fixed trailing literal satisfied the old test, so a rule sending every
+///   `*.lab` name to `did-web` would have been *accepted*. `.lab` is not a
+///   naming system anyone opted into by typing it. §4.1b's answer is that the
+///   line is not *"does a literal exist"* but *"does the literal identify an
+///   authority or a naming system"* — hence an enumerated list, and an
+///   unrecognized suffix makes the pattern broad (fail-safe: the cost is a
+///   refused rule an operator rewrites, against silently disclosing a namespace
+///   nobody reviewed).
+///
+/// The whole vector is pinned by `the_broad_classifier_matches_4_1b`.
 pub fn is_broad(pattern: &str) -> bool {
-    let requires_marker = pattern.contains('@')
-        || pattern.contains(':')
-        || (pattern.starts_with('*') && pattern.len() > 1 && !pattern[1..].contains('*'));
-    !requires_marker
+    // (a) No wildcard: exactly one name.
+    let Some(first_star) = pattern.find('*') else {
+        return false;
+    };
+    // (b) A literal `@` anywhere.
+    if pattern.contains('@') {
+        return false;
+    }
+    // (c) The literal head, before the FIRST `*`, ends in `:`. Checked on the
+    // head rather than "contains a colon" — `*.foo:bar` carries no scheme, and
+    // the old `contains(':')` would have called it narrow.
+    if pattern[..first_star].ends_with(':') {
+        return false;
+    }
+    // (d) Ends in an enumerated typed suffix, with no `*` after it. The
+    // no-`*`-after is what the `ends_with` gives us for free; `*.e*` fails here
+    // because it does not end in a fixed suffix at all.
+    if TYPED_SUFFIXES.iter().any(|s| pattern.ends_with(s)) {
+        return false;
+    }
+    true
 }
 
 /// **D-B.** A broad pattern MUST NOT make a name-transmitting backend eligible.
@@ -296,6 +350,64 @@ pub fn default_rules() -> Vec<DispatchRule> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **§4.1b, every row, both directions** — the classifier ruled at v1.19
+    /// after two conformant implementations split on four patterns and a third
+    /// (ours) classified an exact literal as broad.
+    ///
+    /// Three groups, and each is load-bearing for a different reason:
+    ///
+    /// 1. **§4.1a's own six rows.** The check any implementation should run
+    ///    first, and the one our old classifier already passed — which is
+    ///    precisely why passing it proves nothing on its own.
+    /// 2. **The five `REG-DISPATCH-CONFIG-REFUSED-1` row-7 patterns**, where
+    ///    independent readings diverged. `*.lab` is the one that matters most
+    ///    here: our old rule called it NARROW, so a chain sending every `*.lab`
+    ///    name to `did-web` would have been accepted. That is the leaking
+    ///    direction, and arch's write-up named only the harmless one.
+    /// 3. **The conditions themselves**, including `*.foo:bar` — a colon that is
+    ///    not a scheme. `contains(':')` called that narrow; §4.1b asks whether
+    ///    the literal *head* ends in `:`.
+    #[test]
+    fn the_broad_classifier_matches_4_1b() {
+        // (1) §4.1a's default table, row for row.
+        for narrow in ["did:web:*", "did:key:*", "*.eth", "*@*.*", "*@*"] {
+            assert!(!is_broad(narrow), "§4.1a row {narrow:?} must be NARROW");
+        }
+        assert!(is_broad("*"), "the catch-all is the canonical broad pattern");
+
+        // (2) REG-DISPATCH-CONFIG-REFUSED-1 row 7 — the five that diverged.
+        for broad in ["*.*", "*.e*", "*.lab"] {
+            assert!(
+                is_broad(broad),
+                "{broad:?} must be BROAD — it matches bare dotted names, which §6a admits as \
+                 legal local names, and `.lab` is not a naming system anyone opted into"
+            );
+        }
+        for narrow in ["a.b", "alice.eth"] {
+            assert!(
+                !is_broad(narrow),
+                "{narrow:?} must be NARROW by (a) — a literal matches exactly one name, and is \
+                 the most explicit routing decision an operator can write"
+            );
+        }
+
+        // (3) The four conditions, and the near-misses that separate them.
+        assert!(!is_broad("bare.name.example"), "(a) no wildcard at all");
+        assert!(!is_broad("*@example.com"), "(b) a literal @");
+        assert!(!is_broad("scheme:*"), "(c) the literal head ends in `:`");
+        assert!(
+            is_broad("*.foo:bar"),
+            "a colon that is not a scheme prefix must NOT narrow — the old `contains(':')` \
+             test called this narrow"
+        );
+        assert!(
+            is_broad("*.ETH"),
+            "the suffix list is matched literally; a case variant is unrecognized, and an \
+             unrecognized suffix is broad (fail-safe)"
+        );
+        assert!(is_broad("*.eth*"), "(d) requires no `*` after the suffix");
+    }
 
     /// The proposed default table must satisfy its own rule. If D-C and D-B ever
     /// disagree, this is where it shows — and it is the check an operator's own

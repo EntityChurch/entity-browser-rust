@@ -47,12 +47,15 @@ env:
   # floating `master` means the same tag of this repo can produce two different
   # binaries. Set it to the exact entity-core-rust commit the release was
   # tested against; `master` is the convenience default for dry runs.
-  # Re-pinned 2026-08-19: the exact entity-core-rust commit this line was
-  # developed and gated against (full native suite + unfiltered e2e green
-  # against it). Note that core-rust's own `master` is still the pre-v0.8.0
-  # docs commit — leaving this on `master` would build the flagship against a
-  # two-month-old kernel and silently ship a release containing none of the
-  # connectivity, transfer or sharing work. Re-pin at each release; a floating
+  # Re-pinned 2026-08-19 to `302b7f4`: the exact entity-core-rust commit this
+  # line is gated green against (full native suite + unfiltered e2e), and the
+  # one carrying the published-root fix that makes a tampered interior node a
+  # ContentHashMismatch instead of an absence.
+  #
+  # Note that core-rust's own `master` is still the pre-v0.8.0 docs commit —
+  # leaving this on `master` would build the flagship against a two-month-old
+  # kernel and silently ship a release containing none of the connectivity,
+  # transfer or sharing work. Re-pin at each release; a floating
   # ref is how one tag builds twice into two different binaries.
   #
   # It must be REACHABLE IN `CORE_RUST_REPO` when the tag is cut — the checkout
@@ -61,7 +64,7 @@ env:
   # pin (683a4f0) was in that state, and it also predated `with_ice_observer`,
   # which `src/reachability.rs` calls — either one is a red matrix. Check both:
   #   git -C ../entity-core-rust merge-base --is-ancestor $REF <github-branch>
-  CORE_RUST_REF: eeeff6b
+  CORE_RUST_REF: 302b7f4
   CORE_RUST_REPO: EntityChurch/entity-core-rust
 
   # Publish each artifact a second time without the version in its name, so
