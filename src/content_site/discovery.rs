@@ -401,6 +401,80 @@ pub fn refresh_site_index(peers: &Peers, me: &str) {
     }
 }
 
+/// **Boot-time site-discovery warm-up.** The deployment-config `origins` map
+/// registers *where* each hosting peer is reachable, but nothing enumerates a
+/// foreign peer's sites until you browse one — so a freshly-deployed peer's
+/// sites are invisible in the directory rail on first paint and appear only
+/// after a manual navigate (the bug this closes). For each registered
+/// `(peer, origin)` this fetches the peer's `sites.list` and each site's
+/// manifest over HTTP and writes the manifests **through into MY store** at
+/// their natural `/{peer}/sites/{site}/manifest` path — the same manifest-pinned
+/// write-through the browse resolver does ([`crate::content_site::resolver`]
+/// `persist_to_cache`), so [`scan_local_sites`] surfaces them immediately and
+/// each write fires the `sites/{peer}/` subscription the rail/overlay observes.
+///
+/// `targets` is passed in from the boot origin-registration (the `dc.origins`
+/// pairs already in hand) rather than read back via [`origins::list_origins`]:
+/// on the Worker arm that read goes through the cache mirror, which isn't seeded
+/// for the freshly-written registry prefix yet at boot
+/// (`feedback_worker_cache_get_needs_subscription`).
+///
+/// Fire-and-forget: grabs a `'static` writer handle up front so nothing borrows
+/// `&Peers` across the awaits (WASM `spawn_local`). Manifest-only (pages fetch
+/// lazily on first visit) — a peer that exposes no `sites.list` is simply
+/// skipped (enumeration is an optional enrichment, never required to browse).
+///
+/// [`origins::list_origins`]: crate::content_site::origins::list_origins
+#[cfg(target_arch = "wasm32")]
+pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) {
+    use crate::content_site::http_poll::{fetch_manifest, fetch_sites_list, FetchBinSource};
+    // Don't warm MY own peer (its sites are owned/local, not fetched over HTTP).
+    let targets: Vec<(String, String)> =
+        targets.into_iter().filter(|(peer, _)| peer != me).collect();
+    if targets.is_empty() {
+        return;
+    }
+    let Some(writer) = peers.writer_handle_for(me) else {
+        tracing::warn!(me = %me, "warm_peer_sites: no writer handle for peer — site warm-up skipped");
+        return;
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        for (peer, origin) in targets {
+            let sites = match fetch_sites_list(&FetchBinSource, &origin, &peer).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!(peer = %peer, origin = %origin, error = ?e,
+                        "warm_peer_sites: no sites.list — peer's sites will populate on first browse");
+                    continue;
+                }
+            };
+            let mut cached = 0usize;
+            for site in &sites {
+                match fetch_manifest(&FetchBinSource, &origin, &peer, site).await {
+                    Ok(manifest) => {
+                        writer.put(paths::manifest_path(&peer, site), manifest);
+                        cached += 1;
+                    }
+                    Err(e) => tracing::debug!(peer = %peer, site = %site, error = ?e,
+                        "warm_peer_sites: manifest fetch failed — skipping this site"),
+                }
+            }
+            // Info-level so the effect is observable (and e2e-assertable): the
+            // foreign peer's sites are now in MY store on first paint.
+            tracing::info!(
+                peer = %peer, cached, listed = sites.len(),
+                "warm_peer_sites: cached {cached} foreign site manifest(s) on boot"
+            );
+        }
+    });
+}
+
+/// Native stub — the frontend runs natively only under test, and the live warm
+/// path is a browser `fetch()` (WASM). Validated on the Worker arm via
+/// `make e2e-worker`, not the native suite.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn warm_peer_sites(_peers: &Peers, _me: &str, _targets: Vec<(String, String)>) {}
+
 /// A `system/query/expression` filtered to the site-manifest type with no path
 /// prefix → the whole universal tree. Mirrors `query_console`'s
 /// `build_expression_from_fields`; kept inline so `discovery` doesn't depend on

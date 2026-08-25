@@ -1209,9 +1209,9 @@ impl EntityApp {
                 None
             };
             // Absent durable config → the per-domain deployment config applied
-            // over the build-time profile's preset (§5, `ENTITY_PROFILE` +
-            // `ENTITY_HOME_*`), NOT a hard `Full` default — so a `strict-site`
-            // deployment (baked OR fetched) cold-boots into its posture. A
+            // over the build-time default surface (§5, `ENTITY_STARTUP_SURFACE`
+            // + `ENTITY_HOME_*`), NOT a hard `Chrome` default — so a `site`
+            // deployment (baked OR fetched) cold-boots into its surface. A
             // persisted config (the `Some` arm) always wins; this only shapes a
             // fresh or wiped deployment.
             let mut cfg = match durable {
@@ -1226,7 +1226,7 @@ impl EntityApp {
             };
             // DERIVE the runtime surface from the durable `boot_surface` — boot
             // lands where config says, not wherever a previous session's toggle
-            // last left it. Everything else on the entity (profile, boot_surface,
+            // last left it. Everything else on the entity (boot_surface,
             // home_site, posture) is PRESERVED — re-seeding a default over a
             // persisted config was the original clobber bug.
             cfg.active = cfg.active_from_boot_surface();
@@ -1236,7 +1236,6 @@ impl EntityApp {
                 .await
             {
                 Ok(()) => tracing::info!(
-                    profile = cfg.profile.as_str(),
                     boot_surface = %cfg.boot_surface.describe(),
                     active = cfg.active,
                     home_site = %cfg.home_site.id,
@@ -1302,6 +1301,12 @@ impl EntityApp {
             // too; the `ENTITY_HOME_ORIGIN` env fallback in the home-provision
             // branch below only fires when no deployment config supplied it.
             if let Some(dc) = &deployment {
+                // Collect the resolved (peer, origin) pairs as we register them,
+                // to hand to the site-discovery warm-up below — sourced here
+                // rather than read back via `list_origins` because the Worker-arm
+                // cache mirror isn't seeded for the freshly-written registry
+                // prefix yet at boot (`feedback_worker_cache_get_needs_subscription`).
+                let mut warm_targets: Vec<(String, String)> = Vec::new();
                 for (target_peer, origin) in &dc.origins {
                     // Expand `""`/`self` to the SPA's own origin (the portable
                     // same-origin CDN case — the registry treats an empty origin
@@ -1336,6 +1341,7 @@ impl EntityApp {
                             "boot_load: deployment-config origin seed failed"
                         ),
                     }
+                    warm_targets.push((target_peer.clone(), resolved));
                 }
                 // Roster summary — the multi-tenant signal (design §8): how many
                 // hosted-peer origins this domain declares. >1 means a
@@ -1346,6 +1352,17 @@ impl EntityApp {
                     hosted_peer_origins = dc.origins.len(),
                     "boot_load: domain deployment hosts {} peer origin(s)",
                     dc.origins.len()
+                );
+                // Warm each registered peer's site index NOW — fetch its
+                // `sites.list` + manifests and write them through into my store —
+                // so a foreign published peer's sites appear in the directory rail
+                // on FIRST paint instead of only after a manual navigate. The
+                // origin registration above records *where* a peer is; this
+                // enumerates *what* it hosts (fire-and-forget; manifest-pinned).
+                crate::content_site::discovery::warm_peer_sites(
+                    &self.peer_manager,
+                    &system_pid,
+                    warm_targets,
                 );
             }
 

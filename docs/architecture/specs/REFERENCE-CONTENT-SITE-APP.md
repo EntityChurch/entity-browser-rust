@@ -65,8 +65,8 @@ machinery visible); the window is the "meta" view that also lets you see/manage
 the set of sites. They are the same renderer because a site looks identical
 either way — only link-click routing and the exit/rail chrome differ.
 
-`can_exit` = `site_mode.show_toggle && enabled`. In a **locked** (strict-site)
-deployment it is `false`, so the overlay renders **no** exit control — closing
+`can_exit` = `site_mode.show_toggle && enabled`. In a **locked**
+(`site_mode.locked`) deployment it is `false`, so the overlay renders **no** exit control — closing
 BUG-1 ("Exit strands you in chrome with no way back"). The `ToggleSiteMode`
 action is *also* guarded (no-ops when `locked`) as defense in depth; `?chrome=1`
 is the operator escape hatch (§11).
@@ -376,7 +376,7 @@ papers render dir ──(ingest)──▶ entity tree ──(read)──▶ emit
   Flags: `--ingest=<dir>` (disk → tree, `ingest.rs`), `--html-only`,
   `--bare-root`/`--site=ID` (one site at domain root, no entity branding —
   `Layout::BareRoot`), `--live=<origin>` (banner deep-link; **empty default =
-  same-origin, portable**), `--deployment-config`, `--config-profile=`,
+  same-origin, portable**), `--deployment-config`, `--surface=`/`--window-type=`/`--locked`,
   `--config-site=`, `--prefix=<path>` (hosting-scope nesting; empty = byte-identical root).
 - **`publish_fixture.rs::emit_owned_sites`** writes the entity-native `.bin` +
   content blobs; **`static_export.rs`** writes the legacy `.html` arm (rewriting
@@ -397,8 +397,8 @@ papers render dir ──(ingest)──▶ entity tree ──(read)──▶ emit
    `?boot_window=`, `?fastpaint=`.
 2. **Durable session config** — `/{me}/…/settings/session` (a returning user wins).
 3. **Per-domain `entity-deployment.json`** — fetched cold-boot only.
-4. **Build-time defaults** — `ENTITY_PROFILE`, `ENTITY_HOME_*` env (baked).
-5. **Hard default** — `Profile::Full`, bundled demo.
+4. **Build-time defaults** — `ENTITY_STARTUP_SURFACE`, `ENTITY_HOME_*` env (baked).
+5. **Hard default** — chrome surface, bundled demo.
 
 The **site-origin registry is NOT a preference** — it is re-derived/registered at
 boot from the deployment config, not carried as user state.
@@ -406,14 +406,18 @@ boot from the deployment config, not carried as user state.
 ### 10.2 `entity-deployment.json` (one small file per domain)
 
 `home_site {peer,site,loc}` (boot destination) · `origins {peer-id → base URL}`
-(default `""` = same-origin) · `profile`/`site_mode` (cold-boot posture). One
-generic WASM bundle serves N domains; each domain ships this file.
+(default `""` = same-origin) · `surface` (+ `window_type`) / `site_mode`
+(cold-boot surface + posture). One generic WASM bundle serves N domains; each
+domain ships this file.
 
-### 10.3 Three profiles (the posture knob)
+### 10.3 The surface axis (the posture knob)
 
-- **`full`** (default): full entity chrome + a toggle into Site Mode.
-- **`tutorial`** (published default): overlay-first + a small "open live" banner + toggle back.
-- **`strict-site`**: locked kiosk — site only, no chrome, no toggle, no escape (except `?chrome=1`).
+`surface` is set directly (no preset names); `site_mode`/`peer_creation_enabled`
+are set alongside it:
+
+- **`chrome`** (default): the workspace — full entity chrome + a toggle into Site Mode.
+- **`window`** (+ `window_type`, e.g. `Site Browser`): a maximized window, escapable — the everyday "show my sites" deployment.
+- **`site`**: the full-viewport overlay. Add `site_mode.locked: true` + `peer_creation_enabled: false` for a locked kiosk — site only, no chrome, no toggle, no escape (except `?chrome=1`).
 
 ### 10.4 Site mode, deep links & the escape hatch
 
@@ -481,7 +485,7 @@ generic WASM bundle serves N domains; each domain ships this file.
 | Publish = entity `.bin` + content blobs + legacy `.html` + deployment.json | live source of truth + dumb-CDN fallback + per-domain posture | ✅ proven live |
 | Portable bundle: empty `--live` = same-origin | same bytes work at any URL, no rebuild | ✅ shipped |
 | 5-layer config precedence; origin registry is NOT a preference | operator + user + dev flexibility; warm boot re-derives routes | ✅ shipped |
-| Profiles full/tutorial/strict-site; locked refuses toggle; `?chrome=1` escape | choose chrome posture; never strand the user (BUG-1) | ✅ shipped |
+| Surfaces chrome/window/site; locked (`site_mode.locked`) refuses toggle; `?chrome=1` escape | choose chrome posture; never strand the user (BUG-1) | ✅ shipped |
 | Nav: desktop inline+More, mobile hamburger; pinned Share/Exit; clickable Home | a long nav can never hide the exit; mobile is usable | ✅ shipped (this session) |
 | Responsive `<style>` injected root-scoped; `box-sizing` reset | works in both light-DOM overlay and shadow-DOM window | ✅ shipped (this session) |
 

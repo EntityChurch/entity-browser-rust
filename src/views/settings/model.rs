@@ -22,10 +22,9 @@ use crate::peers::Peers;
 use crate::window::WindowId;
 
 use super::output::{
-    PeerOption, ProfileOption, SessionSettings, SettingsOutput, SiteAppearanceOption, TargetOption,
-    ThemeOption,
+    PeerOption, SessionSettings, SettingsOutput, SiteAppearanceOption, TargetOption, ThemeOption,
 };
-use crate::session_config::{self, BootSurface, Profile};
+use crate::session_config::{self, BootSurface};
 
 /// Tree path stem (under `app/{app-id}/settings/`) where the global
 /// settings entity lives.
@@ -206,16 +205,6 @@ impl SettingsModel {
     //    to the cohesive `session_config` mutators (config logic + tests live
     //    there). The config is the system peer's (this window is System-scoped,
     //    so `self.peer_id` IS the system peer). --
-
-    pub fn set_profile(&self, value: &str, peers: &Peers) {
-        let profile = match value {
-            "full" => Profile::Full,
-            "tutorial" => Profile::Tutorial,
-            "strict-site" => Profile::StrictSite,
-            _ => return,
-        };
-        session_config::set_profile(peers, &self.peer_id, profile);
-    }
 
     /// Is `pid` the system peer? Routed through the single accessor.
     fn is_system_peer(&self, peers: &Peers, pid: &str) -> bool {
@@ -401,11 +390,6 @@ impl SettingsModel {
             .collect();
 
         let cfg = session_config::read(peers, &self.peer_id);
-        let profiles = vec![
-            ProfileOption { value: "full", label: "Full (explore everything)", selected: cfg.profile == Profile::Full },
-            ProfileOption { value: "tutorial", label: "Tutorial (boot into site)", selected: cfg.profile == Profile::Tutorial },
-            ProfileOption { value: "strict-site", label: "Strict Site (locked)", selected: cfg.profile == Profile::StrictSite },
-        ];
 
         // The startup-surface (peer, kind, target) triple.
         let boot_kind = cfg.boot_surface.kind_str();
@@ -467,7 +451,6 @@ impl SettingsModel {
         };
 
         let session = SessionSettings {
-            profiles,
             boot_kind,
             peers: peers_list,
             targets,

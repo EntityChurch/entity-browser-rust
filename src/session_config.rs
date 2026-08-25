@@ -7,13 +7,12 @@
 //! posture; "which site" was a hard-coded `DEMO_SITE_ID` constant. This
 //! module is the single tree-backed config entity that splits them cleanly:
 //!
-//!   * **`profile`** — a deployment preset (`full` / `tutorial` / `strict-site`)
-//!     that seeds the rest. Presets are config, **not** an architecture fork
-//!     (`project_deployment_profiles_mode_model`) — the system peer always
-//!     exists; a profile only changes defaults.
-//!   * **`boot_surface`** — which surface boot lands in: the entity-browser
-//!     `Chrome`, a content `Site`, or a maximized `Window` (the §4-B Surfaces
-//!     seam, activated in step 5).
+//!   * **`boot_surface`** — the primary axis: which surface boot lands in — the
+//!     entity-browser `Chrome`, a content `Site`, or a maximized `Window` (the
+//!     §4-B Surfaces seam). This replaced the old opaque `full`/`site`/`strict-site`
+//!     *profile* presets: a startup posture **is** a surface + a granular
+//!     posture (`site_mode` / `peer_creation_enabled`), set directly, not
+//!     bundled behind a preset name.
 //!   * **`home_site`** — the site the overlay shows by default (where a `Site`
 //!     boot lands, what the chrome toggle opens). The *current* location the
 //!     user browsed to persists separately on the overlay
@@ -28,7 +27,7 @@
 //!     wherever a previous session's toggle last left it — reframe §4); the
 //!     status-bar toggle flips it live during a session.
 //!
-//! Config (`profile` / `boot_surface` / `home_site` / `site_mode`) is durable
+//! Config (`boot_surface` / `home_site` / `site_mode`) is durable
 //! and **preserved** across a warm boot — re-seeding a default over persisted
 //! config was the original clobber bug. The owned boot-load step
 //! ([`EntityApp::boot_load`](crate::app::EntityApp::boot_load)) reads the
@@ -58,99 +57,21 @@ const STATE_TYPE: &str = "app/state/session_config";
 /// `home_site`, never a hard-coded constant.
 pub const DEMO_SITE_ID: &str = "demo";
 
-/// Deployment profile preset. A profile seeds the rest of the config; it is
-/// **not** an architecture fork. Maps onto the vision's three postures
-/// (strict-site / tutorial / full).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// Today's default: chrome-first, toggle available, fully explorable.
-    Full,
-    /// Mid posture: boot into the site, toggle still available.
-    Tutorial,
-    /// Locked content-site deployment: boot into the site, no toggle, locked.
-    StrictSite,
-}
-
-impl Profile {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Profile::Full => "full",
-            Profile::Tutorial => "tutorial",
-            Profile::StrictSite => "strict-site",
-        }
-    }
-
-    /// Parse a profile name (`full` / `tutorial` / `strict-site`). Used by the
-    /// entity round-trip, the build-time `ENTITY_PROFILE`, and the per-domain
-    /// deployment config ([`crate::deployment_config`]). Unknown → `None`.
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "full" => Some(Profile::Full),
-            "tutorial" => Some(Profile::Tutorial),
-            "strict-site" => Some(Profile::StrictSite),
-            _ => None,
-        }
-    }
-
-    /// The deployment profile baked at build time via `ENTITY_PROFILE`
-    /// (reframe §5; see `build.rs`). This is the **cold-boot default
-    /// posture** — consumed only when no durable session config exists
-    /// ([`boot_default`]); a persisted config always wins on a warm boot.
-    /// Defaults to `Full` when unset or (defensively) unrecognized —
-    /// `build.rs` validates the value, so an unknown one shouldn't reach here.
-    pub fn build_default() -> Self {
-        option_env!("ENTITY_PROFILE")
-            .and_then(Self::from_str)
-            .unwrap_or(Profile::Full)
-    }
-
-    /// The full config this profile seeds. Cold boot writes the active
-    /// profile's preset; warm boot reads the persisted value and never
-    /// clobbers it. The preset logic is wired now (held seam, exercised by
-    /// unit tests); selecting a non-`Full` profile at boot is step 4 (the
-    /// system-settings surface) / step 5 (build-time defaults).
-    pub fn preset(self) -> SessionConfig {
-        // The default home site is the build-time `ENTITY_HOME_*` (cut 2a) or,
-        // unset, the bundled local demo. An empty `peer_id` = "the system peer,
-        // resolved at boot" (presets can't bake a runtime peer-id, handoff §3).
-        // Note: `set_profile` PRESERVES the live `home_site` and only takes a
-        // preset's posture, so this default only shapes `default()` /
-        // `boot_default()` — the absent-config cold-boot path.
-        let home_site = home_site_default();
-        match self {
-            Profile::Full => SessionConfig {
-                profile: self,
-                boot_surface: BootSurface::Chrome,
-                home_site,
-                site_mode: SiteModePosture { enabled: true, show_toggle: true, locked: false },
-                active: false,
-                fast_paint: true,
-                peer_creation_enabled: true,
-            },
-            Profile::Tutorial => SessionConfig {
-                profile: self,
-                boot_surface: BootSurface::Site,
-                home_site,
-                site_mode: SiteModePosture { enabled: true, show_toggle: true, locked: false },
-                active: true,
-                fast_paint: true,
-                peer_creation_enabled: true,
-            },
-            // Kiosk: locked site AND no peer creation (the capability lock that
-            // L-3 found missing — a strict-site deployment must not let the user
-            // mint peers even if they reach a create surface).
-            Profile::StrictSite => SessionConfig {
-                profile: self,
-                boot_surface: BootSurface::Site,
-                home_site,
-                site_mode: SiteModePosture { enabled: true, show_toggle: false, locked: true },
-                active: true,
-                fast_paint: true,
-                peer_creation_enabled: false,
-            },
-        }
-    }
-}
+/// The window type the "show my site" posture boots maximized (the Site
+/// Browser) — the publish default `--surface=window --window-type` and the
+/// settings surface point at it. Must match a registered window type name
+/// (`window_registry::standard_window_types`); the `site_browser_window_is_registered`
+/// test pins it so a rename can't silently make the surface boot into the void.
+/// This is the "maximized Site Browser" surface — chosen over the site overlay
+/// for the default show-sites posture: it lives in the normal chrome (the user
+/// can un-maximize, open other windows, browse the directory rail), so it's more
+/// forgiving than the kiosk-like overlay. The overlay (`BootSurface::Site`) is
+/// reserved for the locked-kiosk posture (surface=site + `site_mode.locked`).
+// Native publish (`--window-type` default) + tests reference it; the wasm
+// runtime doesn't call it directly anymore (the old `Profile::Site` preset did),
+// so it reads as dead on wasm32 — keep it as the canonical name, don't inline it.
+#[allow(dead_code)]
+pub const SITE_BROWSER_WINDOW: &str = "Site Browser";
 
 /// Which surface boot lands in (reframe §4-B).
 ///
@@ -197,6 +118,23 @@ impl BootSurface {
     }
 }
 
+/// Build a [`BootSurface`] from the `(kind, peer_id, window_type)` strings —
+/// the shared **surface vocabulary** (`chrome` / `site` / `window`) spoken by
+/// the build-time default ([`boot_default`]), the per-domain deployment config
+/// ([`crate::deployment_config`]), and the settings surface. An empty
+/// `peer_id` on a `window` = "the system peer, resolved at boot". An unknown /
+/// absent kind falls back to `Chrome` (garbage-tolerant, like `from_entity`).
+pub fn boot_surface_from(kind: &str, peer_id: &str, window_type: &str) -> BootSurface {
+    match kind {
+        "site" => BootSurface::Site,
+        "window" => BootSurface::Window {
+            peer_id: peer_id.to_string(),
+            window_type: window_type.to_string(),
+        },
+        _ => BootSurface::Chrome,
+    }
+}
+
 /// A reference to a site + page within it, on a specific peer. `peer_id` empty
 /// = the system peer (resolved at boot — sites are cross-peer,
 /// `entity://{peer}/sites/{id}/...`). `loc` empty = the manifest root
@@ -238,7 +176,6 @@ impl SiteModePosture {
 /// The session configuration entity — the spine (§4-A).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionConfig {
-    pub profile: Profile,
     pub boot_surface: BootSurface,
     pub home_site: SiteRef,
     pub site_mode: SiteModePosture,
@@ -256,21 +193,32 @@ pub struct SessionConfig {
     pub fast_paint: bool,
     /// **Capability** posture (MAP §5 dimension B / §10 item 1b): may the user
     /// create new peers in this deployment? Default **true** (the full
-    /// explorable browser); a `strict-site`/kiosk preset seeds it **false** so
-    /// the create affordance is hidden and `CreatePeerWithMode` is refused
-    /// (closes L-3 — peer creation was reachable in *every* posture). Rides the
-    /// same build/fetched/persisted precedence as the surface posture. Absent in
-    /// a pre-1b persisted config → defaults true (from `default()`), so existing
-    /// full deployments are unaffected.
+    /// explorable browser); a locked-kiosk deployment sets it **false**
+    /// (via `/entity-deployment.json`'s `peer_creation_enabled`) so the create
+    /// affordance is hidden and `CreatePeerWithMode` is refused (closes L-3 —
+    /// peer creation was reachable in *every* posture). An independent axis from
+    /// the surface (MAP §5): a chrome deployment can still disable creation.
+    /// Absent in a pre-1b persisted config → defaults true (from `default()`),
+    /// so existing full deployments are unaffected.
     pub peer_creation_enabled: bool,
 }
 
 impl Default for SessionConfig {
-    /// The `Full` profile preset — chrome-first, toggle available, demo site
-    /// as home. Reproduces the legacy `SiteModeState::default()` behavior so
-    /// the boot path is unchanged for the default deployment.
+    /// The chrome-first default posture — the workspace (window manager),
+    /// toggle available, demo site as home, fully creatable. Reproduces the
+    /// legacy `SiteModeState::default()` behavior so the boot path is unchanged
+    /// for the default deployment. A non-default startup posture is set
+    /// directly (surface + `site_mode` + `peer_creation_enabled`), never via a
+    /// preset name.
     fn default() -> Self {
-        Profile::Full.preset()
+        SessionConfig {
+            boot_surface: BootSurface::Chrome,
+            home_site: home_site_default(),
+            site_mode: SiteModePosture { enabled: true, show_toggle: true, locked: false },
+            active: false,
+            fast_paint: true,
+            peer_creation_enabled: true,
+        }
     }
 }
 
@@ -301,11 +249,8 @@ impl SessionConfig {
         let mut cfg = Self::default();
         for (k, v) in map {
             match k.as_text() {
-                Some("profile") => {
-                    if let Some(p) = v.as_text().and_then(Profile::from_str) {
-                        cfg.profile = p;
-                    }
-                }
+                // A legacy `profile` key (pre-surface-axis) is simply ignored —
+                // the surface + posture fields below carry the whole config now.
                 Some("boot_surface_kind") => {
                     if let Some(s) = v.as_text() {
                         boot_kind = Some(s.to_string());
@@ -396,7 +341,6 @@ impl SessionConfig {
             _ => ("", ""),
         };
         let data = entity_ecf::to_ecf(&entity_ecf::cbor_map! {
-            "profile" => entity_ecf::text(self.profile.as_str()),
             "boot_surface_kind" => entity_ecf::text(self.boot_surface.kind_str()),
             "boot_surface_peer" => entity_ecf::text(boot_peer),
             "boot_surface_window" => entity_ecf::text(boot_window),
@@ -467,15 +411,26 @@ pub fn home_origin_default() -> Option<String> {
         .map(str::to_string)
 }
 
-/// The cold-boot default session config — the build-time profile's preset
-/// (reframe §5, `ENTITY_PROFILE`). [`EntityApp::boot_load`] uses this when no
-/// durable config exists, so a fresh / wiped deployment lands in its baked
-/// posture (a `strict-site` build cold-boots into the site). A persisted
-/// config always wins, so this only shapes the *absent* case. Distinct from
-/// [`SessionConfig::default`] (always `Full`), which stays the type-level
-/// default for `from_entity` fallback + tests.
+/// The cold-boot default session config — the build-time startup **surface**
+/// (`ENTITY_STARTUP_SURFACE` + `ENTITY_STARTUP_WINDOW_TYPE`; see `build.rs`).
+/// [`EntityApp::boot_load`] uses this when no durable config exists, so a fresh
+/// / wiped deployment lands in its baked surface (a `site` build cold-boots
+/// into the site overlay). A persisted config always wins, so this only shapes
+/// the *absent* case. Only the **surface** is baked — the granular posture
+/// (`site_mode` / `peer_creation_enabled`) keeps the escapable, creatable
+/// default; a locked kiosk is expressed per-domain via `/entity-deployment.json`
+/// (the real deployment mechanism), not the build knob. Distinct from
+/// [`SessionConfig::default`] (always `Chrome`), the type-level fallback.
 pub fn boot_default() -> SessionConfig {
-    Profile::build_default().preset()
+    let kind = option_env!("ENTITY_STARTUP_SURFACE").unwrap_or("chrome");
+    let window_type = option_env!("ENTITY_STARTUP_WINDOW_TYPE").unwrap_or("");
+    let mut cfg = SessionConfig {
+        boot_surface: boot_surface_from(kind, "", window_type),
+        ..SessionConfig::default()
+    };
+    // `active` is re-derived by boot_load, but keep the type honest here too.
+    cfg.active = cfg.active_from_boot_surface();
+    cfg
 }
 
 /// Why peer creation is refused right now, or `None` when it's allowed (MAP
@@ -538,22 +493,6 @@ pub fn set_active(peers: &Peers, peer_id: &str, value: bool) -> bool {
 // Each preserves everything it doesn't touch. They live here (not in the
 // Settings window) so the config semantics stay cohesive and unit-testable;
 // the window is a thin controller that delegates.
-
-/// Apply a profile preset's **posture** (`boot_surface` + `site_mode`) while
-/// PRESERVING the chosen `home_site` and the current runtime `active` surface.
-/// A profile is a quick preset over the granular fields, not a reset — picking
-/// "Strict Site" sets the boot surface + hides the toggle but does not yank you
-/// out of wherever you're browsing now (that takes effect next boot).
-pub fn set_profile(peers: &Peers, peer_id: &str, profile: Profile) {
-    let preset = profile.preset();
-    let mut cfg = read(peers, peer_id);
-    cfg.profile = profile;
-    cfg.boot_surface = preset.boot_surface;
-    cfg.site_mode = preset.site_mode;
-    // The capability posture is part of the preset too (kiosk = no creation).
-    cfg.peer_creation_enabled = preset.peer_creation_enabled;
-    write(peers, peer_id, &cfg);
-}
 
 /// Set which site is home (the default the overlay / a `Site` boot points at),
 /// on a specific peer. Empty `target_peer` = the system peer (resolved at boot).
@@ -629,13 +568,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_full_profile_and_reproduces_legacy_site_mode() {
+    fn default_is_chrome_and_reproduces_legacy_site_mode() {
         let cfg = SessionConfig::default();
-        assert_eq!(cfg.profile, Profile::Full);
         assert_eq!(cfg.boot_surface, BootSurface::Chrome);
         assert!(cfg.site_mode.show_toggle, "legacy default: toggle shown");
         assert!(!cfg.active, "legacy default: boots in chrome");
         assert!(!cfg.site_mode.locked);
+        assert!(cfg.peer_creation_enabled, "legacy default: creatable");
         assert_eq!(cfg.home_site.id, DEMO_SITE_ID);
     }
 
@@ -649,7 +588,6 @@ mod tests {
     fn non_default_round_trips_through_entity() {
         // Exercises the peer dimension on BOTH the boot surface and home_site.
         let cfg = SessionConfig {
-            profile: Profile::StrictSite,
             boot_surface: BootSurface::Window {
                 peer_id: "peer-ten".into(),
                 window_type: "Shell".into(),
@@ -682,42 +620,61 @@ mod tests {
     }
 
     #[test]
-    fn profile_presets_match_postures() {
-        assert_eq!(Profile::Full.preset().boot_surface, BootSurface::Chrome);
-        assert!(Profile::Full.preset().site_mode.show_toggle);
-
-        let tut = Profile::Tutorial.preset();
-        assert_eq!(tut.boot_surface, BootSurface::Site);
-        assert!(tut.site_mode.show_toggle);
-        assert!(!tut.site_mode.locked);
-
-        let strict = Profile::StrictSite.preset();
-        assert_eq!(strict.boot_surface, BootSurface::Site);
-        assert!(!strict.site_mode.show_toggle, "strict-site hides the toggle");
-        assert!(strict.site_mode.locked);
+    fn boot_surface_from_builds_each_kind() {
+        assert_eq!(boot_surface_from("chrome", "", ""), BootSurface::Chrome);
+        assert_eq!(boot_surface_from("site", "", ""), BootSurface::Site);
+        assert_eq!(
+            boot_surface_from("window", "peer-x", "Shell"),
+            BootSurface::Window { peer_id: "peer-x".into(), window_type: "Shell".into() }
+        );
+        // An empty peer on a window = "system, resolved at boot" (round-trips as empty).
+        assert_eq!(
+            boot_surface_from("window", "", SITE_BROWSER_WINDOW),
+            BootSurface::Window { peer_id: String::new(), window_type: SITE_BROWSER_WINDOW.into() }
+        );
+        // Unknown / absent kind → Chrome (garbage-tolerant).
+        assert_eq!(boot_surface_from("nonsense", "", ""), BootSurface::Chrome);
     }
 
     /// BUG-1 invariant: the chrome↔site toggle (status bar AND the overlay's
-    /// "Exit Site" control) is exposed iff `exposes_toggle()` — and a
-    /// locked/strict-site deployment must NOT expose it, so the user can't
-    /// toggle out into chrome and get stranded with no way back.
+    /// "Exit Site" control) is exposed iff `exposes_toggle()` — and a locked
+    /// deployment must NOT expose it, so the user can't toggle out into chrome
+    /// and get stranded with no way back. Now expressed directly on the granular
+    /// `SiteModePosture` (no preset in the middle).
     #[test]
-    fn locked_deployment_exposes_no_exit_toggle() {
-        let strict = Profile::StrictSite.preset();
-        assert!(strict.site_mode.locked, "strict-site is locked");
+    fn locked_posture_exposes_no_exit_toggle() {
+        let locked = SiteModePosture { enabled: true, show_toggle: false, locked: true };
+        assert!(locked.locked, "a locked kiosk posture");
         assert!(
-            !strict.site_mode.exposes_toggle(),
+            !locked.exposes_toggle(),
             "a locked deployment must expose no exit toggle (BUG-1 strand)"
         );
 
-        // The explorable profiles DO expose the toggle (you can leave the site).
-        assert!(Profile::Full.preset().site_mode.exposes_toggle());
-        assert!(Profile::Tutorial.preset().site_mode.exposes_toggle());
+        // The escapable posture DOES expose the toggle (you can leave the site).
+        let escapable = SiteModePosture { enabled: true, show_toggle: true, locked: false };
+        assert!(escapable.exposes_toggle());
 
         // `enabled=false` also closes the toggle even if `show_toggle` is set —
         // no site available ⇒ no inert toggle into an empty surface.
         let disabled = SiteModePosture { enabled: false, show_toggle: true, locked: false };
         assert!(!disabled.exposes_toggle());
+    }
+
+    #[test]
+    fn site_browser_window_is_registered() {
+        // The publish default (`--surface=window --window-type="Site Browser"`)
+        // and the settings surface boot a maximized window BY NAME; that name
+        // must be a real registered window type, or boot_load silently falls
+        // back to chrome (app.rs "names an unknown window type; staying in
+        // chrome"). The const pins it so a registry rename can't break it.
+        let registered: Vec<&str> = crate::window_registry::standard_window_type_meta()
+            .into_iter()
+            .map(|(name, _scope)| name)
+            .collect();
+        assert!(
+            registered.contains(&SITE_BROWSER_WINDOW),
+            "{SITE_BROWSER_WINDOW:?} must be a registered window type: {registered:?}"
+        );
     }
 
     #[test]
@@ -793,23 +750,6 @@ mod tests {
     }
 
     #[test]
-    fn set_profile_applies_posture_but_preserves_home_site_and_active() {
-        let peers = Peers::new_direct();
-        let pid = peers.primary_peer_id().to_string();
-        // Custom home site + a live active surface.
-        set_home_site(&peers, &pid, "", "church");
-        let _ = set_active(&peers, &pid, true); // active = true
-        set_profile(&peers, &pid, Profile::StrictSite);
-        let cfg = read(&peers, &pid);
-        assert_eq!(cfg.profile, Profile::StrictSite);
-        assert_eq!(cfg.boot_surface, BootSurface::Site, "preset posture applied");
-        assert!(!cfg.site_mode.show_toggle, "strict-site hides the toggle");
-        assert!(cfg.site_mode.locked);
-        assert_eq!(cfg.home_site.id, "church", "home site preserved across profile change");
-        assert!(cfg.active, "runtime surface untouched by a profile change");
-    }
-
-    #[test]
     fn set_home_site_persists_peer_and_id() {
         let peers = Peers::new_direct();
         let pid = peers.primary_peer_id().to_string();
@@ -851,43 +791,36 @@ mod tests {
     }
 
     #[test]
-    fn build_default_matches_the_built_profile() {
-        // `build.rs` always emits `ENTITY_PROFILE` (defaulting to "full"), so
-        // `build_default()` must reflect whatever THIS binary was built with:
-        // Full for a default dev/CI build, the baked profile for a profiled
-        // build (`ENTITY_PROFILE=strict-site cargo test` flips this and stays
-        // green — proving the build.rs → env! → build_default wiring in both
-        // directions). Guards against the fallback logic silently drifting.
-        let built = option_env!("ENTITY_PROFILE").and_then(Profile::from_str);
-        assert_eq!(Profile::build_default(), built.unwrap_or(Profile::Full));
+    fn boot_default_reflects_the_built_startup_surface() {
+        // `build.rs` always emits `ENTITY_STARTUP_SURFACE` (defaulting to
+        // "chrome"), so `boot_default()`'s surface must reflect whatever THIS
+        // binary was built with: Chrome for a default dev/CI build, the baked
+        // surface for a surfaced build (`ENTITY_STARTUP_SURFACE=site cargo test`
+        // flips this and stays green — proving the build.rs → env! → boot_default
+        // wiring in both directions). Guards against the fallback drifting.
+        let kind = option_env!("ENTITY_STARTUP_SURFACE").unwrap_or("chrome");
+        let window_type = option_env!("ENTITY_STARTUP_WINDOW_TYPE").unwrap_or("");
+        assert_eq!(boot_default().boot_surface, boot_surface_from(kind, "", window_type));
     }
 
     #[test]
-    fn default_dev_build_is_full() {
-        // The regression guard: a normal (unset / `full`) build must keep the
-        // legacy Full posture. Skips on a non-`full` profiled build, which is
-        // intentionally not the default.
-        if option_env!("ENTITY_PROFILE").is_some_and(|p| p != "full") {
+    fn default_dev_build_is_chrome() {
+        // The regression guard: a normal (unset / `chrome`) build must keep the
+        // legacy chrome-first posture. Skips on a non-`chrome` surfaced build,
+        // which is intentionally not the default.
+        if option_env!("ENTITY_STARTUP_SURFACE").is_some_and(|s| s != "chrome") {
             return;
         }
-        assert_eq!(Profile::build_default(), Profile::Full);
+        assert_eq!(boot_default().boot_surface, BootSurface::Chrome);
     }
 
     #[test]
-    fn boot_default_is_the_build_profile_preset() {
-        assert_eq!(boot_default(), Profile::build_default().preset());
-    }
-
-    #[test]
-    fn strict_site_preset_cold_boots_into_locked_site() {
-        // The ergonomic outcome a `strict-site` build must produce on cold
-        // boot: site surface, no chrome toggle, locked. Derive `active` the
-        // way boot_load does to confirm the overlay shows.
-        let mut cfg = Profile::StrictSite.preset();
-        cfg.active = cfg.active_from_boot_surface();
-        assert!(cfg.active, "strict-site cold boot must show the site overlay");
-        assert!(!cfg.site_mode.show_toggle, "no chrome toggle in strict-site");
-        assert!(cfg.site_mode.locked, "strict-site is locked (behavior deferred)");
+    fn boot_default_derives_active_from_surface() {
+        // Whatever surface was baked, `active` is consistent with it (boot_load
+        // re-derives it, but the type stays honest): a `site` build cold-boots
+        // into the (escapable) overlay showing, a chrome/window build does not.
+        let cfg = boot_default();
+        assert_eq!(cfg.active, cfg.active_from_boot_surface());
     }
 
     #[test]
@@ -926,15 +859,17 @@ mod tests {
     // --- 1b: peer-creation capability posture (MAP §10) ----------------------
 
     #[test]
-    fn full_and_tutorial_allow_creation_strict_site_disables_it() {
-        assert!(Profile::Full.preset().peer_creation_enabled, "full = creatable");
-        assert!(Profile::Tutorial.preset().peer_creation_enabled, "tutorial = creatable");
-        assert!(
-            !Profile::StrictSite.preset().peer_creation_enabled,
-            "kiosk/strict-site disables peer creation (L-3)"
-        );
-        // The type-level default is the full, creatable posture.
-        assert!(SessionConfig::default().peer_creation_enabled);
+    fn default_is_creatable_and_capability_is_independent() {
+        // The type-level default is the creatable posture; the capability is now
+        // a plain independent field (a locked kiosk sets it false explicitly via
+        // the deployment config — no preset bundles it, L-3).
+        assert!(SessionConfig::default().peer_creation_enabled, "default = creatable");
+        let kiosk = SessionConfig {
+            peer_creation_enabled: false,
+            site_mode: SiteModePosture { enabled: true, show_toggle: false, locked: true },
+            ..SessionConfig::default()
+        };
+        assert!(!kiosk.peer_creation_enabled, "an explicit kiosk disables creation");
     }
 
     #[test]
@@ -950,8 +885,8 @@ mod tests {
     fn pre_1b_config_without_the_field_defaults_to_creatable() {
         // A persisted config written before 1b carries no `peer_creation_enabled`
         // key. Decoding must keep creation ENABLED (don't silently lock an
-        // existing full deployment). Forge an entity with the old field set,
-        // omitting the new one.
+        // existing deployment). Forge an entity omitting the new field — and
+        // carrying a legacy `profile` key to prove it's ignored, not choked on.
         let data = entity_ecf::to_ecf(&entity_ecf::cbor_map! {
             "profile" => entity_ecf::text("full"),
             "boot_surface_kind" => entity_ecf::text("chrome")
@@ -961,19 +896,6 @@ mod tests {
             SessionConfig::from_entity(&e).peer_creation_enabled,
             "missing key → creatable (backward compatible)"
         );
-    }
-
-    #[test]
-    fn set_profile_applies_capability_posture() {
-        let peers = Peers::new_direct();
-        let pid = peers.primary_peer_id().to_string();
-        // Default is creatable; switching to strict-site must disable creation...
-        assert!(read(&peers, &pid).peer_creation_enabled);
-        set_profile(&peers, &pid, Profile::StrictSite);
-        assert!(!read(&peers, &pid).peer_creation_enabled, "strict-site preset disables creation");
-        // ...and switching back to full re-enables it.
-        set_profile(&peers, &pid, Profile::Full);
-        assert!(read(&peers, &pid).peer_creation_enabled);
     }
 
     #[test]

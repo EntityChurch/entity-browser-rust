@@ -71,6 +71,62 @@ mod native {
         data_root().join("keys")
     }
 
+    /// The durable **publisher** identity — a stable system keypair under
+    /// which this deployment publishes its content sites. Loads
+    /// `{data_root}/publish/keypair` (honoring `ENTITY_DATA_DIR`); on first
+    /// use it generates a fresh keypair and persists it, so every publish
+    /// from this machine (or the same mounted data dir) lands under the same
+    /// stable peer-id — the peer-id *is* the site address, so it must not
+    /// drift per run.
+    ///
+    /// This is the native durable analogue of [`wasm::system_seed`], and it
+    /// replaces the fixed `DEMO_PUBLISH_SEED` as the publish default: the demo
+    /// seed only ever existed to stop the id drifting when there was no
+    /// durable identity — now there is one (same load-or-generate pattern as
+    /// `save_peer` / `system_seed`).
+    ///
+    /// Always returns a keypair. If the file exists but is **unreadable**, it
+    /// does NOT overwrite it (that would silently drift the published identity
+    /// and clobber any chance of recovery) — it logs loudly and falls back to
+    /// an ephemeral per-run identity; the resolved peer-id is printed by the
+    /// publish flow, so the drift is visible rather than silent.
+    pub fn publisher_keypair() -> Keypair {
+        publisher_keypair_in(&data_root())
+    }
+
+    /// Load-or-generate the publisher keypair under an explicit root — the
+    /// testable core of [`publisher_keypair`] (avoids racing the process-global
+    /// `ENTITY_DATA_DIR` across parallel tests).
+    pub(super) fn publisher_keypair_in(root: &Path) -> Keypair {
+        let dir = root.join("publish");
+        let kp_path = dir.join("keypair");
+        if kp_path.exists() {
+            return match Keypair::load_from_file(&kp_path) {
+                Ok(kp) => kp,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e, path = ?kp_path,
+                        "publisher keypair exists but failed to load; refusing to overwrite it. \
+                         Publishing under an EPHEMERAL identity this run — the site address will drift."
+                    );
+                    Keypair::generate()
+                }
+            };
+        }
+        // First use: generate + persist so the next publish reuses the same id.
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::error!(error = %e, path = ?dir, "failed to create publish dir; publisher identity is ephemeral this run");
+            return Keypair::generate();
+        }
+        let kp = Keypair::generate();
+        if let Err(e) = kp.save_to_file(&kp_path) {
+            tracing::error!(error = %e, path = ?kp_path, "failed to persist publisher keypair; identity will drift next run");
+        } else {
+            tracing::info!(peer_id = %kp.peer_id(), path = ?kp_path, "generated durable publisher identity");
+        }
+        kp
+    }
+
     /// Sanitize a label or peer-id prefix into a filesystem-safe alias.
     /// Lowercases ASCII alnum/`-`/`_`, drops everything else, caps at 32.
     fn sanitize_name(raw: &str) -> String {
@@ -675,7 +731,7 @@ mod wasm {
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_entries, delete_peer};
+pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_entries, delete_peer, publisher_keypair};
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{
@@ -733,6 +789,33 @@ mod tests {
 
         std::fs::remove_file(&path).ok();
         assert!(!path.exists());
+    }
+
+    /// The durable publisher identity: first call generates + persists it,
+    /// the second call under the same root reloads the SAME peer-id (a stable
+    /// site address across runs — the whole point vs. the old fixed demo seed).
+    /// A fresh root yields a different identity.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn publisher_keypair_is_generated_then_stable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = native::publisher_keypair_in(tmp.path());
+        assert!(tmp.path().join("publish").join("keypair").exists());
+
+        let again = native::publisher_keypair_in(tmp.path());
+        assert_eq!(
+            first.peer_id().to_string(),
+            again.peer_id().to_string(),
+            "publisher identity must be stable across runs under the same data dir"
+        );
+
+        let other = tempfile::tempdir().unwrap();
+        let elsewhere = native::publisher_keypair_in(other.path());
+        assert_ne!(
+            first.peer_id().to_string(),
+            elsewhere.peer_id().to_string(),
+            "a different data dir must yield its own publisher identity"
+        );
     }
 
     // -------------------------------------------------------------------

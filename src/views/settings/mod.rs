@@ -141,7 +141,6 @@ impl WindowView for SettingsWindow {
                 "toggle_autoconnect" => self.model.toggle_autoconnect(peers),
                 "toggle_singleton_windows" => self.model.toggle_singleton_windows(peers),
                 // Site & Surface — the startup-surface (peer, kind, target).
-                "set_profile" => self.model.set_profile(value, peers),
                 "set_boot_kind" => self.model.set_boot_kind(value, peers),
                 "set_boot_peer" => {
                     self.model.set_boot_peer(value, peers);
