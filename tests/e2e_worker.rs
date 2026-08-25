@@ -44,7 +44,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fantoccini::{Client, ClientBuilder};
@@ -58,34 +58,498 @@ fn http_server_port() -> u16 {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(8092)
 }
-const WEBDRIVER_URL: &str = "http://localhost:4444";
+/// Where the WebDriver lives. Overridable because the **multi-host federation
+/// gate** drives a Firefox that sits on a podman bridge (so it can reach a
+/// publisher container by IP) rather than the host-network one every other test
+/// uses; that container publishes its control port, so the URL differs while
+/// nothing else does.
+fn webdriver_url() -> String {
+    std::env::var("E2E_WEBDRIVER_URL")
+        .unwrap_or_else(|_| "http://localhost:4444".to_string())
+}
+
+/// The origin the **app** is served from, as the browser must address it.
+///
+/// `localhost` is right whenever the browser shares a network namespace with the
+/// dist server. It is wrong for the multi-host gate: there the browser is in a
+/// container, so `localhost` is its *own* loopback and the app is on the host,
+/// reachable at the bridge gateway. `E2E_APP_ORIGIN` carries that address.
+fn app_base() -> String {
+    std::env::var("E2E_APP_ORIGIN")
+        .unwrap_or_else(|_| format!("http://localhost:{}", http_server_port()))
+}
 const TAURI_BIN: &str = "./src-tauri/target/debug/entity-browser-tauri";
+
+/// Upper bound for a poll loop waiting on an **async round-trip** — a connect
+/// handshake, a worker `CreatePeer`, a spawned listener answering, a
+/// `spawn_local`'d boot task logging its result.
+///
+/// It is a bound, not a wait: every loop using it returns the moment its
+/// condition holds, and the ones watching a connect also break out immediately
+/// on the explicit `✗ connect …` line, so a real failure is still reported fast.
+/// The budget is only ever spent when *nothing* arrives — which is a hang, and
+/// deserves to be reported rather than raced.
+///
+/// This constant exists because these budgets used to be a scattering of
+/// hand-written `Duration::from_secs(3)`s, each justified by a guess about how
+/// long its round-trip takes on an unloaded box ("ws connect is fast on
+/// loopback — 2s is plenty"). On a loaded one the guess is wrong and the phase
+/// fails for a reason unrelated to what it tests: two of them were measured
+/// doing exactly that (Phase 15.6, and Phase 14's `sleep(2500)`). Prefer this
+/// over a fresh literal, and prefer `poll_json` over a bare sleep.
+///
+/// Well below the 240s stall watchdog, so a loop that does spend it still gets
+/// to report its own diagnosis rather than being killed from outside.
+const ASYNC_ROUND_TRIP_BUDGET: Duration = Duration::from_secs(30);
+
+/// Upper bound on "the app booted far enough to start its frame loop".
+///
+/// **This replaced fourteen bare `8000`s, and the reason is the one this file
+/// already records one constant up: a budget that is generous and still fails
+/// is not tight, it is LOAD-SENSITIVE, and a bigger guess does not fix that
+/// shape.** Measured across a healthy unfiltered run, boot is **108–711 ms** —
+/// so 8 s was already an 11x margin over the slowest healthy case, and three
+/// consecutive runs on a box with other seats' browser containers up still
+/// failed on it, at a DIFFERENT phase each time (21, then 20, then 19), always
+/// as `never saw 'Frame loop started'`. That reads as an app that will not
+/// boot, at a phase with nothing to do with what changed.
+///
+/// It is an upper bound, not a wait: `wait_for_boot` returns the moment the
+/// marker appears, so a healthy run pays none of it. Well under the 240 s stall
+/// watchdog, so a genuinely wedged boot still reports its own diagnosis.
+const BOOT_BUDGET_MS: u64 = 30_000;
+
+/// Above this, `wait_for_boot` says so on SUCCESS.
+///
+/// Raising a budget silently trades a false failure for a lost signal — a tight
+/// budget was accidentally reporting "this got slower". This keeps the signal
+/// without the failures: 4 s is ~6x the slowest measured healthy boot, so it
+/// cannot fire on a normal run, and when it does fire the number is in the log
+/// instead of being absorbed.
+const BOOT_SLOW_NOTICE_MS: u64 = 4_000;
+
+// ── Phase filter (E2E_UNTIL) ──────────────────────────────────────────────
+//
+// `worker_boots_and_opens_all_windows` is one long stateful chain and it
+// dominates the suite's wall-clock. When you are iterating on a phase in the
+// middle of it, `E2E_UNTIL` lets you stop as soon as that phase is done
+// instead of paying for every phase after it.
+
+/// Every phase of `worker_boots_and_opens_all_windows`, in EXECUTION order.
+///
+/// The filter compares *positions in this list*, never the labels — the labels
+/// are not orderable text ("2h.2" precedes "2i", "13.5" precedes "14", "21b"
+/// precedes "22"), and Phase 11 deliberately runs late, right after Phase 14.
+/// Adding a phase to the test means adding its label here, in the slot where
+/// it actually runs; `phase_gate!` panics on a label that is missing, so the
+/// list cannot silently drift out of sync with the test.
+const PHASE_ORDER: &[&str] = &[
+    "1", "1b", "2", "2-SE", "2b", "2c", "2d", "2e", "2-net", "2f", "2f.1", "2f.3", "2f.2", "2g", "2h",
+    "2h.2", "2h.2s", "2h.2b", "2h.2c", "2h.2d", "2h.2e", "2h.3", "2h.4", "2i", "2i.5", "2j", "2k", "3", "3-i18n", "4", "5", "5.1", "6", "7", "8", "9",
+    "10",
+    "12", "13", "13.5", "14", "14.2", "14.3", "14.5", "14.6", "14.7", "11", "15", "15.5", "15.7", "15.8", "16", "17", "18", "19", "19-doc", "20",
+    "21", "21b", "22", "22.5", "23", "24", "25", "26", "26.8", "26.9", "27",
+];
+
+/// Resolve `E2E_UNTIL` to a position in `PHASE_ORDER`; `None` = run everything.
+///
+/// A **prefix** is the only cut on offer — there is deliberately no `E2E_FROM`.
+/// Phases 1–17 share a single browser session, and every later phase
+/// re-navigates into state its predecessors built (spawned windows, created
+/// peers, persisted session config, published sites). Jumping into the middle
+/// would fail on absent prerequisites and read exactly like a real regression,
+/// which is worse than slow. Stopping early can only run *fewer* assertions —
+/// it can never turn a red green, and the stop line says where it stopped.
+///
+/// To iterate on ONE surface without paying for the chain at all, write it as
+/// its own `#[tokio::test]` (there are a dozen already, each doing its own
+/// `setup()`) and select it with `make e2e-worker T=<name>`.
+fn phase_until_index() -> Option<usize> {
+    let want = std::env::var("E2E_UNTIL").ok()?;
+    let want = want.trim().trim_start_matches("Phase ").to_string();
+    if want.is_empty() {
+        return None;
+    }
+    match PHASE_ORDER.iter().position(|p| *p == want) {
+        Some(i) => Some(i),
+        None => panic!(
+            "E2E_UNTIL={want:?} is not a phase label. Known phases, in run order:\n  {}",
+            PHASE_ORDER.join(" ")
+        ),
+    }
+}
+
+/// Position of `label` in `PHASE_ORDER`, panicking if the roster is stale.
+fn phase_index(label: &str) -> usize {
+    PHASE_ORDER
+        .iter()
+        .position(|p| *p == label)
+        .unwrap_or_else(|| {
+            panic!("phase_gate!({label:?}): label is missing from PHASE_ORDER — add it")
+        })
+}
+
+// ── Stall watchdog ────────────────────────────────────────────────────────
+//
+// Everything in this suite that waits has a deadline EXCEPT the WebDriver
+// round-trips themselves, and those are the ones that can wedge: a hung
+// renderer, a browser that stops painting, a Selenium container that dies
+// mid-command. Then `client.execute(...).await` never returns, and `cargo
+// test` sits there producing nothing — no output, no failure, no diagnosis, in
+// CI or an agent loop, until something external kills it. A suite that hangs
+// is worse than one that fails: a failure names a phase, a hang names nothing.
+//
+// So: a process-wide watchdog. Every phase reports progress; if none is
+// reported for `E2E_STALL_SECS`, we print WHERE we were stuck and kill the
+// process. It cannot rescue the run — it makes the run *tell you what
+// happened*, which is the whole difference.
+//
+// The threshold is a stall bound, not a runtime budget: the full suite is
+// ~285s across ~57 phases (~5s each; the slowest, Phase 14, waits up to 60s on
+// a spawned Tauri). 240s of total silence is therefore far outside any healthy
+// phase while still failing fast.
+
+/// Millis since the process epoch at the last reported progress, and the label
+/// we were on. Written by [`note_progress`], read by the watchdog thread.
+static PROGRESS: std::sync::Mutex<Option<(std::time::Instant, String)>> =
+    std::sync::Mutex::new(None);
+
+fn stall_budget() -> Duration {
+    std::env::var("E2E_STALL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(240))
+}
+
+/// Report that the suite is still moving. Cheap; called per phase and per test.
+fn note_progress(label: &str) {
+    if let Ok(mut p) = PROGRESS.lock() {
+        *p = Some((Instant::now(), label.to_string()));
+    }
+}
+
+/// Arm the watchdog once per process. Idempotent.
+fn arm_stall_watchdog() {
+    static ARMED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ARMED.get_or_init(|| {
+        let budget = stall_budget();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let Ok(p) = PROGRESS.lock() else { continue };
+            let Some((at, ref label)) = *p else { continue };
+            let stuck = at.elapsed();
+            if stuck < budget {
+                continue;
+            }
+            let label = label.clone();
+            drop(p);
+            eprintln!(
+                "\n\n=== E2E STALL WATCHDOG ===\n\
+                 No progress for {}s (limit {}s). Last phase entered: {label}\n\
+                 Something below the assertions wedged — a hung renderer, a\n\
+                 browser that stopped painting, or a dead Selenium container.\n\
+                 WebDriver round-trips are the only unbounded waits here, so\n\
+                 that is where to look; `target/e2e-tauri-stderr.log` covers the\n\
+                 Tauri phases. Raise with E2E_STALL_SECS=<n> if a phase legitimately\n\
+                 needs longer.\n\
+                 Killing the run so it fails loudly instead of hanging forever.\n\
+                 ==========================\n",
+                stuck.as_secs(),
+                budget.as_secs()
+            );
+            // The test thread is wedged in a syscall we cannot unwind, so a
+            // panic would not reach it — exiting the process is the only way
+            // out that still prints the diagnosis above.
+            std::process::exit(101);
+        });
+    });
+}
+
+/// Placed at the top of every phase. Ends the run green when `E2E_UNTIL` names
+/// an earlier phase; otherwise a no-op. See [`phase_until_index`].
+///
+/// Takes the client explicitly so the early exit can hand the browser session
+/// back — bailing out without closing would leave the Selenium standalone's one
+/// slot occupied and stall the next run (see [`reap_stale_sessions`]).
+macro_rules! phase_gate {
+    ($client:expr, $label:literal) => {
+        // Entering a phase IS the suite's unit of progress — so the watchdog
+        // rides the gate every phase already goes through, and can never be
+        // forgotten on a newly-added phase.
+        note_progress($label);
+        if let Some(until) = phase_until_index() {
+            let here = phase_index($label);
+            if here > until {
+                println!(
+                    "=== E2E_UNTIL={} reached — stopping before Phase {}; \
+                     {}/{} phases ran ===",
+                    PHASE_ORDER[until],
+                    $label,
+                    here,
+                    PHASE_ORDER.len()
+                );
+                $client.close().await.ok();
+                return Ok(());
+            }
+        }
+    };
+}
+
+/// Delete any WebDriver session a previous run left behind, before asking for
+/// a new one.
+///
+/// Every test closes its session on the success path — but an assertion
+/// failure (or an `E2E_UNTIL` early exit, or a Ctrl-C) unwinds straight past
+/// the `close()`. The Selenium standalone image serves **one session at a
+/// time** and queues further requests for its `--session-timeout` (300 s), so
+/// the next run blocks for five minutes and then dies with `New session
+/// request timed out` — infra noise that reads exactly like a real failure and
+/// makes iterating on a narrowed run impossible. Reaping on the way *in* is
+/// the only cleanup a panicking run cannot skip.
+///
+/// Driven through `python3`, which this suite already requires for its own
+/// `http.server` — not a new dependency.
+fn reap_stale_sessions() {
+    let out = Command::new("python3")
+        .arg("-c")
+        .arg(
+            r#"
+import json, urllib.request
+BASE = "http://localhost:4444"
+try:
+    st = json.load(urllib.request.urlopen(BASE + "/status", timeout=5))
+except Exception:
+    raise SystemExit(0)          # no grid yet — connect() reports it properly
+ids = []
+def walk(o):
+    if isinstance(o, dict):
+        s = o.get("session")
+        if isinstance(s, dict) and s.get("sessionId"):
+            ids.append(s["sessionId"])
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+walk(st)
+for sid in ids:
+    req = urllib.request.Request(BASE + "/session/" + sid, method="DELETE")
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print(sid)
+    except Exception:
+        pass
+
+# A DELETE returns before the node has actually freed the slot, and this grid
+# serves ONE session at a time — so asking for the next one too early does not
+# fail fast, it QUEUES for --session-timeout (300 s). That is where a 650 s
+# run and `InvalidSessionId: Tried to run command without establishing a
+# connection` both come from. Wait for the grid to report itself empty.
+import time
+if ids:
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            st = json.load(urllib.request.urlopen(BASE + "/status", timeout=5))
+        except Exception:
+            break
+        left = []
+        walk_left = [st]
+        while walk_left:
+            o = walk_left.pop()
+            if isinstance(o, dict):
+                s = o.get("session")
+                if isinstance(s, dict) and s.get("sessionId"):
+                    left.append(s["sessionId"])
+                walk_left.extend(o.values())
+            elif isinstance(o, list):
+                walk_left.extend(o)
+        if not left:
+            break
+        time.sleep(0.1)
+    else:
+        print("WARN-slot-still-busy")
+"#,
+        )
+        .output();
+    if let Ok(out) = out {
+        let reaped = String::from_utf8_lossy(&out.stdout);
+        let mut reaped: Vec<&str> = reaped.split_whitespace().collect();
+        // The slot never came free. Say so LOUDLY: the next `connect()` will
+        // queue for the grid's 300 s session-timeout, and the resulting failure
+        // names neither the queue nor the reap.
+        let stuck = reaped.iter().position(|s| *s == "WARN-slot-still-busy");
+        if let Some(i) = stuck {
+            reaped.remove(i);
+            eprintln!(
+                "  WARNING: reaped {} session(s) but the grid still reports one busy after 30s. \
+                 The next connect() will QUEUE (session-timeout 300s), and its error will not \
+                 mention any of this. Something outside the suite is probably driving :4444.",
+                reaped.len()
+            );
+        }
+        if !reaped.is_empty() {
+            println!(
+                "  reaped {} stale WebDriver session(s) from a previous run: {}",
+                reaped.len(),
+                reaped.join(", ")
+            );
+        }
+    }
+}
 
 /// Holds a child `python3 -m http.server` process for the duration of a
 /// test. `kill()` is called on drop, so panics in the test still clean
 /// up the server.
-struct DistServer(Child);
+///
+/// It also **drains the server's request log for the child's whole life**, into
+/// a bounded buffer. Two reasons, and the second is why the buffer exists at
+/// all rather than a bare counter:
+///
+/// 1. `python3 -m http.server` logs one line per request to stderr, which makes
+///    the server the only place in this rig that can answer *"how many bytes
+///    actually crossed the wire"*. A browser cannot: Firefox zeroes
+///    `transferSize` **and** `encodedBodySize` for any response a service worker
+///    supplied, whether the SW went to the network or served from its cache —
+///    measured, and it is why the obvious in-page assertion is vacuous here.
+/// 2. Before this, stderr was piped and read **only** on the immediate-exit
+///    path, so a server that died mid-run discarded its own explanation — the
+///    same closed-pipe shape that cost a session on the Tauri listener.
+struct DistServer {
+    child: Child,
+    log: Arc<Mutex<Vec<String>>>,
+}
 
-impl Drop for DistServer {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+impl DistServer {
+    /// How many requests the server was asked to serve whose log line contains
+    /// `needle`. Measured at the wire, not reported by the thing under test.
+    fn request_count(&self, needle: &str) -> usize {
+        match self.log.lock() {
+            Ok(lines) => lines.iter().filter(|l| l.contains(needle)).count(),
+            Err(_) => 0,
+        }
     }
 }
 
+impl Drop for DistServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Cap on retained request lines. The monolith makes a few thousand requests;
+/// this is a diagnostic buffer, not a transcript, and an unbounded one in a
+/// 15-minute test is its own bug.
+const DIST_LOG_CAP: usize = 20_000;
+
+/// Start the dist server and **prove it is accepting connections** before
+/// returning.
+///
+/// **This used to spawn, `Stdio::null()` the stderr, and sleep a fixed 300 ms.**
+/// Both halves are anti-patterns this repo has already written down, and
+/// together they make the most common suite failure undiagnosable:
+///
+/// - **Nulling a helper server's stderr** is the exact thing AGENTS.md forbids
+///   ("a bind failure is precisely the error that makes the rig lie"). If the
+///   port is still held, python prints `Address already in use` and exits — into
+///   `/dev/null` — and the harness carries on as though it had a server.
+/// - **A fixed sleep then navigate** is a guess about someone else's startup.
+///   The browser's report when the guess is wrong is `connectionFailure` at
+///   `localhost:8092`, which reads as a network or app fault and is neither.
+///
+/// Measured before changing it, so the sleep is not being blamed for more than
+/// it did: bind latency here is **22–32 ms idle and 21–25 ms under load**, so
+/// 300 ms was a 10× margin and is *not* the cause of the observed failures. The
+/// point of polling is not that 300 ms was too short — it is that a fixed wait
+/// cannot tell "not yet" from "never", and the whole failure class is invisible
+/// while the diagnostic goes to `/dev/null`.
 fn start_dist_server() -> Result<DistServer, std::io::Error> {
-    let child = Command::new("python3")
-        .args([
-            "-m",
-            "http.server",
-            &http_server_port().to_string(),
-            "--directory",
-            "dist",
-        ])
+    // Plain static server: the L5 iframe is same-origin (`allow-same-origin`), so
+    // it fetches its wasm same-origin — no CORS header needed. (An *untrusted* L5
+    // app would run opaque-origin and then need a CORS-adding server; that arrives
+    // with the sub-peer capability model — D21.)
+    let port = http_server_port();
+    let mut child = Command::new("python3")
+        .args(["-m", "http.server", &port.to_string(), "--directory", "dist"])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()?;
-    Ok(DistServer(child))
+
+    // Poll rather than guessing. **"Is our child alive" is checked BEFORE "is
+    // something listening", and that order is load-bearing** — found by
+    // mutation, holding :8092 with a socket that accepts and never answers.
+    // With the connect probe first, it saw the *blocker* listening, returned
+    // Ok over an already-dead child, and the failure surfaced 60 s later as a
+    // WebDriver navigation timeout: the cheap check shadowing the real one, in
+    // the fix for a bug whose whole shape was a missing diagnostic.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        // If it already exited, say WHY — this is the branch that used to be
+        // silent, and "Address already in use" is what it usually says.
+        if let Ok(Some(status)) = child.try_wait() {
+            let mut err = String::new();
+            if let Some(mut e) = child.stderr.take() {
+                use std::io::Read;
+                let _ = e.read_to_string(&mut err);
+            }
+            return Err(std::io::Error::other(format!(
+                "the dist server on :{port} exited immediately ({status}). Its stderr:\n{}\n\
+                 If that says 'Address already in use', something still holds :{port} — a \
+                 previous test's server, a stray `make serve`, or another suite run. This \
+                 used to present as the BROWSER reporting connectionFailure, which looks \
+                 like an app fault and is not one.",
+                if err.trim().is_empty() { "(empty)" } else { err.trim() }
+            )));
+        }
+        // An HTTP round-trip, not a bare TCP connect. A connect only proves
+        // *something* holds the port — including a socket that accepts and
+        // never answers, which is what made the first version of this loop
+        // return Ok over a dead child. Requiring a response line proves it is a
+        // server, and requiring 200 for `/index.html` proves it is serving
+        // `dist/` rather than someone else's directory.
+        if let Ok(mut sock) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            use std::io::{Read, Write};
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
+            let req = format!(
+                "GET /index.html HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
+            );
+            if sock.write_all(req.as_bytes()).is_ok() {
+                let mut head = [0u8; 64];
+                if let Ok(n) = sock.read(&mut head) {
+                    if String::from_utf8_lossy(&head[..n]).contains(" 200 ") {
+                        // Only now take stderr: until this point the loop above
+                        // owns it, because a child that exits has to be able to
+                        // hand back its own reason.
+                        let log = Arc::new(Mutex::new(Vec::new()));
+                        if let Some(err) = child.stderr.take() {
+                            let sink = Arc::clone(&log);
+                            std::thread::spawn(move || {
+                                for line in BufReader::new(err).lines().map_while(Result::ok) {
+                                    if let Ok(mut buf) = sink.lock() {
+                                        if buf.len() < DIST_LOG_CAP {
+                                            buf.push(line);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        return Ok(DistServer { child, log });
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(std::io::Error::other(format!(
+        "the dist server never served a 200 for /index.html on :{port} within 20s. \
+         Either `dist/` has no index.html (run `make wasm`), or something else is \
+         holding :{port} and answering — check for a stray `make serve` or another \
+         suite run before reading this as an app fault."
+    )))
 }
 
 /// Tauri subprocess running with `ENTITY_BROWSER_AUTOSTART_LISTENER=1`.
@@ -108,6 +572,173 @@ struct TauriListener {
     pub peer_id: String,
     pub ws_addr: String,
     pub webview_booted: bool,
+    /// How long the native listener took to print its READY line, and how long
+    /// the WebView took to reach `Frame loop started` — both from spawn.
+    ///
+    /// **They exist because a 60s budget that prints nothing on success cannot
+    /// tell a loaded box from a broken WebView, and that is precisely the
+    /// question the display-gated phase's known red raises.** The failure reads
+    /// *"the WebView never booted in 60s"*, which is a statement about the
+    /// budget as much as about the app — and until now nobody could say whether
+    /// the healthy path takes 3s or 55s. Same rule this suite already learned
+    /// twice (`ASYNC_ROUND_TRIP_BUDGET`, `BOOT_SLOW_NOTICE_MS`): print the
+    /// margin on success, or raising a budget silently trades a false failure
+    /// for a lost signal.
+    pub ready_ms: u128,
+    pub webview_ms: Option<u128>,
+    /// Which of [`WEBVIEW_BOOT_MILESTONES`] the child actually logged during
+    /// startup, in arrival order, with the elapsed ms from spawn. The whole
+    /// point of the phase's failure message: *how far did it get.*
+    pub boot_milestones: Vec<(&'static str, u128)>,
+    /// Rolling tail of the child's stdout, filled by the reader thread for
+    /// as long as the child lives.
+    ///
+    /// This exists for two reasons, and the first one is not diagnostics:
+    ///
+    /// 1. **Something must keep draining the pipe.** This used to be a bare
+    ///    `mpsc` whose receiver was a local in `start_tauri_listener` — so it
+    ///    was dropped the moment startup succeeded, the reader thread's next
+    ///    `send` failed, the thread broke out of its loop, and the read end of
+    ///    the child's stdout closed. From the READY line onward every log line
+    ///    in the Tauri process hit `EPIPE` and its logger dumped a multi-line
+    ///    "Error performing logging / attempted to log / record: …" block to
+    ///    stderr instead. Measured on a real run: the broken-pipe flood starts
+    ///    at the same second as the READY line and accounts for most of the
+    ///    32 KB stderr capture. The child now keeps a live reader for its whole
+    ///    life, so its stdout writes stay cheap and its stderr stays readable.
+    /// 2. Having drained it, we may as well keep it: the Tauri phases run
+    ///    minutes after startup, and when one fails, the child's recent stdout
+    ///    is the evidence. Before this it was discarded, so a Phase 14 / 15.6
+    ///    failure could only be guessed at.
+    stdout_tail: Arc<Mutex<std::collections::VecDeque<String>>>,
+}
+
+/// How many stdout lines to retain from the Tauri child. Bounded so a long
+/// suite can't grow it without limit; large enough that a failing phase sees
+/// the run-up to the failure, not just its last gasp.
+const TAURI_STDOUT_TAIL_LINES: usize = 200;
+
+/// The WebView's boot milestones, **in the order the WASM module logs them**,
+/// from `src/main.rs`. Every one goes through `tracing_wasm` → the console →
+/// the console bridge in `src-tauri/src/lib.rs` → the same stdout this harness
+/// is already scraping, so their presence is observable here for free.
+///
+/// **Why this exists.** On 2026-08-23 the display-gated phase went red 3/3 and
+/// the only thing the failure could say was *"never saw `Frame loop started` in
+/// 60s"* — which is one bit, and it does not distinguish *the module never
+/// started* from *the module started and app boot hung*. Those have completely
+/// different causes and send you to different files. Recovering the answer cost
+/// a session of reading `src/main.rs` by hand to work out what SHOULD have been
+/// logged, and then reasoning from the absence.
+///
+/// The absence was only readable because the bridge was demonstrably alive
+/// (other `[webview]` lines were coming through). **That is the load-bearing
+/// part: an absent log line is evidence only once you have shown the channel
+/// works** — so the report below always states how many milestones arrived,
+/// never just which one is missing.
+///
+/// Reported on **success too**, deliberately. A failure-only diagnostic has no
+/// baseline to compare against: this suite could not answer "does a healthy
+/// boot also hit the `instantiateStreaming` fallback?" because the child's
+/// stdout was dumped on failure and nowhere else. Same rule the suite already
+/// learned for budgets — print the margin on success, or a green run carries no
+/// evidence.
+const WEBVIEW_BOOT_MILESTONES: &[&str] = &[
+    "WASM init: tracing level set",
+    "WASM init: DOM mode set, creating app",
+    "boot: peer host arm selected",
+    "WASM init: app created, starting rAF loop",
+    "Frame loop started",
+];
+
+/// Render the boot-milestone trace for a message. `reached` is `(label, ms)`
+/// in arrival order.
+fn render_boot_milestones(reached: &[(&'static str, u128)]) -> String {
+    if reached.is_empty() {
+        return "  (none — the WASM module never reached its first log statement, \
+                which is BEFORE any app code runs; look at module instantiation, \
+                not at app boot)"
+            .to_string();
+    }
+    let mut out: Vec<String> = reached
+        .iter()
+        .map(|(label, ms)| format!("  ✓ {label} @ {ms} ms"))
+        .collect();
+    for label in WEBVIEW_BOOT_MILESTONES {
+        if !reached.iter().any(|(l, _)| l == label) {
+            out.push(format!("  ✗ {label} — never seen"));
+        }
+    }
+    out.join("\n")
+}
+
+/// The two branches of [`render_boot_milestones`] that only appear on a FAILING
+/// run — so they are pinned here rather than first exercised on the day
+/// somebody needs them to be right.
+///
+/// The healthy branch has its own control and it is a real one: a passing
+/// Phase 14 prints `tauri boot milestones: 5/5`, which is what proves the
+/// milestone strings still match what the console bridge emits. That control is
+/// the load-bearing half — if the app ever reworded one of these lines, the
+/// count drops on a GREEN run and says so, instead of silently degrading the
+/// next failure message back to the single bit it used to carry.
+///
+/// Needs no browser, no Selenium and no display: it is a pure function, and
+/// keeping it that way is why the diagnosis is testable at all.
+#[test]
+fn the_boot_milestone_trace_distinguishes_never_started_from_hung_midway() {
+    // Nothing arrived: the message must send the reader at INSTANTIATION, and
+    // must not name a step as "the one that hung" — there wasn't one.
+    let none = render_boot_milestones(&[]);
+    assert!(
+        none.contains("never reached its first log statement"),
+        "empty trace must say the module never began executing, got: {none}"
+    );
+    assert!(
+        !none.contains('✓'),
+        "empty trace must not claim any milestone was reached, got: {none}"
+    );
+
+    // Got partway: every reached step is shown WITH its timing, and every
+    // missing one is named. A trace that only listed what was reached would
+    // leave the reader counting against a list they have to go find.
+    let partial = render_boot_milestones(&[
+        (WEBVIEW_BOOT_MILESTONES[0], 12),
+        (WEBVIEW_BOOT_MILESTONES[1], 40),
+    ]);
+    assert!(partial.contains("✓ WASM init: tracing level set @ 12 ms"), "{partial}");
+    assert!(partial.contains("✓ WASM init: DOM mode set, creating app @ 40 ms"), "{partial}");
+    assert!(partial.contains("✗ boot: peer host arm selected — never seen"), "{partial}");
+    assert!(partial.contains("✗ Frame loop started — never seen"), "{partial}");
+    assert_eq!(
+        partial.lines().count(),
+        WEBVIEW_BOOT_MILESTONES.len(),
+        "every milestone must appear exactly once, reached or not: {partial}"
+    );
+}
+
+/// Render a stdout ring buffer for a failure message, newest last. Never
+/// panics on a poisoned lock — a diagnostic that can itself fail is worse than
+/// no diagnostic. Shared by the startup-timeout path (which has no
+/// `TauriListener` yet) and [`TauriListener::stdout_tail`].
+fn render_stdout_tail(tail: &Arc<Mutex<std::collections::VecDeque<String>>>) -> String {
+    match tail.lock() {
+        Ok(t) if t.is_empty() => "  (child produced no stdout)".to_string(),
+        Ok(t) => t
+            .iter()
+            .map(|l| format!("  | {l}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(_) => "  (stdout tail unavailable: lock poisoned)".to_string(),
+    }
+}
+
+impl TauriListener {
+    /// The child's most recent stdout lines, ready to paste into a failure
+    /// message.
+    fn stdout_tail(&self) -> String {
+        render_stdout_tail(&self.stdout_tail)
+    }
 }
 
 impl Drop for TauriListener {
@@ -117,7 +748,25 @@ impl Drop for TauriListener {
     }
 }
 
-fn start_tauri_listener() -> Result<TauriListener, Box<dyn std::error::Error>> {
+/// Spawn the desktop binary for the Tauri phases, or `Ok(None)` when the
+/// environment has no display — GTK cannot initialize without a window
+/// server, so in a headless container the child dies at spawn (proven:
+/// `Failed to initialize GTK` on stderr). The phases that need it SKIP
+/// loudly rather than failing the whole suite red forever in headless
+/// runs — a permanent known-red masks every new regression. To exercise
+/// these phases, run where the e2e container gets a display (see the
+/// Makefile's display passthrough / AGENTS §e2e).
+fn start_tauri_listener() -> Result<Option<TauriListener>, Box<dyn std::error::Error>> {
+    let has_display = std::env::var("WAYLAND_DISPLAY").is_ok()
+        || std::env::var("DISPLAY").is_ok();
+    if !has_display {
+        return Ok(None);
+    }
+    // Capture the child's stderr to a file instead of discarding it — when
+    // this phase times out, the stderr tail is the diagnosis (a panic, a GTK/
+    // display failure, a store error print there, not on stdout).
+    let stderr_path = "target/e2e-tauri-stderr.log";
+    let stderr_file = std::fs::File::create(stderr_path)?;
     let mut child = Command::new(TAURI_BIN)
         .env("ENTITY_BROWSER_AUTOSTART_LISTENER", "1")
         // Keep the listener on loopback for the test — the production
@@ -125,7 +774,7 @@ fn start_tauri_listener() -> Result<TauriListener, Box<dyn std::error::Error>> {
         // pairing), but this suite asserts against a same-host connect.
         .env("ENTITY_BROWSER_LOOPBACK_ONLY", "1")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr_file))
         .spawn()
         .map_err(|e| {
             format!(
@@ -142,13 +791,27 @@ fn start_tauri_listener() -> Result<TauriListener, Box<dyn std::error::Error>> {
     // Background thread forwards each stdout line through a channel.
     // We need this rather than a blocking read_line() loop so we can
     // time out cleanly when autostart fails to produce the READY line.
+    //
+    // The thread reads until the child's stdout actually ends — it does NOT
+    // stop when the receiver goes away. Closing the read end early is what
+    // used to give the child EPIPE on every subsequent log write; see
+    // `TauriListener::stdout_tail`. So `send` is deliberately best-effort
+    // (`let _ =`): once the startup loop drops `rx`, sends fail, nothing is
+    // buffered, and the ring buffer below carries on being the sink.
+    let stdout_tail: Arc<Mutex<std::collections::VecDeque<String>>> =
+        Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let (tx, rx) = mpsc::channel::<String>();
+    let reader_tail = Arc::clone(&stdout_tail);
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
+            if let Ok(mut tail) = reader_tail.lock() {
+                if tail.len() >= TAURI_STDOUT_TAIL_LINES {
+                    tail.pop_front();
+                }
+                tail.push_back(line.clone());
             }
+            let _ = tx.send(line);
         }
     });
 
@@ -158,15 +821,27 @@ fn start_tauri_listener() -> Result<TauriListener, Box<dyn std::error::Error>> {
     // want both healthy — if dist/ holds the wrong WASM flavor (e.g.
     // worker-mode on WebKitGTK), the UI fails to boot while autostart
     // still succeeds. We want the test to catch that.
-    let deadline = Instant::now() + Duration::from_secs(20);
+    //
+    // 60s: generous because this runs ~200s into the suite on a loaded
+    // box (Firefox + serve + cargo); the loop exits the moment both
+    // signals arrive, so a healthy boot doesn't pay for the headroom.
+    // On timeout we report the child's recent stdout (ring buffer) +
+    // point at the stderr capture — the phase must carry its own
+    // diagnosis, not guess at causes in a static message.
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(60);
     let mut peer_id: Option<String> = None;
     let mut ws_addr: Option<String> = None;
     let mut webview_booted = false;
+    let mut ready_at: Option<Instant> = None;
+    let mut webview_at: Option<Instant> = None;
+    let mut boot_milestones: Vec<(&'static str, u128)> = Vec::new();
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(remaining) {
             Ok(line) => {
                 if let Some(rest) = line.strip_prefix("ENTITY_BACKEND_LISTENER_READY ") {
+                    ready_at.get_or_insert_with(Instant::now);
                     for tok in rest.trim().split(' ') {
                         if let Some(v) = tok.strip_prefix("peer_id=") {
                             peer_id = Some(v.to_string());
@@ -178,11 +853,25 @@ fn start_tauri_listener() -> Result<TauriListener, Box<dyn std::error::Error>> {
                 if line.starts_with("ENTITY_BACKEND_LISTENER_FAILED") {
                     return Err(format!("tauri autostart failed: {line}").into());
                 }
+                // Record every boot milestone the module logs, not just the
+                // last one — a failure's whole question is HOW FAR it got, and
+                // that is unanswerable from a single boolean. Matched with
+                // `contains` because each line arrives wrapped in the console
+                // bridge's `[webview]` prefix and tracing's own formatting.
+                for label in WEBVIEW_BOOT_MILESTONES {
+                    if line.contains(label)
+                        && !boot_milestones.iter().any(|(l, _)| l == label)
+                    {
+                        boot_milestones
+                            .push((label, (Instant::now() - started).as_millis()));
+                    }
+                }
                 // WASM logs this from src/main.rs:163 once the rAF
                 // pump is running. Routed through the console bridge
                 // in src-tauri/src/lib.rs which forwards to stdout.
                 if line.contains("Frame loop started") {
                     webview_booted = true;
+                    webview_at.get_or_insert_with(Instant::now);
                 }
                 if peer_id.is_some() && webview_booted {
                     break;
@@ -192,20 +881,29 @@ fn start_tauri_listener() -> Result<TauriListener, Box<dyn std::error::Error>> {
         }
     }
 
+    let startup_tail = render_stdout_tail(&stdout_tail);
     let peer_id = peer_id.ok_or_else(|| {
-        "tauri did not print ENTITY_BACKEND_LISTENER_READY within 20s. \
-         Check that DISPLAY is set (Tauri needs a window server) and \
-         that the binary was rebuilt after the autostart hook was added."
-            .to_string()
+        format!(
+            "tauri did not print ENTITY_BACKEND_LISTENER_READY within 60s.\n\
+             Recent stdout from the child:\n{startup_tail}\n\
+             Child stderr captured at {stderr_path} — read its tail for the cause\n\
+             (a panic / GTK display failure / store error prints there, not on stdout).\n\
+             If stdout is empty, the process likely died at spawn: check the binary\n\
+             exists and was rebuilt (cd src-tauri && cargo build).",
+        )
     })?;
     let ws_addr = ws_addr.ok_or("READY line was missing ws_addr=...")?;
 
-    Ok(TauriListener {
+    Ok(Some(TauriListener {
         child,
         peer_id,
         ws_addr,
         webview_booted,
-    })
+        ready_ms: ready_at.map(|t| (t - started).as_millis()).unwrap_or(0),
+        webview_ms: webview_at.map(|t| (t - started).as_millis()),
+        boot_milestones,
+        stdout_tail,
+    }))
 }
 
 /// Fetch the captured browser console as a flat `Vec<String>`, one
@@ -451,6 +1149,91 @@ async fn shell_submit_for_peer(
     shell_scrollback_for_peer(client, peer_id).await
 }
 
+/// The `entity-peer-*` IndexedDB database names currently present in the
+/// origin (each durable peer — the primary system peer and any `frontend-idb`
+/// peer — has its own `entity-peer-{id}` database). Used to detect a newly
+/// created durable this-tab peer and to assert its store survives a reload.
+async fn list_entity_peer_dbs(
+    client: &Client,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let v = client
+        .execute_async(
+            r#"
+            const cb = arguments[arguments.length - 1];
+            (async () => {
+                const dbs = (await indexedDB.databases()).map(d => d.name).filter(Boolean);
+                cb(dbs.filter(n => n.startsWith('entity-peer-')));
+            })().catch(() => cb([]));
+            "#,
+            vec![],
+        )
+        .await?;
+    Ok(v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Open a Shell window bound to `peer_id`: select the peer in the command
+/// palette's peer-selector (by option value, robust to display text), then
+/// click the peer-scoped `+ Shell` spawn (spawn buttons read the palette
+/// selection at click time). Fails loudly if the peer isn't a selectable
+/// palette option — which, after a reload, is itself the proof that the peer
+/// was NOT rehydrated.
+async fn open_peer_shell(
+    client: &Client,
+    peer_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sel = client
+        .execute(
+            r#"
+            const [pid] = arguments;
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const select = root.querySelector('.command-palette select');
+            if (!select) return 'no-palette-select';
+            let found = false;
+            for (const opt of select.options) { if (opt.value === pid) { found = true; break; } }
+            if (!found) return 'no-peer-option';
+            select.value = pid;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'ok';
+            "#,
+            vec![serde_json::Value::String(peer_id.to_string())],
+        )
+        .await?;
+    assert_eq!(
+        sel.as_str(),
+        Some("ok"),
+        "open_peer_shell: couldn't select peer {peer_id} in the palette (rehydrated?): {sel:?}"
+    );
+    sleep(Duration::from_millis(300)).await;
+    let spawn = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const btns = root.querySelectorAll('button.spawn-btn');
+            for (const b of btns) {
+                if (b.textContent.trim() === '+ Shell') { b.click(); return 'clicked'; }
+            }
+            return `no-shell-btn-of-${btns.length}`;
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        spawn.as_str(),
+        Some("clicked"),
+        "open_peer_shell: couldn't spawn a Shell for peer {peer_id}: {spawn:?}"
+    );
+    sleep(Duration::from_millis(800)).await;
+    Ok(())
+}
+
 /// Submit `line` and assert each substring in `expects` appears in the
 /// resulting scrollback. Returns the scrollback for further inspection.
 ///
@@ -516,13 +1299,68 @@ async fn wait_for_boot(
         let elapsed = start.elapsed().as_millis() as u64;
         let log = capture_log(client).await?;
         if log.iter().any(|l| l.contains("Frame loop started")) {
+            if elapsed > BOOT_SLOW_NOTICE_MS {
+                eprintln!(
+                    "  NOTE: boot took {elapsed}ms (healthy is 108-711ms). Not a \
+                     failure — but if this is climbing, it is the signal the old \
+                     fixed 8000ms budget used to deliver as a false failure."
+                );
+            }
             return Ok(elapsed);
         }
         if elapsed > timeout_ms {
+            // **Dump what the page DID say.** Without this the failure is
+            // "never saw 'Frame loop started'" and nothing else — which reads
+            // as a dead app and is indistinguishable from a wedged worker, a
+            // multi-tab lock, an OPFS refusal, or a panic during boot. Every
+            // one of those has a distinct signature in this log, and the
+            // failure was thrown away before anyone could see it. The suite's
+            // own rule about `Stdio::null()` on a helper server is this same
+            // rule: never discard the output that identifies the cause.
+            let tail: Vec<String> = log
+                .iter()
+                .rev()
+                .take(40)
+                .rev()
+                .map(|l| l.chars().take(220).collect())
+                .collect();
             return Err(format!(
-                "wait_for_boot: never saw 'Frame loop started' in {timeout_ms}ms"
+                "wait_for_boot: never saw 'Frame loop started' in {timeout_ms}ms \
+                 ({} log lines captured). Last {} of them:\n  {}",
+                log.len(),
+                tail.len(),
+                tail.join("\n  ")
             )
             .into());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Run `script` until `ready` holds or `budget` elapses, returning the **last**
+/// value either way — so the caller still asserts, and still gets the real
+/// value in its failure message.
+///
+/// Use this instead of `sleep(fixed)` + one read. A fixed sleep encodes a guess
+/// about how long an async re-render takes; on a loaded box the guess is wrong
+/// and the phase fails for a reason that has nothing to do with the behaviour
+/// under test. Polling is also what keeps a headless page honest: with no
+/// WebDriver interaction the rAF loop can go unpumped, and each `execute`
+/// forces a style/layout flush.
+///
+/// The budget is an upper bound, not a wait — a healthy run returns on the
+/// first poll, so a generous budget costs nothing except on the failure path.
+async fn poll_json(
+    client: &Client,
+    script: &str,
+    budget: Duration,
+    ready: impl Fn(&serde_json::Value) -> bool,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + budget;
+    loop {
+        let value = client.execute(script, vec![]).await?;
+        if ready(&value) || Instant::now() >= deadline {
+            return Ok(value);
         }
         sleep(Duration::from_millis(100)).await;
     }
@@ -596,6 +1434,12 @@ async fn check_opfs_workers_subdir(
 /// client + a guard that kills the server on drop.
 async fn setup(
 ) -> Result<(Client, DistServer), Box<dyn std::error::Error>> {
+    // Every test comes through here, so this is where the stall watchdog gets
+    // armed — including for the dozen standalone tests, which have no phases of
+    // their own to report progress from.
+    arm_stall_watchdog();
+    note_progress("setup");
+
     // Defensive: Phase 27 drops a `dist/entity-deployment.json` to test the
     // served-config boot path, then removes it. If a prior run crashed mid-phase
     // it could linger and silently change EVERY earlier phase's cold boot (the
@@ -603,31 +1447,51 @@ async fn setup(
     // phase navigates so phases 1–26 always see the default (no-config) path.
     let _ = std::fs::remove_file("dist/entity-deployment.json");
 
+    // Hand back any session a previous (failed / interrupted / E2E_UNTIL-cut)
+    // run left holding the standalone's single slot.
+    reap_stale_sessions();
+
     let server = start_dist_server().map_err(|e| {
         format!(
             "failed to start python3 -m http.server: {e}. \
              Is dist/ built? Run `make wasm` first (or `make e2e-worker`)."
         )
     })?;
-    sleep(Duration::from_millis(300)).await;
 
     let mut caps = serde_json::Map::new();
     caps.insert(
         "moz:firefoxOptions".to_string(),
         serde_json::json!({ "args": ["-headless"] }),
     );
+    let url = webdriver_url();
     let client = ClientBuilder::native()
         .capabilities(caps)
-        .connect(WEBDRIVER_URL)
+        .connect(&url)
         .await
         .map_err(|e| {
             format!(
-                "failed to connect to WebDriver at {WEBDRIVER_URL}: {e}\n\
+                "failed to connect to WebDriver at {url}: {e}\n\
                 Is the selenium-firefox container running? Try:\n\
                 podman run -d --rm --name e2e-firefox --network=host \\\n\
                     docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404"
             )
         })?;
+
+    // Bound the two server-side waits explicitly rather than inheriting the
+    // WebDriver defaults, where `pageLoad` is **300s**: a page that wedges
+    // mid-navigation would otherwise stall one `goto` for five minutes and
+    // read as a hang. These make the browser return an error we can attribute,
+    // and they are the layer *under* the stall watchdog — the watchdog is the
+    // backstop for wedges these cannot see (a dead container, a hung socket).
+    client
+        .update_timeouts(fantoccini::wd::TimeoutConfiguration::new(
+            Some(Duration::from_secs(30)), // script
+            Some(Duration::from_secs(60)), // pageLoad
+            Some(Duration::from_secs(0)),  // implicit — keep 0 (see fantoccini docs)
+        ))
+        .await
+        .map_err(|e| format!("failed to set WebDriver timeouts: {e}"))?;
+
     Ok((client, server))
 }
 
@@ -654,6 +1518,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // handshake, and run a few frames.
     sleep(Duration::from_secs(5)).await;
 
+    phase_gate!(client, "1");
     // -- Phase 1: bootstrap assertions ---------------------------------
     {
         let log_lines = capture_log(&client).await?;
@@ -686,6 +1551,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         );
     }
 
+    phase_gate!(client, "1b");
     // -- Phase 1b: Service Worker registered ---------------------------
     //
     // Gap 5 (offline app-shell cache): the SW must register on every
@@ -726,6 +1592,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         );
     }
 
+    phase_gate!(client, "2");
     // -- Phase 2: open every window type, one at a time ----------------
     //
     // Per D10 (feedback_e2e_must_exercise_new_features): discover the
@@ -766,15 +1633,26 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         })
         .unwrap_or_default();
 
-    // Floor sanity check: today we ship 19 window types. The Inspect
+    // Floor sanity check: today we ship 21 window types. The Inspect
     // family (Chain Trace, Path Tap, Wire Recorder, Content Stream)
     // landed; Content Site, then the JS-Apps platform (Games
-    // 16th, Apps 17th), the Storage window (18th), and the Site Editor
-    // (19th) landed later. If the DOM returns 0 we're parsing
-    // wrong; if it returns far fewer than expected we've silently
-    // regressed the palette renderer or dropped a window. Update the floor
-    // on intentional removals.
-    const MIN_DISCOVERED_WINDOW_TYPES: usize = 19;
+    // 16th, Apps 17th), the Storage window (18th), the Site Editor
+    // (19th), and the System Backend window (System-scoped) landed
+    // later. The standalone "System Overview" window was then merged INTO
+    // System Backend (one System window, S2), dropping the count 22 → 21.
+    // If the DOM returns 0 we're parsing wrong; if it returns far
+    // fewer than expected we've silently regressed the palette renderer or
+    // dropped a window. Update the floor on intentional removals. Discovery
+    // clicks each (including System Backend, now labelled "System Overview")
+    // and panic-checks it below, so a new window rides this loop rather than
+    // needing a bespoke phase. (22 → 23: the Theme Editor landed. 24 → 25: the
+    // Chat window (app/chat) landed.)
+    // 25 → 24: Games and Apps merged into one launcher with category chips.
+    // 24 → 25: the Registry Browser. It needs no bespoke phase — discovery reads
+    // the live palette, so it is spawned and panic-checked by this loop like
+    // every other window, which is the whole reason the array was replaced by a
+    // query in the first place.
+    const MIN_DISCOVERED_WINDOW_TYPES: usize = 25;
     assert!(
         window_types.len() >= MIN_DISCOVERED_WINDOW_TYPES,
         "Phase 2: discovered only {} window types ({:?}); expected at least {}. \
@@ -837,6 +1715,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         }
     }
 
+    phase_gate!(client, "2-SE");
     // -- Phase 2-SE: Site Editor create flow (Commit 2) ---------------
     //
     // Exercise the new Site Editor end to end on the Worker arm (the
@@ -1071,29 +1950,87 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         se_deleted_v.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
         "Could not drive Site Editor delete-site. Detail: {se_deleted_v}"
     );
-    sleep(Duration::from_millis(1200)).await;
-
-    let se_after_delete = client
-        .execute(
-            r#"
+    // Poll for the delete to reflect rather than sampling ONCE after a fixed
+    // sleep. The subgraph delete itself is fast — measured at ~160 ms to clear
+    // the list, identically before and after the i18n extraction pass — but a
+    // single sample taken after a bare `sleep` intermittently read the stale
+    // list anyway: with no WebDriver interaction in the interval, the headless
+    // page's rAF loop can go unpumped, so the re-render has not run by the time
+    // we look. Each `execute` forces a style/layout flush, which is why polling
+    // is deterministic where one delayed read is not.
+    //
+    // Same assertion, same meaning — it still fails if the site never leaves the
+    // list. Only the "how long do we wait" is now bounded-and-observed instead
+    // of guessed. (A fixed sleep + one read is the shape to avoid in this suite.)
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut se_after_delete;
+    loop {
+        se_after_delete = client
+            .execute(
+                r#"
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
             for (const sec of root.querySelectorAll('section.window')) {
                 if (!sec.querySelector('.site-editor')) continue;
                 const chips = Array.from(sec.querySelectorAll('button')).map(b => b.textContent.trim());
-                return { still_lists: chips.some(c => c.includes('e2e-site')) };
+                const offenders = chips.filter(c => c.includes('e2e-site'));
+                // Diagnostics carried on EVERY sample, not just the last: this
+                // phase fails intermittently (~1 in 3 long runs) and has never
+                // been reproduced on demand, so the failure has to explain
+                // itself. `offenders` says WHICH control still names the site
+                // (the site list? the editor header? a stale row?), which is
+                // the split that tells us whether the tree still holds the
+                // entities or only the DOM is stale. See the handoff's
+                // open-bug section before theorising further.
+                return { still_lists: offenders.length > 0, offenders, chips };
             }
-            return { still_lists: false };
+            return { still_lists: false, offenders: [], chips: [] };
             "#,
-            vec![],
-        )
-        .await?;
+                vec![],
+            )
+            .await?;
+        let still = se_after_delete
+            .get("still_lists")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        if !still || std::time::Instant::now() >= deadline {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
     println!("  site-editor after delete still-lists: {se_after_delete}");
+    // The Worker-arm cache-mirror trace. This phase's "a surviving list row
+    // means the entities outlived the delete" rule is UNDER-DETERMINED: the
+    // site list is built from `tree_listing`, which on this arm is
+    // `cache_list` — the union of every subscription's mirror — so a surviving
+    // row is equally consistent with a stale mirror. The proxy's per-removal
+    // `remaining_holders` line settles which
+    // (AUDIT-THEME-DELETE-STALE-DROPDOWN F2; same disease, and this phase
+    // reproduces it far more often than Phase 26.8 does).
+    let se_proxy_trace: Vec<String> = capture_log(&client)
+        .await?
+        .into_iter()
+        .filter(|l| l.contains("worker-proxy:") || l.contains("panicked at"))
+        .collect();
+    let se_trace_tail: Vec<&String> =
+        se_proxy_trace.iter().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
     assert!(
         !se_after_delete.get("still_lists").and_then(|v| v.as_bool()).unwrap_or(true),
-        "Site Editor still lists the deleted site (subgraph delete didn't reflect). Detail: {se_after_delete}"
+        "Site Editor still lists the deleted site (subgraph delete didn't reflect) \
+         after a 10s poll. `offenders` names the exact control(s) still carrying \
+         the site id. A site-list row does NOT by itself mean the entities \
+         survived — on this arm the list comes from the cache-mirror union, so a \
+         stale mirror looks identical. The `worker-proxy: removal …` lines below \
+         are what separates them: `remaining_holders` non-empty with no later \
+         removal for those subs means the mirror is stale, not the tree. \
+         Detail: {se_after_delete}\
+         \n--- worker-proxy trace (last {} of {} lines) ---\n{}",
+        se_trace_tail.len(),
+        se_proxy_trace.len(),
+        se_trace_tail.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
     );
 
+    phase_gate!(client, "2b");
     // -- Phase 2b: Key Manager renders the real registry roster -------
     //
     // Regression gate for the peer-registry-in-tree migration
@@ -1136,6 +2073,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          registry. Got: {km_text:?}"
     );
 
+    phase_gate!(client, "2c");
     // -- Phase 2c: Shell `help` round-trip ----------------------------
     //
     // Catches the case where Shell isn't in the palette, is in the
@@ -1152,6 +2090,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          'pwd' rows. Scrollback: {help_sb:?}"
     );
 
+    phase_gate!(client, "2d");
     // -- Phase 2d: Shell `open` round-trip through pending_out queue ---
     //
     // Validates the action-out queue: a verb pushes
@@ -1186,6 +2125,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          not be draining into DomCtx.actions."
     );
 
+    phase_gate!(client, "2e");
     // -- Phase 2e: Shell read-only verb smoke pass ---------------------
     //
     // Demonstrates the shell-driven test pattern: one line per verb,
@@ -1216,6 +2156,49 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "`ls` should list children or report empty. Got: {ls_sb:?}"
     );
 
+    phase_gate!(client, "2-net");
+    // -- Phase 2-net: the connectivity preflight, in a real browser ----
+    //
+    // `readiness::assess` is pure and natively tested to death. What no native
+    // test can reach is `readiness::collect` — `window.isSecureContext`, the
+    // `RTCPeerConnection` lookup, the arm, the booted-provisioning snapshot —
+    // and that half is the whole point: the report exists to be typed by a
+    // person on a *second machine* who has nothing else to look at. A `net`
+    // that panicked or reported nothing in the browser would be discovered by
+    // them, during the one run this is meant to rescue.
+    //
+    // Three things are asserted, and each fails for a different reason:
+    let net_sb = shell_submit(&client, "net", 400).await?;
+    println!("  net report:\n{net_sb}");
+    // (1) Every check id reaches the surface — the collector ran and the render
+    //     is not empty. Ids, not prose: the wording is `readiness`' to change.
+    for id in ["origin", "webrtc-api", "rendezvous", "establisher", "this-peer"] {
+        assert!(
+            net_sb.contains(id),
+            "`net` did not report the `{id}` check — the collector may have \
+             failed in the browser. Got:\n{net_sb}"
+        );
+    }
+    // (2) This harness serves over `localhost`, which IS a secure context, so
+    //     the origin row must read OK. If `is_secure_context()` were misread
+    //     the preflight would tell every user their origin is broken — the
+    //     cry-wolf direction, and the one that gets a diagnostic ignored.
+    assert!(
+        net_sb.contains("OK   origin") || net_sb.contains("OK  origin"),
+        "localhost is a secure context and the origin row must say so. \
+         Got:\n{net_sb}"
+    );
+    // (3) The FAIL path renders too. This session boots with no connector, so
+    //     the rendezvous row must fail AND carry the action. A preflight whose
+    //     failure arm has never been seen is not a preflight — and a report
+    //     that is `OK` everywhere by construction proves only that it prints.
+    assert!(
+        net_sb.contains("FAIL rendezvous") && net_sb.contains("connector add"),
+        "with no connector configured, `net` must fail the rendezvous row and \
+         say how to fix it. Got:\n{net_sb}"
+    );
+
+    phase_gate!(client, "2f");
     // -- Phase 2f: Shell async query/count verbs -----------------------
     //
     // `query` and `count` exercise the spawn_local future + dirty-mark
@@ -1254,6 +2237,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "Bare `query` should print usage. Got: {bare_query_sb:?}"
     );
 
+    phase_gate!(client, "2f.1");
     // -- Phase 2f.1: compute verbs work on the Worker arm --------------
     //
     // Regression guard for the compute-in-Worker enable.
@@ -1295,6 +2279,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          with 'not supported on Worker-arm peer'. Got: {compute_eval_sb:?}"
     );
 
+    phase_gate!(client, "2f.3");
     // -- Phase 2f.3: Worker-arm DELETE reflects into the mirror --------
     //
     // The foundational tree invariant: a write fires subscriptions, and a
@@ -1348,6 +2333,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          last `ls app/e2e_deltest` output: {gone_out:?}"
     );
 
+    phase_gate!(client, "2f.2");
     // -- Phase 2f.2: browser-native diagnostics capture ----------------
     //
     // Regression guard for sprint #4 (src/diagnostics.rs). An uncaught
@@ -1376,6 +2362,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          Not found in captured log."
     );
 
+    phase_gate!(client, "2g");
     // -- Phase 2g: Shell `inspect` verb dispatcher --------------------
     //
     // The inspect verb is the diagnostics backbone. Sub-ops chain /
@@ -1456,6 +2443,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "Bare `inspect` should print usage. Got: {insp_bare:?}"
     );
 
+    phase_gate!(client, "2h");
     // -- Phase 2h: Chain Trace window renders + accepts input ---------
     //
     // Chain Trace (11th window) is the visual companion to `inspect`.
@@ -1577,46 +2565,53 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          message naming the id. Got: {ct_after_text:?}"
     );
 
-    // -- Phase 2h.2: Games + Apps launcher grids render the demo apps --
+    phase_gate!(client, "2h.2");
+    // -- Phase 2h.2: ONE launcher grid over both app-sets, with working chips --
     //
-    // The JS-Apps platform (Games = 16th window, Apps = 17th) shipped
-    // with ZERO e2e coverage: Phase 2's spawn loop opened both
-    // but only checked for panics. This pins the real user-visible
-    // contract. On a plain boot (no origins registered), each window
-    // seeds its baked demo token (`ensure_demo_set`, called in the render
-    // path) into the local tree and renders the launcher grid — Games
-    // bakes "War", Apps bakes "Calculator". We assert the grid shows the
-    // app, then launch it and confirm the sandboxed iframe mounts with the
-    // bundle `srcdoc` — proving the catalog + bundle round-trip out of the
-    // store (the two-hop) and the app actually runs. Guards a regression
-    // in the window / launcher / seed / store-read / sandbox paths — the
-    // path the user validates apps through (publish → grid → launch).
+    // The JS-Apps platform shipped with ZERO e2e coverage: Phase 2's spawn loop
+    // opened the launchers but only checked for panics. This pins the real
+    // user-visible contract. On a plain boot (no origins registered) the single
+    // Apps window seeds every set's baked demo token (`ensure_demo_set` per set,
+    // from the factory) and renders one launcher grid — "War" from the `games`
+    // set and "Calculator" from `apps`. We assert BOTH appear in ONE window (the
+    // merge — before it, no single window could show both), that the category
+    // chips filter what they claim to, and then launch War and confirm the
+    // sandboxed iframe mounts with the bundle `srcdoc` — proving the catalog +
+    // bundle round-trip out of the store (the two-hop) and that the app runs.
     //
-    // Selector: each window's `section.window` has `<header><h3>{title}`;
-    // the grid is one `<button>` card per catalog entry (the app name in a
-    // child `<div>`), all in the single `#dom-layer` shadow root.
-    let grids = client
-        .execute(
-            r#"
-            const layer = document.getElementById('dom-layer');
-            const root = layer.shadowRoot || layer;
-            const out = {};
-            for (const sec of root.querySelectorAll('section.window')) {
-                const h3 = sec.querySelector('header h3');
-                if (!h3) continue;
-                const title = h3.textContent.trim();
-                if (title !== 'Games' && title !== 'Apps') continue;
-                out[title] = Array.from(sec.querySelectorAll('button'))
-                    .map(b => b.textContent.trim());
-            }
-            return out;
-            "#,
-            vec![],
-        )
-        .await?;
-    let has_card = |title: &str, name: &str| {
-        grids
-            .get(title)
+    // Selector: each window's `section.window` has `<header><h3>{title}`; the
+    // grid is one `<button>` card per catalog entry (the app name in a child
+    // `<div>`) and the chip row is `button[data-chip]`, all in the single
+    // `#dom-layer` shadow root. Chips are read by `data-chip` / `aria-pressed`
+    // rather than by their inline style: which chip is active must be
+    // recoverable without parsing colors back out of a style attribute.
+    let read_apps = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const chips = Array.from(sec.querySelectorAll('button[data-chip]'));
+            return {
+                found: true,
+                cards: Array.from(sec.querySelectorAll('button'))
+                    .filter(b => !b.hasAttribute('data-chip'))
+                    .map(b => b.textContent.trim()),
+                chips: chips.map(c => c.getAttribute('data-chip')),
+                active: chips.filter(c => c.getAttribute('aria-pressed') === 'true')
+                    .map(c => c.getAttribute('data-chip')),
+            };
+        }
+        return { found: false };
+    "#;
+    let grid = client.execute(read_apps, vec![]).await?;
+    assert!(
+        grid.get("found").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Phase 2h.2: no window titled 'Apps' — the merged launcher should be open \
+         from Phase 2's spawn loop. Got: {grid:?}"
+    );
+    let cards_hold = |g: &serde_json::Value, name: &str| {
+        g.get("cards")
             .and_then(|v| v.as_array())
             .map(|cards| {
                 cards
@@ -1626,15 +2621,109 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             .unwrap_or(false)
     };
     assert!(
-        has_card("Games", "War"),
-        "Games launcher grid should show the baked demo 'War' card after \
-         Phase 2 opened it (ensure_demo_set seeds it in the render path). \
-         Got: {grids:?}"
+        cards_hold(&grid, "War") && cards_hold(&grid, "Calculator"),
+        "The ONE Apps launcher must show both sets' baked demos — 'War' (games) \
+         and 'Calculator' (apps). Two windows became one; if only one of these \
+         is present the merged grid is reading a single set. Got: {grid:?}"
+    );
+
+    // The chip row is derived from what the catalogs actually carry, so an empty
+    // category renders no chip at all. War is `cards` -> Games, Calculator is
+    // `utility` -> Tools, Ping publishes no category -> Other.
+    let chips: Vec<String> = grid
+        .get("chips")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        chips,
+        vec!["all", "games", "tools", "other"],
+        "Chip row should be exactly the non-empty coarse categories, in order. \
+         An 'art' or 'music' chip here would show an empty grid when pressed. \
+         Got: {grid:?}"
+    );
+    assert_eq!(
+        grid.get("active").and_then(|v| v.as_array()).map(|a| a.len()),
+        Some(1),
+        "Exactly one chip may be active, and on first paint it is 'all'. Got: {grid:?}"
+    );
+
+    // Press "Games": the filter must actually filter. An exit code cannot tell
+    // "filtered correctly" from "filtered correctly and rendered nowhere", so
+    // this reads the cards back out of the DOM (AP25).
+    let clicked_chip = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const chip = sec.querySelector('button[data-chip="games"]');
+                if (!chip) return 'no-games-chip';
+                chip.click();
+                return 'clicked';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        clicked_chip.as_str().unwrap_or(""),
+        "clicked",
+        "Games chip click failed: {clicked_chip:?}"
+    );
+    let filtered = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("active")
+            .and_then(|a| a.as_array())
+            .map(|a| a.iter().any(|c| c.as_str() == Some("games")))
+            .unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        cards_hold(&filtered, "War"),
+        "Filtering to Games must keep the game. Got: {filtered:?}"
     );
     assert!(
-        has_card("Apps", "Calculator"),
-        "Apps launcher grid should show the baked demo 'Calculator' card. \
-         Got: {grids:?}"
+        !cards_hold(&filtered, "Calculator"),
+        "Filtering to Games must drop the tool — a chip that changes only its own \
+         highlight is a control that does nothing. Got: {filtered:?}"
+    );
+
+    // Back to All, so the rest of this phase (and 2h.2b's Ping launch) sees the
+    // whole grid. The selected chip is persisted view-state, not a render-local
+    // toggle, so leaving it filtered would leak into every later phase.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const chip = sec.querySelector('button[data-chip="all"]');
+                if (chip) chip.click();
+            }
+            return true;
+            "#,
+            vec![],
+        )
+        .await?;
+    let restored = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("active")
+            .and_then(|a| a.as_array())
+            .map(|a| a.iter().any(|c| c.as_str() == Some("all")))
+            .unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        cards_hold(&restored, "Calculator"),
+        "Clearing the filter must bring every app back. Got: {restored:?}"
     );
 
     // Launch War: click its card, expect the sandboxed iframe to mount
@@ -1646,14 +2735,14 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             const root = layer.shadowRoot || layer;
             for (const sec of root.querySelectorAll('section.window')) {
                 const h3 = sec.querySelector('header h3');
-                if (!h3 || h3.textContent.trim() !== 'Games') continue;
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
                 const card = Array.from(sec.querySelectorAll('button'))
-                    .find(b => b.textContent.includes('War'));
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War'));
                 if (!card) return 'no-war-card';
                 card.click();
                 return 'clicked';
             }
-            return 'no-games-window';
+            return 'no-apps-window';
             "#,
             vec![],
         )
@@ -1672,7 +2761,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             const root = layer.shadowRoot || layer;
             for (const sec of root.querySelectorAll('section.window')) {
                 const h3 = sec.querySelector('header h3');
-                if (!h3 || h3.textContent.trim() !== 'Games') continue;
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
                 const fr = sec.querySelector('iframe[sandbox]');
                 if (!fr) return { found: false };
                 return {
@@ -1688,7 +2777,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         .await?;
     assert!(
         frame.get("found").and_then(|v| v.as_bool()).unwrap_or(false),
-        "Launching War should mount a sandboxed iframe in the Games window. \
+        "Launching War should mount a sandboxed iframe in the Apps window. \
          Got: {frame:?}"
     );
     assert_eq!(
@@ -1707,9 +2796,1707 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          from the store, not an empty/placeholder frame. Got {srcdoc_len} bytes"
     );
     eprintln!(
-        "Phase 2h.2: Games+Apps grids render the baked demo apps; \
-         War launches into a sandboxed iframe (srcdoc {srcdoc_len} bytes)"
+        "Phase 2h.2: one Apps grid renders both sets' demos, the Games chip \
+         filters to the game only, and War launches into a sandboxed iframe \
+         (srcdoc {srcdoc_len} bytes)"
     );
+
+    // Return the merged launcher to its grid. Before the merge, Games and Apps
+    // were separate windows and launching a game left the Apps grid untouched;
+    // they are the SAME window now, so 2h.2b's Ping card is behind this click.
+    let war_back = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const b = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (!b) return 'no-back';
+                b.click();
+                return 'back';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        war_back.as_str().unwrap_or(""),
+        "back",
+        "Back-to-grid after War failed: {war_back:?}"
+    );
+    sleep(Duration::from_millis(400)).await;
+
+    phase_gate!(client, "2h.2s");
+    // -- Phase 2h.2s: the Saves panel is the window's third view --
+    //
+    // Back up / restore / send are proven natively and mutation-checked
+    // (`a_save_can_be_snapshotted_rolled_back_and_the_snapshot_dropped`). What
+    // no native test can see is the WIRING: that the launcher offers a way in,
+    // that the panel replaces the window body rather than rendering nowhere,
+    // and that leaving it returns to the grid. A view reachable only from code
+    // is a feature nobody has.
+    //
+    // Deliberately asserts nothing about WHICH saves are listed: whether the
+    // demo game wrote one during 2h.2 depends on the fixture's own behaviour,
+    // and a gate that depends on that is a flake waiting for a fixture edit.
+    let saves_panel = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const entry = sec.querySelector('button[data-control="saves"]');
+                if (!entry) return { entry: false };
+                entry.click();
+                return { entry: true };
+            }
+            return { entry: false };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert!(
+        saves_panel.get("entry").and_then(|v| v.as_bool()).unwrap_or(false),
+        "The launcher must offer a way into the Saves panel. Got: {saves_panel:?}"
+    );
+
+    let read_panel = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            return {
+                // The panel replaces the grid: its own back button is present,
+                // and the launcher's chips and cards are gone.
+                back: !!Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←')),
+                chips: sec.querySelectorAll('button[data-chip]').length,
+                entry: sec.querySelectorAll('button[data-control="saves"]').length,
+                // Count the grid's CARDS, not the app's name in the text: the
+                // panel legitimately lists a save named after the app that
+                // wrote it, so "does 'War' appear anywhere" cannot tell
+                // "the grid is gone" from "the save is listed". (Found by this
+                // very assertion failing on its first run.)
+                cards: sec.querySelectorAll('button.app-card').length,
+            };
+        }
+        return { back: false };
+    "#;
+    let panel = poll_json(&client, read_panel, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("back").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        panel.get("back").and_then(|v| v.as_bool()).unwrap_or(false),
+        "The Saves panel should render with its own way back. Got: {panel:?}"
+    );
+    assert_eq!(
+        panel.get("chips").and_then(|v| v.as_u64()),
+        Some(0),
+        "The panel REPLACES the launcher — chips still showing means it rendered \
+         under the grid rather than instead of it. Got: {panel:?}"
+    );
+    assert_eq!(
+        panel.get("cards").and_then(|v| v.as_u64()),
+        Some(0),
+        "…and the launcher's app cards are gone with them. Got: {panel:?}"
+    );
+
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const b = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (b) b.click();
+            }
+            return true;
+            "#,
+            vec![],
+        )
+        .await?;
+    let back_to_grid = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("chips")
+            .and_then(|c| c.as_array())
+            .map(|c| !c.is_empty())
+            .unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        cards_hold(&back_to_grid, "War"),
+        "Leaving the Saves panel must put the launcher back. Got: {back_to_grid:?}"
+    );
+    eprintln!("Phase 2h.2s: the Saves panel opens over the launcher and hands it back");
+
+    phase_gate!(client, "2h.2b");
+    // -- Phase 2h.2b: L5 app-hosting — a WASM entity-peer payload in an iframe --
+    //
+    // The first L5 app (review §4): browser-rust booted in stripped `?app-host=`
+    // mode inside the SAME sandboxed-iframe host path the JS apps use. This is the
+    // delivery + boot + ③α-handshake proof (P1) — the sandboxed iframe must fetch
+    // this wasm, instantiate it, run start(), and complete the entity-apps handshake
+    // with the outer host. We can't read into the iframe's document, so we assert on
+    // what crosses the boundary: it is delivered by `src` (`index.html?app-host=ping`),
+    // NOT srcdoc (a multi-MB wasm can't inline), sandboxed `allow-scripts
+    // allow-same-origin` (the trusted payload loads its own wasm without opaque-origin
+    // CORS/CSP friction), and the host stamps `data-host-locale` on it — which it does
+    // ONLY in reply to the payload's `ready-for-init`. A non-empty value therefore
+    // proves the wasm booted in the iframe and spoke the contract. (An empty value
+    // means the payload never came up — the delivery/CSP failure mode.)
+    let l5_launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.includes('Ping'));
+                if (!card) return 'no-ping-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        l5_launched.as_str().unwrap_or(""),
+        "clicked",
+        "Ping (L5) card click failed: {l5_launched:?}"
+    );
+
+    // A full wasm boot inside the iframe: give it time to fetch + instantiate +
+    // run start() + post ready-for-init (host replies, stamping data-host-locale).
+    let mut l5 = serde_json::Value::Null;
+    for _ in 0..40 {
+        sleep(Duration::from_millis(200)).await;
+        l5 = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h3 = sec.querySelector('header h3');
+                    if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                    const fr = sec.querySelector('iframe[sandbox]');
+                    if (!fr) return { found: false };
+                    return {
+                        found: true,
+                        sandbox: fr.getAttribute('sandbox'),
+                        src: fr.getAttribute('src') || '',
+                        srcdoc_len: (fr.getAttribute('srcdoc') || '').length,
+                        host_locale: fr.getAttribute('data-host-locale'),
+                    };
+                }
+                return { found: false };
+                "#,
+                vec![],
+            )
+            .await?;
+        if l5
+            .get("host_locale")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+        {
+            break;
+        }
+    }
+    assert!(
+        l5.get("found").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Launching Ping (L5) should mount a sandboxed iframe in the Apps window. Got: {l5:?}"
+    );
+    assert_eq!(
+        l5.get("sandbox").and_then(|v| v.as_str()).unwrap_or(""),
+        "allow-scripts allow-same-origin",
+        "L5 iframe must be sandboxed allow-scripts allow-same-origin — the trusted \
+         payload needs same-origin to load its wasm without opaque-origin CORS/CSP \
+         friction (regular JS apps stay opaque `allow-scripts`). Got: {l5:?}"
+    );
+    let l5_src = l5.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        l5_src.contains("app-host=ping"),
+        "L5 app must be delivered via src=index.html?app-host=ping, not srcdoc. Got src={l5_src:?}, {l5:?}"
+    );
+    assert_eq!(
+        l5.get("srcdoc_len").and_then(|v| v.as_u64()).unwrap_or(0),
+        0,
+        "L5 app must NOT carry srcdoc (it can't inline a multi-MB wasm). Got: {l5:?}"
+    );
+    let l5_host_locale = l5.get("host_locale").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        !l5_host_locale.is_empty(),
+        "The host must stamp data-host-locale on the L5 iframe in reply to the payload's \
+         ready-for-init — proving the wasm booted in the opaque-origin sandbox and spoke the \
+         ③α contract. Empty means the payload never came up (delivery / CORS / CSP). Got: {l5:?}"
+    );
+    eprintln!(
+        "Phase 2h.2b: L5 app booted in a sandboxed src-iframe and completed the \
+         entity-apps handshake (host locale '{l5_host_locale}')"
+    );
+
+    phase_gate!(client, "2h.2c");
+    // -- Phase 2h.2c: L5 compute — Life runs in the iframe peer, state advances --
+    //
+    // The first *real* L5 app: browser-rust runs the generic compute host behind
+    // the boundary. We launch Life from the PRODUCTION Programs launcher (the L5
+    // demo-app duplicates were dropped — one honest "run a program" surface) and
+    // assert both halves of the proof:
+    //   (a) delivery + handshake — src=index.html?app-host=life and the host stamps
+    //       data-host-locale (the wasm booted in the opaque-origin sandbox), and
+    //   (b) the host's `data-app-state-seq` climbs past 1 — the inner peer emitted
+    //       multiple DISTINCT states (the payload dedups by content hash), i.e. Life
+    //       actually ADVANCED inside its own peer, not merely booted.
+    // We cannot read into the sandboxed document, so the growing seq IS the
+    // cross-boundary proof that compute ran behind the boundary.
+
+    // Reset the Apps window (the Ping player from 2h.2b) back to its launcher
+    // grid — it is otherwise untouched now, and Phase 2h.3's tail launches
+    // Calculator from that grid. Life/Snake/Asteroids run through the PRODUCTION
+    // Programs launcher below (the demo-app duplicates were dropped — one honest
+    // "run a program" surface, the same `?app-host=<key>` iframe delivery).
+    let l5_back = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const b = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (!b) return 'no-back';
+                b.click();
+                return 'back';
+            }
+            return 'no-apps';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(l5_back.as_str().unwrap_or(""), "back", "Apps back-to-grid click failed: {l5_back:?}");
+    sleep(Duration::from_millis(300)).await;
+
+    let life_launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.includes('Life'));
+                if (!card) return 'no-life-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(life_launched.as_str().unwrap_or(""), "clicked", "Life (L5) tile click failed: {life_launched:?}");
+
+    // Boot the wasm + mount Life + run enough ticks to emit ≥2 distinct states.
+    let mut life = serde_json::Value::Null;
+    for _ in 0..60 {
+        sleep(Duration::from_millis(200)).await;
+        life = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h3 = sec.querySelector('header h3');
+                    if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                    const fr = sec.querySelector('iframe[sandbox]');
+                    if (!fr) return { found: false };
+                    // Reach into the same-origin L5 iframe for the rendered display —
+                    // Life is now a filled display-list grid, not a <pre> terminal.
+                    let display = null, drawn = -1, filled = false;
+                    try {
+                        const doc = fr.contentDocument;
+                        const svg = doc && doc.querySelector('[data-program-display="display-list"]');
+                        if (svg) {
+                            display = 'display-list';
+                            drawn = parseInt(svg.getAttribute('data-actor-count') || '0', 10);
+                            const poly = svg.querySelector('polygon');
+                            const f = poly && poly.getAttribute('fill');
+                            filled = !!f && f !== 'none';
+                        }
+                    } catch (e) {}
+                    return {
+                        found: true,
+                        sandbox: fr.getAttribute('sandbox'),
+                        src: fr.getAttribute('src') || '',
+                        host_locale: fr.getAttribute('data-host-locale'),
+                        state_seq: parseInt(fr.getAttribute('data-app-state-seq') || '0', 10),
+                        display, drawn, filled,
+                    };
+                }
+                return { found: false };
+                "#,
+                vec![],
+            )
+            .await?;
+        let seq = life.get("state_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let handshaked = life
+            .get("host_locale")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let painted = life.get("display").and_then(|v| v.as_str()) == Some("display-list")
+            && life.get("drawn").and_then(|v| v.as_i64()).unwrap_or(0) >= 1;
+        if handshaked && seq >= 2 && painted {
+            break;
+        }
+    }
+    assert!(
+        life.get("found").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Launching Life (L5) should mount a sandboxed iframe in the Programs window. Got: {life:?}"
+    );
+    let life_src = life.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        life_src.contains("app-host=life"),
+        "Life (L5) must be delivered via src=index.html?app-host=life. Got src={life_src:?}, {life:?}"
+    );
+    assert!(
+        life.get("host_locale").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false),
+        "The host must stamp data-host-locale on the Life iframe (the wasm booted + handshook). Got: {life:?}"
+    );
+    let life_seq = life.get("state_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        life_seq >= 2,
+        "The host must see ≥2 DISTINCT state emissions from the Life payload \
+         (data-app-state-seq) — proving the compute host ADVANCED Life inside its own \
+         sandboxed peer, behind the boundary, not merely booted. Got seq={life_seq}, {life:?}"
+    );
+    // Render contract: Life was rebound text → display-list. It must render as a
+    // display-list SVG (a grid, not a <pre> terminal), with ≥1 quad actually
+    // DRAWN (the dense grid carries every cell as a kind-0 background quad, which
+    // the host MUST skip — a non-zero drawn count proves the skip works and the
+    // board isn't painted solid), and those quads FILLED (scene.render=fill
+    // honored — solid coloured cells, not wireframe).
+    assert_eq!(
+        life.get("display").and_then(|v| v.as_str()),
+        Some("display-list"),
+        "Life must render as a display-list grid (rebound from text). Got: {life:?}"
+    );
+    let life_drawn = life.get("drawn").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        life_drawn >= 1,
+        "Life's display-list must draw ≥1 live cell with kind-0 background quads SKIPPED \
+         (dense grid; drawing kind 0 paints the whole board). Got drawn={life_drawn}, {life:?}"
+    );
+    assert_eq!(
+        life.get("filled").and_then(|v| v.as_bool()),
+        Some(true),
+        "Life's cells must be FILLED, not wireframe (scene.render=fill honored). Got: {life:?}"
+    );
+    eprintln!(
+        "Phase 2h.2c: Life ran on the compute host inside a sandboxed L5 iframe-peer \
+         ({life_seq} distinct evolved states, P1) and now renders as a FILLED display-list \
+         grid ({life_drawn} live cells drawn, kind-0 background skipped) — not a <pre> terminal"
+    );
+
+    // -- Program chrome: program-owned status caption + generic reset/pause --
+    // RESPONSE-PROGRAM-CHROME-STATUS-AND-RESET, adopted browser-side. Three
+    // proofs, all read INSIDE the same-origin sandbox:
+    //   (a) the program-owned `status` port renders as a caption (`POP NNNN ▶`)
+    //       via the text driver — bytes the host relays blind, never formats;
+    //   (b) PAUSE gates the clock — while paused the inner peer emits no new
+    //       distinct state, so the host's `data-app-state-seq` freezes; then
+    //   (c) RESET reseeds to state₀ WHILE PAUSED — a reseed is a state change, so
+    //       it emits exactly once (seq bumps past the frozen baseline) even with
+    //       the clock stopped; nothing else can advance a paused sim. (The reseed's
+    //       tick-for-tick correctness is pinned natively by
+    //       `oracle_tests::reseed_replays_deterministically`; here we prove the
+    //       button is wired to it.)
+    // A tiny JS helper reads the Programs iframe's status + controls + host seq.
+    let read_chrome = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+            const fr = sec.querySelector('iframe[sandbox]');
+            const doc = fr && fr.contentDocument;
+            if (!doc) return { err: 'no-doc' };
+            const s = doc.querySelector('[data-app-host-status]');
+            const reset = doc.querySelector('[data-host-reset]');
+            const pause = doc.querySelector('[data-host-pause]');
+            const dbgPanel = doc.querySelector('[data-app-host-debug]');
+            return {
+                status: s ? s.textContent.trim() : null,
+                has_reset: !!reset, has_pause: !!pause,
+                paused: pause ? pause.getAttribute('data-host-paused') : null,
+                seq: parseInt(fr.getAttribute('data-app-state-seq') || '0', 10),
+                has_step: !!doc.querySelector('[data-host-step]'),
+                has_debug_chip: !!doc.querySelector('[data-debug-toggle]'),
+                debug_mode: dbgPanel ? dbgPanel.getAttribute('data-mode') : null,
+                // The topology (wiring/relationship) and live tree dump used to be
+                // two separately-refreshed panes read by two selectors; they're now
+                // ONE merged per-row view (name/path/shape/relationship + live value
+                // together, debug.rs `WiringRow`) under a single summary line — read
+                // the whole panel's textContent, which carries both the static
+                // per-row wiring (built at panel-construction time) and the live
+                // values (patched in place by `debug::refresh`).
+                debug_text: dbgPanel ? dbgPanel.textContent : '',
+            };
+        }
+        return { err: 'no-window' };
+    "#;
+    let click_ctl = |sel: &str| {
+        format!(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {{
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const doc = sec.querySelector('iframe[sandbox]').contentDocument;
+                const b = doc.querySelector('{sel}');
+                if (!b) return 'no-button';
+                b.click();
+                return 'clicked';
+            }}
+            return 'no-window';
+            "#
+        )
+    };
+
+    // (a) The program-owned status caption renders, and both host controls exist.
+    let chrome = client.execute(read_chrome, vec![]).await?;
+    let status0 = chrome.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    // `POP NNNN ▶` (alive) or `POP NNNN ✖` (extinct) — Life may have died out over
+    // the run, so accept either run-state glyph; the point is the program-owned
+    // caption renders via the text driver (the host relays the bytes blind).
+    let well_formed_status =
+        |s: &str| s.contains("POP") && (s.contains('\u{25B6}') || s.contains('\u{2716}'));
+    assert!(
+        well_formed_status(status0),
+        "Life must render its program-owned status caption `POP NNNN <glyph>` via the text \
+         driver (the host relays the program's bytes blind). Got: {chrome:?}"
+    );
+    assert_eq!(
+        chrome.get("has_reset").and_then(|v| v.as_bool()),
+        Some(true),
+        "The reset (↻) control must be present. Got: {chrome:?}"
+    );
+    assert_eq!(
+        chrome.get("has_pause").and_then(|v| v.as_bool()),
+        Some(true),
+        "The pause (⏸) control must be present. Got: {chrome:?}"
+    );
+
+    // (b) Pause, let any in-flight tick settle, then confirm the clock is frozen.
+    let paused = client.execute(&click_ctl("[data-host-pause]"), vec![]).await?;
+    assert_eq!(paused.as_str(), Some("clicked"), "pause click failed: {paused:?}");
+    sleep(Duration::from_millis(500)).await; // let the in-flight tick complete
+    let baseline = client.execute(read_chrome, vec![]).await?;
+    assert_eq!(
+        baseline.get("paused").and_then(|v| v.as_str()),
+        Some("1"),
+        "The pause control must report data-host-paused=1. Got: {baseline:?}"
+    );
+    let seq_baseline = baseline.get("seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    sleep(Duration::from_millis(1000)).await;
+    let frozen = client.execute(read_chrome, vec![]).await?;
+    let seq_frozen = frozen.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
+    assert_eq!(
+        seq_frozen, seq_baseline,
+        "A PAUSED compute program must emit no new states — data-app-state-seq must not climb \
+         while paused. baseline={seq_baseline}, after 1s={seq_frozen}, {frozen:?}"
+    );
+
+    // (c) Reset WHILE paused → the reseed emits state₀ exactly once (seq climbs
+    // past the frozen baseline); the caption is re-rendered and still well-formed.
+    let reset_click = client.execute(&click_ctl("[data-host-reset]"), vec![]).await?;
+    assert_eq!(reset_click.as_str(), Some("clicked"), "reset click failed: {reset_click:?}");
+    sleep(Duration::from_millis(600)).await;
+    let after_reset = client.execute(read_chrome, vec![]).await?;
+    let seq_reset = after_reset.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
+    assert!(
+        seq_reset > seq_baseline,
+        "RESET while PAUSED must reseed to state₀ and emit it — the host's seq must climb past \
+         the frozen baseline (nothing else can advance a paused sim). baseline={seq_baseline}, \
+         after reset={seq_reset}, {after_reset:?}"
+    );
+    let status_reset = after_reset.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        well_formed_status(status_reset),
+        "The status caption must still be a well-formed `POP NNNN <glyph>` line after reset. Got: {after_reset:?}"
+    );
+
+    // (d) The 🐞 debug overlay: present on every program (host-owned, no
+    // program knowledge), hidden by default, and — while still PAUSED from
+    // (c) above — a topology panel from the descriptor + a live tree dump,
+    // plus single-STEP advancing exactly one tick and no further.
+    assert_eq!(
+        after_reset.get("has_debug_chip").and_then(|v| v.as_bool()),
+        Some(true),
+        "The 🐞 debug toggle chip must be present. Got: {after_reset:?}"
+    );
+    assert_eq!(
+        after_reset.get("has_step").and_then(|v| v.as_bool()),
+        Some(true),
+        "The ⏭ step control must be present. Got: {after_reset:?}"
+    );
+    assert_eq!(
+        after_reset.get("debug_mode").and_then(|v| v.as_str()),
+        Some("hidden"),
+        "The debug panel must be hidden by default. Got: {after_reset:?}"
+    );
+    let debug_toggled = client.execute(&click_ctl("[data-debug-toggle]"), vec![]).await?;
+    assert_eq!(debug_toggled.as_str(), Some("clicked"), "debug toggle click failed: {debug_toggled:?}");
+    let shown = client.execute(read_chrome, vec![]).await?;
+    assert_eq!(
+        shown.get("debug_mode").and_then(|v| v.as_str()),
+        Some("shown"),
+        "Clicking the 🐞 chip must flip the panel to shown. Got: {shown:?}"
+    );
+    let wiring = shown.get("debug_text").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        wiring.contains("app/life/state"),
+        "The debug panel must render the descriptor's own wiring (state_path), free of any \
+         evaluation. Got: {wiring:?}"
+    );
+    // The live values refresh on the NEXT tick/reset (the loop only pays for
+    // `tree_listing` while shown) — reset once more to force one, well within
+    // the still-paused window so nothing else advances the clock.
+    let redo_reset = client.execute(&click_ctl("[data-host-reset]"), vec![]).await?;
+    assert_eq!(redo_reset.as_str(), Some("clicked"), "second reset click failed: {redo_reset:?}");
+    sleep(Duration::from_millis(400)).await;
+    let with_tree = client.execute(read_chrome, vec![]).await?;
+    let tree = with_tree.get("debug_text").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        tree.contains("entities under /") && tree.contains("app/life/state"),
+        "The live wiring view must list the program's namespace and decode the dynamic state path \
+         inline. Got: {tree:?}"
+    );
+    let seq_before_step = with_tree.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let step_click = client.execute(&click_ctl("[data-host-step]"), vec![]).await?;
+    assert_eq!(step_click.as_str(), Some("clicked"), "step click failed: {step_click:?}");
+    sleep(Duration::from_millis(400)).await;
+    let after_step = client.execute(read_chrome, vec![]).await?;
+    let seq_after_step = after_step.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
+    assert!(
+        seq_after_step > seq_before_step,
+        "STEP while paused must advance exactly one tick — the host's seq must climb past the \
+         paused baseline. baseline={seq_before_step}, after step={seq_after_step}, {after_step:?}"
+    );
+    sleep(Duration::from_millis(700)).await;
+    let still_paused = client.execute(read_chrome, vec![]).await?;
+    let seq_settled = still_paused.get("seq").and_then(|v| v.as_i64()).unwrap_or(-1);
+    assert_eq!(
+        seq_settled, seq_after_step,
+        "STEP must advance exactly ONE tick, not resume the clock — seq must hold after the step. \
+         after step={seq_after_step}, 700ms later={seq_settled}, {still_paused:?}"
+    );
+
+    eprintln!(
+        "Phase 2h.2c: program chrome — status caption `{status0}` (program-owned, host-relayed \
+         via text_driver), PAUSE froze the clock (seq {seq_baseline} held over 1s), RESET reseeded \
+         while paused (seq {seq_baseline}→{seq_reset}); generic controls, program-blind. Debug \
+         overlay: topology from the descriptor, live tree dump (namespace + decoded state), STEP \
+         advanced exactly one tick ({seq_before_step}→{seq_after_step}) and held there"
+    );
+
+    // -- Tick-loop fault resilience (AUDIT-L5-COMPUTE-HOST-FOUNDATION #1) -------
+    // A faulting tick must DEGRADE to a visible caption + a stopped clock, never
+    // a silently frozen board (D13/AP3). Navigate the SAME iframe to the fault
+    // seam (`&app-host-fault-tick=2`): Life boots, runs one real tick, then the
+    // 2nd tick injects a recoverable fault through the identical
+    // `guarded → Err → visible-surface → break` path the real (release-only)
+    // panic containment uses. (A REAL panic can't be asserted here — the e2e
+    // dist is a dev/abort build where a wasm panic aborts the module;
+    // `program_host::host::guarded`'s native unit test covers the true
+    // panic→Err catch. This proves the user-facing surface.) The fault reason
+    // lands on `[data-app-host-fault]` and the caption reads `… stopped — …`;
+    // crucially the iframe document is still ALIVE (queryable), not blank/dead.
+    let fault_nav = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                if (!fr) return 'no-iframe';
+                const base = fr.getAttribute('src').split('&')[0];
+                fr.setAttribute('src', base + '&app-host-fault-tick=2');
+                return 'navigated';
+            }
+            return 'no-programs';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(fault_nav.as_str().unwrap_or(""), "navigated", "fault-seam nav: {fault_nav:?}");
+    // Boot + 1 tick + the injected fault — generous for Life's rate on the
+    // in-memory Direct app-host peer.
+    sleep(Duration::from_millis(2500)).await;
+    let fault = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                const doc = fr && fr.contentDocument;
+                if (!doc) return { err: 'no-doc' };
+                const app = doc.querySelector('[data-app-host]');
+                const board = doc.querySelector('[data-app-host-display]');
+                // The iframe document being queryable at all proves it did NOT
+                // abort/reload to a blank frame. Read the DISPLAY element's text
+                // (not doc.body — that leads with the injected <style> CSS).
+                return {
+                    alive: !!app,
+                    fault: app ? app.getAttribute('data-app-host-fault') : null,
+                    caption: board ? board.textContent.trim() : null,
+                };
+            }
+            return { err: 'no-programs' };
+            "#,
+            vec![],
+        )
+        .await?;
+    let fault_reason = fault.get("fault").and_then(|v| v.as_str()).unwrap_or("");
+    assert_eq!(
+        fault.get("alive").and_then(|v| v.as_bool()),
+        Some(true),
+        "A faulting tick must not blank/abort the iframe — the payload root must still be present. {fault:?}"
+    );
+    assert!(
+        fault_reason.contains("injected fault"),
+        "A faulting tick must surface a visible fault reason on [data-app-host-fault], not freeze silently. Got {fault:?}"
+    );
+    assert!(
+        fault.get("caption").and_then(|v| v.as_str()).unwrap_or("").contains("stopped"),
+        "The faulted board must show a visible `… stopped — …` caption (t(apphost.stopped)), not a frozen last frame. Got {fault:?}"
+    );
+    eprintln!(
+        "Phase 2h.2c: tick-loop fault resilience — an injected tick fault DEGRADED to a visible \
+         `stopped` caption + [data-app-host-fault={fault_reason:?}], iframe still alive (not a \
+         silent frozen board); real panic→Err containment covered natively by host::guarded"
+    );
+
+    // Leave the Programs window back on its launcher grid for the next program
+    // (each phase leaves state as its successors expect). Without this, the Life
+    // player stays up and 2h.2d sees no Snake tile.
+    let l5_reset = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const b = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (!b) return 'no-back';
+                b.click();
+                return 'back';
+            }
+            return 'no-programs';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(l5_reset.as_str().unwrap_or(""), "back", "Programs reset-to-grid after Life failed: {l5_reset:?}");
+    sleep(Duration::from_millis(300)).await;
+
+    phase_gate!(client, "2h.2d");
+    // -- Phase 2h.2d: L5 INPUT — Snake runs behind the boundary AND steers ----
+    //
+    // The second real L5 app and the first INPUT-driven one. Snake is pure-builtin
+    // (runs on wasm today — the `compute/apply` stub gates only import-bearing
+    // programs) and binds the `direction` input shape. This phase proves the two
+    // things the native oracle test CANNOT (it drives inputs directly, never the
+    // wasm/iframe delivery path):
+    //   (a) a SECOND program mounts + advances behind the boundary (state_seq
+    //       climbs past 1, exactly as Life) — admission accepted `text`+`direction`,
+    //   (b) a real keydown delivered into the sandboxed (same-origin) iframe is
+    //       captured, encoded from the SEED's field name, and stamped on the
+    //       payload's D13 surface (`data-app-host-input`). That surface is inside
+    //       the iframe and never crosses ③α — the host stays blind (P1). The
+    //       oracle already proves input→compute agreement tick-for-tick; this
+    //       proves the capture→encode→write path exists on the shipped surface.
+    let snake_launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.includes('Snake'));
+                if (!card) return 'no-snake-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(snake_launched.as_str().unwrap_or(""), "clicked", "Snake (L5) tile click failed: {snake_launched:?}");
+
+    // Boot the wasm + mount Snake + run enough ticks to emit ≥2 distinct states.
+    let mut snake = serde_json::Value::Null;
+    for _ in 0..60 {
+        sleep(Duration::from_millis(200)).await;
+        snake = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h3 = sec.querySelector('header h3');
+                    if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                    const fr = sec.querySelector('iframe[sandbox]');
+                    if (!fr) return { found: false };
+                    return {
+                        found: true,
+                        sandbox: fr.getAttribute('sandbox'),
+                        src: fr.getAttribute('src') || '',
+                        host_locale: fr.getAttribute('data-host-locale'),
+                        state_seq: parseInt(fr.getAttribute('data-app-state-seq') || '0', 10),
+                    };
+                }
+                return { found: false };
+                "#,
+                vec![],
+            )
+            .await?;
+        let seq = snake.get("state_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let handshaked = snake
+            .get("host_locale")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if handshaked && seq >= 2 {
+            break;
+        }
+    }
+    assert!(
+        snake.get("found").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Launching Snake (L5) should mount a sandboxed iframe in the Programs window. Got: {snake:?}"
+    );
+    let snake_src = snake.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        snake_src.contains("app-host=snake"),
+        "Snake (L5) must be delivered via src=index.html?app-host=snake. Got src={snake_src:?}, {snake:?}"
+    );
+    let snake_seq = snake.get("state_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        snake_seq >= 2,
+        "The host must see ≥2 DISTINCT state emissions from the Snake payload — the \
+         compute host ADVANCED Snake behind the boundary. Got seq={snake_seq}, {snake:?}"
+    );
+
+    // (b) The input proof: deliver a real ArrowUp keydown into the same-origin
+    // sandbox and read the payload's D13 input surface back. `allow-same-origin`
+    // makes contentWindow/contentDocument reachable; the driver listens on the
+    // payload window, so a KeyboardEvent dispatched there fires it. We poll
+    // because the driver is installed after seed (a couple seconds in).
+    let mut input_stamp = String::new();
+    for _ in 0..30 {
+        let probe = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h3 = sec.querySelector('header h3');
+                    if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                    const fr = sec.querySelector('iframe[sandbox]');
+                    if (!fr) return 'no-iframe';
+                    const win = fr.contentWindow, doc = fr.contentDocument;
+                    if (!win || !doc) return 'no-same-origin';
+                    // Deliver ArrowUp to the payload window (the driver's target).
+                    win.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+                    const el = doc.querySelector('[data-app-host]');
+                    return el ? (el.getAttribute('data-app-host-input') || '') : 'no-root';
+                }
+                return 'no-programs-window';
+                "#,
+                vec![],
+            )
+            .await?;
+        let s = probe.as_str().unwrap_or("").to_string();
+        if s.starts_with("dir:") {
+            input_stamp = s;
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        input_stamp, "dir:0",
+        "Delivering ArrowUp into the Snake payload must capture the key, encode it from \
+         the seed's field name (`dir`), and stamp the D13 input surface `dir:0` (DIR_UP). \
+         Got: {input_stamp:?} — the in-iframe input driver did not run"
+    );
+
+    // (c) The SECOND input source — the on-screen D-pad. It drives the SAME
+    // `InputTarget` as the keyboard (one shared state), proving "a second source,
+    // not a second code path" on the shipped surface. The pad is now a floating
+    // gamepad HUD with AUTO visibility (shown on touch, hidden on a precise-
+    // pointer desktop) + an always-present 🎮 chip. Headless is desktop-ish, so
+    // we drive it to a known state via the chip rather than assuming a default.
+    // We: (i) force the pad SHOWN via the chip and confirm it renders; (ii)
+    // dispatch a pointerdown on the Right pad button and read the D13 surface
+    // back as `dir:1` (DIR_RIGHT) — a DIFFERENT value than the keyboard's `dir:0`,
+    // so only the pad wrote it; and (iii) click the chip again and confirm it
+    // toggles the pad OFF (computed display → none).
+    let pad_probe = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                if (!fr) return { err: 'no-iframe' };
+                const win = fr.contentWindow, doc = fr.contentDocument;
+                if (!win || !doc) return { err: 'no-same-origin' };
+                const pad = doc.querySelector('[data-app-host-controls="direction"]');
+                if (!pad) return { err: 'no-pad' };
+                const toggle = doc.querySelector('[data-controls-toggle]');
+                if (!toggle) return { err: 'no-toggle' };
+                const shown = () => win.getComputedStyle(pad).display !== 'none';
+                // (i) drive to SHOWN (auto default is device-dependent).
+                if (!shown()) toggle.click();
+                const can_show = shown();
+                // (ii) tap the Right pad button.
+                const right = doc.querySelector('[data-control="dir:1"]');
+                if (!right) return { err: 'no-right-button' };
+                right.dispatchEvent(new win.PointerEvent('pointerdown', { bubbles: true }));
+                const el = doc.querySelector('[data-app-host]');
+                const stamp = el ? (el.getAttribute('data-app-host-input') || '') : 'no-root';
+                // (iii) chip toggles the pad OFF.
+                toggle.click();
+                return { stamp, can_show, toggles_off: !shown() };
+            }
+            return { err: 'no-programs-window' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        pad_probe.get("can_show").and_then(|v| v.as_bool()),
+        Some(true),
+        "The on-screen pad must render (computed display != none) once shown via the 🎮 chip. \
+         Got: {pad_probe:?}"
+    );
+    assert_eq!(
+        pad_probe.get("stamp").and_then(|v| v.as_str()).unwrap_or(""),
+        "dir:1",
+        "A pointerdown on the on-screen D-pad's Right button must drive the SAME target \
+         as the keyboard and stamp `dir:1` (DIR_RIGHT). Got: {pad_probe:?} — the on-screen \
+         input source did not run (or is not sharing the keyboard's target)"
+    );
+    assert_eq!(
+        pad_probe.get("toggles_off").and_then(|v| v.as_bool()),
+        Some(true),
+        "The 🎮 chip must toggle the pad OFF (computed display → none). Got: {pad_probe:?}"
+    );
+    eprintln!(
+        "Phase 2h.2d: Snake ran behind the boundary ({snake_seq} distinct states) and \
+         steered on BOTH a real keydown (data-app-host-input={input_stamp}) AND the \
+         on-screen D-pad (dir:1, same target); floating pad shows/hides via the 🎮 chip \
+         (auto default per device); input captured in-iframe, host blind (P1)"
+    );
+
+    // Leave the Programs window back on its launcher grid for the next program.
+    let snake_reset = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const b = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (!b) return 'no-back';
+                b.click();
+                return 'back';
+            }
+            return 'no-programs';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(snake_reset.as_str().unwrap_or(""), "back", "Programs reset-to-grid after Snake failed: {snake_reset:?}");
+    sleep(Duration::from_millis(300)).await;
+
+    phase_gate!(client, "2h.2e");
+    // -- Phase 2h.2e: L5 vector display + held-key input — Asteroids -----------
+    //
+    // The third real L5 app exercises the two shapes Life/Snake don't: the
+    // `display-list` OUTPUT (rendered as inline SVG behind the boundary) and the
+    // `key-set` INPUT (a held-key bitmask). Asteroids is pure-builtin (its
+    // descriptor declares no imports → runs on wasm). We prove:
+    //   (a) it mounts + advances behind the boundary (state_seq climbs),
+    //   (b) the display-list decoded and drew actors — the payload's SVG carries
+    //       data-program-display="display-list" with data-actor-count ≥ 1, read
+    //       across the same-origin boundary, and
+    //   (c) a real ArrowRight is captured, mapped key→action→bit via the program's
+    //       OWN scene keymap ("right"=bit 1 → mask 2), and stamped `keys:2` on the
+    //       D13 input surface (in-iframe; never crosses ③α, P1).
+    let ast_launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.includes('Asteroids'));
+                if (!card) return 'no-asteroids-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(ast_launched.as_str().unwrap_or(""), "clicked", "Asteroids (L5) tile click failed: {ast_launched:?}");
+
+    // Boot + mount + advance, and reach into the same-origin sandbox for the SVG.
+    let mut ast = serde_json::Value::Null;
+    for _ in 0..60 {
+        sleep(Duration::from_millis(200)).await;
+        ast = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h3 = sec.querySelector('header h3');
+                    if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                    const fr = sec.querySelector('iframe[sandbox]');
+                    if (!fr) return { found: false };
+                    let actors = -1, display = null;
+                    try {
+                        const doc = fr.contentDocument;
+                        const svg = doc && doc.querySelector('[data-program-display="display-list"]');
+                        if (svg) { display = 'display-list'; actors = parseInt(svg.getAttribute('data-actor-count') || '0', 10); }
+                    } catch (e) {}
+                    return {
+                        found: true,
+                        src: fr.getAttribute('src') || '',
+                        host_locale: fr.getAttribute('data-host-locale'),
+                        state_seq: parseInt(fr.getAttribute('data-app-state-seq') || '0', 10),
+                        display, actors,
+                    };
+                }
+                return { found: false };
+                "#,
+                vec![],
+            )
+            .await?;
+        let seq = ast.get("state_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+        let handshaked = ast.get("host_locale").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+        let actors = ast.get("actors").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if handshaked && seq >= 2 && actors >= 1 {
+            break;
+        }
+    }
+    let ast_src = ast.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        ast_src.contains("app-host=asteroids"),
+        "Asteroids (L5) must be delivered via src=index.html?app-host=asteroids. Got src={ast_src:?}, {ast:?}"
+    );
+    let ast_seq = ast.get("state_seq").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        ast_seq >= 2,
+        "The host must see ≥2 DISTINCT state emissions from Asteroids (it advanced behind the boundary). Got seq={ast_seq}, {ast:?}"
+    );
+    assert_eq!(
+        ast.get("display").and_then(|v| v.as_str()),
+        Some("display-list"),
+        "Asteroids must render its `display-list` output as SVG inside the iframe. Got: {ast:?}"
+    );
+    let ast_actors = ast.get("actors").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        ast_actors >= 1,
+        "The display-list driver must decode + draw ≥1 actor (data-actor-count). Got actors={ast_actors}, {ast:?}"
+    );
+
+    // (b2) The STANDARD CONTROLLER (read-only, before any input). Asteroids'
+    // key-set port is now declared with control ROLES (rotate/thrust are
+    // directional AXES, fire is a discrete ACTION — the re-declaration the
+    // generic-host input contract asked for). So the host must present ONE
+    // standard controller: the axes on the d-pad, the action as a glyphed button
+    // — NOT four bespoke buttons. We read the panel structure without dispatching
+    // (so the mask stays 0 for the accumulation test below).
+    let ast_controller = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                if (!fr) return { err: 'no-iframe' };
+                const doc = fr.contentDocument;
+                if (!doc) return { err: 'no-same-origin' };
+                const panel = doc.querySelector('[data-app-host-controls="key-set"]');
+                if (!panel) return { err: 'no-panel' };
+                const fire = panel.querySelector('.ah-actions [data-control="press:fire"]');
+                return {
+                    // rotate + thrust are AXES → on the one d-pad (momentary).
+                    right_axis_on_dpad: !!panel.querySelector('.ah-dpad [data-control="press:right"]'),
+                    thrust_axis_on_dpad: !!panel.querySelector('.ah-dpad [data-control="press:up"]'),
+                    // fire is an ACTION → a glyphed button in the action row.
+                    fire_in_actions: !!fire,
+                    fire_face: fire ? fire.textContent : '',
+                };
+            }
+            return { err: 'no-programs-window' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        ast_controller.get("right_axis_on_dpad").and_then(|v| v.as_bool()),
+        Some(true),
+        "Asteroids' rotate-right is a directional AXIS — it must render on the standard \
+         controller's d-pad (`.ah-dpad [data-control=press:right]`), not as a bespoke button. \
+         Got: {ast_controller:?}"
+    );
+    assert_eq!(
+        ast_controller.get("thrust_axis_on_dpad").and_then(|v| v.as_bool()),
+        Some(true),
+        "Asteroids' thrust is a directional AXIS (up) — it must render on the d-pad \
+         (`.ah-dpad [data-control=press:up]`). Got: {ast_controller:?}"
+    );
+    assert_eq!(
+        ast_controller.get("fire_in_actions").and_then(|v| v.as_bool()),
+        Some(true),
+        "Asteroids' fire is a discrete ACTION — it must render as a button in the action row \
+         (`.ah-actions [data-control=press:fire]`). Got: {ast_controller:?}"
+    );
+    assert!(
+        ast_controller
+            .get("fire_face")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains('\u{1F525}'),
+        "The Fire button must carry the program-declared glyph 🔥 (label+glyph from the scene \
+         keymap, not a host guess). Got: {ast_controller:?}"
+    );
+
+    // (c) Held-key input: deliver ArrowRight and read the D13 input surface. The
+    // key→bit mapping runs the arrows through the keyboard-position convention
+    // (ArrowRight → the `right` axis position) and the program's OWN scene keymap
+    // (right=bit 1 → mask 2), so `keys:2` proves the whole key-set path.
+    let mut ast_stamp = String::new();
+    for _ in 0..30 {
+        let probe = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    const h3 = sec.querySelector('header h3');
+                    if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                    const fr = sec.querySelector('iframe[sandbox]');
+                    if (!fr) return 'no-iframe';
+                    const win = fr.contentWindow, doc = fr.contentDocument;
+                    if (!win || !doc) return 'no-same-origin';
+                    win.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+                    const el = doc.querySelector('[data-app-host]');
+                    return el ? (el.getAttribute('data-app-host-input') || '') : 'no-root';
+                }
+                return 'no-programs-window';
+                "#,
+                vec![],
+            )
+            .await?;
+        let s = probe.as_str().unwrap_or("").to_string();
+        if s.starts_with("keys:") {
+            ast_stamp = s;
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        ast_stamp, "keys:2",
+        "ArrowRight into Asteroids must map key→action→bit via the program's scene keymap \
+         (right=bit 1 → held mask 2) and stamp `keys:2`. Got: {ast_stamp:?} — the key-set driver did not run"
+    );
+
+    // (d) The on-screen action buttons drive the SAME held-key mask as the
+    // keyboard — the strongest proof of one shared target across the boundary.
+    // ArrowRight above set the "right" bit (mask 2) and was never released, so a
+    // pointerdown on the on-screen "Fire" button (bit 3 = 8) must ACCUMULATE into
+    // the same mask → `keys:10` (2 | 8). If the two sources owned separate masks
+    // we'd see `keys:8`, not `keys:10`. The button set is program-declared (from
+    // the scene keymap), so finding a "fire" button also proves the panel is
+    // program-blind, not host-hardcoded.
+    let ast_pad = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                if (!fr) return { err: 'no-iframe' };
+                const win = fr.contentWindow, doc = fr.contentDocument;
+                if (!win || !doc) return { err: 'no-same-origin' };
+                const panel = doc.querySelector('[data-app-host-controls="key-set"]');
+                if (!panel) return { err: 'no-panel' };
+                const fire = doc.querySelector('[data-control="press:fire"]');
+                if (!fire) return { err: 'no-fire-button' };
+                fire.dispatchEvent(new win.PointerEvent('pointerdown', { bubbles: true }));
+                const el = doc.querySelector('[data-app-host]');
+                return { stamp: el ? (el.getAttribute('data-app-host-input') || '') : 'no-root' };
+            }
+            return { err: 'no-programs-window' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        ast_pad.get("stamp").and_then(|v| v.as_str()).unwrap_or(""),
+        "keys:10",
+        "A pointerdown on the on-screen 'Fire' button (bit 3 = 8) must ACCUMULATE into the \
+         SAME held mask the keyboard's ArrowRight set (bit 1 = 2) → `keys:10`. A `keys:8` \
+         would mean the two sources own separate masks (two code paths). Got: {ast_pad:?}"
+    );
+
+    // (e) Stuck-key guard: the mask is currently `10` (right + fire held, no
+    // key/pointer release was delivered). Firing a `blur` on the payload window —
+    // exactly what happens when focus leaves the iframe mid-hold — must
+    // release-all → `keys:0`. Without the guard the ship would spin/thrust
+    // forever — which is how the asteroids breakage was reported.
+    let ast_blur = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                if (!fr) return 'no-iframe';
+                const win = fr.contentWindow, doc = fr.contentDocument;
+                if (!win || !doc) return 'no-same-origin';
+                win.dispatchEvent(new win.Event('blur'));
+                const el = doc.querySelector('[data-app-host]');
+                return el ? (el.getAttribute('data-app-host-input') || '') : 'no-root';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        ast_blur.as_str().unwrap_or(""),
+        "keys:0",
+        "A window `blur` while keys are held must release-all the mask → `keys:0` \
+         (stuck-key guard). Got: {ast_blur:?} — held keys would latch forever"
+    );
+    eprintln!(
+        "Phase 2h.2e: Asteroids ran behind the boundary ({ast_seq} states, {ast_actors} actors \
+         via SVG display-list), presented the STANDARD CONTROLLER (rotate/thrust axes on the \
+         d-pad, 🔥 Fire as a glyphed action button — role-declared, not four bespoke buttons), \
+         took held-key input from BOTH sources into one shared mask (keyboard right=2, on-screen \
+         fire → keys:10), and cleared it on window blur (stuck-key guard → keys:0); P1 intact"
+    );
+
+    // Leave the Programs window back on its launcher grid for Phase 2h.3.
+    let ast_reset = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const b = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (!b) return 'no-back';
+                b.click();
+                return 'back';
+            }
+            return 'no-programs';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(ast_reset.as_str().unwrap_or(""), "back", "Programs reset-to-grid after Asteroids failed: {ast_reset:?}");
+    sleep(Duration::from_millis(300)).await;
+
+    phase_gate!(client, "2h.3");
+    // -- Phase 2h.3: Programs window — redirect to L5, not system-peer mount --
+    //
+    // The Programs window is the "entity native programs" launcher. It no longer
+    // mounts compute on the system peer (the reframe §6-step-4 / discipline D21);
+    // clicking a program runs it BEHIND the L5 boundary — the same sandboxed
+    // iframe delivery the Apps L5 phases (2h.2c/d/e) exercise. This phase pins
+    // the redirect: the launcher lists all three built-in programs, a tile click
+    // yields a sandboxed `iframe` at `index.html?app-host=<key>` (NOT a
+    // system-peer text grid or an Install/Start/tick surface), and Back returns
+    // to the grid. The program RUNNING behind the boundary is already covered by
+    // 2h.2c/d/e; here we prove the Programs surface routes to that one path.
+    // POLLED, not a single sample after a fixed sleep. This assert fired twice
+    // in one session with all three programs absent — the grid was found but
+    // still empty, i.e. we sampled before the launcher had rendered its tiles.
+    // A fixed sleep encodes a guess about how long that takes; on a loaded box
+    // the guess is wrong and the phase fails for a reason unrelated to the
+    // behaviour under test (AGENTS: "Never sleep(fixed) then assert"). The
+    // budget is an upper bound — a healthy run returns on the first poll.
+    let programs_deadline = Instant::now() + Duration::from_secs(15);
+    let mut programs_grid;
+    loop {
+        programs_grid = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const names = Array.from(sec.querySelectorAll('button'))
+                    .map(b => b.textContent.trim());
+                return {
+                    found: true,
+                    // `includes('Life')` is TRUE OF "Interactive Life" TOO, so
+                    // the plain-Life check must exclude it or one tile
+                    // satisfies both and a missing program rides green. Same
+                    // shape as Phase 2h.2s' "does the section still say 'War'"
+                    // — a substring pretending to be a structural claim. The
+                    // count below is the belt: two distinct Life tiles, not one
+                    // matching twice.
+                    has_life: names.some(n => n.includes('Life') && !n.includes('Interactive')),
+                    has_life_edit: names.some(n => n.includes('Interactive Life')),
+                    life_tiles: names.filter(n => n.includes('Life')).length,
+                    has_snake: names.some(n => n.includes('Snake')),
+                    has_asteroids: names.some(n => n.includes('Asteroids')),
+                    // The STRUCTURAL count — tiles, not name matches. Reported
+                    // in the phase's completion line so the roster size is
+                    // measured rather than asserted from a literal.
+                    tiles: sec.querySelectorAll('button.app-card').length,
+                    // No system-peer host UI survives: the old mount surface had
+                    // Install buttons and 'cannot mount' refusals.
+                    install_buttons: names.filter(n => n === 'Install').length,
+                    refusals: (sec.textContent.match(/cannot mount/g) || []).length,
+                };
+            }
+            return { found: false };
+            "#,
+            vec![],
+        )
+        .await?;
+        let ready = ["has_life", "has_life_edit", "has_snake", "has_asteroids"]
+            .iter()
+            .all(|k| programs_grid.get(*k).and_then(|v| v.as_bool()).unwrap_or(false));
+        if ready || Instant::now() >= programs_deadline {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    assert!(
+        programs_grid.get("found").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Phase 2h.3: Programs window should be open after the spawn loop. Got: {programs_grid:?}"
+    );
+    for prog in ["has_life", "has_life_edit", "has_snake", "has_asteroids"] {
+        assert!(
+            programs_grid.get(prog).and_then(|v| v.as_bool()).unwrap_or(false),
+            "Phase 2h.3: the launcher grid must list every built-in program \
+             (missing {prog}). Got: {programs_grid:?}"
+        );
+    }
+    // Two DISTINCT Life tiles. `has_life`/`has_life_edit` are both satisfiable
+    // by the interactive tile alone if the substring guard above ever regresses,
+    // so the count is what makes them independent claims.
+    assert_eq!(
+        programs_grid.get("life_tiles").and_then(|v| v.as_u64()),
+        Some(2),
+        "Phase 2h.3: Life and Interactive Life are two separate programs \
+         (roots app/life and app/life-edit), so the grid must carry two tiles. \
+         Got: {programs_grid:?}"
+    );
+    assert_eq!(
+        programs_grid.get("install_buttons").and_then(|v| v.as_u64()),
+        Some(0),
+        "Phase 2h.3: the Programs window is a LAUNCHER now — no system-peer \
+         'Install' buttons (compute must not run on the system peer, D21). \
+         Got: {programs_grid:?}"
+    );
+    assert_eq!(
+        programs_grid.get("refusals").and_then(|v| v.as_u64()),
+        Some(0),
+        "Phase 2h.3: no 'cannot mount' refusals — EVERY program runs behind the \
+         L5 boundary. This is the assertion that catches a newly-imported \
+         program whose shape the host does not drive: the honest-refusal gate \
+         in `run_program` renders 'cannot mount' rather than failing loudly, so \
+         a program that cannot run still LISTS. Interactive Life is the first \
+         fixture to bind key-set control ROLES (axis + action), and this is \
+         where that would surface. Got: {programs_grid:?}"
+    );
+
+    // Click the Life tile → the redirect renders a sandboxed L5 iframe.
+    let clicked = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const tile = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.includes('Life'));
+                if (!tile) return 'no-life-tile';
+                tile.click();
+                return 'clicked';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        clicked.as_str().unwrap_or(""),
+        "clicked",
+        "Phase 2h.3: Life tile click failed: {clicked:?}"
+    );
+    sleep(Duration::from_millis(1000)).await;
+    let player = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                const back = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                return {
+                    has_iframe: !!fr,
+                    src: fr ? (fr.getAttribute('src') || '') : null,
+                    sandbox: fr ? (fr.getAttribute('sandbox') || '') : null,
+                    back: back ? back.textContent.trim() : null,
+                };
+            }
+            return { has_iframe: false };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert!(
+        player.get("has_iframe").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Phase 2h.3: clicking a program must render a sandboxed L5 iframe (the \
+         redirect), not a system-peer display. Got: {player:?}"
+    );
+    let src = player.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        src.contains("app-host=life"),
+        "Phase 2h.3: the program must be delivered via src=index.html?app-host=life \
+         (run behind the boundary). Got src={src:?}, {player:?}"
+    );
+    assert!(
+        player
+            .get("sandbox")
+            .and_then(|v| v.as_str())
+            .map(|s| s.contains("allow-scripts"))
+            .unwrap_or(false),
+        "Phase 2h.3: the L5 payload must run in a sandboxed iframe. Got: {player:?}"
+    );
+    assert_eq!(
+        player.get("back").and_then(|v| v.as_str()).unwrap_or(""),
+        "← Entity Native Apps",
+        "Phase 2h.3: the player back button must read '← Entity Native Apps' (the renamed \
+         launcher title, i18n `window.programs`). Got: {player:?}"
+    );
+
+    // Back returns to the launcher grid (iframe torn down, tiles reappear) — so
+    // the phase leaves no program running behind the boundary for its successors.
+    let back_click = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const back = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (!back) return 'no-back-button';
+                back.click();
+                return 'clicked-back';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        back_click.as_str().unwrap_or(""),
+        "clicked-back",
+        "Phase 2h.3: Back click failed: {back_click:?}"
+    );
+    sleep(Duration::from_millis(500)).await;
+    let regrid = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const names = Array.from(sec.querySelectorAll('button'))
+                    .map(b => b.textContent.trim());
+                return {
+                    has_iframe: !!sec.querySelector('iframe[sandbox]'),
+                    has_life: names.some(n => n.includes('Life')),
+                };
+            }
+            return { has_iframe: true, has_life: false };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert!(
+        !regrid.get("has_iframe").and_then(|v| v.as_bool()).unwrap_or(true)
+            && regrid.get("has_life").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Phase 2h.3: Back must return to the launcher grid (iframe gone, tiles \
+         back). Got: {regrid:?}"
+    );
+    // Report what was MEASURED, not a literal. The old line said "3 built-in
+    // programs" and stayed there while a 4th was imported — a phase message
+    // that hard-codes a count is stale the moment the roster moves, and it is
+    // read as evidence.
+    eprintln!(
+        "Phase 2h.3: Programs window redirects to L5 — grid lists {} program tile(s) \
+         ({} of them Life), 0 refusals, Life tile → sandboxed app-host=life iframe, \
+         Back → grid ✓",
+        programs_grid.get("tiles").and_then(|v| v.as_u64()).unwrap_or(0),
+        programs_grid.get("life_tiles").and_then(|v| v.as_u64()).unwrap_or(0),
+    );
+
+    // -- Phase 2h.4: INTERACTIVE LIFE — a real press moves the PROGRAM ---------
+    //
+    // The one gate here that asserts on **program state** rather than on a host
+    // property, and it exists because workbench-go just proved the difference
+    // the hard way. Their on-screen d-pad was inert for over three weeks while
+    // their suites were green and their controller had been verified
+    // pixel-for-pixel: "That verification was honest and it was about
+    // rendering. The buttons rendered perfectly." Two defects, one on each side
+    // of their language boundary, and neither side's tests could see the seam.
+    // (workbench-go 7729cb5.)
+    //
+    // Phase 2h.2d — the existing on-screen-pad check — is on the wrong side of
+    // exactly that line: it asserts `data-app-host-input == "dir:1"`, which is
+    // the HOST's stamp saying it wrote to the target. A program that never
+    // observes the write satisfies it. This phase instead presses PAUSE and
+    // waits for the program's own status caption to flip to the paused glyph.
+    // That glyph is projected by the program's `status` port, evaluated by the
+    // compute evaluator from the `paused` field its own step wrote — so it
+    // cannot be produced by any amount of correct plumbing that the program did
+    // not actually see.
+    //
+    // It also covers the race go fixed in their generic host: a momentary press
+    // that begins and ends between two ticks is invisible to a host that only
+    // samples at tick time. We answer that race in the DRIVER instead
+    // (`onscreen::MomentaryGuard` holds the release for one tick period,
+    // `min_hold_ms`) rather than with go's host-side input queue. Two different
+    // answers to one race across two implementations of the same generic host —
+    // recorded in AGENTS.md, and this is the only thing that would notice if
+    // ours stopped working.
+    phase_gate!(client, "2h.4");
+
+    // Open the interactive program from the launcher grid. Matched on the FULL
+    // name: "Life" alone also matches this tile, which is what the grid
+    // assertions above had to be taught.
+    let open_edit = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const tile = Array.from(sec.querySelectorAll('button.app-card'))
+                    .find(b => b.textContent.includes('Interactive Life'));
+                if (!tile) return 'no-tile';
+                tile.click();
+                return 'clicked';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        open_edit.as_str().unwrap_or(""),
+        "clicked",
+        "Phase 2h.4: could not open the Interactive Life tile: {open_edit:?}"
+    );
+
+    // Read the program's own status caption out of the payload. Same-origin
+    // (the L5 payload is our own bundle), so no frame switch is needed — the
+    // pattern Phase 2h.2d already uses.
+    let read_status = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+            const fr = sec.querySelector('iframe[sandbox]');
+            if (!fr) return { err: 'no-iframe' };
+            const doc = fr.contentDocument;
+            if (!doc) return { err: 'no-same-origin' };
+            const st = doc.querySelector('[data-app-host-status]');
+            const txt = st ? st.textContent.trim() : '';
+            return {
+                src: fr.getAttribute('src') || '',
+                status: txt,
+                // The program's own play/pause glyphs, from life_edit.go's
+                // status fold. Reading the GLYPH rather than "did the text
+                // change" is what makes this an assertion about `paused` and
+                // not about repainting.
+                running: txt.includes('▶'),
+                paused: txt.includes('⏸'),
+                has_pause_btn: !!doc.querySelector('[data-control="press:pause"]'),
+            };
+        }
+        return { err: 'no-programs-window' };
+    "#;
+
+    let booted = poll_json(&client, read_status, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("running").and_then(|x| x.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    let src = booted.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        src.contains("app-host=life-edit"),
+        "Phase 2h.4: Interactive Life must be delivered behind the L5 boundary as \
+         app-host=life-edit. Got src={src:?}, {booted:?}"
+    );
+    assert_eq!(
+        booted.get("running").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 2h.4: the program must boot RUNNING (its status port projects the \
+         play glyph from `paused == 0`). Without this baseline the pause \
+         assertion below is unfalsifiable — a program that never ran would also \
+         never show the play glyph. Got: {booted:?}"
+    );
+
+    // Show the controller (auto-hidden on a precise-pointer desktop; headless is
+    // desktop-ish) and press PAUSE with a real pointer down/up pair, not a
+    // synthetic write. The release matters: it is what exercises
+    // `MomentaryGuard`'s held-release, which is our answer to go's tick race.
+    let pressed = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const fr = sec.querySelector('iframe[sandbox]');
+                const win = fr && fr.contentWindow, doc = fr && fr.contentDocument;
+                if (!win || !doc) return { err: 'no-same-origin' };
+                const toggle = doc.querySelector('[data-controls-toggle]');
+                const pad = doc.querySelector('[data-app-host-controls]');
+                if (!toggle || !pad) return { err: 'no-controller' };
+                if (win.getComputedStyle(pad).display === 'none') toggle.click();
+                const btn = doc.querySelector('[data-control="press:pause"]');
+                if (!btn) return { err: 'no-pause-button' };
+                btn.dispatchEvent(new win.PointerEvent('pointerdown', { bubbles: true }));
+                btn.dispatchEvent(new win.PointerEvent('pointerup', { bubbles: true }));
+                return { pressed: true };
+            }
+            return { err: 'no-programs-window' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        pressed.get("pressed").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 2h.4: could not press the program's Pause action. The action bits \
+         come from the program's own keymap (`press:pause`, control role \
+         `action`) — a missing button means the standard-controller role parser \
+         did not bind this program's declaration. Got: {pressed:?}"
+    );
+
+    // The assertion the phase exists for. Polled, not slept-then-read: the press
+    // has to survive a tick boundary and a repaint, and a fixed sleep encodes a
+    // guess about how long that takes.
+    let after = poll_json(&client, read_status, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("paused").and_then(|x| x.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert_eq!(
+        after.get("paused").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 2h.4: pressing Pause must reach the PROGRAM — its status port must \
+         project the paused glyph, which only its own step can produce by writing \
+         `paused`. A host that wrote the bit to the port and a program that never \
+         observed it look identical from every other surface, and that is exactly \
+         how workbench-go's d-pad was inert for three weeks with green suites. \
+         Got: {after:?} (booted as {booted:?})"
+    );
+    eprintln!(
+        "Phase 2h.4: Interactive Life ran behind the boundary and a real pointer \
+         press on its declared `pause` action reached the PROGRAM — status \
+         {:?} -> {:?} (the program's own glyph, not a host stamp) ✓",
+        booted.get("status").and_then(|v| v.as_str()).unwrap_or(""),
+        after.get("status").and_then(|v| v.as_str()).unwrap_or(""),
+    );
+
+    // Leave the Programs window on its launcher grid for the next phase.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Entity Native Apps') continue;
+                const back = Array.from(sec.querySelectorAll('button'))
+                    .find(b => b.textContent.trim().startsWith('←'));
+                if (back) back.click();
+                return 'ok';
+            }
+            return 'no-programs-window';
+            "#,
+            vec![],
+        )
+        .await?;
+
 
     // Launch Calculator in the APPS window and pin the two set-specific player
     // contracts: the back button reads "← Apps" (not the hard-coded "← Games"),
@@ -1752,10 +4539,12 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 const back = Array.from(sec.querySelectorAll('button'))
                     .find(b => b.textContent.trim().startsWith('←'));
                 const stage = sec.querySelector('.gm-stage');
+                const fr = sec.querySelector('iframe[sandbox]');
                 return {
                     back: back ? back.textContent.trim() : null,
                     stage_style: stage ? (stage.getAttribute('style') || '') : null,
-                    has_iframe: !!sec.querySelector('iframe[sandbox]'),
+                    has_iframe: !!fr,
+                    host_locale: fr ? (fr.getAttribute('data-host-locale') || '') : null,
                 };
             }
             return { back: null };
@@ -1782,8 +4571,18 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         apps_player.get("has_iframe").and_then(|v| v.as_bool()).unwrap_or(false),
         "Calculator should mount its sandboxed iframe. Got: {apps_player:?}"
     );
-    eprintln!("Phase 2h.2: Calculator launches in Apps — back='← Apps', stage gm-fill ✓");
+    // i18n P2: the host must deliver its locale into the app `init` payload —
+    // the sandboxed iframe records what it was handed as `data-host-locale`.
+    // (`en` here: the app launched before any language switch in this suite.)
+    assert_eq!(
+        apps_player.get("host_locale").and_then(|v| v.as_str()).unwrap_or(""),
+        "en",
+        "Phase 2h.2: host must hand the app its locale in init (data-host-locale). \
+         Got: {apps_player:?}"
+    );
+    eprintln!("Phase 2h.2: Calculator launches in Apps — back='← Apps', stage gm-fill, host_locale=en ✓");
 
+    phase_gate!(client, "2i");
     // -- Phase 2i: Path Tap live dispatch stream ----------------------
     //
     // Path Tap is the second Inspect window (12th overall) — first
@@ -1877,6 +4676,63 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          counts={pt_counts:?}, text={pt_text:?}"
     );
 
+    phase_gate!(client, "2i.5");
+    // -- Phase 2i.5: Access Log — app-tier access capture ---------------
+    //
+    // The user-facing capability-audit lens (actor · target · operation ·
+    // outcome). Unlike Path Tap (per-peer inspect sink), the Access Log is
+    // fed at the app's `ops::execute` chokepoint — every execute this app
+    // issues, local OR remote, with the peer that issued it. The Phase
+    // 2e-2h shell verbs dispatch through `ops::execute`, so they land here
+    // as access rows regardless of which peer this window is bound to. We
+    // assert the window rendered and at least one access row was logged.
+    let al_state = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const al = sec.querySelector('.access-log');
+                if (!al) continue;
+                const h2 = al.querySelector('h2');
+                const cdiv = al.querySelector("[data-field='access-log-count']");
+                const rows = al.querySelectorAll('tbody tr').length;
+                return {
+                    found: true,
+                    h2: h2 ? h2.textContent : null,
+                    text: al.textContent,
+                    count_field: cdiv ? cdiv.textContent : null,
+                    rows,
+                };
+            }
+            return { found: false };
+            "#,
+            vec![],
+        )
+        .await?;
+    let al_found = al_state.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
+    assert!(
+        al_found,
+        "Access Log window should be rendered after the Phase 2 spawn loop. Got: {al_state:?}"
+    );
+    let al_h2 = al_state.get("h2").and_then(|v| v.as_str()).unwrap_or("");
+    let al_text = al_state.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    let al_rows = al_state.get("rows").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert_eq!(al_h2, "Access Log", "Access Log h2 mismatch: {al_h2:?}");
+    assert!(
+        !al_text.contains("No operations yet"),
+        "Access Log empty — no accesses captured from the shell verbs. Text: {al_text:?}"
+    );
+    // Dispatches from the Phase 2e-2h shell verbs (query/count/inspect against
+    // system/handler) route through `ops::execute` → should be ≥ 1 access row.
+    assert!(
+        al_rows >= 1,
+        "Access Log should have at least one access row from the shell verbs. \
+         rows={al_rows}, count_field={:?}, text={al_text:?}",
+        al_state.get("count_field")
+    );
+
+    phase_gate!(client, "2j");
     // -- Phase 2j: Wire Recorder live wire-frame stream ----------------
     //
     // Sibling to Path Tap; consumes `InspectFact::Wire`. By this point
@@ -1936,6 +4792,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     eprintln!("Wire Recorder counts strip: {wr_counts}");
 
+    phase_gate!(client, "2k");
     // -- Phase 2k: Content Stream live binding-event stream ------------
     //
     // Third Inspect sibling; consumes `InspectFact::Binding`. By this
@@ -2003,6 +4860,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          counts={cs_counts:?}, text={cs_text:?}"
     );
 
+    phase_gate!(client, "3");
     // -- Phase 3: interact with Settings to exercise the write path ----
     //
     // With all windows open, Settings is the cleanest target for
@@ -2038,6 +4896,317 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         .await?;
 
     sleep(Duration::from_millis(500)).await;
+
+    phase_gate!(client, "3-i18n");
+    // -- Phase 3-i18n: language picker drives `dir`/`lang` (i18n P0) ----
+    //
+    // Boot (`i18n::apply(boot_choice())`, main.rs) must have set `lang`/`dir`
+    // on BOTH `<html>` (light DOM) and the shadow host `#dom-layer` (so the
+    // attribute inherits into the shadow tree — the whole point of finding 2:
+    // `dir` on `<html>` alone is a silent RTL no-op). Assert both carry a
+    // non-empty dir after boot.
+    let boot_dir = client
+        .execute(
+            r#"
+            const html = document.documentElement;
+            const host = document.getElementById('dom-layer');
+            return JSON.stringify({
+                htmlDir: html.getAttribute('dir') || '',
+                htmlLang: html.getAttribute('lang') || '',
+                hostDir: host ? (host.getAttribute('dir') || '') : 'no-host',
+                hostLang: host ? (host.getAttribute('lang') || '') : 'no-host',
+            });
+            "#,
+            vec![],
+        )
+        .await?;
+    let boot_dir = boot_dir.as_str().unwrap_or("").to_string();
+    assert!(
+        boot_dir.contains("\"htmlDir\":\"ltr\"")
+            && boot_dir.contains("\"hostDir\":\"ltr\""),
+        "Phase 3-i18n: boot must set dir=ltr on both <html> and the shadow host \
+         (en boot). Got {boot_dir:?}"
+    );
+
+    // Switch to the `en-XA` pseudo-locale (dir=rtl) and assert BOTH surfaces
+    // flip to rtl — the end-to-end proof that the shadow-host `dir` plumbing
+    // works, exercised before any real translation exists.
+    let lang_switch = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="language-"]');
+            if (!s) return 'no-select';
+            s.value = 'en-XA';
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'changed';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        lang_switch.as_str(),
+        Some("changed"),
+        "Phase 3-i18n: the Settings Language dropdown (select[name^=language-]) \
+         must exist and accept a change"
+    );
+    sleep(Duration::from_millis(400)).await;
+    let rtl_dir = client
+        .execute(
+            r#"
+            const html = document.documentElement;
+            const host = document.getElementById('dom-layer');
+            const layer = host;
+            const root = layer.shadowRoot || layer;
+            // The computed `direction` INSIDE the shadow tree — proves the
+            // host's dir actually drives layout (not just the attribute), which
+            // is what the P3 logical properties (margin-inline-*, text-align:
+            // start, …) key off to mirror. This is the automated RTL check.
+            const wm = root.querySelector('.window-manager');
+            const computed = wm ? getComputedStyle(wm).direction : 'no-wm';
+            return JSON.stringify({
+                htmlDir: html.getAttribute('dir') || '',
+                hostDir: host ? (host.getAttribute('dir') || '') : 'no-host',
+                shadowDirection: computed,
+            });
+            "#,
+            vec![],
+        )
+        .await?;
+    let rtl_dir = rtl_dir.as_str().unwrap_or("").to_string();
+    assert!(
+        rtl_dir.contains("\"htmlDir\":\"rtl\"") && rtl_dir.contains("\"hostDir\":\"rtl\""),
+        "Phase 3-i18n: selecting the en-XA pseudo-locale must flip dir=rtl on both \
+         <html> and the shadow host. Got {rtl_dir:?}"
+    );
+    assert!(
+        rtl_dir.contains("\"shadowDirection\":\"rtl\""),
+        "Phase 3-i18n (P3): the shadow tree must COMPUTE direction:rtl under en-XA \
+         (the host dir drives layout, which the logical CSS props mirror off). \
+         Got {rtl_dir:?}"
+    );
+
+    // The string seam (P1): the Settings Appearance/Theme/Language labels
+    // resolve through `t()`, so under en-XA they must render bracketed (⟦…⟧) —
+    // the end-to-end proof of the catalog + pseudolocale AND that the section
+    // actually re-rendered with the new locale. (Other windows' un-migrated
+    // English is untouched, which is the point — only anchored strings move.)
+    let pseudo_present = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            return (root.textContent || '').includes('⟦');
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        pseudo_present.as_bool(),
+        Some(true),
+        "Phase 3-i18n: en-XA must render the t()-backed Settings labels bracketed (⟦…⟧); \
+         none found — catalog/pseudolocale/re-render path broken"
+    );
+
+    // Restore `en` so later phases (which assume LTR chrome) are unaffected.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="language-"]');
+            if (s) { s.value = 'en'; s.dispatchEvent(new Event('change', { bubbles: true })); }
+            return 'ok';
+            "#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(300)).await;
+    // Back on `en`, the pseudo brackets must be gone — proves the switch
+    // re-rendered in both directions (not a one-way transform).
+    let pseudo_gone = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            return (root.textContent || '').includes('⟦');
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        pseudo_gone.as_bool(),
+        Some(false),
+        "Phase 3-i18n: restoring `en` must clear the ⟦…⟧ pseudo brackets (re-render back)"
+    );
+    println!(
+        "  Phase 3-i18n OK — language picker drives dir (ltr↔rtl) + t()/pseudolocale labels (⟦…⟧ on/off)"
+    );
+
+    // P4: a REAL embedded overlay locale renders in the live Worker build (not
+    // just the pseudo). Select `es` and assert the t()-backed Settings language
+    // label shows the Spanish catalog string ("Idioma" = settings.language) —
+    // end-to-end proof that the build-time-embedded locales/es.json overlay is
+    // consulted through catalog_entry — and that no pseudo brackets appear (it's
+    // a real translation, not en-XA). The compiled-in `en` fallback means an
+    // un-translated surface stays English; the anchored label moves.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="language-"]');
+            if (s) { s.value = 'es'; s.dispatchEvent(new Event('change', { bubbles: true })); }
+            return 'ok';
+            "#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(300)).await;
+    let es_idioma = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            return (root.textContent || '').includes('Idioma');
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        es_idioma.as_bool(),
+        Some(true),
+        "Phase 3-i18n (P4): selecting `es` must render the embedded overlay — the \
+         Settings language label should read 'Idioma' (locales/es.json)"
+    );
+    let es_pseudo = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            return (root.textContent || '').includes('⟦');
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        es_pseudo.as_bool(),
+        Some(false),
+        "Phase 3-i18n (P4): a real locale (`es`) must NOT show pseudo brackets"
+    );
+    // Restore `en` again so later phases assume LTR English chrome.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="language-"]');
+            if (s) { s.value = 'en'; s.dispatchEvent(new Event('change', { bubbles: true })); }
+            return 'ok';
+            "#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(200)).await;
+    println!(
+        "  Phase 3-i18n OK (P4) — real overlay `es` renders 'Idioma' live (embedded locales/es.json)"
+    );
+
+    // P5: a real RTL locale — the combination neither phase above covers.
+    // `en-XA` proves dir=rtl with English text; `es` proves a real catalog with
+    // LTR layout. Only a shipped RTL locale exercises both at once, which is the
+    // arrangement the four RTL overlays (ar he fa ur) actually ship in. An empty
+    // or unconsulted `ar` catalog passes both earlier phases and fails here.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="language-"]');
+            if (s) { s.value = 'ar'; s.dispatchEvent(new Event('change', { bubbles: true })); }
+            return 'ok';
+            "#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(400)).await;
+    let ar_state = client
+        .execute(
+            r#"
+            const html = document.documentElement;
+            const host = document.getElementById('dom-layer');
+            const root = host.shadowRoot || host;
+            const wm = root.querySelector('.window-manager');
+            const text = root.textContent || '';
+            return JSON.stringify({
+                htmlDir: html.getAttribute('dir') || '',
+                hostDir: host ? (host.getAttribute('dir') || '') : 'no-host',
+                shadowDirection: wm ? getComputedStyle(wm).direction : 'no-wm',
+                // settings.language / settings.appearance from locales/ar.json
+                arabic: text.includes('اللغة') && text.includes('المظهر'),
+                pseudo: text.includes('⟦'),
+            });
+            "#,
+            vec![],
+        )
+        .await?;
+    let ar_state = ar_state.as_str().unwrap_or("").to_string();
+    assert!(
+        ar_state.contains("\"htmlDir\":\"rtl\"")
+            && ar_state.contains("\"hostDir\":\"rtl\"")
+            && ar_state.contains("\"shadowDirection\":\"rtl\""),
+        "Phase 3-i18n (P5): the real RTL locale `ar` must flip dir=rtl on <html>, the \
+         shadow host, and the computed shadow direction. Got {ar_state:?}"
+    );
+    assert!(
+        ar_state.contains("\"arabic\":true"),
+        "Phase 3-i18n (P5): `ar` must render the embedded Arabic catalog — Settings \
+         should show 'اللغة' (settings.language) and 'المظهر' (settings.appearance) \
+         from locales/ar.json. Got {ar_state:?}"
+    );
+    assert!(
+        ar_state.contains("\"pseudo\":false"),
+        "Phase 3-i18n (P5): a real locale (`ar`) must NOT show pseudo brackets. \
+         Got {ar_state:?}"
+    );
+    // Restore `en` (LTR chrome) for every later phase.
+    let _ = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="language-"]');
+            if (s) { s.value = 'en'; s.dispatchEvent(new Event('change', { bubbles: true })); }
+            return 'ok';
+            "#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(300)).await;
+    let restored = client
+        .execute(
+            r#"
+            const html = document.documentElement;
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            return JSON.stringify({
+                htmlDir: html.getAttribute('dir') || '',
+                english: (root.textContent || '').includes('Language'),
+            });
+            "#,
+            vec![],
+        )
+        .await?;
+    let restored = restored.as_str().unwrap_or("").to_string();
+    assert!(
+        restored.contains("\"htmlDir\":\"ltr\"") && restored.contains("\"english\":true"),
+        "Phase 3-i18n (P5): restoring `en` must return dir=ltr and English chrome — \
+         proves the RTL switch is reversible, not a one-way latch. Got {restored:?}"
+    );
+    println!(
+        "  Phase 3-i18n OK (P5) — real RTL overlay `ar` renders Arabic at dir=rtl, and reverts"
+    );
 
     // Also drive the new "Site appearance" dropdown to "system" (the overlay
     // follows the chrome theme). This exercises the full delivery path:
@@ -2102,6 +5271,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
 
     sleep(Duration::from_millis(800)).await;
 
+    phase_gate!(client, "4");
     // -- Phase 4: assert Entity Tree actually rendered content ---------
     //
     // Regression gate for the "empty snapshot" / "subscription decode"
@@ -2179,6 +5349,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     println!("  selection-source dropdown: ok ({} panel(s))",
         sel_source.get("count").and_then(|v| v.as_i64()).unwrap_or(0));
 
+    phase_gate!(client, "5");
     // -- Phase 5: click a tree row, expect inspector to populate -------
     //
     // After clicking a `.tree-row`, the Entity Tree model writes the
@@ -2276,6 +5447,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+    phase_gate!(client, "5.1");
     // -- Phase 5.1: Stage B selection-slot publish ---------------------
     //
     // Clicking a tree row on Stage B writes two
@@ -2390,6 +5562,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          Detail: {selection_slots}"
     );
 
+    phase_gate!(client, "6");
     // -- Phase 6: Knowledge Base save → back → click round-trip --------
     //
     // Exercises the real user flow:
@@ -2638,6 +5811,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          fire or the cache returned a different entity. Detail: {kb_reader_v}"
     );
 
+    phase_gate!(client, "7");
     // -- Phase 7: Execute Console handler dropdown (Parity-A gate) -----
     //
     // The Execute Console's handler list is populated via
@@ -2707,6 +5881,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          ExecuteConsoleModel::refresh_handlers."
     );
 
+    phase_gate!(client, "8");
     // -- Phase 8: Execute Console click → event log round-trip --------
     //
     // Clicking the "Execute" button fires `Action::Execute`, which
@@ -2817,6 +5992,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          or the event-log writer's worker arm is broken."
     );
 
+    phase_gate!(client, "9");
     // -- Phase 9: Query Console count → event log round-trip ----------
     //
     // Click "Count" in Query Console with default (empty) form fields.
@@ -2879,6 +6055,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          (Peers::count → WorkerPeerStore::count → proxy.count) may be broken."
     );
 
+    phase_gate!(client, "10");
     // -- Phase 10: Query Console Find → event log round-trip ----------
     //
     // Click "Find" with default fields. Validates `Peers::query` worker
@@ -2956,6 +6133,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     println!("  new dispatch_write:   {new_writes}");
     println!("  new panics:           {}", post_panics.len());
 
+    phase_gate!(client, "12");
     // -- Phase 12: Parity-B — create peer in worker mode round-trips -
     //
     // Click "New Peer" in the Peers management window. The worker
@@ -2993,7 +6171,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             for (const sec of sections) {
                 const h2 = sec.querySelector('h2');
                 if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                const rows = sec.querySelectorAll('tbody tr');
+                const rows = sec.querySelectorAll('tbody tr:not(.peer-group)');
                 return rows.length;
             }
             return -1;
@@ -3010,40 +6188,21 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          Window selector or rendering may have broken."
     );
 
-    // "+ Frontend" is the Stage 2B-renamed entry-point for what was
-    // previously "New Peer"; in Worker boot it falls through to the
-    // same `create_new_peer_worker` path the original test exercised.
+    // Create a main-thread in-memory peer via the create form (kind "frontend",
+    // was the "+ Frontend"/"+ Main thread (memory)" button); in Worker boot it
+    // falls through to the same `create_new_peer_worker` path the original test
+    // exercised.
     let new_peer_clicked = client
-        .execute(
-            r#"
-            const layer = document.getElementById('dom-layer');
-            const root = layer.shadowRoot || layer;
-            const sections = root.querySelectorAll('section.window');
-            for (const sec of sections) {
-                const h2 = sec.querySelector('h2');
-                if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                const btns = sec.querySelectorAll('button');
-                for (const b of btns) {
-                    if (b.textContent.trim() === '+ Frontend') {
-                        b.click();
-                        return 'clicked';
-                    }
-                }
-                return 'no-frontend-btn';
-            }
-            return 'no-peers-section';
-            "#,
-            vec![],
-        )
+        .execute(&create_peer_form_js("frontend"), vec![])
         .await?;
     println!(
-        "  + Frontend button click: {:?}",
+        "  create main-thread (memory) peer: {:?}",
         new_peer_clicked.as_str().unwrap_or("non-string")
     );
     assert_eq!(
         new_peer_clicked.as_str(),
         Some("clicked"),
-        "Could not click '+ Frontend' button in Peers window."
+        "Could not create a main-thread (memory) peer via the Peers create form."
     );
     // Worker round-trip: protocol send + handle_create_peer (Keypair gen
     // + sdk.create_peer + set_metadata) + response decode + main-thread
@@ -3071,7 +6230,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             for (const sec of sections) {
                 const h2 = sec.querySelector('h2');
                 if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                const rows = sec.querySelectorAll('tbody tr');
+                const rows = sec.querySelectorAll('tbody tr:not(.peer-group)');
                 return rows.length;
             }
             return -1;
@@ -3098,6 +6257,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          (worker → consumer → persistence::save_peer) is broken."
     );
 
+    phase_gate!(client, "13");
     // -- Phase 13: non-primary peer subscribe round-trip --------------
     //
     // Regression gate for the v6 subscribe peer-scoping bug.
@@ -3126,9 +6286,10 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             // the command palette (`append_peer_selector`) — NOT inside a
             // menu-group <details> (those carry spawn buttons since the menu
             // grouping redesign). Options are "{glyph} {name} ({role})" with
-            // role = system / frontend / backend (memory) / backend (opfs).
-            // The just-created peer was made via "+ Frontend" and is the only
-            // "(frontend)" option (the primary/system peer is "(system)").
+            // role = system / main thread / worker / worker (OPFS) / native.
+            // The just-created peer was made via "+ Main thread (memory)" and is
+            // the only "(main thread)" option (the primary/system peer is
+            // "(system)").
             const select = root.querySelector('.command-palette select');
             if (!select) return { ok: false, reason: 'no-palette-select' };
             let target = null;
@@ -3136,12 +6297,12 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             for (const opt of select.options) {
                 seen.push(opt.text);
                 const lower = opt.text.toLowerCase();
-                if (lower.includes('(frontend)') && !lower.includes('(system)')) {
+                if (lower.includes('(main thread)') && !lower.includes('(system)')) {
                     target = opt.value;
                     break;
                 }
             }
-            if (!target) return { ok: false, reason: 'no-frontend-option', seen };
+            if (!target) return { ok: false, reason: 'no-main-thread-option', seen };
             select.value = target;
             select.dispatchEvent(new Event('change', { bubbles: true }));
             return { ok: true, pid: target };
@@ -3162,7 +6323,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     assert!(
         non_primary_ok && !non_primary_pid.is_empty(),
         "Could not select non-primary peer in palette dropdown. \
-         Phase 12 created a peer but it didn't appear as a (frontend) \
+         Phase 12 created a peer but it didn't appear as a (main thread) \
          option, or the palette select isn't where we expect. \
          Detail: {non_primary_select}"
     );
@@ -3380,6 +6541,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          and the dirty flag never flips (subscribe peer-scoping regression)."
     );
 
+    phase_gate!(client, "13.5");
     // -- Phase 13.5: non-primary Query Console scopes to its peer -----
     //
     // Regression gate for the §4.3 defect (system review,
@@ -3414,7 +6576,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             if (!select) return false;
             for (const opt of select.options) {
                 const lower = opt.text.toLowerCase();
-                if (lower.includes('(frontend)') && !lower.includes('(system)')) {
+                if (lower.includes('(main thread)') && !lower.includes('(system)')) {
                     select.value = opt.value;
                     select.dispatchEvent(new Event('change', { bubbles: true }));
                     return true;
@@ -3567,6 +6729,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          hard-coded-primary_peer_id defect (P0)."
     );
 
+    phase_gate!(client, "14");
     // -- Phase 14: ConnectPeer end-to-end against Tauri-side listener -
     //
     // Validates the full Parity-D-narrow flow: browser-side primary
@@ -3587,211 +6750,775 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // exercise manually with `make tauri-run` + browser.
     //
     // Success signal: the Tauri peer's short_pid appearing in the
-    // window's "Connected Peers" list after the click. That requires
+    // window's "Known devices" table after the click, alongside a
+    // "Reconnect" button (§13 the remembered-peer surface). That requires
     // the WS handshake to complete, the entity-protocol handshake to
-    // succeed, and the consumer's `handle_connect_peer` worker arm
-    // to insert into the connection pool — i.e. the whole
+    // succeed, the consumer's `handle_connect_peer` worker arm to insert
+    // into the connection pool, AND the enriched connection record
+    // (addr + reconnect) to be written + read back — i.e. the whole
     // Parity-D-narrow surface end-to-end.
     let tauri = start_tauri_listener()?;
-    println!("  tauri peer_id:         {}", tauri.peer_id);
-    println!("  tauri ws_addr:         {}", tauri.ws_addr);
-    println!("  tauri webview booted:  {}", tauri.webview_booted);
-    // "Frame loop started" only logs from src/main.rs:163, which runs
-    // strictly AFTER `EntityApp::new_wasm[_worker]` returns Ok. So this
-    // is a universal "WebView UI booted" signal independent of Direct
-    // vs Worker mode. If the autostart hook ever broke the WebView
-    // load (or anything else regresses on the Tauri WebKitGTK path),
-    // this assertion catches it before users see a blank window.
-    assert!(
-        tauri.webview_booted,
-        "Tauri WebView never logged 'Frame loop started' within the \
-         20s startup budget. Autostart printed the READY line so the \
-         native backend is fine, but the WebView UI failed to boot. \
-         A user running `make tauri-run` would see a blank window. \
-         Check the captured Tauri stdout for [UNCAUGHT] errors, OPFS \
-         init failures, or other WASM init failures."
-    );
+    if tauri.is_none() {
+        println!(
+            "--- Phase 14 SKIPPED: no display in this environment \
+             (WAYLAND_DISPLAY/DISPLAY unset) — the Tauri autostart + \
+             ConnectPeer phases need a window server; run the e2e where \
+             the container gets a display to exercise them ---"
+        );
+    }
+    if let Some(tauri) = &tauri {
+        println!("  tauri peer_id:         {}", tauri.peer_id);
+        println!("  tauri ws_addr:         {}", tauri.ws_addr);
+        println!("  tauri webview booted:  {}", tauri.webview_booted);
+        // The MARGIN, on success. The assertion below is a fixed 60s budget,
+        // and its failure text ("never booted in 60s") is a statement about the
+        // budget as much as about the WebView — so a green run has to say how
+        // much room it had, or nobody can tell a slow box from a broken one the
+        // next time it goes red. Loud past half the budget: at that point the
+        // next loaded run is a coin flip, and a *quiet* green is what lets a
+        // load-sensitive budget go on being read as a product failure.
+        println!("  tauri listener ready:  {} ms", tauri.ready_ms);
+        match tauri.webview_ms {
+            Some(ms) if ms > 30_000 => println!(
+                "  tauri webview boot:    {ms} ms — OVER HALF the 60s budget. \
+                 This phase is on the edge; a busier box will fail it, and the \
+                 failure will not look like a timing problem."
+            ),
+            Some(ms) => println!("  tauri webview boot:    {ms} ms (budget 60000 ms)"),
+            None => {}
+        }
+        // The milestone trace on SUCCESS, so a green run carries the baseline a
+        // red one has to be read against. Without it nobody can say whether a
+        // healthy boot also skips a milestone, and the failure message below
+        // has nothing to be compared to.
+        println!(
+            "  tauri boot milestones: {}/{}",
+            tauri.boot_milestones.len(),
+            WEBVIEW_BOOT_MILESTONES.len()
+        );
+        // "Frame loop started" only logs from src/main.rs:163, which runs
+        // strictly AFTER `EntityApp::new_wasm[_worker]` returns Ok. So this
+        // is a universal "WebView UI booted" signal independent of Direct
+        // vs Worker mode. If the autostart hook ever broke the WebView
+        // load (or anything else regresses on the Tauri WebKitGTK path),
+        // this assertion catches it before users see a blank window.
+        assert!(
+            tauri.webview_booted,
+            "Tauri WebView never logged 'Frame loop started' within the \
+             60s startup budget. Autostart printed the READY line so the \
+             native backend is fine, but the WebView UI failed to boot. \
+             A user running `make tauri-run` would see a blank window.\n\
+             The child's stdout tail is below — look for [UNCAUGHT] errors, \
+             OPFS init failures, or other WASM init failures. Note that \
+             `libEGL warning: egl: failed to create dri2 screen` in \
+             target/e2e-tauri-stderr.log is NOT a boot failure: it appears on \
+             runs where the WebView goes on to boot fine (software \
+             compositing via WEBKIT_DISABLE_DMABUF_RENDERER=1), so don't stop \
+             at it.\n\
+             \n\
+             HOW FAR THE WEBVIEW GOT — read this FIRST; it is the only thing \
+             here that separates causes. Each line below is logged by the WASM \
+             module itself through the console bridge, so `none` means the \
+             module never began executing (look at instantiation) while a \
+             partial trace means app boot hung at a named step (look there). \
+             Compare against the `tauri boot milestones: N/{}` a green run \
+             prints:\n{}\n\
+             \n\
+             Child stdout tail:\n{}",
+            WEBVIEW_BOOT_MILESTONES.len(),
+            render_boot_milestones(&tauri.boot_milestones),
+            tauri.stdout_tail(),
+        );
 
-    let tauri_short = if tauri.peer_id.len() > 16 {
-        format!(
-            "{}...{}",
-            &tauri.peer_id[..8],
-            &tauri.peer_id[tauri.peer_id.len() - 6..]
-        )
-    } else {
-        tauri.peer_id.clone()
-    };
-    println!("  tauri short_pid:       {tauri_short}");
+        let tauri_short = if tauri.peer_id.len() > 16 {
+            format!(
+                "{}...{}",
+                &tauri.peer_id[..8],
+                &tauri.peer_id[tauri.peer_id.len() - 6..]
+            )
+        } else {
+            tauri.peer_id.clone()
+        };
+        println!("  tauri short_pid:       {tauri_short}");
 
-    let connect_click = client
-        .execute(
+        let connect_click = client
+            .execute(
+                &format!(
+                    r#"
+                    const layer = document.getElementById('dom-layer');
+                    const root = layer.shadowRoot || layer;
+                    const sections = root.querySelectorAll('section.window');
+                    for (const sec of sections) {{
+                        if (!sec.querySelector('.peer-connections')) continue;
+                        const input = sec.querySelector('input[data-field="address"]');
+                        if (!input) return {{ ok: false, reason: 'no-address-input' }};
+                        input.value = '{ws_addr}';
+                        // Fire the input event like a real keystroke would:
+                        // the field is a draft-tracked atom (components::
+                        // text_input) and Connect submits from the drafts map,
+                        // not the DOM — a silent value-set is a fill no user
+                        // can produce and would submit the default suggestion.
+                        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        const btns = sec.querySelectorAll('button');
+                        for (const b of btns) {{
+                            if (b.textContent.trim() === 'Connect') {{
+                                b.click();
+                                return {{ ok: true }};
+                            }}
+                        }}
+                        return {{ ok: false, reason: 'no-connect-btn' }};
+                    }}
+                    return {{ ok: false, reason: 'no-peer-connections-section' }};
+                    "#,
+                    ws_addr = tauri.ws_addr,
+                ),
+                vec![],
+            )
+            .await?;
+        let connect_clicked = connect_click
+            .get("ok")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        assert!(
+            connect_clicked,
+            "Could not drive Peer Connections → Connect for ConnectPeer flow. \
+             Detail: {connect_click}"
+        );
+        // Connect involves: WS handshake to Tauri listener + entity protocol
+        // handshake + connection-pool insert + post-connect type fetch, and
+        // only then a re-render of the Known devices table. This used to be a
+        // fixed 2.5s sleep — a guess at how long that chain takes, which on a
+        // loaded box (this runs minutes into the suite, beside Firefox, the
+        // dist server, cargo, and a second Tauri process) is exactly the shape
+        // that fails for reasons unrelated to the behaviour under test. Poll
+        // instead: a healthy run returns on the first poll and the generous
+        // budget is only ever paid on the failure path.
+        let connect_started = std::time::Instant::now();
+        let connected_v = poll_json(
+            &client,
             &format!(
                 r#"
-                const layer = document.getElementById('dom-layer');
-                const root = layer.shadowRoot || layer;
-                const sections = root.querySelectorAll('section.window');
-                for (const sec of sections) {{
-                    if (!sec.querySelector('.peer-connections')) continue;
-                    const input = sec.querySelector('input[data-field="address"]');
-                    if (!input) return {{ ok: false, reason: 'no-address-input' }};
-                    input.value = '{ws_addr}';
-                    const btns = sec.querySelectorAll('button');
-                    for (const b of btns) {{
-                        if (b.textContent.trim() === 'Connect') {{
-                            b.click();
-                            return {{ ok: true }};
-                        }}
+                    const layer = document.getElementById('dom-layer');
+                    const root = layer.shadowRoot || layer;
+                    const sections = root.querySelectorAll('section.window');
+                    for (const sec of sections) {{
+                        if (!sec.querySelector('.peer-connections')) continue;
+                        // After ConnectPeer success the renderer lists the peer
+                        // in the "Known devices" table: its short_pid, a
+                        // "Connected" conn_chip, and the saved address in the
+                        // Address column (the §13.2 enrichment, asserted
+                        // directly — a CONNECTED row deliberately renders no
+                        // Reconnect button, only Forget).
+                        const text = sec.textContent;
+                        const knownLabel = text.includes('Known devices');
+                        const foundPeer = text.includes('{tauri_short}');
+                        const connectedChip = text.includes('Connected');
+                        const hasAddr = text.includes('{ws_addr}');
+                        return {{
+                            connected: knownLabel && foundPeer && connectedChip,
+                            knownLabel, foundPeer, connectedChip, hasAddr,
+                            text: text.slice(0, 400),
+                        }};
                     }}
-                    return {{ ok: false, reason: 'no-connect-btn' }};
-                }}
-                return {{ ok: false, reason: 'no-peer-connections-section' }};
-                "#,
+                    return {{ connected: false, reason: 'no-section' }};
+                    "#,
                 ws_addr = tauri.ws_addr,
             ),
-            vec![],
+            ASYNC_ROUND_TRIP_BUDGET,
+            // Both assertions below read this one value, so wait for BOTH
+            // facts — settling on `connected` alone would race the address
+            // enrichment and make `has_addr` the flaky one instead.
+            |v| {
+                v.get("connected").and_then(|c| c.as_bool()).unwrap_or(false)
+                    && v.get("hasAddr").and_then(|c| c.as_bool()).unwrap_or(false)
+            },
         )
         .await?;
-    let connect_clicked = connect_click
-        .get("ok")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    assert!(
-        connect_clicked,
-        "Could not drive Peer Connections → Connect for ConnectPeer flow. \
-         Detail: {connect_click}"
-    );
-    // Connect involves: WS handshake to Tauri listener + entity protocol
-    // handshake + connection-pool insert + post-connect type fetch. 2.5s
-    // is a comfortable budget on a dev box; CI may need more.
-    sleep(Duration::from_millis(2500)).await;
+        let connected = connected_v
+            .get("connected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_addr = connected_v
+            .get("hasAddr")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // Elapsed on success for the same reason as 15.6 — this replaced a fixed
+        // 2.5s sleep, so the number also tells you how much of that sleep was
+        // ever real.
+        println!(
+            "  known + connected: {connected} (addr persisted: {has_addr}) in {}ms",
+            connect_started.elapsed().as_millis()
+        );
+        assert!(
+            connected,
+            "Browser primary peer did not list Tauri peer's short_pid as \
+             Connected under Known devices after click. ConnectPeer flow broken \
+             end-to-end. Could be: WS handshake failed, entity-protocol \
+             handshake failed, worker arm of handle_connect_peer didn't pool \
+             the connection, or the post-connect refresh isn't writing the \
+             enriched connection record back into the tree the window \
+             subscribes to. Detail: {connected_v}"
+        );
+        assert!(
+            has_addr,
+            "Known devices listed the peer but its Address column is missing \
+             the connect address — the remembered-peer record has no saved \
+             address (§13.2 enrichment not persisted through the worker arm). \
+             Detail: {connected_v}"
+        );
 
-    let connected_v = client
+        // -- Phase 14b: FILE TRANSFER over `local/files` — the desktop path --
+        //
+        // **This is the transfer most users hit first and it had no coverage at
+        // all**: until now this file contained zero occurrences of "file
+        // transfer" (buildout item 17). `make e2e-webrtc-file` proves
+        // browser↔browser over `system/content` + offer manifests; this proves
+        // the *other* kind of serving peer — a native backend mounting a real
+        // directory at `local/files` — through the same window, the same rows
+        // and the same Pull button.
+        //
+        // It lives inside the display-gated Tauri block **because it needs that
+        // listener**, which is the only thing that belongs in here (`AGENTS.md`:
+        // 14 and 15.6 are the phases allowed in this gate; this is 14's own
+        // second half, sharing its child process, not a new tenant). It shares
+        // 14's `phase_gate!` for the same reason.
+        //
+        // Four claims, in the order a person would make them:
+        //   1. the window lists what the backend shares (`welcome.txt`, seeded
+        //      by `ensure_share_root`);
+        //   2. Pull saves it — the `local/files:read` half of `PullPlan::Share`;
+        //   3. Upload lands, and the app's own read-back verification agrees;
+        //   4. **the bytes are on the backend's disk, byte for byte** — read
+        //      from this process, which shares a filesystem with the child it
+        //      spawned. Nothing else in either suite asserts that: every other
+        //      transfer check reads the app's own report of its own work.
+        println!("--- Phase 14b: file transfer over local/files (desktop path) ---");
+
+        // A unique name per run. NOT cosmetic: a fixed name would be left in
+        // the share by the previous run, and then the "it appeared in the
+        // listing" assertions would pass on a stale file while a broken upload
+        // wrote nothing. It is removed at the end of the phase.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let up_name = format!("from-browser-{stamp}.bin");
+        // Deterministic content, and multi-KiB so this is a real write rather
+        // than a token one. Same generator the Shell's `offer … size=` uses, so
+        // the two fixtures read alike.
+        let up_bytes: Vec<u8> = (0..200_000usize)
+            .map(|i| (i.wrapping_mul(31) % 251) as u8)
+            .collect();
+        let share_dir = std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".entity").join("tori-share"))
+            .expect("HOME must be set — the Tauri child inherits it and shares its filesystem");
+        let up_path = share_dir.join(&up_name);
+
+        // The File Transfer window is spawned by the Phase 2 boot loop; click
+        // it up again only if something closed it, so this phase does not
+        // depend on window-lifecycle decisions made 5,000 lines earlier.
+        let ft_open = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {
+                    if (sec.querySelector('.file-transfer')) return 'present';
+                }
+                for (const b of root.querySelectorAll('button.spawn-btn')) {
+                    if (b.textContent.trim() === '+ File Transfer') {
+                        b.click();
+                        return 'spawned';
+                    }
+                }
+                return 'no-spawn-btn';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_ne!(
+            ft_open.as_str(),
+            Some("no-spawn-btn"),
+            "No File Transfer window and no '+ File Transfer' button to open one."
+        );
+
+        // Point the window at the Tauri peer explicitly. The picker only
+        // renders with more than one remembered peer, so "no selector" is a
+        // legitimate answer — but choosing by hand is what keeps this phase
+        // honest if a later phase ever adds a second remembered peer above it.
+        let ft_target = poll_json(
+            &client,
+            &format!(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                let sec = null;
+                for (const s of root.querySelectorAll('section.window')) {{
+                    if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+                }}
+                if (!sec) return {{ ready: false, reason: 'no-window' }};
+                const sel = sec.querySelector('[data-field="ft-target"]');
+                if (!sel) return {{ ready: true, mode: 'single-target' }};
+                const values = [...sel.options].map(o => o.value);
+                if (sel.value !== '{tauri_pid}') {{
+                    sel.value = '{tauri_pid}';
+                    sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+                return {{ ready: values.includes('{tauri_pid}'), mode: 'picked', values }};
+                "#,
+                tauri_pid = tauri.peer_id,
+            ),
+            ASYNC_ROUND_TRIP_BUDGET,
+            |v| v.get("ready").and_then(|r| r.as_bool()).unwrap_or(false),
+        )
+        .await?;
+        assert!(
+            ft_target.get("ready").and_then(|r| r.as_bool()).unwrap_or(false),
+            "File Transfer could not target the Tauri peer. The window reads the \
+             ever-connected registry, so this failing means the Connect above did \
+             not leave a row for it. Detail: {ft_target}"
+        );
+
+        // 1. The backend's share, listed. The root auto-loads on first render;
+        //    the Refresh press is the retry, not the trigger.
+        let listed_started = std::time::Instant::now();
+        let share_listed = poll_json(
+            &client,
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            let sec = null;
+            for (const s of root.querySelectorAll('section.window')) {
+                if (s.querySelector('.file-transfer')) { sec = s; break; }
+            }
+            if (!sec) return { found: false, reason: 'no-window' };
+            const row = sec.querySelector('[data-row-name="welcome.txt"]');
+            if (!row) {
+                const refresh = sec.querySelector('[data-field="ft-refresh"]');
+                if (refresh) refresh.click();
+            }
+            const results = sec.querySelector('[data-field="ft-results"]');
+            return {
+                found: !!row,
+                results: results ? results.textContent.slice(-300) : '',
+            };
+            "#,
+            ASYNC_ROUND_TRIP_BUDGET,
+            |v| v.get("found").and_then(|f| f.as_bool()).unwrap_or(false),
+        )
+        .await?;
+        assert!(
+            share_listed.get("found").and_then(|f| f.as_bool()).unwrap_or(false),
+            "The Tauri backend's share never listed `welcome.txt` in the File \
+             Transfer window. The backend seeds that file in `ensure_share_root`, \
+             so this is either the `local/files:list` dispatch, the listing \
+             decode, or the window's target. Detail: {share_listed}"
+        );
+        println!(
+            "  share listed (welcome.txt) in {}ms",
+            listed_started.elapsed().as_millis()
+        );
+
+        // 2. Pull it. Same row → same Pull button as an offered file: the whole
+        //    point of `PullPlan` is that this layer cannot tell the two apart.
+        let pulled = poll_json(
+            &client,
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            let sec = null;
+            for (const s of root.querySelectorAll('section.window')) {
+                if (s.querySelector('.file-transfer')) { sec = s; break; }
+            }
+            if (!sec) return { saved: false, reason: 'no-window' };
+            const results = sec.querySelector('[data-field="ft-results"]');
+            const text = results ? results.textContent : '';
+            if (text.includes('✓ saved') && text.includes('welcome.txt')) {
+                return { saved: true, tail: text.slice(-200) };
+            }
+            // Re-press each poll: the row is re-rendered on every repaint, so a
+            // click landed on a stale element does nothing and must be retried
+            // rather than waited on.
+            const row = sec.querySelector('[data-row-name="welcome.txt"]');
+            if (row) row.click();
+            const pull = sec.querySelector('[data-field="ft-pull"]');
+            if (pull && !pull.disabled) pull.click();
+            return { saved: false, tail: text.slice(-200) };
+            "#,
+            ASYNC_ROUND_TRIP_BUDGET,
+            |v| v.get("saved").and_then(|s| s.as_bool()).unwrap_or(false),
+        )
+        .await?;
+        assert!(
+            pulled.get("saved").and_then(|s| s.as_bool()).unwrap_or(false),
+            "Pull of `welcome.txt` from the Tauri share never reported a save. \
+             This is the `local/files:read` + reassemble + browser-download path \
+             (`PullPlan::Share`). Detail: {pulled}"
+        );
+        println!("  pulled welcome.txt from the backend share");
+
+        // 3. Upload the other way. The picker's hidden input is driven
+        //    directly — a native file dialog cannot be answered by a harness —
+        //    which still enters the app exactly where a real choice does, at
+        //    the `change` listener, `array_buffer()` and all.
+        let upload_sent = client
+            .execute(
+                &format!(
+                    r#"
+                    const layer = document.getElementById('dom-layer');
+                    const root = layer.shadowRoot || layer;
+                    let sec = null;
+                    for (const s of root.querySelectorAll('section.window')) {{
+                        if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+                    }}
+                    if (!sec) return 'no-window';
+                    const inp = sec.querySelector('[data-field="ft-upload-input"]');
+                    if (!inp) return 'no-input';
+                    const n = {len};
+                    const a = new Uint8Array(n);
+                    for (let i = 0; i < n; i++) a[i] = (i * 31) % 251;
+                    const f = new File([a], '{name}', {{ type: 'application/octet-stream' }});
+                    const dt = new DataTransfer();
+                    dt.items.add(f);
+                    inp.files = dt.files;
+                    inp.dispatchEvent(new Event('change'));
+                    return 'sent';
+                    "#,
+                    len = up_bytes.len(),
+                    name = up_name,
+                ),
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            upload_sent.as_str(),
+            Some("sent"),
+            "Could not drive the File Transfer upload picker. Detail: {upload_sent}"
+        );
+
+        let uploaded = poll_json(
+            &client,
+            &format!(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                let sec = null;
+                for (const s of root.querySelectorAll('section.window')) {{
+                    if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+                }}
+                if (!sec) return {{ ok: false, reason: 'no-window' }};
+                const results = sec.querySelector('[data-field="ft-results"]');
+                const text = results ? results.textContent : '';
+                return {{
+                    ok: text.includes('uploaded') && text.includes('{name}'),
+                    verified: text.includes('verified') && text.includes('{name}'),
+                    rejected: text.includes('upload REJECTED') || text.includes('VERIFY FAILED'),
+                    // The S5 write-refresh claim: the app re-lists the share
+                    // itself after a confirmed write, so the new file must
+                    // appear with nobody pressing Refresh.
+                    row: !!sec.querySelector('[data-row-name="{name}"]'),
+                    tail: text.slice(-300),
+                }};
+                "#,
+                name = up_name,
+            ),
+            ASYNC_ROUND_TRIP_BUDGET,
+            |v| {
+                (v.get("ok").and_then(|o| o.as_bool()).unwrap_or(false)
+                    && v.get("verified").and_then(|o| o.as_bool()).unwrap_or(false)
+                    && v.get("row").and_then(|o| o.as_bool()).unwrap_or(false))
+                    || v.get("rejected").and_then(|o| o.as_bool()).unwrap_or(false)
+            },
+        )
+        .await?;
+        assert!(
+            uploaded.get("ok").and_then(|o| o.as_bool()).unwrap_or(false),
+            "Upload to the Tauri share never reported success. This is \
+             `Action::UploadFile` → `local/files:write` across the worker arm. \
+             Detail: {uploaded}"
+        );
+        assert!(
+            uploaded.get("verified").and_then(|o| o.as_bool()).unwrap_or(false),
+            "The upload reported OK but the app's own read-back verification did \
+             not confirm it — exactly the 'says OK but no file' case that check \
+             exists to catch. Detail: {uploaded}"
+        );
+        assert!(
+            uploaded.get("row").and_then(|o| o.as_bool()).unwrap_or(false),
+            "The uploaded file never appeared in the share listing without a \
+             manual Refresh — the S5 write-refresh (`handle_upload_file` \
+             enqueueing `ft_refresh` for the initiating window) is not firing. \
+             The write itself landed. Detail: {uploaded}"
+        );
+
+        // 4. The bytes, on the backend's disk. Every check above reads the
+        //    app's report of its own work; this one leaves the app entirely —
+        //    the Tauri child was spawned by this process and shares its HOME, so
+        //    the share root is a directory we can simply open. A `write` that
+        //    is acknowledged, verified, and yet absent here would be invisible
+        //    to every other assertion in either suite.
+        let on_disk = std::fs::read(&up_path).unwrap_or_else(|e| {
+            panic!(
+                "the uploaded file is not on the backend's disk at {up_path:?}: {e}\n\
+                 The app reported a confirmed write AND a successful read-back, so \
+                 either the share root moved (ensure_share_root) or the handler \
+                 acknowledged a write it did not persist."
+            )
+        });
+        assert_eq!(
+            on_disk.len(),
+            up_bytes.len(),
+            "the file on disk is {} bytes, the browser sent {}",
+            on_disk.len(),
+            up_bytes.len()
+        );
+        assert!(
+            on_disk == up_bytes,
+            "the file on the backend's disk is not the file the browser sent \
+             (same length, different bytes) — a corrupting re-encode somewhere \
+             between the picker and `local/files:write`"
+        );
+        println!(
+            "  uploaded {} ({} bytes) — verified byte-for-byte at {:?}",
+            up_name,
+            up_bytes.len(),
+            up_path
+        );
+        // Leave the share as we found it: the next run's uniqueness check does
+        // not depend on this, but an accumulating demo share is its own slow
+        // mess (and it is shared with `make tauri-run` on a dev box).
+        let _ = std::fs::remove_file(&up_path);
+    }
+    // ^^ end of the display-gated Tauri block. NOTHING that must run on every
+    // box belongs above this line. Phase 11 below (the OPFS reload-persistence
+    // acceptance test) was accidentally re-indented INTO this block by the
+    // display-gating commit (d24ee12) and silently stopped running on headless
+    // hosts — the suite reported green while never exercising the one failure
+    // mode Phase 11 exists to catch, and every later phase ran without the
+    // reload. Keep it out here.
+
+    // -- Phase 14.2: OFFER + WITHDRAW on the WORKER ARM -----------------
+    //
+    // The offer path has two gates and both run the main-thread arm:
+    // `e2e-webrtc-file` drives a plain browser (no `?worker=1`), and the
+    // native proof is Direct by construction. So every Worker-arm hop in it —
+    // `DispatchHandle::Worker` carrying a `system/content:ingest` across the
+    // worker boundary, `put_and_wait_for_cache` landing the manifest, the
+    // offers-prefix subscription seeding the cache mirror that
+    // `read_own_offers` reads — was **unproven on the arm this suite runs**.
+    // That is the arm-split footgun this repo keeps meeting, and its signature
+    // failure is silent: the write succeeds, another peer can pull it, and only
+    // *our own* view of it is empty forever (an unsubscribed prefix on the
+    // Worker arm is an unseeded mirror, not an error).
+    //
+    // That this really is the Worker arm is not taken on the URL's word: the
+    // session boots `?worker=1` from a secure `localhost` origin (an insecure
+    // one falls back to Direct **silently**, `main.rs`), and Phase 11 — the OPFS
+    // reload-persistence acceptance test, which only passes under Worker+OPFS —
+    // runs later in this same session. A silent fallback turns that red.
+    //
+    // **Deliberately OUTSIDE the display gate above.** Offering is untargeted —
+    // it publishes on our side and needs no peer, no listener and no display —
+    // so gating it would silently retire it on every headless box, which is the
+    // exact mistake Phase 11 and the QR check below were rescued from.
+    //
+    // Not covered here, on purpose: the `MAX_OFFER_BYTES` refusal (it needs a
+    // 16 MiB+ allocation in the browser to reach, and the model-level refusal is
+    // already mutation-checked natively) and the cross-peer half (that is what
+    // `make e2e-webrtc-file` is for).
+    phase_gate!(client, "14.2");
+    println!("--- Phase 14.2: offer + withdraw on the Worker arm ---");
+    let offer_name = "worker-arm-offer.bin";
+    let offer_sent = client
         .execute(
             &format!(
                 r#"
                 const layer = document.getElementById('dom-layer');
                 const root = layer.shadowRoot || layer;
-                const sections = root.querySelectorAll('section.window');
-                for (const sec of sections) {{
-                    if (!sec.querySelector('.peer-connections')) continue;
-                    // After ConnectPeer success the renderer adds a
-                    // "Connected Peers" block with <code>{{short_pid}}</code>
-                    // rows. We grep for the Tauri peer's short_pid.
-                    const codes = sec.querySelectorAll('code');
-                    const seen = [];
-                    for (const c of codes) {{
-                        const t = c.textContent.trim();
-                        seen.push(t);
-                        if (t === '{tauri_short}') {{
-                            return {{ connected: true, found: t }};
-                        }}
-                    }}
-                    return {{ connected: false, codes: seen }};
+                let sec = null;
+                for (const s of root.querySelectorAll('section.window')) {{
+                    if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
                 }}
-                return {{ connected: false, reason: 'no-section' }};
-                "#
+                if (!sec) {{
+                    for (const b of root.querySelectorAll('button.spawn-btn')) {{
+                        if (b.textContent.trim() === '+ File Transfer') {{ b.click(); break; }}
+                    }}
+                    return 'spawned-retry';
+                }}
+                const inp = sec.querySelector('[data-field="ft-offer-input"]');
+                if (!inp) return 'no-offer-input';
+                // Two full chunks and a tail: a one-chunk offer would ingest in a
+                // single entity and prove less about the envelope crossing the
+                // worker boundary.
+                const n = 600000;
+                const a = new Uint8Array(n);
+                for (let i = 0; i < n; i++) a[i] = (i * 31) % 251;
+                const f = new File([a], '{offer_name}', {{ type: 'application/octet-stream' }});
+                const dt = new DataTransfer();
+                dt.items.add(f);
+                inp.files = dt.files;
+                inp.dispatchEvent(new Event('change'));
+                return 'sent';
+                "#,
             ),
             vec![],
         )
         .await?;
-    let connected = connected_v
-        .get("connected")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    println!("  connected to tauri:    {connected}");
-    assert!(
-        connected,
-        "Browser primary peer did not list Tauri peer's short_pid in \
-         Connected Peers after click. ConnectPeer flow broken end-to-end. \
-         Could be: WS handshake failed, entity-protocol handshake failed, \
-         worker arm of handle_connect_peer didn't pool the connection, or \
-         the post-connect refresh isn't writing the connections list back \
-         into the tree the window subscribes to. Detail: {connected_v}"
-    );
-
-    // -- Stage F regression: QR generation is lazy ------------------
-    //
-    // The QR pairing SVG (Reed-Solomon encode + per-module SVG build +
-    // set_inner_html parse) is the dominant render cost for this
-    // window. Stage F deferred it to the <details> toggle so collapsed
-    // renders pay nothing. This guard is runtime-agnostic (no
-    // `--features measurement` needed): assert the QR content carries
-    // no <svg> while collapsed, then that opening it generates one.
-    // If someone moves generation back into the eager render path the
-    // pre-open assertion fails.
-    let qr_pre = client
-        .execute(
-            r#"
-            const layer = document.getElementById('dom-layer');
-            const root = layer.shadowRoot || layer;
-            const sections = root.querySelectorAll('section.window');
-            for (const sec of sections) {
-                if (!sec.querySelector('.peer-connections')) continue;
-                let qr = null;
-                for (const d of sec.querySelectorAll('details')) {
-                    const s = d.querySelector('summary');
-                    if (s && s.textContent.trim() === 'QR Pairing') { qr = d; break; }
-                }
-                if (!qr) return { ok: false, reason: 'no-qr-details' };
-                const before = qr.querySelectorAll('svg').length;
-                qr.open = true;
-                return { ok: true, before };
-            }
-            return { ok: false, reason: 'no-section' };
-            "#,
-            vec![],
-        )
-        .await?;
-    assert!(
-        qr_pre.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
-        "Could not locate the QR Pairing <details> in Peer Connections. \
-         Detail: {qr_pre}"
-    );
     assert_eq!(
-        qr_pre.get("before").and_then(|v| v.as_u64()),
-        Some(0),
-        "QR SVG was present while the <details> was still collapsed — \
-         Stage F lazy-generation regressed; generation is back in the \
-         eager per-render path and the window pays the QR encode cost \
-         every frame. Detail: {qr_pre}"
+        offer_sent.as_str(),
+        Some("sent"),
+        "Could not drive the File Transfer offer picker. The offer card renders \
+         with no target selected by design, so 'no window' here is a real \
+         failure, not a missing precondition. Detail: {offer_sent}"
     );
-    // `details.open = true` queues the `toggle` event; let it fire +
-    // run the lazy generator before asserting.
-    sleep(Duration::from_millis(200)).await;
-    let qr_post = client
-        .execute(
+
+    let offered_started = std::time::Instant::now();
+    let offered = poll_json(
+        &client,
+        &format!(
             r#"
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
-            const sections = root.querySelectorAll('section.window');
-            for (const sec of sections) {
-                if (!sec.querySelector('.peer-connections')) continue;
-                for (const d of sec.querySelectorAll('details')) {
-                    const s = d.querySelector('summary');
-                    if (s && s.textContent.trim() === 'QR Pairing') {
-                        return { after: d.querySelectorAll('svg').length };
-                    }
-                }
-            }
-            return { after: -1 };
+            let sec = null;
+            for (const s of root.querySelectorAll('section.window')) {{
+                if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+            }}
+            if (!sec) return {{ row: false, reason: 'no-window' }};
+            const results = sec.querySelector('[data-field="ft-results"]');
+            const text = results ? results.textContent : '';
+            return {{
+                row: !!sec.querySelector('[data-field="ft-offer-row"][data-offer-name="{offer_name}"]'),
+                reported: text.includes('✓ offering') && text.includes('{offer_name}'),
+                failed: text.includes('✗ offer'),
+                tail: text.slice(-300),
+            }};
             "#,
+        ),
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| {
+            (v.get("row").and_then(|r| r.as_bool()).unwrap_or(false)
+                && v.get("reported").and_then(|r| r.as_bool()).unwrap_or(false))
+                || v.get("failed").and_then(|r| r.as_bool()).unwrap_or(false)
+        },
+    )
+    .await?;
+    assert!(
+        offered.get("reported").and_then(|r| r.as_bool()).unwrap_or(false),
+        "The Worker arm never completed an offer. This is `Action::OfferFile` → \
+         `DispatchHandle::Worker` carrying `system/content:ingest` across the \
+         worker boundary, then the manifest `put`. Detail: {offered}"
+    );
+    assert!(
+        offered.get("row").and_then(|r| r.as_bool()).unwrap_or(false),
+        "The offer completed but the window never listed it — the read
+         (`read_own_offers`) or the render is broken. NOTE what this canNOT be, \
+         measured: the window's own offers subscription. Every window is open in \
+         this session and two of them (Entity Tree, Storage) subscribe the whole \
+         peer tree, and the Worker proxy's cache is a UNION over all mirrors — so \
+         deleting that `watch_prefix` leaves this phase green. \
+         `a_lone_file_transfer_window_lists_what_it_offers` is the test that \
+         covers it. Detail: {offered}"
+    );
+    println!(
+        "  offered {offer_name} and listed it in {}ms",
+        offered_started.elapsed().as_millis()
+    );
+
+    // Withdraw it again: the Worker-arm `remove` plus the invalidation that has
+    // to reach the same subscription the read came from.
+    let withdrawn = poll_json(
+        &client,
+        &format!(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            let sec = null;
+            for (const s of root.querySelectorAll('section.window')) {{
+                if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+            }}
+            if (!sec) return {{ gone: false, reason: 'no-window' }};
+            const row = sec.querySelector('[data-field="ft-offer-row"][data-offer-name="{offer_name}"]');
+            if (!row) return {{ gone: true }};
+            // Re-press each poll: every repaint rebuilds the row, so a click on a
+            // stale button does nothing and must be retried rather than waited on.
+            const btn = sec.querySelector('[data-field="ft-stop-offer"][data-offer-name="{offer_name}"]');
+            if (btn) btn.click();
+            return {{ gone: false }};
+            "#,
+        ),
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("gone").and_then(|g| g.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        withdrawn.get("gone").and_then(|g| g.as_bool()).unwrap_or(false),
+        "Stop offering did not remove the row on the Worker arm — the manifest \
+         `remove` did not land, or its invalidation never reached the \
+         subscription this window reads through. Detail: {withdrawn}"
+    );
+    println!("  stopped offering it, and the row went");
+
+    // -- QR pairing must be hidden without a local listener -------------
+    //
+    // QR pairing advertises an address another device dials to reach a peer
+    // *here*. A pure browser can't bind a listener, so it has nothing to
+    // advertise — the QR Pairing <details> is rendered ONLY when
+    // `qr_payload` is Some (this process's native WS listener, or the
+    // system's Tauri-managed backend surfaced via IPC — see
+    // `dom/peer_connections.rs` + the model's `qr_payload` derivation). This
+    // e2e IS a pure Selenium browser (the Tauri peer is a *remote* ws://
+    // connection, not a local listener), so the QR display MUST be absent.
+    // (The lazy-generate-on-toggle Stage-F guard only applies where the QR
+    // actually renders — a Tauri-desktop run — so it lives with that path,
+    // not this browser suite.) The Scan-QR side stays available regardless.
+    //
+    // Deliberately OUTSIDE the display gate: this needs no Tauri and no
+    // listener — the *absence* of a listener is precisely the fixture. It sat
+    // inside the gate until now (the same class of mistake as Phase 11, noted
+    // as a standing trap in AGENTS.md), so on a headless box the assertion
+    // never ran and the suite reported green without it. If anything, the
+    // headless run is the more faithful fixture of the two.
+    let qr_present = client
+        .execute(
+            r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                const sections = root.querySelectorAll('section.window');
+                for (const sec of sections) {
+                    if (!sec.querySelector('.peer-connections')) continue;
+                    for (const d of sec.querySelectorAll('details')) {
+                        const s = d.querySelector('summary');
+                        if (s && s.textContent.trim() === 'QR Pairing') {
+                            return { found: true };
+                        }
+                    }
+                    return { found: false };
+                }
+                return { found: false, reason: 'no-section' };
+                "#,
             vec![],
         )
         .await?;
-    assert!(
-        qr_post.get("after").and_then(|v| v.as_i64()).unwrap_or(0) >= 1,
-        "QR SVG did not appear after opening the <details>. The lazy \
-         toggle handler didn't generate the code — Stage F lazy path \
-         is broken (users would see an empty QR Pairing panel). \
-         Detail: {qr_post}"
+    assert_eq!(
+        qr_present.get("found").and_then(|v| v.as_bool()),
+        Some(false),
+        "A QR Pairing <details> is showing in a PURE BROWSER — but a browser \
+         has no listener to advertise, so QR display must be gated off \
+         (`qr_payload` None). Either the display gate regressed or a remote \
+         ws-connected peer is wrongly feeding `qr_payload`. Detail: {qr_present}"
     );
+    println!("  QR pairing correctly hidden in the browser (no local listener to advertise)");
 
-    // -- Measurement checkpoint -------------------------------------
+    // -- Measurement checkpoint -----------------------------------------
     //
     // Capture per-window render numbers from Phases 1–10's interactions
     // before the Phase 11 reload wipes the page-local log buffer. Only
     // fires under `--features measurement`; otherwise the filter is a no-op
     // because the render-counter logs aren't emitted.
+    //
+    // Also moved out of the display gate: the samples it reports come from
+    // Phases 1–10, so gating them on a display meant a headless measurement run
+    // silently reported nothing.
     {
         let pre_reload_log = capture_log(&client).await?;
         let render_lines: Vec<&String> = pre_reload_log
@@ -3817,6 +7544,753 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         }
     }
 
+    phase_gate!(client, "14.3");
+    // -- Phase 14.3: a REFUSED file picker must say so ------------------
+    //
+    // Reported from Android/Firefox on the published site: *"I go to File
+    // Transfer, offer a file, it just doesn't do anything. It doesn't ask me.
+    // Doesn't give me an error."* The same button works on desktop.
+    //
+    // The cause of the SILENCE (not necessarily of the Android refusal, which
+    // is unreproduced here): the button called `HTMLElement::click()` on the
+    // hidden `<input type=file>`, which is fire-and-forget. An engine that
+    // declines to open a chooser produces no dialog, no `change`, no exception
+    // and no console entry — there is nothing for any surface to report. It
+    // goes through `showPicker()` now, which *throws* instead.
+    //
+    // **This phase is possible only because a scripted click carries no user
+    // activation** — the harness's ordinary `el.click()` is itself the refusal
+    // case, so `showPicker` raises `NotAllowedError` and the status line must
+    // carry it. That makes the assertion free here and impossible by hand.
+    //
+    // It does NOT prove the Android button now works; nothing on this box can.
+    // It proves the refusal has a voice, which is the half that was missing.
+    println!("--- Phase 14.3: a refused file picker reports instead of going silent ---");
+    let refused = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let sec = null;
+        for (const s of root.querySelectorAll('section.window')) {
+            if (s.querySelector('.file-transfer')) { sec = s; break; }
+        }
+        if (!sec) return { ok: false, why: 'no-window' };
+        if (typeof HTMLInputElement.prototype.showPicker !== 'function')
+            return { ok: false, why: 'engine-has-no-showPicker' };
+        const btn = sec.querySelector('[data-field="ft-offer"]');
+        if (!btn) return { ok: false, why: 'no-ft-offer-button' };
+        if (!window.__e2e_picker_clicked) { window.__e2e_picker_clicked = 1; btn.click(); }
+        const st = sec.querySelector('[data-field="ft-offer-status"]');
+        const text = st ? st.textContent.trim() : '';
+        return { ok: text.length > 0, text };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    let picker_text = refused.get("text").and_then(|t| t.as_str()).unwrap_or("");
+    assert!(
+        refused.get("ok").and_then(|b| b.as_bool()).unwrap_or(false),
+        "A refused file picker said NOTHING. A scripted click has no user \
+         activation, so `showPicker()` must throw `NotAllowedError` and the \
+         offer status line must render it. Silence here is the exact Android \
+         symptom this phase exists for — and the regression to look for is a \
+         call site that swallows the `Err` from `util::show_file_picker`. \
+         Detail: {refused}"
+    );
+    // The REASON, not merely some text: a status line that renders an empty
+    // failure is the same dead end wearing a ✗.
+    assert!(
+        picker_text.contains("NotAllowedError") || picker_text.contains("activation"),
+        "The picker refusal rendered, but not with the engine's reason — the \
+         whole point is that the person is told WHY. Got: {picker_text:?}"
+    );
+    println!("  refused picker reported: {picker_text}");
+
+    phase_gate!(client, "14.5");
+    // -- Phase 14.5: a failed Connect must SAY SO ---------------------
+    //
+    // The reported bug: press Connect, the address box empties, and nothing —
+    // no error, no row, no hint — appears anywhere in the window. It looked
+    // like a dead button. Two separate defects produced it, and this phase
+    // covers both, headless, on every box:
+    //
+    //   1. The outcome was invisible. `handle_connect_peer`'s failure path
+    //      wrote only a `tracing::error!` and an Event Log line; the Peer
+    //      Connections window had no outcome surface at all, so it could not
+    //      report a failure even when there was one. (A *success* was equally
+    //      invisible, which is the nastier half — see the model unit tests.)
+    //   2. The typed address was consumed in the click handler, BEFORE the dial
+    //      resolved, so a failure also ate the thing the user had typed.
+    //
+    // Deliberately OUTSIDE the display gate above: this needs no Tauri and no
+    // listener. It dials an address nothing answers, which is the whole point —
+    // the failure is the fixture. That also makes it the one connect-path phase
+    // that runs on a headless box.
+    let bogus = "ws://127.0.0.1:1/nothing-listens-here";
+    let click = client
+        .execute(
+            &format!(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const sec of root.querySelectorAll('section.window')) {{
+                    if (!sec.querySelector('.peer-connections')) continue;
+                    const input = sec.querySelector('input[data-field="address"]');
+                    if (!input) return {{ ok: false, reason: 'no-address-input' }};
+                    input.value = '{bogus}';
+                    // Real keystroke semantics: the field is a draft-tracked
+                    // atom and Connect submits from the drafts map, not the DOM.
+                    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    for (const b of sec.querySelectorAll('button')) {{
+                        if (b.textContent.trim() === 'Connect') {{
+                            b.click();
+                            return {{ ok: true }};
+                        }}
+                    }}
+                    return {{ ok: false, reason: 'no-connect-btn' }};
+                }}
+                return {{ ok: false, reason: 'no-peer-connections-section' }};
+                "#
+            ),
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        click.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Could not drive Peer Connections → Connect. Detail: {click}"
+    );
+
+    // Poll, don't sleep: the dial fails asynchronously and each `execute` also
+    // pumps the rAF loop a headless page would otherwise leave unpumped. The
+    // budget is an upper bound — a healthy run returns on the first poll.
+    let outcome = poll_json(
+        &client,
+        &format!(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {{
+                if (!sec.querySelector('.peer-connections')) continue;
+                const text = sec.innerText || '';
+                const input = sec.querySelector('input[data-field="address"]');
+                return {{
+                    found: true,
+                    // The ✗ error line the renderer emits for a failed attempt.
+                    reported: text.includes('✗'),
+                    // The address must still be in the box to retry/read.
+                    kept: input ? input.value : null,
+                }};
+            }}
+            return {{ found: false }};
+            "#
+        ),
+        Duration::from_secs(20),
+        |v| v.get("reported").and_then(|r| r.as_bool()) == Some(true),
+    )
+    .await?;
+
+    assert_eq!(
+        outcome.get("found").and_then(|v| v.as_bool()),
+        Some(true),
+        "Peer Connections section vanished mid-phase. Detail: {outcome}"
+    );
+    assert_eq!(
+        outcome.get("reported").and_then(|v| v.as_bool()),
+        Some(true),
+        "A FAILED connect reported nothing in the Peer Connections window. \
+         This is the reported bug: the user presses Connect, the dial fails, \
+         and the window shows no error — indistinguishable from a dead button. \
+         The failure must render as an error line (`components::error`). \
+         Detail: {outcome}"
+    );
+    assert_eq!(
+        outcome.get("kept").and_then(|v| v.as_str()),
+        Some(bogus),
+        "The address box was emptied by a FAILED connect. It used to be cleared \
+         in the click handler, before the dial resolved, so a failure ate what \
+         the user typed and left them retyping an address they could no longer \
+         see. It must survive a failure. Detail: {outcome}"
+    );
+    println!("  failed connect reported in-window, and the typed address survived");
+
+
+    phase_gate!(client, "14.6");
+    // -- Phase 14.6: the connector registry, end to end on the Worker arm ---
+    //
+    // The Connectors section of Peer Connections: add a signaling node, select
+    // it, remove it. Drives the SAME `crate::connectors` functions the
+    // `connector` shell verb does — one model, two surfaces — so this covers
+    // both.
+    //
+    // Deliberately OUTSIDE the display gate: it needs no Tauri and no listener.
+    //
+    // **The add DIALS now, and the address here is deliberately one that
+    // refuses instantly.** The form learns a node's peer-id by asking the
+    // address who it is; nothing is listening on `127.0.0.1:65535`, so this
+    // exercises the *named* branch — a node you have identified but cannot
+    // reach right now — which is the only branch that keeps this phase about
+    // the registry write rather than about a node being up. A hostname would
+    // put a DNS lookup in the everyday suite's critical path; a refused
+    // loopback connection needs no resolver and fails in microseconds.
+    //
+    // **Why this phase has to exist at all.** The write goes to the system
+    // peer's tree and the section reads it back through a subscription-fed
+    // mirror. On the Worker arm a surface that reads a prefix nobody subscribed
+    // reads silently EMPTY — so the add could succeed and the row never appear,
+    // with every native test green (the native `Peers` is Direct, where the
+    // mirror does not exist). That is exactly the failure mode that landed a
+    // broken `delete_site` earlier the same day with 965 native tests passing.
+    println!("--- Phase 14.6: connector registry (add / use / rm) ---");
+    let add_connector = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                if (!sec.querySelector('.peer-connections')) continue;
+                const inputs = sec.querySelectorAll('input');
+                let id = null, addr = null;
+                for (const i of inputs) {
+                    const ph = i.getAttribute('placeholder') || '';
+                    if (ph.startsWith('2K')) id = i;
+                    if (ph.startsWith('wss://')) addr = i;
+                }
+                if (!id || !addr) return { ok: false, reason: 'no-connector-fields' };
+                // Real keystroke events: the fields are draft-tracked atoms and
+                // Add submits from the drafts map, not from the DOM — a silent
+                // value-set is a fill no user can produce.
+                id.value = '2KE2eNodeSeven';
+                id.dispatchEvent(new Event('input', { bubbles: true }));
+                addr.value = 'ws://127.0.0.1:65535';
+                addr.dispatchEvent(new Event('input', { bubbles: true }));
+                for (const b of sec.querySelectorAll('button')) {
+                    if (b.textContent.trim() === 'Add connector') { b.click(); return { ok: true }; }
+                }
+                return { ok: false, reason: 'no-add-button' };
+            }
+            return { ok: false, reason: 'no-section' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        add_connector.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Could not drive the Connectors add form. Detail: {add_connector}"
+    );
+
+    let listed = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            const text = sec.textContent;
+            return {
+                listed: text.includes('2KE2eNod'),
+                addr: text.includes('ws://127.0.0.1:65535'),
+            };
+        }
+        return { listed: false, addr: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("listed").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        listed.get("listed").and_then(|v| v.as_bool()),
+        Some(true),
+        "The added connector never appeared in the Connectors table. On the          Worker arm this is what an unsubscribed prefix looks like: the write          lands in the tree and the surface reading it stays silently empty          (the window must watch `connectors_prefix` + the selection path).          Detail: {listed}"
+    );
+    println!("  connector added and listed: {listed}");
+
+    // It must ALREADY be the selection — nobody pressed Use.
+    //
+    // `add_connector` writes the selection when there is none, because a
+    // registry holding rows and no selection resolves to no provisioning at
+    // all: an app that looks configured, installs no establisher, and hands out
+    // ids nobody can reach [AP22]. This phase used to click **Use** here; the
+    // selected row deliberately renders no Use button, so that click now waits
+    // forever for a control that should not exist. Asserting the mark appears on
+    // its own is strictly stronger — it covers the add AND the selection, on the
+    // Worker arm, through the surface a user drives.
+    //
+    // The Use button itself is still gated, on a SECOND connector, by
+    // `selecting_a_connector_says_it_needs_a_reload` — where the button count is
+    // also what proves the first row took the selection.
+    let in_use = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            return { in_use: sec.textContent.includes('In use') };
+        }
+        return { in_use: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("in_use").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        in_use.get("in_use").and_then(|v| v.as_bool()),
+        Some(true),
+        "The first connector added did not become the selection. Two things can          cause this: `add_connector` not writing the selection, or the window not          watching it — the selection is its own entity OUTSIDE the connectors          prefix, so it needs its OWN watch, without which the mark appears only          when some unrelated registry change happens to dirty the window.          Detail: {in_use}"
+    );
+    println!("  connector added and selected in one act (no Use press)");
+
+    // Remove it. The selection must go with it — a selection naming a deleted
+    // node is the dangling case, and provisioning must then resolve to nothing
+    // rather than to some other row.
+    let removed = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                if (!sec.querySelector('.peer-connections')) continue;
+                const rows = sec.querySelectorAll('tr');
+                for (const r of rows) {
+                    if (!r.textContent.includes('2KE2eNod')) continue;
+                    for (const b of r.querySelectorAll('button')) {
+                        if (b.textContent.trim() === 'Delete') { b.click(); return { ok: true }; }
+                    }
+                }
+                return { ok: false, reason: 'no-delete-button' };
+            }
+            return { ok: false, reason: 'no-section' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        removed.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Could not press Delete on the connector row. Detail: {removed}"
+    );
+    let gone = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            const text = sec.textContent;
+            return { gone: !text.includes('2KE2eNod'), in_use: text.includes('In use') };
+        }
+        return { gone: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("gone").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        gone.get("gone").and_then(|v| v.as_bool()),
+        Some(true),
+        "The removed connector is still listed. Detail: {gone}"
+    );
+    assert_eq!(
+        gone.get("in_use").and_then(|v| v.as_bool()),
+        Some(false),
+        "The registry is empty but something still reports being in use — the          selection outlived the node it named. Detail: {gone}"
+    );
+    println!("  connector removed, and the selection went with it");
+
+    phase_gate!(client, "14.7");
+    // -- Phase 14.7: meet at a name — the surface reports, never spins -------
+    //
+    // The `lobby` / `tag` / `secret` naming modes (`crate::rendezvous`), driven
+    // through the window the way a user drives them. Phase 14.6 left the
+    // registry EMPTY, which is this phase's first fixture: with no connector
+    // there is nowhere to meet, and the section has to say so rather than offer
+    // a button that cannot work.
+    //
+    // What this phase can and cannot cover: a real meeting needs a real
+    // signaling node and a second browser — that is `make e2e-webrtc-chat`'s
+    // shape, not this suite's. What it covers instead is everything between the
+    // click and the node, on the **Worker arm**, and specifically that BOTH
+    // failure paths are visible: a refused input (`Mode::parse`) and a node that
+    // cannot be reached. A search that reported neither would render as a
+    // spinner that never resolves — the dead-button disease wearing a progress
+    // indicator, and the reason the section carries its own status at all.
+    println!("--- Phase 14.7: meet at a name (refusal + unreachable node) ---");
+    let empty_state = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                if (!sec.querySelector('.peer-connections')) continue;
+                const text = sec.textContent;
+                let meet_btn = false;
+                for (const b of sec.querySelectorAll('button')) {
+                    if (b.textContent.trim() === 'Meet') meet_btn = true;
+                }
+                return {
+                    card: text.includes('Meet at a name'),
+                    needs_connector: text.includes('Select a connector first'),
+                    meet_btn,
+                };
+            }
+            return { card: false, reason: 'no-section' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        empty_state.get("card").and_then(|v| v.as_bool()),
+        Some(true),
+        "The Meet section is missing from Peer Connections. Detail: {empty_state}"
+    );
+    assert_eq!(
+        empty_state.get("needs_connector").and_then(|v| v.as_bool()),
+        Some(true),
+        "With an empty registry the Meet section must say a connector is needed. \
+         Detail: {empty_state}"
+    );
+    assert_eq!(
+        empty_state.get("meet_btn").and_then(|v| v.as_bool()),
+        Some(false),
+        "The Meet button is offered with no connector to meet through — pressing it \
+         could only fail. Detail: {empty_state}"
+    );
+    println!("  no connector ⇒ the section says so, and offers no button");
+
+    // Put a connector back and select it, so the form has somewhere to go. Same
+    // drive as 14.6 — the address is deliberately unreachable, which is the
+    // second half of this phase, and it is why the peer-id field (Advanced,
+    // `connector_expect`) is filled: with nothing answering, the id can only
+    // come from the person adding it.
+    let armed = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                if (!sec.querySelector('.peer-connections')) continue;
+                let id = null, addr = null;
+                for (const i of sec.querySelectorAll('input')) {
+                    const ph = i.getAttribute('placeholder') || '';
+                    if (ph.startsWith('2K')) id = i;
+                    if (ph.startsWith('wss://')) addr = i;
+                }
+                if (!id || !addr) return { ok: false, reason: 'no-connector-fields' };
+                id.value = '2KE2eMeetNode';
+                id.dispatchEvent(new Event('input', { bubbles: true }));
+                addr.value = 'ws://127.0.0.1:65534';
+                addr.dispatchEvent(new Event('input', { bubbles: true }));
+                for (const b of sec.querySelectorAll('button')) {
+                    if (b.textContent.trim() === 'Add connector') { b.click(); return { ok: true }; }
+                }
+                return { ok: false, reason: 'no-add-button' };
+            }
+            return { ok: false, reason: 'no-section' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        armed.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Could not re-add a connector for the meet. Detail: {armed}"
+    );
+    let selected = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            if (sec.textContent.includes('In use')) return { in_use: true };
+            for (const b of sec.querySelectorAll('button')) {
+                if (b.textContent.trim() === 'Use') { b.click(); return { in_use: false, clicked: true }; }
+            }
+            return { in_use: false, clicked: false };
+        }
+        return { in_use: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("in_use").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        selected.get("in_use").and_then(|v| v.as_bool()),
+        Some(true),
+        "The meet's connector never became the selected one. Detail: {selected}"
+    );
+
+    // The form must now exist — and the mode picker with it.
+    let form = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            const mode = sec.querySelector("[data-field='meet_mode']");
+            const name = sec.querySelector("[data-field='meet_input']");
+            let meet_btn = false;
+            for (const b of sec.querySelectorAll('button')) {
+                if (b.textContent.trim() === 'Meet') meet_btn = true;
+            }
+            return {
+                mode: !!mode,
+                name: !!name,
+                meet_btn,
+                modes: mode ? Array.from(mode.options).map(o => o.value).join(',') : '',
+            };
+        }
+        return { mode: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("meet_btn").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        form.get("meet_btn").and_then(|v| v.as_bool()),
+        Some(true),
+        "With a connector selected the Meet form must appear. Detail: {form}"
+    );
+    // TWO modes, not three, and `secret` is deliberately NOT among them.
+    // `key::tag_key` and `secret_key` are the SAME derivation — SHA-256 over a
+    // domain string, the mode tag and the bytes you typed — so neither word
+    // leaves the device and the only difference is which domain the hash lands
+    // in. That difference is invisible to the person choosing and produces a
+    // silent never-meet: two people typing the same word under different modes
+    // derive different keys and are told "nobody else was there". The Shell
+    // keeps `meet secret <phrase>` for a client that uses it.
+    //
+    // **This assertion was left at three when the picker was narrowed to two modes,
+    // and it is why the unfiltered suite was red on `dev` for two commits with
+    // nobody noticing** — the one place that catches a rule change is a gate
+    // that clicks the control, and this suite is expensive enough that it gets
+    // run last. If you are here because you are re-adding `secret`, read
+    // `render_meet`'s comment first: the mode is not what makes a name private,
+    // entropy is.
+    assert_eq!(
+        form.get("modes").and_then(|v| v.as_str()),
+        Some("tag,lobby"),
+        "The mode picker must offer exactly the two naming modes it ships — these \
+         are upstream mode tags, and a wrong one derives a key nobody else uses. \
+         Detail: {form}"
+    );
+    println!("  connector selected ⇒ the form and all three modes are offered: {form}");
+
+    // (a) A refused input reports itself. `tag` with nothing to meet at would
+    //     otherwise derive a key from the empty string — silently.
+    let refused = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                if (!sec.querySelector('.peer-connections')) continue;
+                for (const b of sec.querySelectorAll('button')) {
+                    if (b.textContent.trim() === 'Meet') { b.click(); return { ok: true }; }
+                }
+                return { ok: false, reason: 'no-meet-button' };
+            }
+            return { ok: false, reason: 'no-section' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        refused.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Could not press Meet. Detail: {refused}"
+    );
+    let refusal = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            const text = sec.textContent;
+            return {
+                said: text.includes('needs something to meet at'),
+                searching: text.includes('Searching at'),
+            };
+        }
+        return { said: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("said").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        refusal.get("said").and_then(|v| v.as_bool()),
+        Some(true),
+        "Meet with an empty name reported nothing. A press that produces no visible \
+         result is indistinguishable from a dead button. Detail: {refusal}"
+    );
+    assert_eq!(
+        refusal.get("searching").and_then(|v| v.as_bool()),
+        Some(false),
+        "A refused input still started a search. Detail: {refusal}"
+    );
+    println!("  an empty name is refused, visibly, and starts nothing");
+
+    // (b) A real search against an unreachable node ends in a visible failure.
+    let started = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                if (!sec.querySelector('.peer-connections')) continue;
+                const name = sec.querySelector("[data-field='meet_input']");
+                if (!name) return { ok: false, reason: 'no-name-field' };
+                name.value = 'chess';
+                name.dispatchEvent(new Event('input', { bubbles: true }));
+                for (const b of sec.querySelectorAll('button')) {
+                    if (b.textContent.trim() === 'Meet') { b.click(); return { ok: true }; }
+                }
+                return { ok: false, reason: 'no-meet-button' };
+            }
+            return { ok: false, reason: 'no-section' };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        started.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "Could not start a meet at a tag. Detail: {started}"
+    );
+    // A started search must **report something** — and then it must END. Which
+    // of the two lands first is a race we do not pretend to control: the node is
+    // unreachable, and the dial can fail before the first poll of this test ever
+    // sees the in-progress state. So the first wait accepts either, and only the
+    // second one is an assertion about the outcome.
+    let running = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            const text = sec.textContent;
+            return {
+                searching: text.includes('Searching at'),
+                // The reach_node failure text specifically — NOT the address,
+                // which is also sitting in the connector row two cards up and
+                // would make this pass on a meet that reported nothing at all.
+                failed: text.includes('connector: dialing'),
+                stop_btn: Array.from(sec.querySelectorAll('button'))
+                    .some(b => b.textContent.trim() === 'Stop'),
+            };
+        }
+        return { searching: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| {
+            v.get("searching").and_then(|b| b.as_bool()).unwrap_or(false)
+                || v.get("failed").and_then(|b| b.as_bool()).unwrap_or(false)
+        },
+    )
+    .await?;
+    assert!(
+        running.get("searching").and_then(|v| v.as_bool()).unwrap_or(false)
+            || running.get("failed").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Starting a meet produced no visible state at all — neither a search in \
+         progress nor a failure. Detail: {running}"
+    );
+    if running.get("searching").and_then(|v| v.as_bool()).unwrap_or(false) {
+        // Caught it mid-search: then there must be a way out of it.
+        assert_eq!(
+            running.get("stop_btn").and_then(|v| v.as_bool()),
+            Some(true),
+            "A running meet offers no way to stop it — it would poll for its whole \
+             window with no way out. Detail: {running}"
+        );
+        println!("  meet observed in progress, with a way to stop it: {running}");
+    } else {
+        println!("  meet failed before the first look — that is a report too: {running}");
+    }
+
+    // It ENDS, and says why. The node is unreachable by construction, so a
+    // session that neither finds nor fails is the spinner this whole surface is
+    // written to avoid.
+    //
+    // What ends it is the failed dial, not `rendezvous::SETUP_BUDGET` — the dial
+    // rejects promptly here. The budget is the backstop for a round trip that
+    // never returns at all, and this phase does not exercise it.
+    let settled = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            const text = sec.textContent;
+            return {
+                failed: text.includes('connector: dialing'),
+                searching: text.includes('Searching at'),
+            };
+        }
+        return { failed: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("failed").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        settled.get("failed").and_then(|v| v.as_bool()),
+        Some(true),
+        "A meet at an unreachable node never reported a failure. This is the exact \
+         shape that was broken once already: the dial DID fail, and the window kept \
+         rendering 'Searching…' because nothing repainted it (`MeetSession::\
+         take_changed`). Detail: {settled}"
+    );
+    assert_eq!(
+        settled.get("searching").and_then(|v| v.as_bool()),
+        Some(false),
+        "The meet failed but still claims to be searching. Detail: {settled}"
+    );
+    println!("  meet at an unreachable node failed visibly: {settled}");
+
+    // Leave the registry as we found it. The selection is mirrored into
+    // localStorage for the pre-peer boot path, so a leftover row would hand the
+    // §6.5 provisioning an unreachable node for every phase after this one —
+    // including the reload in Phase 11, which would come back up provisioned
+    // with it.
+    let cleaned = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            if (!sec.querySelector('.peer-connections')) continue;
+            if (!sec.textContent.includes('2KE2eMeetNod')) return { clean: true };
+            for (const r of sec.querySelectorAll('tr')) {
+                if (!r.textContent.includes('2KE2eMeetNod')) continue;
+                for (const b of r.querySelectorAll('button')) {
+                    if (b.textContent.trim() === 'Delete') { b.click(); return { clean: false }; }
+                }
+            }
+            return { clean: false, reason: 'no-delete-button' };
+        }
+        return { clean: false, reason: 'no-section' };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("clean").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        cleaned.get("clean").and_then(|v| v.as_bool()),
+        Some(true),
+        "The meet's connector outlived the phase — later phases (and the Phase 11 \
+         reload) would boot provisioned with an unreachable node. Detail: {cleaned}"
+    );
+    println!("  registry left clean for the phases that follow");
+    phase_gate!(client, "11");
     // -- Phase 11: reload page, OPFS-backed state must persist --------
     //
     // The persistence acceptance test. With `enable_opfs: true` in
@@ -3853,7 +8327,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // OpfsStore::open() must reattach to existing journal files; allow
     // up to 8s but return as soon as the "Frame loop started" sentinel
     // lands. Saves a few seconds vs. a fixed 6s wait in practice.
-    let phase11_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase11_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 11 reload boot: {phase11_boot_ms}ms");
 
     // Sanity: the primary peer keypair must round-trip across reload.
@@ -3968,9 +8442,10 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          OpfsStore failed to rehydrate on reattach. Detail: {kb_article_persisted_v}"
     );
 
+    phase_gate!(client, "15");
     // -- Phase 15: Stage 2B — multi-SDK backend peer creation --------
     //
-    // Clicks the "+ Backend (Memory)" and "+ Backend (OPFS)" buttons.
+    // Clicks the "+ Worker (memory)" and "+ Worker (OPFS)" buttons.
     // Each spawns a *new* `Sdk::Worker` in `Peers.sdks` (lazy), so the
     // peer-management footer should reflect the growing SDK count.
     //
@@ -4010,6 +8485,24 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // `N peer(s) — 1 boot + M dedicated worker(s)` when sdk_count > 1.
     // Map back to sdk_count = 1 + dedicated for assertion compatibility
     // with the previous "across N SDK(s)" shape.
+    //
+    // The footer is localized, which broke this parse in TWO ways once the
+    // peers surface was extracted:
+    //
+    //  1. The peer count is the `peer.count` CLDR plural (`{n} peer` /
+    //     `{n} peers`) — never the literal `N peer(s)` this used to match.
+    //  2. `t()`/`t_plural()` **bidi-isolate every interpolated arg**, wrapping
+    //     it in FSI (U+2068) … PDI (U+2069) so an LTR number stays LTR inside
+    //     an RTL sentence. So the rendered text is `3 peers`, and `\d+ peers`
+    //     cannot match across the invisible PDI. This defeated *both* regexes
+    //     below, which is why the parse returned -1.
+    //
+    // Strip the isolate marks before matching. Any assertion in this suite that
+    // regex-matches rendered UI text across an interpolated value needs to do
+    // the same — the marks are correct output, not noise to be removed at the
+    // source. (This went unnoticed because Phase 14 sits earlier and hard-errors
+    // without the Tauri binary, so nothing down here ran.) The suite pins
+    // English (`host_locale=en`), so matching the en plural forms is correct.
     let read_sdk_count_script = r#"
         const layer = document.getElementById('dom-layer');
         const root = layer.shadowRoot || layer;
@@ -4017,13 +8510,16 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         for (const sec of sections) {
             const h2 = sec.querySelector('h2');
             if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-            const text = sec.textContent || '';
+            // Drop Unicode bidi isolates (FSI/LRI/RLI/PDI) that t() wraps
+            // around every interpolated arg — they sit between the number and
+            // its noun and would break every match below.
+            const text = (sec.textContent || '').replace(/[\u2066-\u2069]/g, '');
             const dedicated_re = /1 boot \+ (\d+) dedicated worker/;
             const m = text.match(dedicated_re);
             if (m) return 1 + parseInt(m[1], 10);
-            // Footer with no dedicated workers: just `N peer(s)`.
-            // sdk_count is 1 (only the boot SDK exists).
-            if (/\d+ peer\(s\)/.test(text)) return 1;
+            // Footer with no dedicated workers: just the peer count
+            // (`1 peer` / `3 peers`). sdk_count is 1 (only the boot SDK).
+            if (/\d+ peers?\b/.test(text)) return 1;
             return -1;
         }
         return -2;
@@ -4042,35 +8538,18 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
 
     // Helper builds the JS for "click '+ <Mode>' in Peers window".
-    fn click_mode_btn_js(btn_text: &str) -> String {
-        format!(
-            r#"
-            const layer = document.getElementById('dom-layer');
-            const root = layer.shadowRoot || layer;
-            const sections = root.querySelectorAll('section.window');
-            for (const sec of sections) {{
-                const h2 = sec.querySelector('h2');
-                if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                const btns = sec.querySelectorAll('button');
-                for (const b of btns) {{
-                    if (b.textContent.trim() === '{btn_text}') {{
-                        b.click();
-                        return 'clicked';
-                    }}
-                }}
-                return 'no-btn';
-            }}
-            return 'no-peers-section';
-            "#
-        )
+    // `kind` is the create-form option value (persist_key), not a button label —
+    // see `create_peer_form_js`.
+    fn click_mode_btn_js(kind: &str) -> String {
+        create_peer_form_js(kind)
     }
 
     let bm_status_v = client
-        .execute(&click_mode_btn_js("+ Backend (Memory)"), vec![])
+        .execute(&click_mode_btn_js("backend-memory"), vec![])
         .await?;
     let bm_status = bm_status_v.as_str().unwrap_or("non-string");
-    println!("  + Backend (Memory):   {bm_status}");
-    assert_eq!(bm_status, "clicked", "Couldn't click '+ Backend (Memory)' button");
+    println!("  + Worker (memory):    {bm_status}");
+    assert_eq!(bm_status, "clicked", "Couldn't click '+ Worker (memory)' button");
     // Poll for the SDK count to grow rather than burning a fixed 2s.
     // Worker spawn + Ready handshake + drain happens within ~200-400ms
     // typically; give a generous 4s timeout.
@@ -4132,11 +8611,11 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
 
     let bo_status_v = client
-        .execute(&click_mode_btn_js("+ Backend (OPFS)"), vec![])
+        .execute(&click_mode_btn_js("backend-opfs"), vec![])
         .await?;
     let bo_status = bo_status_v.as_str().unwrap_or("non-string");
-    println!("  + Backend (OPFS):     {bo_status}");
-    assert_eq!(bo_status, "clicked", "Couldn't click '+ Backend (OPFS)' button");
+    println!("  + Worker (OPFS):      {bo_status}");
+    assert_eq!(bo_status, "clicked", "Couldn't click '+ Worker (OPFS)' button");
     // OPFS workers take longer than memory — give 6s.
     let final_sdk_count =
         wait_for_sdk_count(&client, read_sdk_count_script, initial_sdk_count + 2, 6000)
@@ -4171,7 +8650,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             for (const sec of sections) {
                 const h2 = sec.querySelector('h2');
                 if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                return sec.querySelectorAll('tbody tr').length;
+                return sec.querySelectorAll('tbody tr:not(.peer-group)').length;
             }
             return -1;
             "#,
@@ -4188,6 +8667,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "Expected at least {expected_rows} peer rows, got {final_rows}"
     );
 
+    phase_gate!(client, "15.5");
     // -- Phase 15.5: Cross-Worker xworker:// handshake -----------------
     //
     // Phase 15 created two backend Worker peers (Memory + OPFS), each
@@ -4270,7 +8750,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     let _ = shell_submit(&client, &format!("open shell @{bm_pid}"), 600).await?;
 
     // Poll for the new Shell section to appear with our peer-id.
-    let new_shell_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let new_shell_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
     let mut new_shell_seen = false;
     while std::time::Instant::now() < new_shell_deadline {
         let v = client
@@ -4320,7 +8800,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         bo_pid.clone()
     };
     let success_needle = format!("connected to {short_bo}");
-    let connect_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let connect_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
     let mut connect_seen = false;
     let mut last_sb = String::new();
     while std::time::Instant::now() < connect_deadline {
@@ -4358,86 +8838,114 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     }
     println!("  ✓ xworker handshake completed (success line in scrollback)");
 
-    // -- Phase 15.6: MultiConnector composition — same backend, both schemes --
-    //
-    // Phase 15.5 proved `xworker://` works from the backend-memory
-    // Worker. Phase 15.6 verifies the upstream MultiConnector
-    // (landed in `bindings/wasm-worker-host/src/lib.rs:354-391`)
-    // composes ws/wss alongside xworker on the same Worker. Before
-    // this landing, a Worker with a control port had ONLY
-    // `MessagePortConnector` — `connect ws://...` from a backend
-    // shell errored with "expected xworker:// scheme" (wrong scheme
-    // handler). After it, the same Worker dispatches both:
-    //   - xworker://<pid>  → MessagePortConnector → broker
-    //   - ws://<host:port> → BrowserWebSocketConnector → external relay
-    //
-    // The Tauri listener from Phase 14 is still alive (TauriListener
-    // drop happens at fn-scope end). We reuse its ws_addr as a real
-    // target — the backend-memory Worker connects to it via ws, and
-    // we assert the success line appears in the backend-memory shell.
-    println!("--- Phase 15.6: MultiConnector ws scheme from backend Worker ---");
-    let ws_connect_line = format!("connect {}", tauri.ws_addr);
-    println!("  submitting from backend-memory shell: {ws_connect_line}");
-    let _ = shell_submit_for_peer(&client, &bm_pid, &ws_connect_line, 200).await?;
-
-    // ws connect is fast on loopback — 2s is plenty. Use the same
-    // short_pid format the verb prints (first-8...last-6).
-    let short_tauri = if tauri.peer_id.len() > 16 {
-        format!(
-            "{}...{}",
-            &tauri.peer_id[..8],
-            &tauri.peer_id[tauri.peer_id.len() - 6..]
-        )
-    } else {
-        tauri.peer_id.clone()
-    };
-    let ws_success_needle = format!("connected to {short_tauri}");
-    let ws_deadline = std::time::Instant::now() + Duration::from_secs(3);
-    let mut ws_connect_seen = false;
-    let mut ws_last_sb = String::new();
-    while std::time::Instant::now() < ws_deadline {
-        ws_last_sb = shell_scrollback_for_peer(&client, &bm_pid).await?;
-        if ws_last_sb.contains(&ws_success_needle) {
-            ws_connect_seen = true;
-            break;
-        }
-        if ws_last_sb.contains("✗ connect ws://") {
-            break;
-        }
-        sleep(Duration::from_millis(100)).await;
+    if tauri.is_none() {
+        println!("--- Phase 15.6 SKIPPED: no display (needs the Phase-14 Tauri listener) ---");
     }
-    if !ws_connect_seen {
-        // Loud diagnostic — if the MultiConnector composition
-        // regresses, the failure here will be "expected xworker://
-        // scheme" or similar (the wrong-scheme-handler signature).
-        // That's the regression we're guarding against.
-        let diag = capture_log(&client).await?;
-        println!("--- diagnostic: ws connect from backend log tail ---");
-        for line in diag.iter().rev().take(40).rev() {
-            if line.contains("connect")
-                || line.contains("ws://")
-                || line.contains("MultiConnector")
-                || line.contains("MessagePort")
-                || line.contains("Browser")
-                || line.contains("WARN")
-                || line.contains("ERROR")
-            {
-                println!("  | {}", line);
+    if let Some(tauri) = &tauri {
+        // -- Phase 15.6: MultiConnector composition — same backend, both schemes --
+        //
+        // Phase 15.5 proved `xworker://` works from the backend-memory
+        // Worker. Phase 15.6 verifies the upstream MultiConnector
+        // (landed in `bindings/wasm-worker-host/src/lib.rs:354-391`)
+        // composes ws/wss alongside xworker on the same Worker. Before
+        // this landing, a Worker with a control port had ONLY
+        // `MessagePortConnector` — `connect ws://...` from a backend
+        // shell errored with "expected xworker:// scheme" (wrong scheme
+        // handler). After it, the same Worker dispatches both:
+        //   - xworker://<pid>  → MessagePortConnector → broker
+        //   - ws://<host:port> → BrowserWebSocketConnector → external relay
+        //
+        // The Tauri listener from Phase 14 is still alive (TauriListener
+        // drop happens at fn-scope end). We reuse its ws_addr as a real
+        // target — the backend-memory Worker connects to it via ws, and
+        // we assert the success line appears in the backend-memory shell.
+        println!("--- Phase 15.6: MultiConnector ws scheme from backend Worker ---");
+        let ws_connect_line = format!("connect {}", tauri.ws_addr);
+        println!("  submitting from backend-memory shell: {ws_connect_line}");
+        let _ = shell_submit_for_peer(&client, &bm_pid, &ws_connect_line, 200).await?;
+
+        // Use the same short_pid format the verb prints (first-8...last-6).
+        let short_tauri = if tauri.peer_id.len() > 16 {
+            format!(
+                "{}...{}",
+                &tauri.peer_id[..8],
+                &tauri.peer_id[tauri.peer_id.len() - 6..]
+            )
+        } else {
+            tauri.peer_id.clone()
+        };
+        let ws_success_needle = format!("connected to {short_tauri}");
+        // 30s, not the 3s this used to be. The old budget was a guess at how
+        // long a loopback ws connect takes ("fast on loopback — 2s is plenty"),
+        // and it was measured failing on a loaded box in the 2026-08-13 soak
+        // (`f3-7`) with a sibling failure pre-dating that session's fixes — the
+        // fixed-budget-against-a-spawned-process shape, not a defect in the
+        // connect. Cost of the headroom is zero on a healthy run: the loop
+        // returns on the first scrollback read that carries the success line,
+        // and an explicit `✗ connect ws://` still breaks out immediately, so a
+        // genuine failure is still reported fast rather than waiting out 30s.
+        let ws_started = std::time::Instant::now();
+        let ws_deadline = ws_started + ASYNC_ROUND_TRIP_BUDGET;
+        let mut ws_connect_seen = false;
+        let mut ws_last_sb = String::new();
+        while std::time::Instant::now() < ws_deadline {
+            ws_last_sb = shell_scrollback_for_peer(&client, &bm_pid).await?;
+            if ws_last_sb.contains(&ws_success_needle) {
+                ws_connect_seen = true;
+                break;
             }
+            if ws_last_sb.contains("✗ connect ws://") {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
         }
-        panic!(
-            "ws connect from backend-memory to {} did not produce \
-             success line within 3s. If the scrollback shows \
-             \"expected xworker:// scheme\", the host's MultiConnector \
-             composition regressed (kernel-side).\n\
-             Last scrollback:\n{}",
-            tauri.ws_addr, ws_last_sb
+        if !ws_connect_seen {
+            // Loud diagnostic — if the MultiConnector composition
+            // regresses, the failure here will be "expected xworker://
+            // scheme" or similar (the wrong-scheme-handler signature).
+            // That's the regression we're guarding against.
+            let diag = capture_log(&client).await?;
+            println!("--- diagnostic: ws connect from backend log tail ---");
+            for line in diag.iter().rev().take(40).rev() {
+                if line.contains("connect")
+                    || line.contains("ws://")
+                    || line.contains("MultiConnector")
+                    || line.contains("MessagePort")
+                    || line.contains("Browser")
+                    || line.contains("WARN")
+                    || line.contains("ERROR")
+                {
+                    println!("  | {}", line);
+                }
+            }
+            panic!(
+                "ws connect from backend-memory to {} did not produce \
+                 success line within {}s. If the scrollback shows \
+                 \"expected xworker:// scheme\", the host's MultiConnector \
+                 composition regressed (kernel-side).\n\
+                 Last scrollback:\n{}\n\
+                 Tauri child stdout tail (the listener side of this connect):\n{}",
+                tauri.ws_addr,
+                ASYNC_ROUND_TRIP_BUDGET.as_secs(),
+                ws_last_sb,
+                tauri.stdout_tail(),
+            );
+        }
+        // Print the elapsed time on SUCCESS, not just on failure. Raising this
+        // budget from 3s to 30s removed an accidental signal — a tight budget
+        // fails when something gets slower, which is information. Printing the
+        // measurement keeps that information without the false failures: a
+        // healthy connect lands in well under a second, so a green run that
+        // suddenly reports seconds here is a regression worth chasing even
+        // though it passed.
+        println!(
+            "  ✓ ws connect from backend Worker completed in {}ms \
+             (MultiConnector composes both schemes)",
+            ws_started.elapsed().as_millis()
         );
     }
-    println!(
-        "  ✓ ws connect from backend Worker completed (MultiConnector composes both schemes)"
-    );
 
+    phase_gate!(client, "15.7");
     // -- Phase 15.7: backend → boot-worker primary via xworker:// -----
     //
     // Proves the boot-worker control-port wiring (consumer-side, this
@@ -4488,7 +8996,10 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         system_pid.clone()
     };
     let boot_success_needle = format!("connected to {short_system}");
-    let boot_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    // Same reasoning as 15.6's budget: an upper bound, not a wait. This one is
+    // NOT display-gated, so its fixed 3s was exposed on every headless run too.
+    let boot_started = std::time::Instant::now();
+    let boot_deadline = boot_started + ASYNC_ROUND_TRIP_BUDGET;
     let mut boot_connect_seen = false;
     let mut boot_last_sb = String::new();
     while std::time::Instant::now() < boot_deadline {
@@ -4519,14 +9030,18 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         }
         panic!(
             "xworker connect from backend-memory to boot-primary {} did \
-             not produce success line within 3s.\nLast scrollback:\n{}",
-            system_pid, boot_last_sb
+             not produce success line within {}s.\nLast scrollback:\n{}",
+            system_pid,
+            ASYNC_ROUND_TRIP_BUDGET.as_secs(),
+            boot_last_sb
         );
     }
     println!(
-        "  ✓ boot-worker primary reachable via xworker:// from a sibling Worker"
+        "  ✓ boot-worker primary reachable via xworker:// from a sibling Worker ({}ms)",
+        boot_started.elapsed().as_millis()
     );
 
+    phase_gate!(client, "15.8");
     // -- Phase 15.8: runtime-added Frontend reachable via xworker:// ---
     //
     // Boot-time registration (Phase 15.7) covers peers known when
@@ -4562,23 +9077,24 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         .collect();
     println!("  pre-create entity_peers lines: {}", pre_pids.len());
 
-    // Click `+ Frontend` in the Peers window — same button Phase 12
-    // exercised pre-reload. The click dispatches
-    // `Action::CreateFrontendPeer` → `create_frontend_peer`.
+    // Click `+ Main thread (memory)` in the Peers window — same button (a
+    // main-thread in-memory peer, was "+ Frontend") Phase 12 exercised
+    // pre-reload. The click dispatches `Action::CreateFrontendPeer` →
+    // `create_frontend_peer`.
     let frontend_status = client
-        .execute(&click_mode_btn_js("+ Frontend"), vec![])
+        .execute(&click_mode_btn_js("frontend"), vec![])
         .await?;
     assert_eq!(
         frontend_status.as_str().unwrap_or(""),
         "clicked",
-        "couldn't click '+ Frontend' in Peers window"
+        "couldn't click '+ Main thread (memory)' in Peers window"
     );
 
     // Wait for localStorage to grow — that's our signal that the
     // CreatePeer round-trip completed and `create_frontend_peer`
     // persisted the new entry. 3s budget for the worker round-trip
     // on a dev box.
-    let create_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let create_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
     let mut new_fe_pid: Option<String> = None;
     while std::time::Instant::now() < create_deadline {
         let cur_ls_v = client
@@ -4629,7 +9145,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         new_fe_pid.clone()
     };
     let runtime_success_needle = format!("connected to {short_new_fe}");
-    let runtime_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let runtime_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
     let mut runtime_connect_seen = false;
     let mut runtime_last_sb = String::new();
     while std::time::Instant::now() < runtime_deadline {
@@ -4670,6 +9186,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "  ✓ runtime-added Frontend reachable via xworker:// (Gap A regression gate)"
     );
 
+    phase_gate!(client, "16");
     // -- Phase 16: Stage 2C — PeerConfig persistence across reload ----
     //
     // After Phase 15: boot worker SDK + 2 backend SDKs = 3 SDKs total.
@@ -4709,7 +9226,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     client.refresh().await?;
     // Boot worker + 2 backend-worker respawns; OPFS replay adds latency.
     // Poll for "Frame loop started" rather than burning a fixed 6s.
-    let phase16_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase16_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 16 reload boot: {phase16_boot_ms}ms");
 
     // Respawn the Peers window to read its footer.
@@ -4731,13 +9248,24 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             vec![],
         )
         .await?;
-    sleep(Duration::from_millis(800)).await;
-
-    let post_reload_sdk_count = client
-        .execute(read_sdk_count_script, vec![])
-        .await?
-        .as_i64()
-        .unwrap_or(-3);
+    // POLL, do not sleep-then-read. A respawned backend peer lands through the
+    // `pending` queue on some later frame, and 800ms was a guess that happened
+    // to hold while the respawns were fired IN PARALLEL with the boot worker's
+    // handshake. They are deliberately fired AFTER it now (that parallelism
+    // wedged boot — see `app.rs`' note at the `pending` declaration), so they
+    // start later and this sampled before the second one had attached. The
+    // property under test is unchanged — the count must MATCH across the reload
+    // — and the budget is an upper bound a healthy run returns from on the first
+    // poll.
+    let post_reload_sdk_count = poll_json(
+        &client,
+        read_sdk_count_script,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.as_i64().unwrap_or(-3) >= pre_phase16_sdk_count,
+    )
+    .await?
+    .as_i64()
+    .unwrap_or(-3);
     println!("  post-reload sdk_count: {post_reload_sdk_count}");
     println!("  pre-reload  sdk_count: {pre_phase16_sdk_count}");
     let post_reload_log = capture_log(&client).await?;
@@ -4762,6 +9290,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          respawned — check the partition logic."
     );
 
+    phase_gate!(client, "17");
     // -- Phase 17: OPFS cleanup on Backend(OPFS) delete ---------------
     //
     // Verifies: when a Backend(OPFS) peer is deleted, its localStorage
@@ -4846,7 +9375,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             const h2 = sec.querySelector('h2');
             if (!h2 || h2.textContent.trim() !== 'Peers') continue;
             let n = 0;
-            for (const row of sec.querySelectorAll('tbody tr')) {{
+            for (const row of sec.querySelectorAll('tbody tr:not(.peer-group)')) {{
                 if ((row.textContent || '').includes('{opfs_prefix}')) n++;
             }}
             return n;
@@ -4874,7 +9403,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         for (const sec of sections) {{
             const h2 = sec.querySelector('h2');
             if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-            const rows = sec.querySelectorAll('tbody tr');
+            const rows = sec.querySelectorAll('tbody tr:not(.peer-group)');
             for (const row of rows) {{
                 const txt = row.textContent || '';
                 if (!txt.includes('{opfs_prefix}')) continue;
@@ -4976,7 +9505,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
 
     // Reload — boot-time cleanup runs before any worker spawn.
     client.refresh().await?;
-    let phase17_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase17_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 17 reload boot: {phase17_boot_ms}ms");
 
     let tombstones_post_reload = client
@@ -5003,6 +9532,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
 
     // ====================================================================
+    phase_gate!(client, "18");
     // Phase 18: Direct-browser mode (C4 — closes the largest §5 coverage
     // hole). Every phase above ran Worker mode (?worker=1). Direct mode —
     // the auto-fallback, in-memory-only arm — had ZERO app-level e2e, and
@@ -5034,7 +9564,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             http_server_port()
         ))
         .await?;
-    let phase18_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase18_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 18 direct boot: {phase18_boot_ms}ms");
 
     let direct_log = capture_log(&client).await?;
@@ -5111,7 +9641,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // and awaits navigator.storage promises, so its log line lands shortly
     // AFTER "Frame loop started" — poll for it rather than snapshot-check.
     let mut persist_logged = false;
-    let persist_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let persist_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
     while std::time::Instant::now() < persist_deadline {
         let l = capture_log(&client).await?;
         if l.iter().any(|x| x.contains("storage durability:")) {
@@ -5228,7 +9758,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
 
     client.refresh().await?; // URL still carries ?worker=0
-    let phase18_reload_ms = wait_for_boot(&client, 8000).await?;
+    let phase18_reload_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 18 direct reload boot: {phase18_reload_ms}ms");
 
     let post_direct_log = capture_log(&client).await?;
@@ -5308,6 +9838,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     println!("  Phase 18 OK — durable Direct boot, IDB primary, factory, reactive write, reload-survival");
 
     // ====================================================================
+    phase_gate!(client, "19");
     // Phase 19: Site Mode overlay (P2 — the content-site overlay surface).
     // Runs in the current Direct context (?worker=0), where the demo site
     // seeds synchronously so the overlay resolves deterministically. We
@@ -5491,6 +10022,429 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             .join("\n---\n")
     );
 
+    phase_gate!(client, "19-doc");
+    // -- Phase 19-doc: a `format:html` page renders in a RESTRICTED sandbox --
+    //
+    // The web-tier escape hatch (convention §3.1) is what carries a
+    // pre-rendered Pandoc paper/book. Its safety does not come from a
+    // sanitizer — there is none — it comes from WHERE the bytes are mounted:
+    // an `<iframe sandbox="">` with every restriction on. So this phase asserts
+    // the two independent halves of that claim, and deliberately does NOT
+    // settle for the easy one:
+    //
+    //   (a) the document did NOT reach our origin — the marker id inside it is
+    //       unreachable from our DOM. Only a regression to `set_inner_html`
+    //       can make this assertion fail, which is why it is phrased as a
+    //       negative on the document's own content rather than as "an iframe
+    //       exists".
+    //   (b) nothing in it executed — the document carries a script that would
+    //       rewrite its own paragraph. Comparing the sandbox ATTRIBUTE would
+    //       only check a spelling; reading the rendered text checks the
+    //       property. WebDriver can enter an opaque-origin frame; the app
+    //       cannot, and that asymmetry is exactly what makes this checkable
+    //       from here and nowhere else.
+    //
+    // Navigation is a real click on the index page's link, so the resolve →
+    // render → mount path is the shipped one.
+    println!("--- Phase 19-doc: format:html page → restricted sandbox ---");
+
+    let doc_nav = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const link = Array.from(sl.querySelectorAll('a'))
+                .find(a => (a.textContent || '').includes('Pre-Rendered Document'));
+            if (!link) return { clicked: false,
+                links: Array.from(sl.querySelectorAll('a')).map(a => a.textContent.trim()) };
+            link.click();
+            return { clicked: true };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        doc_nav.get("clicked").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-doc: no link to the document page on the demo index: {doc_nav:?}"
+    );
+
+    // Poll rather than sleep on a guess — the nav routes through an Action and
+    // a rebuild, and a fixed sleep is the known source of load-dependent flake.
+    let mut doc_state = serde_json::Value::Null;
+    let doc_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+    while std::time::Instant::now() < doc_deadline {
+        doc_state = client
+            .execute(
+                r#"
+                const sl = document.getElementById('site-layer');
+                const frames = Array.from(sl.querySelectorAll('iframe'));
+                const f = frames[0];
+                return {
+                    frame_count: frames.length,
+                    // "" and null are DIFFERENT: a missing attribute is NO
+                    // sandbox at all, and getAttribute returns null for it.
+                    // Read both so the two can never be confused.
+                    sandbox_attr: f ? f.getAttribute('sandbox') : null,
+                    has_sandbox: f ? f.hasAttribute('sandbox') : false,
+                    // The document is delivered as its own `data:` URL, not
+                    // inline `srcdoc` — that is what gives it a base URL of
+                    // its own, which is what makes its table of contents
+                    // resolve to itself instead of to OUR page.
+                    src_len: f ? (f.getAttribute('src') || '').length : 0,
+                    src_scheme: f ? (f.getAttribute('src') || '').slice(0, 33) : '',
+                    has_srcdoc: f ? f.hasAttribute('srcdoc') : false,
+                    // (a) The document's own marker must NOT be in our tree.
+                    marker_in_our_dom:
+                        !!document.getElementById('entity-demo-doc-marker'),
+                    // Nor may the markdown pane have been used for it.
+                    markup_pane_present: !!sl.querySelector('.cs-doc'),
+                };
+                "#,
+                vec![],
+            )
+            .await?;
+        if doc_state.get("frame_count").and_then(|v| v.as_i64()).unwrap_or(0) > 0 {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    assert_eq!(
+        doc_state.get("frame_count").and_then(|v| v.as_i64()),
+        Some(1),
+        "Phase 19-doc: the document page did not mount exactly one frame: {doc_state:?}"
+    );
+    assert_eq!(
+        doc_state.get("has_sandbox").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-doc: the document frame carries NO sandbox attribute — an \
+         absent attribute is no sandbox at all: {doc_state:?}"
+    );
+    assert_eq!(
+        doc_state.get("marker_in_our_dom").and_then(|v| v.as_bool()),
+        Some(false),
+        "Phase 19-doc: the document's own element is in OUR DOM — it was \
+         injected into our origin instead of the frame (stored XSS): {doc_state:?}"
+    );
+    assert_eq!(
+        doc_state.get("markup_pane_present").and_then(|v| v.as_bool()),
+        Some(false),
+        "Phase 19-doc: a document page rendered through the markdown pane: {doc_state:?}"
+    );
+    // NOTE: "is the body big enough" is a check on the DELIVERY SPELLING and
+    // lives at the bottom with the others, not here. Placed here it fired
+    // first under mutation and the anchor assertion below was never reached —
+    // the same shadowing that already cost this phase its script-inertness
+    // gate once. "Did the body arrive" is covered behaviourally by
+    // `marker_here` inside the frame.
+
+    // (b) Step INSIDE the frame and read what a reader would see. This is the
+    // only assertion that can tell "scripts are blocked" from "the attribute
+    // is spelled right", and it is why this phase enters the frame at all.
+    client.enter_frame(0).await?;
+    let inside = client
+        .execute(
+            r#"
+            const probe = document.getElementById('script-probe');
+            const deep = document.getElementById('entity-demo-doc-deep');
+            return {
+                probe_text: probe ? probe.textContent : null,
+                marker_here: !!document.getElementById('entity-demo-doc-marker'),
+                // The document's own stylesheet must have applied — that is
+                // the whole point of carrying it verbatim.
+                serif: probe ? getComputedStyle(probe).fontFamily : '',
+                // Where the anchor target sits BEFORE any jump. It has to
+                // start off-screen or "it jumped" is unfalsifiable — that is
+                // exactly how the previous demo document, which was short
+                // enough to fit, carried a claim about anchors that was false.
+                deep_top_before: deep
+                    ? Math.round(deep.getBoundingClientRect().top) : null,
+                hash_before: location.hash,
+            };
+            "#,
+            vec![],
+        )
+        .await?;
+    client.enter_parent_frame().await?;
+
+    assert_eq!(
+        inside.get("marker_here").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-doc: the document did not render inside the frame — a blank \
+         frame is indistinguishable from a working one, so this is the check \
+         that says it actually arrived: {inside:?}"
+    );
+    let probe_text = inside.get("probe_text").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        !probe_text.contains("SCRIPT RAN"),
+        "Phase 19-doc: a script INSIDE the document executed — the sandbox is \
+         not restricting scripts. This is the stored-XSS boundary: {inside:?}"
+    );
+    assert!(
+        probe_text.contains("Scripts do not run here"),
+        "Phase 19-doc: the document's own paragraph text is missing: {inside:?}"
+    );
+    assert!(
+        inside.get("serif").and_then(|v| v.as_str()).unwrap_or("").contains("serif"),
+        "Phase 19-doc: the document's own stylesheet did not apply — carrying \
+         it verbatim is pointless if its typography is lost: {inside:?}"
+    );
+
+    // (c) THE DOCUMENT'S OWN TABLE OF CONTENTS. A pre-rendered paper navigates
+    // entirely by `#anchor`, and a book is one file whose every chapter jump is
+    // one. Under `srcdoc` these resolved against OUR base URL, so a TOC click
+    // replaced the paper with the app's host page — the document rendered
+    // perfectly and could not be read past the first screen. The fix is the
+    // `data:` delivery above, and this is the assertion that holds it.
+    //
+    // Both halves are needed. "Still the document" alone passes if the click
+    // did nothing; "scrolled" alone passes if the frame navigated somewhere
+    // that happens to be tall.
+    let deep_before = inside.get("deep_top_before").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        deep_before > 400,
+        "Phase 19-doc: the anchor target starts on screen, so a jump to it is \
+         unobservable and this gate proves nothing. The demo document's spacer \
+         must keep it below the fold: {inside:?}"
+    );
+
+    client.enter_frame(0).await?;
+    client
+        .execute("document.getElementById('entity-demo-doc-toc').click(); return true;", vec![])
+        .await?;
+    // Poll, don't sleep: the jump is a same-document navigation plus a scroll,
+    // and a fixed wait here reported a working tier as broken on one run out
+    // of six while measuring this.
+    let mut jumped = serde_json::Value::Null;
+    let jump_deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+    while std::time::Instant::now() < jump_deadline {
+        jumped = client
+            .execute(
+                r#"
+                const deep = document.getElementById('entity-demo-doc-deep');
+                return {
+                    hash: location.hash,
+                    title: document.title,
+                    // Still OUR document? A frame that navigated away to the
+                    // app's host page has no marker in it.
+                    marker_here: !!document.getElementById('entity-demo-doc-marker'),
+                    deep_top: deep
+                        ? Math.round(deep.getBoundingClientRect().top) : null,
+                    scrolled: Math.round(window.scrollY),
+                };
+                "#,
+                vec![],
+            )
+            .await?;
+        if jumped.get("hash").and_then(|v| v.as_str()) == Some("#entity-demo-doc-deep")
+            && jumped.get("deep_top").and_then(|v| v.as_i64()).map(|t| t < 100).unwrap_or(false)
+        {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    client.enter_parent_frame().await?;
+
+    assert_eq!(
+        jumped.get("marker_here").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-doc: clicking the document's own table-of-contents link \
+         navigated the frame AWAY from the document — this is the `srcdoc` \
+         base-URL bug: the anchor resolved against our page instead of the \
+         paper's. The document must be delivered with a base URL of its own: \
+         {jumped:?}"
+    );
+    let deep_after = jumped.get("deep_top").and_then(|v| v.as_i64()).unwrap_or(i64::MAX);
+    // Tight on purpose. The demo document carries trailing height so the target
+    // can reach the TOP of the frame; without that it stops part-way down and
+    // only a loose bound is assertable, which would also pass for a document
+    // that merely scrolled a bit.
+    assert!(
+        deep_after < 100,
+        "Phase 19-doc: the table-of-contents link did not move the document to \
+         its target — it is still {deep_after}px away (was {deep_before}px). \
+         An anchor that is inert is what `blob:` under this sandbox tier does; \
+         a paper's whole navigation is these links: {jumped:?}"
+    );
+    println!(
+        "  document TOC anchor jumped: target {deep_before}px → {deep_after}px, \
+         still the same document"
+    );
+
+    // (c2) THE SAME JUMP, EIGHT MORE TIMES — because one jump cannot tell
+    // "anchors work" from "anchors work once". The check above clicks a single
+    // anchor, and a single anchor is roughly how far the original delivery got:
+    // the `blob:` URL was revoked on the frame's `load` event, which serves the
+    // first several same-document navigations and then silently stops granting
+    // them, so every real book went dead a few chapters in.
+    //
+    // **READ THIS BEFORE TRUSTING IT: this run does NOT catch that defect.**
+    // Mutation-checked, twice. Reintroducing the exact shipped bug (revoke on
+    // the frame's own `load`) leaves this phase GREEN at 8/8 with
+    // `history.length` incrementing the whole way. A cruder mutation — revoking
+    // before the frame loads — does go red, but on the earlier "did it render
+    // at all" assertion, so it proves nothing about this loop either.
+    //
+    // What DOES separate the two, measured in an isolated page with trusted
+    // WebDriver clicks (not the synthetic `.click()` used here), varying only
+    // the revoke:
+    //
+    //   revoke on load        7/12 jumps      revoke on replacement   12/12
+    //
+    // and that split holds at EVERY document size tried — 21 KB, 1.2 MB, and
+    // all seven real books from 0.81 MB to 7.82 MB. So the blind spot is not
+    // fixture size, which is what it was for the 2 MiB `data:` ceiling; it is
+    // something about this harness, and it is **unidentified**. Until it is,
+    // the real check is the one that found the bug: serve a real book and click
+    // its table of contents a dozen times. Do not read a green 19-doc as
+    // evidence that document navigation survives repetition.
+    //
+    // The loop is kept because it is still a gate against *total* anchor
+    // breakage and it prints its trace on pass, so a future run degrading from
+    // 8 to 5 is visible rather than binary. The assertion is on EVERY jump, not
+    // the last — a run that dies at 5 and is only checked at 8 is
+    // indistinguishable from one that never worked. `history.length` rides
+    // along because it is the underlying signal: it stops incrementing at the
+    // exact click the hash stops changing.
+    client.enter_frame(0).await?;
+    let mut chapter_trace: Vec<String> = Vec::new();
+    let mut first_dead: Option<usize> = None;
+    for n in 1..=8u32 {
+        let id = format!("entity-demo-ch{n}");
+        client
+            .execute(
+                &format!(
+                    "document.querySelector('a[href=\"#{id}\"]').click(); return true;"
+                ),
+                vec![],
+            )
+            .await?;
+        let mut moved = serde_json::Value::Null;
+        let deadline = std::time::Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while std::time::Instant::now() < deadline {
+            moved = client
+                .execute(
+                    &format!(
+                        r#"
+                        const t = document.getElementById('{id}');
+                        return {{
+                            hash: location.hash,
+                            hist: history.length,
+                            top: t ? Math.round(t.getBoundingClientRect().top) : null,
+                            alive: !!document.getElementById('entity-demo-doc-marker'),
+                        }};
+                        "#
+                    ),
+                    vec![],
+                )
+                .await?;
+            if moved.get("hash").and_then(|v| v.as_str()) == Some(&format!("#{id}")) {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        let hash = moved.get("hash").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let hist = moved.get("hist").and_then(|v| v.as_i64()).unwrap_or(-1);
+        chapter_trace.push(format!("ch{n}:{hash}(h{hist})"));
+        if hash != format!("#{id}") && first_dead.is_none() {
+            first_dead = Some(n as usize);
+        }
+        assert_eq!(
+            moved.get("alive").and_then(|v| v.as_bool()),
+            Some(true),
+            "Phase 19-doc: the document vanished on chapter jump {n} — the frame \
+             navigated away or the delivery died mid-read: {moved:?}"
+        );
+    }
+    client.enter_parent_frame().await?;
+    // Printed on PASS as well as fail: a green run still carries the evidence,
+    // which is what lets a future reader see a run degrade from 8 to 5 rather
+    // than only see it cross zero.
+    println!("  document chapter jumps: {}", chapter_trace.join(" "));
+    assert!(
+        first_dead.is_none(),
+        "Phase 19-doc: the document stopped honouring its own anchors at chapter \
+         {} of 8 — the earlier jumps worked, so this is not 'anchors are broken', \
+         it is the delivery being revoked out from under a document that is still \
+         mounted. A reader meets this as a book that goes dead a few chapters in. \
+         Trace: {}",
+        first_dead.unwrap_or(0),
+        chapter_trace.join(" ")
+    );
+
+    // The attribute check comes LAST, deliberately. It is the cheap one, and
+    // when it ran first it *shadowed* the behavioural check above: mutating the
+    // tier to `allow-scripts` failed here and the suite never reached the
+    // assertion that actually proves scripts are inert — so that assertion had
+    // never been seen red. Ordering the property before its spelling is what
+    // makes both of them gates. (Verified by mutation in both orders.)
+    // EXACTLY this string. `allow-same-origin` alone grants an origin to a
+    // document that cannot use it — no scripts, so nothing in the frame can
+    // reach a cookie, storage or our DOM (the inertness assertion above is what
+    // proves that half). Adding `allow-scripts` beside it is the one edit that
+    // turns this into full origin access for every publisher on the network,
+    // which is why the comparison is `==` against the whole attribute rather
+    // than a "contains" that a second token would slip past.
+    assert_eq!(
+        doc_state.get("sandbox_attr").and_then(|v| v.as_str()),
+        Some("allow-same-origin"),
+        "Phase 19-doc: the document sandbox must be EXACTLY `allow-same-origin` \
+         — and never with `allow-scripts`, which together hand every publisher \
+         our origin via parent.document: {doc_state:?}"
+    );
+    // Same reasoning, same position: the DELIVERY spelling is cheap and the
+    // behaviour above is what matters, so it is checked after. Its value is
+    // naming the cause when the anchor assertion goes red — `srcdoc` present
+    // is the bug, in one word.
+    //
+    // `blob:` and not `data:`, which shipped for one commit: Chrome caps a
+    // `data:` URL at 2 MiB and renders a BLANK FRAME past it, with no error and
+    // no event. The published corpus book is 10.9 MB base64, so every real book
+    // was blank in one of our two engines while this phase's 5 KB demo document
+    // stayed green. A ceiling only the real payload crosses cannot be caught by
+    // a fixture that never approaches it — which is why the size number lives in
+    // the module docs and this assertion pins the delivery that has no ceiling.
+    assert!(
+        doc_state
+            .get("src_scheme")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .starts_with("blob:"),
+        "Phase 19-doc: the document frame is not delivered from a `blob:` URL. \
+         `srcdoc` inherits OUR base URL and breaks every anchor; `data:` is \
+         capped at 2 MiB in Chrome and renders real books blank: {doc_state:?}"
+    );
+    assert_eq!(
+        doc_state.get("has_srcdoc").and_then(|v| v.as_bool()),
+        Some(false),
+        "Phase 19-doc: the frame still carries a `srcdoc` attribute — with both \
+         set, `srcdoc` wins and the base-URL bug is back: {doc_state:?}"
+    );
+    println!("  document mounted sandboxed; scripts inert, own stylesheet applied");
+
+    let doc_log = capture_log(&client).await?;
+    let doc_panics = count_panics(&doc_log);
+    assert!(
+        doc_panics.is_empty(),
+        "Phase 19-doc: rendering the document page panicked:\n{}",
+        doc_panics.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n---\n")
+    );
+
+    // Return to the index so the phases after this one start where they expect.
+    client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const home = Array.from(sl.querySelectorAll('a'))
+                .find(a => (a.textContent || '').trim() === 'Home');
+            if (home) home.click();
+            return !!home;
+            "#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(400)).await;
+
     // 19b.5 — the Share control (the static→live round-trip's live→link reverse
     // half). The overlay nav bar carries a "Share link" button copying the live
     // `?site=` deep link; clicking flips the label to "Copied" (clipboard may be
@@ -5571,6 +10525,256 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  overlay navigated to the About page (still in site mode)");
 
+    // 19c-x — CROSS-SITE navigation (the feature billslab ships on). Return
+    // Home (the demo index carries a `site:demo-notes/index` cross-site link),
+    // click it, and assert the COMPANION site rendered — proving `site:` nav
+    // routes through the shared rewrite_links → classify_link → go_to path.
+    // Then follow the companion's `site:demo/index` link back and assert we
+    // land on the primary demo index again (the round trip).
+    let home_click = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            for (const a of (sl ? sl.querySelectorAll('a') : [])) {
+                if ((a.textContent || '').trim() === 'Home') { a.click(); return 'clicked'; }
+            }
+            return 'no-home-link';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        home_click.as_str(),
+        Some("clicked"),
+        "Phase 19: couldn't find the 'Home' nav link to return to the demo index"
+    );
+    sleep(Duration::from_millis(500)).await;
+
+    // 19c-t setup — MANIFEST SITE THEME (S-T2) needs the "Site's theme"
+    // appearance mode (the manifest applies ONLY there). Phase 3 left the
+    // localStorage mirror on "system", so pin it to "site" for this
+    // sub-phase and restore the prior value at the end (state hygiene for
+    // later phases). The mirror IS the render loop's designed input
+    // (`site_appearance_current`, read per frame); the Settings-select →
+    // set_site_appearance → apply_site_appearance delivery path is Phase
+    // 3's coverage. Also empty the #site-theme-vars :root block "system"
+    // installed, as selecting "site" in Settings would.
+    let prior_site_mode = client
+        .execute(
+            r#"
+            const prev = localStorage.getItem('entity_site_appearance');
+            localStorage.setItem('entity_site_appearance', 'site');
+            const el = document.getElementById('site-theme-vars');
+            if (el) el.textContent = '';
+            return prev;
+            "#,
+            vec![],
+        )
+        .await?;
+    let prior_site_mode = prior_site_mode.as_str().unwrap_or("site").to_string();
+    sleep(Duration::from_millis(400)).await;
+
+    // The PRIMARY demo declares no manifest theme, so in "site" mode its
+    // wrapper renders the default dark site palette (S-T2 must not leak the
+    // companion's theme onto it).
+    let demo_bg = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const w = sl ? sl.querySelector('div') : null;
+            return w ? getComputedStyle(w).backgroundColor : 'no-wrapper';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        demo_bg.as_str(),
+        Some("rgb(16, 16, 24)"), // #101018 — the --site-bg default
+        "Phase 19: the unthemed demo site should render the default dark palette: {demo_bg:?}"
+    );
+
+    let cross_click = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            for (const a of (sl ? sl.querySelectorAll('a') : [])) {
+                if ((a.textContent || '').trim() === 'Field Notes') { a.click(); return 'clicked'; }
+            }
+            return 'no-field-notes-link';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        cross_click.as_str(),
+        Some("clicked"),
+        "Phase 19: couldn't find the 'Field Notes' cross-site link on the demo index"
+    );
+    sleep(Duration::from_millis(600)).await;
+
+    let cross = client
+        .execute(
+            r#"
+            const c = document.getElementById('app-container');
+            const sl = document.getElementById('site-layer');
+            return {
+                container_class: c ? c.className : null,
+                site_text: sl ? (sl.textContent || '').trim() : '',
+            };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        cross.get("container_class").and_then(|v| v.as_str()),
+        Some("mode-site"),
+        "Phase 19: cross-site nav must stay in site mode (no reload): {cross:?}"
+    );
+    let cross_text = cross.get("site_text").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        cross_text.contains("Field Notes") && cross_text.contains("cross-site link"),
+        "Phase 19: the cross-site link didn't render the companion site; got: {cross_text:?}"
+    );
+    println!("  overlay followed a cross-site link to the companion site");
+
+    // 19c-t — MANIFEST SITE THEME (S-T2). The companion's manifest declares
+    // `"theme": "light"`; in the default "Site's theme" appearance mode the
+    // renderer freezes the whole `--site-*` family onto the site's own
+    // wrapper (container-scoped — the primary demo just asserted it stayed
+    // dark). Assert the LIGHT palette actually painted, then flip the
+    // appearance mode to a strict override and assert the user's choice
+    // wins WHILE the themed site stays open — the container block must
+    // vanish on the next rebuild (the output-equality guard carries the
+    // mode, the exact mechanism a renderer-side gate would break). The
+    // Settings-select → set_site_appearance → apply_site_appearance path is
+    // Phase 3's coverage; the localStorage mirror driven here IS the render
+    // loop's designed input (`site_appearance_current`, read per frame).
+    let themed_bg = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const w = sl ? sl.querySelector('div') : null;
+            return w ? getComputedStyle(w).backgroundColor : 'no-wrapper';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        themed_bg.as_str(),
+        Some("rgb(246, 246, 250)"), // #f6f6fa — LIGHT's --overlay-bg via --site-bg
+        "Phase 19: the companion's manifest theme (light) didn't paint its wrapper: {themed_bg:?}"
+    );
+
+    // Strict override: "Always Dark" must beat the manifest theme.
+    client
+        .execute(
+            r#"localStorage.setItem('entity_site_appearance', 'dark'); return true;"#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(400)).await;
+    let strict_bg = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const w = sl ? sl.querySelector('div') : null;
+            return w ? getComputedStyle(w).backgroundColor : 'no-wrapper';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        strict_bg.as_str(),
+        Some("rgb(16, 16, 24)"),
+        "Phase 19: strict 'Always Dark' must override the manifest theme \
+         (stale container vars defeat the user's choice): {strict_bg:?}"
+    );
+
+    // Back to "Site's theme" → the manifest theme re-applies live.
+    client
+        .execute(
+            r#"localStorage.setItem('entity_site_appearance', 'site'); return true;"#,
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(400)).await;
+    let restored_bg = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const w = sl ? sl.querySelector('div') : null;
+            return w ? getComputedStyle(w).backgroundColor : 'no-wrapper';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        restored_bg.as_str(),
+        Some("rgb(246, 246, 250)"),
+        "Phase 19: returning to 'Site's theme' must re-apply the manifest theme: {restored_bg:?}"
+    );
+    let theme_log = capture_log(&client).await?;
+    let theme_panics = count_panics(&theme_log);
+    assert!(
+        theme_panics.is_empty(),
+        "Phase 19: manifest-theme flips panicked the frame loop:\n{}",
+        theme_panics.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n---\n")
+    );
+    println!("  manifest site theme: light applied · strict override wins · site mode restores");
+
+    // Restore the appearance mode this sub-phase found (Phase 3 set it via
+    // the real Settings path; later phases see the state they expect).
+    client
+        .execute(
+            &format!(
+                r#"localStorage.setItem('entity_site_appearance', '{prior_site_mode}'); return true;"#
+            ),
+            vec![],
+        )
+        .await?;
+    sleep(Duration::from_millis(300)).await;
+
+    // Home-reset fix: while on the COMPANION site, click the ⌂ Home button (the
+    // site-title anchor, `title="Go to site home"`). It must return to the
+    // configured HOME site (the demo), NOT the companion's own root — the old
+    // code wired Home to `/` (the current site's root), which is exactly what
+    // stranded a user on an unresolvable location ("No site manifest…", where
+    // `/` just reloads the error). Landing on the demo index proves the fix.
+    let home_btn = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const a = sl ? sl.querySelector('a[title="Go to site home"]') : null;
+            if (a) { a.click(); return 'clicked'; }
+            return 'no-home-button';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        home_btn.as_str(),
+        Some("clicked"),
+        "Phase 19: couldn't find the ⌂ Home button on the companion site"
+    );
+    sleep(Duration::from_millis(600)).await;
+
+    let home_text = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            return (sl ? (sl.textContent || '').trim() : '');
+            "#,
+            vec![],
+        )
+        .await?;
+    let home_text = home_text.as_str().unwrap_or("");
+    assert!(
+        home_text.contains("Welcome") && home_text.contains("Entity Demo Site"),
+        "Phase 19: the ⌂ Home button didn't reset to the configured home site \
+         (demo) from the companion; got: {home_text:?}"
+    );
+    println!("  ⌂ Home reset to the configured home site from a different site");
+
     // 19d — exit via the site's own nav-bar "Enter Peer" control (the
     // status bar is hidden in Site Mode, so the bridge back lives in the
     // site chrome). It survives the About navigation (re-rendered each
@@ -5637,6 +10841,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     println!("  Phase 19 OK — overlay toggle, live render, in-site nav, toggle back");
 
     // ====================================================================
+    phase_gate!(client, "20");
     // Phase 20: Site Mode in WORKER mode (the browser default) — regression
     // guard for the cache-mirror bug. Phase 19 ran Direct (?worker=0) where
     // reads hit the real store synchronously, so it could NOT catch the bug
@@ -5656,7 +10861,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             http_server_port()
         ))
         .await?;
-    let phase20_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase20_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 20 worker boot: {phase20_boot_ms}ms");
 
     // Nothing else is open in a fresh Worker boot (the default Entity Tree
@@ -5867,6 +11072,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     println!("  Phase 20 OK — Worker-mode toggle + live content render");
 
     // ====================================================================
+    phase_gate!(client, "21");
     // Phase 21: CROSS-PEER HTTP-poll — a REMOTE site fetched over static
     // HTTP and rendered in the overlay (the multi-peer milestone). Boots
     // with `?remote_fixture`, which registers a same-origin fixture origin
@@ -5900,8 +11106,12 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // Must match `app::REMOTE_FIXTURE_PEER` (the bin crate has no lib target to
     // import from). A REAL peer-id so the write-through cache can durably land
     // the foreign site (tree paths validate the peer-segment) — Phase 21b.
+    // Bound once and reused, so the fixture path and the share-link assertion
+    // below cannot drift apart if the fixture peer ever changes.
+    const REMOTE_FIXTURE_PEER: &str = "2KFAQwKL6XzdwLkoHkxZ9WE7kvBtS59piFA2AkdBBiQUt5";
     let manifest_bin =
-        "dist/remote-fixture/2KFAQwKL6XzdwLkoHkxZ9WE7kvBtS59piFA2AkdBBiQUt5/sites/labs/manifest.bin";
+        format!("dist/remote-fixture/{REMOTE_FIXTURE_PEER}/sites/labs/manifest.bin");
+    let manifest_bin = manifest_bin.as_str();
     assert!(
         std::path::Path::new(manifest_bin).exists(),
         "fixture not emitted: {manifest_bin} missing after `cargo test emit_e2e_fixture`"
@@ -5914,7 +11124,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             http_server_port()
         ))
         .await?;
-    let phase21_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase21_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 21 worker boot: {phase21_boot_ms}ms");
 
     // Let the origin-registry dispatch land + the overlay's origin-prefix
@@ -5992,6 +11202,47 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         "Phase 21: nested remote page (guide/intro) didn't resolve over HTTP-poll: {nested:?}"
     );
 
+    // -- A shared link to a FOREIGN site must carry that publisher's peer -----
+    //
+    // The renderer half of the `self`-sentinel bug, which the native gate
+    // (`a_shared_link_carries_the_publishers_peer_not_the_readers`) cannot see:
+    // that one proves the RULE, this proves the Share button CALLS it. Emitting
+    // `self` here shipped on every published domain and was found by a person —
+    // `self` resolves at boot to the *reader's own* peer, so the link reported
+    // "No site manifest" at a peer-id that differed per visitor.
+    //
+    // A foreign site is on screen right now (that is all of Phase 21), so this
+    // is a two-line assertion on an existing fixture rather than a new rig.
+    let read_share = r#"
+        const sl = document.getElementById('site-layer');
+        if (!sl) return 'NO-SITE-LAYER';
+        const b = sl.querySelector('[data-share-link]');
+        return b ? b.getAttribute('data-share-link') : 'NO-SHARE-BUTTON';
+    "#;
+    let mut share_link = String::new();
+    for _ in 0..20 {
+        share_link =
+            client.execute(read_share, vec![]).await?.as_str().unwrap_or("").to_string();
+        if share_link.starts_with("http") || share_link.starts_with('/') {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    assert!(
+        share_link.contains(REMOTE_FIXTURE_PEER),
+        "Phase 21: a shared link to a FOREIGN site must carry that publisher's peer-id \
+         ({REMOTE_FIXTURE_PEER}), got {share_link:?}"
+    );
+    // The negative half is the load-bearing one: `self` is a well-formed link
+    // that opens nothing for anybody, so every positive shape check passes while
+    // the bug is live.
+    assert!(
+        !share_link.contains("site=self"),
+        "Phase 21: the Share button emitted the `self` sentinel for a foreign site — \
+         that link resolves to the READER's own peer and 404s as 'No site manifest': {share_link:?}"
+    );
+    println!("  Phase 21 share-link OK — carries the publisher's peer: {share_link}");
+
     let phase21_log = capture_log(&client).await?;
     let phase21_panics = count_panics(&phase21_log);
     assert!(
@@ -6001,6 +11252,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  Phase 21 OK — cross-peer HTTP-poll remote site rendered live");
 
+    phase_gate!(client, "21b");
     // -- Phase 21b: manifest-pinned site survives reload (O3) ---------------
     //
     // The peer-general site-cache headline under the O3 manifest-pinned
@@ -6039,7 +11291,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             http_server_port()
         ))
         .await?;
-    let phase21b_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase21b_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 21b reload boot: {phase21b_boot_ms}ms");
     sleep(Duration::from_millis(700)).await;
     // Ensure we're in Site Mode showing the cached site. Poll generously; if
@@ -6094,6 +11346,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
          deleted → reload → chrome survives, ephemeral page gone); exit-site trap dissolved"
     );
 
+    phase_gate!(client, "22");
     // -- Phase 22: Settings "Site & Surface" drives the session config -----
     //
     // Step 4 of the boot/config reframe: the system-settings surface. Proves
@@ -6146,24 +11399,21 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     sleep(Duration::from_millis(700)).await;
 
     // 22c — the Site & Surface section rendered with the startup-surface
-    // (peer, kind, target) controls: the profile <select>, the boot-kind radios
-    // (default "chrome"), the peer <select>, the target <select>, and the
-    // show_toggle checkbox. The old single default-site text field is gone —
-    // "which site" is now the peer-qualified Target dropdown.
+    // (peer, kind, target) controls: the boot-kind radios (default "chrome",
+    // the primary axis that replaced the old profile <select>), the peer
+    // <select>, the target <select>, and the show_toggle checkbox. The old
+    // single default-site text field is gone — "which site" is now the
+    // peer-qualified Target dropdown.
     let section = client
         .execute(
             r#"
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
-            const sel = root.querySelector('select');
-            const profileOpts = sel ? Array.from(sel.options).map(o => o.value) : [];
             const kindChecked = (() => {
                 const r = root.querySelector('input[data-kind][checked], input[data-kind]:checked');
                 return r ? r.getAttribute('data-kind') : null;
             })();
             return {
-                has_select: !!sel,
-                profile_opts: profileOpts,
                 kinds: Array.from(root.querySelectorAll('input[data-kind]')).map(r => r.getAttribute('data-kind')),
                 kind_checked: kindChecked,
                 has_peer_select: !!root.querySelector('select[name="boot_peer"]'),
@@ -6176,11 +11426,6 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             vec![],
         )
         .await?;
-    assert_eq!(
-        section.get("has_select").and_then(|v| v.as_bool()),
-        Some(true),
-        "Phase 22: profile <select> missing from Site & Surface: {section:?}"
-    );
     let kinds = section.get("kinds").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     assert_eq!(kinds.len(), 3, "Phase 22: expected 3 boot-kind radios (chrome/site/window): {section:?}");
     assert_eq!(
@@ -6281,6 +11526,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  Phase 22 OK — Settings drives the session config live (Worker arm)");
 
+    phase_gate!(client, "22.5");
     // -- Phase 22.5: every window root FILLS its panel horizontally ---------
     //
     // Each window renders one root wrapper into `.window-content`; the panel
@@ -6326,6 +11572,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  Phase 22.5 OK — window root fills its panel width ({child_w}px / {panel_w}px)");
 
+    phase_gate!(client, "23");
     // -- Phase 23: maximize a window to the full-screen surface ------------
     //
     // Step 5 of the reframe (§4-B Surfaces). A window's maximize control
@@ -6451,6 +11698,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  Phase 23 OK — maximize → surface → restore (one-deep, Worker arm)");
 
+    phase_gate!(client, "24");
     // -- Phase 24: boot directly into a maximized window surface -----------
     //
     // §4-B Surfaces, C1a: the `BootSurface::Window` seam, activated. A
@@ -6469,7 +11717,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             http_server_port()
         ))
         .await?;
-    let phase24_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase24_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 24 boot: {phase24_boot_ms}ms");
     // Let the first frames paint the boot-maximized window into the DOM.
     sleep(Duration::from_millis(600)).await;
@@ -6535,6 +11783,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  Phase 24 OK — booted directly into a maximized window surface (Worker arm)");
 
+    phase_gate!(client, "25");
     // -- Phase 25: PERSISTED-config boot into a peer-scoped window surface --
     //
     // Phase 24 proved the `?boot_window=` override (spawn-only, never
@@ -6596,7 +11845,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     client
         .goto(&format!("http://localhost:{}/?worker=1&log=trace", http_server_port()))
         .await?;
-    let phase25_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase25_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 25 boot: {phase25_boot_ms}ms");
     sleep(Duration::from_millis(700)).await;
 
@@ -6653,6 +11902,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     );
     println!("  Phase 25 OK — persisted boot_surface=Window booted into the maximized Shell (Worker arm)");
 
+    phase_gate!(client, "26");
     // -- Phase 26: static→live deep-link round-trip (?site=) ---------------
     //
     // [F3]: a static page's "open in live peer" banner ([F2]) links to
@@ -6669,7 +11919,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             http_server_port()
         ))
         .await?;
-    let phase26_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase26_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 26 boot: {phase26_boot_ms}ms");
     // Let boot_load's navigate + the first overlay frames resolve the page
     // (Worker arm: the resolve hits the cache mirror, filled on subscription).
@@ -6769,9 +12019,583 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     println!("  Phase 26b OK — Enter Peer released the ?site= override and returned to chrome");
 
     // ====================================================================
+    phase_gate!(client, "26.8");
+    // Phase 26.8: user-defined themes end-to-end (Worker arm, warm boot).
+    // Exercises the WHOLE feature through the real delivery path: Theme
+    // Editor create (duplicate dark) → live preview (input event rewrites
+    // #theme-vars from the draft) → Save (tree write) → select it as the
+    // chrome theme in Settings → RELOAD (the registry must reload from the
+    // tree through the app-level subscription — the Worker-arm cache-mirror
+    // cell that native tests can't reach) → load-in-editor → delete.
+    // ====================================================================
+    println!("--- Phase 26.8: user-defined themes end-to-end ---");
+    let pre_theme_log = capture_log(&client).await?;
+    let pre_theme_panics = count_panics(&pre_theme_log).len();
+
+    let spawn_editor = click_spawn_btn(&client, "+ Theme Editor").await?;
+    assert_eq!(spawn_editor, "clicked", "Phase 26.8: no '+ Theme Editor' palette button");
+    sleep(Duration::from_millis(600)).await;
+
+    // Create "e2e-neon" from the dark base.
+    let created = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const name = root.querySelector("input[data-field^='theme-new-name-']");
+            const create = root.querySelector("[data-field='theme-create']");
+            if (!name || !create) return 'no-controls';
+            name.value = 'e2e-neon';
+            create.click();
+            return 'created';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(created.as_str(), Some("created"), "Phase 26.8: create controls missing");
+    sleep(Duration::from_millis(700)).await;
+
+    let editor_state = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const status = root.querySelector("[data-field='theme-editor-status']");
+            const load = root.querySelector("select[name^='theme-editor-load-']");
+            const bg = root.querySelector("input[data-token='--bg']");
+            return {
+                status: status ? status.textContent : 'missing',
+                load_options: load ? Array.from(load.options).map(o => o.value) : [],
+                has_bg_row: !!bg,
+            };
+            "#,
+            vec![],
+        )
+        .await?;
+    let ed_status = editor_state.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        ed_status.contains("Created"),
+        "Phase 26.8: create didn't report success; status: {editor_state:?}"
+    );
+    assert!(
+        editor_state.get("has_bg_row").and_then(|v| v.as_bool()).unwrap_or(false),
+        "Phase 26.8: token rows didn't render after create: {editor_state:?}"
+    );
+
+    // Live preview: type a distinctive --bg into the token input. The input
+    // event must rewrite #theme-vars from the DRAFT (no save, no rebuild).
+    let preview = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const bg = root.querySelector("input[data-token='--bg']");
+            if (!bg) return 'no-input';
+            bg.value = '#123456';
+            bg.dispatchEvent(new Event('input', { bubbles: true }));
+            const vars = document.getElementById('theme-vars');
+            return vars ? vars.textContent : 'no-theme-vars';
+            "#,
+            vec![],
+        )
+        .await?;
+    let preview = preview.as_str().unwrap_or("").to_string();
+    assert!(
+        preview.contains("--bg:#123456;"),
+        "Phase 26.8: live preview didn't rewrite #theme-vars from the draft; got: {preview:?}"
+    );
+
+    // Save, then make it the current chrome theme via the Settings dropdown
+    // (the registry-driven option must be there without any wiring).
+    let saved = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const save = root.querySelector("[data-field='theme-save']");
+            if (!save) return 'no-save';
+            save.click();
+            return 'saved';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(saved.as_str(), Some("saved"), "Phase 26.8: no Save button");
+    sleep(Duration::from_millis(700)).await;
+
+    // Settings may not be open on this post-deep-link boot — spawn if needed.
+    let _ = click_spawn_btn(&client, "+ Settings").await;
+    sleep(Duration::from_millis(600)).await;
+    let selected = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="theme-"]:not([name^="theme-editor"])');
+            if (!s) return 'no-select';
+            if (!Array.from(s.options).some(o => o.value === 'e2e-neon')) return 'option-missing';
+            s.value = 'e2e-neon';
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'selected';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        selected.as_str(),
+        Some("selected"),
+        "Phase 26.8: the saved user theme must appear in the Settings theme dropdown \
+         (registry-driven) and be selectable"
+    );
+    // Applying a selected theme is an async re-render, so poll for the recolor
+    // rather than sleeping a guess and reading once — this assertion was an
+    // observed flake under load (the box was busy; 600ms was not enough).
+    let applied = poll_json(
+        &client,
+        r#"
+            const vars = document.getElementById('theme-vars');
+            return {
+                css: vars ? vars.textContent : 'missing',
+                ls_name: localStorage.getItem('entity_theme'),
+                ls_css: (localStorage.getItem('entity_theme_css') || '').slice(0, 60),
+            };
+            "#,
+        Duration::from_secs(15),
+        |v| {
+            v.get("css")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("--bg:#123456;"))
+        },
+    )
+    .await?;
+    let applied_css = applied.get("css").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        applied_css.contains("--bg:#123456;"),
+        "Phase 26.8: selecting the user theme didn't recolor #theme-vars: {applied:?}"
+    );
+    assert_eq!(
+        applied.get("ls_name").and_then(|v| v.as_str()),
+        Some("e2e-neon"),
+        "Phase 26.8: the localStorage name mirror must carry the user theme: {applied:?}"
+    );
+
+    // Diagnostic breadcrumbs for the persistence assert below: which paths
+    // the settings writes actually hit, and the peer-identity vault keys
+    // (a system-peer id drift between sessions would silently repath
+    // settings/ui). Printed, not asserted.
+    let pre_log = capture_log(&client).await?;
+    for l in pre_log.iter().filter(|l| l.contains("settings/ui") || l.contains("ensure_state")) {
+        println!("  [pre-reload] {l}");
+    }
+    let pre_vault = client
+        .execute(
+            r#"return Object.keys(localStorage).sort().join(',') + ' || peers=' +
+                (localStorage.getItem('entity_peers') || '').slice(0, 120);"#,
+            vec![],
+        )
+        .await?;
+    println!("  [pre-reload] localStorage: {}", pre_vault.as_str().unwrap_or(""));
+    assert!(
+        applied.get("ls_css").and_then(|v| v.as_str()).unwrap_or("").contains(":root{"),
+        "Phase 26.8: the CSS paint-hint mirror (entity_theme_css) must be written for a \
+         user chrome theme — without it the next boot flashes dark: {applied:?}"
+    );
+
+    // Panic check BEFORE the reload — the reload wipes the in-page log, so
+    // a create/save/select panic would otherwise vanish (the false-0 gotcha).
+    let pre_reload_log = capture_log(&client).await?;
+    let pre_reload_panics = count_panics(&pre_reload_log);
+    assert!(
+        pre_reload_panics.len() <= pre_theme_panics,
+        "Phase 26.8: create/preview/save/select triggered new panic(s):\n{}",
+        pre_reload_panics.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n---\n")
+    );
+
+    // RELOAD — the warm-boot cell. The theme must come back from the TREE
+    // (app-level subscription → registry sync), not just the mirrors: the
+    // Settings dropdown must list it again, selected, and the live palette
+    // must carry the edited value.
+    client
+        .goto(&format!("http://localhost:{}/?worker=1&log=trace", http_server_port()))
+        .await?;
+    let theme_boot_ms = wait_for_boot(&client, 60_000).await?;
+    println!("  phase 26.8 reload boot: {theme_boot_ms}ms");
+    sleep(Duration::from_millis(1500)).await;
+
+    let after_reload = client
+        .execute(
+            r#"
+            const vars = document.getElementById('theme-vars');
+            return vars ? vars.textContent : 'missing';
+            "#,
+            vec![],
+        )
+        .await?;
+    let after_reload = after_reload.as_str().unwrap_or("").to_string();
+    assert!(
+        after_reload.contains("--bg:#123456;"),
+        "Phase 26.8: after reload the user theme must paint (mirror at boot, tree-synced \
+         registry after); #theme-vars: {after_reload:?}"
+    );
+
+    let _ = click_spawn_btn(&client, "+ Settings").await;
+    // The registry re-syncs from the tree via the app-level subscription —
+    // asynchronous on the Worker arm (cache-mirror seed → dirty → frame
+    // sync). Poll briefly instead of trusting one fixed sleep.
+    let mut dropdown_after = serde_json::Value::Null;
+    let mut dd_options: Vec<String> = Vec::new();
+    for _ in 0..12 {
+        sleep(Duration::from_millis(500)).await;
+        dropdown_after = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                const s = root.querySelector('select[name^="theme-"]:not([name^="theme-editor"])');
+                if (!s) return 'no-select';
+                return { options: Array.from(s.options).map(o => o.value), value: s.value };
+                "#,
+                vec![],
+            )
+            .await?;
+        dd_options = dropdown_after
+            .get("options")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        // Both facts converge asynchronously (the themes-prefix sync fills
+        // the options; the settings-entity snapshot seed selects the value)
+        // — poll until BOTH hold, then assert.
+        if dd_options.iter().any(|o| o == "e2e-neon")
+            && dropdown_after.get("value").and_then(|v| v.as_str()) == Some("e2e-neon")
+        {
+            break;
+        }
+    }
+    // Diagnostic breadcrumbs (see pre-reload twin above).
+    let post_log = capture_log(&client).await?;
+    for l in post_log.iter().filter(|l| l.contains("settings/ui") || l.contains("ensure_state")) {
+        println!("  [post-reload] {l}");
+    }
+    let post_vault = client
+        .execute(
+            r#"return Object.keys(localStorage).sort().join(',') + ' || peers=' +
+                (localStorage.getItem('entity_peers') || '').slice(0, 120);"#,
+            vec![],
+        )
+        .await?;
+    println!("  [post-reload] localStorage: {}", post_vault.as_str().unwrap_or(""));
+
+    assert!(
+        dd_options.iter().any(|o| o == "e2e-neon"),
+        "Phase 26.8: after reload the registry must re-sync the user theme from the tree \
+         (Worker-arm cache-mirror cell); dropdown: {dropdown_after:?}"
+    );
+    assert_eq!(
+        dropdown_after.get("value").and_then(|v| v.as_str()),
+        Some("e2e-neon"),
+        "Phase 26.8: the persisted selection must survive reload (a fresh Settings spawn \
+         must NOT reseed defaults over persisted settings — the ensure_state \
+         get-then-write clobber): {dropdown_after:?}"
+    );
+
+    // Delete path: switch back to the pre-phase theme first (delete of an
+    // in-use theme is refused by design), then delete through the editor.
+    let restored = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="theme-"]:not([name^="theme-editor"])');
+            if (!s) return 'no-select';
+            s.value = 'light';
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'restored';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(restored.as_str(), Some("restored"), "Phase 26.8: theme restore failed");
+    sleep(Duration::from_millis(500)).await;
+
+    let spawn_editor2 = click_spawn_btn(&client, "+ Theme Editor").await?;
+    assert_eq!(spawn_editor2, "clicked", "Phase 26.8: editor respawn failed");
+    sleep(Duration::from_millis(600)).await;
+    let deleted = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const load = root.querySelector("select[name^='theme-editor-load-']");
+            if (!load) return 'no-load-select';
+            load.value = 'e2e-neon';
+            load.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'loaded';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        deleted.as_str(),
+        Some("loaded"),
+        "Phase 26.8: fresh editor must list the persisted theme in its loader"
+    );
+    sleep(Duration::from_millis(500)).await;
+    let del_result = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const del = root.querySelector("[data-field='theme-delete']");
+            if (!del) return 'no-delete';
+            if (del.disabled) return 'disabled';
+            del.click();
+            return 'clicked';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        del_result.as_str(),
+        Some("clicked"),
+        "Phase 26.8: Delete must be enabled once the theme is no longer in use"
+    );
+    // The delete propagates to the Settings dropdown via the themes-prefix
+    // watch (async event → dirty → re-render) — poll, don't trust one sleep.
+    // 15s, not 10×500ms: the old 5s bound was an observed flake under load, and
+    // a bound that only matters on the failure path should be generous.
+    let post_delete_deadline = Instant::now() + Duration::from_secs(15);
+    let mut post_delete = serde_json::Value::Null;
+    let mut post_options: Vec<String> = Vec::new();
+    loop {
+        sleep(Duration::from_millis(250)).await;
+        post_delete = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                const s = root.querySelector('select[name^="theme-"]:not([name^="theme-editor"])');
+                const status = root.querySelector("[data-field='theme-editor-status']");
+                return {
+                    options: s ? Array.from(s.options).map(o => o.value) : [],
+                    status: status ? status.textContent : 'missing',
+                };
+                "#,
+                vec![],
+            )
+            .await?;
+        post_options = post_delete
+            .get("options")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if !post_options.is_empty() && !post_options.iter().any(|o| o == "e2e-neon") {
+            break;
+        }
+        if Instant::now() >= post_delete_deadline {
+            break;
+        }
+    }
+    // AUDIT-THEME-DELETE-STALE-DROPDOWN Pass A: capture the reconcile/render
+    // trace BEFORE the assert, not after — the panic check further down never
+    // ran on a failing run, so we have never even known whether a frame
+    // panicked here. These lines answer §3 directly: a `register` of the
+    // deleted name after the `delete` line is H-B (resurrection from a stale
+    // listing); a `reconcile` that removes it with no later `settings: theme
+    // options built` is H-A (reconcile-after-render); no post-delete
+    // `reconcile` at all is H-C (the removal Change never arrives).
+    let theme_trace: Vec<String> = capture_log(&client)
+        .await?
+        .into_iter()
+        .filter(|l| {
+            l.contains("user-themes:")
+                || l.contains("settings: theme options built")
+                || l.contains("worker-proxy:")
+                || l.contains("panicked at")
+        })
+        .collect();
+    // Printed on PASS as well as fail, deliberately. The failure is
+    // intermittent and expensive to catch, but the *mechanism* (§3: does a
+    // post-delete reconcile ever re-register the deleted name from a stale
+    // mirror union?) is visible on a passing run too — a green run that shows
+    // the resurrection is the same evidence, minus the lost race.
+    println!("  Phase 26.8 theme reconcile/render trace ({} lines):", theme_trace.len());
+    for line in &theme_trace {
+        println!("    {line}");
+    }
+    assert!(
+        !post_options.iter().any(|o| o == "e2e-neon"),
+        "Phase 26.8: after delete the theme must leave every registry-driven dropdown: \
+         {post_delete:?}\n--- theme reconcile/render trace ---\n{}",
+        theme_trace.join("\n")
+    );
+    assert!(
+        post_delete.get("status").and_then(|v| v.as_str()).unwrap_or("").contains("Deleted"),
+        "Phase 26.8: delete must report its outcome in the status line: {post_delete:?}"
+    );
+
+    // Post-reload log is fresh (the goto reset it) — any panic here is new.
+    let theme_log = capture_log(&client).await?;
+    let theme_panics = count_panics(&theme_log);
+    assert!(
+        theme_panics.is_empty(),
+        "Phase 26.8: reload/load/delete triggered panic(s):\n{}",
+        theme_panics.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n---\n")
+    );
+    println!("  Phase 26.8 OK — create → preview → save → select → reload persistence → delete");
+
+    // ====================================================================
+    phase_gate!(client, "26.9");
+    // Phase 26.9: a theme removed from the TREE must leave the Settings
+    // dropdown. The permanent gate for AUDIT-THEME-DELETE-STALE-DROPDOWN
+    // finding F1 (`docs/plans/`).
+    //
+    // Why this exists as its own phase rather than more polling in 26.8:
+    // 26.8's delete goes through `user_themes::delete_theme`, which
+    // unregisters from the runtime registry **synchronously** before
+    // dispatching the tree remove — so the dropdown is already correct
+    // before any re-render, and the reconcile→render path it depends on is
+    // never actually tested. 26.8 passes on the optimistic local update, not
+    // on the projection working.
+    //
+    // Deleting straight from the tree (the Shell's `rm`) removes that
+    // crutch: nothing touches the registry locally, so the ONLY route from
+    // "entity gone" to "option gone" is
+    //   removal Change → watch dirty → `UserThemes::sync` reconciles →
+    //   Settings re-renders.
+    // That is exactly the path F1 says is broken, and it is a real user
+    // scenario (a theme dropped by another tab, a peer sync, or the shell).
+    //
+    // Expected to fail DETERMINISTICALLY before the fix and pass after. If
+    // it ever starts passing on an unfixed build, the ordering changed —
+    // don't relax the assert, re-read `EntityApp::frame`.
+    // ====================================================================
+    println!("--- Phase 26.9: a tree-side theme delete must leave the dropdown ---");
+
+    let spawn_editor3 = click_spawn_btn(&client, "+ Theme Editor").await?;
+    assert_eq!(spawn_editor3, "clicked", "Phase 26.9: editor respawn failed");
+    sleep(Duration::from_millis(600)).await;
+
+    let ghost_created = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const name = root.querySelector("input[data-field^='theme-new-name-']");
+            const create = root.querySelector("[data-field='theme-create']");
+            if (!name || !create) return 'no-controls';
+            name.value = 'e2e-ghost';
+            create.click();
+            return 'created';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(ghost_created.as_str(), Some("created"), "Phase 26.9: create controls missing");
+    sleep(Duration::from_millis(700)).await;
+    let ghost_saved = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const save = root.querySelector("[data-field='theme-save']");
+            if (!save) return 'no-save';
+            save.click();
+            return 'saved';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(ghost_saved.as_str(), Some("saved"), "Phase 26.9: no Save button");
+
+    // Setup check: the option must be there before we can prove it leaves.
+    let ghost_present = poll_json(
+        &client,
+        r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="theme-"]:not([name^="theme-editor"])');
+            return { options: s ? Array.from(s.options).map(o => o.value) : [] };
+        "#,
+        Duration::from_secs(10),
+        |v| {
+            v.get("options")
+                .and_then(|o| o.as_array())
+                .is_some_and(|a| a.iter().any(|o| o.as_str() == Some("e2e-ghost")))
+        },
+    )
+    .await?;
+    assert!(
+        ghost_present
+            .get("options")
+            .and_then(|o| o.as_array())
+            .is_some_and(|a| a.iter().any(|o| o.as_str() == Some("e2e-ghost"))),
+        "Phase 26.9 setup: the saved theme must reach the Settings dropdown first: \
+         {ghost_present:?}"
+    );
+
+    // The tree-side delete. `@primary` expands to the bound peer, which is
+    // where `user_themes` writes (`system_peer_id` == `primary_peer_id`).
+    let rm_sb = shell_submit(&client, "rm @primary/app/entity-browser/themes/e2e-ghost", 600).await?;
+    assert!(
+        !rm_sb.contains("usage: rm"),
+        "Phase 26.9: the shell rejected the remove — path/alias wrong, so the \
+         phase would pass vacuously. Scrollback: {rm_sb:?}"
+    );
+
+    // Generous budget: this must be decided by change-detection, not speed.
+    // A healthy build returns on the first poll.
+    let ghost_gone = poll_json(
+        &client,
+        r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const s = root.querySelector('select[name^="theme-"]:not([name^="theme-editor"])');
+            return { options: s ? Array.from(s.options).map(o => o.value) : [] };
+        "#,
+        Duration::from_secs(12),
+        |v| {
+            v.get("options")
+                .and_then(|o| o.as_array())
+                .is_some_and(|a| {
+                    !a.is_empty() && !a.iter().any(|o| o.as_str() == Some("e2e-ghost"))
+                })
+        },
+    )
+    .await?;
+    let ghost_trace: Vec<String> = capture_log(&client)
+        .await?
+        .into_iter()
+        .filter(|l| {
+            l.contains("user-themes:")
+                || l.contains("settings: theme options built")
+                || l.contains("worker-proxy:")
+                || l.contains("panicked at")
+        })
+        .collect();
+    assert!(
+        ghost_gone
+            .get("options")
+            .and_then(|o| o.as_array())
+            .is_some_and(|a| !a.iter().any(|o| o.as_str() == Some("e2e-ghost"))),
+        "Phase 26.9: a theme deleted from the tree must leave the Settings dropdown. \
+         The entity is gone and the surface still shows it. Two distinct causes have \
+         produced this (AUDIT-THEME-DELETE-STALE-DROPDOWN): F1 — the reconcile ran \
+         but AFTER the render that reads it, so look for a final `reconcile` with \
+         `removed=[…]` and no `theme options built` following it; F3 — the reconcile \
+         never ran again at all, so look for a `reconcile` whose `listing` still has \
+         the theme, followed by `worker-proxy: removal` lines draining \
+         `remaining_holders` to empty with no reconcile after. \
+         Dropdown: {ghost_gone:?}\n--- theme reconcile/render trace ---\n{}",
+        ghost_trace.join("\n")
+    );
+    println!("  Phase 26.9 OK — a tree-side delete reaches the dropdown");
+
+    // ====================================================================
+    phase_gate!(client, "27");
     // Phase 27: per-domain deployment config served at /entity-deployment.json
     // (boot-closure cut 2b). The harness builds a GENERIC `Full` bundle; this
-    // phase publishes a strict-site, same-origin config + the demo content into
+    // phase publishes a locked-site, same-origin config + the demo content into
     // dist/ and boots the SAME bundle against it — proving the generic-WASM-
     // per-domain model: one build adopts a domain's posture + home from a
     // fetched file, NO rebuild. Boots Direct (`?worker=0`, ephemeral tree) so
@@ -6783,7 +12607,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // ====================================================================
     println!("--- Phase 27: per-domain /entity-deployment.json (cut 2b) ---");
 
-    // Publish the demo + a strict-site same-origin config into dist/ (the
+    // Publish the demo + a locked-site same-origin config into dist/ (the
     // served origin). Same nested-cargo fixture pattern as Phase 21.
     match Command::new(env!("CARGO"))
         .args([
@@ -6823,13 +12647,13 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     client.goto(&url27).await?;
     wipe_all_storage(&client).await?;
     client.goto(&url27).await?;
-    let phase27_boot_ms = wait_for_boot(&client, 8000).await?;
+    let phase27_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 27 boot: {phase27_boot_ms}ms");
 
     // Poll for the published home to render. Fast-paint's pre-peer paint is
     // DISABLED for the consolidation, so the LIVE overlay is the sole
     // `#site-layer` owner: it paints the config's home post-peer over
-    // same-origin HTTP once boot_load applies the served strict-site config.
+    // same-origin HTTP once boot_load applies the served locked-site config.
     let read_site = r#"
         const sl = document.getElementById('site-layer');
         return sl ? (sl.textContent || '').trim() : '';
@@ -6858,14 +12682,14 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // (b) Fast-paint is DISABLED for the site-surface consolidation
     // (HANDOFF-SITE-SURFACE-AUDIT §5), so its pre-peer "fast-paint: painted
     // remote home" must NOT fire. The generic-bundle crux of cut 2b (a Full
-    // build adopting a SERVED strict-site config + rendering its home) is still
+    // build adopting a SERVED locked-site config + rendering its home) is still
     // verified end-to-end below — by (c) mode-site and (d) the home rendering
     // via the LIVE overlay — just post-peer instead of pre-peer.
     assert!(
         !phase27_log.iter().any(|l| l.contains("fast-paint: painted remote home")),
         "Phase 27: fast-paint is disabled for the consolidation — it must not paint pre-peer"
     );
-    // (c) Posture applied: strict-site config boots the generic bundle into the
+    // (c) Posture applied: locked-site config boots the generic bundle into the
     // site overlay even though the BUILD is Full (chrome-first).
     let container_class = client
         .execute(
@@ -6876,13 +12700,45 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     assert_eq!(
         container_class.as_str(),
         Some("mode-site"),
-        "Phase 27: strict-site config should boot the generic bundle into the site overlay"
+        "Phase 27: locked-site config should boot the generic bundle into the site overlay"
     );
     // (d) End-to-end: the published home rendered, fetched same-origin.
     assert!(
         home_text.contains("Welcome to the Entity Demo Site"),
         "Phase 27: the published home didn't render same-origin; got: {home_text:?}"
     );
+    // (e) Boot-time site-discovery warm-up: the served config registers the
+    // publisher peer's ORIGIN, and the warm-up must then fetch its `sites.list` +
+    // manifests and cache them into MY store on this boot — so the foreign peer's
+    // sites are present on FIRST paint (the directory rail lists them without a
+    // manual navigate), not lazily on first browse. The fixture publishes the
+    // demo SET (demo + its cross-site companion demo-notes + entity-info), so the
+    // warm-up caches ≥1 (the home `demo` may already be resolved by the overlay;
+    // the non-home sites prove the warm-up fetched beyond home).
+    // Poll: the warm-up is fire-and-forget async, so it can land shortly after the
+    // home renders.
+    let mut warm_line = String::new();
+    for _ in 0..15 {
+        let log = capture_log(&client).await?;
+        if let Some(l) = log.iter().find(|l| l.contains("warm_peer_sites: cached")) {
+            warm_line = l.clone();
+            break;
+        }
+        sleep(Duration::from_millis(300)).await;
+    }
+    assert!(
+        !warm_line.is_empty(),
+        "Phase 27: boot-time site warm-up never ran — the registered peer's sites \
+         would appear only after a manual navigate (the discovery regression). \
+         Expected a 'warm_peer_sites: cached' log line."
+    );
+    assert!(
+        !warm_line.contains("cached 0 "),
+        "Phase 27: site warm-up ran but cached 0 manifests — the foreign peer's \
+         sites.list/manifests were not fetched on boot: {warm_line:?}"
+    );
+    println!("  Phase 27e OK — boot-time warm-up cached the published peer's sites on first paint");
+
     let phase27_panics = count_panics(&phase27_log);
     assert!(
         phase27_panics.is_empty(),
@@ -6893,7 +12749,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     // Remove the served config so it can't change any later phase / re-run's
     // default boot path (setup() also clears it defensively).
     let _ = std::fs::remove_file(cfg_file);
-    println!("  Phase 27 OK — generic bundle adopted the served strict-site config + home (cut 2b)");
+    println!("  Phase 27 OK — generic bundle adopted the served locked-site config + home (cut 2b)");
 
     // Final print regardless of pass/fail — captured console is the
     // primary diagnostic signal under --nocapture.
@@ -7147,29 +13003,15 @@ async fn second_tab_detects_secondary_on_direct_idb() -> Result<(), Box<dyn std:
 
     // The create panel still RENDERS here: this is the full profile, so the 1b
     // capability is intact — only this tab's durability (1a) fails. The action
-    // guard, not a hidden button, is what blocks it.
+    // guard, not a hidden button, is what blocks it. Drive the create form
+    // (kind "frontend") the same way the primary tab does.
     let click_status = client
-        .execute(
-            r#"
-            const layer = document.getElementById('dom-layer');
-            const root = layer.shadowRoot || layer;
-            for (const sec of root.querySelectorAll('section.window')) {
-                const h2 = sec.querySelector('h2');
-                if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                for (const b of sec.querySelectorAll('button')) {
-                    if (b.textContent.trim() === '+ Frontend') { b.click(); return 'clicked'; }
-                }
-                return 'no-btn';
-            }
-            return 'no-peers-section';
-            "#,
-            vec![],
-        )
+        .execute(&create_peer_form_js("frontend"), vec![])
         .await?;
     assert_eq!(
         click_status.as_str().unwrap_or(""),
         "clicked",
-        "the '+ Frontend' button should still render in a secondary tab \
+        "the create form should still render in a secondary tab \
          (full profile keeps the capability) — got {click_status:?}"
     );
 
@@ -7205,6 +13047,213 @@ async fn second_tab_detects_secondary_on_direct_idb() -> Result<(), Box<dyn std:
     // Cleanup: close tab 2, return to tab 1, end the session.
     client.close_window().await.ok();
     client.switch_to_window(tab1).await.ok();
+    client.close().await.ok();
+    Ok(())
+}
+
+/// End-to-end lifecycle proof for the durable this-tab (`frontend-idb`) peer:
+///   1. create one → it gets its own `entity-peer-{id}` IndexedDB database;
+///   2. write a USER entity to its tree → reload → the app REHYDRATES the peer
+///      (`replay_persisted_idb_peer`) and the entity is still readable;
+///   3. delete it → reload → its IndexedDB database is DROPPED (no orphan, D9).
+/// Direct/IDB posture (`?worker=0`), single leader tab (peer creation allowed).
+/// This is the committed reload-survival proof for a NON-primary durable peer —
+/// the gap Phase 18e in the monolith explicitly could not cover (its non-primary
+/// peers were in-memory). Standalone (not a monolith phase) because it is
+/// Direct-only and independent of the display-gated Tauri phase.
+/// (DESIGN-PERSISTENT-THIS-TAB-PEER.md — the whole point of the feature.)
+#[tokio::test(flavor = "current_thread")]
+async fn frontend_idb_peer_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?worker=0&log=trace", http_server_port());
+
+    // Fresh profile: IDB + localStorage persist across sessions otherwise.
+    client.goto(&url).await?;
+    wipe_all_storage(&client).await?;
+
+    // Boot Direct/IDB as the single (leader) tab — durable, peer creation allowed.
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    sleep(Duration::from_millis(1500)).await; // let the IDB primary settle
+
+    // Spawn the Peers window so the create form (its <select>) is in the DOM.
+    let peers_spawn = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            if (!layer) return 'no-dom-layer';
+            const root = layer.shadowRoot || layer;
+            for (const b of root.querySelectorAll('button.spawn-btn')) {
+                if (b.textContent.trim() === '+ Peers') { b.click(); return 'clicked'; }
+            }
+            return 'no-peers-spawn-btn';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        peers_spawn.as_str(),
+        Some("clicked"),
+        "couldn't spawn the Peers window: {peers_spawn:?}"
+    );
+    sleep(Duration::from_millis(600)).await;
+
+    // Baseline entity-peer-* IDB databases (just the primary system peer).
+    let dbs_before = list_entity_peer_dbs(&client).await?;
+
+    // Create a frontend-idb peer via the Peers form (Direct-only option).
+    let created = client
+        .execute(&create_peer_form_js("frontend-idb"), vec![])
+        .await?;
+    assert_eq!(
+        created.as_str(),
+        Some("clicked"),
+        "couldn't create a frontend-idb peer — is the 'This tab · saved' option \
+         present + enabled in Direct mode? {created:?}"
+    );
+
+    // Async build → drain-insert → persist → checkpoint. Poll for the peer's OWN
+    // entity-peer-{id} database to appear.
+    let mut new_pid = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while std::time::Instant::now() < deadline {
+        let now = list_entity_peer_dbs(&client).await?;
+        if let Some(name) = now.iter().find(|n| !dbs_before.contains(*n)) {
+            new_pid = name
+                .strip_prefix("entity-peer-")
+                .unwrap_or(name)
+                .to_string();
+            break;
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    assert!(
+        !new_pid.is_empty(),
+        "no new entity-peer-* IndexedDB database appeared after creating a frontend-idb \
+         peer — the async build → drain-insert → persist path is broken."
+    );
+    println!("frontend-idb peer created — own IDB db: entity-peer-{new_pid}");
+
+    {
+        let l = capture_log(&client).await?;
+        let p = count_panics(&l);
+        assert!(
+            p.is_empty(),
+            "create panicked:\n{}",
+            p.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n---\n")
+        );
+    }
+
+    // Write a distinctive USER entity into the peer's own tree via its Shell.
+    open_peer_shell(&client, &new_pid).await?;
+    let marker_path = format!("/{new_pid}/e2e/idb-marker");
+    let put_sb = shell_submit_for_peer(
+        &client,
+        &new_pid,
+        &format!("put {marker_path} note/text \"durable-marker-42\""),
+        800,
+    )
+    .await?;
+    assert!(
+        put_sb.contains("e2e/idb-marker"),
+        "put into the frontend-idb peer's tree didn't confirm; scrollback: {put_sb:?}"
+    );
+    let pre_sb =
+        shell_submit_for_peer(&client, &new_pid, &format!("cat {marker_path}"), 500).await?;
+    assert!(
+        pre_sb.contains("durable-marker-42"),
+        "marker not readable before reload; scrollback: {pre_sb:?}"
+    );
+
+    // A plain `put` rides the ~250ms write-behind debounce (no checkpoint) — give
+    // it margin to flush to IndexedDB before reload.
+    sleep(Duration::from_secs(2)).await;
+
+    // RELOAD.
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    sleep(Duration::from_millis(1500)).await;
+    {
+        let l = capture_log(&client).await?;
+        let p = count_panics(&l);
+        assert!(
+            p.is_empty(),
+            "reload panicked:\n{}",
+            p.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n---\n")
+        );
+    }
+
+    // The peer's own IDB database must still exist after reload.
+    let dbs_after = list_entity_peer_dbs(&client).await?;
+    assert!(
+        dbs_after
+            .iter()
+            .any(|n| n == &format!("entity-peer-{new_pid}")),
+        "the frontend-idb peer's IndexedDB database vanished across reload (have: {dbs_after:?})."
+    );
+
+    // THE PROOF: the app rehydrated the peer (`replay_persisted_idb_peer`) AND its
+    // user tree survived — open a fresh peer-scoped Shell and read the marker back.
+    // (`open_peer_shell` fails at 'no-peer-option' if the peer wasn't rehydrated.)
+    open_peer_shell(&client, &new_pid).await?;
+    let post_sb =
+        shell_submit_for_peer(&client, &new_pid, &format!("cat {marker_path}"), 800).await?;
+    assert!(
+        post_sb.contains("durable-marker-42"),
+        "the user entity written to the frontend-idb peer did NOT survive reload — either \
+         the peer wasn't rehydrated (replay_persisted_idb_peer) or its IDB store wasn't \
+         reopened. scrollback: {post_sb:?}"
+    );
+    println!("frontend-idb peer + user tree SURVIVED reload (rehydrated + readable)");
+
+    // --- Delete → the peer's IndexedDB database is dropped (D9 cleanup) -------
+    // A deleted durable peer must not orphan its entity-peer-{id} database. The
+    // delete tombstones it synchronously; the boot-time idb_cleanup drain drops
+    // it at the next boot (race-free — the peer is off the roster, never reopened).
+    let peers_spawn2 = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            if (!layer) return 'no-dom-layer';
+            const root = layer.shadowRoot || layer;
+            for (const b of root.querySelectorAll('button.spawn-btn')) {
+                if (b.textContent.trim() === '+ Peers') { b.click(); return 'clicked'; }
+            }
+            return 'no-peers-spawn-btn';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        peers_spawn2.as_str(),
+        Some("clicked"),
+        "couldn't re-spawn the Peers window to delete the peer: {peers_spawn2:?}"
+    );
+    sleep(Duration::from_millis(600)).await;
+
+    // The frontend-idb peer is the only deletable (non-system) peer here.
+    let deleted_n = delete_all_deletable_peers(&client).await?;
+    assert!(
+        deleted_n >= 1,
+        "expected to delete the frontend-idb peer via its Delete button; deleted {deleted_n}"
+    );
+    // Sync vault/roster removal + tombstone are immediate; the SDK teardown is
+    // async. Give it a moment, then reload so the boot-time idb_cleanup runs.
+    sleep(Duration::from_millis(1500)).await;
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    sleep(Duration::from_millis(1500)).await;
+
+    let dbs_post_delete = list_entity_peer_dbs(&client).await?;
+    assert!(
+        !dbs_post_delete
+            .iter()
+            .any(|n| n == &format!("entity-peer-{new_pid}")),
+        "the deleted frontend-idb peer's IndexedDB database was NOT dropped at boot \
+         (orphaned store — D9 cleanup broke); dbs present: {dbs_post_delete:?}"
+    );
+    println!("frontend-idb peer DELETE dropped its IndexedDB database (no orphan)");
+
     client.close().await.ok();
     Ok(())
 }
@@ -7281,6 +13330,600 @@ async fn watchdog_detects_a_stalled_frame() -> Result<(), Box<dyn std::error::Er
             .any(|l| l.contains("frozen-frame watchdog") && l.contains("stopped rendering")),
         "the stall should be recorded in the in-app diagnostics sink \
          (`note` → 'frozen-frame watchdog … stopped rendering'). Not found."
+    );
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// rung-0.5 of S5 (design §3a / the F2-task1b note) — the FIRST live exercise of
+/// v11/v12 WebRTC provisioning through the real delivery path. It proves the
+/// app-side chain end to end: URL provisioning source → `InitParams.webrtc` +
+/// per-peer `webrtc_enabled` → the worker installs the §6.5 establisher at the
+/// §10.3 seam → the v12 `WireCaps.webrtc_peers` report → our capability diff
+/// logs "confirmed".
+///
+/// A **dummy, unreachable** node is deliberate and sufficient: install ≠
+/// connect. `PeerCarrier::new` only stores the addr (`conn: None`); it is dialed
+/// lazily at negotiate, and the worker reaches `RTCPeerConnection` through the
+/// main-thread broker (control port), so nothing here needs a live node or
+/// worker-side WebRTC. **Honesty line (§11.5.1):** this proves the leg
+/// *installs*, NOT that transport works — that is rung-1 (two peers + a real
+/// signaling node + a channel), which has open infra unknowns (a 2nd browser
+/// session; the standalone caps at one — see setup()).
+#[tokio::test(flavor = "current_thread")]
+async fn webrtc_provisioning_installs_the_establisher_on_the_enabled_primary(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    client
+        .goto(&format!(
+            // Worker arm (webrtc is worker-only) + the URL provisioning source:
+            // a dummy node that will never be dialed, and the explicit per-peer
+            // enable on the primary.
+            "http://localhost:{}/?worker=1\
+             &webrtc_node=ws://127.0.0.1:65535&webrtc_node_peer=dummy-node\
+             &webrtc_enable=1&log=trace",
+            http_server_port()
+        ))
+        .await?;
+    wait_for_boot(&client, 30_000).await?;
+    // Let the Ready handshake + the capability diff land in the log sink.
+    sleep(Duration::from_millis(500)).await;
+
+    let log = capture_log(&client).await?;
+    // The provisioning line — we asked for the capability at all.
+    assert!(
+        log.iter()
+            .any(|l| l.contains("provisioning") && l.contains("establisher capability")),
+        "expected the provisioning log (URL source → InitParams.webrtc). Log:\n{}",
+        log.join("\n")
+    );
+    // The v12 report confirmed the establisher installed on the enabled primary.
+    assert!(
+        log.iter().any(|l| l.contains("establisher confirmed on the primary")),
+        "expected the v12 install-confirmed line (provision→install→report). If \
+         absent, the worker did not install the establisher and Init likely fell \
+         back to Direct. Log:\n{}",
+        log.join("\n")
+    );
+    // And no shortfall — an enabled primary the worker did NOT install would have
+    // logged an error instead (D13: never silent, either way).
+    assert!(
+        !log.iter().any(|l| l.contains("install shortfall")),
+        "the enabled primary reported an install shortfall. Log:\n{}",
+        log.join("\n")
+    );
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Chat's reachability header on the **Worker arm** — the half a native test
+/// cannot reach.
+///
+/// What this covers and what it deliberately does not: a single browser has
+/// nobody to actually connect to, so the LIVE `Connected` case is asserted by
+/// `make e2e-webrtc-meet` §6, where two browsers have genuinely exchanged
+/// messages. What is provable here is the other half, and it is the half that
+/// was silent before: bind a conversation to a peer that does not exist, and
+/// the window must SAY it cannot be reached rather than looking identical to a
+/// working one. That is the whole defect — a failed delivery was a
+/// `tracing::warn!` and nothing a user could see.
+///
+/// Worker arm specifically because `peer_has_webrtc` reads `WireCaps` there
+/// (the v12 install report) rather than the Direct-arm seam, so a projection
+/// that only ever ran on Direct proves nothing about the shipped surface.
+#[tokio::test(flavor = "current_thread")]
+async fn chat_says_when_a_bound_conversation_cannot_be_reached(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    client
+        .goto(&format!(
+            "http://localhost:{}/?worker=1&log=trace",
+            http_server_port()
+        ))
+        .await?;
+    wait_for_boot(&client, 30_000).await?;
+
+    // Spawn Chat from the palette.
+    let spawn = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const b of root.querySelectorAll('button.spawn-btn')) {
+                if (b.textContent.trim() === '+ Chat') { b.click(); return 'clicked'; }
+            }
+            return 'no-chat-btn';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(spawn.as_str(), Some("clicked"), "could not spawn Chat: {spawn:?}");
+
+    // Read the reachability row out of the LAST Chat window. `(none)` and
+    // `(no-window)` are distinct on purpose: an absent row is the assertion for
+    // the unbound state, and an absent *window* would otherwise pass as one.
+    let read_reach = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const wins = [];
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h = sec.querySelector('header h3');
+            if (h && h.textContent.trim() === 'Chat') wins.push(sec);
+        }
+        if (!wins.length) return '(no-window)';
+        const el = wins[wins.length - 1].querySelector('[data-field="chat-reachability"]');
+        return el ? (el.textContent || '').trim() : '(none)';
+    "#;
+
+    // Unbound: the default self-conversation is about nobody, so there must be
+    // no row at all. A chip here would invent a relationship the user never
+    // created — and it is the state every freshly-opened Chat starts in.
+    let unbound = poll_json(&client, read_reach, Duration::from_secs(10), |v| {
+        v.as_str().map(|s| s != "(no-window)").unwrap_or(false)
+    })
+    .await?;
+    assert_eq!(
+        unbound.as_str(),
+        Some("(none)"),
+        "an unbound Chat must paint no reachability row, got {unbound:?}"
+    );
+
+    // Bind to a well-formed id that nothing has ever connected to, through the
+    // shipped by-id affordance (not a synthesized action) — so this exercises
+    // the same path a user walks.
+    let dark_pid = "2KnobodyHomeAtThisPeerdForTheReachabiityGatezz";
+    let bind = client
+        .execute(
+            &format!(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                const wins = [];
+                for (const sec of root.querySelectorAll('section.window')) {{
+                    const h = sec.querySelector('header h3');
+                    if (h && h.textContent.trim() === 'Chat') wins.push(sec);
+                }}
+                if (!wins.length) return 'no-window';
+                const inp = wins[wins.length - 1]
+                    .querySelector('[data-field="chat-start-peer"]');
+                if (!inp) return 'no-field';
+                inp.focus();
+                inp.value = {dark:?};
+                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                inp.dispatchEvent(new KeyboardEvent('keydown', {{
+                    key: 'Enter', bubbles: true
+                }}));
+                return 'typed';
+                "#,
+                dark = dark_pid
+            ),
+            vec![],
+        )
+        .await?;
+    assert_eq!(bind.as_str(), Some("typed"), "could not drive the by-id bind: {bind:?}");
+
+    // Now the row must exist AND say something honest. Polled, never slept-then-
+    // asserted: the bind lands on a later frame and the budget is an upper bound
+    // a healthy run returns from on the first pass.
+    let reach = poll_json(&client, read_reach, Duration::from_secs(15), |v| {
+        v.as_str().map(|s| s.contains("reached back")).unwrap_or(false)
+    })
+    .await?;
+    let reach = reach.as_str().unwrap_or("");
+    assert!(
+        !reach.is_empty() && reach != "(none)" && reach != "(no-window)",
+        "a bound conversation must paint a reachability row, got {reach:?}"
+    );
+    // The reason line. This peer installs no establisher (no connector is
+    // provisioned in this boot) and nothing here is reachable, so the note is
+    // both true and the actual explanation for the silence.
+    assert!(
+        reach.contains("reached back"),
+        "an unreachable bound conversation must say why it is unreachable, got {reach:?}"
+    );
+    // And never a Connected chip against a peer that does not exist — the
+    // stale-`Connected` lie the kernel read-model exists to prevent.
+    assert!(
+        !reach.contains("Connected"),
+        "nothing was ever connected to {dark_pid}, so the header must not say \
+         Connected: {reach:?}"
+    );
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// **Binding a chat used to be one-way.** The start picker renders only while
+/// the window is unbound, so the first peer you chatted with was the only peer
+/// that window could ever talk to; the escape was to open a second Chat window,
+/// and that is how it was reported from a real two-device run — *"once I connect
+/// to a peer, it's the only peer I can chat with"*.
+///
+/// Why this is an e2e and not a native test: the native pair
+/// (`leaving_a_conversation_returns_the_window_to_the_picker`,
+/// `switching_peers_swaps_the_conversation_and_keeps_both`) proves the model
+/// unbinds and re-binds. Neither can see the thing that was actually missing,
+/// which is a **control on screen** — the model has always been able to
+/// re-bind, and `ChatStartWith` has always accepted a second peer. So the
+/// assertions here are deliberately about the DOM: the button exists while
+/// bound, pressing it brings the picker back, and the window then re-points at
+/// a different conversation without being closed.
+///
+/// The conversation id is the proof of the re-point, because it is derived from
+/// the participant pair — a window that "left" but stayed bound would keep it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_chat_window_can_be_pointed_at_a_second_peer_without_reopening_it(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    client
+        .goto(&format!(
+            "http://localhost:{}/?worker=1&log=trace",
+            http_server_port()
+        ))
+        .await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    let spawn = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const b of root.querySelectorAll('button.spawn-btn')) {
+                if (b.textContent.trim() === '+ Chat') { b.click(); return 'clicked'; }
+            }
+            return 'no-chat-btn';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(spawn.as_str(), Some("clicked"), "could not spawn Chat: {spawn:?}");
+
+    // One probe for the whole window state, so every assertion below reads the
+    // same frame: which controls are present, and which conversation is bound.
+    // `(no-window)` is distinct from an absent control — an absent *window*
+    // would otherwise satisfy "the picker is gone".
+    let probe = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const wins = [];
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h = sec.querySelector('header h3');
+            if (h && h.textContent.trim() === 'Chat') wins.push(sec);
+        }
+        if (!wins.length) return '(no-window)';
+        const w = wins[wins.length - 1];
+        const conv = w.querySelector('[data-field="chat-conversation"]');
+        return JSON.stringify({
+            picker: !!w.querySelector('[data-field="chat-start-peer"]'),
+            leave: !!w.querySelector('[data-field="chat-leave"]'),
+            conversation: conv ? (conv.textContent || '').trim() : '',
+        });
+    "#;
+    let state = |v: &serde_json::Value| -> serde_json::Value {
+        serde_json::from_str(v.as_str().unwrap_or("{}")).unwrap_or_default()
+    };
+
+    // Two well-formed ids nothing has ever connected to. Same length by
+    // construction (a peer id is 46 Base58 chars, and `is_peer_id` enforces it —
+    // a hand-typed second literal is how that quietly stops being true).
+    let peer_a = "2KnobodyHomeAtThisPeerdForTheReachabiityGatezz";
+    let peer_b = "2KnobodyHomeAtThisPeerdForTheReachabiityGateyy";
+    assert_eq!(peer_a.len(), peer_b.len(), "both fixtures must be well-formed peer ids");
+
+    let bind_to = |pid: &str| {
+        format!(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const wins = [];
+            for (const sec of root.querySelectorAll('section.window')) {{
+                const h = sec.querySelector('header h3');
+                if (h && h.textContent.trim() === 'Chat') wins.push(sec);
+            }}
+            if (!wins.length) return 'no-window';
+            const inp = wins[wins.length - 1]
+                .querySelector('[data-field="chat-start-peer"]');
+            if (!inp) return 'no-field';
+            inp.focus();
+            inp.value = {pid:?};
+            inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            inp.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', bubbles: true }}));
+            return 'typed';
+            "#,
+            pid = pid
+        )
+    };
+
+    // Fresh window: the picker, and nothing to leave.
+    let fresh = poll_json(&client, probe, Duration::from_secs(10), |v| {
+        v.as_str().map(|s| s != "(no-window)").unwrap_or(false)
+    })
+    .await?;
+    let fresh = state(&fresh);
+    assert_eq!(fresh["picker"], serde_json::json!(true), "a fresh Chat offers the picker");
+    assert_eq!(
+        fresh["leave"],
+        serde_json::json!(false),
+        "…and nothing to leave, because nothing is bound: {fresh:?}"
+    );
+
+    // Bind the first peer. The picker goes; the way out must arrive with it —
+    // that swap is the entire bug, and asserting only one half would pass on
+    // the shipped behaviour.
+    let typed = client.execute(&bind_to(peer_a), vec![]).await?;
+    assert_eq!(typed.as_str(), Some("typed"), "could not drive the by-id bind: {typed:?}");
+    let bound_a = poll_json(&client, probe, Duration::from_secs(15), |v| {
+        state(v)["leave"] == serde_json::json!(true)
+    })
+    .await?;
+    let bound_a = state(&bound_a);
+    assert_eq!(
+        bound_a["picker"],
+        serde_json::json!(false),
+        "a bound Chat hides the picker (unchanged): {bound_a:?}"
+    );
+    let conv_a = bound_a["conversation"].as_str().unwrap_or("").to_string();
+    assert!(!conv_a.is_empty(), "a bound conversation names itself: {bound_a:?}");
+
+    // Leave. The picker must come back — this is the control that did not exist.
+    let left = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const wins = [];
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h = sec.querySelector('header h3');
+                if (h && h.textContent.trim() === 'Chat') wins.push(sec);
+            }
+            if (!wins.length) return 'no-window';
+            const btn = wins[wins.length - 1].querySelector('[data-field="chat-leave"]');
+            if (!btn) return 'no-button';
+            btn.click();
+            return 'clicked';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(left.as_str(), Some("clicked"), "no way out of a bound chat: {left:?}");
+
+    let unbound = poll_json(&client, probe, Duration::from_secs(15), |v| {
+        state(v)["picker"] == serde_json::json!(true)
+    })
+    .await?;
+    let unbound = state(&unbound);
+    assert_eq!(
+        unbound["leave"],
+        serde_json::json!(false),
+        "leaving must also retract the leave control: {unbound:?}"
+    );
+    assert_ne!(
+        unbound["conversation"].as_str().unwrap_or(""),
+        conv_a,
+        "the window is back on its own scratch, not still in the conversation it left"
+    );
+
+    // …and now the point of all of it: a SECOND peer, in the same window.
+    let typed = client.execute(&bind_to(peer_b), vec![]).await?;
+    assert_eq!(typed.as_str(), Some("typed"), "could not re-bind: {typed:?}");
+    let bound_b = poll_json(&client, probe, Duration::from_secs(15), |v| {
+        state(v)["leave"] == serde_json::json!(true)
+    })
+    .await?;
+    let bound_b = state(&bound_b);
+    let conv_b = bound_b["conversation"].as_str().unwrap_or("");
+    assert!(!conv_b.is_empty(), "the second bind names its conversation: {bound_b:?}");
+    assert_ne!(
+        conv_b, conv_a,
+        "a different peer is a different conversation — an id that did not move \
+         means the window never actually re-pointed"
+    );
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Choosing a connector does nothing until reload, and the window must say so.
+///
+/// `InitParams.webrtc` is Init-only upstream, so a selection made mid-session
+/// cannot reach the running establisher. The gate `e2e-webrtc-meet` documents
+/// that reload in Python; the *user* was told nothing, which made "I selected it
+/// and meet still fails" the expected first experience.
+///
+/// Both halves are asserted, and the first is the one that keeps this honest: a
+/// cold window must be QUIET. A static "changes need a reload" caption would
+/// pass the second assertion and fail this one, which is exactly the difference
+/// between a live state and permanent furniture.
+///
+/// **Adding the FIRST connector is what raises the notice now**, because that
+/// add is also the selection (`connectors::add_connector` — a registry with rows
+/// and no selection provisions nothing). This test used to Add and then click
+/// *Use*; the selected row deliberately offers no Use button, so the old
+/// sequence now waits forever for a control that should not exist. The Use path
+/// is still exercised, on a **second** connector — where the button count is
+/// also the cheapest proof that the first add really took the selection.
+#[tokio::test(flavor = "current_thread")]
+async fn selecting_a_connector_says_it_needs_a_reload(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    client
+        .goto(&format!(
+            "http://localhost:{}/?worker=1&log=trace",
+            http_server_port()
+        ))
+        .await?;
+    wait_for_boot(&client, 30_000).await?;
+
+    let spawn = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const b of root.querySelectorAll('button.spawn-btn')) {
+                if (b.textContent.trim() === '+ Peer Connections') { b.click(); return 'clicked'; }
+            }
+            return 'no-btn';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(spawn.as_str(), Some("clicked"), "could not spawn Peer Connections: {spawn:?}");
+
+    // Whole-window text; the notice is a line inside the connectors card.
+    let window_text = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h = sec.querySelector('header h3');
+            if (h && h.textContent.trim() === 'Peer Connections') {
+                return (sec.textContent || '').trim();
+            }
+        }
+        return '(no-window)';
+    "#;
+
+    // Cold: nothing provisioned, nothing selected, so a reload would change
+    // nothing and the window must not nag.
+    let cold = poll_json(&client, window_text, Duration::from_secs(10), |v| {
+        v.as_str().map(|s| s != "(no-window)").unwrap_or(false)
+    })
+    .await?;
+    let cold = cold.as_str().unwrap_or("");
+    assert!(!cold.is_empty() && cold != "(no-window)", "Peer Connections did not render");
+    assert!(
+        !cold.contains("takes effect on reload"),
+        "a session with no connector must not claim a pending reload: {cold:?}"
+    );
+
+    // Add a connector through the window's own form — the click a user makes.
+    // Factored so the SECOND add below is the same code path as the first; two
+    // hand-copied blobs is how the two stop being the same click.
+    //
+    // **The peer-id now goes in `connector_expect`, inside the Advanced
+    // disclosure, and that is load-bearing here rather than incidental.** The
+    // form learns a node's id by dialing it; this rig's address is deliberately
+    // dead (`:65535`), so the add can only succeed down the *named* branch —
+    // which is exactly the "the node is not up yet" case worth exercising, and
+    // the one that keeps this gate about the RELOAD NOTICE rather than about
+    // whether a node happened to answer.
+    //
+    // It also proves the Advanced fields work while the `<details>` is closed:
+    // the element is in the DOM, the `input` event lands in `ctx.drafts`, and
+    // the submit-time read finds it. Nothing here opens the disclosure.
+    let add_connector_js = |pid: &str| {
+        format!(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            let card = null;
+            for (const sec of root.querySelectorAll('section.window')) {{
+                const h = sec.querySelector('header h3');
+                if (h && h.textContent.trim() === 'Peer Connections') card = sec;
+            }}
+            if (!card) return 'no-window';
+            const set = (field, val) => {{
+                const el = card.querySelector(`[data-field="${{field}}"]`);
+                if (!el) return false;
+                el.focus();
+                el.value = val;
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                return true;
+            }};
+            if (!set('connector_addr', 'ws://127.0.0.1:65535')) return 'no-addr-field';
+            if (!set('connector_expect', {pid:?})) return 'no-expect-field';
+            for (const b of card.querySelectorAll('button')) {{
+                if (b.textContent.trim() === 'Add connector') {{ b.click(); return 'added'; }}
+            }}
+            return 'no-add-button';
+            "#,
+            pid = pid
+        )
+    };
+
+    let added = client
+        .execute(&add_connector_js("2KnodeForTheReoadNoticeGatezzzzzzzzzzzzzzzzzzz"), vec![])
+        .await?;
+    assert_eq!(added.as_str(), Some("added"), "could not add a connector: {added:?}");
+
+    // The FIRST add is also the selection, so a reload would now resolve a node
+    // this session did not boot with — and the window must say so without the
+    // user touching anything else.
+    let hot = poll_json(&client, window_text, Duration::from_secs(15), |v| {
+        v.as_str().map(|s| s.contains("takes effect on reload")).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        hot.as_str().unwrap_or("").contains("takes effect on reload"),
+        "adding the first connector selects it, so the window must report the \
+         pending reload: {hot:?}"
+    );
+
+    // Add a SECOND connector and drive `Use`. Two things at once: the Use path
+    // is still covered, and the button COUNT is the cheapest proof the first add
+    // really took the selection — a selected row renders no Use button, so
+    // "exactly one of two rows offers Use" is only true if one is selected.
+    let added2 = client
+        .execute(&add_connector_js("2KsecondNodeForTheReloadNoticeGatezzzzzzzzzz"), vec![])
+        .await?;
+    assert_eq!(added2.as_str(), Some("added"), "could not add a second connector: {added2:?}");
+
+    let use_buttons = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let card = null;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h = sec.querySelector('header h3');
+            if (h && h.textContent.trim() === 'Peer Connections') card = sec;
+        }
+        if (!card) return -1;
+        let n = 0;
+        for (const b of card.querySelectorAll('button')) {
+            if (b.textContent.trim() === 'Use') n++;
+        }
+        return n;
+    "#;
+    let count = poll_json(&client, use_buttons, Duration::from_secs(15), |v| {
+        v.as_i64() == Some(1)
+    })
+    .await?;
+    assert_eq!(
+        count.as_i64(),
+        Some(1),
+        "with two connectors and one of them selected, exactly one row may offer \
+         Use — got {count:?}"
+    );
+
+    // Click it: selecting the other node mid-session must leave the notice up.
+    let used = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            let card = null;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h = sec.querySelector('header h3');
+                if (h && h.textContent.trim() === 'Peer Connections') card = sec;
+            }
+            if (!card) return 'no-window';
+            for (const b of card.querySelectorAll('button')) {
+                if (b.textContent.trim() === 'Use') { b.click(); return 'used'; }
+            }
+            return 'no-use-button';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(used.as_str(), Some("used"), "the unselected connector never offered Use: {used:?}");
+
+    let still = poll_json(&client, window_text, Duration::from_secs(15), |v| {
+        v.as_str().map(|s| s.contains("takes effect on reload")).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        still.as_str().unwrap_or("").contains("takes effect on reload"),
+        "selecting a different connector mid-session is still pending until \
+         reload: {still:?}"
     );
 
     client.close().await.ok();
@@ -7404,28 +14047,45 @@ async fn click_spawn_btn(
 }
 
 /// Click a `+ <Mode>` button inside the Peers window.
-async fn click_peers_mode_btn(
-    client: &Client,
-    btn_text: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let script = format!(
+/// JS that creates a peer via the Peers-window create form: set the
+/// `.peer-create-kind` <select> to `kind` (value = `PeerMode::persist_key`, e.g.
+/// `frontend` / `backend-memory` / `backend-opfs`, or the special `native`),
+/// then click the single "Add peer" button. Centralizes the form-driving JS so a
+/// future create-UI change touches ONE place, not every call site (the lesson
+/// from the vocabulary relabel: create-UI text is a cross-surface coupling).
+/// Returns "clicked" on success, else a diagnostic token.
+fn create_peer_form_js(kind: &str) -> String {
+    format!(
         r#"
         const layer = document.getElementById('dom-layer');
         const root = layer.shadowRoot || layer;
-        const sections = root.querySelectorAll('section.window');
-        for (const sec of sections) {{
+        for (const sec of root.querySelectorAll('section.window')) {{
             const h2 = sec.querySelector('h2');
             if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-            const btns = sec.querySelectorAll('button');
-            for (const b of btns) {{
-                if (b.textContent.trim() === '{btn_text}') {{ b.click(); return 'clicked'; }}
+            const select = sec.querySelector('select.peer-create-kind');
+            if (!select) return 'no-kind-select';
+            let found = false;
+            for (const opt of select.options) {{ if (opt.value === '{kind}') {{ found = true; break; }} }}
+            if (!found) return 'no-kind-option';
+            select.value = '{kind}';
+            select.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            for (const b of sec.querySelectorAll('button')) {{
+                if (b.textContent.trim() === 'Add peer') {{ b.click(); return 'clicked'; }}
             }}
-            return 'no-btn';
+            return 'no-add-btn';
         }}
         return 'no-peers-section';
         "#
-    );
-    let v = client.execute(&script, vec![]).await?;
+    )
+}
+
+/// Create a peer via the Peers-window create form (see [`create_peer_form_js`]).
+/// `kind` is the option value, not a button label. Returns "clicked" on success.
+async fn click_peers_mode_btn(
+    client: &Client,
+    kind: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let v = client.execute(&create_peer_form_js(kind), vec![]).await?;
     Ok(v.as_str().unwrap_or("non-string").to_string())
 }
 
@@ -7499,11 +14159,11 @@ async fn deleted_backend_peers_stay_deleted_across_reload(
         "couldn't open the Peers window");
     sleep(Duration::from_millis(600)).await;
 
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (Memory)").await?, "clicked",
-        "couldn't click '+ Backend (Memory)'");
+    assert_eq!(click_peers_mode_btn(&client, "backend-memory").await?, "clicked",
+        "couldn't click '+ Worker (memory)'");
     sleep(Duration::from_millis(1500)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (OPFS)").await?, "clicked",
-        "couldn't click '+ Backend (OPFS)'");
+    assert_eq!(click_peers_mode_btn(&client, "backend-opfs").await?, "clicked",
+        "couldn't click '+ Worker (OPFS)'");
     sleep(Duration::from_millis(2500)).await;
 
     let after_create = read_persisted_peers(&client).await?;
@@ -7656,9 +14316,9 @@ async fn roster_shadow_matches_spawn_list_across_lifecycle(
     // Create two backend peers (each dual-writes its roster entry).
     assert_eq!(click_spawn_btn(&client, "+ Peers").await?, "clicked", "open Peers");
     sleep(Duration::from_millis(600)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (Memory)").await?, "clicked");
+    assert_eq!(click_peers_mode_btn(&client, "backend-memory").await?, "clicked");
     sleep(Duration::from_millis(1500)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (OPFS)").await?, "clicked");
+    assert_eq!(click_peers_mode_btn(&client, "backend-opfs").await?, "clicked");
     sleep(Duration::from_millis(2500)).await;
 
     // Reload #1: the roster is replayed durably (primary + 2 backends) and the
@@ -7727,7 +14387,7 @@ async fn default_boot_is_idb_and_roster_drives_spawn(
     //     roster entry on the IDB system peer.
     assert_eq!(click_spawn_btn(&client, "+ Peers").await?, "clicked", "open Peers");
     sleep(Duration::from_millis(600)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (Memory)").await?, "clicked");
+    assert_eq!(click_peers_mode_btn(&client, "backend-memory").await?, "clicked");
     sleep(Duration::from_millis(2000)).await;
     let after_create = read_persisted_peers(&client).await?;
     let backend: Vec<_> = after_create.iter().filter(|(_, m)| m == "backend-memory").collect();
@@ -7813,7 +14473,7 @@ async fn cross_arm_roster_migration_flag_is_per_system_peer(
     sleep(Duration::from_millis(1000)).await;
     assert_eq!(click_spawn_btn(&client, "+ Peers").await?, "clicked", "open Peers");
     sleep(Duration::from_millis(600)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (Memory)").await?, "clicked");
+    assert_eq!(click_peers_mode_btn(&client, "backend-memory").await?, "clicked");
     sleep(Duration::from_millis(2000)).await;
 
     // (2) Switch to the Worker arm. Its system peer (set-A primary) has a
@@ -7867,7 +14527,7 @@ async fn default_idb_boots_into_remote_deployment_home(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (client, _server) = setup().await?;
 
-    // Publish the demo under a foreign publish-peer + a strict-site same-origin
+    // Publish the demo under a foreign publish-peer + a locked-site same-origin
     // entity-deployment.json into dist/ (identical to Phase 27's fixture).
     let out = Command::new(env!("CARGO"))
         .args([
@@ -7976,9 +14636,9 @@ async fn deleted_backend_peers_stay_deleted_with_second_tab_open(
 
     assert_eq!(click_spawn_btn(&client, "+ Peers").await?, "clicked");
     sleep(Duration::from_millis(600)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (Memory)").await?, "clicked");
+    assert_eq!(click_peers_mode_btn(&client, "backend-memory").await?, "clicked");
     sleep(Duration::from_millis(1500)).await;
-    assert_eq!(click_peers_mode_btn(&client, "+ Backend (OPFS)").await?, "clicked");
+    assert_eq!(click_peers_mode_btn(&client, "backend-opfs").await?, "clicked");
     sleep(Duration::from_millis(2500)).await;
 
     let created = read_persisted_peers(&client).await?;
@@ -8017,7 +14677,7 @@ async fn deleted_backend_peers_stay_deleted_with_second_tab_open(
     let t2_open = click_spawn_btn(&client, "+ Peers").await?;
     println!("  [tab2] open Peers: {t2_open}");
     sleep(Duration::from_millis(600)).await;
-    let t2_create = click_peers_mode_btn(&client, "+ Backend (Memory)").await?;
+    let t2_create = click_peers_mode_btn(&client, "backend-memory").await?;
     println!("  [tab2] create backend-memory: {t2_create}");
     sleep(Duration::from_millis(2500)).await;
     let after_tab2_write = read_persisted_peers(&client).await?;
@@ -8212,7 +14872,7 @@ async fn drifted_identity_peers_are_durably_deletable(
             for (const sec of sections) {
                 const h2 = sec.querySelector('h2');
                 if (!h2 || h2.textContent.trim() !== 'Peers') continue;
-                return sec.querySelectorAll('tbody tr').length;
+                return sec.querySelectorAll('tbody tr:not(.peer-group)').length;
             }
             return -1;
             "#,
@@ -8268,6 +14928,1514 @@ async fn drifted_identity_peers_are_durably_deletable(
     );
 
     println!("  drifted_identity_peers_are_durably_deletable OK");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// **The subscription proof — and it needs a boot of its own to mean anything.**
+///
+/// A Worker-arm surface must subscribe every prefix it reads: `get_entity` /
+/// `tree_listing` there are a main-thread **cache mirror**, seeded only for
+/// subscribed prefixes, so an unsubscribed read is not an error — it is an empty
+/// answer, forever, on a surface whose data is perfectly readable by everyone
+/// else. `FileTransferWindow` reads its own offers prefix and subscribes it for
+/// exactly that reason.
+///
+/// **Phase 14.2 cannot prove that, and this test exists because measuring said
+/// so.** Removing the subscription leaves 14.2 green: the monolith has every
+/// window open, and **two of them subscribe the whole peer tree** (Entity Tree's
+/// `observe_with_events` on `/{pid}/` and Storage's `watch_prefix` on the same),
+/// while `WorkerProxy::cache_list`/`cache_get` are a **union over every
+/// subscription's mirror**. So in that session a window that forgot to subscribe
+/// still reads. **This generalizes: no assertion in the monolith can catch a
+/// missing app-tier subscription while those two windows are open** — a fact
+/// worth knowing before trusting any "the window subscribes what it reads"
+/// claim made from a green suite.
+///
+/// Here the File Transfer window is the only one open, so the mirror it reads is
+/// its own. Mutation-checked: delete the offers `watch_prefix` in
+/// `FileTransferWindow::window_type` and this goes red (the offer still
+/// completes and reports; only the owner's own view of it is missing) while the
+/// monolith stays green.
+#[tokio::test]
+async fn a_lone_file_transfer_window_lists_what_it_offers() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?worker=1&log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, 30_000).await?;
+    sleep(Duration::from_millis(600)).await;
+
+    // Open File Transfer, and nothing else.
+    assert_eq!(
+        click_spawn_btn(&client, "+ File Transfer").await?,
+        "clicked",
+        "couldn't open the File Transfer window"
+    );
+    sleep(Duration::from_millis(600)).await;
+
+    // THE PRECONDITION, asserted rather than assumed: no whole-tree subscriber
+    // is open. If a future boot spawns Entity Tree or Storage by default, this
+    // test would silently stop proving anything — so it fails loudly instead.
+    let lone = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const open = [];
+            for (const s of root.querySelectorAll('section.window')) {
+                const h = s.querySelector('h2, h3, header');
+                open.push((h ? h.textContent : s.className).trim().slice(0, 40));
+            }
+            return {
+                tree: !!root.querySelector('.tree-panel'),
+                storage: !!root.querySelector('.storage'),
+                ft: !!root.querySelector('.file-transfer'),
+                open,
+            };
+            "#,
+            vec![],
+        )
+        .await?;
+    assert!(
+        lone.get("ft").and_then(|v| v.as_bool()).unwrap_or(false),
+        "the File Transfer window is not open: {lone}"
+    );
+    assert!(
+        !lone.get("tree").and_then(|v| v.as_bool()).unwrap_or(true)
+            && !lone.get("storage").and_then(|v| v.as_bool()).unwrap_or(true),
+        "a whole-tree subscriber (Entity Tree / Storage) is open, so this test \
+         would pass on ITS mirror and prove nothing about File Transfer's own \
+         subscription. Open windows: {lone}"
+    );
+    println!("  open windows: {}", lone.get("open").unwrap_or(&serde_json::Value::Null));
+
+    let name = "lone-window-offer.bin";
+    let sent = client
+        .execute(
+            &format!(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                let sec = null;
+                for (const s of root.querySelectorAll('section.window')) {{
+                    if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+                }}
+                if (!sec) return 'no-window';
+                const inp = sec.querySelector('[data-field="ft-offer-input"]');
+                if (!inp) return 'no-offer-input';
+                const n = 600000;
+                const a = new Uint8Array(n);
+                for (let i = 0; i < n; i++) a[i] = (i * 31) % 251;
+                const f = new File([a], '{name}', {{ type: 'application/octet-stream' }});
+                const dt = new DataTransfer();
+                dt.items.add(f);
+                inp.files = dt.files;
+                inp.dispatchEvent(new Event('change'));
+                return 'sent';
+                "#,
+            ),
+            vec![],
+        )
+        .await?;
+    assert_eq!(sent.as_str(), Some("sent"), "could not drive the offer picker: {sent}");
+
+    let listed = poll_json(
+        &client,
+        &format!(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            let sec = null;
+            for (const s of root.querySelectorAll('section.window')) {{
+                if (s.querySelector('.file-transfer')) {{ sec = s; break; }}
+            }}
+            if (!sec) return {{ row: false, reason: 'no-window' }};
+            const results = sec.querySelector('[data-field="ft-results"]');
+            const text = results ? results.textContent : '';
+            return {{
+                row: !!sec.querySelector('[data-field="ft-offer-row"][data-offer-name="{name}"]'),
+                reported: text.includes('✓ offering') && text.includes('{name}'),
+                tail: text.slice(-300),
+            }};
+            "#,
+        ),
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("row").and_then(|r| r.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        listed.get("reported").and_then(|r| r.as_bool()).unwrap_or(false),
+        "the offer itself never completed on the Worker arm — that is the ingest \
+         or the manifest put, not the subscription. Detail: {listed}"
+    );
+    assert!(
+        listed.get("row").and_then(|r| r.as_bool()).unwrap_or(false),
+        "the offer completed and the window never listed it. With no other window \
+         open there is no mirror to borrow: this is `FileTransferWindow`'s own \
+         `watch_prefix` on the offers prefix. Detail: {listed}"
+    );
+    println!("  a lone File Transfer window listed its own offer");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The naming chain, in a real browser, cross-origin
+// ---------------------------------------------------------------------------
+
+/// A `tools/cors-serve.py` child serving the emitted federation on its own port.
+///
+/// **Not `python3 -m http.server`** — that is what `start_dist_server` uses, and
+/// it sends **no CORS headers at all**. Same-origin (the app's own bundle) does
+/// not care; a *cross-origin* fetch of a published tree does, and the browser
+/// drops the response no matter how good the bytes are. That difference is the
+/// entire point of this test, so the two servers are deliberately different
+/// programs (`RUNBOOK-CDN-BROWSER-DEPLOYMENT` §2.1).
+struct FederationServer(Child);
+
+impl Drop for FederationServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Emit a four-domain federation whose bindings carry **absolute** origins on
+/// `port`, then serve it there with CORS. Returns `(server, registry_peer_id)`.
+fn start_federation(port: u16) -> Result<(FederationServer, String), Box<dyn std::error::Error>> {
+    let out = "target/e2e-federation";
+    // `ORIGIN_BASE` is what makes each binding's `http-poll` transport an
+    // absolute cross-origin URL instead of a path slug — i.e. what makes the
+    // resolved name reachable from an app served somewhere else entirely.
+    let status = Command::new("bash")
+        .args(["tools/local-federation.sh", out])
+        .env("ORIGIN_BASE", format!("http://localhost:{port}/"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status()?;
+    if !status.success() {
+        return Err(format!("local-federation.sh failed: {status}").into());
+    }
+
+    let mapping = std::fs::read_to_string(format!("{out}/MAPPING.txt"))?;
+    // The registry peer-id is the ONE string a consumer holds a priori, and the
+    // mapping file is where the publish reports it.
+    let registry = mapping
+        .lines()
+        .skip_while(|l| !l.contains("registry peer"))
+        .nth(1)
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or("no registry peer-id in MAPPING.txt")?;
+
+    // stderr is NOT discarded: a bind failure is the one thing that makes this
+    // rig lie. A squatter on the port serves 404s with no CORS, the browser
+    // reports `NetworkError`, and it reads exactly like the app failing CORS —
+    // which is what happened the first time this ran (a stale `http.server` from
+    // another session held the port).
+    let child = Command::new("python3")
+        .args(["tools/cors-serve.py", out, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    Ok((FederationServer(child), registry))
+}
+
+/// A free TCP port. The federation's binding origins are **baked in at publish
+/// time**, so the port has to be known before the emit — it cannot be an
+/// ephemeral listener handed to a server later.
+fn pick_free_port() -> Result<u16, std::io::Error> {
+    let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let p = l.local_addr()?.port();
+    drop(l);
+    Ok(p)
+}
+
+/// Where the published federation lives for this run, and who is serving it.
+///
+/// **Two modes, and the difference is the whole point of the multi-host gate.**
+/// In the default (local) mode the federation is emitted and served by a child of
+/// this process on `localhost` — real HTTP, real CORS, but the consumer and the
+/// origin share a host, so every fetch is a loopback hop. In **external** mode the
+/// origin is already standing somewhere else (`tools/e2e/federation-multihost.sh`
+/// puts it in its own container with its own routable IP) and this process only
+/// *consumes* it.
+///
+/// `EXTENSION-SIGNALING` §11.5.1's blindness class is why the second mode exists:
+/// a loopback run reports success for things that cannot work off it, and "every
+/// individual step reports success" is exactly what it looks like.
+struct FederationTarget {
+    /// Origin base with **no** trailing slash — e.g. `http://10.89.1.5:8099`.
+    base: String,
+    registry_pid: String,
+    /// `Some` only in local mode; dropping it kills the child server.
+    _server: Option<FederationServer>,
+}
+
+/// Resolve the federation for this run — external if `E2E_FED_ORIGIN` names one,
+/// otherwise emitted and served locally exactly as before.
+///
+/// External mode also needs `E2E_FED_REGISTRY` (the registry peer-id), because
+/// the consumer is deliberately not the publisher and must not read the
+/// publisher's `MAPPING.txt` off a shared filesystem to learn it — that would be
+/// the same-process shortcut this gate exists to remove. It is the one string a
+/// consumer holds a priori, and here it genuinely arrives out of band.
+fn federation_target() -> Result<FederationTarget, Box<dyn std::error::Error>> {
+    if let Ok(origin) = std::env::var("E2E_FED_ORIGIN") {
+        let base = origin.trim().trim_end_matches('/').to_string();
+        let registry_pid = std::env::var("E2E_FED_REGISTRY").map_err(|_| {
+            "E2E_FED_ORIGIN is set but E2E_FED_REGISTRY is not — the consumer has no pin, and \
+             reading it off the publisher's disk would reintroduce the shared-filesystem \
+             shortcut this mode exists to remove"
+        })?;
+        assert_not_loopback(&base)?;
+        // **Deliberately NOT `assert_origin_healthy` here — the vantage is wrong.**
+        // In external mode this process is the *orchestrator*, not the consumer:
+        // the browser is a container on the publisher's bridge and this test runs
+        // on the host, which under rootless podman has no route into that bridge
+        // at all. Probing from here would fail on a perfectly healthy origin — it
+        // did, first run — and worse, a probe that *did* pass from here would be
+        // evidence about a path nobody under test takes. The rig owns this check
+        // and runs it from inside the network, which is where the consumer is.
+        return Ok(FederationTarget { base, registry_pid: registry_pid.trim().to_string(), _server: None });
+    }
+    let port = match std::env::var("E2E_FED_PORT").ok().and_then(|v| v.trim().parse().ok()) {
+        Some(p) => p,
+        None => pick_free_port()?,
+    };
+    let (server, registry_pid) = start_federation(port)?;
+    let base = format!("http://localhost:{port}");
+    assert_origin_healthy(&base)?;
+    Ok(FederationTarget { base, registry_pid, _server: Some(server) })
+}
+
+/// **The control that keeps "multi-host" from silently becoming "same host".**
+///
+/// `E2E_FED_ORIGIN=http://localhost:8099` would run this gate end-to-end, pass
+/// every assertion, and prove exactly what the local mode already proves — while
+/// the target's name says otherwise. A rig that can quietly degrade into the
+/// thing it was built to replace is the NAT rig's lesson one layer over: **probe
+/// your own controls, or a green run means something you did not measure.**
+fn assert_not_loopback(base: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let host = host_of(base);
+    let loopback = host == "localhost"
+        || host == "::1"
+        || host.parse::<std::net::Ipv4Addr>().map(|a| a.is_loopback()).unwrap_or(false);
+    if loopback {
+        return Err(format!(
+            "E2E_FED_ORIGIN points at {host:?}, which is loopback — this is the MULTI-HOST gate \
+             and a loopback origin makes it a slower copy of the local one. §11.5.1's blindness \
+             class is precisely what the separate host is here to remove."
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// `http://10.89.1.5:8099` → `10.89.1.5`; `http://localhost:8099` → `localhost`.
+fn host_of(base: &str) -> String {
+    base.trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .rsplit_once(':')
+        .map(|(h, _)| h.to_string())
+        .unwrap_or_else(|| base.trim_start_matches("http://").to_string())
+}
+
+/// `http://10.89.1.5:8099` → `8099`, defaulting to 80.
+fn port_of(base: &str) -> u16 {
+    base.trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.parse().ok())
+        .unwrap_or(80)
+}
+
+/// Assert the federation origin is up, is **ours**, and sends CORS — before the
+/// browser is asked to trust any of it.
+///
+/// Without this the rig fails open: anything else listening on the port answers,
+/// the browser reports a bare `NetworkError`, and the diagnosis lands on the app.
+/// "Prove the network path before blaming the application" (AGENTS.md, learned on
+/// the NAT rig) applies to a static origin just as well.
+fn assert_origin_healthy(base: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    let (host, port) = (host_of(base), port_of(base));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut last = String::from("never connected");
+    while Instant::now() < deadline {
+        if let Ok(mut sock) = std::net::TcpStream::connect((host.as_str(), port)) {
+            let req = format!(
+                "GET /MAPPING.txt HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+            );
+            if sock.write_all(req.as_bytes()).is_ok() {
+                let mut raw = Vec::new();
+                let _ = sock.read_to_end(&mut raw);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                let ok = text.starts_with("HTTP/1.0 200") || text.starts_with("HTTP/1.1 200");
+                let cors = text.to_ascii_lowercase().contains("access-control-allow-origin");
+                if ok && cors {
+                    return Ok(());
+                }
+                last = format!(
+                    "200={ok} cors={cors} — first line: {:?}",
+                    text.lines().next().unwrap_or("")
+                );
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(format!(
+        "the federation origin at {base} is not healthy ({last}). Something else is \
+         probably holding the port — a plain `http.server` answers without CORS and the \
+         browser then reports a bare NetworkError that looks like an app bug."
+    )
+    .into())
+}
+
+/// **The whole naming chain, in a browser, across two origins.**
+///
+/// Everything else that exercises this runs native: the `LocalWeb` unit tests
+/// read from disk, and `four_domains_resolve_and_serve_over_real_http_with_cors`
+/// speaks HTTP from a Rust client. Neither can prove the part that only a
+/// browser has — **CORS enforcement** and the real `window.fetch`. A native
+/// client happily reads a response a browser would discard, which is exactly the
+/// gap `RUNBOOK-CDN-BROWSER-DEPLOYMENT` was written for and the one this repo is
+/// assigned by name.
+///
+/// The app is served from one origin (`:8092`) and the published federation from
+/// another (`:8099`-ish), so **every fetch in the walk is cross-origin**. The
+/// consumer types one string it could have got off a business card — the
+/// registry's peer-id — and ends up holding verified page bytes from a domain
+/// nothing in the build knows about.
+///
+/// What each assertion is really for:
+/// - `name pin` — the peer-id alone is a usable pin (it embeds the public key).
+/// - `name resolve` — hop 1 crosses an origin boundary and the evidence fields
+///   report that D1's name check and the §6a.6 revocation probe actually ran.
+/// - `name open` — hop 2 pins a *different* publisher at a *different* path and
+///   walks its signed root to bytes whose hash was recomputed on the way down.
+#[tokio::test]
+async fn a_name_resolves_cross_origin_to_a_verified_page_in_a_browser(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    // Local by default (a child on `localhost`), or an already-standing origin on
+    // its own host when `E2E_FED_ORIGIN` names one — see `federation_target`. The
+    // walk below is byte-identical either way, which is the point: the *topology*
+    // is the variable under test, not the code path.
+    let fed = federation_target()?;
+    let (base, registry_pid) = (fed.base.clone(), fed.registry_pid.clone());
+    println!("  federation at {base}, registry {}", &registry_pid[..12.min(registry_pid.len())]);
+
+    let url = format!("{}/?log=trace", app_base());
+    client.goto(&url).await?;
+    wait_for_boot(&client, 30_000).await?;
+    sleep(Duration::from_millis(600)).await;
+
+    // The Shell is the surface; `name` is app-local, like `connector` and `meet`.
+    assert_eq!(
+        click_spawn_btn(&client, "+ Shell").await?,
+        "clicked",
+        "couldn't open the Shell window"
+    );
+    sleep(Duration::from_millis(500)).await;
+
+    // --- the pin: one string, and it is not a key ---
+    let pin_out = shell_submit(
+        &client,
+        &format!("name pin {registry_pid} {base}/registry"),
+        400,
+    )
+    .await?;
+    assert!(
+        pin_out.contains("pinned registry"),
+        "the registry did not pin — scrollback:\n{pin_out}"
+    );
+
+    // --- hop 1: cross-origin, and the evidence says what was checked ---
+    let resolved = shell_submit(&client, "name resolve entitychurch.org", 2500).await?;
+    assert!(
+        resolved.contains("entitychurch.org →"),
+        "the name did not resolve cross-origin — scrollback:\n{resolved}"
+    );
+    for claim in ["association=true", "name=true", "revocation=true"] {
+        assert!(
+            resolved.contains(claim),
+            "the resolution did not report {claim} — a check was skipped:\n{resolved}"
+        );
+    }
+    assert!(
+        resolved.contains(&host_of(&base)),
+        "the binding must carry the cross-origin where — scrollback:\n{resolved}"
+    );
+
+    // --- hop 2: a second publisher, pinned by the id the registry named ---
+    // `demo`/`index` is what `local-federation.sh` actually publishes — the site
+    // id is the PUBLISH's, not the domain slug, and asking for a slug-named site
+    // walks the signed root to a key that is simply absent.
+    let opened = shell_submit(&client, "name open entitychurch.org demo index", 6000).await?;
+    assert!(
+        opened.contains("verified"),
+        "the page did not verify — scrollback:\n{opened}"
+    );
+    assert!(
+        opened.contains("sites/demo/pages/index"),
+        "the verified key is not the page we asked for — scrollback:\n{opened}"
+    );
+
+    // --- the DEFAULTS, which used to be guesses (audit F5) ---
+    // `name open <name>` with no site defaulted to `"home"` — a site id that
+    // exists nowhere in a real publish, only in this repo's test fixtures — so
+    // the obvious first command always failed on a key nothing publishes and
+    // read as "that page isn't there". It must ask, using the publisher's own
+    // listing, and must NOT walk to a site it invented.
+    let no_site = shell_submit(&client, "name open entitychurch.org", 8000).await?;
+    assert!(
+        no_site.contains("which site?") && no_site.contains("demo"),
+        "with no site given the verb must offer what the publisher lists — scrollback:\n{no_site}"
+    );
+    assert!(
+        !no_site.contains("sites/home/"),
+        "the verb must not fall back to a guessed site id — scrollback:\n{no_site}"
+    );
+
+    // With a site but no page, the landing page comes from that site's OWN
+    // manifest, read through the signed root — verified, where `"index"` was a
+    // guess that happened to match our emitter and nobody else's.
+    let no_page = shell_submit(&client, "name open entitychurch.org demo", 8000).await?;
+    assert!(
+        no_page.contains("sites/demo/pages/index") && no_page.contains("verified"),
+        "the landing page must come from the manifest and verify — scrollback:\n{no_page}"
+    );
+
+    // A key the publisher never published must be refused, not invented — the
+    // control that says "verified" above means the walk, not a default.
+    let absent = shell_submit(&client, "name open entitychurch.org demo nosuchpage", 8000).await?;
+    assert!(
+        !absent.contains("sites/demo/pages/nosuchpage verified"),
+        "an absent page must not verify — scrollback:\n{absent}"
+    );
+
+    // A name the registry does not carry must fail closed, not fall back to
+    // anything. This is the same fail-closed posture as `chain_exhausted`.
+    // Budget note: a MISS is slower than a hit, not faster — the walk still
+    // fetches the manifest, the signature and the interior nodes before the key
+    // turns out to be absent. 2.5s was not enough and read as "no output".
+    let missing = shell_submit(&client, "name resolve not-a-real-name.example", 6000).await?;
+    assert!(
+        missing.contains("no binding for this name in the signed registry"),
+        "an unbound name must fail closed with the signed-absence message — scrollback:\n{missing}"
+    );
+
+    // Nothing may have panicked: a dropped rejecting promise reloads the app and
+    // would make every assertion above meaningless (see AGENTS.md).
+    let log_lines = capture_log(&client).await?;
+    let panics = count_panics(&log_lines);
+    assert!(panics.is_empty(), "a window panicked during the walk: {panics:?}");
+
+    println!("  a browser resolved a name cross-origin and verified the page it named");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// A copy of `dist/` carrying a `/entity-deployment.json` that seeds a registry
+/// pin — the shape a real deployment ships.
+///
+/// **Hardlinks, and inside `target/`**, so the 28 MB debug wasm is not copied and
+/// the link cannot fail across filesystems. Served on its own port, which also
+/// makes it a distinct browser ORIGIN from the dist server — that is what
+/// guarantees a **cold** boot (separate localStorage/IDB), and a cold boot is the
+/// only one that reads a deployment document at all.
+fn stage_pinned_spa(
+    registry_pid: &str,
+    registry_origin: &str,
+    port: u16,
+) -> Result<(FederationServer, std::path::PathBuf), Box<dyn std::error::Error>> {
+    let root = std::path::PathBuf::from("target/e2e-pinned-spa");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    fn link_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if e.file_type()?.is_dir() {
+                link_tree(&src, &dst)?;
+            } else {
+                // Hardlink, falling back to a copy for anything exotic.
+                if std::fs::hard_link(&src, &dst).is_err() {
+                    std::fs::copy(&src, &dst)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    link_tree(std::path::Path::new("dist"), &root)?;
+
+    // **Only the pin.** A minimal document keeps the blast radius minimal: every
+    // other key (surface, home_site, origins, site_mode) would move this boot's
+    // posture away from the default the rest of the suite asserts against, and
+    // the property under test is the pin alone.
+    std::fs::write(
+        root.join("entity-deployment.json"),
+        format!(
+            "{{\n  \"name_registry_pin\": {{ \"peer_id\": \"{registry_pid}\", \"origin\": \"{registry_origin}\" }}\n}}\n"
+        ),
+    )?;
+
+    let child = Command::new("python3")
+        .args(["tools/cors-serve.py", root.to_str().unwrap(), &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    Ok((FederationServer(child), root))
+}
+
+/// **The §7.4 preload, in a browser, with the user typing nothing.**
+///
+/// Everything under `name_registry_pin` is proven natively — the deployment
+/// document parses, the pin rides the durable `SessionConfig`, the boot mirror
+/// carries it, and the user's own pin outranks it. **None of that is evidence
+/// that a browser boot installs it**, and this repo's standing failure is exactly
+/// that shape: a control proven on the path the test takes and absent on the one
+/// it does not (`pack_mirror` ate a relay while every native test passed;
+/// `resolve_name` had zero callers for a session).
+///
+/// So this boots a real browser against a real deployment document served from a
+/// real origin, and then **types no pin**. If the seeded pin does not reach
+/// `session_config::active_registry_pin()`, the resolve below fails with "no
+/// registry pinned" and says so.
+///
+/// The control is the previous test: it types a pin and resolves the same name.
+/// If both fail, the chain moved; if only this one fails, the *seeding* moved.
+#[tokio::test]
+async fn a_deployment_that_seeds_a_registry_pin_resolves_a_name_with_nothing_typed(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let fed = federation_target()?;
+    let registry_pid = fed.registry_pid.clone();
+
+    let spa_port = pick_free_port()?;
+    let registry_origin = format!("{}/registry", fed.base);
+    let (_spa, staged) = stage_pinned_spa(&registry_pid, &registry_origin, spa_port)?;
+    // Precondition: the document we are about to rely on is actually served, and
+    // carries the pin. Without this, "no registry pinned" below would be
+    // indistinguishable from a staging bug — the same lesson as probing the
+    // federation origin before trusting the browser's NetworkError.
+    let served = std::process::Command::new("curl")
+        .args(["-fsS", "--retry", "20", "--retry-all-errors", "--retry-delay", "1",
+               &format!("http://localhost:{spa_port}/entity-deployment.json")])
+        .output()?;
+    let body = String::from_utf8_lossy(&served.stdout).to_string();
+    assert!(
+        body.contains(&registry_pid) && body.contains("name_registry_pin"),
+        "the staged deployment document is not being served (staged at {}): {body:?}",
+        staged.display()
+    );
+    println!("  pinned SPA on :{spa_port}, seeding {}", &registry_pid[..12.min(registry_pid.len())]);
+
+    // A DIFFERENT origin from the dist server, so this is a cold boot and the
+    // deployment document is read.
+    client.goto(&format!("http://localhost:{spa_port}/?log=trace")).await?;
+    wait_for_boot(&client, 30_000).await?;
+    sleep(Duration::from_millis(600)).await;
+
+    assert_eq!(
+        click_spawn_btn(&client, "+ Shell").await?,
+        "clicked",
+        "couldn't open the Shell window"
+    );
+    sleep(Duration::from_millis(500)).await;
+
+    // (1) The shell reports the seeded pin AND says where it came from. The
+    // source label is asserted because two pins that resolve identically are not
+    // the same fact — resolving through a registry nobody in this tab chose is
+    // precisely what must not be silent.
+    let pins = shell_submit(&client, "name pins", 1500).await?;
+    assert!(
+        pins.contains("seeded by this deployment"),
+        "the deployment pin did not reach the shell — scrollback:\n{pins}"
+    );
+    assert!(
+        pins.contains(&registry_pid[..8.min(registry_pid.len())]),
+        "the shell reports a pin, but not the one this deployment seeded — scrollback:\n{pins}"
+    );
+
+    // (2) And it RESOLVES, with no `name pin` ever typed. This is the whole
+    // deliverable: the distance between "we built a naming system" and "a user
+    // who types nothing can use it".
+    let resolved = shell_submit(&client, "name resolve entitychurch.org", 6000).await?;
+    assert!(
+        !resolved.contains("no registry pinned"),
+        "the seeded pin was not in force at resolution time — scrollback:\n{resolved}"
+    );
+    assert!(
+        resolved.contains("entitychurch.org →"),
+        "the name did not resolve through the seeded pin — scrollback:\n{resolved}"
+    );
+    for claim in ["association=true", "name=true", "revocation=true"] {
+        assert!(
+            resolved.contains(claim),
+            "a seeded-pin resolve skipped {claim} — it must check exactly what a typed pin does:\n{resolved}"
+        );
+    }
+
+    // (3) The user's own pin still outranks it, in the live surface and not just
+    // in the unit test. Pinning the SAME registry at a bogus origin is the clean
+    // discriminator: if the deployment value were still winning, the resolve
+    // would keep working.
+    let repin = shell_submit(
+        &client,
+        &format!("name pin {registry_pid} http://localhost:{spa_port}/not-a-registry"),
+        1500,
+    )
+    .await?;
+    assert!(repin.contains("pinned registry"), "the re-pin was refused — scrollback:\n{repin}");
+    let after = shell_submit(&client, "name pins", 1500).await?;
+    assert!(
+        after.contains("yours"),
+        "after `name pin` the shell must report the USER's pin as in force — scrollback:\n{after}"
+    );
+
+    let log_lines = capture_log(&client).await?;
+    let panics = count_panics(&log_lines);
+    assert!(panics.is_empty(), "a window panicked during the seeded-pin boot: {panics:?}");
+
+    println!("  a deployment seeded the pin and the browser resolved a name with nothing typed");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// **The 17 MB worker bundle must be downloaded once per BUILD, not once per
+/// load** — measured at the wire, because nothing in the browser can see it.
+///
+/// `entity-worker_bg.wasm` is 17.1 MB and trunk's `data-type="worker"` pipeline
+/// emits it under a FIXED filename, so it misses `sw.js`'s `HASHED_ASSET` rule,
+/// falls to `networkFirst`, and `networkFirst` fetches with `cache: 'reload'` —
+/// a deliberate, unconditional, HTTP-cache-bypassing download. Every visitor
+/// paid it on every load, **once per worker** (boot spawns one; every persisted
+/// `Backend*` peer respawns another), and no HTTP cache could help because the
+/// fetch opts out of one.
+///
+/// It was also the cause of this suite's intermittent
+/// `Navigation timed out after 60000 ms`, which landed on a different phase
+/// every run (19, 20 and 21 were all seen) and read as flake for three
+/// sessions: by Phase 16 there are two workers, so one navigation pulls ~51 MB
+/// while the navigation itself is on the same `networkFirst` path, competing
+/// with them.
+///
+/// **Why the assertion is server-side.** The obvious in-page check does not
+/// work: Firefox zeroes `transferSize` *and* `encodedBodySize` for any response
+/// a service worker supplied, whether the SW hit its cache or went to the
+/// network. Measured both ways — a load that demonstrably fetched 17 MB and one
+/// that fetched nothing both report `transferSize=0`. A gate built on it would
+/// have been vacuous and looked fine. The server's request log is the only
+/// honest account of bytes crossing the wire.
+///
+/// Mutation-checked in both directions, against a real Firefox:
+/// - Restore the pre-fix `sw.js` → the server sees **3** requests for 3 loads.
+/// - With the fix → **1**.
+/// - And the deploy path, which is the failure that would be silent: after the
+///   main bundle's hash changes, the worker is refetched exactly once. An
+///   earlier version of the fix served the STALE worker to the new bundle — a
+///   `entity-wasm-worker-protocol` mismatch, worse than the bug — because
+///   `cache.match('/', {ignoreSearch: true})` resolves in insertion order and
+///   kept returning the shell written at install. That is why the SW now caches
+///   navigations under one canonical key.
+#[tokio::test]
+async fn the_worker_bundle_is_fetched_once_per_build_not_once_per_load(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, server) = setup().await?;
+    let url = format!("http://localhost:{}/?worker=1", http_server_port());
+
+    const LOADS: usize = 3;
+    for n in 1..=LOADS {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+        // Wait for the WORKER specifically, not just the frame loop — the
+        // bundle we are counting is fetched in the worker's realm, after boot.
+        // Polled, never slept: a fixed wait here would make the count depend on
+        // how loaded the box is, which is the very shape being fixed.
+        poll_json(
+            &client,
+            "return (window.__entity_browser_log||[])\
+             .map(e => (e && e.args ? e.args.join(' ') : String(e)))\
+             .filter(s => s.indexOf('wasm_bindgen init resolved') !== -1).length;",
+            ASYNC_ROUND_TRIP_BUDGET,
+            |v| v.as_u64().unwrap_or(0) >= 1,
+        )
+        .await
+        .map_err(|e| format!("load {n}: the worker never finished wasm init ({e})"))?;
+    }
+
+    let fetches = server.request_count("entity-worker_bg.wasm");
+    assert_eq!(
+        fetches, 1,
+        "the worker bundle (17 MB) was fetched {fetches}× across {LOADS} loads of the same \
+         build — it must be fetched exactly once and served from the service-worker cache \
+         thereafter. {} See `WORKER_ASSET` / `buildScopedAsset` in assets/sw.js.",
+        if fetches > 1 {
+            "This is the pre-fix behaviour: the bundle is on the networkFirst path, whose \
+             `cache: 'reload'` bypasses the HTTP cache unconditionally."
+        } else {
+            "Zero fetches means it was never requested at all — the worker probably did not \
+             spawn, so this run proves nothing about caching."
+        }
+    );
+
+    println!("  the 17 MB worker bundle was fetched once across {LOADS} loads (was once per load)");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// A running app must survive its own save.
+///
+/// The Apps window watches the save prefix — the Saves panel lists it, and on
+/// the Worker arm a read only lands in the cache mirror for a *subscribed*
+/// prefix, so leaving it unwatched reads empty after a reload. That
+/// subscription also flipped the window's dirty flag, and a dirty window is
+/// rebuilt: `render_player` clears the container and creates a **new** iframe.
+/// So every debounced save write tore the running app down and remounted it
+/// from its start screen, roughly a second after each move — reported from the
+/// outside as "it keeps knocking me out of the app".
+///
+/// Two facts are asserted and BOTH are load-bearing:
+///
+///  1. the save actually **landed** (`window.__entity_app_save_seq` advances),
+///     which is what stops this being satisfied by an app that never saved; and
+///  2. the iframe is the **same element** — a JS expando set before the wait is
+///     still there afterwards. An attribute would not do: the regression's
+///     signature is that the element is replaced, so anything stamped on it is
+///     destroyed exactly when the gate needs to read it.
+///
+/// The survival check polls for the *failure* rather than sleeping and reading
+/// once, so the red path returns as soon as the teardown happens and the green
+/// path genuinely spends the budget instead of checking too early.
+#[tokio::test]
+async fn a_running_app_survives_its_own_save() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?worker=1&log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    // Open Apps, and nothing else — this test enters the app's frame by index,
+    // and the assertion below is what keeps that index from being a guess.
+    assert_eq!(
+        click_spawn_btn(&client, "+ Apps").await?,
+        "clicked",
+        "couldn't open the Apps window"
+    );
+
+    // Launch War: it is the demo app that persists on every move
+    // (`flipOnce` -> `persist()` -> `ctx.save(state)`), which is the trigger.
+    let read_apps = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            return {
+                open: true,
+                war: !!Array.from(sec.querySelectorAll('button'))
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War')),
+            };
+        }
+        return { open: false, war: false };
+    "#;
+    let grid = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("war").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        grid.get("war").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the Apps launcher never listed the War demo, so there is nothing to \
+         play. Got: {grid:?}"
+    );
+    let launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War'));
+                if (!card) return 'no-war-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(launched.as_str().unwrap_or(""), "clicked", "War launch failed: {launched:?}");
+
+    // Mark the mounted iframe with an expando. A section rebuild creates a
+    // fresh element, so the probe's survival IS "the app was never torn down".
+    // Also assert this is the page's ONLY frame, so `enter_frame(0)` below
+    // addresses the app rather than whatever else happened to mount first.
+    let mark = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let fr = null;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            fr = sec.querySelector('iframe[sandbox]');
+        }
+        if (!fr) return { mounted: false, frames: window.frames.length };
+        fr.__aliveProbe = 'war-still-running';
+        return {
+            mounted: true,
+            frames: window.frames.length,
+            has_cw: !!fr.contentWindow,
+            doc_frames: document.querySelectorAll('iframe').length,
+        };
+    "#;
+    let marked = poll_json(&client, mark, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("mounted").and_then(|b| b.as_bool()).unwrap_or(false)
+            && v.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        marked.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false),
+        "War never mounted its sandboxed iframe. Got: {marked:?}"
+    );
+    // NOTE `window.frames.length` reads 0 here and `document.querySelectorAll`
+    // finds nothing: the player's iframe lives inside the window section's
+    // **shadow root**, which injected script cannot enumerate from the top
+    // document. WebDriver's own frame enumeration is separate — that is why the
+    // frame is entered by index below rather than located by script — and this
+    // window is the only one this test opens.
+    println!("  frame mounted (window.frames sees {} from script)",
+        marked.get("frames").unwrap_or(&serde_json::Value::Null));
+
+    // Play one move INSIDE the sandbox. The frame is an opaque origin, so the
+    // parent cannot reach its document — WebDriver can, and this is the only
+    // way to make the real app emit a real `state` message.
+    client.enter_frame(0).await?;
+    let flipped = client
+        .execute(
+            r#"
+            const b = Array.from(document.querySelectorAll('button'))
+                .find(b => b.textContent.trim() === 'Flip');
+            if (!b) return 'no-flip-button';
+            b.click();
+            return 'flipped';
+            "#,
+            vec![],
+        )
+        .await?;
+    client.enter_parent_frame().await?;
+    assert_eq!(
+        flipped.as_str().unwrap_or(""),
+        "flipped",
+        "couldn't press Flip inside the War frame: {flipped:?}"
+    );
+
+    // (1) The save has to LAND, or nothing below is testing anything. The write
+    // is a trailing-edge debounce behind the move, so this is the one place a
+    // real wait is unavoidable; the counter is page-level and survives the very
+    // teardown this gate is about, so it stays readable either way.
+    let read_state = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let fr = null;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            fr = sec.querySelector('iframe[sandbox]');
+        }
+        return {
+            saves: window.__entity_app_save_seq || 0,
+            alive: !!(fr && fr.__aliveProbe === 'war-still-running'),
+            mounted: !!fr,
+            state_seq: fr ? (fr.getAttribute('data-app-state-seq') || '0') : null,
+        };
+    "#;
+    let saved = poll_json(&client, read_state, Duration::from_secs(10), |v| {
+        v.get("saves").and_then(|n| n.as_u64()).unwrap_or(0) >= 1
+    })
+    .await?;
+    let saves = saved.get("saves").and_then(|n| n.as_u64()).unwrap_or(0);
+    assert!(
+        saves >= 1,
+        "no save was written in 10s after a move, so this gate would prove \
+         nothing about what a save does to the running app — the app is \
+         probably not emitting state (did the Flip click land?). Got: {saved:?}"
+    );
+
+    // (2) ...and the app must still be the same running app. Poll for the
+    // FAILURE so the red path reports as soon as the teardown lands and the
+    // green path spends the whole budget rather than reading too early.
+    let after = poll_json(&client, read_state, Duration::from_secs(3), |v| {
+        !v.get("alive").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        after.get("alive").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the running app was torn down by its own save: the Apps window \
+         watches the save prefix, so the debounced write flipped its dirty \
+         flag, the section rebuilt, and `render_player` replaced the iframe — \
+         which restarts the app at its start screen. Got: {after:?}"
+    );
+
+    println!(
+        "  the app survived {saves} save write(s) without being remounted \
+         (state messages: {})",
+        after.get("state_seq").unwrap_or(&serde_json::Value::Null)
+    );
+    client.close().await.ok();
+    Ok(())
+}
+
+/// A **trusted** left click at viewport coordinates.
+///
+/// Necessary rather than stylistic: our windows render inside a shadow root, so
+/// a CSS locator cannot reach their buttons, and the suite's usual answer —
+/// `execute` + `el.click()` — produces an event with **no user activation**.
+/// That is fine for every other control and fatal for the Fullscreen API, which
+/// Firefox gates on `full-screen-api.allow-trusted-requests-only` (default
+/// true). Measured against this grid: a script click is refused with
+/// `TypeError: Fullscreen request denied`; the pointer sequence below is
+/// granted. So the element is located by script (for its rect) and pressed by
+/// the driver.
+async fn trusted_click_at(
+    client: &Client,
+    x: f64,
+    y: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use fantoccini::actions::{InputSource, MouseActions, PointerAction, MOUSE_BUTTON_LEFT};
+    let seq = MouseActions::new("mouse".to_string())
+        .then(PointerAction::MoveTo { duration: None, x, y })
+        .then(PointerAction::Down { button: MOUSE_BUTTON_LEFT })
+        .then(PointerAction::Pause { duration: Duration::from_millis(30) })
+        .then(PointerAction::Up { button: MOUSE_BUTTON_LEFT });
+    client.perform_actions(seq).await?;
+    Ok(())
+}
+
+/// JS that reads everything the app player's size controls are made of: the two
+/// buttons' labels and whether each is *offered* (rendered AND not hidden by a
+/// rule), the stage's full-bleed class, whether the player is the element the
+/// engine is showing full-screen, its width against the viewport's, and the
+/// survival expando on the running app's iframe.
+///
+/// One probe for every assertion in the gate below, deliberately: these facts
+/// have to be read at the same instant or a mid-transition sample can show a
+/// relabelled button beside an un-expanded stage and read as a bug.
+const READ_PLAYER_CHROME: &str = r#"
+    const layer = document.getElementById('dom-layer');
+    const root = layer.shadowRoot || layer;
+    for (const sec of root.querySelectorAll('section.window')) {
+        const h3 = sec.querySelector('header h3');
+        if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+        const player = sec.querySelector('.gm-player');
+        if (!player) return { player: false };
+        const area = sec.querySelector('.gm-stage-area');
+        const expand = sec.querySelector('.gm-expand-btn');
+        const full = sec.querySelector('.gm-full-btn');
+        const frame = sec.querySelector('iframe[sandbox]');
+        const shown = el => !!el && getComputedStyle(el).display !== 'none';
+        return {
+            player: true,
+            fullscreen: player.matches(':fullscreen'),
+            player_w: Math.round(player.getBoundingClientRect().width),
+            inner_w: window.innerWidth,
+            expanded: !!area && area.className.includes('gm-expanded'),
+            expand_offered: shown(expand),
+            expand_label: expand ? expand.textContent.trim() : null,
+            full_present: !!full,
+            full_offered: shown(full),
+            full_label: full ? full.textContent.trim() : null,
+            alive: !!(frame && frame.__aliveProbe === 'war-still-running'),
+        };
+    }
+    return { player: false };
+"#;
+
+/// FULL SCREEN — the app leaves the page and fills the physical screen, and the
+/// running app is NOT remounted on the way in or out.
+///
+/// The Apps window already had two ways to get bigger and they read as one:
+/// `▢` on the window header (the *window* covers the viewport) and `⤢ Expand`
+/// in the player bar (the *stage* fills the window). Both together still leave
+/// two bars of chrome above the app plus the browser's own, which on a laptop
+/// is most of the vertical space a game is missing. `⛶ Full screen` is the
+/// third, and this gate is what says it works.
+///
+/// Four properties, and the last is the one a plausible implementation breaks:
+///
+///  1. the button is **offered** — i.e. `util::fullscreen_supported()` answered
+///     true in a real engine. Only a browser can tell us that;
+///  2. a trusted press actually **enters** full screen (the player matches
+///     `:fullscreen` and widens to the viewport);
+///  3. the chrome converges — the stage goes full-bleed, Expand is withdrawn
+///     (it could only be "on" there), the button names the way out;
+///  4. **the app keeps running.** The transition is a class flip plus a
+///     Fullscreen call, with no action, no dirty-mark and no rebuild — the
+///     obvious implementation raises an `Action`, the section rebuilds, and
+///     `render_player` replaces the iframe, restarting the game at its start
+///     screen. The expando is the only probe that survives the check it is for.
+///
+/// The exit is driven by `document.exitFullscreen()` from **script**, not by
+/// pressing the button again. That is deliberate: it is an exit our click
+/// handler never sees — the shape of a user pressing Esc — so it proves the
+/// chrome is reconciled from `fullscreenchange` rather than from our own press.
+#[tokio::test]
+async fn full_screen_fills_the_screen_and_the_app_keeps_running(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?worker=1&log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    // Apps, and nothing else: the press below is by viewport coordinate, so a
+    // second window stacked above would move the target under the pointer.
+    assert_eq!(
+        click_spawn_btn(&client, "+ Apps").await?,
+        "clicked",
+        "couldn't open the Apps window"
+    );
+
+    let read_apps = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            return { open: true, war: !!Array.from(sec.querySelectorAll('button'))
+                .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War')) };
+        }
+        return { open: false, war: false };
+    "#;
+    let grid = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("war").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        grid.get("war").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the Apps launcher never listed the War demo, so there is no running \
+         app to take full screen. Got: {grid:?}"
+    );
+    let launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War'));
+                if (!card) return 'no-war-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(launched.as_str().unwrap_or(""), "clicked", "War launch failed: {launched:?}");
+
+    // Stamp the mounted iframe. A section rebuild creates a fresh element, so
+    // the expando's survival IS "the app was never torn down" — an attribute
+    // would be destroyed by exactly the failure it is meant to detect.
+    let marked = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const fr = sec.querySelector('iframe[sandbox]');
+            if (!fr) return { mounted: false };
+            fr.__aliveProbe = 'war-still-running';
+            return { mounted: true, has_cw: !!fr.contentWindow };
+        }
+        return { mounted: false };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        marked.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false),
+        "War never mounted its sandboxed iframe. Got: {marked:?}"
+    );
+
+    // (1) Both controls are offered, and they say which is which.
+    let before = poll_json(&client, READ_PLAYER_CHROME, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("player").and_then(|b| b.as_bool()).unwrap_or(false)
+    })
+    .await?;
+    assert!(
+        before.get("full_present").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the player bar carries no full-screen button. `fullscreen_supported()` \
+         reads `document.fullscreenEnabled`, so this means the engine reports \
+         the Fullscreen API unavailable — which is a real answer on some \
+         WebViews and would be news on Firefox. Got: {before:?}"
+    );
+    assert_eq!(
+        before.get("full_label").and_then(|v| v.as_str()),
+        Some("\u{26f6} Full screen"),
+        "the full-screen button must name the SCREEN, not the window — it sits \
+         beside Expand, which names the window, and the glyphs alone do not \
+         carry the difference. Got: {before:?}"
+    );
+    assert_eq!(
+        before.get("expand_label").and_then(|v| v.as_str()),
+        Some("\u{2922} Expand"),
+        "Expand should be offered in its collapsed state on a fresh mount. \
+         Got: {before:?}"
+    );
+    assert_eq!(
+        before.get("expanded").and_then(|b| b.as_bool()),
+        Some(false),
+        "a freshly mounted stage is capped and centered, not full-bleed. \
+         Got: {before:?}"
+    );
+
+    // (2) Press it — with the driver, not with script. See `trusted_click_at`.
+    let rect = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const b = sec.querySelector('.gm-full-btn');
+                if (!b) return null;
+                b.scrollIntoView({block: 'center'});
+                const r = b.getBoundingClientRect();
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2,
+                         w: r.width, h: r.height };
+            }
+            return null;
+            "#,
+            vec![],
+        )
+        .await?;
+    let (bx, by) = (
+        rect.get("x").and_then(|v| v.as_f64()).unwrap_or(-1.0),
+        rect.get("y").and_then(|v| v.as_f64()).unwrap_or(-1.0),
+    );
+    assert!(
+        bx > 0.0 && by > 0.0 && rect.get("w").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0,
+        "the full-screen button has no clickable box — a zero-size or \
+         off-viewport target would make the press below land on whatever is \
+         underneath and the gate fail for the wrong reason. Got: {rect:?}"
+    );
+    trusted_click_at(&client, bx, by).await?;
+
+    // Poll for the CHROME to converge, not for `:fullscreen` alone. Measured on
+    // this grid: the engine flips `:fullscreen` and dispatches
+    // `fullscreenchange` as two steps, so there is a real instant where the
+    // player already matches and our listener has not run yet. A predicate on
+    // the engine's half alone samples that instant and reports a state the app
+    // was never in — which is a race in the GATE, and it reads exactly like the
+    // product bug the gate is for.
+    let entered = poll_json(&client, READ_PLAYER_CHROME, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        let b = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+        b("fullscreen") && b("expanded")
+    })
+    .await?;
+    assert_eq!(
+        entered.get("fullscreen").and_then(|b| b.as_bool()),
+        Some(true),
+        "a trusted press did not take the player full screen. Got: {entered:?}"
+    );
+    let (pw, iw) = (
+        entered.get("player_w").and_then(|v| v.as_i64()).unwrap_or(0),
+        entered.get("inner_w").and_then(|v| v.as_i64()).unwrap_or(-1),
+    );
+    assert_eq!(
+        pw, iw,
+        "the player matches `:fullscreen` but is not filling the viewport \
+         ({pw}px of {iw}px) — something in the player's own box model is \
+         fighting the promotion, which is what the user sees as a letterboxed \
+         app on a full screen. Got: {entered:?}"
+    );
+
+    // (3) ...and the chrome converged on it.
+    assert_eq!(
+        entered.get("expanded").and_then(|b| b.as_bool()),
+        Some(true),
+        "full screen must force the stage full-bleed: a 680px-capped stage \
+         centered on a whole screen reads as a failed transition. \
+         Got: {entered:?}"
+    );
+    assert_eq!(
+        entered.get("expand_offered").and_then(|b| b.as_bool()),
+        Some(false),
+        "Expand must be withdrawn while full screen — it can only be `on` \
+         there, so rendering it is chrome pretending to be a control. \
+         Got: {entered:?}"
+    );
+    assert_eq!(
+        entered.get("full_label").and_then(|v| v.as_str()),
+        Some("\u{26f6} Exit full screen"),
+        "the button must name the way out once we are in. Got: {entered:?}"
+    );
+
+    // (4) The app was never remounted.
+    assert_eq!(
+        entered.get("alive").and_then(|b| b.as_bool()),
+        Some(true),
+        "going full screen tore the running app down and remounted it — the \
+         transition raised an action / marked the window dirty, the section \
+         rebuilt, and `render_player` replaced the iframe, restarting the game \
+         at its start screen. It must be a class flip plus a Fullscreen call, \
+         nothing more. Got: {entered:?}"
+    );
+    println!("  entered full screen: player {pw}px = viewport {iw}px, app still running");
+
+    // (5) Leave by a route the button never sees.
+    client.execute("document.exitFullscreen(); return 1;", vec![]).await?;
+    // Same two-step as the entry, in reverse — wait for our own reconcile.
+    let left = poll_json(&client, READ_PLAYER_CHROME, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        let b = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(true);
+        !b("fullscreen") && !b("expanded")
+    })
+    .await?;
+    assert_eq!(
+        left.get("fullscreen").and_then(|b| b.as_bool()),
+        Some(false),
+        "still full screen after `exitFullscreen()`. Got: {left:?}"
+    );
+    assert_eq!(
+        left.get("expanded").and_then(|b| b.as_bool()),
+        Some(false),
+        "leaving full screen must return the stage to the size it had in the \
+         window — the trip is not a decision about how big the app should be \
+         inside its window. Got: {left:?}"
+    );
+    assert_eq!(
+        left.get("expand_offered").and_then(|b| b.as_bool()),
+        Some(true),
+        "Expand must come back when the player returns to the window. \
+         Got: {left:?}"
+    );
+    assert_eq!(
+        left.get("full_label").and_then(|v| v.as_str()),
+        Some("\u{26f6} Full screen"),
+        "the button must offer the way IN again after an exit it did not \
+         initiate — if this still reads `Exit full screen`, the chrome is \
+         being reconciled from our own click rather than from \
+         `fullscreenchange`, and an Esc leaves the bar lying. Got: {left:?}"
+    );
+    assert_eq!(
+        left.get("alive").and_then(|b| b.as_bool()),
+        Some(true),
+        "leaving full screen remounted the app. Got: {left:?}"
+    );
+    println!("  left full screen by a route the button never saw; chrome and app intact");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// WAKE LOCK — a running app can keep the screen awake, through our sandbox.
+///
+/// An idle-watchable app (Warlord with the AI driving, a long turn, anything
+/// you watch rather than touch) has to hold a screen wake lock or the display
+/// blanks mid-game. It cannot grant itself one: `screen-wake-lock` is denied in
+/// a frame by default and **only the embedder can delegate it**, via Permissions
+/// Policy — a different mechanism from `sandbox`, and one an app has no way to
+/// ask for.
+///
+/// **The assertion order here is the point.** The behavioural check — does a
+/// request inside the real frame get GRANTED — comes first; the attribute
+/// spelling comes last. This suite has now twice been bitten by a cheap check
+/// shadowing an expensive one for the same property (Phase 19-doc, twice), and
+/// this is the exact shape: the tempting gate is `getAttribute('allow')`, which
+/// passes for `allow="screen-wake-lock"` — a spelling measured to be **inert**
+/// for an opaque-origin `srcdoc` frame, because its default `'src'` allowlist
+/// names an origin the frame does not have. A spelling-only gate would be green
+/// over a completely broken feature.
+///
+/// It runs INSIDE the frame (`enter_frame`) because that is the only vantage
+/// the permission applies to: the host page holds the feature regardless, so
+/// asking from out here proves nothing about what we delegated.
+#[tokio::test]
+async fn a_running_app_can_hold_a_screen_wake_lock() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    // `localhost` matters: `navigator.wakeLock` is undefined off a secure
+    // origin, measured at every sandbox tier, so on a plain-http LAN address
+    // this feature is absent no matter what we delegate.
+    let url = format!("http://localhost:{}/?worker=1&log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    let secure = client
+        .execute("return {secure: isSecureContext, api: typeof navigator.wakeLock};", vec![])
+        .await?;
+    assert_eq!(
+        secure.get("secure").and_then(|b| b.as_bool()),
+        Some(true),
+        "this gate needs a secure origin — the API does not exist otherwise, and \
+         a red here would be about the harness. Got: {secure:?}"
+    );
+    if secure.get("api").and_then(|v| v.as_str()) == Some("undefined") {
+        // Not a failure: an engine without Screen Wake Lock is a real answer
+        // (WebKit lagged for years). Say so loudly rather than asserting a
+        // permanent red that masks regressions.
+        println!(
+            "  SKIPPED: this engine exposes no navigator.wakeLock at all, so \
+             there is no delegation to observe. Got: {secure:?}"
+        );
+        client.close().await.ok();
+        return Ok(());
+    }
+
+    // Apps, and nothing else — this test enters the app's frame by index.
+    assert_eq!(
+        click_spawn_btn(&client, "+ Apps").await?,
+        "clicked",
+        "couldn't open the Apps window"
+    );
+    let grid = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            return { war: !!Array.from(sec.querySelectorAll('button'))
+                .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War')) };
+        }
+        return { war: false };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("war").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        grid.get("war").and_then(|b| b.as_bool()).unwrap_or(false),
+        "the Apps launcher never listed the War demo. Got: {grid:?}"
+    );
+    let launched = client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const sec of root.querySelectorAll('section.window')) {
+                const h3 = sec.querySelector('header h3');
+                if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+                const card = Array.from(sec.querySelectorAll('button'))
+                    .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('War'));
+                if (!card) return 'no-war-card';
+                card.click();
+                return 'clicked';
+            }
+            return 'no-apps-window';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(launched.as_str().unwrap_or(""), "clicked", "War launch failed: {launched:?}");
+
+    // Wait for the mount, and confirm this is the page's only sandboxed frame
+    // so `enter_frame(0)` addresses the app rather than whatever mounted first.
+    let mounted = poll_json(
+        &client,
+        r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const frames = sec.querySelectorAll('iframe[sandbox]');
+            const fr = frames[0];
+            return { mounted: !!fr, count: frames.length, has_cw: !!(fr && fr.contentWindow),
+                     allow: fr ? fr.getAttribute('allow') : null,
+                     sandbox: fr ? fr.getAttribute('sandbox') : null };
+        }
+        return { mounted: false };
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("has_cw").and_then(|b| b.as_bool()).unwrap_or(false),
+    )
+    .await?;
+    assert_eq!(
+        mounted.get("count").and_then(|n| n.as_u64()),
+        Some(1),
+        "expected exactly one sandboxed frame so the frame index below is not a \
+         guess. Got: {mounted:?}"
+    );
+
+    // (1) THE BEHAVIOUR. Ask for the lock from inside the frame — the only
+    // vantage the delegation applies to — and require it to be GRANTED.
+    client.enter_frame(0).await?;
+    let started = client
+        .execute(
+            r#"
+            window.__wl = { state: 'pending', api: typeof navigator.wakeLock };
+            if (!navigator.wakeLock) { window.__wl.state = 'no-api'; return 'no-api'; }
+            navigator.wakeLock.request('screen').then(
+                s => { window.__wl = { state: 'granted', type: s.type }; },
+                e => { window.__wl = { state: 'denied', err: e.name + ': ' + e.message }; });
+            return 'asked';
+            "#,
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        started.as_str().unwrap_or(""),
+        "asked",
+        "could not even ask for a wake lock inside the app frame: {started:?}"
+    );
+    let verdict = poll_json(
+        &client,
+        "return window.__wl;",
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.get("state").and_then(|s| s.as_str()).unwrap_or("pending") != "pending",
+    )
+    .await?;
+    client.enter_parent_frame().await?;
+    assert_eq!(
+        verdict.get("state").and_then(|s| s.as_str()),
+        Some("granted"),
+        "a running app was REFUSED a screen wake lock, so a game you watch \
+         without touching will blank the display mid-play — silently, with the \
+         same bundle working fine standalone.\n\
+         `screen-wake-lock` is Permissions Policy, not sandbox: only the \
+         embedder can delegate it, and the delegation must be spelled \
+         `allow=\"screen-wake-lock *\"`. The bare `allow=\"screen-wake-lock\"` \
+         defaults its allowlist to `'src'`, which an opaque-origin srcdoc frame \
+         does not have — measured, it is refused exactly like no attribute at \
+         all. Got: {verdict:?} (frame allow={:?})",
+        mounted.get("allow")
+    );
+
+    // (2) ...and only now the spelling, which is the cheap check and therefore
+    // goes last. It is kept because it names the ONE token that must not be
+    // dropped, and it fails with the reason rather than with a denied promise.
+    assert_eq!(
+        mounted.get("allow").and_then(|v| v.as_str()),
+        Some("screen-wake-lock *"),
+        "the app frame's Permissions Policy delegation changed. Got: {mounted:?}"
+    );
+
+    println!(
+        "  the app frame holds a '{}' wake lock through sandbox={:?}",
+        verdict.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
+        mounted.get("sandbox").and_then(|v| v.as_str()).unwrap_or("?")
+    );
     client.close().await.ok();
     Ok(())
 }
