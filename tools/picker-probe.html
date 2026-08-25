@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<!--
+  picker-probe.html — WHICH file-picker mechanism actually opens a chooser on
+  THIS browser?
+
+  Written because a file offer does nothing on Android/Firefox, reproduces on no
+  machine here, and three rounds of changing one mechanism at a time cost a
+  round trip each. This changes all of them at once and *labels* them, so one
+  session of tapping says which pattern works and which is silent.
+
+  It is deliberately NOT part of the app: plain HTML, no wasm, no build step.
+  The app's real picker is a hidden <input type=file> inside a **shadow root**,
+  opened programmatically from a button — so rows 4/5 replicate the shipped
+  situation exactly, and row 7 is the control.
+
+  THE KEY SIGNAL IS `cancel` **AND HOW LONG IT TOOK**. A file input fires
+  `change` when a file is chosen and `cancel` when no file is — and `cancel`
+  covers two completely different things:
+      cancel in < 300ms   -> THE ENGINE DISMISSED ITS OWN CHOOSER. Nothing was
+                             ever shown. This mechanism is DEAD.
+      cancel after 300ms  -> a human closed a chooser that really opened.
+      change              -> a chooser opened and a file was picked.
+      neither, after 20s  -> nothing happened at all.
+
+  **THE FIRST VERSION OF THIS FILE GOT THAT WRONG AND IT COST A ROUND TRIP.**
+  It scored any `cancel` as "the chooser opened", so all seven mechanisms
+  reported success on a device where every one of them was failing — the
+  instrument could not represent the actual failure mode, which is the one
+  thing a diagnostic must be able to do. The operator spotted it from the
+  outside ("sounds like it's automatically dismissing"), not the probe.
+  Leave this paragraph here: the next person to extend this file needs to know
+  that a green row is only meaningful because of the threshold below.
+
+  A second bug worth the same warning: the timer used to start only when a
+  *proxy button* was pressed, so the rows where the finger lands on the input
+  itself (3, 7, 9) measured from the epoch and printed nonsense — and those
+  were precisely the rows behaving differently from the rest. A diagnostic's
+  own bugs land hardest on its outliers.
+
+  MEASURED RESULT, 2026-08-24, one Android device: **all nine rows
+  AUTO-DISMISSED in Firefox for Android (~200-250ms); Chrome on the same phone
+  opened the chooser normally.** So no hiding style, activation path or
+  rendering state changes the outcome — it is the browser. Do not re-run this
+  hoping for a different row to pass; run it on a NEW device or browser to find
+  out whether that one is affected.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File picker probe</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 16px 14px 60px;
+         background: #14141d; color: #e2e2ea; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .env { font: 12px/1.5 monospace; color: #9aa3b2; background: #1b1b28;
+         border: 1px solid #2a2a3e; border-radius: 6px; padding: 8px 10px;
+         margin: 10px 0 18px; word-break: break-all; }
+  .t { border: 1px solid #2a2a3e; border-radius: 8px; padding: 10px 12px; margin: 0 0 12px;
+       background: #1b1b28; }
+  .t h2 { font-size: 14px; margin: 0 0 2px; }
+  .t p  { font-size: 12px; color: #9aa3b2; margin: 0 0 9px; }
+  button, .lbl {
+    display: inline-block; font: 600 15px system-ui, sans-serif; color: #14141d;
+    background: #9fd0ff; border: 0; border-radius: 7px;
+    padding: 11px 16px; cursor: pointer; -webkit-appearance: none; }
+  .res { font: 12px/1.45 monospace; margin-top: 9px; white-space: pre-wrap;
+         color: #9aa3b2; }
+  .ok   { color: #7ddc9a; }
+  .bad  { color: #ff9f9f; }
+  .wait { color: #ffd98a; }
+  /* The app's real hiding rule, copied verbatim from dom/file_transfer.rs. */
+  .vh { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .op0 { position: absolute; width: 100%; height: 100%; left: 0; top: 0;
+         opacity: 0; }
+  #summary { position: fixed; left: 0; right: 0; bottom: 0; background: #0d0d14;
+             border-top: 1px solid #2a2a3e; padding: 8px 12px;
+             font: 12px/1.4 monospace; color: #9aa3b2; }
+</style>
+</head>
+<body>
+<h1>Which file picker actually opens?</h1>
+<p style="font-size:13px;color:#9aa3b2;margin:0 0 2px">
+  Tap each button. If a chooser opens, <b>just close/back out of it</b> — you do
+  not need to pick a file. Then read the line under the button.
+</p>
+<div class="env" id="env">collecting…</div>
+
+<div id="tests"></div>
+<div id="summary">tap the buttons above</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var env = document.getElementById('env');
+  env.textContent =
+    'showPicker on HTMLInputElement.prototype : ' +
+      (typeof HTMLInputElement.prototype.showPicker) + '\n' +
+    'secure context                           : ' + window.isSecureContext + '\n' +
+    'origin                                   : ' + location.origin + '\n' +
+    'attachShadow                             : ' + (typeof Element.prototype.attachShadow) + '\n' +
+    'oncancel supported on input              : ' + ('oncancel' in document.createElement('input')) + '\n' +
+    'UA                                       : ' + navigator.userAgent;
+
+  var results = {};
+  // Below this, a `cancel` cannot have come from a human hand.
+  var AUTO_CANCEL_MS = 300;
+
+  function summarize() {
+    var opened = [], dead = [], auto = [], pending = 0;
+    Object.keys(results).forEach(function (k) {
+      if (results[k] === 'opened') opened.push(k);
+      else if (results[k] === 'auto') auto.push(k);
+      else if (results[k] === 'dead') dead.push(k);
+      else pending++;
+    });
+    document.getElementById('summary').textContent =
+      'REALLY OPENED: ' + (opened.join(' ') || '(none)') +
+      '  |  AUTO-DISMISSED: ' + (auto.join(' ') || '(none)') +
+      '  |  SILENT: ' + (dead.join(' ') || '(none)') +
+      (pending ? '  |  waiting: ' + pending : '');
+  }
+
+  // Build one test row. `mount(input, host)` places the input however this
+  // mechanism wants it; `fire(input)` is the thing under test.
+  function test(id, title, note, mount, fire, labelMode) {
+    var box = document.createElement('div');
+    box.className = 't';
+    box.innerHTML = '<h2>' + id + '. ' + title + '</h2><p>' + note + '</p>';
+
+    var input = document.createElement('input');
+    input.type = 'file';
+    var res = document.createElement('div');
+    res.className = 'res';
+    res.textContent = 'not tapped yet';
+
+    var timer = null;
+    var asked = 0;            // when we asked for a chooser
+    var armWaitRef = function () {};
+    function settle(what, cls) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      res.className = 'res ' + cls;
+      res.textContent = what;
+      summarize();
+    }
+    // A chooser that opened must end in change or cancel. Either proves it
+    // opened; that is the whole point of listening for both.
+    input.addEventListener('change', function () {
+      results[id] = 'opened';
+      settle('✓ CHOOSER OPENED — a file was chosen (' +
+             (input.files[0] ? input.files[0].name : '?') + ') after ' +
+             (Date.now() - asked) + 'ms', 'ok');
+    });
+    // **TIMING IS THE WHOLE DISCRIMINATOR.** `cancel` fires both when a human
+    // dismisses a chooser and when the engine refuses to show one at all — and
+    // the first version of this probe called both of them "opened", which was
+    // wrong and cost a round trip. A human cannot dismiss anything in under
+    // ~300ms; an automatic cancel comes back in single-digit ms.
+    input.addEventListener('cancel', function () {
+      var dt = Date.now() - asked;
+      if (dt < AUTO_CANCEL_MS) {
+        results[id] = 'auto';
+        settle('✗ AUTO-DISMISSED after ' + dt + 'ms — no chooser was shown.\n' +
+               'The engine accepted the request and cancelled it itself.', 'bad');
+      } else {
+        results[id] = 'opened';
+        settle('✓ CHOOSER OPENED — you dismissed it after ' + dt + 'ms', 'ok');
+      }
+    });
+
+    // Rows where the tap lands on the input itself (a bare visible input, an
+    // overlay, a <label>) never run `armWait`, so without this their `asked`
+    // stayed 0 and the interval was measured from 1970. Reported as "it says a
+    // billion milliseconds", and it was hiding the answer on exactly the two
+    // rows that behaved differently from the rest.
+    input.addEventListener('click', function () {
+      if (!asked) { asked = Date.now(); }
+      if (results[id] !== 'waiting') { armWaitRef(); }
+    });
+
+    var host = document.createElement('div');
+    host.style.position = 'relative';
+    box.appendChild(host);
+
+    var trigger;
+    if (labelMode) {
+      trigger = document.createElement('label');
+      trigger.className = 'lbl';
+      trigger.textContent = 'Open picker';
+    } else {
+      trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.textContent = 'Open picker';
+    }
+
+    mount(input, host, trigger);
+    box.appendChild(res);
+    document.getElementById('tests').appendChild(box);
+
+    function armWait() {
+      results[id] = 'waiting';
+      if (!asked) { asked = Date.now(); }
+      res.className = 'res wait';
+      res.textContent = '… called. Waiting up to 20s for change/cancel.\n' +
+                        'If a chooser opened, close it. If none opened, wait.';
+      summarize();
+      timer = setTimeout(function () {
+        results[id] = 'dead';
+        settle('✗ SILENT — no chooser, no error, no event in 20s', 'bad');
+      }, 20000);
+    }
+
+    armWaitRef = armWait;
+    if (labelMode) {
+      // No JS at all: the browser activates the input via the label.
+      trigger.addEventListener('click', function () { asked = Date.now(); armWait(); });
+    } else {
+      trigger.addEventListener('click', function () {
+        asked = Date.now();
+        var thrown = null;
+        try { fire(input); } catch (e) {
+          thrown = (e && e.name ? e.name + ': ' + e.message : String(e));
+        }
+        if (thrown) {
+          results[id] = 'dead';
+          settle('✗ THREW — ' + thrown, 'bad');
+        } else {
+          armWait();
+        }
+      });
+    }
+  }
+
+  var VH = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;' +
+           'overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0';
+
+  // 1 — exactly what the app shipped BEFORE today: hidden input, bare click().
+  test('1', 'Hidden input + .click()',
+       'The original. Fire-and-forget: a refusal here is silent by construction.',
+       function (i, host, btn) { i.setAttribute('style', VH); host.appendChild(i); host.appendChild(btn); },
+       function (i) { i.click(); });
+
+  // 2 — what the app ships NOW.
+  test('2', 'Hidden input + showPicker()',
+       'Today\'s fix. Should THROW if refused — if this is silent, showPicker is a no-op here.',
+       function (i, host, btn) { i.setAttribute('style', VH); host.appendChild(i); host.appendChild(btn); },
+       function (i) {
+         if (typeof i.showPicker !== 'function') throw new Error('showPicker is not a function on this engine');
+         i.showPicker();
+       });
+
+  // 3 — opacity:0 instead of clip. `clip` may make an element "not rendered".
+  test('3', 'opacity:0 input (not clipped) + .click()',
+       'Same size as the button, fully rendered, just invisible.',
+       function (i, host, btn) { host.appendChild(btn); i.className = 'op0'; host.appendChild(i); },
+       function (i) { i.click(); });
+
+  // 4/5 — the SHIPPED situation: the app renders every window in a shadow root.
+  test('4', 'Input inside a SHADOW ROOT + showPicker()',
+       'This is where the real app\'s input lives.',
+       function (i, host, btn) {
+         var sr = host.attachShadow({ mode: 'open' });
+         i.setAttribute('style', VH); sr.appendChild(i); sr.appendChild(btn);
+       },
+       function (i) {
+         if (typeof i.showPicker !== 'function') throw new Error('showPicker is not a function on this engine');
+         i.showPicker();
+       });
+
+  test('5', 'Input inside a SHADOW ROOT + .click()',
+       'Same place, old mechanism.',
+       function (i, host, btn) {
+         var sr = host.attachShadow({ mode: 'open' });
+         i.setAttribute('style', VH); sr.appendChild(i); sr.appendChild(btn);
+       },
+       function (i) { i.click(); });
+
+  // 6 — native label activation. No JS, no programmatic click at all.
+  test('6', '&lt;label&gt; wrapping a hidden input (NO JavaScript)',
+       'The browser activates the input itself. No script touches it.',
+       function (i, host, lbl) {
+         i.setAttribute('style', VH); lbl.appendChild(i); host.appendChild(lbl);
+       },
+       null, true);
+
+  // 7 — THE CONTROL. If a plain visible file input fails, nothing else matters.
+  test('7', 'A plain VISIBLE &lt;input type=file&gt; (the control)',
+       'No hiding, no proxy, no shadow root. If THIS is silent, the problem is not ours.',
+       function (i, host, btn) {
+         btn.style.display = 'none';
+         i.style.cssText = 'display:block;font-size:15px;color:#e2e2ea';
+         host.appendChild(i);
+       },
+       null);
+
+  var RENDERED = 'display:block;width:130px;height:34px;opacity:0;border:0;padding:0';
+
+  // 8 — RENDERED input, but opened from a proxy button. If this works while 1/2
+  // fail, the deciding property is that the input is really laid out, and the
+  // app just needs to stop using clip().
+  test('8', 'RENDERED (opacity:0, real size) input + proxy .click()',
+       'Laid out and invisible — not clipped. Opened from a button, like the app does.',
+       function (i, host, btn) { host.appendChild(btn); i.setAttribute('style', RENDERED); host.appendChild(i); },
+       function (i) { i.click(); });
+
+  // 9 — RENDERED input, native label activation, no script at all.
+  test('9', 'RENDERED input inside a &lt;label&gt; (NO JavaScript)',
+       'Belt and braces: laid out AND activated by the browser itself.',
+       function (i, host, lbl) { i.setAttribute('style', RENDERED); lbl.appendChild(i); host.appendChild(lbl); },
+       null, true);
+
+  // Row 7 has no button — arm it directly on the input.
+  (function () {
+    var boxes = document.getElementById('tests').children;
+    var box = boxes[6];               // row 7, by position, not "last"
+    var inp = box ? box.querySelector('input[type=file]') : null;
+    var res = box.querySelector('.res');
+    if (!inp) return;
+    res.textContent = 'tap the file field above';
+    inp.addEventListener('click', function () {
+      window.__row7asked = Date.now();
+      results['7'] = 'waiting';
+      res.className = 'res wait';
+      res.textContent = '… waiting up to 20s for change/cancel';
+      summarize();
+      setTimeout(function () {
+        if (results['7'] === 'waiting') {
+          results['7'] = 'dead';
+          res.className = 'res bad';
+          res.textContent = '✗ SILENT — even the plain visible input did nothing';
+          summarize();
+        }
+      }, 20000);
+    });
+  })();
+
+  summarize();
+})();
+</script>
+</body>
+</html>

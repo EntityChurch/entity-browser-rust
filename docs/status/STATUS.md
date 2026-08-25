@@ -22,7 +22,7 @@ do not resolve for a reader outside this tree (see *Commit pins* below).
 | Deferred work with the reason | `docs/plans/BACKLOG.md` |
 | Connectivity open items (canonical table) | `docs/architecture/reviews/BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md` §8 |
 | What changed for a user | `CHANGELOG.md` |
-| Where the last session left off | `docs/status/HANDOFF-2026-08-23-f-static-site-nav-and-a-full-gate-review.md` |
+| Where the last session left off | `docs/status/HANDOFF-2026-08-24-c-static-nav-registry-button-and-the-android-picker.md` |
 
 Spot-check a row before acting on it. That table has carried stale rows, and they survived by
 being read instead of run.
@@ -44,10 +44,10 @@ Re-measured 2026-08-23 rather than quoted:
 
 | Gate | Result |
 |---|---|
-| `make test` | **1289 / 0 / 8-ignored** across **16** test binaries (1283/15 earlier the same day — a concurrent seat landed `tests/foreign_namespace_write.rs` mid-session, which is exactly how the denominator moves without anyone noticing) |
-| `make test-tauri` | **55 / 0** across 4 binaries — re-run today; `src-tauri` is workspace-excluded, so it is not in the number above |
-| `make lint` | clean — clippy, ui-lint, i18n-lint, i18n-locale-check, i18n-callsite-check, i18n-untranslated, tree-hygiene |
-| `make e2e-worker` | **25 passed / 0 failed, 374.28 s** — unfiltered, end of session (+1 test: the R1 milestone-trace gate). An earlier unfiltered run the same afternoon was 23/1, the failure being blocker 5; it did not reproduce across 13 subsequent runs |
+| `make test` | **1293 / 0 / 8-ignored** across **16** test binaries — re-measured 2026-08-24 (+4: the static nav marker gate and three `open_target` gates). 1289/16 the previous day; 1283/15 the day before that, when a concurrent seat landed `tests/foreign_namespace_write.rs` mid-session, which is exactly how the denominator moves without anyone noticing |
+| `make test-tauri` | **55 / 0** across 4 binaries — measured 2026-08-23, untouched since (`src-tauri` is workspace-excluded, so it is not in the number above, and nothing on 08-24 went near it) |
+| `make lint` | clean — clippy (**zero warnings**, after `subtree_holds_active` dropped an unused `LinkCtx`), ui-lint, i18n-lint, i18n-locale-check, i18n-callsite-check, i18n-untranslated, tree-hygiene |
+| `make e2e-worker` | **25 passed / 0 failed, 368.95 s** — unfiltered, 2026-08-24, R1 green, and now carrying Phase 14.3 (a refused file picker must report). Test COUNT is unchanged because a phase is not a test — quote the phase, not the denominator. Run against a **private Selenium grid** (`E2E_WEBDRIVER_URL`), because eight other containers were on the box and `setup()` reaps *every* session on whatever grid it is pointed at. 374.28 s the previous day |
 
 **Read the two i18n gates as the different things they are.** `i18n-locale-check`'s *30 locales ×
 701 keys clean* is **structural** — parity, slots, plural categories, homoglyphs — and says nothing
@@ -141,6 +141,18 @@ costs the same as a missed one.
 | Icons are a placeholder upscale | **Cosmetic, post-release.** Real art + `cargo tauri icon` whenever art exists |
 | macOS legs / Windows `.msi` / linux-arm64 unproven | **Post-release, GitHub Actions, DevOps.** Only comes back to this repo if a *code* bug turns up in Windows or macOS packaging — possible, but it is not pre-work |
 
+**One thing found on 2026-08-24 was fixed on `dev`.** The 0.8.2 CHANGELOG section said **twice**
+that TURN was unsupported while the relay fields, parser and three connector-row boxes had all
+shipped — a false statement on the page a downloader reads first. Corrected, along with the code
+doc comment it had been copied from.
+
+> **The `release/0.8.2` branch is NOT the release and is not to be treated as one.** An earlier
+> version of this paragraph read its stale CHANGELOG as a pre-tag blocker and told the next seat to
+> merge `dev` into it. That was wrong: the operator's instruction is that the branch is not real,
+> and nothing here should reason from it. **`dev` is the tree.** Left in place as a correction
+> rather than deleted, because the wrong version was published in a handoff and a reader may act
+> on it.
+
 The one thing genuinely open in this repo is R1 below, and it is not a blocker either: it is a
 **test-harness** phase that is currently green and now self-diagnosing.
 
@@ -184,13 +196,22 @@ The one thing genuinely open in this repo is R1 below, and it is not a blocker e
 2. **IndexedDB across-restart durability on WebKitGTK — ✅ verified.** Confirmed by hand via
    `make tauri-run`: create a site, save, relaunch, the site is still there. Safari/iOS on real
    hardware still wants the same check; the WebKitGTK/JavaScriptCore question is answered.
-3. **Full screen and wake lock in the Tauri WebView.** Both are Firefox-gated here. WebKitGTK is
+3. **Offering a file on Android — ANSWERED, and the answer is "not ours".** Firefox for Android
+   accepts a file-chooser request and closes it itself in ~200–250 ms without showing it; **Chrome
+   on the same phone, same page, same file works**. Measured across all nine ways a page may open
+   a chooser (hidden, rendered, visible-and-tapped-directly, script, `showPicker()`, `<label>`,
+   shadow root) — every one is dismissed, so **no app-side change fixes it**. What was ours is
+   fixed: the app listened only for `change` and never for `cancel`, so the failure was completely
+   silent; it now says so. `CHANGELOG.md` carries it as a known limitation, scoped to *picking a
+   file to send* — browse, pull and receive are unaffected. `tools/picker-probe.html` is the
+   nine-row matrix, kept for the next device-only picker question.
+4. **Full screen and wake lock in the Tauri WebView.** Both are Firefox-gated here. WebKitGTK is
    a different engine and has surprised this repo badly before (it ships no `RTCPeerConnection` at
    all). Both degrade honestly — the full-screen button renders only when
    `document.fullscreenEnabled` is true, and a wake-lock request on an engine without the API is a
    no-op the app already handles — so the outcomes to tell apart are *absent* and *works*.
    `make tauri-run`, open Apps, launch something, press ⛶ and leave it running.
-4. **Two real devices on two real NETWORKS — blocked on hardware nobody here has, and note the
+5. **Two real devices on two real NETWORKS — blocked on hardware nobody here has, and note the
    same-network half is already DONE.** Two devices on one LAN, meeting through a desktop Tori and
    moving a file, was run on real hardware on 2026-08-21 and is a transcript in
    `docs/RUNBOOK-TWO-MACHINES.md` §5. What is untested is the cross-*network* case — one ISP to

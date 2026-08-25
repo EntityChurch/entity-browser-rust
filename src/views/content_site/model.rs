@@ -1632,6 +1632,60 @@ mod tests {
         );
     }
 
+    /// **A Site Browser's bound peer is the store it READS, never the publisher
+    /// it is looking at — and binding it to a foreign publisher empties the
+    /// window deterministically.**
+    ///
+    /// This is the "Open in Site Browser" rail bug. The button spawned a Site
+    /// Browser bound to the *resolved* peer-id, which no local SDK hosts, so
+    /// `Peers::sdk_for` answers `UnknownPeer` and every read in the window —
+    /// the derived index, the direct scan, prefs, provenance — collapses to its
+    /// empty value. The rail then says *"No external sites cached"* about a
+    /// manifest sitting in this very store, which reads as *the registry found
+    /// the publisher and it has nothing*.
+    ///
+    /// Nothing about the network was ever involved: this assertion holds with
+    /// the site already cached, which is why the fetch-side measurement came
+    /// back green while the rail stayed empty.
+    ///
+    /// Both directions are asserted. A fix that merely made the foreign binding
+    /// work would leave the cached-foreign contract (`/{foreign}/sites/` lives
+    /// in **my** store, selector = me) with no gate at all.
+    #[test]
+    fn the_rail_reads_my_store_so_a_foreign_bound_window_sees_nothing() {
+        use crate::content_site::{origins, paths, SiteManifest};
+        let peers = pm();
+        let me = peers.primary_peer_id().to_string();
+        let foreign = Peers::new_direct().primary_peer_id().to_string();
+
+        // Exactly what `warm_peer_sites` leaves behind: the origin registered
+        // under MY peer, and the foreign manifest written through into MY store
+        // at its natural cached-foreign address.
+        origins::set_origin(&peers, &me, &foreign, "https://billslab.example");
+        peers.seed_write(
+            &me,
+            paths::manifest_path(&foreign, "labs"),
+            SiteManifest::new("labs", "Bill's Labs", "index", vec![]).to_entity(),
+        );
+
+        // Bound to MY peer: the cached foreign site is in the rail.
+        let mine = ContentSiteModel::new(1, me.clone());
+        let dir = mine.site_directory(&peers);
+        assert!(
+            dir.entries.iter().any(|e| e.peer == foreign && e.site == "labs" && !e.owned),
+            "a window bound to my peer lists the cached foreign site: {:?}",
+            dir.entries.iter().map(|e| (&e.peer, &e.site)).collect::<Vec<_>>()
+        );
+
+        // Bound to the PUBLISHER: the same store, read through a selector no
+        // local SDK hosts, is empty.
+        let theirs = ContentSiteModel::new(2, foreign.clone());
+        assert!(
+            theirs.site_directory(&peers).entries.is_empty(),
+            "a window bound to a foreign publisher can read nothing at all"
+        );
+    }
+
     #[test]
     fn section_path_renders_generated_index() {
         let peers = pm();

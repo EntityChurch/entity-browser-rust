@@ -194,6 +194,59 @@ fn call_consuming_promise(target: &wasm_bindgen::JsValue, names: &[&str]) -> boo
     false
 }
 
+/// Open a file input's chooser, preferring `showPicker()` **because it
+/// reports**. `Ok(())` means the engine accepted the request; `Err(reason)` is
+/// a refusal with the engine's own words.
+///
+/// **The whole point is the return type.** `HTMLElement::click()` on a hidden
+/// file input is fire-and-forget: if the engine declines to open a chooser
+/// there is no dialog, no `change` event, no exception and no console entry —
+/// which is exactly how this was reported from Android/Firefox, *"a broken ass
+/// button"* that works on desktop. `showPicker()` throws instead
+/// (`NotAllowedError` without transient activation, `InvalidStateError`,
+/// `SecurityError`), so the same failure arrives as a sentence we can put on
+/// screen. It is also the API specified for programmatic opening, where
+/// `.click()` is a workaround that predates it.
+///
+/// `.click()` remains the fallback for engines older than `showPicker`
+/// (Firefox 101+, Chrome 99+, Safari 16+), so nothing that works today stops
+/// working. **A caller must surface the `Err`** — swallowing it rebuilds the
+/// exact silence this exists to remove.
+pub fn show_file_picker(el: &web_sys::HtmlElement) -> Result<(), String> {
+    let target: wasm_bindgen::JsValue = el.clone().into();
+    if let Ok(prop) = js_sys::Reflect::get(&target, &wasm_bindgen::JsValue::from_str("showPicker"))
+    {
+        if let Ok(f) = prop.dyn_into::<js_sys::Function>() {
+            return match f.call0(&target) {
+                Ok(_) => Ok(()),
+                // `showPicker` throws synchronously; there is no promise to
+                // consume, so this cannot become an unhandled rejection.
+                Err(e) => Err(describe_js_error(&e)),
+            };
+        }
+    }
+    el.click();
+    Ok(())
+}
+
+/// A thrown JS value as something a person can read. A `DOMException` carries a
+/// `name` and a `message`; anything else falls back to its debug form, which is
+/// still better than nothing on screen.
+pub fn describe_js_error(e: &wasm_bindgen::JsValue) -> String {
+    let get = |k: &str| {
+        js_sys::Reflect::get(e, &wasm_bindgen::JsValue::from_str(k))
+            .ok()
+            .and_then(|v| v.as_string())
+            .filter(|s| !s.is_empty())
+    };
+    match (get("name"), get("message")) {
+        (Some(n), Some(m)) => format!("{n}: {m}"),
+        (Some(n), None) => n,
+        (None, Some(m)) => m,
+        _ => format!("{e:?}"),
+    }
+}
+
 /// Can this document take an element fullscreen at all? A WebView embedder may
 /// compile the API out or switch it off; a button that cannot work must not be
 /// rendered rather than press silently.
