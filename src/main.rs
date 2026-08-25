@@ -24,6 +24,12 @@ mod inspect_router;
 mod ansi;
 mod connections;
 mod connection_health;
+// Piece A (DESIGN-CONNECTIVITY-UX): the subscribed connection-liveness facet of
+// the unified Peer read-model. `allow(dead_code)` while it's staged — the
+// consumers (window renders) wire up across Pieces B/C; today only the WASM
+// shadow-parity probe uses it. Tighten when the mirror migration lands.
+#[allow(dead_code)]
+mod peer_liveness;
 mod content_site;
 mod peer_auth;
 mod backend_auth;

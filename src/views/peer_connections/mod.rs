@@ -83,6 +83,19 @@ impl PeerConnectionsWindow {
                     &sys_pid,
                     crate::app_paths::peers_registry_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // Piece A (P2.0): subscribe the KERNEL liveness surface
+                // (`system/peer/status`) for every local vantage, so we can
+                // shadow it against the `connection_health` mirror before
+                // migrating consumers off the mirror (Piece B). Watching seeds
+                // the Worker-arm cache and wakes the window on a kernel
+                // connect/keepalive-miss/disconnect transition.
+                for vantage in pm.peer_ids() {
+                    pm.watch_prefix(
+                        &mut window.watch,
+                        &vantage,
+                        crate::peer_liveness::peer_status_prefix(&vantage),
+                    );
+                }
                 Box::new(window)
             },
         }
@@ -139,6 +152,11 @@ impl WindowView for PeerConnectionsWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
+        // Piece A (P2.0) shadow-parity: log the kernel liveness surface vs the
+        // connection_health mirror on each rebuild, so convergence is
+        // observable in the live build / e2e before Piece B migrates the render
+        // off the mirror. Read-only, no behaviour.
+        crate::peer_liveness::log_shadow_parity(peers);
         let output = self.model.render_output(peers);
         crate::dom::peer_connections::render(container, &output, ctx);
     }
