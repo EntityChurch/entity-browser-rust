@@ -34,13 +34,15 @@ use crate::window::{WindowId, WindowType, WindowView};
 
 use crate::window_watch::WindowWatch;
 use model::AccessLogModel;
-use output::DirectionFilter;
+use output::{AccessView, DirectionFilter};
 
 pub struct AccessLogWindow {
     window_id: WindowId,
     peer_id: String,
     model: AccessLogModel,
     watch: WindowWatch,
+    /// Which view: the live activity log, or the observed-capability map.
+    view: AccessView,
     /// The active direction filter (→/←/·). View-only state: the store is
     /// app-global + ephemeral, so this lives on the window, not the tree.
     filter: DirectionFilter,
@@ -62,6 +64,7 @@ impl AccessLogWindow {
             peer_id,
             model,
             watch,
+            view: AccessView::default(),
             filter: DirectionFilter::default(),
             peer_filter: String::new(),
         }
@@ -102,6 +105,12 @@ impl WindowView for AccessLogWindow {
                 return;
             }
             let changed = match event.as_str() {
+                "set_access_view" => {
+                    let next = AccessView::from_value(value);
+                    let changed = next != self.view;
+                    self.view = next;
+                    changed
+                }
                 "set_direction_filter" => {
                     let next = DirectionFilter::from_value(value);
                     let changed = next != self.filter;
@@ -128,8 +137,16 @@ impl WindowView for AccessLogWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.model.render_output(peers, self.filter, &self.peer_filter);
-        crate::dom::access_log::render(container, &output, ctx);
+        match self.view {
+            AccessView::Activity => {
+                let output = self.model.render_output(peers, self.filter, &self.peer_filter);
+                crate::dom::access_log::render(container, &output, self.view, ctx);
+            }
+            AccessView::Capabilities => {
+                let output = self.model.capability_map(peers);
+                crate::dom::access_log::render_capabilities(container, &output, self.view, ctx);
+            }
+        }
     }
 }
 

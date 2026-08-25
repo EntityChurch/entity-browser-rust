@@ -100,6 +100,97 @@ pub fn subject_key(entry: &AccessEntry, backend_key: &str) -> String {
     }
 }
 
+/// Which view the Access Log window is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessView {
+    /// The live stream of individual accesses (newest first).
+    #[default]
+    Activity,
+    /// The observed-capability map: per peer, the distinct grants it exercised.
+    Capabilities,
+}
+
+impl AccessView {
+    pub fn as_value(self) -> &'static str {
+        match self {
+            AccessView::Activity => "activity",
+            AccessView::Capabilities => "capabilities",
+        }
+    }
+    pub fn from_value(v: &str) -> Self {
+        match v {
+            "capabilities" => AccessView::Capabilities,
+            _ => AccessView::Activity,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            AccessView::Activity => "Activity (live log)",
+            AccessView::Capabilities => "Observed capabilities",
+        }
+    }
+    pub const ALL: [AccessView; 2] = [AccessView::Activity, AccessView::Capabilities];
+}
+
+/// One distinct capability an acting peer was observed exercising — the dedup
+/// unit of the observed-capability map. Aggregated from the raw access stream:
+/// each `(target, handler, operation, resource)` tuple collapses to one row with
+/// a use count. This *is* the minimal grant that op would require under
+/// enforcement — the raw material for "observed vs. authored".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedGrant {
+    /// Friendly label of the target peer the op ran against; `None` = a local
+    /// dispatch on the actor's own peer (no cross-peer grant needed).
+    pub target_label: Option<String>,
+    pub handler: String,
+    pub operation: String,
+    /// The resource path, when captured. `None` today on local + inbound (a known
+    /// capture gap — see PLAN-OF-RECORD-capability-enforcement.md §3).
+    pub resource: Option<String>,
+    /// How many times this exact tuple was seen (in the retained window).
+    pub count: usize,
+    /// Whether any occurrence was denied (a capability refusal) — visible even
+    /// though enforcement is currently open, so a future denial stands out.
+    pub any_denied: bool,
+}
+
+/// A peer's **authored** grant on the System backend — the profile it was
+/// granted, expanded to bits. Shown beside the observed grants so the
+/// observed-vs-authorized gap is visible (the input to the enforcement decision).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoredGrant {
+    /// Friendly profile name, e.g. "File transfer (pull only)".
+    pub profile_label: String,
+    /// Plain-English scope summary.
+    pub summary: String,
+    pub handlers: Vec<String>,
+    pub resources: Vec<String>,
+    pub operations: Vec<String>,
+}
+
+/// The observed capabilities of one acting peer — "what this peer actually does,
+/// i.e. the minimal grant it would need under enforcement" — paired with what it
+/// is *authorized* for, when a grant has been recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerCapabilities {
+    /// The acting peer's id (the grantee).
+    pub actor_key: String,
+    /// Friendly label (System peer / System backend / descriptor + short id).
+    pub actor_label: String,
+    /// The distinct grants it exercised, sorted for a stable read.
+    pub grants: Vec<ObservedGrant>,
+    /// What this peer is *authorized* for on the System backend, if a grant has
+    /// been recorded. `None` = no explicit grant (our own system peers; or a
+    /// device not yet authorized). The observed-vs-authorized comparison.
+    pub authorized: Option<AuthoredGrant>,
+}
+
+/// The capability-map view's render input — the aggregation over all retained
+/// accesses, grouped by acting peer.
+pub struct CapabilityMapOutput {
+    pub peers: Vec<PeerCapabilities>,
+}
+
 /// The whole window's render input: completed accesses (newest first, already
 /// narrowed to the active filters) plus the state the two dropdowns reflect.
 pub struct AccessLogOutput {

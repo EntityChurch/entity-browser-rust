@@ -14,7 +14,8 @@ use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::theme_tokens;
 use crate::views::access_log::output::{
-    subject_key, AccessDirection, AccessEntry, AccessLogOutput, AccessOutcome, DirectionFilter,
+    subject_key, AccessDirection, AccessEntry, AccessLogOutput, AccessOutcome, AccessView,
+    CapabilityMapOutput, DirectionFilter, ObservedGrant, PeerCapabilities,
 };
 
 use std::collections::HashMap;
@@ -28,16 +29,12 @@ use web_sys::Element;
 const TABLE_SCROLL: &str =
     "max-height:60vh;overflow:auto;border:1px solid var(--border,#222);border-radius:4px";
 
-pub fn render(container: &Element, output: &AccessLogOutput, ctx: &DomCtx) {
+pub fn render(container: &Element, output: &AccessLogOutput, view: AccessView, ctx: &DomCtx) {
     util::clear_children(container);
 
     let wrapper = util::create_element_with_class("div", "access-log");
     wrapper.set_attribute("style", theme::SECTION).ok();
-
-    let h2 = util::create_element("h2");
-    h2.set_attribute("style", "margin:0").ok();
-    util::set_text(&h2, "Access Log");
-    util::append(&wrapper, &h2);
+    window_header(&wrapper, view, ctx);
 
     let hint = util::create_element("p");
     hint.set_attribute("style", theme::HINT).ok();
@@ -90,6 +87,177 @@ pub fn render(container: &Element, output: &AccessLogOutput, ctx: &DomCtx) {
     util::append(&wrapper, &scroll);
 
     util::append(container, &wrapper);
+}
+
+/// Capabilities view: the observed-capability map — per acting peer, the distinct
+/// grants it exercised (= the minimal grant it would need under enforcement). The
+/// analytical projection of the log, and the raw material for "observed vs.
+/// authored" (PLAN-OF-RECORD-capability-enforcement.md).
+pub fn render_capabilities(
+    container: &Element,
+    output: &CapabilityMapOutput,
+    view: AccessView,
+    ctx: &DomCtx,
+) {
+    util::clear_children(container);
+
+    let wrapper = util::create_element_with_class("div", "access-log");
+    wrapper.set_attribute("style", theme::SECTION).ok();
+    window_header(&wrapper, view, ctx);
+
+    let hint = util::create_element("p");
+    hint.set_attribute("style", theme::HINT).ok();
+    util::set_text(
+        &hint,
+        "What each peer has actually done — the minimal grant it would need if \
+         enforcement were on. Aggregated from the activity log (this session). \
+         Compare against what a peer is authorized for to find the gap. (Resource \
+         path is captured on outbound calls only; “—” elsewhere means the path \
+         wasn't exposed to the log, not that none was used.)",
+    );
+    util::append(&wrapper, &hint);
+
+    if output.peers.is_empty() {
+        util::append(
+            &wrapper,
+            &components::empty(
+                "No capabilities observed yet. Dispatch something — browse a peer, \
+                 transfer a file — and each peer's used grants appear here.",
+            ),
+        );
+        util::append(container, &wrapper);
+        return;
+    }
+
+    let scroll = util::create_element("div");
+    scroll.set_attribute("style", TABLE_SCROLL).ok();
+    for peer in &output.peers {
+        util::append(&scroll, &capability_section(peer));
+    }
+    util::append(&wrapper, &scroll);
+
+    util::append(container, &wrapper);
+}
+
+/// One peer's observed grants: a labelled heading + a table of its distinct
+/// (target, handler, operation, resource) tuples with use counts.
+fn capability_section(peer: &PeerCapabilities) -> Element {
+    let section = util::create_element("div");
+    section.set_attribute("style", "margin:8px 0 12px 0").ok();
+
+    let heading = util::create_element("div");
+    heading
+        .set_attribute("style", "font-weight:600;font-size:13px;margin:0 0 4px 0")
+        .ok();
+    heading.set_attribute("data-field", "capability-peer").ok();
+    util::set_text(
+        &heading,
+        &format!("{} — {} capabilit{} observed", peer.actor_label, peer.grants.len(),
+            if peer.grants.len() == 1 { "y" } else { "ies" }),
+    );
+    util::append(&section, &heading);
+
+    // Authorized (authored) grant, beside what's observed — the gap the operator
+    // reads to decide whether the profile matches reality.
+    util::append(&section, &authorized_line(peer));
+
+    let (tbl, body) = components::table(&["Target", "Handler", "Operation", "Resource", "Uses"]);
+    for g in &peer.grants {
+        util::append(&body, &capability_row(g));
+    }
+    util::append(&section, &tbl);
+    section
+}
+
+/// The peer's authored grant summarized in one block: profile name + scope, and
+/// the granted handler/operation/path bits. Dim "not authorized" when there's no
+/// recorded grant (our own peers, or a device not yet granted).
+fn authorized_line(peer: &PeerCapabilities) -> Element {
+    let line = util::create_element("div");
+    line.set_attribute(
+        "style",
+        "font-size:12px;margin:0 0 6px 0;padding:4px 8px;border-left:2px solid var(--border,#333)",
+    )
+    .ok();
+    line.set_attribute("data-field", "capability-authorized").ok();
+
+    match &peer.authorized {
+        Some(a) => {
+            let head = util::create_element("div");
+            head.set_attribute("style", &format!("color:{}", theme_tokens::STATUS_OK)).ok();
+            util::set_text(&head, &format!("Authorized: {} — {}", a.profile_label, a.summary));
+            util::append(&line, &head);
+
+            let bits = util::create_element("div");
+            bits.set_attribute("style", theme::HINT).ok();
+            util::set_text(
+                &bits,
+                &format!(
+                    "grants — handlers: {} · operations: {} · paths: {}",
+                    join_or_dash(&a.handlers),
+                    join_or_dash(&a.operations),
+                    join_or_dash(&a.resources),
+                ),
+            );
+            util::append(&line, &bits);
+        }
+        None => {
+            let none = util::create_element("div");
+            none.set_attribute("style", theme::HINT).ok();
+            util::set_text(
+                &none,
+                "No explicit grant recorded — an owned system peer, or a device not \
+                 yet authorized.",
+            );
+            util::append(&line, &none);
+        }
+    }
+    line
+}
+
+fn join_or_dash(items: &[String]) -> String {
+    if items.is_empty() {
+        "—".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn capability_row(g: &ObservedGrant) -> Element {
+    let count = if g.any_denied {
+        format!("{} · denied", g.count)
+    } else {
+        g.count.to_string()
+    };
+    let cells = vec![
+        components::td_text(g.target_label.as_deref().unwrap_or("— (own peer)")),
+        components::td_text(&g.handler),
+        components::td_text(&g.operation),
+        components::td_text(g.resource.as_deref().unwrap_or("—")),
+        components::td_text(&count),
+    ];
+    components::tr(cells)
+}
+
+/// Shared window header: the title + a small view switcher (Activity ↔ observed
+/// Capabilities). Kept identical across both views so the toggle doesn't jump.
+fn window_header(wrapper: &Element, view: AccessView, ctx: &DomCtx) {
+    let bar = util::create_element("div");
+    bar.set_attribute("style", theme::HEADER_ROW).ok();
+
+    let h2 = util::create_element("h2");
+    h2.set_attribute("style", "margin:0").ok();
+    util::set_text(&h2, "Access Log");
+    util::append(&bar, &h2);
+
+    let switch = compact_select("access-log-view");
+    for v in AccessView::ALL {
+        append_option(&switch, v.as_value(), v.label(), v == view);
+    }
+    ctx.on_select_change(&switch, "set_access_view");
+    util::append(&bar, &switch);
+
+    util::append(wrapper, &bar);
 }
 
 /// The filter controls: a Peer `<select>` (whose log) + a direction `<select>`.
