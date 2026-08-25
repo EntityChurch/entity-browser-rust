@@ -217,6 +217,57 @@ fn main() {
         );
     }
 
+    // `ENTITY_WEBRTC_*` bakes the §6.5 signaling node this build rendezvouses
+    // through (`session_config::webrtc_provisioning_default`). Its reason for
+    // existing is the pairing problem: machine A serves the SPA to the phone
+    // and the laptop, so **the URL they already have to type can BE the
+    // pairing** — bake A's own node here and a browser that merely loads the
+    // app is provisioned, with nothing to retype, no QR, and no camera (which
+    // an insecure origin does not have anyway).
+    //
+    // **These were read by `option_env!` with no `rerun-if-env-changed`**, so
+    // changing the node silently reused the cached wasm — the "a green build
+    // can be a cached build" trap, on the one knob whose staleness is
+    // invisible (a stale node id fails as "nobody is at the rendezvous").
+    for var in [
+        "ENTITY_WEBRTC_NODE_PEER",
+        "ENTITY_WEBRTC_NODE_ADDR",
+        "ENTITY_WEBRTC_ICE",
+    ] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
+    let node_peer = env::var("ENTITY_WEBRTC_NODE_PEER").unwrap_or_default();
+    let node_addr = env::var("ENTITY_WEBRTC_NODE_ADDR").unwrap_or_default();
+    // A HALF config is fatal here, where the home-site half-config above only
+    // warns, and the difference is how the failure presents. A wrong home page
+    // is visible the moment you look at it; `resolve_webrtc_provisioning`
+    // requires BOTH halves and yields `None` for one, so a half config installs
+    // no establisher at all and reads as "nobody is at the rendezvous" [AP22] —
+    // the exact silent shape this whole knob exists to remove. Fail closed and
+    // loudly, at the only moment a person is watching.
+    if node_peer.is_empty() != node_addr.is_empty() {
+        panic!(
+            "ENTITY_WEBRTC_NODE_PEER and ENTITY_WEBRTC_NODE_ADDR must be set \
+             TOGETHER — both are required to provision a signaling node, and \
+             one alone provisions nothing while looking configured \
+             (peer='{node_peer}', addr='{node_addr}')"
+        );
+    }
+    if !node_addr.is_empty() && !(node_addr.starts_with("ws://") || node_addr.starts_with("wss://"))
+    {
+        panic!(
+            "ENTITY_WEBRTC_NODE_ADDR='{node_addr}' must be a ws:// or wss:// \
+             address — a node is dialed, not fetched, and a wrong scheme fails \
+             as an unreachable rendezvous rather than as a bad value"
+        );
+    }
+    if !node_peer.is_empty() {
+        println!(
+            "cargo:warning=signaling node baked in: {node_peer} at {node_addr} \
+             — every browser served this build rendezvouses through it with no pairing step"
+        );
+    }
+
     let mut entries: Vec<(String, String, String)> = Vec::new();
     match &docs_root {
         Some(root) if root.is_dir() => {

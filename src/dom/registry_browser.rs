@@ -21,6 +21,8 @@ use crate::views::registry_browser::output::{
 use crate::window::WindowId;
 
 const NAME_FIELD: &str = "registry_name";
+const PIN_PID_FIELD: &str = "registry_pin_pid";
+const PIN_ORIGIN_FIELD: &str = "registry_pin_origin";
 
 pub fn render(
     container: &Element,
@@ -33,7 +35,7 @@ pub fn render(
     // spacing decision (and the ui-lint ratchet is what caught it).
     let root = util::create_element("div");
 
-    render_pin(&root, output);
+    render_pin(&root, output, ctx);
     render_names(&root, output, ctx);
     render_resolve(&root, output, ctx, window_id);
 
@@ -46,7 +48,7 @@ pub fn render(
 /// The source line is not decoration [AP25]: a deployment-seeded pin means names
 /// resolve through a registry the user never typed. That is the feature, and it
 /// is exactly the thing that must not be silent.
-fn render_pin(root: &Element, output: &RegistryBrowserOutput) {
+fn render_pin(root: &Element, output: &RegistryBrowserOutput, ctx: &DomCtx) {
     let card = c::card(&crate::i18n::t("registry.pinned", &[]));
     match &output.pinned {
         Some(p) => {
@@ -78,6 +80,14 @@ fn render_pin(root: &Element, output: &RegistryBrowserOutput) {
         // panel here would read as "this registry is empty".
         None => util::append(&card, &c::notice(&crate::i18n::t("registry.no_pin", &[]))),
     }
+
+    // The form. Until 2026-08-21 this window could only *report* a pin —
+    // `pinned()` read the deployment seed and nothing else, and the only way to
+    // set one was `name pin` in the Shell, which wrote a `Mutex` on that window
+    // that this one could not see. So "no registry pinned" was a dead end with
+    // no affordance anywhere in the GUI. Both surfaces write one shared pin now.
+    render_pin_form(&card, output, ctx);
+
     util::append(
         &card,
         &c::pre_notice(&crate::i18n::t(
@@ -86,6 +96,84 @@ fn render_pin(root: &Element, output: &RegistryBrowserOutput) {
         )),
     );
     util::append(root, &card);
+}
+
+/// Two fields and a button: the peer-id (the trust decision) and the origin
+/// (merely where to fetch).
+///
+/// **The origin may be left empty** — that means same-origin, exactly as in the
+/// deployment's `origins` map, and it is the common case when the registry is
+/// published beside the app. The peer-id may not: pinning an origin would trust
+/// the origin, which is the one thing this chain never does. Both refusals come
+/// back from the model as text, so the reason is on screen rather than being a
+/// button that does nothing.
+fn render_pin_form(card: &Element, output: &RegistryBrowserOutput, ctx: &DomCtx) {
+    let pid = c::text_input(ctx, PIN_PID_FIELD, "", &crate::i18n::t("registry.pin_pid_ph", &[]));
+    util::append(card, &c::field(&crate::i18n::t("label.peer_id", &[]), "", &pid));
+
+    let origin = c::text_input(
+        ctx,
+        PIN_ORIGIN_FIELD,
+        "",
+        &crate::i18n::t("registry.pin_origin_ph", &[]),
+    );
+    util::append(card, &c::field(&crate::i18n::t("registry.origin", &[]), "", &origin));
+
+    // Read at click time, not per keystroke — a tree write per character
+    // rebuilds the snapshot and destroys focus (same rule as the resolve field).
+    let go = c::button_el(&crate::i18n::t("registry.pin_btn", &[]), c::ButtonKind::Primary);
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let wid = ctx.window_id;
+        let card_ref = card.clone();
+        ctx.listen(&go, "click", move |_| {
+            let read = |field: &str| {
+                card_ref
+                    .query_selector(&format!("[data-field='{field}']"))
+                    .ok()
+                    .flatten()
+                    .and_then(|el| {
+                        wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlInputElement>(el).ok()
+                    })
+                    .map(|i| i.value())
+                    .unwrap_or_default()
+            };
+            let peer_id = read(PIN_PID_FIELD);
+            if peer_id.trim().is_empty() {
+                return;
+            }
+            // `\x1f`-packed, the repo's idiom for a multi-field save: an origin
+            // cannot contain it, and splitting on it keeps an empty origin
+            // (same-origin) distinguishable from an absent second field.
+            actions.borrow_mut().push(crate::action::Action::WindowEvent {
+                window_id: wid,
+                event: "registry_pin".into(),
+                value: format!("{peer_id}\u{1f}{}", read(PIN_ORIGIN_FIELD)),
+            });
+            rp();
+        });
+    }
+    util::append(card, &go);
+
+    // Only offered when there is something of *yours* to drop. A deployment's
+    // seed is not the user's to unpin from here — that is the deployment's
+    // posture, and an "Unpin" that silently did nothing would be worse than none.
+    if matches!(output.pinned.as_ref().map(|p| p.source), Some(PinOrigin::User)) {
+        util::append(
+            card,
+            &c::button(
+                ctx,
+                &crate::i18n::t("registry.unpin_btn", &[]),
+                c::ButtonKind::Small,
+                "registry_unpin",
+            ),
+        );
+    }
+
+    if let Some(err) = &output.pin_error {
+        util::append(card, &c::pre_notice(err));
+    }
 }
 
 fn render_names(root: &Element, output: &RegistryBrowserOutput, ctx: &DomCtx) {

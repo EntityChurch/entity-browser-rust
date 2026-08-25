@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::peers::Peers;
 
-use super::output::{AuthRow, AuthorizationsView, BackendStatusView, SystemOverviewOutput};
+use super::output::{
+    AppServerView, AuthRow, AuthorizationsView, BackendStatusView, SystemOverviewOutput,
+};
 
 /// Label of the canonical backend peer — must match `src-tauri`'s
 /// `SYSTEM_BACKEND_LABEL`. The poll picks this peer out of `list_backend_peers`.
@@ -85,6 +87,13 @@ struct Inner {
     /// reactive re-read so device authorizations stay current without a button
     /// (the auth read is also the real S↔B liveness probe).
     last_auth_refresh_ms: f64,
+    /// What the SPA server is doing — whether another device can load the app
+    /// from this desktop, and whether it arrives provisioned.
+    ///
+    /// Stored **already graded** rather than as the raw IPC report: the IPC type
+    /// is `wasm32`-only, and holding it here would drag the whole model out of
+    /// `make test`'s reach.
+    app_server: AppServerView,
 }
 
 #[derive(Clone, Default)]
@@ -261,6 +270,7 @@ impl SystemOverviewModel {
             log_lines: inner.lines.clone(),
             tauri: is_tauri_runtime(),
             authorizations,
+            app_server: inner.app_server.clone(),
         }
     }
 
@@ -307,6 +317,42 @@ impl SystemOverviewModel {
                 Err(e) => {
                     tracing::warn!(error = %e, "rendezvous toggle failed");
                 }
+            }
+            dirty.mark();
+        });
+    }
+
+    /// Turn the SPA server on or off.
+    ///
+    /// **Optimistic is still wrong here, but for a different reason than its two
+    /// neighbours.** Nothing restarts — the listener is independent — so the
+    /// flip is fast; what can still be wrong is the *outcome*. The port may be
+    /// taken (the server moves and reports a different URL), and whether a
+    /// visitor arrives provisioned depends on the rendezvous, which this toggle
+    /// does not touch. Painting a URL we have not been given back is inventing
+    /// the one string the user is about to type into another device.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_app_server(
+        &self,
+        peer_id: &str,
+        enabled: bool,
+        dirty: crate::window_watch::DirtyFlag,
+    ) {
+        let peer_id = peer_id.to_string();
+        let inner = std::sync::Arc::downgrade(&self.inner);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::tauri_ipc::set_backend_app_server(&peer_id, enabled).await;
+            let Some(inner) = inner.upgrade() else { return };
+            let Ok(mut inner) = inner.lock() else { return };
+            match result {
+                Ok(info) => {
+                    inner.app_server = AppServerView::grade(
+                        info.serving,
+                        info.url.as_deref(),
+                        info.node_peer_id.as_deref(),
+                    )
+                }
+                Err(e) => tracing::warn!(error = %e, "app-server toggle failed"),
             }
             dirty.mark();
         });
@@ -422,6 +468,13 @@ impl SystemOverviewModel {
                 let cursor = inner_arc.lock().unwrap().cursor;
                 let list = crate::tauri_ipc::list_backend_peers().await.ok();
                 let tail = crate::tauri_ipc::backend_log_tail(cursor).await.ok();
+                // Polled in the same tick as everything else rather than on its
+                // own timer. Its `node_peer_id` half is changed by the
+                // *rendezvous* toggle — a different control — so folding in the
+                // app-server toggle's own response is not sufficient: the row
+                // would keep saying "visitors must add a connector by hand"
+                // after the user had just fixed precisely that.
+                let app_server = crate::tauri_ipc::app_server_status().await.ok();
 
                 let mut changed = false;
                 {
@@ -442,6 +495,17 @@ impl SystemOverviewModel {
                             });
                         if found != inner.backend {
                             inner.backend = found;
+                            changed = true;
+                        }
+                    }
+                    if let Some(info) = app_server {
+                        let graded = AppServerView::grade(
+                            info.serving,
+                            info.url.as_deref(),
+                            info.node_peer_id.as_deref(),
+                        );
+                        if inner.app_server != graded {
+                            inner.app_server = graded;
                             changed = true;
                         }
                     }

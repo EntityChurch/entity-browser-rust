@@ -202,6 +202,61 @@ pub async fn set_backend_port_mapping(
     BackendPeerInfo::from_js(&result).ok_or("invalid set_backend_port_mapping response".into())
 }
 
+/// What the desktop's SPA server is doing.
+///
+/// `serving` and `node_peer_id` are reported separately and the surface must
+/// keep them apart: serving *with* a rendezvous means the other device types a
+/// URL and is finished; serving *without* one means it still has to add a
+/// connector by hand. Collapsing them into "on" would promise the first while
+/// delivering the second.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AppServerInfo {
+    pub serving: bool,
+    /// The URL to type on the other device — already LAN-resolved, never
+    /// `0.0.0.0`. `None` when not serving.
+    pub url: Option<String>,
+    /// The rendezvous a fresh visitor is provisioned with, if any.
+    pub node_peer_id: Option<String>,
+}
+
+impl AppServerInfo {
+    fn from_js(result: &JsValue) -> Option<Self> {
+        Some(Self {
+            serving: js_sys::Reflect::get(result, &JsValue::from_str("serving"))
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            url: get_string(result, "url"),
+            node_peer_id: get_string(result, "node_peer_id"),
+        })
+    }
+}
+
+/// Serve the SPA from this desktop, or stop.
+///
+/// **Takes effect immediately and does NOT restart the peer** — unlike the
+/// rendezvous and port-mapping toggles beside it. This is an independent TCP
+/// listener, not a handler mounted on `PeerBuilder` nor a lease bound to the
+/// port this run got, so there is nothing to rebuild and no connection to drop.
+pub async fn set_backend_app_server(
+    peer_id: &str,
+    enabled: bool,
+) -> Result<AppServerInfo, String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(&args, &JsValue::from_str("peerId"), &JsValue::from_str(peer_id))
+        .map_err(|_| "failed to set peerId arg")?;
+    js_sys::Reflect::set(&args, &JsValue::from_str("enabled"), &JsValue::from_bool(enabled))
+        .map_err(|_| "failed to set enabled arg")?;
+    let result = invoke("set_backend_app_server", &args.into()).await?;
+    AppServerInfo::from_js(&result).ok_or("invalid set_backend_app_server response".into())
+}
+
+/// Poll what the SPA server is doing.
+pub async fn app_server_status() -> Result<AppServerInfo, String> {
+    let result = invoke("app_server_status", &JsValue::UNDEFINED).await?;
+    AppServerInfo::from_js(&result).ok_or("invalid app_server_status response".into())
+}
+
 /// Delete a backend peer entirely — stops + removes from disk.
 pub async fn delete_backend_peer(peer_id: &str) -> Result<(), String> {
     let args = js_sys::Object::new();

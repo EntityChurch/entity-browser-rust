@@ -401,6 +401,66 @@ impl SignedSession {
         Err(SignedFetchError::Budget)
     }
 
+    /// **Resolve a hash this publisher's own signed data REFERENCED** — the
+    /// by-hash counterpart to [`Self::resolve`]'s by-key walk.
+    ///
+    /// `EXTENSION-REGISTRY` v1.21 D8 makes a binding's `transports` a list of
+    /// bare `system/hash` naming `system/peer/transport/*` entities, and D8a
+    /// makes serving them a **MUST** on the publishing registry. So a consumer
+    /// needs a way to follow a reference *out of* a verified body, which the
+    /// trie walk cannot express — the hash is in the binding, not in the trie.
+    ///
+    /// Three properties, and each of them is a rule this repo has already paid
+    /// for at least once:
+    ///
+    /// 1. **Verify before believing.** The bytes must hash to the address we
+    ///    asked for, or an origin can answer any reference with anything. Same
+    ///    check, same reason, same place in the sequence as [`Self::resolve`]'s.
+    /// 2. **A missing referent is `IncompleteWalk`, not `Transport`.** The
+    ///    reference came out of a body the signed root commits to, so a 404 is
+    ///    the origin refusing its own declared closure — terminal, because
+    ///    retrying grants a withholding origin unbounded attempts. Arch's own
+    ///    reason for making D8a a MUST is that *"a missing referent and a
+    ///    withheld one are byte-identical at the consumer"*; `declared_fetch_error`
+    ///    is the single place that decision lives, so this call site cannot
+    ///    re-collapse it by reaching for `Transport` out of habit.
+    /// 3. **It shares the session cache**, so a profile referenced by several
+    ///    bindings is fetched once and the `seq` floor still governs the session
+    ///    it was fetched under.
+    ///
+    /// It deliberately does **not** consult the trie: a reference is not a key,
+    /// and pretending otherwise would make an unreferenced-but-published entity
+    /// resolvable, which is a different (looser) claim than the one D8a makes.
+    pub async fn content<S: BinSource + ?Sized>(
+        &self,
+        src: &S,
+        hash: &Hash,
+    ) -> Result<Entity, SignedFetchError> {
+        if let Ok(c) = self.state.content.lock() {
+            if let Some(bytes) = c.get(hash) {
+                return crate::content_site::http_poll::verify_and_decode(bytes, hash).map_err(|e| {
+                    SignedFetchError::Verify(format!("cached content {}: {e:?}", hash.to_hex()))
+                });
+            }
+        }
+        let bytes = src
+            .get(self.pin.layout.content_url(hash), Freshness::Immutable)
+            .await
+            .map_err(|e| declared_fetch_error(&hash.to_hex(), e))?;
+        let entity =
+            crate::content_site::http_poll::verify_and_decode(&bytes, hash).map_err(|e| {
+                SignedFetchError::Verify(format!(
+                    "referenced content {}: {e:?} — the origin served bytes that do not hash to \
+                     the address its own published binding named",
+                    hash.to_hex()
+                ))
+            })?;
+        if let Ok(mut c) = self.state.content.lock() {
+            c.insert(*hash, bytes);
+        }
+        Ok(entity)
+    }
+
     /// **Enumerate the keys the signed root commits to — and fail rather than
     /// return a short list.**
     ///

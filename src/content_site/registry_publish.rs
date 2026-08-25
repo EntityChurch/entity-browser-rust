@@ -87,9 +87,21 @@ pub struct BindingSpec {
 #[derive(Debug)]
 pub struct RegistryReport {
     pub registry_peer_id: String,
-    pub bindings: Vec<(String, String)>,
+    pub bindings: Vec<IssuedBinding>,
     pub ttl_ms: u64,
     pub root: SignedRootReport,
+}
+
+/// One binding this emission issued.
+///
+/// Carries the **binding hash** as well as the name and target because the
+/// `system/tree/listing` artifact (§6.5.3.1) names each entry's hash — the text
+/// form it replaced could only carry the name, which is why this was a tuple.
+#[derive(Debug, Clone)]
+pub struct IssuedBinding {
+    pub name: String,
+    pub target_peer_id: String,
+    pub binding_hash: Hash,
 }
 
 /// Emit a static registry origin into `dir`.
@@ -191,11 +203,14 @@ pub fn emit_registry(
             name: name.clone(),
             kind: KIND_PEER_ISSUED.into(),
             target_peer_id: spec.target_peer_id.clone(),
-            transports: spec
-                .origin
-                .as_deref()
-                .map(|o| vec![http_poll_profile(&spec.target_peer_id, o)])
-                .unwrap_or_default(),
+            // **D8: a bare `system/hash`, never an inline map** (`EXTENSION-REGISTRY`
+            // §3, v1.21). The profile travels as a reference into our OWN
+            // published namespace, which is what makes D8a's serving obligation
+            // meaningful — and what we gain is not bookkeeping: the profile now
+            // arrives carrying its **entity type**, so a consumer runs
+            // `EXTENSION-NETWORK` §6.5.1a D5's fail-closed `transport_type` check
+            // against a typed entity instead of trusting an unsigned inner field.
+            transports: transports_for(dir, &rid, &mut root, spec)?,
             issued_at: issued_at_ms,
             // Non-null, always — see the module docs (arch D3).
             ttl: Some(ttl_ms),
@@ -230,7 +245,11 @@ pub fn emit_registry(
         write_entity(dir, &rid, &sig_key, &sig_entity)?;
         root.record(&rid, &sig_key, &sig_entity);
 
-        issued.push((name, spec.target_peer_id.clone()));
+        issued.push(IssuedBinding {
+            name,
+            target_peer_id: spec.target_peer_id.clone(),
+            binding_hash,
+        });
     }
 
     // The registry's enumeration artifact — the sibling of a peer's
@@ -278,22 +297,63 @@ fn normalized(name: &str) -> String {
     entity_registry::data::normalize_name(name.trim(), "none")
 }
 
-/// Write `{dir}/{registry}/system/registry/binding/by-name.list` — every name
-/// this registry carries, sorted, one per line. See the call site for why it is
-/// transport-trusted and why that is safe.
-fn write_names_list(dir: &Path, rid: &str, issued: &[(String, String)]) -> Result<(), String> {
-    let mut names: Vec<&str> = issued.iter().map(|(n, _)| n.as_str()).collect();
-    names.sort_unstable();
-    names.dedup();
-    let mut body = names.join("\n");
-    if !body.is_empty() {
-        body.push('\n');
-    }
+/// Write `{dir}/{registry}/system/registry/binding/by-name.list` — the names
+/// this registry carries, as the **`system/tree/listing` wire entity**.
+///
+/// **It was newline-delimited text, and that was a `[MUST]` violation needing no
+/// ruling.** `EXTENSION-NETWORK` §6.5.3.1 says the listing route carries *"the
+/// existing `system/tree/listing` entity … wire entity in ECF,
+/// `Content-Type: application/cbor`"* and *"**No JSON form.**"* — and by
+/// extension no text form. workbench-go raised it as *"the ask is only to know
+/// which of us is wrong"*; they were right.
+///
+/// The typed form is also strictly more useful than the text was: an `entries`
+/// map carries each name's **binding hash**, so a browse surface gets the
+/// address it would otherwise have to resolve a second time. `has_children` is
+/// `false` throughout — a by-name key names a binding, and nothing hangs below
+/// it.
+///
+/// Still transport-trusted, and the call site says why that is safe: every name
+/// offered here is resolved through the signed root before it means anything.
+/// A listing entity does not change that — it is a menu in a better encoding.
+fn write_names_list(dir: &Path, rid: &str, issued: &[IssuedBinding]) -> Result<(), String> {
+    // Sorted + deduped by name so the artifact is byte-stable across emissions
+    // with the same content — a fixture pinned in another repo depends on it.
+    let mut rows: Vec<&IssuedBinding> = issued.iter().collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows.dedup_by(|a, b| a.name == b.name);
+
+    let entries: Vec<(entity_ecf::Value, entity_ecf::Value)> = rows
+        .iter()
+        .map(|r| {
+            (
+                entity_ecf::Value::Text(r.name.clone()),
+                entity_ecf::cbor_map! {
+                    "hash" => entity_ecf::Value::Bytes(r.binding_hash.to_bytes().to_vec()),
+                    "has_children" => entity_ecf::Value::Bool(false),
+                },
+            )
+        })
+        .collect();
+    let count = entries.len() as i64;
+    let body = entity_ecf::cbor_map! {
+        "path" => entity_ecf::Value::Text(format!("/{rid}/{NAMES_LIST_PATH}")),
+        "entries" => entity_ecf::Value::Map(entries),
+        "count" => entity_ecf::Value::Integer(count.into()),
+        "offset" => entity_ecf::Value::Integer(0.into()),
+    };
+    // Canonical ECF, for the same reason the profile is (above): an entity's
+    // `data` must be the canonical encoding or its `content_hash` does not
+    // survive a fetch-and-verify round trip.
+    let entity = entity_entity::Entity::new(entity_types::TYPE_TREE_LISTING, entity_ecf::to_ecf(&body))
+        .map_err(|e| format!("listing entity: {e}"))?;
+
     let path = dir.join(rid).join(format!("{NAMES_LIST_PATH}.list"));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))
+    std::fs::write(&path, entity_wire::encode_entity(&entity))
+        .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 /// The binding's `transports` entry for a statically-published peer — an
@@ -358,6 +418,88 @@ fn body_key(h: &Hash) -> String {
     format!("system/registry/binding/{}", h.to_hex())
 }
 
+/// The trie key a target peer's transport profile is published at.
+///
+/// Under the **registry's** namespace, keyed by the **target** peer — the
+/// registry is asserting how to reach that peer, so the profile is about the
+/// target and served by us. `EXTENSION-REGISTRY` §6a.3's D8a is what obliges us
+/// to serve it at all.
+fn transport_key(target_peer_id: &str) -> String {
+    format!(
+        "system/peer/transport/{target_peer_id}/{}",
+        crate::transport_profiles::PROFILE_ID_PRIMARY
+    )
+}
+
+/// Publish this binding's transport profile **as an entity** and return the
+/// bare `system/hash` references that go in `transports` (D8, `EXTENSION-REGISTRY`
+/// v1.21 §3).
+///
+/// Three obligations are discharged together here, deliberately, because they
+/// are the same act and splitting them is how a hash gets published that nobody
+/// can resolve:
+///
+/// 1. **D8** — `transports` carries hashes, not inline maps.
+/// 2. **D8a** — *a publishing registry MUST serve what its bindings reference.*
+///    `root.record` both stores the entity and binds it at a trie key, so
+///    `RootProjector::finish`'s closure walk emits its blob under `content/` —
+///    i.e. it is fetchable **by hash**, which is the form a consumer resolves.
+///    Arch's reason for making this a MUST is worth keeping in view: *"a missing
+///    referent and a withheld one are byte-identical at the consumer"*, so an
+///    unserved profile reinstates the exact gap §6a.3 exists to close, one
+///    indirection later.
+/// 3. **The tree key**, so the profile is also reachable by path rather than
+///    only by a hash you must already hold.
+///
+/// A binding with no origin carries **no** transports, unchanged — arch D10's
+/// non-empty requirement is enforced at the caller, against the *spec*, not
+/// here.
+fn transports_for(
+    dir: &Path,
+    rid: &str,
+    root: &mut RootProjector,
+    spec: &BindingSpec,
+) -> Result<Vec<Hash>, String> {
+    let Some(origin) = spec.origin.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let entity = http_poll_profile_entity(&spec.target_peer_id, origin)?;
+    let hash = entity.content_hash;
+    let key = transport_key(&spec.target_peer_id);
+    write_entity(dir, rid, &key, &entity)?;
+    root.record(rid, &key, &entity);
+    Ok(vec![hash])
+}
+
+/// The §6.5.3 `http-poll` profile as the **entity** it is published as.
+///
+/// `system/peer/transport/http-poll` is **not an upstream constant** — `core/peer`
+/// defines `TYPE_PEER_TRANSPORT_{TCP,HTTP}` and no `http-poll`, the same shape as
+/// the missing `…/transport/websocket` type this repo already records: the
+/// profile is specified and the Rust type is not. The string is pinned against
+/// workbench-go's emission, read out of their artifact rather than assumed.
+///
+/// One builder for both emission sites — the standalone `transport-profile`
+/// artifact (§6.5.4, out-of-band) and the registry's by-hash reference (D8) —
+/// because a consumer that meets both must not be able to tell them apart.
+pub fn http_poll_profile_entity(
+    peer_id: &str,
+    origin: &str,
+) -> Result<entity_entity::Entity, String> {
+    // **`to_ecf`, NOT `ciborium::into_writer`** — and this is now load-bearing
+    // in a way it was not when the profile only ever travelled as a standalone
+    // artifact. A referenced profile is fetched by hash and
+    // `http_poll::verify_and_decode` canonically **re-encodes** the decoded
+    // `data` before hashing it, so a body encoded any other way fails as
+    // `HashMismatch` — i.e. as *the origin served bytes that do not hash to the
+    // address it committed to*, which is a hostile-origin verdict about our own
+    // correct emission. The old encoding was invisible because
+    // `from_profile_artifact` does not hash-verify.
+    let data = entity_ecf::to_ecf(&http_poll_profile(peer_id, origin));
+    entity_entity::Entity::new("system/peer/transport/http-poll", data)
+        .map_err(|e| format!("profile entity: {e}"))
+}
+
 /// Strip the `/{peer}/` qualification — trie keys and projected paths are both
 /// relative to it, while the upstream path helpers return absolute paths.
 fn rel(peer_id: &str, absolute: &str) -> String {
@@ -389,7 +531,8 @@ fn write_pointer(dir: &Path, peer_id: &str, key: &str, hash: &Hash) -> Result<()
 // CLI
 // ---------------------------------------------------------------------------
 
-/// `entity-browser registry OUT_DIR --bind NAME=PEER_ID [--bind …] [--ttl-days=N]`
+/// `entity-browser registry OUT_DIR --bind=NAME=PEER_ID@ORIGIN [--bind=…] [--ttl-days=N]
+/// [--issued-at=MS]`
 ///
 /// Identity resolution matches `publish`: the durable publisher keypair by
 /// default, `--identity-seed=hex` / `--demo-identity` to override. **A registry
@@ -435,7 +578,7 @@ pub fn parse_registry_args(args: &[String]) -> Result<RegistryArgs, String> {
     // first non-flag argument and would otherwise be adopted as the output
     // directory — a wrong answer instead of a refusal.
     if let Some(bare) =
-        args.iter().find(|a| matches!(a.as_str(), "--bind" | "--ttl-days" | "--identity-seed"))
+        args.iter().find(|a| matches!(a.as_str(), "--bind" | "--ttl-days" | "--identity-seed" | "--issued-at"))
     {
         return Err(format!(
             "{bare} takes `=`, not a space — write {bare}=VALUE. (With a space the value becomes \
@@ -576,10 +719,26 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
         return super::publish::run_verify(&out_dir, &peer_id, "", &key);
     }
 
-    let issued_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    // `--issued-at=MS` pins the clock, which is what makes an emission
+    // **reproducible**. `issued_at` goes into every binding body, so it goes
+    // into every binding hash, so it decides the trie shape — two runs of the
+    // same command otherwise produce different bytes for the same content, and
+    // a cross-impl fixture cut from one of them cannot be regenerated or
+    // checked against. Same reason the tests pin `ISSUED_AT_MS`; this exposes
+    // it to the operator emitting the corpus other repos consume.
+    let issued_at_ms = match args.iter().find_map(|a| a.strip_prefix("--issued-at=")) {
+        Some(raw) => match raw.trim().parse::<u64>() {
+            Ok(ms) => ms,
+            Err(_) => {
+                eprintln!("--issued-at must be milliseconds since the epoch, got {raw:?}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    };
 
     match emit_registry(&out_dir, keypair, &bindings, ttl_ms, issued_at_ms) {
         Ok(r) => {
@@ -589,7 +748,7 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
                 r.bindings.len(),
                 r.ttl_ms / (24 * 60 * 60 * 1000)
             );
-            for (name, target) in &r.bindings {
+            for IssuedBinding { name, target_peer_id: target, .. } in &r.bindings {
                 println!("  {name} → {target}");
             }
             println!("  registry peer: {}", r.registry_peer_id);

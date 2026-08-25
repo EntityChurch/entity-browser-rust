@@ -655,6 +655,130 @@ mod registry_pin {
 
 pub use registry_pin::{get as active_registry_pin, set as set_active_registry_pin};
 
+/// The registry pin the **user** chose, above the deployment's seed.
+///
+/// # Why this is not a slot on the Shell
+///
+/// It was. `ShellModel::name_pin` was an in-memory `Mutex` on one *window*, so
+/// `name pin` bound a registry the Registry Browser could not see — that window
+/// read only the deployment seed and said "no registry pinned" with no affordance
+/// anywhere in the GUI to supply one, its own comment recording that wiring the
+/// two together was "deliberately not answered". The result is one of this app's
+/// three disjoint stores in miniature: two surfaces, one concept, no shared
+/// state, and the answer depending on which window you asked.
+///
+/// So the pin lives in **one** place that both read, and
+/// [`pinned_registry`] is the only expression of the precedence.
+///
+/// # Why a localStorage mirror rather than the tree
+///
+/// The tree is where state belongs, and a pin nearly qualifies. What disqualifies
+/// it is *when* it is read: the shell resolves inside a `spawn_task` holding no
+/// config handle, and on the Worker arm a boot-time tree read returns the default
+/// because the cache mirror is not seeded. That is the same constraint
+/// `connectors::write_selection_mirror` and `boot_fast_paint` already answer the
+/// same way, so this uses their idiom rather than inventing a fourth.
+///
+/// Clearing on `None` is load-bearing for their reason too: a stale mirror would
+/// keep resolving names through a registry the user has unpinned, silently.
+mod user_registry_pin {
+    use super::RegistryPin;
+    use std::cell::RefCell;
+
+    /// `\x1f`-joined `peer_id` + `origin`, matching the packing used elsewhere
+    /// for two-field values. An origin may legitimately be empty (same-origin).
+    #[cfg(target_arch = "wasm32")]
+    const MIRROR_KEY: &str = "entity-browser:registry-pin";
+
+    thread_local! {
+        static CHOSEN: RefCell<Option<RegistryPin>> = const { RefCell::new(None) };
+    }
+
+    /// Record the user's choice, in memory and in the mirror.
+    pub fn set(pin: Option<RegistryPin>) {
+        CHOSEN.with(|c| *c.borrow_mut() = pin.clone());
+        #[cfg(target_arch = "wasm32")]
+        write_mirror(pin.as_ref());
+    }
+
+    pub fn get() -> Option<RegistryPin> {
+        CHOSEN.with(|c| c.borrow().clone())
+    }
+
+    /// Restore the user's pin at boot. Called before the deployment config is
+    /// applied, because the deployment only ever *seeds*: a user who has pinned
+    /// a registry must not silently be moved back onto the deployment's.
+    #[cfg(target_arch = "wasm32")]
+    pub fn restore_from_mirror() {
+        let Some(raw) = web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .and_then(|s| s.get_item(MIRROR_KEY).ok().flatten())
+        else {
+            return;
+        };
+        // A pin with no peer-id is dropped rather than completed from the
+        // origin — pinning an origin would trust the origin, which is the one
+        // thing this chain never does (`DeploymentConfig`'s parser, same rule).
+        let (peer_id, origin) = raw.split_once('\u{1f}').unwrap_or((raw.as_str(), ""));
+        if peer_id.trim().is_empty() {
+            return;
+        }
+        CHOSEN.with(|c| {
+            *c.borrow_mut() = Some(RegistryPin {
+                peer_id: peer_id.trim().to_string(),
+                origin: origin.trim().to_string(),
+            })
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn write_mirror(pin: Option<&RegistryPin>) {
+        let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+        else {
+            return;
+        };
+        match pin {
+            Some(p) => {
+                let _ = storage
+                    .set_item(MIRROR_KEY, &format!("{}\u{1f}{}", p.peer_id, p.origin));
+            }
+            None => {
+                let _ = storage.remove_item(MIRROR_KEY);
+            }
+        }
+    }
+}
+
+pub use user_registry_pin::{get as user_registry_pin, set as set_user_registry_pin};
+#[cfg(target_arch = "wasm32")]
+pub use user_registry_pin::restore_from_mirror as restore_user_registry_pin;
+
+/// Where a registry pin came from. Surfaces **must** say which [AP25]: a name
+/// resolving through a registry the user never chose, silently, is
+/// indistinguishable from one they did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinSource {
+    /// The user pinned it here, in this app.
+    User,
+    /// `/entity-deployment.json` seeded it — `EXTENSION-REGISTRY` §7.4.
+    Deployment,
+}
+
+/// The registry pin in force and where it came from: **the user's choice above
+/// the deployment's seed**.
+///
+/// The single expression of that precedence. Every surface calls this; none
+/// keeps its own slot. There is still exactly ONE pin, not a resolver chain —
+/// `name_dispatch::default_rules()` matches the ratified §4.1a table and is
+/// deliberately installed nowhere, because a catch-all needs a default registry
+/// to point at and shipping one *for everybody* is how two app tiers ship two.
+pub fn pinned_registry() -> Option<(RegistryPin, PinSource)> {
+    if let Some(p) = user_registry_pin() {
+        return Some((p, PinSource::User));
+    }
+    active_registry_pin().map(|p| (p, PinSource::Deployment))
+}
+
 impl Default for SessionConfig {
     /// The chrome-first default posture — the workspace (window manager),
     /// toggle available, demo site as home, fully creatable. Reproduces the
@@ -979,11 +1103,57 @@ pub fn webrtc_install_primary(provisioned: bool, url_override: Option<bool>) -> 
 /// percent-decoding — callers use it for `ws://host:port` values, whose chars
 /// (`:` `/`) are query-legal unencoded; a value containing `&`/`=`/`#` is not
 /// supported here (none of ours do). Mirrors the `main.rs` `?worker=` idiom.
-fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query.trim_start_matches('?').split('&').find_map(|pair| {
+/// One query parameter, **percent-decoded**.
+///
+/// The decode is not optional and its absence was a live bug: the desktop's SPA
+/// server redirects a bare `/` to `?webrtc_node=ws%3A%2F%2F…` (a `ws://` URL
+/// must be encoded or a parser truncates it at the first `:`), and reading it
+/// raw handed the establisher the literal string `ws%3A%2F%2F192.168.68.55%3A4041`
+/// as a node address. Nothing downstream validates the scheme at runtime — only
+/// `build.rs` does — so it **installed cleanly**, and `net` then reported
+/// `OK rendezvous … at ws%3A%2F%2F…`: a green row containing an address no
+/// socket could ever open. Measured in a real browser against a real desktop.
+///
+/// `+` is deliberately **not** treated as a space: this is a URL query, not an
+/// `application/x-www-form-urlencoded` form body, and a `+` in a peer-id or an
+/// address is a literal.
+fn query_param<'a>(query: &'a str, key: &str) -> Option<std::borrow::Cow<'a, str>> {
+    let raw = query.trim_start_matches('?').split('&').find_map(|pair| {
         let mut parts = pair.splitn(2, '=');
         (parts.next() == Some(key)).then(|| parts.next().unwrap_or(""))
-    })
+    })?;
+    Some(percent_decode(raw))
+}
+
+/// Decode `%XX` escapes. Borrows when there is nothing to decode, which is the
+/// common case (a Base58 peer-id needs no escaping).
+fn percent_decode(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('%') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) =
+                ((b[i + 1] as char).to_digit(16), (b[i + 2] as char).to_digit(16))
+            {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    // A malformed escape yields the original rather than an error: this feeds a
+    // fail-closed resolver, and handing it undecodable bytes is a better outcome
+    // than a panic on a URL somebody typed.
+    match String::from_utf8(out) {
+        Ok(decoded) => std::borrow::Cow::Owned(decoded),
+        Err(_) => std::borrow::Cow::Borrowed(s),
+    }
 }
 
 /// Runtime WebRTC provisioning from a URL query — the dev/showcase / e2e
@@ -993,13 +1163,17 @@ fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
 /// reason for existing: a per-test signaling node has a **dynamic** address the
 /// compile-time knob cannot carry.
 pub fn webrtc_provisioning_from_query(query: &str) -> Option<WebRtcProvisioning> {
+    // Bound before the call: each `Cow` must outlive the `&str` handed on.
+    let node_peer = query_param(query, "webrtc_node_peer");
+    let node_addr = query_param(query, "webrtc_node");
+    // `?webrtc_ice=stun:host:3478` — the rung-2 harness channel, same reason
+    // the node halves are here: a per-test reflector has an address the
+    // compile-time knob cannot carry.
+    let ice = query_param(query, "webrtc_ice");
     resolve_webrtc_provisioning(
-        query_param(query, "webrtc_node_peer"),
-        query_param(query, "webrtc_node"),
-        // `?webrtc_ice=stun:host:3478` — the rung-2 harness channel, same reason
-        // the node halves are here: a per-test reflector has an address the
-        // compile-time knob cannot carry.
-        query_param(query, "webrtc_ice"),
+        node_peer.as_deref(),
+        node_addr.as_deref(),
+        ice.as_deref(),
     )
 }
 
@@ -1883,6 +2057,50 @@ mod tests {
         // Leading '?' optional; only one half present → None (fail closed).
         assert!(webrtc_provisioning_from_query("webrtc_node=ws://x").is_none());
         assert!(webrtc_provisioning_from_query("a=1&b=2").is_none(), "absent → None");
+    }
+
+    /// **A percent-encoded node address must decode, and it did not.**
+    ///
+    /// The test above passes the address *unencoded* — legal, and what the e2e
+    /// harness has always sent, which is exactly why this went unnoticed. The
+    /// desktop's SPA server encodes it (a `ws://` URL in a query value must be,
+    /// or a parser truncates it at the first `:`), and the raw value went
+    /// straight through: the establisher installed with the literal string
+    /// `ws%3A%2F%2F…` as its node address, `net` printed
+    /// `OK rendezvous … at ws%3A%2F%2F…`, and nothing failed until a meet did.
+    /// Measured in two real browsers against a real desktop, 2026-08-21.
+    ///
+    /// Both forms must work — the encoded one is now the shipped path and the
+    /// unencoded one is every existing harness.
+    #[test]
+    fn a_percent_encoded_node_address_decodes() {
+        let q = "?webrtc_node_peer=2KaNODE&webrtc_node=ws%3A%2F%2F192.168.68.55%3A4041";
+        let p = webrtc_provisioning_from_query(q).expect("both halves present");
+        assert_eq!(
+            p.node_addr, "ws://192.168.68.55:4041",
+            "an encoded address must reach the establisher decoded",
+        );
+        assert_eq!(p.node_peer_id, "2KaNODE");
+
+        // A Base58 peer-id needs no escaping, so the common case must not be
+        // disturbed by the decoder.
+        let q = "?webrtc_node_peer=2KaNODE&webrtc_node=ws://plain:4041";
+        assert_eq!(
+            webrtc_provisioning_from_query(q).unwrap().node_addr,
+            "ws://plain:4041",
+        );
+    }
+
+    /// `+` is a literal here, not a space: this is a URL query, not an
+    /// `application/x-www-form-urlencoded` body. Getting that wrong would
+    /// silently corrupt any value containing one.
+    #[test]
+    fn percent_decoding_leaves_plus_and_malformed_escapes_alone() {
+        assert_eq!(percent_decode("a+b"), "a+b");
+        assert_eq!(percent_decode("100%"), "100%", "a trailing % is not an escape");
+        assert_eq!(percent_decode("%zz"), "%zz", "non-hex is not an escape");
+        assert_eq!(percent_decode("nothing-to-do"), "nothing-to-do");
+        assert_eq!(percent_decode("%2F%2f"), "//", "either hex case");
     }
 
     #[test]

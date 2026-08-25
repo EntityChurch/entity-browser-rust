@@ -486,7 +486,9 @@ pub struct TailEntry {
 /// the fact that must not be silent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PinSource {
-    /// `name pin`, typed here. Outranks the deployment's, for this tab.
+    /// Chosen by the user — `name pin` here or the Registry Browser's own
+    /// field; they write the same pin. Outranks the deployment's and survives a
+    /// reload (`session_config::user_registry_pin`).
     User,
     /// `/entity-deployment.json`'s `name_registry_pin`, seeded at boot.
     Deployment,
@@ -515,14 +517,6 @@ pub struct ShellModel {
     /// records each entry here; verbs read it (`tails`) and flip
     /// the flag on cancel (`untail`).
     pub(super) tails: Arc<Mutex<Vec<TailEntry>>>,
-    /// The registry this shell resolves names through **when the user pinned one
-    /// themselves** (`(peer_id, origin)`). In memory: a pin is a trust decision
-    /// the operator makes for this session, and the durable form is B16b's
-    /// resolver-chain config, held on arch's `name_format_dispatch` ruling.
-    ///
-    /// `None` here does not mean "no registry" — the deployment may seed one.
-    /// Read it through [`ShellModel::pinned_registry`], never directly.
-    pub(super) name_pin: Arc<Mutex<Option<(String, String)>>>,
     /// The `meet` in progress, if any (`crate::rendezvous`).
     ///
     /// **In memory, never in the tree** — a meet is an action in progress, like
@@ -548,7 +542,6 @@ impl ShellModel {
             peer_id,
             inner: Arc::new(Mutex::new(state)),
             pending_out: Arc::new(Mutex::new(Vec::new())),
-            name_pin: Arc::new(Mutex::new(None)),
             tails: Arc::new(Mutex::new(Vec::new())),
             meet: Arc::new(Mutex::new(None)),
         }
@@ -698,10 +691,17 @@ impl ShellModel {
     ///
     /// ```text
     /// name pin <registry-peer-id> <origin>   pin a registry (the ONE a priori string)
+    /// name unpin                              drop it, back to the deployment's seed
     /// name resolve <name>                     hop 1 — name → peer-id + where
     /// name open <name> [site] [page]          hop 1 + hop 2 — → verified page bytes
-    /// name pins                               what this tab holds a seq floor for
+    /// name pins                               the registry in force, and whose it is
     /// ```
+    ///
+    /// The pin is **shared with the Registry Browser and survives a reload**
+    /// (`session_config::pinned_registry`) — it used to be a `Mutex` on this one
+    /// window, which is why that window reported "no registry pinned" while this
+    /// verb held one. `unpin` exists because it now persists: a choice you cannot
+    /// withdraw is worse than one that evaporates.
     ///
     /// **The optional arguments are resolved, never guessed** (audit F5). With no
     /// `site`, this offers the publisher's own `sites.list` — labelled unverified,
@@ -740,9 +740,17 @@ impl ShellModel {
                 // say about who it is.
                 match crate::content_site::session_cache::session_for(pid, origin) {
                     Some(_) => {
-                        if let Ok(mut slot) = self.name_pin.lock() {
-                            *slot = Some((pid.clone(), origin.clone()));
-                        }
+                        // Written to the ONE shared pin, not to a slot on this
+                        // window: `name pin` used to bind a registry the
+                        // Registry Browser could not see, which then reported
+                        // "no registry pinned" with the pin sitting a few
+                        // hundred lines away in another window's `Mutex`.
+                        crate::session_config::set_user_registry_pin(Some(
+                            crate::session_config::RegistryPin {
+                                peer_id: pid.clone(),
+                                origin: origin.clone(),
+                            },
+                        ));
                         push(ScrollbackEntry::Info(format!(
                             "pinned registry {} at {} — nothing else is trusted", // i18n-ignore — dev-facing CLI
                             crate::views::short_pid(pid),
@@ -756,6 +764,27 @@ impl ShellModel {
                     ))),
                 }
             }
+            Some("unpin") => {
+                // Says what you fall back TO, not merely that something was
+                // dropped: unpinning does not leave you with no registry when
+                // the deployment seeds one, and a person who thinks it did will
+                // read the next successful resolve as a bug.
+                let had = crate::session_config::user_registry_pin();
+                crate::session_config::set_user_registry_pin(None);
+                match (had, crate::session_config::active_registry_pin()) {
+                    (None, _) => push(ScrollbackEntry::Info(
+                        "no pin of yours to drop".into(), // i18n-ignore — dev-facing CLI
+                    )),
+                    (Some(_), Some(seed)) => push(ScrollbackEntry::Info(format!(
+                        "unpinned — back to this deployment's registry {}", // i18n-ignore — dev-facing CLI
+                        crate::views::short_pid(&seed.peer_id)
+                    ))),
+                    (Some(_), None) => push(ScrollbackEntry::Info(
+                        "unpinned — no registry is in force now, so names will not resolve" // i18n-ignore — dev-facing CLI
+                            .into(),
+                    )),
+                }
+            }
             Some("pins") => {
                 // The registry in force AND where it came from. A deployment
                 // that seeds a pin resolves names through a registry the user
@@ -763,7 +792,7 @@ impl ShellModel {
                 // thing that must not be silent [AP25].
                 match self.pinned_registry_with_source() {
                     Some((pid, origin, PinSource::User)) => push(ScrollbackEntry::Info(format!(
-                        "registry: {} at {} — yours, this tab only (a reload returns to the deployment's)", // i18n-ignore — dev-facing CLI
+                        "registry: {} at {} — yours, and it survives a reload (`name unpin` returns to the deployment's)", // i18n-ignore — dev-facing CLI
                         crate::views::short_pid(&pid),
                         if origin.is_empty() { "this origin" } else { origin.as_str() } // i18n-ignore — dev-facing CLI
                     ))),
@@ -805,8 +834,8 @@ impl ShellModel {
             }
             _ => {
                 push(ScrollbackEntry::ErrorText(
-                    "usage: name pin <registry-peer-id> <origin> | name resolve <name> | \
-                     name open <name> [site] [page] | name pins" // i18n-ignore — dev-facing CLI
+                    "usage: name pin <registry-peer-id> <origin> | name unpin | \
+                     name resolve <name> | name open <name> [site] [page] | name pins" // i18n-ignore — dev-facing CLI
                         .into(),
                 ));
             }
@@ -817,12 +846,19 @@ impl ShellModel {
     ///
     /// Two sources, in this order and never the other one:
     ///
-    /// 1. **The user's own pin** (`name pin`), held for this tab. A pin is a
-    ///    trust decision, and a deployment does not get to revise the user's —
-    ///    so the deployment value *seeds*, it never overwrites (design §4
-    ///    constraint 2). Its scope is the tab, deliberately: it is unpersisted,
-    ///    so a reload returns to the deployment's, which is stated by
-    ///    `name pins` rather than left to be discovered.
+    /// 1. **The user's own pin** — `name pin` here or the Registry Browser's
+    ///    field, which write the same thing. A pin is a trust decision, and a
+    ///    deployment does not get to revise the user's, so the deployment value
+    ///    *seeds* and never overwrites (design §4 constraint 2) — which is also
+    ///    what gives `name unpin` something to fall back to.
+    ///
+    ///    **It used to be a `Mutex` on this window and tab-scoped.** That made
+    ///    `name pin` invisible to the Registry Browser, which read only the
+    ///    deployment seed and so reported "no registry pinned" while this verb
+    ///    held one — with no way to set a pin from the GUI at all. It now lives
+    ///    in [`crate::session_config::user_registry_pin`], shared and durable
+    ///    across a reload (its mirror is localStorage, for the reason that
+    ///    module gives).
     /// 2. **The deployment's seeded pin** — `/entity-deployment.json`'s
     ///    `name_registry_pin`, out of the durable config via
     ///    [`crate::session_config::active_registry_pin`]. `None` in a generic
@@ -843,11 +879,13 @@ impl ShellModel {
     /// is announced [AP25]: a name resolving through a registry the user never
     /// typed, silently, is indistinguishable from one they did.
     fn pinned_registry_with_source(&self) -> Option<(String, String, PinSource)> {
-        if let Some((pid, origin)) = self.name_pin.lock().ok().and_then(|p| p.clone()) {
-            return Some((pid, origin, PinSource::User));
-        }
-        crate::session_config::active_registry_pin()
-            .map(|p| (p.peer_id, p.origin, PinSource::Deployment))
+        crate::session_config::pinned_registry().map(|(p, src)| {
+            let src = match src {
+                crate::session_config::PinSource::User => PinSource::User,
+                crate::session_config::PinSource::Deployment => PinSource::Deployment,
+            };
+            (p.peer_id, p.origin, src)
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1220,7 +1258,11 @@ impl ShellModel {
                     Some(id) => connectors::read_connectors(peers, &registry_pid)
                         .into_iter()
                         .find(|c| c.node_peer_id == **id),
-                    None => connectors::selected_connector(peers, &registry_pid),
+                    // Bare `connector check` means "check the one I am using",
+                    // which on a URL- or build-provisioned session is not a
+                    // registry row at all. Asking for a row answered "no such
+                    // connector" about the node `net` reports as connected.
+                    None => connectors::node_in_force(peers, &registry_pid),
                 };
                 let Some(node_row) = target else {
                     push(ScrollbackEntry::ErrorText(
@@ -1406,10 +1448,16 @@ impl ShellModel {
         };
 
         let registry_pid = peers.system_peer_id().to_string();
-        let Some(node) = crate::connectors::selected_connector(peers, &registry_pid) else {
+        // `node_in_force`, NOT `selected_connector`: a session provisioned by URL
+        // (the desktop's served link) or by the build knob (`make pair-serve`)
+        // has a working establisher and an EMPTY registry, and asking the
+        // registry refused the meet while `net` said `OK rendezvous` one command
+        // earlier. Reproduced in two real browsers, 2026-08-21.
+        let Some(node) = crate::connectors::node_in_force(peers, &registry_pid) else {
             push(ScrollbackEntry::ErrorText(
-                "no connector selected — `connector add <peer-id> <addr>` then \
-                 `connector use <peer-id>`" // i18n-ignore — dev-facing CLI
+                "no rendezvous — this session is provisioned with no signaling node. \
+                 Open the app from a desktop that is serving one, or \
+                 `connector add <peer-id> <addr>` then `connector use <peer-id>`" // i18n-ignore — dev-facing CLI
                     .into(),
             ));
             return;
@@ -2214,12 +2262,17 @@ mod tests {
             ))
         );
 
-        // (c) The user's own, typed into this tab. It outranks the deployment's
-        // WITHOUT clearing it — seeding is not ownership, and a `name pin` that
-        // overwrote the deployment value would make the override permanent for a
-        // profile that only meant it for one session.
-        *model.name_pin.lock().unwrap() =
-            Some(("2KUsersOwnRegistry".to_string(), "https://mine.example".to_string()));
+        // (c) The user's own. It outranks the deployment's WITHOUT clearing it:
+        // seeding is not ownership, and the two are separate slots so `name
+        // unpin` has something to fall back TO. Overwriting the seed would make
+        // the override unwithdrawable — which matters more now that the user's
+        // pin persists across a reload rather than dying with the tab.
+        crate::session_config::set_user_registry_pin(Some(
+            crate::session_config::RegistryPin {
+                peer_id: "2KUsersOwnRegistry".into(),
+                origin: "https://mine.example".into(),
+            },
+        ));
         assert_eq!(
             model.pinned_registry_with_source(),
             Some((
@@ -2235,6 +2288,7 @@ mod tests {
         );
 
         crate::session_config::set_active_registry_pin(None);
+        crate::session_config::set_user_registry_pin(None);
     }
 
     #[test]

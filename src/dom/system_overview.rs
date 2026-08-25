@@ -8,7 +8,7 @@ use crate::dom::components::{self, AuthState, ConnState};
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::views::system_overview::output::{
-    AuthorizationsView, AuthRow, BackendStatusView, PairScope, SystemOverviewOutput,
+    AppServerView, AuthorizationsView, AuthRow, BackendStatusView, PairScope, SystemOverviewOutput,
 };
 use crate::views::system_peers::output::SystemPeersOutput;
 
@@ -124,6 +124,10 @@ pub fn render(
             // offer, and this is the only thing that can be it without anyone
             // running server infrastructure.
             render_rendezvous_row(&status, b, ctx);
+            // Directly under the rendezvous, because the two are the halves of
+            // "this desktop is the thing the other device connects to", and the
+            // unprovisioned state of this row is fixed by the row above it.
+            render_app_server_row(&status, b, &output.app_server, ctx);
             render_port_mapping_row(&status, b, ctx);
             // Last, because it is composed from both rows above: the one line a
             // person carries to the other machine.
@@ -280,6 +284,84 @@ fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) 
     add_chip_row(parent, "", btn);
 }
 
+/// The **serve-the-app** row: can another device on this network load Tori from
+/// this desktop, and does it arrive able to connect.
+///
+/// # Why this is not just a convenience
+///
+/// Without it the two-machine flow needs two commands and a second release
+/// build (`make tauri-run` plus `make pair-serve`), which is one command too
+/// many for the most ordinary thing anyone will do with this product. With it,
+/// the process already running the rendezvous is the one handing out the app, so
+/// it knows its own node peer-id and address and puts them in the URL it
+/// redirects to — a browser that loads the bare address is provisioned **before
+/// boot**, with nothing typed, nothing scanned and no reload.
+///
+/// # Three states, and the middle one is the point
+///
+/// Serving *with* a rendezvous is "type this URL and you are done". Serving
+/// *without* one hands over a working app that still cannot reach anybody, and
+/// says so, pointing at the Rendezvous row directly above — which is why the two
+/// rows sit together. Collapsing them into "on" would promise the first while
+/// delivering the second.
+///
+/// Unlike its two neighbours this toggle **does not restart the backend**: the
+/// server is an independent listener, not a handler mounted on `PeerBuilder` nor
+/// a lease bound to this run's port. The button says so, because the other two
+/// buttons here warn that they *do*, and an unexplained difference between three
+/// adjacent controls is read as an oversight.
+fn render_app_server_row(parent: &Element, b: &BackendStatusView, s: &AppServerView, ctx: &DomCtx) {
+    // The URL is deliberately NOT interpolated into these sentences: it is
+    // rendered below as a copyable code row, because it is going to be typed on
+    // a different device and a string inside a sentence cannot be copied.
+    let (text, color) = match s {
+        AppServerView::Serving { .. } => (
+            crate::i18n::t("sysoverview.appserver_on", &[]),
+            crate::theme_tokens::STATUS_OK,
+        ),
+        AppServerView::ServingUnprovisioned { .. } => (
+            crate::i18n::t("sysoverview.appserver_unprovisioned", &[]),
+            crate::theme_tokens::STATUS_WARN,
+        ),
+        AppServerView::Off => (
+            crate::i18n::t("sysoverview.appserver_off", &[]),
+            "var(--text-muted, #c0c0c0)",
+        ),
+    };
+    add_row(
+        parent,
+        &crate::i18n::t("sysoverview.appserver", &[]),
+        &text,
+        Some(&crate::i18n::t("sysoverview.appserver_hint", &[])),
+        Some(color),
+    );
+
+    // The URL gets a copy button for the same reason the pairing line does: it
+    // is going to be typed on a *different* device, and every character retyped
+    // by hand is a chance to produce a failure that reads as connectivity.
+    if let Some(url) = s.url() {
+        add_chip_row(parent, "", components::copy_code(ctx, url, None));
+    }
+
+    // `\x1f`-packed backend id + wanted direction, for `render_rendezvous_row`'s
+    // reason: the handler must not re-derive the current state, or a poll
+    // landing between render and click flips the wrong way.
+    let want = if s.is_serving() { "0" } else { "1" };
+    let label = if s.is_serving() {
+        crate::i18n::t("sysoverview.appserver_stop", &[])
+    } else {
+        crate::i18n::t("sysoverview.appserver_start", &[])
+    };
+    let btn = components::button_value(
+        ctx,
+        &label,
+        components::ButtonKind::Small,
+        "sb_set_app_server",
+        &format!("{}\u{1f}{}", b.peer_id, want),
+    );
+    add_chip_row(parent, "", btn);
+}
+
 /// The **pairing** row: the exact line to type on the *other* machine.
 ///
 /// # Why a command and not two facts
@@ -331,45 +413,19 @@ fn render_pairing_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
 /// row in Peer Connections — which is the other place in the app that exists to
 /// get a long string onto another device.
 fn add_command_row(parent: &Element, label: &str, command: &str, ctx: &DomCtx) {
-    let holder = util::create_element("span");
-    holder.set_attribute("style", theme::ID_ROW).ok();
-
-    let code = util::create_element("code");
-    code.set_attribute("style", theme::ID_CODE).ok();
-    // What to DO with the line, on hover — the label names which address this
-    // is, and that is the half a reader cannot infer from the command itself.
-    // The reload is in there because the node is read once at boot: a paste
-    // that stops at "added connector" leaves a correct registry doing nothing.
-    code.set_attribute("title", &crate::i18n::t("sysoverview.pair_hint", &[])).ok();
-    util::set_text(&code, command);
-    util::append(&holder, &code);
-
-    let copy = components::button_el(
-        &crate::i18n::t("btn.copy", &[]),
-        components::ButtonKind::Secondary,
+    // The shared affordance (`components::copy_code`) — this row and Peer
+    // Connections' device rows are the two places in the app whose job is
+    // getting a long string onto another machine, and they had one copy button
+    // between them.
+    //
+    // The hint names the RELOAD as well as the address: the node is read once
+    // at boot, so a paste that stops at "added connector" leaves a correct
+    // registry doing nothing.
+    let holder = components::copy_code(
+        ctx,
+        command,
+        Some(&crate::i18n::t("sysoverview.pair_hint", &[])),
     );
-    {
-        let cmd = command.to_string();
-        let el = copy.clone();
-        ctx.listen(&copy, "click", move |_| {
-            if let Some(win) = web_sys::window() {
-                let promise = win.navigator().clipboard().write_text(&cmd);
-                // MUST consume the promise: a dropped *rejecting* promise hits
-                // index.html's `unhandledrejection` guard, which reloads the
-                // whole app. Clipboard writes reject on denied permission, no
-                // focus, or an insecure context — all three of which are more
-                // likely on exactly the machine someone is pairing from.
-                wasm_bindgen_futures::spawn_local(async move {
-                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                });
-            }
-            // Acknowledge regardless: the write may be denied, and a button
-            // that never responds reads as broken. The command is selectable
-            // either way, which is the fallback.
-            el.set_text_content(Some(&crate::i18n::t("status.copied", &[])));
-        });
-    }
-    util::append(&holder, &copy);
     add_chip_row(parent, label, holder);
 }
 

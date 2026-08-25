@@ -45,6 +45,9 @@ pub struct RegistryBrowserModel {
     listing: Rc<RefCell<Phase<NameListing>>>,
     resolved: Rc<RefCell<Phase<ResolvedName>>>,
     changed: Rc<Cell<bool>>,
+    /// Why the last pin attempt was refused. In memory and dropped on reload —
+    /// it describes a keystroke, not state worth persisting.
+    pin_error: Rc<RefCell<Option<String>>>,
 }
 
 impl RegistryBrowserModel {
@@ -54,6 +57,7 @@ impl RegistryBrowserModel {
             listing: Rc::new(RefCell::new(Phase::Idle)),
             resolved: Rc::new(RefCell::new(Phase::Idle)),
             changed: Rc::new(Cell::new(false)),
+            pin_error: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -75,15 +79,81 @@ impl RegistryBrowserModel {
     /// chose is the point of a seeded pin *and* exactly the thing that must not
     /// be silent [AP25].
     pub fn pinned(&self) -> Option<PinnedRegistry> {
-        crate::session_config::active_registry_pin().map(|p| PinnedRegistry {
+        // ONE shared pin, read through the one expression of its precedence.
+        // This used to read only the deployment seed while `name pin` wrote a
+        // `Mutex` on the Shell window — so pinning in one surface left the other
+        // reporting "no registry pinned", with no way to fix it from here at
+        // all. Both write `session_config::set_user_registry_pin` now.
+        crate::session_config::pinned_registry().map(|(p, src)| PinnedRegistry {
             peer_id: p.peer_id,
             origin: p.origin,
-            // The window reads the durable/deployment pin. A tab-scoped `name
-            // pin` lives in the Shell's own slot; wiring the two together is a
-            // shared-state question and is deliberately not answered by
-            // duplicating the slot here.
-            source: PinOrigin::Deployment,
+            source: match src {
+                crate::session_config::PinSource::User => PinOrigin::User,
+                crate::session_config::PinSource::Deployment => PinOrigin::Deployment,
+            },
         })
+    }
+
+    /// Pin a registry from this window.
+    ///
+    /// **Refuses a non-canonical peer-id, with its reason.** A pin is consumed
+    /// by this client, which derives the verification key out of the peer-id
+    /// itself (`PinnedPublisher::from_peer_id`) — the SHA-256 legacy form
+    /// carries no key, so pinning it produces a registry that can never verify
+    /// anything, and the failure would surface later as an unresolvable name.
+    /// Same bar and same reason as the emitter's `--registry-pin`.
+    ///
+    /// An **empty origin is legitimate** — it means same-origin, exactly as in
+    /// `DeploymentConfig`'s `origins` map. An empty *peer-id* is not: pinning an
+    /// origin would trust the origin.
+    pub fn pin(&self, peer_id: &str, origin: &str) -> Result<(), String> {
+        let peer_id = peer_id.trim();
+        let origin = origin.trim();
+        if peer_id.is_empty() {
+            let e = crate::i18n::t("registry.pin_needs_peer_id", &[]);
+            *self.pin_error.borrow_mut() = Some(e.clone());
+            self.mark();
+            return Err(e);
+        }
+        // `from_peer_id` is the "user typed an origin, there is no endpoint
+        // document to read" constructor — exactly this case — and it returns
+        // `None` precisely when the peer-id carries no key.
+        if crate::content_site::signed_fetch::PinnedPublisher::from_peer_id(origin, peer_id)
+            .is_none()
+        {
+            let e = crate::i18n::t("registry.pin_not_canonical", &[]);
+            *self.pin_error.borrow_mut() = Some(e.clone());
+            self.mark();
+            return Err(e);
+        }
+        crate::session_config::set_user_registry_pin(Some(
+            crate::session_config::RegistryPin {
+                peer_id: peer_id.to_string(),
+                origin: origin.to_string(),
+            },
+        ));
+        *self.pin_error.borrow_mut() = None;
+        self.clear_for_new_registry();
+        Ok(())
+    }
+
+    /// Drop the user's pin, falling back to whatever the deployment seeded.
+    pub fn unpin(&self) {
+        crate::session_config::set_user_registry_pin(None);
+        *self.pin_error.borrow_mut() = None;
+        self.clear_for_new_registry();
+    }
+
+    /// Reset what belongs to the *previous* registry.
+    ///
+    /// The listing and the resolved name are that registry's answers; leaving
+    /// them on screen under a new pin's identity row would attribute one
+    /// registry's names to another — the same class of quiet mis-statement as a
+    /// truncated listing that does not announce itself.
+    fn clear_for_new_registry(&self) {
+        *self.listing.borrow_mut() = Phase::Idle;
+        *self.resolved.borrow_mut() = Phase::Idle;
+        self.mark();
     }
 
     pub fn render_output(&self, _peers: &Peers) -> RegistryBrowserOutput {
@@ -93,6 +163,7 @@ impl RegistryBrowserModel {
             resolved: self.resolved.borrow().clone(),
             sessions: crate::content_site::session_cache::len(),
             browser_only: cfg!(not(target_arch = "wasm32")),
+            pin_error: self.pin_error.borrow().clone(),
         }
     }
 
@@ -311,5 +382,81 @@ mod tests {
             ),
             other => panic!("native browse must fail loudly, got {other:?}"),
         }
+    }
+
+    /// **The bug this window had for its whole life.** `name pin` in the Shell
+    /// wrote a `Mutex` on the Shell's own model; this window read only the
+    /// deployment seed. So pinning a registry left the Registry Browser saying
+    /// "no registry pinned", with no field here to fix it and no indication the
+    /// pin existed a few hundred lines away.
+    ///
+    /// The gate is that a pin made *here* is visible *there* and vice versa —
+    /// which is only meaningful because both now go through one function. Note
+    /// what it does NOT do: assert on a field of either model, since that is
+    /// exactly the shape that let two slots drift apart.
+    #[test]
+    fn a_pin_set_in_one_surface_is_the_pin_every_surface_reads() {
+        let m = RegistryBrowserModel::new(1);
+        crate::session_config::set_user_registry_pin(None);
+        crate::session_config::set_active_registry_pin(None);
+
+        assert!(m.pinned().is_none(), "fail closed: nothing seeded, nothing typed");
+
+        // A real canonical-form peer-id — the check derives a key from it, so a
+        // made-up string would exercise the refusal instead of the success.
+        let pid = entity_crypto::Keypair::generate().peer_id().to_string();
+        m.pin(&pid, "https://reg.example").expect("a canonical peer-id pins");
+
+        let p = m.pinned().expect("this window sees its own pin");
+        assert_eq!(p.peer_id, pid);
+        assert_eq!(p.source, PinOrigin::User);
+        // …and the Shell resolves through the same one, without a second slot.
+        assert_eq!(
+            crate::session_config::pinned_registry().map(|(p, s)| (p.peer_id, s)),
+            Some((pid.clone(), crate::session_config::PinSource::User)),
+        );
+
+        // Unpinning falls back to the deployment's seed rather than to nothing —
+        // which is why the two are separate slots.
+        crate::session_config::set_active_registry_pin(Some(
+            crate::session_config::RegistryPin {
+                peer_id: "2KDeployment".into(),
+                origin: "https://seeded.example".into(),
+            },
+        ));
+        m.unpin();
+        let p = m.pinned().expect("the deployment's seed survived the user's pin");
+        assert_eq!(p.peer_id, "2KDeployment");
+        assert_eq!(p.source, PinOrigin::Deployment);
+
+        crate::session_config::set_active_registry_pin(None);
+    }
+
+    /// A pin is a key, and the two refusals are the two ways it can fail to be
+    /// one. Both must come back as **text** — a Pin button that silently does
+    /// nothing tells the one person who could fix it nothing at all, which is
+    /// the operator-surface failure this repo keeps meeting.
+    #[test]
+    fn a_peer_id_that_carries_no_key_is_refused_with_its_reason() {
+        let m = RegistryBrowserModel::new(1);
+        crate::session_config::set_user_registry_pin(None);
+        crate::session_config::set_active_registry_pin(None);
+
+        let e = m.pin("   ", "https://reg.example").expect_err("an origin alone is not a pin");
+        assert!(!e.is_empty(), "the refusal must say something");
+
+        let e = m
+            .pin("not-a-peer-id", "https://reg.example")
+            .expect_err("a string that carries no key cannot be pinned");
+        assert!(!e.is_empty());
+        assert!(m.pinned().is_none(), "and neither refusal may leave a pin behind");
+
+        // An EMPTY origin is legitimate — same-origin, exactly as in the
+        // deployment's `origins` map. Only an empty peer-id is refused.
+        let pid = entity_crypto::Keypair::generate().peer_id().to_string();
+        m.pin(&pid, "").expect("same-origin is a valid place for a registry to live");
+        assert_eq!(m.pinned().map(|p| p.origin), Some(String::new()));
+
+        crate::session_config::set_user_registry_pin(None);
     }
 }

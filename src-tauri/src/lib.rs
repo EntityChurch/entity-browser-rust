@@ -9,6 +9,7 @@ use serde::Serialize;
 use tauri::Manager;
 
 mod access_log;
+pub mod app_server;
 mod backend_log;
 mod manager_grant;
 mod persistence;
@@ -61,6 +62,19 @@ fn connectable_addr(listen_addr: &str) -> String {
         .replace("ws://[::]:", &format!("ws://{sub}:"))
         .replace("tcp://0.0.0.0:", &format!("tcp://{sub}:"))
         .replace("tcp://[::]:", &format!("tcp://{sub}:"))
+}
+
+/// Render a bound socket address as something a person can type on another
+/// device. A wildcard bind (`0.0.0.0`) is not an address anyone can reach; the
+/// listener-side twin of [`connectable_addr`], for a `SocketAddr` rather than a
+/// URL string.
+fn connectable_host(addr: std::net::SocketAddr) -> String {
+    if addr.ip().is_unspecified() {
+        let host = local_lan_ip().map(|ip| ip.to_string()).unwrap_or_else(|| "127.0.0.1".into());
+        format!("{host}:{}", addr.port())
+    } else {
+        addr.to_string()
+    }
 }
 
 /// Tree prefix the backend peer exposes its shared filesystem root at.
@@ -159,6 +173,13 @@ struct BackendPeer {
     /// is bound to the port this run actually got, so flipping it restarts the
     /// peer rather than taking effect live.
     port_mapping: bool,
+    /// Persisted "serve the SPA over HTTP" preference (`config.toml`).
+    ///
+    /// Read **only at startup**, to decide whether to restore the server. The
+    /// live toggle drives `SpaServer` directly, so unlike its two neighbours
+    /// this field is not consulted when the peer starts — the server is not the
+    /// peer's, it just borrows the peer's config file to remember a preference.
+    app_server: bool,
     runtime: Option<BackendPeerRuntime>,
 }
 
@@ -212,6 +233,18 @@ impl BackendPeer {
 /// Shared state holding all managed backend peers.
 struct BackendPeers {
     peers: Mutex<HashMap<String, BackendPeer>>,
+}
+
+/// The SPA server, if the user turned it on.
+///
+/// **App-scoped, not per-peer**, because only one process can hold the port —
+/// putting it on `BackendPeer` would let two peers each claim to be serving and
+/// leave the loser silently unbound. The *preference* is persisted on the system
+/// backend's `config.toml` (that peer is the singleton, and serving the app and
+/// serving the rendezvous are the two halves of "this desktop is the thing the
+/// other device connects to"); the *server* lives here.
+struct SpaServer {
+    running: Mutex<Option<app_server::AppServer>>,
 }
 
 /// Response sent back to the WASM frontend.
@@ -331,6 +364,7 @@ fn create_backend_peer(
         // `persistence::PeerConfigFile` writes.
         signaling_node: false,
         port_mapping: false,
+        app_server: false,
         runtime: None,
     });
 
@@ -897,6 +931,120 @@ fn list_backend_peers(state: tauri::State<'_, BackendPeers>) -> Vec<BackendPeerR
     }).collect()
 }
 
+/// What the SPA server is doing, for the System Overview row.
+#[derive(serde::Serialize, Clone)]
+struct AppServerStatus {
+    /// Is a server bound right now.
+    serving: bool,
+    /// The URL to type on the other device. `None` when not serving.
+    url: Option<String>,
+    /// The rendezvous a fresh visitor will be provisioned with, if any.
+    ///
+    /// Reported separately from `serving` because the two are independent and
+    /// the difference is exactly what a person needs to know: serving with a
+    /// node means the other device types a URL and is done; serving without one
+    /// means it still has to add a connector by hand.
+    node_peer_id: Option<String>,
+}
+
+/// The rendezvous a freshly-loaded browser should be pointed at: this desktop's
+/// own, when a managed peer is actually serving one *right now*.
+///
+/// Reads `serves_signaling()` (the running peer) rather than the persisted flag,
+/// for the reason that field's own doc gives: a peer started before the toggle
+/// was flipped is not a node, and provisioning a browser with a rendezvous
+/// nobody mounted is worse than provisioning it with none — it fails as "nobody
+/// is at the bucket", which reads as the *other* person's fault.
+fn current_node_hint(state: &BackendPeers) -> Option<app_server::NodeHint> {
+    let peers = state.peers.lock().unwrap();
+    peers.values().find(|bp| bp.serves_signaling()).map(|bp| app_server::NodeHint {
+        peer_id: bp.peer_id.clone(),
+        // `ws_addr` is the bound address, which may be the wildcard; a remote
+        // browser cannot dial `0.0.0.0`.
+        ws_addr: connectable_addr(bp.ws_addr().unwrap_or_default()),
+    })
+}
+
+/// Turn the SPA server on or off. Takes effect **immediately** — no peer
+/// restart, no dropped connections, because this is an independent listener.
+#[tauri::command]
+fn set_backend_app_server(
+    peers: tauri::State<'_, BackendPeers>,
+    spa: tauri::State<'_, SpaServer>,
+    app: tauri::AppHandle,
+    peer_id: String,
+    enabled: bool,
+) -> Result<AppServerStatus, String> {
+    persistence::set_app_server(&peer_id, enabled);
+    let mut running = spa.running.lock().unwrap();
+    if enabled {
+        if running.is_none() {
+            *running = Some(start_spa_server(&app)?);
+        }
+    } else {
+        // Dropping the handle stops the accept loop.
+        *running = None;
+    }
+    Ok(spa_status(&running, &peers))
+}
+
+#[tauri::command]
+fn app_server_status(
+    peers: tauri::State<'_, BackendPeers>,
+    spa: tauri::State<'_, SpaServer>,
+) -> AppServerStatus {
+    spa_status(&spa.running.lock().unwrap(), &peers)
+}
+
+fn spa_status(
+    running: &Option<app_server::AppServer>,
+    peers: &BackendPeers,
+) -> AppServerStatus {
+    AppServerStatus {
+        serving: running.is_some(),
+        url: running.as_ref().map(|s| s.url()),
+        node_peer_id: current_node_hint(peers).map(|n| n.peer_id),
+    }
+}
+
+/// Bind the server, giving it a per-request view of the current rendezvous.
+///
+/// The hint is a **closure, not a captured value**: the user can flip the
+/// rendezvous after the server is up, and a visitor arriving afterwards must get
+/// the node that exists then, not the one that existed at bind time.
+fn start_spa_server(app: &tauri::AppHandle) -> Result<app_server::AppServer, String> {
+    let handle = app.clone();
+    app_server::start(app.clone(), app_server::DEFAULT_PORT, move || {
+        current_node_hint(&handle.state::<BackendPeers>())
+    })
+}
+
+/// One identity present in the machine-wide store that Tori does not manage.
+#[derive(serde::Serialize, Clone)]
+struct UnmanagedIdentityResponse {
+    /// The directory name its owning tool chose — the only label we have.
+    name: String,
+    peer_id: String,
+}
+
+/// List the identities in `~/.entity/peers/` that Tori did **not** create.
+///
+/// They are real peer identities on this computer and saying so is honest; what
+/// would not be honest is listing them beside the managed peers as though the
+/// app could start them. It cannot, and must not — see
+/// `persistence::is_tauri_managed`.
+///
+/// **On demand.** A developer box accumulates these in the thousands (measured:
+/// 1511 against 3 managed), and the startup path has no reason to parse a
+/// keypair for each one.
+#[tauri::command]
+fn list_unmanaged_identities() -> Vec<UnmanagedIdentityResponse> {
+    persistence::list_unmanaged_identities()
+        .into_iter()
+        .map(|i| UnmanagedIdentityResponse { name: i.name, peer_id: i.peer_id })
+        .collect()
+}
+
 /// JavaScript that intercepts console.log/warn/error and forwards
 /// to the Tauri backend via invoke("webview_log").
 /// Also installs a global error handler to catch WASM crashes.
@@ -988,6 +1136,7 @@ async fn ensure_backend_peer(
                     sqlite_path,
                     signaling_node: false,
                     port_mapping: false,
+                    app_server: false,
                     runtime: None,
                 },
             );
@@ -1072,11 +1221,13 @@ pub fn run() {
                     sqlite_path: entry.sqlite_path,
                     signaling_node: entry.signaling_node,
                     port_mapping: entry.port_mapping,
+                    app_server: entry.app_server,
                     runtime: None,
                 });
             }
             BackendPeers { peers: Mutex::new(peers) }
         })
+        .manage(SpaServer { running: Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             webview_log,
             create_backend_peer,
@@ -1084,6 +1235,9 @@ pub fn run() {
             stop_backend_peer,
             delete_backend_peer,
             list_backend_peers,
+            list_unmanaged_identities,
+            set_backend_app_server,
+            app_server_status,
             set_backend_signaling_node,
             set_backend_port_mapping,
             ensure_system_backend,
@@ -1096,6 +1250,49 @@ pub fn run() {
         ])
         .setup(|app| {
             log::info!("Tauri backend starting");
+
+            // Report the shared store from HERE, not from `load_all_peers`.
+            //
+            // `.manage({ … })` is an argument expression evaluated while the
+            // builder is still being assembled — `tauri_plugin_log` installs its
+            // logger at run time, so every `log::` call inside that block is
+            // DROPPED. The one line explaining why a box with 1500 identities in
+            // `~/.entity/peers` shows three was therefore invisible, which is the
+            // precise failure this file warns about: a diagnostic that does not
+            // reach the person who needs it is not a diagnostic. (Found by
+            // grepping a real boot log for it and getting nothing.)
+            let unmanaged = persistence::count_unmanaged_identities();
+            if unmanaged > 0 {
+                log::info!(
+                    "{} identit{} in the shared peer store are not managed by Tori and were \
+                     not adopted (~/.entity/peers is shared with the CLI, the conformance \
+                     harness and sibling fixtures; ours carry managed_by = \"tauri\")",
+                    unmanaged,
+                    if unmanaged == 1 { "y" } else { "ies" },
+                );
+            }
+
+            // Restore the persisted "serve the SPA" preference. Bound here
+            // rather than lazily on first request: the whole point is that a
+            // person can walk to another device and type a URL, and a server
+            // that starts when the app is next asked about it would not be
+            // listening when they got there.
+            if app
+                .state::<BackendPeers>()
+                .peers
+                .lock()
+                .unwrap()
+                .values()
+                .any(|bp| bp.app_server)
+            {
+                match start_spa_server(app.handle()) {
+                    Ok(server) => {
+                        log::info!("app-server: restored, serving at {}", server.url());
+                        *app.state::<SpaServer>().running.lock().unwrap() = Some(server);
+                    }
+                    Err(e) => log::error!("app-server: could not restore: {e}"),
+                }
+            }
             // Inject console bridge as early as possible, retrying until the
             // Tauri JS API is available. The bridge also installs global error
             // handlers to catch WASM crashes.

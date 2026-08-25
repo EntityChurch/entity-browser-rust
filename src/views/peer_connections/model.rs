@@ -295,6 +295,16 @@ impl PeerConnectionsModel {
         let sys_pid = peers.system_peer_id().to_string();
         let selected = crate::connectors::selected_connector(peers, &sys_pid)
             .map(|c| c.node_peer_id);
+        // The node the Meet panel can actually use. NOT the same question as
+        // which ROW is selected: a session provisioned by URL (the link this
+        // desktop serves) or by the build knob (`make pair-serve`) has a working
+        // establisher and an EMPTY registry, and gating Meet on a row told those
+        // users "add a connector" while they were already rendezvousing through
+        // one. The row list above keeps using `selected` — a synthesized node is
+        // not a row, and marking it as one would offer a Remove that removes
+        // nothing.
+        let node_in_force = crate::connectors::node_in_force(peers, &sys_pid)
+            .map(|c| c.node_peer_id);
         let connectors = crate::connectors::read_connectors(peers, &sys_pid)
             .into_iter()
             .map(|c| crate::views::peer_connections::output::ConnectorRow {
@@ -310,7 +320,7 @@ impl PeerConnectionsModel {
         // a peer already in the registry is not offered a Remember that would
         // change nothing visible.
         let meet = {
-            let selected_node = selected.clone();
+            let selected_node = node_in_force.clone();
             let status = self.meet.lock().ok().and_then(|s| s.as_ref().map(|s| s.status()));
             crate::views::peer_connections::output::MeetPanel {
                 has_connector: selected_node.is_some(),
@@ -371,7 +381,10 @@ impl PeerConnectionsModel {
     /// so it is the identity a counterpart comes away with.
     pub fn start_meet(&self, peers: &Peers, mode: crate::rendezvous::Mode) -> Result<(), String> {
         let sys = peers.system_peer_id().to_string();
-        let node = crate::connectors::selected_connector(peers, &sys)
+        // `node_in_force`, not `selected_connector` — see `render_output`'s note:
+        // a URL- or build-provisioned session has a working establisher and no
+        // registry row, and asking for a row refused the meet.
+        let node = crate::connectors::node_in_force(peers, &sys)
             .ok_or_else(|| crate::i18n::t("peerconn.meet_needs_connector", &[]))?;
         let session = crate::rendezvous::MeetSession::start(&self.peer_id, node, mode);
         if let Ok(mut slot) = self.meet.lock() {
@@ -408,6 +421,24 @@ impl PeerConnectionsModel {
         let Ok(mut slot) = self.meet.lock() else { return false };
         let Some(session) = slot.as_mut() else { return false };
         session.pump(peers);
+        // **Meeting someone IS the intent to talk to them**, so it is where the
+        // reach keeper learns its targets — and this window is where a user
+        // actually meets, the Shell verb being the developer surface.
+        //
+        // This was in the Shell's identical loop, with a comment explaining it
+        // is load-bearing, and NOT here. The cost is invisible and asymmetric:
+        // a browser peer has no listener, so being reachable is an activity it
+        // performs. A side that only *serves* — offers a file and waits —
+        // dispatches nothing, is therefore never present at the rendezvous, and
+        // the puller's offer deposits meet zero collects. So meeting through
+        // the GUI left you unreachable while meeting through the Shell did not,
+        // and the file gates all drive the Shell.
+        //
+        // `reach_keeper` is idempotent per `(local, remote)`, so re-registering
+        // every pump costs an enum compare once the peer reads `Connected`.
+        for found in &session.status().found {
+            crate::reach_keeper::global().want(&self.peer_id, &found.peer_id);
+        }
         // Ask the session, do NOT diff the status around the pump: nearly every
         // change lands in a spawned round trip *between* frames, so a diff sees
         // before == after and reports "nothing happened". That is precisely how
@@ -798,6 +829,25 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert!(row_seen, "the panel never showed the peer the meet found");
+
+        // **Meeting through the GUI must make us reachable, exactly as meeting
+        // through the Shell does.** A browser peer has no listener, so presence
+        // is an activity it performs; a side that only serves (offers a file
+        // and waits) dispatches nothing and is never at the rendezvous, so the
+        // other side's offer deposits meet zero collects. This window is where
+        // a user actually meets — the Shell verb is the developer surface, and
+        // it was the only one registering the intent.
+        //
+        // Asserted on the keeper rather than on a rendered row because the
+        // symptom has no pixels: everything *looks* met, and the failure only
+        // appears later as a transfer that never starts.
+        assert!(
+            crate::reach_keeper::global().targets().contains(&other_pid),
+            "a meet through the window registered no reach intent, so this peer \
+             is discoverable and unreachable — the asymmetry that made offers \
+             work from the Shell and hang from the GUI. targets: {:?}",
+            crate::reach_keeper::global().targets()
+        );
 
         let out = render();
         let found = out.meet.status.unwrap();

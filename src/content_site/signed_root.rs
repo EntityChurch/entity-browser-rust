@@ -483,17 +483,12 @@ pub const TRANSPORT_PROFILE_REL: &str = "transport-profile";
 /// closure to be present. Advertising it beside a tree that has no root is the
 /// false claim §6.5.3 warns about.
 pub fn write_transport_profile(base: &Path, peer_id: &str, origin: &str) -> Result<(), String> {
-    let profile = crate::content_site::registry_publish::http_poll_profile(peer_id, origin);
-    let mut data = Vec::new();
-    ciborium::into_writer(&profile, &mut data).map_err(|e| format!("encode profile: {e}"))?;
-    // `system/peer/transport/http-poll`. **Not an upstream constant** — `core/peer`
-    // defines `TYPE_PEER_TRANSPORT_{TCP,HTTP}` and no `http-poll`, which is the
-    // same shape as the missing `…/transport/websocket` type this repo already
-    // records: the profile is specified and the Rust type is not. The string is
-    // pinned against workbench-go's emission, read out of their artifact rather
-    // than assumed — the one cross-impl fact a constant name could not give us.
-    let entity = entity_entity::Entity::new("system/peer/transport/http-poll", data)
-        .map_err(|e| format!("profile entity: {e}"))?;
+    // ONE builder shared with the registry's by-hash reference (D8) — a
+    // consumer that meets the standalone artifact and the referenced entity
+    // must not be able to tell them apart, which two constructions of "the same"
+    // entity cannot guarantee.
+    let entity =
+        crate::content_site::registry_publish::http_poll_profile_entity(peer_id, origin)?;
     write_file(&base.join(TRANSPORT_PROFILE_REL), &entity_wire::encode_entity(&entity))
 }
 

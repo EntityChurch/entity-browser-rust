@@ -92,6 +92,20 @@ impl WindowView for RegistryBrowserWindow {
         match event.as_str() {
             "registry_browse" => self.model.browse(),
             "registry_resolve" => self.model.resolve(value),
+            // `peer_id \x1f origin`. Split rather than `split_whitespace` so an
+            // EMPTY origin survives as an empty second field — that is
+            // same-origin, a legitimate and common answer, not a missing one.
+            "registry_pin" => {
+                let (pid, origin) = value.split_once('\u{1f}').unwrap_or((value.as_str(), ""));
+                // The error is carried on the output, so a refusal is on screen
+                // rather than a button that appears to do nothing.
+                let _ = self.model.pin(pid, origin);
+                self.watch.mark_dirty();
+            }
+            "registry_unpin" => {
+                self.model.unpin();
+                self.watch.mark_dirty();
+            }
             // Opening registers the origin the SIGNED binding carried, then hands
             // the peer to a Site Browser. See `open_in_site_browser` for what that
             // does and does not establish — the pages themselves stay unverified,
