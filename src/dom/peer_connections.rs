@@ -23,7 +23,7 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
     util::append(&wrapper, &h2);
 
     render_bound_info(&wrapper, output);
-    render_connected(&wrapper, output);
+    render_known_peers(&wrapper, output, ctx);
     render_backend_peers(&wrapper, output, ctx);
     render_manual_connect(&wrapper, output, ctx);
     render_qr_section(&wrapper, output, ctx);
@@ -53,21 +53,56 @@ fn render_bound_info(parent: &Element, output: &PeerConnectionsOutput) {
     util::append(parent, &info);
 }
 
-fn render_connected(parent: &Element, output: &PeerConnectionsOutput) {
-    if output.connected.is_empty() {
+/// Peers we've connected to before — the remembered-peer registry, each with
+/// a one-tap **Reconnect** off the saved address (§13.2/§13.4). Honest framing:
+/// this is a *known-peers history*, not a live list (no disconnect signal yet).
+fn render_known_peers(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
+    if output.known_peers.is_empty() {
         return;
     }
-    let conn_div = util::create_element("div");
-    conn_div.set_attribute("style", theme::SECTION_GROUP).ok();
-    let mut html = String::from("<strong>Connected Peers</strong><br>");
-    for rpid in &output.connected {
-        html.push_str(&format!(
-            "<span style='color:var(--status-ok, #0f0)'>●</span> <code>{}</code><br>",
-            util::escape_html(&crate::views::short_pid(rpid))
-        ));
+    let known_div = util::create_element("div");
+    known_div.set_attribute("style", theme::SECTION_GROUP).ok();
+    let label = util::create_element("strong");
+    util::set_text(&label, "Known Peers");
+    util::append(&known_div, &label);
+
+    for kp in &output.known_peers {
+        let row = util::create_element_with_class("div", "peer-conn-backend-row");
+
+        // Name + the saved reconnect address (dim), if any.
+        let info = util::create_element_with_class("span", "peer-conn-backend-info");
+        let meta = if kp.addr.is_empty() {
+            util::escape_html(&kp.display)
+        } else {
+            format!(
+                "{} <span style='color:var(--text-dim, #888)'>{}</span>",
+                util::escape_html(&kp.display),
+                util::escape_html(&kp.addr),
+            )
+        };
+        info.set_inner_html(&meta);
+        util::append(&row, &info);
+
+        // One-tap reconnect — dial the saved address from the bound peer.
+        // Legacy entries without an address show no button (nothing to dial).
+        if !kp.addr.is_empty() {
+            let reconnect = util::create_element("button");
+            util::set_text(&reconnect, "Reconnect");
+            reconnect.set_attribute("style", theme::BTN_SECONDARY).ok();
+            ctx.on_action(
+                &reconnect,
+                "click",
+                Action::ConnectPeer {
+                    peer_id: output.bound_peer.peer_id.clone(),
+                    addr: kp.addr.clone(),
+                },
+            );
+            util::append(&row, &reconnect);
+        }
+
+        util::append(&known_div, &row);
     }
-    conn_div.set_inner_html(&html);
-    util::append(parent, &conn_div);
+    util::append(parent, &known_div);
 }
 
 fn render_backend_peers(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {

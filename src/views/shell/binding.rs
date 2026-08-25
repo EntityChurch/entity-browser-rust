@@ -97,12 +97,13 @@ impl<'a> PeerBinding for PeersBinding<'a> {
         // connections registry before returning the remote pid (the
         // existing verb did this inline; crate-side connect verb just
         // forwards the success).
-        let connect_fut = self.peers.connect_peer(from_peer, address);
+        let connect_fut = self.peers.connect_peer(from_peer, address.clone());
         let connections = crate::connections::ConnectionsWriter::new(self.peers);
         Box::pin(async move {
             match connect_fut.await {
                 Ok(remote_pid) => {
-                    connections.add(&remote_pid);
+                    // Remember the address that worked → one-tap reconnect (§13.2).
+                    connections.add(&remote_pid, &address);
                     Ok(remote_pid)
                 }
                 Err(e) => Err(e),

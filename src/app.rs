@@ -2349,7 +2349,10 @@ impl EntityApp {
                     return;
                 }
             };
-            connections.add(&remote_pid);
+            // Record the address that just worked so this backend is
+            // remembered + one-tap reconnectable (§13.2). `addr` was moved
+            // in for exactly this.
+            connections.add(&remote_pid, &addr);
             log.log(format!("Connected to {}", remote_pid));
 
             let uri = format!("entity://{}/system/tree", remote_pid);
