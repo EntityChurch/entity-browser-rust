@@ -13,7 +13,7 @@ use crate::action::Action;
 use crate::dom::event_log;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
-use crate::views::file_transfer::output::FileTransferOutput;
+use crate::views::file_transfer::output::{FileRow, FileTransferOutput, TargetAccess};
 
 use web_sys::Element;
 
@@ -23,10 +23,17 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     let wrapper = util::create_element_with_class("div", "file-transfer");
     wrapper.set_attribute("style", theme::SECTION).ok();
 
+    // Header row: title + a live access chip on the right.
+    let header = util::create_element("div");
+    header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
-    h2.set_attribute("style", theme::HEADING).ok();
+    h2.set_attribute("style", "margin:0;font-size:16px").ok();
     util::set_text(&h2, "File Transfer");
-    util::append(&wrapper, &h2);
+    util::append(&header, &h2);
+    if output.has_target {
+        util::append(&header, &access_chip(&output.access));
+    }
+    util::append(&wrapper, &header);
 
     if !output.has_target {
         render_no_target_hint(&wrapper);
@@ -34,13 +41,70 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
         return;
     }
 
-    render_target_selector(&wrapper, output, ctx);
-    render_list_button(&wrapper, output, ctx);
-    render_pull_controls(&wrapper, output, ctx);
-    render_upload_controls(&wrapper, output, ctx);
+    // Peer + access.
+    let peer_group = section_group();
+    render_target_selector(&peer_group, output, ctx);
+    render_access(&peer_group, output, ctx);
+    util::append(&wrapper, &peer_group);
+
+    // Browse the share as a tree, then pull a file.
+    let get_group = section_group();
+    render_file_browser(&get_group, output, ctx);
+    util::append(&wrapper, &get_group);
+
+    // Send files (push).
+    let send_group = section_group();
+    subheading(&send_group, "Send a file");
+    render_upload_controls(&send_group, output, ctx);
+    util::append(&wrapper, &send_group);
+
     render_results(&wrapper, output);
 
     util::append(container, &wrapper);
+}
+
+/// A bordered group container that visually separates the window's sections.
+fn section_group() -> Element {
+    let g = util::create_element("div");
+    g.set_attribute(
+        "style",
+        "margin:10px 0;padding:10px;border-radius:6px;\
+         border:1px solid var(--border, #333);background:var(--surface-sunken, #0a0a1a)",
+    )
+    .ok();
+    g
+}
+
+fn subheading(parent: &Element, text: &str) {
+    let h = util::create_element("h3");
+    h.set_attribute(
+        "style",
+        "margin:0 0 8px;font-size:12px;text-transform:uppercase;\
+         letter-spacing:0.05em;color:var(--text-dim, #888)",
+    )
+    .ok();
+    util::set_text(&h, text);
+    util::append(parent, &h);
+}
+
+/// A compact status pill for the header reflecting the target's access.
+fn access_chip(access: &TargetAccess) -> Element {
+    let (label, fg, border) = match access {
+        TargetAccess::Authorized(_) => ("✓ Authorized", "var(--status-ok, #4c4)", "var(--status-ok, #4c4)"),
+        TargetAccess::Denied => ("⛔ Not authorized", "var(--status-err, #f66)", "var(--status-err, #f66)"),
+        TargetAccess::Unknown => ("• Access unverified", "var(--text-dim, #888)", "var(--border, #444)"),
+    };
+    let chip = util::create_element("span");
+    chip.set_attribute(
+        "style",
+        &format!(
+            "font-size:11px;padding:2px 8px;border-radius:10px;white-space:nowrap;\
+             color:{fg};border:1px solid {border}"
+        ),
+    )
+    .ok();
+    util::set_text(&chip, label);
+    chip
 }
 
 fn render_no_target_hint(parent: &Element) {
@@ -75,94 +139,222 @@ fn render_target_selector(parent: &Element, output: &FileTransferOutput, ctx: &D
     util::append(parent, &select);
 }
 
-fn render_list_button(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let btn = util::create_element("button");
-    util::set_text(&btn, "List shared files");
-    btn.set_attribute("style", theme::BTN_SECONDARY).ok();
+/// Access affordance for the effective target (`§2.1`) — honest and
+/// evidence-based. Only a **real** refusal (a `403`/`401` from an actual
+/// operation, captured as [`TargetAccess::Denied`]) raises the deep-link into
+/// **Peer Connections**, the authority surface. An authorized/unknown target
+/// shows only a quiet hint — File Transfer never manufactures a "not
+/// authorized" claim from an empty local mirror. It is a *consumer* of
+/// authorization; it never authors grants inline.
+fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    match &output.access {
+        TargetAccess::Denied => {
+            let notice = util::create_element("div");
+            notice
+                .set_attribute(
+                    "style",
+                    "margin:8px 0 2px;padding:8px;border-radius:4px;\
+                     border:1px solid var(--status-err, #a44);\
+                     background:var(--surface, #2a1a1a)",
+                )
+                .ok();
 
-    let actions = ctx.actions.clone();
-    let rp = ctx.repaint.clone();
-    let peer_id = output.peer_id.clone();
-    let target = output.selected_target.clone();
-    let prefix = output.share_prefix.clone();
+            let msg = util::create_element("p");
+            msg.set_attribute("style", "margin:0 0 6px;font-size:13px").ok();
+            msg.set_inner_html(
+                "<span style='color:var(--status-err, #f66)'>This device isn't authorized \
+                 for file transfer.</span> The exposing device must authorize it before \
+                 transfers succeed.",
+            );
+            util::append(&notice, &msg);
 
-    ctx.listen(&btn, "click", move |_| {
-        if target.is_empty() {
-            return;
+            // Deep-link to the authority surface (§2.1) — focuses the singleton
+            // Peer Connections window (or spawns it) where the grant is made.
+            let btn = util::create_element("button");
+            util::set_text(&btn, "Authorize in Peer Connections");
+            btn.set_attribute("style", theme::BTN_PRIMARY).ok();
+            let actions = ctx.actions.clone();
+            let rp = ctx.repaint.clone();
+            ctx.listen(&btn, "click", move |_| {
+                actions.borrow_mut().push(Action::SpawnWindow {
+                    type_name: "Peer Connections",
+                    peer_id: None,
+                });
+                rp();
+            });
+            util::append(&notice, &btn);
+            util::append(parent, &notice);
         }
-        actions.borrow_mut().push(Action::Execute {
-            peer_id: peer_id.clone(),
-            handler_uri: format!("entity://{}/local/files", target),
-            operation: "list".into(),
-            resource: Some(prefix.clone()),
-            params: None,
-        });
-        rp();
-    });
+        TargetAccess::Unknown => {
+            let hint = util::create_element("p");
+            hint.set_attribute("style", theme::HINT).ok();
+            util::set_text(&hint, "Access not verified yet — List shared files to check.");
+            util::append(parent, &hint);
+        }
+        // Authorized: the header chip already says so — keep the body quiet.
+        TargetAccess::Authorized(_) => {}
+    }
+}
+
+// Tree-row styles — the same shared-tree look Site Creator / Entity Tree use,
+// kept local so File Transfer doesn't depend on another window's private consts.
+const TREE_ROW: &str = "display:flex;align-items:center;gap:4px;margin:1px 0";
+const CARET: &str = "background:transparent;border:none;color:var(--text,#e0e0e0);\
+    cursor:pointer;font-size:14px;width:20px;padding:0;line-height:1;flex:0 0 20px";
+const NODE_BTN: &str = "flex:1 1 auto;text-align:left;background:transparent;\
+    color:var(--text,#e0e0e0);border:1px solid transparent;border-radius:4px;\
+    cursor:pointer;padding:2px 6px;font-size:13px";
+const NODE_BTN_SELECTED: &str = "flex:1 1 auto;text-align:left;\
+    background:var(--surface,#2a2a4e);color:var(--accent,#7aa2d0);\
+    border:1px solid var(--accent,#3a6ea5);border-radius:4px;cursor:pointer;\
+    padding:2px 6px;font-size:13px";
+
+/// The share browsed as a **tree** — a Refresh control, the flattened rows
+/// (built from the shared `TreeNode` machinery in the model), and a Pull button
+/// for the selected file. Directories lazy-load on expand; nothing here reaches
+/// the tree directly — it renders `output.tree_rows`.
+fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    let header = util::create_element("div");
+    header.set_attribute("style", theme::HEADER_ROW).ok();
+    let title = util::create_element("h3");
+    title
+        .set_attribute(
+            "style",
+            "margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;\
+             color:var(--text-dim, #888)",
+        )
+        .ok();
+    util::set_text(&title, "Shared files");
+    util::append(&header, &title);
+    if output.root_listed {
+        let refresh = util::create_element("button");
+        util::set_text(&refresh, "Refresh");
+        refresh.set_attribute("style", theme::BTN_SMALL).ok();
+        ctx.on_window_event(&refresh, "click", "ft_refresh", "");
+        util::append(&header, &refresh);
+    }
+    util::append(parent, &header);
+
+    if let Some(err) = &output.browse_error {
+        let e = util::create_element("p");
+        e.set_attribute("style", "color:var(--status-err, #f66);font-size:12px;margin:4px 0").ok();
+        util::set_text(&e, &format!("✗ {err}"));
+        util::append(parent, &e);
+    }
+
+    if !output.root_listed {
+        let el = util::create_element(if output.root_loading { "p" } else { "button" });
+        if output.root_loading {
+            el.set_attribute("style", theme::HINT).ok();
+            util::set_text(&el, "Loading…");
+        } else {
+            el.set_attribute("style", theme::BTN_SECONDARY).ok();
+            util::set_text(&el, "Browse shared files");
+            ctx.on_window_event(&el, "click", "ft_refresh", "");
+        }
+        util::append(parent, &el);
+        return;
+    }
+
+    let list = util::create_element("div");
+    list.set_attribute("style", "margin:4px 0;max-height:260px;overflow:auto").ok();
+    list.set_attribute("data-scroll-key", "file-transfer-tree").ok();
+    if output.tree_rows.is_empty() {
+        let empty = util::create_element("p");
+        empty.set_attribute("style", theme::HINT).ok();
+        util::set_text(&empty, "This share is empty.");
+        util::append(&list, &empty);
+    } else {
+        for row in &output.tree_rows {
+            render_tree_row(&list, row, ctx);
+        }
+    }
+    util::append(parent, &list);
+
+    render_pull_selected(parent, output, ctx);
+}
+
+fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
+    let el = util::create_element("div");
+    el.set_attribute("style", &format!("{TREE_ROW};padding-left:{}px", row.depth * 16)).ok();
+
+    // Caret for directories; an aligning spacer for files.
+    if row.is_dir {
+        let caret = util::create_element("button");
+        caret.set_attribute("style", CARET).ok();
+        util::set_text(&caret, if row.expanded { "\u{25be}" } else { "\u{25b8}" }); // ▾ / ▸
+        ctx.on_window_event(&caret, "click", "ft_toggle", &row.path);
+        util::append(&el, &caret);
+    } else {
+        let spacer = util::create_element("span");
+        spacer.set_attribute("style", "flex:0 0 20px").ok();
+        util::append(&el, &spacer);
+    }
+
+    let btn = util::create_element("button");
+    btn.set_attribute("style", if row.selected { NODE_BTN_SELECTED } else { NODE_BTN }).ok();
+    let icon = if row.is_dir { "\u{1f4c1}" } else { "\u{1f4c4}" }; // 📁 / 📄
+    let mut label = format!("{icon} {}", row.name);
+    if row.loading {
+        label.push_str(" …");
+    } else if let Some(sz) = row.size {
+        label.push_str(&format!("  ({})", human_size(sz)));
+    }
+    util::set_text(&btn, &label);
+    // Directory rows toggle; file rows select (highlight → Pull).
+    let event = if row.is_dir { "ft_toggle" } else { "ft_select" };
+    ctx.on_window_event(&btn, "click", event, &row.path);
+    util::append(&el, &btn);
+
+    util::append(list, &el);
+}
+
+/// Pull the currently-selected file. Inert (dimmed, no handler) when nothing is
+/// selected — reuses the proven `Action::DownloadFile` path.
+fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    let btn = util::create_element("button");
+    util::set_text(&btn, "\u{2b07} Pull selected file");
+    match &output.selected_full_path {
+        Some(path) => {
+            btn.set_attribute("style", theme::BTN_PRIMARY).ok();
+            let actions = ctx.actions.clone();
+            let rp = ctx.repaint.clone();
+            let peer_id = output.peer_id.clone();
+            let target = output.selected_target.clone();
+            let path = path.clone();
+            ctx.listen(&btn, "click", move |_| {
+                if target.is_empty() {
+                    return;
+                }
+                let filename = path.rsplit('/').next().unwrap_or("file").to_string();
+                actions.borrow_mut().push(Action::DownloadFile {
+                    peer_id: peer_id.clone(),
+                    handler_uri: format!("entity://{}/local/files", target),
+                    path: path.clone(),
+                    filename,
+                });
+                rp();
+            });
+        }
+        None => {
+            btn.set_attribute("style", &format!("{};opacity:0.5;cursor:default", theme::BTN_PRIMARY))
+                .ok();
+        }
+    }
     util::append(parent, &btn);
 }
 
-fn render_pull_controls(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&label, "File to pull:");
-    util::append(parent, &label);
-
-    // `tracked_input` preserves the typed value across the results-pane
-    // rebuild the Execute triggers (event-log subscription → re-render).
-    util::tracked_input(parent, ctx, "filename", &output.filename_initial, theme::INPUT);
-
-    let btn = util::create_element("button");
-    util::set_text(&btn, "Pull file");
-    btn.set_attribute("style", theme::BTN_PRIMARY).ok();
-
-    let actions = ctx.actions.clone();
-    let rp = ctx.repaint.clone();
-    let parent_ref = parent.clone();
-    let peer_id = output.peer_id.clone();
-    let target = output.selected_target.clone();
-    let prefix = output.share_prefix.clone();
-    let filename_fallback = output.filename_initial.clone();
-    let window_id = ctx.window_id;
-
-    ctx.listen(&btn, "click", move |_| {
-        if target.is_empty() {
-            return;
-        }
-        let filename = parent_ref
-            .query_selector("[data-field='filename']")
-            .ok()
-            .flatten()
-            .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok())
-            .map(|inp| inp.value())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| filename_fallback.clone());
-
-        // Persist the typed filename to the model before the Execute-driven
-        // re-render reads `filename_initial` back (mirrors Execute Console's
-        // set_resource-before-execute).
-        actions.borrow_mut().push(Action::WindowEvent {
-            window_id,
-            event: "set_filename".into(),
-            value: filename.clone(),
-        });
-        actions.borrow_mut().push(Action::DownloadFile {
-            peer_id: peer_id.clone(),
-            handler_uri: format!("entity://{}/local/files", target),
-            path: format!("{}{}", prefix, filename),
-            filename: filename.clone(),
-        });
-        rp();
-    });
-    util::append(parent, &btn);
+fn human_size(n: u64) -> String {
+    if n < 1024 {
+        format!("{n} B")
+    } else if n < 1024 * 1024 {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
+    }
 }
 
 fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&label, "Send a file to this peer:");
-    util::append(parent, &label);
-
     // Hidden native file picker; the visible button triggers it.
     let input = util::create_element("input");
     input.set_attribute("type", "file").ok();

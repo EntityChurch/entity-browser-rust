@@ -36,6 +36,30 @@ use std::collections::BTreeSet;
 /// identity-hash hex.
 pub const SESSION_PREFIX: &str = "system/peer/session/";
 
+/// Normalize an app-layer **Base58** peer id to the kernel's canonical
+/// **identity-hash hex** — the one key space of `session/*`, `policy/*`, and
+/// the `authz` mirror the authorize action writes (module keying contract).
+///
+/// The Base58 form is an identity-multihash (`bs58(key_type ‖ hash_type ‖
+/// digest)`); for canonical Ed25519 ids (`HASH_TYPE_IDENTITY`) the digest **is**
+/// the raw public key, so we recover it and re-derive `peer_identity_hash` — the
+/// same content-hash the kernel keys sessions by. This is the ONLY computable
+/// direction: hex is a one-way hash of the peer entity, so hex→Base58 is
+/// impossible. Callers that hold a Base58 id (e.g. the connections registry)
+/// normalize to hex to join against the hex-keyed `authz` mirror.
+///
+/// Returns `None` when the id is malformed, or a legacy SHA-256-form id (whose
+/// digest hides the public key — not recoverable); callers fall back to the raw
+/// key (self-consistent legacy/test entries written under the same string).
+pub fn identity_hash_hex(peer_id_base58: &str) -> Option<String> {
+    let decoded = entity_crypto::PeerId::from(peer_id_base58).decode().ok()?;
+    if decoded.hash_type != entity_crypto::HASH_TYPE_IDENTITY {
+        return None;
+    }
+    let public_key: [u8; 32] = decoded.digest.try_into().ok()?;
+    Some(entity_crypto::peer_identity_hash(&public_key).ok()?.to_hex())
+}
+
 /// Authorization state of a peer connected to the backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthState {
@@ -125,6 +149,29 @@ mod tests {
 
     fn set(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn base58_identity_id_maps_to_kernel_hex() {
+        // A canonical identity-multihash Base58 id embeds the raw public key;
+        // normalizing it must reproduce the kernel's session/policy hex key
+        // (`peer_identity_hash(pubkey).to_hex()`) exactly — the join contract.
+        let public_key = [7u8; 32];
+        let base58 = entity_crypto::PeerId::from_public_key(&public_key)
+            .as_str()
+            .to_string();
+        let expected = entity_crypto::peer_identity_hash(&public_key)
+            .unwrap()
+            .to_hex();
+        assert_eq!(identity_hash_hex(&base58).as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn non_base58_id_yields_none_for_raw_fallback() {
+        // Malformed / non-multihash strings (e.g. legacy or test fixtures)
+        // don't convert — the caller falls back to the raw key.
+        assert_eq!(identity_hash_hex("REMOTE_A"), None);
+        assert_eq!(identity_hash_hex(""), None);
     }
 
     #[test]

@@ -214,6 +214,27 @@ pub fn read_connected(peers: &Peers) -> Vec<String> {
 /// *subscribed* prefixes — any surface that calls this must watch **both**
 /// [`app_paths::connections_prefix`] and [`app_paths::authz_prefix`]
 /// (`[[feedback_worker_cache_get_needs_subscription]]`).
+/// Read the `authz` mirror profile for a remote, **reconciling the two key
+/// spaces**. The connections registry keys by the app's Base58 `remote_pid`;
+/// the authorize action (`app.rs::handle_authorize_peer`) writes the mirror
+/// keyed by the target's canonical **identity-hash hex** (that's how B's tree
+/// reports the connected peer — `DESIGN-AUTHORIZE-GATE-INCREMENT-3 §2`). So we
+/// normalize Base58 → hex ([`peer_auth::identity_hash_hex`]) and look up under
+/// hex first; falling back to the raw Base58 key covers legacy / test entries
+/// written self-consistently under the same string.
+fn read_authz(peers: &Peers, sys_pid: &str, remote: &str) -> Option<String> {
+    if let Some(hex) = crate::peer_auth::identity_hash_hex(remote) {
+        let hex_path = app_paths::authz_entry_path(app_paths::APP_ID, sys_pid, &hex);
+        if let Some(e) = peers.get_entity(sys_pid, &hex_path) {
+            // Entity present under the canonical key — its decode is definitive
+            // (a malformed body ⇒ None; don't fall through to the raw key).
+            return decode_authz(&e);
+        }
+    }
+    let raw_path = app_paths::authz_entry_path(app_paths::APP_ID, sys_pid, remote);
+    peers.get_entity(sys_pid, &raw_path).and_then(|e| decode_authz(&e))
+}
+
 pub fn read_connections(peers: &Peers) -> Vec<RememberedPeer> {
     let pid = peers.system_peer_id();
     let prefix = app_paths::connections_prefix(app_paths::APP_ID, pid);
@@ -233,8 +254,7 @@ pub fn read_connections(peers: &Peers) -> Vec<RememberedPeer> {
                 .map(|e| decode_connection(&e))
                 .unwrap_or_default();
             // Join the sibling authz mirror (absent ⇒ paired, not authorized).
-            let authz_path = app_paths::authz_entry_path(app_paths::APP_ID, pid, &remote);
-            let authorized = peers.get_entity(pid, &authz_path).and_then(|e| decode_authz(&e));
+            let authorized = read_authz(peers, pid, &remote);
             Some(RememberedPeer {
                 remote_pid: remote,
                 addr,
@@ -348,6 +368,33 @@ mod tests {
         let records = read_connections(&pm);
         assert_eq!(records.len(), 1, "authz is a sibling, not a second known peer");
         assert_eq!(records[0].authorized.as_deref(), Some("file-transfer"));
+    }
+
+    #[test]
+    fn authz_written_under_hex_joins_base58_connection() {
+        // Production reality: the connections registry keys by Base58
+        // `remote_pid`, but `handle_authorize_peer` writes the authz mirror
+        // under the target's canonical identity-hash **hex** (that's how B's
+        // tree reports the peer). read_connections must reconcile the two.
+        let pm = Peers::new_direct();
+        let writer = ConnectionsWriter::new(&pm);
+        let public_key = [9u8; 32];
+        let base58 = entity_crypto::PeerId::from_public_key(&public_key)
+            .as_str()
+            .to_string();
+        let hex = entity_crypto::peer_identity_hash(&public_key).unwrap().to_hex();
+
+        writer.add(&base58, "ws://a:1");
+        writer.set_authorized(&hex, "file-transfer"); // keyed as the authorize path keys it
+
+        let records = read_connections(&pm);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].remote_pid, base58);
+        assert_eq!(
+            records[0].authorized.as_deref(),
+            Some("file-transfer"),
+            "Base58 connection must join the hex-keyed authz mirror",
+        );
     }
 
     /// The load-bearing invariant (§4): a reconnect (`add`) must NOT clobber an
