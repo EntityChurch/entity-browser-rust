@@ -102,7 +102,9 @@ max-width:420px;margin:0 auto 10px;}\
 padding:6px 10px;border-radius:999px;border:1px solid var(--border, rgba(255,255,255,0.22));\
 background:var(--surface-sunken, #0a0a1a);color:var(--text-muted, #9aa3b2);}\
 .ah-status{display:flex;justify-content:center;max-width:420px;margin:8px auto 0;\
-font-variant-numeric:tabular-nums;}";
+font-variant-numeric:tabular-nums;}\
+[data-app-host]{overflow-y:auto;}\
+[data-app-host][data-has-pad]{padding-bottom:150px;}";
 
 /// One action button's presentation — the program-declared action name (the
 /// press token), its label, and its (declared or standard-default) glyph.
