@@ -683,9 +683,24 @@ impl WorkerPeerStore {
     /// (window close), `NotifyChannel.next().await` returns `None` and
     /// the task exits.
     pub fn watch_prefix(&self, watch: &mut WindowWatch, peer_id: String, prefix: String) {
+        self.watch_prefix_gated(watch, peer_id, prefix, None);
+    }
+
+    /// [`watch_prefix`](Self::watch_prefix) whose **dirty-marking** is
+    /// conditional on `gate`. The `observe` subscription is registered either
+    /// way, so the cache mirror keeps filling for this prefix even while the
+    /// gate is closed — which is the whole point (see
+    /// [`crate::window_watch::RebuildGate`]).
+    pub fn watch_prefix_gated(
+        &self,
+        watch: &mut WindowWatch,
+        peer_id: String,
+        prefix: String,
+        gate: Option<crate::window_watch::RebuildGate>,
+    ) {
         self.record_subscription(&prefix);
         let proxy = self.proxy.clone();
-        let dirty = watch.flag();
+        let dirty = watch.flag_gated(gate);
         let watch_handle = watch.worker_subs_slot();
 
         wasm_bindgen_futures::spawn_local(async move {

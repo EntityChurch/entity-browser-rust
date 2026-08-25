@@ -419,6 +419,60 @@ def main():
                 print(f"  results pane: {(ex(B_BASE, sb, FIELD_TEXT('ft-results')) or '')[-400:]!r}")
         checks["B pulls what the window offered"] = w_saved
 
+        # ── 8b. Refresh is a RE-ASK, not a teardown ──────────────────────
+        # Reported from a real two-device run: *"I can download the file, but
+        # if I hit refresh it just deletes it — then Browse shows a loading
+        # thing and busts out."* Two causes, both in the browse cache: a forced
+        # re-list cleared `listed` (which is what the renderer gates the whole
+        # tree on), and the offers half then repaired that state while
+        # reporting "nothing changed", so no repaint ever painted the repair.
+        # Against a peer with no `local/files` share — i.e. every browser peer,
+        # including the one on the other side of this gate — the share half
+        # never succeeds, so the listing never came back.
+        #
+        # **This presses Refresh ONCE and requires the row to survive every
+        # sample.** Phase 8 above clicks Refresh in a *retry loop*, which is
+        # precisely why the whole suite stayed green through this: with enough
+        # presses one of them eventually lands in the ordering where the row is
+        # on screen. A gate that retries cannot see a surface that flickers,
+        # and "eventually correct after N presses" is not what the user has.
+        # The sampling is a TIGHT loop with no sleep (~1.4ms a round trip here,
+        # ~4300 samples in 6s), because the empty state is painted within about
+        # ten milliseconds of the press — a half-second sampler missed it
+        # entirely and reported green. Each `execute` also forces the page's rAF
+        # loop to flush, which is what makes the samples mean anything on a
+        # headless page.
+        #
+        # **What this gate CANNOT see, measured rather than assumed.** Only the
+        # *combination* of the two causes is red here: restore the teardown half
+        # alone and the rig stays green, because these two browsers share a
+        # podman bridge and the offers listing lands (repairing the state, and
+        # now reporting that it did) before the flicker outlives the sampler.
+        # Over a real WiFi hop that listing is far slower, which is exactly why
+        # the reported symptom was permanent rather than a blink. The
+        # per-cause discrimination lives in the native tests
+        # (`a_refresh_keeps_the_listing_on_screen_while_it_re_asks`,
+        # `an_unchanged_offer_listing_still_reports_state_it_repaired`), both
+        # mutation-checked; this gate is the end-to-end proof that the shipped
+        # defect is gone, on the shipped surface.
+        print("\n── 8b. Refresh does not empty the listing ────")
+        survived, samples = True, 0
+        if w_row:
+            clicked = ex(B_BASE, sb, REFRESH_CLICK)
+            print(f"  one press: {clicked}")
+            deadline = time.time() + 6
+            while time.time() < deadline:
+                samples += 1
+                if not ex(B_BASE, sb, ROW_NAMED(WINDOW_NAME)):
+                    survived = False
+                    print(f"  ❌ the row vanished after one Refresh (sample #{samples})")
+                    break
+            if survived:
+                print(f"  the row held across {samples} samples in 6s")
+        else:
+            survived = False  # nothing was listed, so nothing was proved
+        checks["Refresh leaves the listing on screen"] = survived
+
         # ── 9. A stops offering, and B stops seeing it ───────────────────
         # A listing that only ever *adds* cannot show a withdrawal: Refresh
         # would fetch the shorter list, insert nothing, and leave a dead row

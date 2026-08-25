@@ -389,13 +389,27 @@ federation: image
 # fixture cannot be diffed against a fresh emit.
 FED_VECTORS := tests/fixtures/registry-federation
 FED_VECTORS_ISSUED_AT := 1756000000000
+# The corpus README is HAND-WRITTEN and lives inside the corpus directory, which
+# the regeneration below wipes — so the documented "regenerate with the same
+# command" workflow deleted the one file that explains the corpus, including its
+# own Regenerating section. (AGENTS.md says "read that README before
+# regenerating"; regenerating removed it.) Carried across rather than moved out
+# of the directory, because a fixture that does not carry its own explanation is
+# how a consumer ends up cutting from bytes nobody can account for — which is
+# the exact failure this corpus was committed to fix.
+FED_VECTORS_DOC := /tmp/entity-browser-fed-vectors-README.md
 .PHONY: federation-vectors
 federation-vectors:
+	@test -f $(FED_VECTORS)/README.md && cp $(FED_VECTORS)/README.md $(FED_VECTORS_DOC) || true
 	rm -rf $(FED_VECTORS)
 	$(MAKE) federation FED_OUT=$(FED_VECTORS) ISSUED_AT_MS=$(FED_VECTORS_ISSUED_AT)
+	@test -f $(FED_VECTORS_DOC) && mv $(FED_VECTORS_DOC) $(FED_VECTORS)/README.md || true
 	@echo ""
 	@echo "  wrote $(FED_VECTORS) — commit it; consumers cut fixtures from these bytes."
-	@echo "  Regenerate with the SAME command; a diff means the emitter changed."
+	@echo "  Regenerate with the SAME command; a diff means the emitter changed —"
+	@echo "  EXCEPT each domain's published-root + its signature (and the two content"
+	@echo "  blobs they hash to), which carry a wall clock upstream. Expect 5 modified"
+	@echo "  roots and 5 signature/blob renames per run; anything else is the emitter."
 
 # Lint, in-container: clippy + the UI ratchet gate (raw atoms / inline style
 # literals / untokenized hex must match tools/ui-lint-baseline.txt — see
@@ -454,7 +468,7 @@ endif
 # Worker automatically when available and falls back to Direct on
 # failure (Stage 1B). `DEMO=1` bakes the demo apps (incl. the L5 demos).
 wasm: image
-	$(call RUN,trunk build $(WASM_FEATURES) --dist $(DIST) && ./tools/check-dist.sh $(DIST))
+	$(call RUN,trunk build $(WASM_FEATURES) --dist $(DIST) && ./tools/check-dist.sh $(DIST) && ./tools/build-stamp.sh $(DIST))
 
 # Alias — `make build` is the conventional bare-box entry point across the repo group.
 build: wasm
@@ -463,7 +477,7 @@ build: wasm
 # `dist-web` run the SAME frontend build through the NATIVE-aware runner —
 # one definition, so a release artifact can never be built from a different
 # frontend command than `make wasm-release` produces.
-WASM_RELEASE_CMD := trunk build --release --dist $(DIST) && ./tools/check-dist.sh $(DIST)
+WASM_RELEASE_CMD := trunk build --release --dist $(DIST) && ./tools/check-dist.sh $(DIST) && ./tools/build-stamp.sh $(DIST)
 wasm-release: image
 	$(call RUN,$(WASM_RELEASE_CMD))
 
@@ -1118,7 +1132,7 @@ tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
@@ -1291,6 +1305,25 @@ pair-check:
 #                   site = full-viewport overlay (add LOCKED=1 for a kiosk).
 #                   Details:
 #                   docs/architecture/guides/GUIDE-DEPLOYMENT-AND-CONFIGURATION.md
+#   REGISTRY_PIN=<PEER_ID[@ORIGIN]>  seed the §7.4 preloaded NAME REGISTRY into
+#                   /entity-deployment.json (`name_registry_pin`), so a visitor
+#                   resolves names through that registry before typing anything.
+#                   Same PEER_ID@ORIGIN spelling as `registry --bind` — it is the
+#                   same pair, and a second spelling is a second thing to get
+#                   wrong. Bare peer-id = same origin. **Needs DEPLOY_CONFIG=1**:
+#                   the pin rides in that file, and `publish` refuses the
+#                   combination without it rather than emitting a pin nothing
+#                   carries.
+#                   Validated at the emitter (`parse_registry_pin`) — a
+#                   non-canonical peer-id is refused HERE, where an operator can
+#                   read the refusal, rather than dropped silently at a
+#                   consumer's machine (audit F9's rule). That validation is the
+#                   entire reason this flag exists as a passthrough: without it
+#                   the only route was hand-editing the emitted JSON, which
+#                   bypasses exactly the check the emitter is for. Honoured by
+#                   `site`, `site-dist` (inherited), `site-serve` and
+#                   `tauri-bundle`; NOT by `site-bare`, which emits no
+#                   deployment config at all.
 #   IDENTITY_SEED=<64-hex>  publish under a SPECIFIC system identity (any
 #                   `entity_system_seed`-form hex seed) so each site/deployment
 #                   gets its own stable peer-id. Bad seed fails the build.
@@ -1333,6 +1366,10 @@ OUT ?= dist/static-demo
 # destructive publish, with no extra flags. Same knobs as a real publish — plan
 # what you are about to run, not an approximation of it.
 PLAN ?=
+# The §7.4 preloaded registry pin (see the knob table above). Empty = no pin,
+# which is the shipped default: a catch-all registry chosen for everybody is how
+# two app tiers ship two, so a pin is always a per-deployment decision.
+REGISTRY_PIN ?=
 # VERIFY=1 — walk an ALREADY-published OUT dir and prove the two-hop chain
 # resolves: every .bin pointer cracks, names a blob that exists, and whose bytes
 # hash to the address it claims. Runs the SAME check the browser runs per fetch,
@@ -1349,7 +1386,7 @@ site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 
 # ============================================================================
@@ -1512,7 +1549,7 @@ site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
 	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="

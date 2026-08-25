@@ -44,6 +44,20 @@ use crate::views::games::{FILTER_EVENT, SELECT_EVENT};
 /// pending write (back-to-grid / rebuild / window close).
 const SAVE_DEBOUNCE_MS: i32 = 1000;
 
+/// Bump `window.__entity_app_save_seq` — a monotone count of save-state writes
+/// performed by any app host in this page. See the comment at `flush` in
+/// [`render_player`] for why this is page-level rather than an iframe stamp.
+/// Best-effort diagnostics: every failure path leaves the counter alone.
+fn note_save_written() {
+    let Some(win) = web_sys::window() else { return };
+    let key = JsValue::from_str("__entity_app_save_seq");
+    let prev = js_sys::Reflect::get(&win, &key)
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let _ = js_sys::Reflect::set(&win, &key, &JsValue::from_f64(prev + 1.0));
+}
+
 /// Player layout CSS, injected as a `<style>` by [`render_player`]. Replicates
 /// the entity-apps reference host (`templates/index.html`): the iframe is NOT
 /// stretched to fill the whole window — it's a stage **capped + centered** in a
@@ -649,6 +663,20 @@ pub fn render_player(
 
     // Persist the pending save now: put the latest value, then reclaim the
     // hash the retention ring evicted. No-op when nothing is pending.
+    //
+    // Each completed put bumps `window.__entity_app_save_seq`, the write-side
+    // counterpart to the `data-app-state-seq` iframe stamp below. It lets a gate
+    // assert that a save actually LANDED, rather than that a `state` message was
+    // merely received — the two are a debounce apart, and the tear-down
+    // regression this pins (`a_running_app_survives_its_own_save`) is triggered
+    // by the write, not by the message. Without it that gate is satisfied by an
+    // app that never saved.
+    //
+    // It is deliberately NOT an attribute on the iframe, where every other
+    // host-side observable lives: the regression's whole signature is that the
+    // iframe is REPLACED, so a stamp on it is destroyed at exactly the moment a
+    // gate needs to read it back. A page-level counter outlives the rebuild, so
+    // "the save landed" and "the app survived" stay independently observable.
     let flush: Rc<dyn Fn()> = {
         let pending = pending.clone();
         let ring = ring.clone();
@@ -669,6 +697,7 @@ pub fn render_player(
             if let Some(evicted) = ring.record(hash) {
                 writer.content_remove(evicted);
             }
+            note_save_written();
         })
     };
 

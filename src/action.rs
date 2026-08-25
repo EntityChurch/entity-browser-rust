@@ -266,6 +266,18 @@ pub enum Action {
     /// binds the well-known 1:1 conversation with `peer_id`, subscribes to their
     /// message log, and starts delivery.
     ChatStartWith { window_id: WindowId, peer_id: String },
+    /// User left the bound conversation: the window returns to the default
+    /// single-peer scratch and offers the start-a-chat picker again.
+    ///
+    /// This exists because **binding was one-way**. The picker renders only
+    /// while unbound, so the first peer you chatted with was the only peer that
+    /// window could ever talk to — the escape was to open another Chat window,
+    /// which is how it was reported. Leaving is not a disconnection: it drops
+    /// the delivery pipeline and the maintain intent (the release sweep sees
+    /// `maintained_remotes` go empty and releases with reason `idle`, which
+    /// leaves the connection up), and it deletes nothing — the messages stay in
+    /// the tree and re-binding the same peer shows them again.
+    ChatLeave { window_id: WindowId },
 
     // -- Shell actions (entity-shell window) --
     /// User pressed Enter in the shell prompt. `line` is the raw input.

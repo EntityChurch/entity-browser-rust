@@ -91,6 +91,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "کسی اور سے چیٹ کریں",
   "chat.no_establisher": "اس پیئر تک واپس نہیں پہنچا جا سکتا — وہ آپ کو ڈھونڈ لیں گے، مگر کوئی چیز آپ سے رابطہ نہیں کر سکتی۔ اس ونڈو کو اپنے مرکزی پیئر پر بدلیں۔",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "اس نیٹ ورک کو ایک ریلے کی ضرورت ہے — کسی بھی آلے تک براہِ راست نہیں پہنچا جا سکتا۔ جس کنیکٹر کے ذریعے آپ ملتے ہیں اس پر ایک ریلے شامل کریں۔",

@@ -473,6 +473,13 @@ pub struct AppWindow {
     /// an in-memory render input owns its own dirty signal, or the panel shows
     /// a stale answer until something unrelated repaints it (AP21).
     saves_ui: std::rc::Rc<std::cell::RefCell<SavesUi>>,
+    /// Whether a write under the save/backup prefixes may rebuild this window.
+    /// Closed for exactly as long as a player is mounted: a running app writes
+    /// its own save every few seconds, and a rebuild replaces its `<iframe>`,
+    /// which restarts it at the start screen. Set in [`Self::render_dom`] — the
+    /// one place that knows which of the three views is up. See
+    /// [`crate::window_watch::RebuildGate`].
+    saves_gate: crate::window_watch::RebuildGate,
     /// The host `message` listener for the current frame, owned for its
     /// lifetime; removed on rebuild / window drop so listeners don't stack.
     #[cfg(target_arch = "wasm32")]
@@ -496,6 +503,7 @@ impl AppWindow {
             peer_id,
             watch: WindowWatch::new(),
             saves_ui: std::rc::Rc::new(std::cell::RefCell::new(SavesUi::default())),
+            saves_gate: crate::window_watch::RebuildGate::open(),
             #[cfg(target_arch = "wasm32")]
             listener: std::cell::RefCell::new(None),
             #[cfg(target_arch = "wasm32")]
@@ -1058,16 +1066,29 @@ fn create_apps(id: WindowId, peer_id: &str, pm: &Peers) -> Box<dyn WindowView> {
     // after a reload on the Worker arm. The Saves panel makes that latent hole
     // load-bearing (it lists the prefix, having written nothing), so both are
     // watched here.
+    //
+    // **Gated**, and that is not an optimization. This window is the only
+    // WRITER of the save prefix as well as a reader: a running app persists on
+    // every move, and marking dirty on that write rebuilds the section, which
+    // runs `render_player`, which replaces the `<iframe>` — restarting the app
+    // at its start screen about a second after every move. The subscription
+    // stays live either way (the mirror keeps filling, which is what the Saves
+    // panel needs on the Worker arm); only the rebuild is suppressed, and only
+    // while a player is mounted. Backups are gated with them for symmetry:
+    // nothing writes one while a player is up today, and an autosave-backup
+    // would otherwise arrive at exactly this bug wearing a new name.
     for set in paths::APP_SETS {
-        pm.watch_prefix(
+        pm.watch_prefix_gated(
             &mut window.watch,
             &window.peer_id,
             crate::app_paths::app_saves_prefix(crate::app_paths::APP_ID, &window.peer_id, set),
+            Some(window.saves_gate.clone()),
         );
-        pm.watch_prefix(
+        pm.watch_prefix_gated(
             &mut window.watch,
             &window.peer_id,
             crate::app_paths::app_backups_prefix(crate::app_paths::APP_ID, &window.peer_id, set),
+            Some(window.saves_gate.clone()),
         );
     }
     // Live consumer: apps published under a registered origin land in MY store at
@@ -1184,6 +1205,14 @@ impl WindowView for AppWindow {
         ctx: &crate::dom::DomCtx,
     ) {
         use crate::apps::format::AppSave;
+
+        // No player is mounted from here until one is, so save writes may
+        // rebuild again. Opening it BEFORE the listener drops is deliberate:
+        // dropping the listener flushes any pending save, and that write should
+        // reach whichever view we are about to render (the grid, or the Saves
+        // panel that is about to list it). Re-closed at the bottom if this
+        // render mounts a player.
+        self.saves_gate.set_open(true);
 
         // Drop any stale listener before (re)building the section.
         if let Some(old) = self.listener.borrow_mut().take() {
@@ -1314,6 +1343,11 @@ impl WindowView for AppWindow {
         };
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;
+
+        // A player is live: from here the save prefix is write-only to this
+        // window, and a rebuild would replace the iframe we just mounted. The
+        // running app's own saves must not do that.
+        self.saves_gate.set_open(false);
     }
 }
 

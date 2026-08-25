@@ -92,6 +92,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "Discută cu altcineva",
   "chat.no_establisher": "Nu se poate reveni cu o conexiune către acest partener — vă pot găsi, dar nimic nu se poate conecta la dumneavoastră. Schimbați această fereastră la partenerul principal.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "Această rețea are nevoie de un releu — niciunul dintre dispozitive nu poate fi contactat direct. Adaugă un releu pe conectorul prin care vă întâlniți.",

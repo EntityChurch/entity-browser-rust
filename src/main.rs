@@ -53,6 +53,9 @@ mod format;
 #[cfg(feature = "measurement")]
 mod frame_counters;
 mod i18n;
+// The visible outcome of the Offer button — the counterpart of
+// `connect_attempt` for the other control that could complete in silence.
+mod offer_attempt;
 mod ops;
 mod peers;
 mod program_host;

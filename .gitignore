@@ -3,6 +3,16 @@
 /dist-papers
 # Output-isolated dirs for the publish-* family so it runs concurrently with
 # tauri-run without clobbering dist/ + target/ (Makefile DIST/TARGET_DIR).
+# **A GLOB, not an enumeration.** This list used to name each publish output
+# directory one at a time, so every NEW one was committable by default — and
+# that is exactly how `f9c8e7ca` (a chat fix) swept in 18,408 files: a 114 MB
+# `dist-all/` publish tree plus an 11 MB frozen SPA shell, neither of which any
+# target regenerates under those names. Same shape as the cache-header rule this
+# repo already learned: when a policy enumerates the exceptions and defaults the
+# rest to the unsafe value, everything added later inherits the unsafe value
+# silently. Nothing under a `dist-` prefix is source; if that ever stops being
+# true, negate the one path rather than going back to a list.
+/dist-*
 /dist-publish
 /dist-federation
 /dist-registry
@@ -16,8 +26,12 @@
 /.apps-stage
 /.ingest-stage
 # Durable publisher identity (Makefile PUBLISH_DATA_DIR / ENTITY_DATA_DIR) — a
-# private keypair; NEVER commit it.
-/.entity-publish
+# private keypair; NEVER commit it. The glob matters: the registry emitter
+# resolves a SEPARATE durable identity (`{data-dir}-registry/`, so that a
+# name-issuer key is not also a content-publisher key), and `/.entity-publish`
+# alone does not match `/.entity-publish-registry` — which duly turned up
+# untracked in `git status` after a suite run.
+/.entity-publish*
 # Cargo.lock is COMMITTED (both of them). This repo ships binaries, not a
 # library, and a release build must be reproducible: without the lockfile the
 # same tag resolves different transitive versions on different days. Un-ignored

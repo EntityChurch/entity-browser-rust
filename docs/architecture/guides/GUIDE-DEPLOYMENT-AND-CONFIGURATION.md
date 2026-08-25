@@ -398,6 +398,15 @@ ingests its sites + apps, reads them back off the tree, and projects them to
 | `LOCKED=1` | off | For `SURFACE=site`, emit the kiosk lock (`site_mode` no-toggle-locked + `peer_creation_enabled: false`). Rejected for other surfaces. |
 | `CONFIG_SITE=<id>` | demo site | The home site written into the emitted config. Must be among the published sites or the build **fails**. |
 | `IDENTITY_SEED=<64-hex>` | demo publisher seed | The **system identity** to publish under (the same hex seed form as the runtime `entity_system_seed`) → its own stable peer-id under `sites/{peer}/…`. Generate with e.g. `openssl rand -hex 32`; reuse per deployment. A malformed seed **fails the build**. See [§2.1](#21-the-published-peer-id--you-choose-the-identity-stable-per-seed). |
+| `REGISTRY_PIN=<PEER_ID[@ORIGIN]>` *(flag `--registry-pin=`)* | empty (no pin) | Seed the §7.4 **preloaded name registry** into the emitted config (`name_registry_pin`), so a visitor resolves names through that registry without pinning one by hand. Same `PEER_ID@ORIGIN` spelling as `registry --bind`; a bare peer-id means same-origin. **Requires `DEPLOY_CONFIG=1`** — the pin rides in that file, and the publish *refuses* the combination without it rather than emitting a pin nothing carries. The peer-id must be **canonical form**: it is the verification key, so a legacy-form id is refused at the emitter (there is nowhere in a deployment config to put an out-of-band key). Honoured by `site`, `site-dist`, `site-serve` and `tauri-bundle`; `site-bare` emits no config, so it takes no pin. |
+
+> **Why this is a flag and not a hand-edit.** `name_registry_pin` is two strings
+> in a JSON file, so injecting it after the publish looks equivalent — and it is
+> not. The emitter validates the pin (`parse_registry_pin`) and refuses a
+> peer-id a consumer could never use, *on the operator's machine, where the
+> refusal can be read*. A hand-edited pin skips exactly that check and fails
+> instead at a visitor's browser, where it is indistinguishable from a registry
+> that is simply down. Audit F9's rule, on a new field.
 
 > ⚠️ **Default surface gotcha:** with `DEPLOY_CONFIG=1` and **no** `SURFACE`, the
 > emitted surface defaults to **`window`** + `WINDOW_TYPE="Site Browser"` (boots

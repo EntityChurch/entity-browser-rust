@@ -92,6 +92,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "Чат с другим человеком",
   "chat.no_establisher": "К этому пиру нельзя подключиться в ответ — вас найдут, но ничто не сможет к вам подключиться. Переключите это окно на свой основной пир.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "Этой сети нужен ретранслятор — ни одно из устройств недоступно напрямую. Добавьте ретранслятор в коннекторе, через который вы встречаетесь.",

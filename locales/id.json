@@ -90,6 +90,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "Mengobrol dengan orang lain",
   "chat.no_establisher": "Peer ini tidak dapat dihubungi balik — mereka dapat menemukan Anda, tetapi tidak ada yang dapat terhubung ke Anda. Ganti jendela ini ke peer utama Anda.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "Jaringan ini memerlukan relai — tidak satu pun perangkat dapat dijangkau langsung. Tambahkan relai pada konektor tempat Anda bertemu.",

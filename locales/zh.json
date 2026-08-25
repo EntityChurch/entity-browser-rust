@@ -90,6 +90,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "与其他人聊天",
   "chat.no_establisher": "无法回连到此对等节点——对方能找到你，但没有任何东西能连上你。请将此窗口切换到你的主对等节点。",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "此网络需要中继 — 两台设备都无法直接连接。请在你用于会合的连接器上添加一个中继。",

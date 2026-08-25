@@ -90,6 +90,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "แชทกับคนอื่น",
   "chat.no_establisher": "ไม่สามารถเชื่อมต่อกลับมายังเพียร์นี้ได้ — พวกเขาหาคุณเจอ แต่ไม่มีอะไรเชื่อมต่อมาหาคุณได้ สลับหน้าต่างนี้ไปยังเพียร์หลักของคุณ",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "เครือข่ายนี้ต้องใช้รีเลย์ — ไม่สามารถเข้าถึงอุปกรณ์ใดได้โดยตรง เพิ่มรีเลย์ที่ตัวเชื่อมต่อที่คุณใช้นัดพบ",

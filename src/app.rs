@@ -187,6 +187,11 @@ pub struct EntityApp {
     /// Read at render by the Peer Connections window so that action reports
     /// itself instead of completing in silence.
     connect_attempt: crate::connect_attempt::ConnectAttempt,
+    /// Outcome of the last file offered (`crate::offer_attempt`). Read at
+    /// render by the File Transfer window, and written from BOTH sides: the DOM
+    /// picker owns the half before the action exists (choosing a file, reading
+    /// its bytes), this owns the half after.
+    offer_attempt: crate::offer_attempt::OfferAttempt,
     /// Tree-backed publisher for the WS listener's bound address.
     /// Cloned into the listener-bind spawned task; only used on native.
     #[cfg(feature = "native-ws")]
@@ -1387,6 +1392,7 @@ impl EntityApp {
         let backend_auth_writer = crate::backend_auth::BackendAuthWriter::new(&peer_manager);
         let dial_markers = crate::dial_markers::DialMarkers::new();
         let connect_attempt = crate::connect_attempt::ConnectAttempt::new();
+        let offer_attempt = crate::offer_attempt::OfferAttempt::new();
         let mut peer_registry = PeerRegistry::new(&peer_manager);
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
@@ -1600,6 +1606,7 @@ impl EntityApp {
             backend_auth_writer,
             dial_markers,
             connect_attempt,
+            offer_attempt,
             peer_registry,
             user_themes,
             share_sync,
@@ -2502,7 +2509,7 @@ impl EntityApp {
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
-            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt, provisioning_drifted);
+            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt, &self.offer_attempt, provisioning_drifted);
         }
         if !actions.is_empty() {
             self.process_actions(actions);
@@ -2735,7 +2742,8 @@ impl EntityApp {
                 | Action::ShellHistoryNext { window_id, .. }
                 | Action::ShellTail { window_id, .. }
                 | Action::ChatSend { window_id, .. }
-                | Action::ChatStartWith { window_id, .. } => {
+                | Action::ChatStartWith { window_id, .. }
+                | Action::ChatLeave { window_id, .. } => {
                     match self.window_manager.get_mut(*window_id) {
                         Some(win) => win.view.handle_action(action, &self.peer_manager),
                         // A dropped action here is a **submitted command that
@@ -3605,10 +3613,39 @@ impl EntityApp {
     fn handle_offer_file(&self, pid: String, filename: String, bytes: Vec<u8>) {
         let log = self.event_log_writer.clone();
         let len = bytes.len() as u64;
+        // The window-visible outcome of THIS press. The Results pane below it
+        // gets the same lines, but a pane at the bottom of the window is not
+        // where anyone is looking on a phone — which is how every failure mode
+        // of this button arrived as "I hit it and nothing happened" (D13).
+        let attempt = self.offer_attempt.clone();
+        // Waking the window is not optional: this outcome lives in memory
+        // precisely so it never becomes a tree entity, so no write fires and no
+        // subscription fires. Success would repaint anyway (the offer manifest
+        // dirties the prefix this window watches) — a FAILURE would not, which
+        // is exactly the case that must be visible. Same lesson, same shape as
+        // `handle_connect_peer`.
+        let watchers: Vec<crate::window_watch::DirtyFlag> = self
+            .window_manager
+            .windows
+            .iter()
+            .filter(|w| w.open && w.view.type_name() == "File Transfer") // i18n-ignore — stable type identifier, not UI text
+            .map(|w| w.view.watch().flag())
+            .collect();
+        let wake = move |flags: &[crate::window_watch::DirtyFlag]| {
+            for f in flags {
+                f.mark();
+            }
+        };
+
         let Some(dispatch) = self.peer_manager.dispatch_handle(&pid) else {
+            let why = crate::file_offer::not_routed_message(&pid);
             log.log(format!("✗ offer {filename} → local peer {pid} is not routed"));
+            attempt.set_failed(&filename, &why);
+            wake(&watchers);
             return;
         };
+        attempt.set_preparing(&filename);
+        wake(&watchers);
         // State the shape of the work before starting it: chunking and ingest
         // are one synchronous pass with nothing to report from inside, so the
         // count is the only honest progress an offer has.
@@ -3632,6 +3669,8 @@ impl EntityApp {
                         crate::file_offer::human_bytes(offer.size),
                         offer.id()
                     ));
+                    attempt.set_offered(&offer.name, offer.size);
+                    wake(&watchers);
                     if let Some(writer) = share_writer {
                         let share = crate::share::Share::from_file_offer(&offer);
                         if let Err(e) =
@@ -3641,7 +3680,11 @@ impl EntityApp {
                         }
                     }
                 }
-                Err(e) => log.log(format!("✗ offer {filename} → {e}")),
+                Err(e) => {
+                    log.log(format!("✗ offer {filename} → {e}"));
+                    attempt.set_failed(&filename, &e);
+                    wake(&watchers);
+                }
             }
         });
     }

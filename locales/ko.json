@@ -90,6 +90,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "다른 사람과 채팅",
   "chat.no_establisher": "이 피어로는 다시 연결할 수 없습니다 — 상대는 당신을 찾을 수 있지만, 아무것도 당신에게 연결할 수 없습니다. 이 창을 기본 피어로 전환하세요.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "이 네트워크에는 릴레이가 필요합니다 — 두 기기 모두 직접 연결할 수 없습니다. 만남에 사용하는 커넥터에 릴레이를 추가하세요.",

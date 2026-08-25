@@ -327,6 +327,39 @@ pub fn human_bytes(n: u64) -> String {
     }
 }
 
+/// Why a file of `size` bytes is too big to offer — **one expression of the
+/// refusal**, for the same reason `human_bytes` lives here: the wording a
+/// window shows must read identically to the wording the model produces.
+///
+/// It has two callers on purpose. [`offer_file`] refuses at the point of work,
+/// which is the authority; the file picker refuses at the point of *choice*,
+/// **before** `array_buffer()` — a 200 MB video should not be pulled into wasm
+/// memory (where it costs roughly four copies) just to be turned down, and on a
+/// phone that read is exactly where the tab dies. Neither refusal is redundant:
+/// the picker's is a courtesy the Shell verb does not get, and the model's is
+/// the one that cannot be bypassed.
+pub fn too_large_message(name: &str, size: u64) -> String {
+    format!(
+        "{name} is {} — this browser offers files up to {} \
+         (it holds the whole file, its chunks and one CBOR envelope in memory \
+         at once; larger files need a streaming ingest, not a larger limit)",
+        human_bytes(size),
+        human_bytes(MAX_OFFER_BYTES),
+    )
+}
+
+/// Why an offer could not start at all: this device's own peer has no dispatch
+/// route, so there is nothing to ingest into.
+///
+/// Lives beside [`too_large_message`] for the same reason — the refusal wording
+/// has one home in the model tier — and because that keeps the whole
+/// `OfferOutcome::Failed` channel a single, consistent class of message. (Model
+/// English inside a localized frame is a known, recorded shape; a translated
+/// "it failed" with the reason dropped would be worse.)
+pub fn not_routed_message(local_pid: &str) -> String {
+    format!("this device's peer ({local_pid}) is not routed — reload and try again")
+}
+
 /// How many §3.2 chunks a file of `size` bytes becomes. The window states this
 /// *before* the work starts — a count is the only honest progress an ingest can
 /// offer, since chunking is one synchronous pass with nothing to report from
@@ -380,13 +413,7 @@ pub async fn offer_file(
     // is that the user is told, in a sentence, instead of watching the tab die
     // partway through an ingest they cannot see. See [`MAX_OFFER_BYTES`].
     if raw.len() as u64 > MAX_OFFER_BYTES {
-        return Err(format!(
-            "{name} is {} — this browser offers files up to {} \
-             (it holds the whole file, its chunks and one CBOR envelope in memory \
-             at once; larger files need a streaming ingest, not a larger limit)",
-            human_bytes(raw.len() as u64),
-            human_bytes(MAX_OFFER_BYTES),
-        ));
+        return Err(too_large_message(name, raw.len() as u64));
     }
     let (blob, chunks) = chunk_bytes(raw)?;
     let params = ingest_params(&blob, &chunks)?;
