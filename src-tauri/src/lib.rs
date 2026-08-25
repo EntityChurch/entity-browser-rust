@@ -12,6 +12,10 @@ mod access_log;
 mod backend_log;
 mod manager_grant;
 mod persistence;
+// Public so `tests/signaling_node.rs` can build a node the way
+// `start_backend_peer` does. An integration test that hand-rolled its own mount
+// would prove the extension works and say nothing about what we ship.
+pub mod signaling_node;
 
 /// Best-effort detection of this host's primary LAN IP — the address
 /// another device on the same network (e.g. a phone being paired) uses
@@ -111,6 +115,18 @@ struct BackendPeerRuntime {
     peer: Peer,
     shared: Arc<PeerShared>,
     ws_addr: String,
+    /// Whether `system/signaling` was mounted on THIS running peer. Recorded at
+    /// build time rather than re-read from config, so a toggle flipped after
+    /// start cannot make the UI claim a rendezvous nobody mounted.
+    signaling_node: bool,
+    /// The system peer designated as this backend's manager at start.
+    ///
+    /// Kept so an **internal** restart (`set_backend_signaling_node`) re-seeds
+    /// the same manager grant the original start did. Passing an empty string
+    /// there would not error — `seed_manager_grant` logs a warning and returns
+    /// — so the designation would be lost quietly, and on an in-memory peer
+    /// (no SQLite path) the grant would be gone with it.
+    manager_peer_id: String,
     listener_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -125,6 +141,12 @@ struct BackendPeer {
     /// the peer was loaded from disk with storage_backend = "sqlite".
     /// `None` means in-memory tree (legacy fallback).
     sqlite_path: Option<PathBuf>,
+    /// Persisted "serve §6.5 rendezvous" setting for this peer
+    /// (`config.toml`). Read at start and resolvable from the environment;
+    /// see `signaling_node::resolve_enabled`. **Only meaningful at start** —
+    /// the handler is mounted on `PeerBuilder`, so flipping this restarts the
+    /// peer rather than taking effect live.
+    signaling_node: bool,
     runtime: Option<BackendPeerRuntime>,
 }
 
@@ -139,6 +161,12 @@ impl BackendPeer {
 
     fn ws_addr(&self) -> Option<&str> {
         self.runtime.as_ref().map(|r| r.ws_addr.as_str())
+    }
+
+    /// Is this peer serving rendezvous *now*? A stopped peer serves nothing,
+    /// whatever its persisted setting says.
+    fn serves_signaling(&self) -> bool {
+        self.runtime.as_ref().is_some_and(|r| r.signaling_node)
     }
 
     fn stop(&mut self) {
@@ -161,6 +189,12 @@ struct BackendPeerResponse {
     label: Option<String>,
     status: String,
     ws_addr: Option<String>,
+    /// Whether this peer is serving `system/signaling` **right now**, which is
+    /// not the same as the persisted setting: the handler is mounted at build
+    /// time, so a peer started before the toggle was flipped is still not a
+    /// node. Reported from the running peer so the UI cannot claim a rendezvous
+    /// that is not actually mounted.
+    signaling_node: bool,
 }
 
 /// Native-store stats for the system backend, surfaced to the Storage window
@@ -211,6 +245,7 @@ fn create_backend_peer(
         label: label.clone(),
         status: "stopped".into(),
         ws_addr: None,
+        signaling_node: false,
     };
 
     state.peers.lock().unwrap().insert(peer_id.clone(), BackendPeer {
@@ -218,6 +253,9 @@ fn create_backend_peer(
         seed,
         label,
         sqlite_path,
+        // A newly created peer serves no rendezvous until asked — the same
+        // fail-closed default `persistence::PeerConfigFile` writes.
+        signaling_node: false,
         runtime: None,
     });
 
@@ -235,7 +273,7 @@ async fn start_backend_peer(
     manager_peer_id: String,
 ) -> Result<BackendPeerResponse, String> {
     // Extract what we need under the lock, then release it for async work.
-    let (seed, label, sqlite_path) = {
+    let (seed, label, sqlite_path, wants_signaling) = {
         let peers = state.peers.lock().unwrap();
         let bp = peers.get(&peer_id)
             .ok_or_else(|| format!("Backend peer {} not found", peer_id))?;
@@ -245,10 +283,12 @@ async fn start_backend_peer(
                 label: bp.label.clone(),
                 status: "running".into(),
                 ws_addr: bp.ws_addr().map(String::from),
+                signaling_node: bp.serves_signaling(),
             });
         }
-        (bp.seed, bp.label.clone(), bp.sqlite_path.clone())
+        (bp.seed, bp.label.clone(), bp.sqlite_path.clone(), bp.signaling_node)
     };
+    let serve_signaling = signaling_node::resolve_enabled(wants_signaling);
 
     log::info!("Starting backend peer: {}", &peer_id[..12.min(peer_id.len())]);
 
@@ -276,6 +316,60 @@ async fn start_backend_peer(
         ..PeerConfig::default()
     };
 
+    // --- Bind the listener BEFORE building the peer ---------------------------
+    //
+    // The order is load-bearing when this peer serves rendezvous: `advertise`
+    // publishes the node's endpoint verbatim for other peers to dial, and the
+    // only dialable form of it is `connectable_addr(bound_addr)` — which does
+    // not exist until the bind has chosen a port. Building the peer first would
+    // leave the node advertising either a guess or `0.0.0.0`.
+    //
+    // Binding is not accepting: `server::run` below is what starts serving, and
+    // it still happens after the manager grant and the share root are seeded.
+    // A side benefit — a port conflict now fails before we build a peer and open
+    // its SQLite store, instead of after.
+    //
+    // Bind ALL interfaces (`0.0.0.0`) by default so the listener is
+    // reachable from other devices on the LAN — the reported address is
+    // the host's real LAN IP (connectable_addr), which is what QR pairing
+    // a phone needs. The first backend peer takes the well-known port
+    // 4041, subsequent peers get dynamic ports.
+    //
+    // Security (C3): a `0.0.0.0` bind exposes the peer to the local
+    // network. That is the intended desktop posture here (pairing). Lock
+    // it back down to loopback-only with ENTITY_BROWSER_LOOPBACK_ONLY=1
+    // (the e2e sets this to keep its same-host expectations). See
+    // STANDARDS-RELEASE-ACCEPTANCE §6.D.
+    let has_running_peer = {
+        let peers = state.peers.lock().unwrap();
+        peers.values().any(|bp| bp.peer_id != peer_id && bp.is_running())
+    };
+    let loopback_only = std::env::var("ENTITY_BROWSER_LOOPBACK_ONLY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let host = if loopback_only { "127.0.0.1" } else { "0.0.0.0" };
+    let port = if has_running_peer { "0" } else { "4041" };
+    let bind_addr = format!("{host}:{port}");
+    let listener = match WebSocketListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(_) if bind_addr.ends_with(":4041") => {
+            // Well-known port in use — fall back to a dynamic port on the
+            // same host (same interface scope as the primary bind).
+            log::info!("Port 4041 in use, falling back to dynamic port");
+            let dynamic = format!("{host}:0");
+            WebSocketListener::bind(&dynamic)
+                .await
+                .map_err(|e| format!("Failed to bind WS listener: {}", e))?
+        }
+        Err(e) => return Err(format!("Failed to bind WS listener: {}", e)),
+    };
+    let bound_addr = listener.local_addr();
+    // Reported / connect address: listener.local_addr() returns the
+    // bound address, which uses 0.0.0.0 when binding to all
+    // interfaces. Browsers can't connect to 0.0.0.0, so we
+    // substitute the loopback address for the reported value.
+    let ws_addr = connectable_addr(&bound_addr);
+
     let mut builder = PeerBuilder::new()
         .keypair(keypair)
         .config(config)
@@ -298,6 +392,28 @@ async fn start_backend_peer(
     } else {
         log::warn!("Backend peer {} has no SQLite path; tree state will not persist",
             &peer_id[..12.min(peer_id.len())]);
+    }
+
+    // --- The rendezvous decision: BOTH halves, or neither ---------------------
+    //
+    // `mount` returns the handler and its admission grant together precisely so
+    // this call site cannot install one without the other [AP22]. Note the
+    // failure it prevents is invisible in a default build: with
+    // `debug_open_grants` on (enforcement is opt-in above) a handler mounted
+    // with no seed policy works for everyone, and starts 403ing the day someone
+    // sets ENTITY_BROWSER_ENFORCE.
+    if serve_signaling {
+        let mount = signaling_node::mount(&ws_addr, &peer_id);
+        log::info!(
+            "Backend peer {} SERVES §6.5 rendezvous at {} — any peer reaching \
+             this listener may offer/collect (system/signaling only; the file \
+             share is not widened)",
+            &peer_id[..12.min(peer_id.len())],
+            mount.endpoint
+        );
+        builder = builder
+            .with_seed_policy(mount.seed_policy)
+            .handler(mount.handler);
     }
 
     let peer = builder
@@ -341,46 +457,6 @@ async fn start_backend_peer(
         }
     }
 
-    // Bind ALL interfaces (`0.0.0.0`) by default so the listener is
-    // reachable from other devices on the LAN — the reported address is
-    // the host's real LAN IP (connectable_addr), which is what QR pairing
-    // a phone needs. The first backend peer takes the well-known port
-    // 4041, subsequent peers get dynamic ports.
-    //
-    // Security (C3): a `0.0.0.0` bind exposes the peer to the local
-    // network. That is the intended desktop posture here (pairing). Lock
-    // it back down to loopback-only with ENTITY_BROWSER_LOOPBACK_ONLY=1
-    // (the e2e sets this to keep its same-host expectations). See
-    // STANDARDS-RELEASE-ACCEPTANCE §6.D.
-    let has_running_peer = {
-        let peers = state.peers.lock().unwrap();
-        peers.values().any(|bp| bp.peer_id != peer_id && bp.is_running())
-    };
-    let loopback_only = std::env::var("ENTITY_BROWSER_LOOPBACK_ONLY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let host = if loopback_only { "127.0.0.1" } else { "0.0.0.0" };
-    let port = if has_running_peer { "0" } else { "4041" };
-    let bind_addr = format!("{host}:{port}");
-    let listener = match WebSocketListener::bind(&bind_addr).await {
-        Ok(l) => l,
-        Err(_) if bind_addr.ends_with(":4041") => {
-            // Well-known port in use — fall back to a dynamic port on the
-            // same host (same interface scope as the primary bind).
-            log::info!("Port 4041 in use, falling back to dynamic port");
-            let dynamic = format!("{host}:0");
-            WebSocketListener::bind(&dynamic)
-                .await
-                .map_err(|e| format!("Failed to bind WS listener: {}", e))?
-        }
-        Err(e) => return Err(format!("Failed to bind WS listener: {}", e)),
-    };
-    let bound_addr = listener.local_addr();
-    // Reported / connect address: listener.local_addr() returns the
-    // bound address, which uses 0.0.0.0 when binding to all
-    // interfaces. Browsers can't connect to 0.0.0.0, so we
-    // substitute the loopback address for the reported value.
-    let ws_addr = connectable_addr(&bound_addr);
     log::info!(
         "Backend peer {} listening on {} (reported as {})",
         &peer_id[..12.min(peer_id.len())],
@@ -401,6 +477,7 @@ async fn start_backend_peer(
         label: label.clone(),
         status: "running".into(),
         ws_addr: Some(ws_addr.clone()),
+        signaling_node: serve_signaling,
     };
 
     // Update the peer with runtime state.
@@ -410,6 +487,8 @@ async fn start_backend_peer(
             peer,
             shared,
             ws_addr,
+            signaling_node: serve_signaling,
+            manager_peer_id,
             listener_handle,
         });
     }
@@ -432,7 +511,84 @@ fn stop_backend_peer(
         label: bp.label.clone(),
         status: "stopped".into(),
         ws_addr: None,
+        // A stopped peer serves nothing, whatever it is configured to serve.
+        signaling_node: false,
     })
+}
+
+/// Turn this backend's §6.5 rendezvous on or off, persistently.
+///
+/// **Restarts the peer when it is running**, and that is not an implementation
+/// shortcut — `system/signaling` is mounted on `PeerBuilder`, so there is no
+/// way to add or remove a handler on a live peer. Doing the restart here rather
+/// than asking the user to stop and start means the toggle's observable effect
+/// matches its label; the alternative is a control that silently does nothing
+/// until the next launch.
+///
+/// The restart drops in-flight connections. That is honest for this operation
+/// (§1.3: a node holds nothing durable, and losing one drops in-flight
+/// handshakes and nothing that mattered) and it is why the UI says so.
+///
+/// Returns the peer's state **after** the change, so a caller never has to
+/// assume the flip took: `signaling_node` in the response is read from the
+/// running peer, not from the setting we just wrote.
+#[tauri::command]
+async fn set_backend_signaling_node(
+    state: tauri::State<'_, BackendPeers>,
+    peer_id: String,
+    enabled: bool,
+) -> Result<BackendPeerResponse, String> {
+    if !persistence::set_signaling_node(&peer_id, enabled) {
+        return Err(format!(
+            "Could not persist the rendezvous setting for backend peer {}",
+            &peer_id[..12.min(peer_id.len())]
+        ));
+    }
+
+    // Land the new value on the in-memory record, and find out whether we have
+    // to restart. Both under one lock acquisition, released before the await.
+    let (was_running, manager) = {
+        let mut peers = state.peers.lock().unwrap();
+        let bp = peers
+            .get_mut(&peer_id)
+            .ok_or_else(|| format!("Backend peer {} not found", peer_id))?;
+        bp.signaling_node = enabled;
+        // Read the manager BEFORE stopping — `stop()` takes the runtime that
+        // holds it, and restarting with an empty manager loses the designation
+        // silently rather than failing.
+        let manager = bp
+            .runtime
+            .as_ref()
+            .map(|r| r.manager_peer_id.clone())
+            .unwrap_or_default();
+        let running = bp.is_running();
+        if running {
+            bp.stop();
+        }
+        (running, manager)
+    };
+
+    if !was_running {
+        // Nothing to restart: the setting applies at the next start, and the
+        // response says `signaling_node: false` because a stopped peer is not
+        // serving anything yet.
+        let peers = state.peers.lock().unwrap();
+        let bp = peers
+            .get(&peer_id)
+            .ok_or_else(|| format!("Backend peer {} not found", peer_id))?;
+        return Ok(BackendPeerResponse {
+            peer_id: bp.peer_id.clone(),
+            label: bp.label.clone(),
+            status: bp.status().into(),
+            ws_addr: bp.ws_addr().map(String::from),
+            signaling_node: bp.serves_signaling(),
+        });
+    }
+
+    // Restart so the mount decision is re-made. The manager designation is
+    // re-seeded by `start_backend_peer` from the same argument the original
+    // start used; an empty string is the headless case it already handles.
+    start_backend_peer(state, peer_id, manager).await
 }
 
 /// Delete a backend peer entirely — stop if running, remove from disk.
@@ -542,6 +698,7 @@ fn list_backend_peers(state: tauri::State<'_, BackendPeers>) -> Vec<BackendPeerR
         label: bp.label.clone(),
         status: bp.status().into(),
         ws_addr: bp.ws_addr().map(String::from),
+        signaling_node: bp.serves_signaling(),
     }).collect()
 }
 
@@ -634,6 +791,7 @@ async fn ensure_backend_peer(
                     seed,
                     label: lbl,
                     sqlite_path,
+                    signaling_node: false,
                     runtime: None,
                 },
             );
@@ -716,6 +874,7 @@ pub fn run() {
                     seed,
                     label: entry.label,
                     sqlite_path: entry.sqlite_path,
+                    signaling_node: entry.signaling_node,
                     runtime: None,
                 });
             }
@@ -728,6 +887,7 @@ pub fn run() {
             stop_backend_peer,
             delete_backend_peer,
             list_backend_peers,
+            set_backend_signaling_node,
             ensure_system_backend,
             backend_log_tail,
             backend_access_log_tail,

@@ -8,7 +8,7 @@ use crate::dom::components::{self, AuthState, ConnState};
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::views::system_overview::output::{
-    AuthorizationsView, AuthRow, SystemOverviewOutput,
+    AuthorizationsView, AuthRow, BackendStatusView, SystemOverviewOutput,
 };
 use crate::views::system_peers::output::SystemPeersOutput;
 
@@ -118,6 +118,12 @@ pub fn render(
             if let Some(path) = &output.share_path {
                 add_row(&status, &crate::i18n::t("sysoverview.share_disk", &[]), path, Some(path), None);
             }
+            // Rendezvous: whether browsers on this LAN can meet through this
+            // desktop. Two browsers need no STUN and no TURN on one LAN
+            // (`e2e-webrtc-lan`) — but they do need somewhere to exchange the
+            // offer, and this is the only thing that can be it without anyone
+            // running server infrastructure.
+            render_rendezvous_row(&status, b, ctx);
         }
         None => {
             // Non-content states (S5): still loading vs genuinely absent.
@@ -194,6 +200,80 @@ fn add_row(parent: &Element, label: &str, value: &str, title: Option<&str>, colo
     util::append(&row, &val);
 
     util::append(parent, &row);
+}
+
+/// The **Rendezvous** row: is this desktop acting as a §6.5 signaling node, and
+/// a button to change that.
+///
+/// # Why this row exists at all
+///
+/// A browser peer has no listener, so two browsers cannot exchange a WebRTC
+/// offer without a third party holding it — even on the same Wi-Fi, where
+/// `e2e-webrtc-lan` proved the media itself needs neither STUN nor TURN. This
+/// desktop already binds a WebSocket a browser can reach, so it can be that
+/// third party, and then nobody has to run server infrastructure.
+///
+/// # What the strings must and must not claim
+///
+/// When it is **on** the row shows the address a browser types into
+/// `connector add`, because a rendezvous nobody can address is not usable and
+/// "it's on" is not an actionable answer. When it is **off** the row says so
+/// plainly rather than hiding — a person looking for "why can't my two browsers
+/// meet" needs to find this, and an absent row answers nothing.
+///
+/// The button warns that flipping restarts the backend, because it does
+/// (`system/signaling` mounts on `PeerBuilder`; there is no live add). That is
+/// cheap — a node holds nothing durable (§1.3) — but it drops in-flight
+/// connections, and a control that silently hangs up deserves to say so.
+fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
+    // Built from the card's own two row helpers rather than hand-rolled markup,
+    // so this surface adds no raw styles to the `ui-lint` baseline — the state
+    // reads as a normal `label: value` row and the control sits under it in the
+    // value column.
+    let (text, color) = if b.signaling_node {
+        // The address is the actionable half: "it is on" is not something a
+        // user can do anything with, and this is the string the other browser
+        // types into `connector add`.
+        let addr = b.ws_addr.clone().unwrap_or_default();
+        (
+            crate::i18n::t("sysoverview.rendezvous_on", &[("addr", addr.as_str())]),
+            crate::theme_tokens::STATUS_OK,
+        )
+    } else {
+        (
+            crate::i18n::t("sysoverview.rendezvous_off", &[]),
+            "var(--text-muted, #c0c0c0)",
+        )
+    };
+    add_row(
+        parent,
+        &crate::i18n::t("sysoverview.rendezvous", &[]),
+        &text,
+        Some(&crate::i18n::t("sysoverview.rendezvous_hint", &[])),
+        Some(color),
+    );
+
+    // `\x1f`-packed: WHICH backend and WHICH direction. The row is the only
+    // place that knows both, and the handler must not have to re-derive the
+    // current state to work out what the click meant — a toggle that reads
+    // "the opposite of whatever I last painted" flips the wrong way whenever a
+    // poll lands between the render and the click.
+    let want = if b.signaling_node { "0" } else { "1" };
+    let label = if b.signaling_node {
+        crate::i18n::t("sysoverview.rendezvous_stop", &[])
+    } else {
+        crate::i18n::t("sysoverview.rendezvous_start", &[])
+    };
+    let btn = components::button_value(
+        ctx,
+        &label,
+        components::ButtonKind::Small,
+        "sb_set_signaling_node",
+        &format!("{}\u{1f}{}", b.peer_id, want),
+    );
+    // Empty label: the control belongs to the row above, aligned under its
+    // value rather than introducing a second key nobody needs to read.
+    add_chip_row(parent, "", btn);
 }
 
 /// A `label:` row whose value is an element (e.g. a status chip) rather than

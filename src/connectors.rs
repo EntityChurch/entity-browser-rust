@@ -140,6 +140,26 @@ pub struct Connector {
     /// Storing it per-connector is what keeps that true — these reflectors are
     /// scoped to the node that published them and die with its row.
     pub ice_advertised: String,
+    /// The node operator's **relay** (TURN) URIs, as typed — a separate field
+    /// from [`Self::ice`] on purpose.
+    ///
+    /// A reflector is a commodity: credential-free by spec (§9.3 forbids
+    /// reflector authentication) and **node-advertisable**, which is what
+    /// [`Self::ice_advertised`] is and why its dedup is defined over published
+    /// bytes exactly. A relay is rented, carries credentials, forwards every
+    /// packet, and `EXTENSION-REGISTRY` §3b has **no credential channel** — a
+    /// node cannot advertise one, so this half is always the user's own.
+    ///
+    /// Parsed with its credentials by [`crate::session_config::parse_relay`],
+    /// and refused at [`add_connector`] if the three fields disagree.
+    pub relay: String,
+    /// Username for [`Self::relay`]. Stored in this peer's tree in plaintext,
+    /// like the rest of the app's configuration — stated rather than implied,
+    /// because a TURN credential is usually a shared rotatable secret and this
+    /// is not a secret store.
+    pub relay_username: String,
+    /// Credential for [`Self::relay`]. See [`Self::relay_username`] on storage.
+    pub relay_credential: String,
 }
 
 /// Merge a node's advertised reflectors into the user's typed ones
@@ -212,7 +232,10 @@ pub fn connector_to_entity(c: &Connector) -> Entity {
         "node_addr" => entity_ecf::text(&c.node_addr),
         "label" => entity_ecf::text(&c.label),
         "ice" => entity_ecf::text(&c.ice),
-        "ice_advertised" => entity_ecf::text(&c.ice_advertised)
+        "ice_advertised" => entity_ecf::text(&c.ice_advertised),
+        "relay" => entity_ecf::text(&c.relay),
+        "relay_username" => entity_ecf::text(&c.relay_username),
+        "relay_credential" => entity_ecf::text(&c.relay_credential)
     });
     Entity::new(CONNECTOR_TYPE, data).unwrap()
 }
@@ -246,6 +269,13 @@ pub fn connector_from_entity(entity: &Entity) -> Option<Connector> {
         // told us nothing", which is the same posture as a node that serves no
         // reflection — so a missing field is a default, never a malformed row.
         ice_advertised: field("ice_advertised").unwrap_or_default(),
+        // Absent on every row written before relays were configurable. Empty
+        // means "no relay", which is what those deployments meant and is the
+        // fail-closed reading — so a missing field is a default, never a
+        // malformed row. Same rule as `ice` above.
+        relay: field("relay").unwrap_or_default(),
+        relay_username: field("relay_username").unwrap_or_default(),
+        relay_credential: field("relay_credential").unwrap_or_default(),
     })
 }
 
@@ -326,6 +356,11 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<(), 
     // typed and can be corrected (D13). Downstream the same value only warns,
     // because by then there is no user to tell; that split is deliberate.
     crate::session_config::parse_ice_urls(&c.ice)?;
+    // Same posture, one field along: refuse a half-configured relay HERE, where
+    // the person who typed it can fix it. A relay URL with no credentials builds
+    // an `RTCIceServer` that looks configured and gathers no relay candidates —
+    // the silent-nothing failure this whole area keeps producing.
+    crate::session_config::parse_relay(&c.relay, &c.relay_username, &c.relay_credential)?;
     // `ice_advertised` is preserved from the existing row and the caller's value
     // is IGNORED — `record_advertised_reflectors` is its only writer, and this
     // is what makes that true structurally rather than by everyone remembering.
@@ -344,6 +379,9 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<(), 
         label: c.label.trim().to_string(),
         ice: c.ice.trim().to_string(),
         ice_advertised: learned,
+        relay: c.relay.trim().to_string(),
+        relay_username: c.relay_username.trim().to_string(),
+        relay_credential: c.relay_credential.trim().to_string(),
     };
     let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &normalized.node_peer_id);
     peers.dispatch_write(peer_id, path, connector_to_entity(&normalized));
@@ -446,7 +484,26 @@ pub fn provisioning_from_registry(peers: &Peers, peer_id: &str) -> Option<WebRtc
     let c = selected_connector(peers, peer_id)?;
     // §4.5.1: what the node advertised is ADDITIONAL to what the user typed.
     let ice = merge_reflectors(&c.ice, &c.ice_advertised);
+    // Degrade LOUDLY, never silently — the same split `ice` already uses. A bad
+    // value is *refused* where it is typed (`add_connector`); by the time it is
+    // read back there is no user to tell, and losing the rendezvous over a relay
+    // typo would cost more than losing the relay.
+    let relay = match crate::session_config::parse_relay(
+        &c.relay,
+        &c.relay_username,
+        &c.relay_credential,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "connector: ignoring a malformed relay — this session will not use a relay"
+            );
+            None
+        }
+    };
     resolve_webrtc_provisioning(Some(&c.node_peer_id), Some(&c.node_addr), Some(&ice))
+        .map(|p| p.with_relay(relay))
 }
 
 /// What `row` should become once `node` has advertised `advertised` — or `None`
@@ -499,14 +556,44 @@ pub fn record_advertised_reflectors(
 /// Pack a selection for the localStorage mirror. Separated from the write so it
 /// is testable natively — the write itself is wasm-only.
 pub fn pack_mirror(p: &WebRtcProvisioning) -> String {
-    let ice = p
-        .ice_servers
-        .iter()
-        .flat_map(|s| s.urls.iter())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("{}\u{1f}{}\u{1f}{}", p.node_peer_id, p.node_addr, ice)
+    // **Reflectors and the relay are packed SEPARATELY, and flattening them
+    // together is a real bug, not an inefficiency.** The first version of this
+    // joined every entry's urls into one list and dropped `username`/
+    // `credential` on the floor. A relay survived the round trip as a bare
+    // `turn:` url with no credentials — which `parse_ice_urls` then *refuses*
+    // on the way back in, so `unpack_mirror` dropped the whole ICE list with a
+    // warning and the session silently fell back to host-only. Measured: the
+    // establisher installed with `ice_servers=0` against a connector row that
+    // held a complete, valid relay.
+    //
+    // An entry is a relay iff it carries credentials — the same discriminator
+    // `parse_relay` enforces on the way in, so the two cannot disagree.
+    let (relays, reflectors): (Vec<_>, Vec<_>) =
+        p.ice_servers.iter().partition(|s| s.is_relay());
+    let join = |v: &[&crate::session_config::IceServer]| {
+        v.iter()
+            .flat_map(|s| s.urls.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let ice = join(&reflectors);
+    let relay = join(&relays);
+    // One credential pair, from the first relay entry — `parse_relay` produces
+    // exactly one, and a second would have to come from somewhere that does not
+    // exist yet.
+    let user = relays
+        .first()
+        .and_then(|s| s.username.clone())
+        .unwrap_or_default();
+    let cred = relays
+        .first()
+        .and_then(|s| s.credential.clone())
+        .unwrap_or_default();
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        p.node_peer_id, p.node_addr, ice, relay, user, cred
+    )
 }
 
 /// Parse a mirror value written by [`pack_mirror`]. Fails closed on anything
@@ -523,7 +610,26 @@ pub fn unpack_mirror(raw: &str) -> Option<WebRtcProvisioning> {
     let id = parts.next()?;
     let addr = parts.next()?;
     let ice = parts.next().unwrap_or("");
-    resolve_webrtc_provisioning(Some(id), Some(addr), Some(ice))
+    // Fields 4-6 are absent on every mirror written before relays existed, and
+    // absent means "no relay" — the same compatibility rule the reflector field
+    // above already follows, and the fail-closed reading.
+    let relay = parts.next().unwrap_or("");
+    let user = parts.next().unwrap_or("");
+    let cred = parts.next().unwrap_or("");
+    // Degrade loudly, never silently — this is a read path with no user to
+    // correct, exactly like the malformed-reflector case. Losing the rendezvous
+    // over a bad mirror would cost far more than losing the relay.
+    let relay = match crate::session_config::parse_relay(relay, user, cred) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "connector mirror: ignoring a malformed relay — this session will not use one"
+            );
+            None
+        }
+    };
+    resolve_webrtc_provisioning(Some(id), Some(addr), Some(ice)).map(|p| p.with_relay(relay))
 }
 
 // ---------------------------------------------------------------------------
@@ -813,6 +919,9 @@ pub(crate) mod tests {
             label: String::new(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         }
     }
 
@@ -920,6 +1029,59 @@ pub(crate) mod tests {
         let decoded = connector_from_entity(&legacy).expect("a pre-4.5.1 row is not malformed");
         assert_eq!(decoded.ice_advertised, "");
         assert_eq!(decoded.ice, "stun:typed.example:3478", "and its typed half is untouched");
+        // The same row also predates the relay fields, and reads as "no relay"
+        // — the fail-closed default, and what that deployment actually meant.
+        assert_eq!(decoded.relay, "");
+        assert_eq!(decoded.relay_username, "");
+        assert_eq!(decoded.relay_credential, "");
+    }
+
+    /// The relay survives the tree, credentials included.
+    ///
+    /// Worth its own test because the failure is silent in the worst way: a
+    /// field dropped on **encode** leaves a relay that the user typed, the form
+    /// accepted, and every surface shows — which then gathers no relay
+    /// candidates, because the credential never came back. That is exactly the
+    /// looks-configured-does-nothing shape this whole feature exists to refuse.
+    #[test]
+    fn a_relay_round_trips_through_the_tree_with_its_credentials() {
+        let mut c = conn("2KNode", "ws://node.example:4040");
+        c.ice = "stun:typed.example:3478".to_string();
+        c.relay = "turn:relay.example:3478 turns:relay.example:5349".to_string();
+        c.relay_username = "alice".to_string();
+        c.relay_credential = "s3cret".to_string();
+
+        let back = connector_from_entity(&connector_to_entity(&c)).expect("round trips");
+        assert_eq!(back, c);
+        // Named individually as well as by struct equality: a future `PartialEq`
+        // that skipped a field would let the whole-struct assert pass.
+        assert_eq!(back.relay_username, "alice");
+        assert_eq!(back.relay_credential, "s3cret");
+        assert_eq!(back.ice, "stun:typed.example:3478", "the reflector half is untouched");
+    }
+
+    /// `add_connector` refuses a half-configured relay at the surface where it
+    /// was typed — the same posture the reflector list already has, and for a
+    /// sharper reason: a relay URL with no credentials is accepted by
+    /// `RTCPeerConnection` and gathers nothing.
+    #[tokio::test]
+    async fn a_relay_without_credentials_is_refused_where_it_was_typed() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+
+        let mut c = conn("2KNode", "ws://node.example:4040");
+        c.relay = "turn:relay.example:3478".to_string();
+        let e = add_connector(&peers, &me, &c).expect_err("a bare relay is refused");
+        assert!(
+            e.contains("username") && e.contains("credential"),
+            "the refusal must name what is missing: {e}"
+        );
+
+        // With both, it is accepted — the refusal is about the missing halves,
+        // not about relays being unwelcome.
+        c.relay_username = "alice".to_string();
+        c.relay_credential = "s3cret".to_string();
+        add_connector(&peers, &me, &c).expect("a complete relay is accepted");
     }
 
     /// Wait until `done` holds. Writes here go through `dispatch_write` (L1,
@@ -948,6 +1110,9 @@ pub(crate) mod tests {
             label: "my box".to_string(),
             ice: "stun:stun.example.org:3478".to_string(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
         assert_eq!(connector_from_entity(&connector_to_entity(&c)), Some(c));
     }
@@ -983,6 +1148,9 @@ pub(crate) mod tests {
             label: String::new(),
             ice: "turn:relay.example:3478".to_string(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
         let err = add_connector(&peers, &me, &bad).expect_err("turn has no credential carrier");
         assert!(err.contains("username"), "the reason must be sayable: {err}");
@@ -1282,6 +1450,9 @@ pub(crate) mod tests {
             label: "the node".to_string(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
 
         let no_route = advertise(&peers, &me, &node_pid).await;
@@ -1399,6 +1570,52 @@ pub(crate) mod tests {
         // host-only rather than failing — same compatibility rule as the row.
         let legacy = unpack_mirror("2KNode\u{1f}ws://n:9").expect("a legacy mirror still reads");
         assert!(legacy.ice_servers.is_empty());
+
+        // **The relay survives the boot mirror WITH its credentials, and this
+        // is the assertion that was missing when the feature first "worked".**
+        //
+        // `pack_mirror` originally flattened every entry's urls into one list
+        // and dropped `username`/`credential`. A relay came back as a bare
+        // `turn:` url, which `parse_ice_urls` then REFUSES — so `unpack_mirror`
+        // discarded the whole ICE list and the session fell back to host-only,
+        // silently, against a connector row holding a perfectly good relay.
+        // Measured through the shipped surface: the establisher installed with
+        // `ice_servers=0`. Native tests on the tree round-trip all passed,
+        // because the tree is not the path boot reads.
+        let with_relay = WebRtcProvisioning {
+            node_peer_id: "2KNode".to_string(),
+            node_addr: "ws://n:9".to_string(),
+            ice_servers: vec![
+                crate::session_config::IceServer {
+                    urls: vec!["stun:a.example:3478".to_string()],
+                    username: None,
+                    credential: None,
+                },
+                crate::session_config::IceServer {
+                    urls: vec!["turn:r.example:3478".to_string()],
+                    username: Some("alice".to_string()),
+                    credential: Some("s3cret".to_string()),
+                },
+            ],
+            poll_interval_ms: None,
+            max_deadline_ms: None,
+        };
+        let back = unpack_mirror(&pack_mirror(&with_relay)).expect("round trips");
+        assert_eq!(back, with_relay);
+        assert_eq!(back.ice_servers.len(), 2, "reflector and relay stay separate entries");
+        assert_eq!(back.ice_servers[1].credential.as_deref(), Some("s3cret"));
+
+        // A relay with NO reflectors is the common shape for someone who was
+        // handed only TURN credentials, and it must not collapse.
+        let relay_only = WebRtcProvisioning {
+            ice_servers: vec![crate::session_config::IceServer {
+                urls: vec!["turn:r.example:3478".to_string()],
+                username: Some("bob".to_string()),
+                credential: Some("hunter2".to_string()),
+            }],
+            ..with_relay.clone()
+        };
+        assert_eq!(unpack_mirror(&pack_mirror(&relay_only)), Some(relay_only));
 
         assert!(unpack_mirror("").is_none());
         assert!(unpack_mirror("2KNodeOnly").is_none(), "an id with no address");

@@ -13,6 +13,13 @@ pub struct BackendStatusView {
     pub status: String,
     /// WS listen / connect address, when running.
     pub ws_addr: Option<String>,
+    /// Whether this backend is serving `system/signaling` right now — i.e.
+    /// whether browsers on this LAN can rendezvous through it.
+    ///
+    /// From the IPC poll, which reports the **running** peer rather than the
+    /// persisted setting: the handler mounts at build time, so a peer started
+    /// before the toggle was flipped is configured to serve and is not serving.
+    pub signaling_node: bool,
 }
 
 /// Everything the System Backend window renders.

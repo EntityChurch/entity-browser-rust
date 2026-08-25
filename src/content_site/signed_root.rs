@@ -312,6 +312,47 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+/// The artifact name a static publisher ships its own endpoint under.
+///
+/// Deliberately **not** at `manifest_url_prefix` — §6.5.3 reserves that slot for
+/// the signed root and calls serving a transport profile there non-conformant,
+/// naming it as *"a reasonable mistake"*: a static origin has no live surface to
+/// answer "what are your transports", that slot is the one singular terminal
+/// thing it serves, and a profile is plausibly "the manifest". It is not, and a
+/// consumer following `signed_pointer` there would find a profile and no signed
+/// root. Ours sits beside the site, which is what the spec says to do instead.
+pub const TRANSPORT_PROFILE_REL: &str = "transport-profile";
+
+/// **Emit our own `http-poll` endpoint beside the publish**, so a consumer can
+/// *discover* where our artifacts are instead of sharing our convention.
+///
+/// This is the publisher half of §6.5.3 v1.8. Until it existed, our reader
+/// derived the manifest's location by convention — which the ruling forbids —
+/// and had no alternative, because **we advertised the endpoint only inside a
+/// registry binding's `transports`**. A consumer meeting a bare
+/// `entity-browser` origin had no endpoint document at all, so the rule was
+/// satisfiable against other publishers and not against us. Found by running the
+/// cross-implementation check in the other direction (`ROUTING-2026-08-19-c` §4).
+///
+/// Emitted **after** the signed root, and only when one was written: the profile
+/// advertises `signed_pointer`, which under Amendment 10 obliges the trie
+/// closure to be present. Advertising it beside a tree that has no root is the
+/// false claim §6.5.3 warns about.
+pub fn write_transport_profile(base: &Path, peer_id: &str, origin: &str) -> Result<(), String> {
+    let profile = crate::content_site::registry_publish::http_poll_profile(peer_id, origin);
+    let mut data = Vec::new();
+    ciborium::into_writer(&profile, &mut data).map_err(|e| format!("encode profile: {e}"))?;
+    // `system/peer/transport/http-poll`. **Not an upstream constant** — `core/peer`
+    // defines `TYPE_PEER_TRANSPORT_{TCP,HTTP}` and no `http-poll`, which is the
+    // same shape as the missing `…/transport/websocket` type this repo already
+    // records: the profile is specified and the Rust type is not. The string is
+    // pinned against workbench-go's emission, read out of their artifact rather
+    // than assumed — the one cross-impl fact a constant name could not give us.
+    let entity = entity_entity::Entity::new("system/peer/transport/http-poll", data)
+        .map_err(|e| format!("profile entity: {e}"))?;
+    write_file(&base.join(TRANSPORT_PROFILE_REL), &entity_wire::encode_entity(&entity))
+}
+
 // ---------------------------------------------------------------------------
 // A fetcher over a projected directory
 // ---------------------------------------------------------------------------
@@ -330,25 +371,82 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// 3. **The signature is a two-hop** — a `system/hash` pointer at
 ///    `system/signature/{head_hex}.bin` naming a blob — where upstream's
 ///    `signature_url` serves the leaf directly.
+///
+/// ## The manifest is DISCOVERED, and #1 above is why that had to change
+///
+/// Divergence #1 was a *choice* — and `EXTENSION-NETWORK` §6.5.3 v1.8 has since
+/// ruled that a consumer **MUST NOT** derive the manifest's location by
+/// convention: it is read from the profile's `manifest_url_prefix`, and
+/// `{origin}/manifest` is as conformant as ours. So this fetcher reads
+/// `{base}/transport-profile` when the publisher emitted one
+/// ([`crate::content_site::publish_layout`]), and falls back to the convention
+/// only when there is none.
+///
+/// The fallback is not a shortcut kept for comfort — it is the **absence of a
+/// source**. Our own `make site` publishes ship no profile artifact yet, so
+/// every existing gate in this tree enters that arm; a publisher we have never
+/// met, who does emit one, enters the other. That asymmetry is the open item,
+/// not the design.
 pub struct DirFetcher {
     base: std::path::PathBuf,
     peer_id: String,
+    /// The origin this directory stands for — needed to map an advertised
+    /// absolute URL back onto a file under `base`. `None` uses the fixture-
+    /// friendly default of "whatever origin the profile itself names".
+    origin: Option<String>,
 }
 
 impl DirFetcher {
+    /// A directory whose layout follows **our** convention, or which carries a
+    /// `transport-profile` naming the origin it was published for.
     pub fn new(base: impl Into<std::path::PathBuf>, peer_id: impl Into<String>) -> Self {
-        Self { base: base.into(), peer_id: peer_id.into() }
+        Self { base: base.into(), peer_id: peer_id.into(), origin: None }
+    }
+
+    /// A directory standing in for a specific origin — use this when the
+    /// publisher's advertised URLs are rooted somewhere other than the profile's
+    /// own `tree_url_prefix`.
+    pub fn at_origin(
+        base: impl Into<std::path::PathBuf>,
+        peer_id: impl Into<String>,
+        origin: impl Into<String>,
+    ) -> Self {
+        Self { base: base.into(), peer_id: peer_id.into(), origin: Some(origin.into()) }
     }
 
     fn blob_path(&self, hash: &Hash) -> std::path::PathBuf {
         let hex = hash.to_hex();
         self.base.join("content").join(&hex[0..2]).join(&hex[2..4]).join(&hex)
     }
+
+    /// The publisher's emitted endpoint, if it shipped one beside the site.
+    fn discovered_layout(&self) -> Option<super::publish_layout::PublishLayout> {
+        let bytes = fs::read(self.base.join("transport-profile")).ok()?;
+        super::publish_layout::PublishLayout::from_profile_artifact(&bytes)
+    }
+
+    /// Where the manifest actually is, in order of authority: what the publisher
+    /// advertised, then our own convention.
+    fn manifest_path(&self) -> std::path::PathBuf {
+        if let Some(layout) = self.discovered_layout() {
+            // `origin_for`, not `tree_url_prefix` — a peer-rooted prefix
+            // (`/{peer}`, our own same-origin emission) is not the origin, and
+            // stripping it as one drops the peer segment from every path.
+            let origin =
+                self.origin.clone().unwrap_or_else(|| layout.origin_for(&self.peer_id));
+            if let Some(rel) =
+                super::publish_layout::PublishLayout::relative_to_origin(&layout.manifest_url, &origin)
+            {
+                return self.base.join(rel);
+            }
+        }
+        self.base.join(&self.peer_id).join(PUBLISHED_ROOT_REL)
+    }
 }
 
 impl entity_peer::published_root::ContentFetcher for DirFetcher {
     fn manifest(&self) -> Result<Vec<u8>, String> {
-        let p = self.base.join(&self.peer_id).join(PUBLISHED_ROOT_REL);
+        let p = self.manifest_path();
         fs::read(&p).map_err(|e| format!("manifest {}: {e}", p.display()))
     }
 

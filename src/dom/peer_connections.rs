@@ -26,6 +26,12 @@ const CONNECTOR_ID_FIELD: &str = "connector_id";
 const CONNECTOR_ADDR_FIELD: &str = "connector_addr";
 const CONNECTOR_LABEL_FIELD: &str = "connector_label";
 const CONNECTOR_ICE_FIELD: &str = "connector_ice";
+/// Relay (TURN) URI list + its credentials. Three fields rather than one,
+/// because all three must be present together — `parse_relay` refuses a partial
+/// set, and naming which half is missing is only possible if they are separate.
+const CONNECTOR_RELAY_FIELD: &str = "connector_relay";
+const CONNECTOR_RELAY_USER_FIELD: &str = "connector_relay_user";
+const CONNECTOR_RELAY_CRED_FIELD: &str = "connector_relay_cred";
 
 /// Drafts keys for the meet-at-a-name form.
 const MEET_MODE_FIELD: &str = "meet_mode";
@@ -755,6 +761,37 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
         ),
     );
 
+    // Relay. Optional, and separate from the reflectors above because the two
+    // are different kinds of thing: a reflector is a commodity that takes no
+    // credentials (§9.3) and that a node may advertise for you; a relay is
+    // rented, credentialed, and can never be advertised (§3b has no credential
+    // channel). The help text says when a person needs one — which is exactly
+    // what the reachability diagnosis now tells them.
+    let relay_input =
+        components::text_input(ctx, CONNECTOR_RELAY_FIELD, "", "turn:relay.example.org:3478");
+    util::append(
+        &card,
+        &components::field(
+            &crate::i18n::t("label.relay", &[]),
+            &crate::i18n::t("peerconn.relay_help", &[]),
+            &relay_input,
+        ),
+    );
+    let relay_user_input = components::text_input(ctx, CONNECTOR_RELAY_USER_FIELD, "", "");
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.relay_username", &[]), "", &relay_user_input),
+    );
+    let relay_cred_input = components::text_input(ctx, CONNECTOR_RELAY_CRED_FIELD, "", "");
+    util::append(
+        &card,
+        &components::field(
+            &crate::i18n::t("label.relay_credential", &[]),
+            &crate::i18n::t("peerconn.relay_secret_help", &[]),
+            &relay_cred_input,
+        ),
+    );
+
     let add_btn = components::button_el(
         &crate::i18n::t("peerconn.connector_add", &[]),
         components::ButtonKind::Primary,
@@ -772,6 +809,11 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
                 read(CONNECTOR_LABEL_FIELD),
                 read(CONNECTOR_ICE_FIELD),
             );
+            let (relay, ruser, rcred) = (
+                read(CONNECTOR_RELAY_FIELD),
+                read(CONNECTOR_RELAY_USER_FIELD),
+                read(CONNECTOR_RELAY_CRED_FIELD),
+            );
             // Both halves are required, and the model says so with a notice —
             // submitting the empty form must not look like a dead button, so we
             // dispatch and let `add_connector` report the refusal.
@@ -779,7 +821,9 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
                 window_id: wid,
                 event: "connector_add".to_string(),
                 // The app's multi-field packing, so one event carries the form.
-                value: format!("{id}\u{1f}{addr}\u{1f}{label}\u{1f}{ice}"),
+                value: format!(
+                    "{id}\u{1f}{addr}\u{1f}{label}\u{1f}{ice}\u{1f}{relay}\u{1f}{ruser}\u{1f}{rcred}"
+                ),
             });
             rp();
         });

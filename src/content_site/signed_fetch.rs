@@ -68,7 +68,7 @@ use entity_hash::Hash;
 use entity_peer::published_root::{ContentFetcher, PublishedRootClient, PublishedRootError};
 
 use super::http_poll::{content_url, crack_pointer, BinSource, Freshness, PollError};
-use super::paths::PUBLISHED_ROOT_REL;
+use super::publish_layout::PublishLayout;
 
 /// How many pump rounds before we give up. The walk is HAMT-depth deep and the
 /// measured projection resolves a page in **3 fetches**, so this is a runaway
@@ -81,55 +81,73 @@ const MAX_ROUNDS: usize = 32;
 #[derive(Clone)]
 pub struct PinnedPublisher {
     /// HTTP origin the files are served from (`""` = same-origin).
+    ///
+    /// **Nothing on the signed path derives a URL from this any more** — that is
+    /// [`layout`](Self::layout)'s job, per §6.5.3 v1.8. It is kept because it is
+    /// *where we pinned this publisher*, which the first-origin-wins note in
+    /// `session_cache` is about, and because the transport-trusted `.list`
+    /// convenience surfaces still take an origin.
     pub origin: String,
     pub peer_id: String,
     pub pubkey: Vec<u8>,
     pub key_type: KeyType,
+    /// **Where this publisher's artifacts actually are**, as *they* advertised —
+    /// not as we would have laid them out. See
+    /// [`PublishLayout`](super::publish_layout::PublishLayout): deriving the
+    /// manifest by convention is the hop-0 defect the cross-implementation run
+    /// found, and the reason this field exists rather than a second `format!`.
+    pub layout: PublishLayout,
 }
 
 impl PinnedPublisher {
-    /// **Derive the pin from a peer-id alone** — which is what makes the whole
-    /// chain work with one pinned key.
+    /// **Pin a publisher at an origin the user typed, with no profile to read.**
     ///
-    /// A registry binding names a *peer-id*, not a public key. There is no key
-    /// distribution problem to solve, because for Ed25519 in canonical form the
-    /// peer-id **embeds** the public key: it is
+    /// Falls back to our own layout convention — legitimate *here and nowhere
+    /// else*, because it is the absence of an endpoint document rather than a
+    /// shortcut past one (`name pin <peer-id> <origin>` gives us a URL, not an
+    /// endpoint). A publisher reached through a registry binding **has**
+    /// advertised transports, and that path goes through [`Self::with_layout`];
+    /// deriving there is the §6.5.3 v1.8 violation.
+    pub fn from_peer_id(origin: impl Into<String>, peer_id: &str) -> Option<Self> {
+        let origin = origin.into();
+        let layout = PublishLayout::conventional(&origin, peer_id);
+        Self::with_layout(peer_id, layout).map(|p| Self { origin, ..p })
+    }
+
+    /// **Pin a publisher at the layout it advertised** — the path every
+    /// binding-resolved consumer takes.
+    ///
+    /// **Derives the key from the peer-id alone**, which is what makes the whole
+    /// chain work from one pinned string. A registry binding names a *peer-id*,
+    /// not a public key, and there is no key distribution problem to solve:
+    /// for Ed25519 in canonical form the peer-id **embeds** the public key —
     /// `bs58(varint(key_type) || varint(hash_type) || digest)` with
-    /// `hash_type = identity`, so the digest **is** the 32-byte public key
+    /// `hash_type = identity`, so the digest **is** the 32 key bytes
     /// (`PeerId::derive_public_key`). Decode it and you hold the pin.
     ///
     /// Returns `None` for a peer-id whose form does not carry its key — the
     /// SHA-256 legacy form (`derive_public_key` refuses any non-identity
     /// `hash_type`), or a key type we cannot verify with. Those need an
     /// out-of-band key, and saying so beats guessing one.
-    pub fn from_peer_id(origin: impl Into<String>, peer_id: &str) -> Option<Self> {
+    pub fn with_layout(peer_id: &str, layout: PublishLayout) -> Option<Self> {
         let pid = entity_crypto::PeerId::from(peer_id.to_string());
         let (pubkey, key_type_byte) = pid.derive_public_key()?;
         let key_type = KeyType::from_byte(key_type_byte).ok()?;
         Some(Self {
-            origin: origin.into(),
+            origin: layout.origin_for(peer_id),
             peer_id: peer_id.to_string(),
             pubkey,
             key_type,
+            layout,
         })
     }
 
     fn manifest_url(&self) -> String {
-        format!(
-            "{}/{}/{}",
-            self.origin.trim_end_matches('/'),
-            self.peer_id,
-            PUBLISHED_ROOT_REL
-        )
+        self.layout.manifest_url.clone()
     }
 
     fn signature_pointer_url(&self, target: &Hash) -> String {
-        format!(
-            "{}/{}/system/signature/{}.bin",
-            self.origin.trim_end_matches('/'),
-            self.peer_id,
-            target.to_hex()
-        )
+        self.layout.signature_pointer_url(&self.peer_id, target)
     }
 }
 
@@ -337,7 +355,7 @@ impl SignedSession {
                 // a 5xx or a dead socket is not. See
                 // `SignedFetchError::IncompleteWalk`.
                 let bytes = src
-                    .get(content_url(&self.pin.origin, &want), Freshness::Immutable)
+                    .get(self.pin.layout.content_url(&want), Freshness::Immutable)
                     .await
                     .map_err(|e| declared_fetch_error(&want.to_hex(), e))?;
                 if let Ok(mut c) = self.state.content.lock() {
@@ -376,7 +394,7 @@ async fn fetch_signature<S: BinSource + ?Sized>(
     // transport hiccup — retrying it would spin.
     let hash = crack_pointer(&ptr)
         .map_err(|e| SignedFetchError::Verify(format!("signature pointer: {e}")))?;
-    src.get(content_url(&pin.origin, &hash), Freshness::Immutable)
+    src.get(pin.layout.content_url(&hash), Freshness::Immutable)
         .await
         .map_err(|e| declared_fetch_error("signature body", e))
 }
@@ -518,7 +536,8 @@ mod tests {
         };
         emit_owned_sites(dir, std::slice::from_ref(&site), "", Some(&mut root)).unwrap();
         root.finish(dir).unwrap();
-        PinnedPublisher { origin: String::new(), peer_id, pubkey, key_type }
+        let layout = PublishLayout::conventional("", &peer_id);
+        PinnedPublisher { origin: String::new(), peer_id, pubkey, key_type, layout }
     }
 
     /// **The B15 gate.** The sync walk driven to completion over an async
@@ -791,6 +810,7 @@ mod tests {
 
         let pin = PinnedPublisher {
             origin: String::new(),
+            layout: PublishLayout::conventional("", &peer_id),
             peer_id,
             pubkey,
             key_type,

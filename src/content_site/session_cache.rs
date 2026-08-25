@@ -57,6 +57,30 @@ thread_local! {
 /// someone serving the same tree from a second URL — and its cost is the
 /// first-origin-wins limit in the module docs.
 pub fn session_for(peer_id: &str, origin: &str) -> Option<Rc<SignedSession>> {
+    with_session(peer_id, || PinnedPublisher::from_peer_id(origin, peer_id))
+}
+
+/// The session for `peer_id` at the layout **it advertised** — the path a
+/// binding-resolved publisher takes.
+///
+/// Same first-wins rule, and it now carries a second consequence worth naming:
+/// a publisher first met at a *typed origin* (convention layout) keeps that
+/// layout even if a later binding advertises a real one. The floor is what the
+/// cache exists to protect, so the session is not rebuilt — but it means the
+/// order in which a publisher is first met decides whether we consume it by
+/// convention or by advertisement. Recorded, not designed around; the escape is
+/// [`reset`], which lowers the floor.
+pub fn session_for_layout(
+    peer_id: &str,
+    layout: super::publish_layout::PublishLayout,
+) -> Option<Rc<SignedSession>> {
+    with_session(peer_id, || PinnedPublisher::with_layout(peer_id, layout))
+}
+
+fn with_session(
+    peer_id: &str,
+    build: impl FnOnce() -> Option<PinnedPublisher>,
+) -> Option<Rc<SignedSession>> {
     SESSIONS.with(|s| {
         let mut map = s.borrow_mut();
         if let Some(existing) = map.get(peer_id) {
@@ -64,8 +88,7 @@ pub fn session_for(peer_id: &str, origin: &str) -> Option<Rc<SignedSession>> {
             // than the mirror, and silently minting a second session is the bug.
             return Some(Rc::clone(existing));
         }
-        let pin = PinnedPublisher::from_peer_id(origin, peer_id)?;
-        let session = Rc::new(SignedSession::new(pin));
+        let session = Rc::new(SignedSession::new(build()?));
         map.insert(peer_id.to_string(), Rc::clone(&session));
         Some(session)
     })

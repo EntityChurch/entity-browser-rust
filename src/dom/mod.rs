@@ -141,6 +141,10 @@ pub struct DomRenderer {
     /// window is force-rebuilt for one frame so `t()` strings re-resolve — the
     /// "dirty all" the per-window `WindowWatch` can't express (i18n P1).
     last_locale_generation: u64,
+    /// Twin of [`Self::last_locale_generation`] for `crate::reachability` —
+    /// the diagnosis store is mutated off the frame loop and carries no
+    /// per-window flag, so this compare is its only path to the screen.
+    last_reachability_generation: u64,
 }
 
 impl DomRenderer {
@@ -231,6 +235,7 @@ impl DomRenderer {
             // Seed from the current generation (boot already applied a locale),
             // so the first frame doesn't spuriously force-rebuild everything.
             last_locale_generation: crate::i18n::locale_generation(),
+            last_reachability_generation: crate::reachability::generation(),
         })
     }
 
@@ -820,6 +825,17 @@ impl DomRenderer {
         let locale_gen = crate::i18n::locale_generation();
         let force_all = locale_gen != self.last_locale_generation;
         self.last_locale_generation = locale_gen;
+
+        // Same shape, same reason, different input: a reachability verdict is
+        // written from inside the establisher's async negotiation, off this
+        // loop, so no tree write happens and no per-window flag fires. Without
+        // this compare the diagnosis renders only when something unrelated
+        // happens to repaint the window — measured on the first `e2e-webrtc-nat`
+        // run against the feature, where ~30 failed negotiations per side
+        // produced the note on exactly one of the two browsers.
+        let reach_gen = crate::reachability::generation();
+        let force_all = force_all || reach_gen != self.last_reachability_generation;
+        self.last_reachability_generation = reach_gen;
 
         // Determine which windows are currently open.
         let open_ids: HashSet<WindowId> = window_manager

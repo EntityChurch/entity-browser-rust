@@ -66,6 +66,25 @@ pub fn button(ctx: &util::DomCtx, label: &str, kind: ButtonKind, event: &str) ->
     b
 }
 
+/// [`button`], but carrying a `value` alongside the event name.
+///
+/// The third sibling of [`button`] / [`button_action`], for the common shape
+/// where one event serves several rows and the row identifies itself — a
+/// per-item Select/Delete, or a toggle that must say *which* thing and *which
+/// direction*. Without it a view reaches for raw `button_el` +
+/// `on_window_event` (which several already do), and the UI lint cannot see it.
+pub fn button_value(
+    ctx: &util::DomCtx,
+    label: &str,
+    kind: ButtonKind,
+    event: &str,
+    value: &str,
+) -> Element {
+    let b = button_el(label, kind);
+    ctx.on_window_event(&b, "click", event, value);
+    b
+}
+
 /// [`button`]'s twin for a direct [`Action`] (no window-event indirection).
 pub fn button_action(ctx: &util::DomCtx, label: &str, kind: ButtonKind, action: Action) -> Element {
     let b = button_el(label, kind);

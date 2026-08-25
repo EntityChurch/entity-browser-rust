@@ -16,6 +16,14 @@ pub struct BackendPeerInfo {
     #[allow(dead_code)]
     pub status: String,
     pub ws_addr: Option<String>,
+    /// Whether this backend is serving `system/signaling` **right now** — i.e.
+    /// whether browsers can rendezvous through it.
+    ///
+    /// Read from the running peer, not from the persisted setting, because the
+    /// handler mounts at build time: a peer started before the toggle was
+    /// flipped is configured to serve and is not serving. Reporting the setting
+    /// here would put a "Rendezvous: on" row above a node that answers 404.
+    pub signaling_node: bool,
 }
 
 impl BackendPeerInfo {
@@ -34,6 +42,12 @@ impl BackendPeerInfo {
             label: get_string(result, "label"),
             status: get_string(result, "status").unwrap_or_else(|| "unknown".into()),
             ws_addr: get_string(result, "ws_addr"),
+            // Absent reads as false — an older backend that does not send the
+            // field is not serving rendezvous, which is the truthful answer.
+            signaling_node: js_sys::Reflect::get(result, &JsValue::from_str("signaling_node"))
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         })
     }
 }
@@ -113,6 +127,29 @@ pub async fn stop_backend_peer(peer_id: &str) -> Result<BackendPeerInfo, String>
         .map_err(|_| "failed to set peerId arg")?;
     let result = invoke("stop_backend_peer", &args.into()).await?;
     BackendPeerInfo::from_js(&result).ok_or("invalid stop response".into())
+}
+
+/// Turn this backend's §6.5 rendezvous on or off, persistently.
+///
+/// **Restarts the peer when it is running** — `system/signaling` mounts on
+/// `PeerBuilder`, so there is no way to add a handler to a live peer. The
+/// returned info reports what is actually being served afterwards, so a caller
+/// never has to assume the flip took.
+pub async fn set_backend_signaling_node(
+    peer_id: &str,
+    enabled: bool,
+) -> Result<BackendPeerInfo, String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(&args, &JsValue::from_str("peerId"), &JsValue::from_str(peer_id))
+        .map_err(|_| "failed to set peerId arg")?;
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("enabled"),
+        &JsValue::from_bool(enabled),
+    )
+    .map_err(|_| "failed to set enabled arg")?;
+    let result = invoke("set_backend_signaling_node", &args.into()).await?;
+    BackendPeerInfo::from_js(&result).ok_or("invalid set_backend_signaling_node response".into())
 }
 
 /// Delete a backend peer entirely — stops + removes from disk.

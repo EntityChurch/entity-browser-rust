@@ -830,6 +830,21 @@ impl ChatModel {
             .any(|r| r.status == crate::peer_liveness::ConnDisplay::Connected);
         let no_establisher = bound && nothing_reachable && !peers.peer_has_webrtc(me);
 
+        // Why, when our own ICE agent can say. Same relevance rule as the line
+        // above — bound, and nothing currently reachable — because a diagnosis
+        // beside a working conversation is the kind of notice users learn to
+        // ignore, and the WebRTC gates assert twice a run that we raise no false
+        // unreachable note. `verdict_for` is `Unknown` (non-advisory) for any
+        // peer whose negotiation has not actually failed, so the guard against
+        // speaking mid-establishment lives in the classifier, not here.
+        let reachability_advice = crate::reachability::advice_for_conversation(
+            bound,
+            nothing_reachable,
+            reachability
+                .iter()
+                .map(|r| crate::reachability::verdict_for(&r.peer_id)),
+        );
+
         ChatOutput {
             conversation_id: self.conversation_id.clone(),
             messages,
@@ -837,6 +852,7 @@ impl ChatModel {
             startable,
             reachability,
             no_establisher,
+            reachability_advice,
         }
     }
 }

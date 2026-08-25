@@ -834,6 +834,9 @@ mod tests {
             label: "test node".to_string(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
         (peers, me, connector)
     }
@@ -1081,6 +1084,9 @@ mod tests {
             label: String::new(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
         let mut s = MeetSession::start(&me, ghost, Mode::Tag("chess".into())).with_cadence(1, 10);
 

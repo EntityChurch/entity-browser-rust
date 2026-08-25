@@ -14,8 +14,16 @@ tauri-plugin-log = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+# `net` + `time` are for `port_mapping.rs` (UDP to the gateway on 5351, and the
+# retransmit/renewal timers). Both were already unified into the build by
+# entity-peer's native deps; declared here because relying on another crate's
+# feature selection is how a build breaks when that crate drops one.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
 dirs = "6"
+# PCP mapping nonces (RFC 6887 §11.2) — the one field an off-path attacker must
+# not be able to predict. Already in the tree transitively (via `rand`), so this
+# is a direct edge to a crate we ship either way, not a new supply-chain edge.
+getrandom = "0.2"
 
 # Entity system — native peer for backend
 # `sqlite` feature enables PeerBuilder::sqlite(path) so backend-peer
@@ -23,15 +31,30 @@ dirs = "6"
 entity-peer = { path = "../../entity-core-rust/core/peer", features = [
     "websocket", "inbox", "continuation", "subscription", "clock", "revision", "query",
     "sqlite", "history",
+    # EXTENSION-SIGNALING: lets this backend MOUNT `system/signaling` and be the
+    # rendezvous itself (`signaling_node.rs`), not merely call one. A browser
+    # peer has no listener, so two browsers need a third party holding the
+    # bulletin board — and this process already binds a WebSocket a browser can
+    # reach. Off unless the user turns it on; see `signaling_node::mount`.
+    "signaling",
 ] }
 entity-crypto = { path = "../../entity-core-rust/core/crypto" }
+# The signaling extension as a DIRECT edge — `SignalingCore` / `SignalingHandler`
+# / `signaling_seed_grants` / `Limits`, which are what mounting a node needs.
+# `entity-peer/signaling` compiles the crate but re-exports none of it, the same
+# reason the app crate takes this edge.
+entity-signaling = { path = "../../entity-core-rust/extensions/signaling" }
 # Capability grant authoring — B self-seeds S's manager grant at designation
 # (DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 1).
 entity-capability = { path = "../../entity-core-rust/core/capability" }
 entity-ecf = { path = "../../entity-core-rust/core/ecf" }
 entity-entity = { path = "../../entity-core-rust/core/entity" }
 entity-types = { path = "../../entity-core-rust/core/types" }
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+# `display` as well as `parse`: `persistence::set_signaling_node` rewrites
+# config.toml from the parsed table rather than appending a line, so flipping a
+# setting twice cannot leave two keys with the stale first one winning — and
+# round-tripping the table is what preserves keys this version does not know.
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 # Capture the backend peer's `tracing` output. entity-peer logs exclusively
 # via `tracing` (handshake/dispatch/write/errors); without a subscriber in
 # this process those events are dropped — the backend peer runs dark

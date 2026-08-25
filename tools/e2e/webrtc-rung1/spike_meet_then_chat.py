@@ -128,7 +128,25 @@ def rq(base, method, path, body=None, timeout=60):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
-_PREFS = {"media.peerconnection.ice.obfuscate_host_addresses": False}
+# **mDNS host-candidate obfuscation — off by default here, and that is a RIG
+# accommodation, not a statement about browsers.**
+#
+# Chrome and Firefox both ship this ON: a host candidate's IP is replaced by a
+# random `{uuid}.local` name resolved over multicast DNS at connection time. On a
+# real LAN that resolves and two peers connect on host candidates alone — no
+# STUN, no TURN. Between podman containers it has not been shown to resolve,
+# which is why every spike in this directory turns it off.
+#
+# The cost of that accommodation is that **the shipped candidate path on the most
+# common topology (two people on one Wi-Fi) has no coverage** — our green gates
+# all run raw-IP host candidates, which is not what a user's browser sends.
+#
+# `E2E_MDNS=1` runs it the way a real browser does. Treat a failure under it as a
+# question about the RIG first (does multicast cross this bridge at all?) and
+# about the app second — a red result here is only evidence about browsers if
+# multicast is known to work between the containers.
+_MDNS = os.environ.get("E2E_MDNS", "").strip() not in ("", "0")
+_PREFS = {"media.peerconnection.ice.obfuscate_host_addresses": _MDNS}
 if MODE == "worker":
     _PREFS["dom.securecontext.allowlist"] = "host.containers.internal"
     _PREFS["dom.securecontext.whitelist"] = "host.containers.internal"
@@ -162,6 +180,16 @@ def field_text(title, field):
 SHELL_TEXT = field_text("Shell", "shell-scrollback")
 CHAT_TEXT = field_text("Chat", "chat-messages")
 REACH_TEXT = field_text("Chat", "chat-reachability")
+# Distinctive fragments of every sentence `crate::reachability` can add to the
+# Chat header. None of them may appear beside a connection that is demonstrably
+# working — a diagnosis raised during ordinary establishment, or left over after
+# it succeeded, is worse than silence, which is what the four "raises no false
+# unreachable note" assertions have always been about.
+FALSE_NOTES = (
+    "No reflector is set up",
+    "reflector didn’t answer",
+    "needs a relay",
+)
 SHELL_COUNT = _windows("Shell") + "return out.length;"
 
 def ex(base, sid, script, args=None):
@@ -327,6 +355,34 @@ E2E_ICE = os.environ.get("E2E_ICE", "").strip()
 # the rig, never typed into the Shell.
 E2E_NODE_REFLECTION = os.environ.get("E2E_NODE_REFLECTION", "").strip()
 
+# A RELAY (TURN) for the connector row, with its credentials. Empty by default,
+# so every existing gate reproduces exactly as before.
+#
+# Proves the shipped path end to end — typed into the Shell's `connector add`,
+# stored in the durable row, resolved through provisioning, landed on the ICE
+# agent — WITHOUT needing a real TURN server, which is the same thing the
+# reflector assertion does for `stun:`. What it deliberately does NOT prove is
+# that relayed media flows; that needs a relay to point at.
+E2E_RELAY = os.environ.get("E2E_RELAY", "").strip()
+E2E_RELAY_USER = os.environ.get("E2E_RELAY_USER", "").strip()
+E2E_RELAY_CRED = os.environ.get("E2E_RELAY_CRED", "").strip()
+
+def expected_ice_servers():
+    """How many `RTCIceServer` ENTRIES the agent should hold.
+
+    Counted in entries, not urls, because that is the property a relay has and
+    a reflector does not: `parse_ice_urls` packs every reflector into ONE entry,
+    while a relay is always a SECOND one — an `RTCIceServer` carries a single
+    credential pair for all its urls, so a credentialed relay cannot share an
+    entry with credential-free reflectors without either leaking the username
+    onto them or losing it from the relay.
+
+    So `ice_urls` sees the §4.5.1 merge and `ice_servers` sees the relay split;
+    each assertion needs its own counter, and using one for both would be blind
+    to exactly the thing it was added for.
+    """
+    return (1 if expected_ice_urls() else 0) + (1 if E2E_RELAY else 0)
+
 def expected_ice_urls():
     """The §4.5.1 merge, as an expectation — counted in URLs, not entries.
 
@@ -347,6 +403,18 @@ def expected_ice_urls():
                   if a not in typed]
     return len(typed + advertised)
 
+def expected_ice_urls_total():
+    """`ice_urls` as the app logs it — every url across EVERY entry.
+
+    The relay's urls land in the same sum, so this is the reflector merge plus
+    the relay. Kept separate from `expected_ice_urls` so the §4.5.1 dedup/union
+    rule above stays readable as itself: that function answers "what should the
+    merge produce", this one answers "what does the log field count".
+    """
+    return expected_ice_urls() + len(
+        [u for u in re.split(r"[,\s]+", E2E_RELAY) if u] if E2E_RELAY else []
+    )
+
 def provision(base, sid, node_peer, label):
     """Add + select the connector through the Shell — the user's own surface."""
     open_shell(base, sid, label)
@@ -354,7 +422,14 @@ def provision(base, sid, node_peer, label):
     # injected by URL: the durable registry row is the shipped path, and it is
     # the one that has to carry reflectors all the way to the ICE agent.
     ice_arg = f" ice={E2E_ICE}" if E2E_ICE else ""
-    ok_add = until_listed(base, sid, f"connector add {node_peer} {NODE_WS}{ice_arg} rung1",
+    # Same surface, same reason: a relay that only works when injected by URL
+    # would prove nothing about the field a person actually fills in.
+    relay_arg = ""
+    if E2E_RELAY:
+        relay_arg = (f" relay={E2E_RELAY} relay_user={E2E_RELAY_USER}"
+                     f" relay_cred={E2E_RELAY_CRED}")
+    ok_add = until_listed(base, sid,
+                          f"connector add {node_peer} {NODE_WS}{ice_arg}{relay_arg} rung1",
                           short_pid(node_peer))
     # `connector ls` marks the selection with ●.
     ok_use = until_listed(base, sid, f"connector use {node_peer}", "●")
@@ -529,7 +604,7 @@ def main():
         # prove the row was stored, not that the agent was configured. When
         # E2E_ICE is unset this asserts the LAN posture instead (0), so the
         # shared-bridge gates keep proving they add no third party.
-        want_ice = expected_ice_urls()
+        want_ice = expected_ice_urls_total()
         ice_a = [l for l in log_lines(A_BASE, sa) if "establisher" in l and "ice_urls" in l]
         ice_b = [l for l in log_lines(B_BASE, sb) if "establisher" in l and "ice_urls" in l]
         # Format-agnostic on purpose: the field reaches this log as
@@ -550,9 +625,63 @@ def main():
               + (f"   ({' + '.join(src)})" if src else "   (host-only, no reflector)"))
         if not ice_a or not ice_b:
             print("  !! no establisher line carried an ice_urls field — cannot classify")
-        checks[f"the ICE agent is configured with {want_ice} reflector url(s)"] = (
+        checks[f"the ICE agent is configured with {want_ice} ICE url(s)"] = (
             bool(ice_a) and bool(ice_b) and got(ice_a) and got(ice_b)
         )
+
+        # The RELAY reached the agent as its own entry. Asserted on the same
+        # install line for the same reason as the reflectors — anywhere earlier
+        # would prove the row was stored, not that the agent was configured.
+        want_servers = expected_ice_servers()
+        srv_re = re.compile(r'ice_servers\D{0,4}(\d+)')
+        def got_servers(ls):
+            vals = [int(m.group(1)) for l in ls for m in [srv_re.search(l)] if m]
+            return bool(vals) and all(v == want_servers for v in vals)
+        print(f"  A/B establisher ice_servers == {want_servers}: "
+              f"{got_servers(ice_a)}/{got_servers(ice_b)}"
+              + (f"   (relay {E2E_RELAY} as user '{E2E_RELAY_USER}')" if E2E_RELAY else ""))
+        checks[f"the ICE agent holds {want_servers} ICE server entry/entries"] = (
+            bool(ice_a) and bool(ice_b) and got_servers(ice_a) and got_servers(ice_b)
+        )
+
+        # ── mDNS: prove the PREF IS IN EFFECT, or a green run proves nothing ──
+        # Under `E2E_MDNS=1` the whole point is that host candidates carry
+        # `{uuid}.local` names instead of raw IPs — what a real browser sends.
+        # But a PASS on its own cannot distinguish "mDNS resolved and the peers
+        # connected" from "the pref never applied and this was the ordinary
+        # raw-IP run". Firefox scopes obfuscation by permission state, so it is
+        # genuinely possible for the pref to be set and not bite.
+        #
+        # So gather candidates from a throwaway `RTCPeerConnection` in the page
+        # and read the SDP. Printed on PASS as well as FAIL — a green run has to
+        # carry its own evidence, or the next seat re-derives this.
+        if _MDNS:
+            probe = (
+                "const done = arguments[arguments.length-1];"
+                "const pc = new RTCPeerConnection({iceServers:[]});"
+                "pc.createDataChannel('probe');"
+                "pc.onicegatheringstatechange = () => {"
+                "  if (pc.iceGatheringState === 'complete') {"
+                "    const sdp = (pc.localDescription && pc.localDescription.sdp) || '';"
+                "    pc.close(); done(sdp); } };"
+                "pc.createOffer().then(o => pc.setLocalDescription(o));"
+                "setTimeout(() => { const sdp = (pc.localDescription && pc.localDescription.sdp) || '';"
+                "  try { pc.close(); } catch(e) {} done(sdp); }, 5000);"
+            )
+            def cands(base, sid):
+                sdp = rq(base, "POST", f"/session/{sid}/execute/async",
+                         {"script": probe, "args": []})["value"] or ""
+                return [l.strip() for l in sdp.splitlines() if l.startswith("a=candidate")]
+            ca, cb = cands(A_BASE, sa), cands(B_BASE, sb)
+            mdns_a = any(".local" in c for c in ca)
+            mdns_b = any(".local" in c for c in cb)
+            print(f"  mDNS host candidates (E2E_MDNS=1): A={mdns_a} B={mdns_b}")
+            for lbl, cs in (("A", ca), ("B", cb)):
+                for c in cs[:3]:
+                    print(f"     {lbl}: {c[:120]}")
+            checks["host candidates are obfuscated to .local (what a real browser sends)"] = (
+                mdns_a and mdns_b
+            )
 
         open_shell(A_BASE, sa, "A"); open_shell(B_BASE, sb, "B")
         pa = bound_peer_id(A_BASE, sa, "A")
@@ -649,10 +778,40 @@ def main():
                     break
                 time.sleep(1)
             print(f"  {lbl} header: {reach!r}")
-            checks[f"{lbl} header reads Connected"] = "Connected" in reach
-            checks[f"{lbl} header raises no false unreachable note"] = (
-                "can’t be reached back" not in reach
-            )
+            if EXPECT_NO_MEDIA:
+                # THE SPLIT RIG IS THE `NoReflector` TOPOLOGY, exactly: host
+                # candidates only (`ice_servers: Vec::new()`), two isolated
+                # networks, so every negotiation genuinely fails and the
+                # classifier has something TRUE to say. This is the positive
+                # half of the diagnosis feature and the only gate that proves it
+                # can produce a note at all — everywhere else the requirement is
+                # that it stays quiet, which a classifier wired to nothing also
+                # satisfies.
+                #
+                # It reads the RENDERED TEXT, deliberately. The classifier has
+                # native tests; an exit code cannot tell "classified correctly"
+                # from "classified correctly and rendered nowhere" (AP25).
+                named = any(n in reach for n in FALSE_NOTES)
+                checks[f"{lbl} header names WHY it is unreachable"] = named
+                # And specifically the right one — "no reflector configured",
+                # not "this network needs a relay". Recommending a relay to
+                # someone who has not configured a reflector sends them to buy
+                # the wrong thing, and both notes appear in exactly the
+                # situations that look alike from outside.
+                checks[f"{lbl} names the reflector, not a relay"] = (
+                    "No reflector is set up" in reach and "needs a relay" not in reach
+                )
+            else:
+                checks[f"{lbl} header raises no false unreachable note"] = (
+                    "can’t be reached back" not in reach
+                    # The classifier's notes belong to the same rule and are
+                    # checked here rather than in a gate of their own, because
+                    # this is the case that matters: messages just crossed in
+                    # both directions, so any of these sentences is provably
+                    # false. If the strings are reworded, update `FALSE_NOTES` —
+                    # a check that silently stops matching is the failure mode.
+                    and not any(n in reach for n in FALSE_NOTES)
+                )
 
         # ── 7. survives idle — EXTENSION-NETWORK Amdt 14 / §11.5 ─────────────
         # Establishment and carriage are the easy halves. The gate's own phrase
@@ -827,14 +986,26 @@ def main():
             # positive NAT gate it was always meant to grow into).
             rendezvous = [k for k in checks if "met" in k or "connector" in k
                           or "provisioning" in k or "establisher" in k]
+            # The diagnosis assertions are load-bearing in this mode, so they
+            # must reach the verdict — a check that only prints is a check that
+            # can regress silently.
+            diagnosis = [k for k in checks if "WHY it is unreachable" in k
+                         or "reflector, not a relay" in k]
+            diag_ok = all(checks[k] for k in diagnosis) and bool(diagnosis)
             delivery = [k for k in checks if "delivered" in k]
             rv_ok = all(checks[k] for k in rendezvous)
             delivered = any(checks[k] for k in delivery)
             print("\n── negative control: two isolated networks ───")
             print(f"   rendezvous over the node (must hold) : {'✅' if rv_ok else '❌'}")
             print(f"   media delivered (must NOT)           : {'❌ delivered' if delivered else '✅ no path'}")
-            ok = rv_ok and not delivered
-            if delivered:
+            print(f"   the app SAYS why (no-reflector)      : {'✅' if diag_ok else '❌'}")
+            ok = rv_ok and not delivered and diag_ok
+            if not diag_ok:
+                print("\nRESULT: FAIL ❌ unreachable, and the app did not say why.")
+                print("  This rig is the `NoReflector` topology; the Chat header")
+                print("  must name the reflector as the missing piece. Silence")
+                print("  here is the bug the classifier exists to fix.")
+            elif delivered:
                 print("\nRESULT: FAIL ❌ media crossed two isolated networks.")
                 print("  Either the isolation leaked or traversal now works.")
                 print("  Check the rig's A->B probe before believing the latter.")

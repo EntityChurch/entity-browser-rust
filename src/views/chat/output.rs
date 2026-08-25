@@ -39,6 +39,19 @@ pub struct ChatOutput {
     /// a WebSocket, and a standing warning next to a working conversation is
     /// the kind users learn to ignore.
     pub no_establisher: bool,
+    /// *Why* nothing here is reachable, when our own ICE agent's gathered
+    /// candidates can say (`crate::reachability`). `None` renders nothing.
+    ///
+    /// Subordinate to the state above, never a replacement for it: the chips
+    /// keep saying **whether**, this adds **why**, and it is the difference
+    /// between "that peer is not connected" and "this network needs a relay".
+    ///
+    /// Same relevance rule as [`Self::no_establisher`] — set only when the
+    /// conversation is bound and nothing is currently reachable. It is also
+    /// naturally exclusive with it: no establisher means no negotiation ever
+    /// ran, so there is no verdict to carry. That is asserted rather than
+    /// assumed (`no_establisher_and_a_network_verdict_are_never_both_shown`).
+    pub reachability_advice: Option<crate::reachability::Reachability>,
 }
 
 /// One other participant's reachability, as the header paints it.

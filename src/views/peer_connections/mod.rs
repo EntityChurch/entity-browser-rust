@@ -246,10 +246,15 @@ impl WindowView for PeerConnectionsWindow {
                     // bound peer: a connector is deployment infrastructure, and
                     // provisioning reads it from the system peer.
                     "connector_add" => {
-                        // Packed "{peer_id}\x1f{addr}\x1f{label}\x1f{ice}" — the
-                        // app's multi-field convention, so one event carries the
-                        // form.
-                        let mut parts = value.splitn(4, '\x1f');
+                        // Packed
+                        // "{peer_id}\x1f{addr}\x1f{label}\x1f{ice}\x1f{relay}\x1f{user}\x1f{cred}"
+                        // — the app's multi-field convention, so one event
+                        // carries the form. `splitn(7, ..)` so a credential
+                        // containing the separator would be preserved whole
+                        // rather than truncated (it cannot contain `\x1f` from a
+                        // text input, but the last field is the right place for
+                        // the remainder either way).
+                        let mut parts = value.splitn(7, '\x1f');
                         let c = crate::connectors::Connector {
                             node_peer_id: parts.next().unwrap_or("").to_string(),
                             node_addr: parts.next().unwrap_or("").to_string(),
@@ -258,6 +263,9 @@ impl WindowView for PeerConnectionsWindow {
                             // Ignored by `add_connector` — a node's own advertisement is
                                 // learned, never typed.
                                 ice_advertised: String::new(),
+                            relay: parts.next().unwrap_or("").to_string(),
+                            relay_username: parts.next().unwrap_or("").to_string(),
+                            relay_credential: parts.next().unwrap_or("").to_string(),
                             };
                         let sys = peers.system_peer_id().to_string();
                         self.set_connector_notice(
