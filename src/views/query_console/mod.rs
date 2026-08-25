@@ -66,7 +66,7 @@ impl QueryConsoleWindow {
 
 impl WindowView for QueryConsoleWindow {
     fn title(&self) -> String {
-        "Query Console".into()
+        crate::i18n::window_title("Query Console")
     }
 
     fn type_name(&self) -> &'static str {

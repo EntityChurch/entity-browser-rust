@@ -97,7 +97,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     util::append(&create_panel, &alias_input);
 
     use crate::peer_mode::PeerMode;
-    let add_btn = components::button_el("Add peer", components::ButtonKind::Primary);
+    let add_btn = components::button_el(&crate::i18n::t("btn.add_peer", &[]), components::ButtonKind::Primary);
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();

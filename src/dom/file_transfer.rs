@@ -48,7 +48,7 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     // "not authorized" path. The status itself is the header chip.
     let denied = matches!(output.access, TargetAccess::Denied);
     if output.target_options.len() > 1 || denied {
-        let peer_group = components::card("Device");
+        let peer_group = components::card(&crate::i18n::t("filetransfer.device", &[]));
         if output.target_options.len() > 1 {
             render_target_selector(&peer_group, output, ctx);
         }
@@ -63,12 +63,12 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     // here we simply withhold the surfaces until access is granted.
     if !denied {
         // Get: browse the share as a tree, then pull a file.
-        let get_group = components::card("Shared files");
+        let get_group = components::card(&crate::i18n::t("filetransfer.shared_files", &[]));
         render_file_browser(&get_group, output, ctx);
         util::append(&wrapper, &get_group);
 
         // Send: push a file up.
-        let send_group = components::card("Send a file");
+        let send_group = components::card(&crate::i18n::t("filetransfer.send_file", &[]));
         render_upload_controls(&send_group, output, ctx);
         util::append(&wrapper, &send_group);
     }
@@ -124,7 +124,10 @@ fn render_target_selector(parent: &Element, output: &FileTransferOutput, ctx: &D
         .map(|o| o.value.as_str())
         .unwrap_or("");
     let select = components::select(ctx, &options, selected, "select_target");
-    util::append(parent, &components::field("From peer", "", &select));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("filetransfer.from_peer", &[]), "", &select),
+    );
 }
 
 /// Access affordance for the effective target (`§2.1`) — honest and
@@ -169,7 +172,12 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     if output.root_listed {
         let header = util::create_element("div");
         header.set_attribute("style", theme::ROW_END).ok();
-        let refresh = components::button(ctx, "Refresh", components::ButtonKind::Small, "ft_refresh");
+        let refresh = components::button(
+            ctx,
+            &crate::i18n::t("btn.refresh", &[]),
+            components::ButtonKind::Small,
+            "ft_refresh",
+        );
         util::append(&header, &refresh);
         util::append(parent, &header);
     }
@@ -234,7 +242,7 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
 /// Pull the currently-selected file. Inert (dimmed, no handler) when nothing is
 /// selected — reuses the proven `Action::DownloadFile` path.
 fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let btn = components::button_el("\u{2b07} Pull selected file", components::ButtonKind::Primary);
+    let btn = components::button_el(&crate::i18n::t("filetransfer.pull_selected", &[]), components::ButtonKind::Primary);
     match &output.selected_full_path {
         Some(path) => {
             let actions = ctx.actions.clone();
@@ -280,7 +288,7 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
     input.set_attribute("style", "display:none").ok();
     util::append(parent, &input);
 
-    let btn = components::button_el("Upload a file", components::ButtonKind::Secondary);
+    let btn = components::button_el(&crate::i18n::t("filetransfer.upload_file", &[]), components::ButtonKind::Secondary);
     {
         let input_for_click = input.clone();
         ctx.listen(&btn, "click", move |_| {
@@ -347,7 +355,7 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
 fn render_results(parent: &Element, output: &FileTransferOutput) {
     // A bounded group like its siblings (S2) — the results pane is the
     // window's feedback surface, not a floating tail.
-    let card = components::card("Results");
+    let card = components::card(&crate::i18n::t("filetransfer.results", &[]));
 
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();

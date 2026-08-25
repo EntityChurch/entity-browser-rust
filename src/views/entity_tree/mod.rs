@@ -83,7 +83,7 @@ impl EntityTreeWindow {
 
 impl WindowView for EntityTreeWindow {
     fn title(&self) -> String {
-        "Entity Tree".to_string()
+        crate::i18n::window_title("Entity Tree")
     }
 
     fn type_name(&self) -> &'static str {

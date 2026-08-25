@@ -79,12 +79,26 @@ report() {
         # raw — un-extracted UI-text literals (skip the atom-defining files).
         raw=0
         if [[ ! "$f" =~ $ALLOW ]]; then
-            card=$(count 'card("' "$flat")
-            field=$(count 'field("' "$flat")
-            button=$(count 'button(ctx,[[:space:]]*"' "$flat")
-            button=$((button + $(count 'button_action(ctx,[[:space:]]*"' "$flat")))
-            text=$(count 'set_text_content(Some("' "$flat")
-            raw=$((card + field + button + text))
+            # Trailing `[^"]` requires a NON-EMPTY literal: an empty title
+            # (`card("")`, site_editor's disclosure-form convention) is not
+            # translatable prose, so it must not count.
+            card=$(count 'card("[^"]' "$flat")
+            # `[^.]field("` — the free-function UI atom `field("Label", …)`, NOT
+            # the `.field("name", &val)` method of `fmt::DebugStruct` in a Debug
+            # impl (views/*/model.rs). Those are struct field *names*, never
+            # user-rendered — counting them was a false positive (they must not
+            # be translated). Requiring a non-`.` lead char excludes the method.
+            field=$(count '[^.]field("[^"]' "$flat")
+            button=$(count 'button(ctx,[[:space:]]*"[^"]' "$flat")
+            button=$((button + $(count 'button_action(ctx,[[:space:]]*"[^"]' "$flat")))
+            text=$(count 'set_text_content(Some("[^"]' "$flat")
+            # `"title", "…"` — a title-attribute tooltip literal (set via
+            # util::set_attr / .set_attribute). A `t()` call has no quote after
+            # the comma, so migrating drops the count. The `[^"]` keeps it from
+            # matching an empty title. (text_input's field_id arg is `"title",
+            # &initial` — a non-quote follows, so it's not caught here.)
+            title=$(count '"title", *"[^"]' "$flat")
+            raw=$((card + field + button + text + title))
         fi
 
         if ((raw + phys > 0)); then
@@ -94,7 +108,10 @@ report() {
 }
 
 if [[ "${1:-}" == "--update-baseline" ]]; then
-    report >"$BASELINE"
+    # Normalize exactly as the compare path does (`printf '%s\n' "$current"`),
+    # so the all-clean state (report empty → one trailing newline) round-trips
+    # instead of spuriously diverging (0-byte file vs a lone newline).
+    printf '%s\n' "$(report)" >"$BASELINE"
     echo "i18n-lint: baseline updated ($BASELINE)"
     exit 0
 fi

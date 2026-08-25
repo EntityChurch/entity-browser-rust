@@ -77,7 +77,7 @@ impl WireRecorderWindow {
 
 impl WindowView for WireRecorderWindow {
     fn title(&self) -> String {
-        "Wire Recorder".into()
+        crate::i18n::window_title("Wire Recorder")
     }
 
     fn type_name(&self) -> &'static str {

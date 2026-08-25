@@ -84,7 +84,7 @@ impl PathTapWindow {
 
 impl WindowView for PathTapWindow {
     fn title(&self) -> String {
-        "Path Tap".into()
+        crate::i18n::window_title("Path Tap")
     }
 
     fn type_name(&self) -> &'static str {

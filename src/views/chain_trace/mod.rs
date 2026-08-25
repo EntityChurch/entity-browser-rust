@@ -96,7 +96,7 @@ impl ChainTraceWindow {
 
 impl WindowView for ChainTraceWindow {
     fn title(&self) -> String {
-        "Chain Trace".into()
+        crate::i18n::window_title("Chain Trace")
     }
 
     fn type_name(&self) -> &'static str {

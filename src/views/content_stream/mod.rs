@@ -76,7 +76,7 @@ impl ContentStreamWindow {
 
 impl WindowView for ContentStreamWindow {
     fn title(&self) -> String {
-        "Content Stream".into()
+        crate::i18n::window_title("Content Stream")
     }
 
     fn type_name(&self) -> &'static str {

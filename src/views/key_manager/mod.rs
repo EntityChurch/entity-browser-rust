@@ -61,7 +61,7 @@ impl KeyManagerWindow {
 
 impl WindowView for KeyManagerWindow {
     fn title(&self) -> String {
-        "Key Manager".to_string()
+        crate::i18n::window_title("Key Manager")
     }
 
     fn type_name(&self) -> &'static str {

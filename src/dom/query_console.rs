@@ -132,11 +132,11 @@ fn render_action_buttons(parent: &Element, output: &QueryConsoleOutput, ctx: &Do
     let row = util::create_element("div");
     row.set_attribute("style", theme::BTN_ROW).ok();
 
-    let find_btn = components::button_el("Find", components::ButtonKind::Primary);
+    let find_btn = components::button_el(&crate::i18n::t("btn.find", &[]), components::ButtonKind::Primary);
     bind_query_click(&find_btn, parent, "find", output.window_id, output.peer_id.clone(), ctx);
     util::append(&row, &find_btn);
 
-    let count_btn = components::button_el("Count", components::ButtonKind::Secondary);
+    let count_btn = components::button_el(&crate::i18n::t("btn.count", &[]), components::ButtonKind::Secondary);
     bind_query_click(&count_btn, parent, "count", output.window_id, output.peer_id.clone(), ctx);
     util::append(&row, &count_btn);
 

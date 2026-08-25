@@ -488,7 +488,7 @@ impl DomRenderer {
         // "Window…" in the narrow (~25%) slot. ⧉ (two joined squares) reads as
         // "windows" without saying it; the count rides alongside.
         util::set_text(&windows_toggle, &format!("\u{29c9} {open_count}"));
-        util::set_attr(&windows_toggle, "title", "Open windows");
+        util::set_attr(&windows_toggle, "title", &crate::i18n::t("tooltip.open_windows", &[]));
         // Nothing to open at zero — disable so a tap is a no-op (no empty-panel
         // jitter). Re-enabled on the next rebuild once a window exists.
         if open_count == 0 {
@@ -557,7 +557,7 @@ impl DomRenderer {
                 util::set_attr(&details, "open", "");
             }
             let summary = util::create_element("summary");
-            util::set_text(&summary, cat.label());
+            util::set_text(&summary, &cat.label_i18n());
             util::append(&details, &summary);
 
             // Persist this group's open/closed state across rebuilds.
@@ -751,7 +751,7 @@ impl DomRenderer {
 
             let close_btn = util::create_element_with_class("button", "close-small");
             util::set_text(&close_btn, "\u{00d7}");
-            util::set_attr(&close_btn, "title", "Close window");
+            util::set_attr(&close_btn, "title", &crate::i18n::t("tooltip.close_window", &[]));
             {
                 let actions_rc = self.pending_actions.clone();
                 let rp = self.repaint.clone();
@@ -974,7 +974,7 @@ impl DomRenderer {
 
             let close_btn = util::create_element_with_class("button", "close");
             util::set_text(&close_btn, "\u{00d7}");
-            util::set_attr(&close_btn, "title", "Close window");
+            util::set_attr(&close_btn, "title", &crate::i18n::t("tooltip.close_window", &[]));
             {
                 let actions_rc = pending_actions.clone();
                 let rp = repaint.clone();
@@ -1124,10 +1124,10 @@ fn build_empty_state() -> Element {
             "style",
             "color:var(--accent, #90d0ff);font-weight:600;",
         );
-        util::set_text(&name, cat.label());
+        util::set_text(&name, &cat.label_i18n());
         util::append(&row, &name);
         let desc = util::create_element("span");
-        util::set_text(&desc, &format!(" — {}", cat.description()));
+        util::set_text(&desc, &format!(" — {}", cat.description_i18n()));
         util::append(&row, &desc);
         util::append(&legend, &row);
     }

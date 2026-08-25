@@ -61,7 +61,7 @@ pub fn render(container: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
 
 /// "Themes" card: load an existing user theme + duplicate-a-base creation row.
 fn render_picker(parent: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
-    let card = components::card("Themes");
+    let card = components::card(&crate::i18n::t("theme.themes", &[]));
 
     if !output.user_themes.is_empty() {
         let options: Vec<(&str, &str)> =
@@ -70,7 +70,10 @@ fn render_picker(parent: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
             output.user_themes.iter().find(|t| t.selected).map(|t| t.name.as_str()).unwrap_or("");
         let load = components::select(ctx, &options, selected, "load_theme");
         load.set_attribute("name", &format!("theme-editor-load-{}", output.window_id)).ok();
-        util::append(&card, &components::field("Theme", "", &load));
+        util::append(
+            &card,
+            &components::field(&crate::i18n::t("settings.theme", &[]), "", &load),
+        );
     }
 
     // New-from row: base select + name input + Create (submit-time reads).
@@ -80,13 +83,24 @@ fn render_picker(parent: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
         output.base_themes.iter().find(|t| t.selected).map(|t| t.name.as_str()).unwrap_or("");
     let base = components::select_el(&base_options, base_selected);
     base.set_attribute("data-field", "theme-new-base").ok();
-    util::append(&card, &components::field("New theme from", "", &base));
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("theme.new_from", &[]), "", &base),
+    );
 
     let name_field = format!("theme-new-name-{}", output.revision);
-    let name = components::text_input(ctx, &name_field, "", "name (a-z, 0-9, dashes)");
-    util::append(&card, &components::field("Name", "", &name));
+    let name = components::text_input(
+        ctx,
+        &name_field,
+        "",
+        &crate::i18n::t("theme.name_placeholder", &[]),
+    );
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.name", &[]), "", &name),
+    );
 
-    let create = components::button_el("Create", ButtonKind::Primary);
+    let create = components::button_el(&crate::i18n::t("btn.create", &[]), ButtonKind::Primary);
     create.set_attribute("data-field", "theme-create").ok();
     {
         let actions = ctx.actions.clone();
@@ -138,8 +152,16 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
     util::append(&card, &preview_hint);
 
     let label_field = format!("theme-label-{rev}");
-    let label = components::text_input(ctx, &label_field, &editing.label, "display label");
-    util::append(&card, &components::field("Label", "", &label));
+    let label = components::text_input(
+        ctx,
+        &label_field,
+        &editing.label,
+        &crate::i18n::t("theme.label_placeholder", &[]),
+    );
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.label", &[]), "", &label),
+    );
 
     let scheme = components::select_el(&[("dark", "Dark"), ("light", "Light")], &editing.scheme);
     scheme.set_attribute("data-field", "theme-scheme").ok();
@@ -212,7 +234,7 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
     let buttons = util::create_element("div");
     buttons.set_attribute("style", theme::BTN_ROW).ok();
 
-    let save = components::button_el("Save", ButtonKind::Primary);
+    let save = components::button_el(&crate::i18n::t("btn.save", &[]), ButtonKind::Primary);
     save.set_attribute("data-field", "theme-save").ok();
     {
         let actions = ctx.actions.clone();
@@ -245,10 +267,10 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
 
     util::append(
         &buttons,
-        &components::button(ctx, "Revert", ButtonKind::Secondary, "revert_theme"),
+        &components::button(ctx, &crate::i18n::t("btn.revert", &[]), ButtonKind::Secondary, "revert_theme"),
     );
 
-    let delete = components::button(ctx, "Delete", ButtonKind::Destructive, "delete_theme");
+    let delete = components::button(ctx, &crate::i18n::t("btn.delete", &[]), ButtonKind::Destructive, "delete_theme");
     delete.set_attribute("data-field", "theme-delete").ok();
     if editing.in_use {
         components::disable(&delete);

@@ -91,7 +91,7 @@ impl PeerConnectionsWindow {
 
 impl WindowView for PeerConnectionsWindow {
     fn title(&self) -> String {
-        "Peer Connections".to_string()
+        crate::i18n::window_title("Peer Connections")
     }
 
     fn type_name(&self) -> &'static str {

@@ -269,6 +269,197 @@ fn main() {
     src.push_str("];\n");
 
     fs::write(&out_path, src).expect("write embedded_docs.rs");
+
+    // ---- i18n locale catalogs (P4) -------------------------------------
+    // Parse the JSON locale files under I18N_LOCALES_ROOT and codegen Rust
+    // `&'static` literals into $OUT_DIR/embedded_locales.rs (include!'d by
+    // src/i18n.rs). Unlike the KB corpus (heavy → default embed nothing),
+    // locale catalogs are tiny core-feature data, so the root DEFAULTS to the
+    // crate-local `locales/` — a normal build ships the languages. `en` is
+    // always the compiled-in base; these layer over it with en fallback.
+    generate_embedded_locales(&manifest_dir, &out_dir);
+}
+
+/// A locale message during codegen — mirrors `i18n::Message` but owns `String`s.
+enum LocaleMsg {
+    Simple(String),
+    Plural(Vec<(&'static str, String)>),
+}
+
+/// i18n (P4): codegen `$OUT_DIR/embedded_locales.rs` from the JSON locale files
+/// under `I18N_LOCALES_ROOT` (default: the crate-local `locales/`; explicit
+/// empty ⇒ en-only lean build). Each `*.json` file is one locale (id = file
+/// stem); its top-level object maps message keys to either a **string**
+/// (`Simple`) or an **object** of CLDR-category → string (`Plural`). A
+/// `locales/en.json` is ignored — `en` is the compiled-in base (`EN`), and
+/// these are the locales that *layer over* it.
+fn generate_embedded_locales(manifest_dir: &str, out_dir: &str) {
+    use serde_json::Value;
+
+    println!("cargo:rerun-if-env-changed=I18N_LOCALES_ROOT");
+
+    let root: Option<PathBuf> = match env::var("I18N_LOCALES_ROOT") {
+        Ok(v) if v.trim().is_empty() => None, // explicit empty = lean en-only
+        Ok(v) => {
+            let p = PathBuf::from(v.trim());
+            Some(if p.is_absolute() {
+                p
+            } else {
+                Path::new(manifest_dir).join(p)
+            })
+        }
+        Err(_) => Some(Path::new(manifest_dir).join("locales")), // default: bake
+    };
+
+    // CLDR plural categories in canonical order → the Rust variant ident. A
+    // category outside this set is a typo — fail the build (the selector must
+    // be exact). Building the plural list by iterating this array also gives
+    // deterministic canonical ordering regardless of JSON key order.
+    const CATS: &[(&str, &str)] = &[
+        ("zero", "Zero"),
+        ("one", "One"),
+        ("two", "Two"),
+        ("few", "Few"),
+        ("many", "Many"),
+        ("other", "Other"),
+    ];
+
+    let mut locales: Vec<(String, Vec<(String, LocaleMsg)>)> = Vec::new();
+
+    if let Some(root) = &root {
+        if root.is_dir() {
+            println!("cargo:rerun-if-changed={}", root.display());
+            let mut files: Vec<PathBuf> = fs::read_dir(root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+                .collect();
+            files.sort();
+            for path in files {
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if id.is_empty() {
+                    continue;
+                }
+                if id == "en" {
+                    println!(
+                        "cargo:warning=i18n: skipping {} — `en` is the compiled-in base",
+                        path.display()
+                    );
+                    continue;
+                }
+                let text = fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("i18n: cannot read {}: {e}", path.display()));
+                let json: Value = serde_json::from_str(&text)
+                    .unwrap_or_else(|e| panic!("i18n: {} is not valid JSON: {e}", path.display()));
+                let obj = json.as_object().unwrap_or_else(|| {
+                    panic!(
+                        "i18n: {} must be a JSON object of key → message",
+                        path.display()
+                    )
+                });
+                let mut entries: Vec<(String, LocaleMsg)> = Vec::new();
+                for (key, val) in obj {
+                    let msg = match val {
+                        Value::String(s) => LocaleMsg::Simple(s.clone()),
+                        Value::Object(forms) => {
+                            // Reject unknown category names (typos) up front.
+                            for cat in forms.keys() {
+                                if !CATS.iter().any(|(name, _)| name == cat) {
+                                    panic!(
+                                        "i18n: {} key '{key}' has unknown plural category \
+                                         '{cat}' (expected: zero one two few many other)",
+                                        path.display()
+                                    );
+                                }
+                            }
+                            let mut plural: Vec<(&'static str, String)> = Vec::new();
+                            for (name, variant) in CATS {
+                                if let Some(fval) = forms.get(*name) {
+                                    let s = fval.as_str().unwrap_or_else(|| {
+                                        panic!(
+                                            "i18n: {} key '{key}' category '{name}' must be a string",
+                                            path.display()
+                                        )
+                                    });
+                                    plural.push((*variant, s.to_string()));
+                                }
+                            }
+                            LocaleMsg::Plural(plural)
+                        }
+                        _ => panic!(
+                            "i18n: {} key '{key}' must be a string or an object of plural forms",
+                            path.display()
+                        ),
+                    };
+                    entries.push((key.clone(), msg));
+                }
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                locales.push((id, entries));
+            }
+        }
+    }
+
+    if locales.is_empty() {
+        println!(
+            "cargo:warning=i18n: no overlay locales embedded (en-only) — \
+             add JSON to locales/ or set I18N_LOCALES_ROOT"
+        );
+    } else {
+        let ids: Vec<&str> = locales.iter().map(|(id, _)| id.as_str()).collect();
+        println!(
+            "cargo:warning=i18n: embedding {} overlay locale(s): {}",
+            locales.len(),
+            ids.join(", ")
+        );
+    }
+
+    let mut src = String::new();
+    src.push_str(
+        "// Auto-generated by build.rs — DO NOT EDIT.\n\
+         // Overlay locale catalogs parsed from the I18N_LOCALES_ROOT JSON.\n\
+         // `en` is the compiled-in base (EN); these layer over it (en fallback).\n\n",
+    );
+    src.push_str("pub static EMBEDDED_LOCALES: &[EmbeddedLocale] = &[\n");
+    for (id, entries) in &locales {
+        src.push_str(&format!(
+            "    EmbeddedLocale {{\n        id: {},\n        entries: &[\n",
+            rust_string_literal(id)
+        ));
+        for (key, msg) in entries {
+            match msg {
+                LocaleMsg::Simple(s) => src.push_str(&format!(
+                    "            ({}, Message::Simple({})),\n",
+                    rust_string_literal(key),
+                    rust_string_literal(s),
+                )),
+                LocaleMsg::Plural(forms) => {
+                    src.push_str(&format!(
+                        "            ({}, Message::Plural(&[\n",
+                        rust_string_literal(key)
+                    ));
+                    for (variant, s) in forms {
+                        src.push_str(&format!(
+                            "                (PluralCategory::{}, {}),\n",
+                            variant,
+                            rust_string_literal(s),
+                        ));
+                    }
+                    src.push_str("            ])),\n");
+                }
+            }
+        }
+        src.push_str("        ],\n    },\n");
+    }
+    src.push_str("];\n");
+
+    let out_path = Path::new(out_dir).join("embedded_locales.rs");
+    fs::write(&out_path, src).expect("write embedded_locales.rs");
 }
 
 /// Recursively walk `dir`, collecting `*.md` files keyed by their path

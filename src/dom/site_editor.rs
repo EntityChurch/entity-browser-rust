@@ -189,7 +189,7 @@ fn create_block(ctx: &DomCtx) -> Element {
     let title_input = util::tracked_input(&block, ctx, "new_site_title", "", theme::INPUT);
     title_input.set_attribute("placeholder", "Title (optional)").ok();
 
-    let create = components::button_el("Create site", components::ButtonKind::Primary);
+    let create = components::button_el(&crate::i18n::t("siteeditor.create_site", &[]), components::ButtonKind::Primary);
     {
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
@@ -224,7 +224,7 @@ fn editor_block(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     title.set_attribute("style", "font-weight:bold;font-size:14px").ok();
     util::set_text(&title, &format!("Editing: {}", sel.site_id));
     util::append(&head, &title);
-    let del_site = components::button_el("Delete site", components::ButtonKind::Destructive);
+    let del_site = components::button_el(&crate::i18n::t("siteeditor.delete_site", &[]), components::ButtonKind::Destructive);
     on_confirmed_event(
         ctx,
         &del_site,
@@ -368,7 +368,7 @@ fn render_node(list: &Element, node: &VisibleRow, sel: &SelectedSite, ctx: &DomC
         )
         .ok();
         util::set_text(&dot, "\u{25cf}");
-        dot.set_attribute("title", "Unsaved changes").ok();
+        dot.set_attribute("title", &crate::i18n::t("tooltip.unsaved", &[])).ok();
         util::append(&btn, &dot);
     }
     if is_page {
@@ -535,7 +535,7 @@ fn page_editor(
     // Save + Delete page.
     let actions_row = util::create_element("div");
     actions_row.set_attribute("style", ROW).ok();
-    let save = components::button_el("Save page", components::ButtonKind::Primary);
+    let save = components::button_el(&crate::i18n::t("siteeditor.save_page", &[]), components::ButtonKind::Primary);
     {
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
@@ -566,7 +566,7 @@ fn page_editor(
         });
     }
     util::append(&actions_row, &save);
-    let del_page = components::button_el("Delete page", components::ButtonKind::Destructive);
+    let del_page = components::button_el(&crate::i18n::t("siteeditor.delete_page", &[]), components::ButtonKind::Destructive);
     on_confirmed_event(
         ctx,
         &del_page,
@@ -590,7 +590,7 @@ fn page_editor(
     let move_input =
         util::tracked_input(&move_row, ctx, &move_field, page, &format!("{};max-width:240px", theme::INPUT));
     move_input.set_attribute("placeholder", "new/path/slug").ok();
-    let move_btn = components::button_el("Move", components::ButtonKind::Small);
+    let move_btn = components::button_el(&crate::i18n::t("btn.move", &[]), components::ButtonKind::Small);
     {
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();

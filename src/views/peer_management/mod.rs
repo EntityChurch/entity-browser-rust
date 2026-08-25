@@ -64,7 +64,7 @@ impl PeerManagementWindow {
 
 impl WindowView for PeerManagementWindow {
     fn title(&self) -> String {
-        "Peers".to_string()
+        crate::i18n::window_title("Peers")
     }
 
     fn type_name(&self) -> &'static str {

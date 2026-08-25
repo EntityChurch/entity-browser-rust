@@ -63,6 +63,16 @@ pub const DEFAULT: &str = "en";
 /// is one entry in `THEMES`.
 pub const LOCALES: &[Locale] = &[
     Locale { id: "en", label: "English", dir: "ltr", pseudo: false },
+    // First real target locales (P4). Labels are endonyms (each language's own
+    // name — picker convention). Their catalogs are the `locales/*.json`
+    // overlays baked at build time; `he`/`ar` carry `dir: "rtl"` — the primitive
+    // that drives the whole logical-CSS layout flip. A locale is pickable from
+    // this roster even under a lean `en`-only build (strings fall back to `en`,
+    // but `dir` still flips) — the roster and the embedded catalog are
+    // independent (see `locales/README.md`).
+    Locale { id: "es", label: "Español", dir: "ltr", pseudo: false },
+    Locale { id: "he", label: "עברית", dir: "rtl", pseudo: false },
+    Locale { id: "ar", label: "العربية", dir: "rtl", pseudo: false },
     // Pseudo-locale: RTL, no translation. The RTL-blindside detector.
     Locale { id: "en-XA", label: "Pseudo (RTL)", dir: "rtl", pseudo: true },
 ];
@@ -219,11 +229,12 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// CLDR plural categories. `en`/`es` use only `One`/`Other`; the RTL test
-/// locales (`ar` up to six forms, `he` four) are ADR-0001's open question and
-/// land with their catalogs (P4). The selector must stay **honest** about which
-/// categories it actually supports — that honesty is the single input that
-/// would flip the bespoke-vs-Fluent decision (design §8).
+/// CLDR plural categories. `en`/`es` use only `One`/`Other`; `he` uses
+/// `One`/`Two`/`Other`; `ar` uses all six. Category sets are pinned to the
+/// authoritative CLDR cardinal rules (see [`plural_category`] + its vector
+/// tests, and ADR-0001 §"Plural resolution"). The selector stays **honest**
+/// about which categories it supports — that honesty was the single input that
+/// could have flipped the bespoke-vs-Fluent decision (design §8); it did not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluralCategory {
     Zero,
@@ -249,19 +260,171 @@ pub enum Message {
 /// `t()`; the long-tail extraction is P4.
 pub const EN: &[(&str, Message)] = &[
     // -- base vocabulary (ecosystem-shareable common UI terms) --
+    // Buttons/verbs — reused across every window; translate once, extend per-app.
     ("btn.save", Message::Simple("Save")),
     ("btn.cancel", Message::Simple("Cancel")),
     ("btn.delete", Message::Simple("Delete")),
     ("btn.copy", Message::Simple("Copy")),
     ("btn.connect", Message::Simple("Connect")),
+    ("btn.edit", Message::Simple("Edit")),
+    ("btn.refresh", Message::Simple("Refresh")),
+    ("btn.back", Message::Simple("← Back")),
+    ("btn.revert", Message::Simple("Revert")),
+    ("btn.create", Message::Simple("Create")),
+    ("btn.move", Message::Simple("Move")),
+    ("btn.authorize", Message::Simple("Authorize")),
+    ("btn.add_peer", Message::Simple("Add peer")),
+    ("btn.find", Message::Simple("Find")),
+    ("btn.count", Message::Simple("Count")),
+    ("btn.trace", Message::Simple("Trace")),
+    // Field/section labels — common nouns shared across windows.
+    ("label.status", Message::Simple("Status")),
+    ("label.title", Message::Simple("Title")),
+    ("label.peer", Message::Simple("Peer")),
+    ("label.target", Message::Simple("Target")),
+    ("label.address", Message::Simple("Address")),
+    ("label.name", Message::Simple("Name")),
+    ("label.label", Message::Simple("Label")),
+    // Transient status glyphs.
+    ("status.copied", Message::Simple("Copied ✓")),
+    // -- execute console surface --
+    ("execute.handler", Message::Simple("Handler")),
+    ("execute.operation", Message::Simple("Operation")),
+    ("execute.handler_uri", Message::Simple("Handler URI")),
+    ("execute.resource", Message::Simple("Resource")),
+    ("execute.execute", Message::Simple("Execute")),
+    ("execute.guided", Message::Simple("Guided")),
+    ("execute.raw", Message::Simple("Raw")),
+    // -- peer connections surface --
+    ("peers.known_devices", Message::Simple("Known devices")),
+    ("peers.connect_device", Message::Simple("Connect to a device")),
+    ("peers.pair_qr", Message::Simple("Pair a device (QR)")),
+    // -- window-chrome tooltips (title attrs) --
+    ("tooltip.close_window", Message::Simple("Close window")),
+    ("tooltip.open_windows", Message::Simple("Open windows")),
+    ("tooltip.fill_window", Message::Simple("Fill the window")),
+    ("tooltip.restore_size", Message::Simple("Back to normal size")),
+    ("tooltip.menu", Message::Simple("Menu")),
+    ("tooltip.back", Message::Simple("Back")),
+    ("tooltip.site_home", Message::Simple("Go to site home")),
+    ("tooltip.unsaved", Message::Simple("Unsaved changes")),
+    // -- input placeholders --
+    ("kb.title_placeholder", Message::Simple("Article title")),
+    ("theme.name_placeholder", Message::Simple("name (a-z, 0-9, dashes)")),
+    ("theme.label_placeholder", Message::Simple("display label")),
+    // -- file transfer surface --
+    ("filetransfer.device", Message::Simple("Device")),
+    ("filetransfer.shared_files", Message::Simple("Shared files")),
+    ("filetransfer.send_file", Message::Simple("Send a file")),
+    ("filetransfer.from_peer", Message::Simple("From peer")),
+    ("filetransfer.results", Message::Simple("Results")),
+    ("filetransfer.pull_selected", Message::Simple("\u{2b07} Pull selected file")),
+    ("filetransfer.upload_file", Message::Simple("Upload a file")),
+    // -- site editor surface --
+    ("siteeditor.create_site", Message::Simple("Create site")),
+    ("siteeditor.delete_site", Message::Simple("Delete site")),
+    ("siteeditor.save_page", Message::Simple("Save page")),
+    ("siteeditor.delete_page", Message::Simple("Delete page")),
+    // -- system peers surface --
+    ("syspeers.system_peer", Message::Simple("System peer")),
+    ("syspeers.system_backend", Message::Simple("System backend")),
+    // -- system overview surface --
+    ("sysoverview.clear_logs", Message::Simple("Clear logs")),
+    ("sysoverview.logs", Message::Simple("Logs")),
+    ("sysoverview.device_auth", Message::Simple("Device authorizations")),
+    (
+        "sysoverview.grant_backend_hint",
+        Message::Simple("Authorized on the backend; the specific scope isn't recorded locally."),
+    ),
+    // -- knowledge base surface --
+    ("kb.new_article", Message::Simple("+ New article")),
+    ("kb.back_to_list", Message::Simple("← Back to list")),
     // -- settings surface (the P1 demonstrators — wired through t()) --
     ("settings.appearance", Message::Simple("Appearance")),
     ("settings.theme", Message::Simple("Theme")),
     ("settings.language", Message::Simple("Language")),
+    ("settings.windows", Message::Simple("Windows")),
+    ("settings.site_surface", Message::Simple("Site & Surface")),
+    ("settings.rendering", Message::Simple("Rendering")),
+    ("settings.network", Message::Simple("Network")),
+    // -- theme editor surface --
+    ("theme.themes", Message::Simple("Themes")),
+    ("theme.new_from", Message::Simple("New theme from")),
     (
         "settings.language.hint",
         Message::Simple("Sets the interface language and layout direction."),
     ),
+    // -- menu category headers + blurbs (WindowCategory label/description) --
+    ("category.apps", Message::Simple("Apps & Content")),
+    ("category.system", Message::Simple("System")),
+    ("category.developer", Message::Simple("Developer")),
+    (
+        "category.apps.desc",
+        Message::Simple("Browse sites, play games, run apps"),
+    ),
+    (
+        "category.system.desc",
+        Message::Simple("Peers, keys, connections, settings, storage"),
+    ),
+    (
+        "category.developer.desc",
+        Message::Simple("Entity tree, query & execute consoles, shell, logs"),
+    ),
+    // -- window titles (title bar + menu label, via i18n::window_title) --
+    ("window.entity_tree", Message::Simple("Entity Tree")),
+    ("window.games", Message::Simple("Games")),
+    ("window.apps", Message::Simple("Apps")),
+    ("window.knowledge_base", Message::Simple("Knowledge Base")),
+    ("window.key_manager", Message::Simple("Key Manager")),
+    ("window.peer_connections", Message::Simple("Peer Connections")),
+    ("window.file_transfer", Message::Simple("File Transfer")),
+    ("window.execute_console", Message::Simple("Execute Console")),
+    ("window.query_console", Message::Simple("Query Console")),
+    ("window.settings", Message::Simple("Settings")),
+    ("window.event_log", Message::Simple("Event Log")),
+    ("window.peers", Message::Simple("Peers")),
+    ("window.shell", Message::Simple("Shell")),
+    ("window.chain_trace", Message::Simple("Chain Trace")),
+    ("window.path_tap", Message::Simple("Path Tap")),
+    ("window.wire_recorder", Message::Simple("Wire Recorder")),
+    ("window.content_stream", Message::Simple("Content Stream")),
+    ("window.site_browser", Message::Simple("Site Browser")),
+    ("window.storage", Message::Simple("Storage")),
+    ("window.site_creator", Message::Simple("Site Creator")),
+    ("window.system_overview", Message::Simple("System Overview")),
+    ("window.access_log", Message::Simple("Access Log")),
+    ("window.theme_editor", Message::Simple("Theme Editor")),
+    // -- QR scanner surface (dom/scanner.rs) --
+    ("scanner.scanned_codes", Message::Simple("Scanned Codes")),
+    ("scanner.scanned_codes_count", Message::Simple("Scanned Codes ({n} unique)")),
+    ("scanner.photo_capture", Message::Simple("Photo Capture")),
+    ("scanner.photo_hint", Message::Simple("Take a photo of a QR code")),
+    ("scanner.take_photo", Message::Simple("Take Photo")),
+    ("scanner.processing", Message::Simple("Processing...")),
+    (
+        "scanner.no_detector",
+        Message::Simple("No BarcodeDetector — enter code manually"),
+    ),
+    ("scanner.detector_init_failed", Message::Simple("Detector init failed")),
+    ("scanner.detect_call_failed", Message::Simple("Detect call failed")),
+    ("scanner.qr_found", Message::Simple("QR code found!")),
+    ("scanner.no_qr", Message::Simple("No QR found — try again")),
+    ("scanner.decode_error", Message::Simple("Decode error")),
+    ("scanner.live_scanner", Message::Simple("Live Scanner")),
+    ("scanner.live_hint", Message::Simple("Real-time camera scanning")),
+    ("scanner.start_live", Message::Simple("Start Live Scan")),
+    ("scanner.stop", Message::Simple("Stop")),
+    ("scanner.stopped", Message::Simple("Stopped")),
+    ("scanner.camera_unavailable", Message::Simple("Camera not available")),
+    ("scanner.camera_denied", Message::Simple("Camera denied")),
+    ("scanner.starting_camera", Message::Simple("Starting camera...")),
+    ("scanner.stream_error", Message::Simple("Stream error")),
+    ("scanner.scanning", Message::Simple("Scanning...")),
+    ("scanner.detector_failed", Message::Simple("Detector failed")),
+    ("scanner.scan_detect_error", Message::Simple("Scan {n} — detect error")),
+    ("scanner.found_continuing", Message::Simple("Found! Continuing scan...")),
+    ("scanner.scan_n", Message::Simple("Scan {n}...")),
+    ("scanner.scan_error", Message::Simple("Scan {n} — error")),
     // -- a plural example: proves the selector round-trips (not yet consumed) --
     (
         "peer.count",
@@ -279,13 +442,76 @@ fn en_map() -> &'static HashMap<&'static str, &'static Message> {
     MAP.get_or_init(|| EN.iter().map(|(k, m)| (*k, m)).collect())
 }
 
-/// Look up a key in the catalog for `locale_id`, falling back to `en`. P1 only
-/// `en` has a catalog (real locales `es`/`ar`/`he` join in P4); this is the
-/// single extension point where a locale's own catalog would be consulted
-/// first. The pseudo-locale (`en-XA`) has no catalog — it transforms `en`'s
-/// resolved string (see [`render_template`]).
-fn catalog_entry(_locale_id: &str, key: &str) -> Option<&'static Message> {
+/// A build-time-embedded overlay locale: a locale id + its `(key, message)`
+/// entries, generated by `build.rs` from the JSON files under
+/// `I18N_LOCALES_ROOT` (default `locales/`). `en` is **not** here — it is the
+/// compiled-in [`EN`] base; these are the *additional* locales that layer over
+/// it (a missing key falls back to `en`). The pseudo-locale (`en-XA`) is not
+/// embedded either — it transforms `en`'s resolved string.
+pub struct EmbeddedLocale {
+    pub id: &'static str,
+    pub entries: &'static [(&'static str, Message)],
+}
+
+// Generated by build.rs at compile time. Defines:
+//   pub static EMBEDDED_LOCALES: &[EmbeddedLocale] = &[ ... ];
+include!(concat!(env!("OUT_DIR"), "/embedded_locales.rs"));
+
+/// The embedded overlay catalogs as `id → (key → &Message)`, built once. Empty
+/// on a lean `en`-only build.
+fn embedded_map() -> &'static HashMap<&'static str, HashMap<&'static str, &'static Message>> {
+    static MAP: OnceLock<HashMap<&'static str, HashMap<&'static str, &'static Message>>> =
+        OnceLock::new();
+    MAP.get_or_init(|| {
+        EMBEDDED_LOCALES
+            .iter()
+            .map(|loc| (loc.id, loc.entries.iter().map(|(k, m)| (*k, m)).collect()))
+            .collect()
+    })
+}
+
+/// Look up `key` for `locale_id`: the active locale's own overlay catalog wins;
+/// a key it doesn't define (a **partial** locale — the common case, since
+/// catalogs start as the base vocabulary only) falls back to the compiled-in
+/// `en` base. `en` itself and the pseudo-locale have no overlay → straight to
+/// `en`. Never returns `None` for a key present in `en` — the D13 "always
+/// render, never a raw key" guarantee rides on the `en` completeness.
+fn catalog_entry(locale_id: &str, key: &str) -> Option<&'static Message> {
+    if let Some(overlay) = embedded_map().get(locale_id) {
+        if let Some(msg) = overlay.get(key) {
+            return Some(*msg);
+        }
+    }
     en_map().get(key).copied()
+}
+
+/// Slugify a canonical window name into its catalog-key suffix:
+/// `"File Transfer"` → `"file_transfer"` (non-alphanumerics → `_`).
+fn window_slug(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The localized display title for a window, by its **canonical (English)
+/// name**. The one place both the title bar (`WindowView::title`) and the
+/// menu/picker label (`window::window_display_name`) resolve through, so they
+/// stay in sync (the invariant `window.rs` flags). The canonical name remains
+/// the identity key — matching, grouping, and persistence use it verbatim; only
+/// the *rendered* title is translated. A name with no `window.<slug>` key
+/// renders verbatim (never a raw `window.` key leaks to the user — D13).
+pub fn window_title(name: &str) -> String {
+    let key = format!("window.{}", window_slug(name));
+    match catalog_entry(active_id(), &key) {
+        Some(_) => t(&key, &[]),
+        None => name.to_string(),
+    }
 }
 
 thread_local! {
@@ -371,29 +597,60 @@ pub fn t_plural(key: &str, n: i64, args: &[(&str, &str)]) -> String {
     })
 }
 
-/// Select the CLDR plural category for `n` in `locale_id`. **Honest scope**: P1
-/// implements `en`/`es` (and the `en`-derived pseudo) — `One` for exactly 1,
-/// else `Other`. `ar`/`he` categories are deferred to P4 with their catalogs
-/// (ADR-0001 open); until then an unknown locale falls through to the `en`
-/// rule, which is documented, not silent.
-#[allow(dead_code)] // reached via t_plural (the P1 plural seam); consumed at P4.
+/// Select the CLDR **cardinal** plural category for `n` in `locale_id`.
+///
+/// Rules pinned to the authoritative CLDR source (`unicode.org/cldr` v47 +
+/// `unicode-org/cldr-json`, corroborated — ADR-0001 §"Plural resolution"), for
+/// the **integer-count scope** the app actually renders (every count is a
+/// non-negative integer, so the CLDR `v`/`f`/`e` operands are 0 and `i = n`):
+///
+/// - `en` / `es` (+ the `en`-derived pseudo): `One` ⇔ n=1, else `Other`. (`es`
+///   also has a CLDR `many`, but **only for compact notation** — "1 M", the `e`
+///   exponent operand — which we never emit.)
+/// - `he`: `One` ⇔ n=1, `Two` ⇔ n=2, else `Other`. **No `many`** (removed from
+///   CLDR in v42). The CLDR `one` branch `i=0 and v!=0` is fraction-only and
+///   can't arise from an integer count.
+/// - `ar`: the full six. `Zero`/`One`/`Two` are exact; `Few` ⇔ n%100∈3..10,
+///   `Many` ⇔ n%100∈11..99; everything else (incl. n%100∈{0,1,2} for n≥100) is
+///   `Other`.
+///
+/// An unknown locale falls through to the `en` rule — documented, not silent —
+/// until its own catalog + rules land.
+#[allow(dead_code)] // reached via t_plural (the plural seam); live once counts route through it.
 fn plural_category(locale_id: &str, n: i64) -> PluralCategory {
+    use PluralCategory::*;
     let base = locale_id.split('-').next().unwrap_or(locale_id);
     match base {
-        // en, es, and the en-XA pseudo (base "en"): one/other.
         "en" | "es" => {
             if n == 1 {
-                PluralCategory::One
+                One
             } else {
-                PluralCategory::Other
+                Other
             }
         }
-        // ar/he and anything else: not yet modeled — fall back to en's rule.
+        "he" => match n {
+            1 => One,
+            2 => Two,
+            _ => Other,
+        },
+        "ar" => {
+            // CLDR operand n is the absolute value; counts are non-negative, but
+            // rem_euclid keeps the modulo correct even if a negative ever slips in.
+            let m = n.rem_euclid(100);
+            match n {
+                0 => Zero,
+                1 => One,
+                2 => Two,
+                _ if (3..=10).contains(&m) => Few,
+                _ if (11..=99).contains(&m) => Many,
+                _ => Other,
+            }
+        }
         _ => {
             if n == 1 {
-                PluralCategory::One
+                One
             } else {
-                PluralCategory::Other
+                Other
             }
         }
     }
@@ -568,6 +825,184 @@ mod tests {
         assert_eq!(t_plural("peer.count", 3, &[("n", "3")]), "\u{2068}3\u{2069} peers");
         // zero uses Other in en/es.
         assert_eq!(t_plural("peer.count", 0, &[("n", "0")]), "\u{2068}0\u{2069} peers");
+    }
+
+    // -- P4: CLDR cardinal plural vectors (ADR-0001 §"Plural resolution") -----
+    //
+    // Boundaries pinned to the authoritative CLDR source (unicode.org/cldr v47
+    // chart + unicode-org/cldr-json plurals.json, corroborated) — asserted, not
+    // trusted to memory. Representative n per category, including the modulo
+    // boundaries that are the real correctness test. Integer scope (v=0).
+
+    use PluralCategory::{Few, Many, Other, Two, Zero};
+
+    #[test]
+    fn cldr_plural_es_one_other() {
+        // es: one ⇔ n=1, else other. (CLDR `many` is compact-notation only.)
+        assert_eq!(plural_category("es", 1), PluralCategory::One);
+        for n in [0, 2, 3, 11, 100, 1000] {
+            assert_eq!(plural_category("es", n), Other, "es n={n}");
+        }
+    }
+
+    #[test]
+    fn cldr_plural_he_one_two_other_no_many() {
+        // he: one ⇔ n=1, two ⇔ n=2, else other. Crucially NO `many` — 20/30/100
+        // (old memory-rule multiples of ten) are `other`, not `many`.
+        assert_eq!(plural_category("he", 1), PluralCategory::One);
+        assert_eq!(plural_category("he", 2), Two);
+        for n in [0, 3, 10, 17, 20, 30, 100, 1000] {
+            assert_eq!(plural_category("he", n), Other, "he n={n}");
+        }
+    }
+
+    #[test]
+    fn cldr_plural_ar_all_six_with_modulo_boundaries() {
+        // ar: the six-category worst case — the modulo logic is the real test.
+        assert_eq!(plural_category("ar", 0), Zero);
+        assert_eq!(plural_category("ar", 1), PluralCategory::One);
+        assert_eq!(plural_category("ar", 2), Two);
+        // few: n%100 = 3..10 (CLDR examples: 3~10, 103~110, 1003)
+        for n in [3, 10, 103, 110, 1003] {
+            assert_eq!(plural_category("ar", n), Few, "ar few n={n}");
+        }
+        // many: n%100 = 11..99 (CLDR examples: 11~26, 111, 1011)
+        for n in [11, 26, 99, 111, 1011] {
+            assert_eq!(plural_category("ar", n), Many, "ar many n={n}");
+        }
+        // other: n%100 ∈ {0,1,2} for n≥100 (CLDR examples: 100~102, 200~202, 1000)
+        for n in [100, 101, 102, 200, 202, 1000] {
+            assert_eq!(plural_category("ar", n), Other, "ar other n={n}");
+        }
+    }
+
+    #[test]
+    fn unknown_locale_falls_back_to_en_rule() {
+        // Documented fallback (not silent): an un-modeled locale uses en's rule.
+        assert_eq!(plural_category("zz", 1), PluralCategory::One);
+        assert_eq!(plural_category("zz", 5), Other);
+    }
+
+    // -- P4: the embedded overlay catalogs (loader) ------------------------
+
+    #[test]
+    fn embedded_locales_have_no_orphan_keys_and_matching_shape() {
+        // Subset-VALIDITY, not completeness: an overlay may be partial (missing
+        // keys fall back to `en` by design — the "partial → English" policy).
+        // But every key it DOES define must exist in `en` (else it's a
+        // typo/orphan that silently never renders), and its Simple/Plural shape
+        // must match `en` so the selector behaves. The i18n analog of theming's
+        // key-parity test, deliberately weakened: a missing string is a safe en
+        // fallback; a missing color is a broken render.
+        for loc in EMBEDDED_LOCALES {
+            for (key, msg) in loc.entries {
+                let en_msg = en_map().get(key).copied().unwrap_or_else(|| {
+                    panic!(
+                        "overlay locale '{}' defines key '{key}' not in the en \
+                         base catalog (orphan/typo)",
+                        loc.id
+                    )
+                });
+                assert_eq!(
+                    matches!(en_msg, Message::Plural(_)),
+                    matches!(msg, Message::Plural(_)),
+                    "overlay '{}' key '{key}': Simple/Plural shape differs from en",
+                    loc.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overlay_locale_is_consulted() {
+        // Each overlay Simple entry must resolve to ITS OWN template through the
+        // full `t()` path — proves `catalog_entry` consults the overlay, not en.
+        for loc in EMBEDDED_LOCALES {
+            for (key, msg) in loc.entries {
+                if let Message::Simple(tpl) = msg {
+                    set_active(loc.id);
+                    assert_eq!(
+                        t(key, &[]),
+                        render_template(tpl, &[], false),
+                        "overlay '{}' key '{key}' must resolve to its own template",
+                        loc.id
+                    );
+                }
+            }
+        }
+        set_active("en");
+    }
+
+    #[test]
+    fn overlay_ar_plural_selects_distinct_forms() {
+        // The ar worst case, integrated: Arabic peer.count carries all six CLDR
+        // forms, and the selector must pick DISTINCT templates across categories
+        // *through the overlay* (few ≠ many ≠ other). Guards the plural × overlay
+        // × selector wiring. Skipped on a lean en-only build (no ar overlay →
+        // en's one/other fallback can't distinguish the categories).
+        if !EMBEDDED_LOCALES.iter().any(|l| l.id == "ar") {
+            return;
+        }
+        set_active("ar");
+        let few = t_plural("peer.count", 3, &[("n", "3")]); // n%100=3 → few
+        let many = t_plural("peer.count", 11, &[("n", "11")]); // n%100=11 → many
+        let other = t_plural("peer.count", 100, &[("n", "100")]); // → other
+        set_active("en");
+        assert_ne!(few, many, "ar few vs many must select different forms");
+        assert_ne!(many, other, "ar many vs other must select different forms");
+        assert!(few.contains('3'), "the count arg must render: {few:?}");
+    }
+
+    #[test]
+    fn window_title_maps_and_falls_back() {
+        set_active("en");
+        assert_eq!(window_title("File Transfer"), "File Transfer");
+        assert_eq!(window_title("System Overview"), "System Overview");
+        // An unkeyed name renders verbatim — never a raw `window.<slug>` key.
+        let unknown = window_title("Totally Unknown Window");
+        assert_eq!(unknown, "Totally Unknown Window");
+        assert!(!unknown.starts_with("window."), "raw key leaked: {unknown}");
+    }
+
+    #[test]
+    fn every_registered_window_has_a_title_key() {
+        // Parity guard: adding a window without a `window.<slug>` en key would
+        // silently fall back to the verbatim name (untranslatable). Catch it.
+        for wt in crate::window_registry::standard_window_types() {
+            let key = format!("window.{}", window_slug(wt.name));
+            assert!(
+                en_map().contains_key(key.as_str()),
+                "window '{}' has no '{key}' key in the EN catalog",
+                wt.name
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_missing_key_falls_back_to_en() {
+        // The user's "partial → English" policy: a key an overlay lacks renders
+        // the `en` template verbatim (not the raw key, not a blank).
+        for loc in EMBEDDED_LOCALES {
+            let overlay: std::collections::HashSet<&str> =
+                loc.entries.iter().map(|(k, _)| *k).collect();
+            let fallback_key = EN
+                .iter()
+                .filter(|(k, m)| matches!(m, Message::Simple(_)) && !overlay.contains(k))
+                .map(|(k, _)| *k)
+                .next();
+            if let Some(key) = fallback_key {
+                set_active(loc.id);
+                let via_locale = t(key, &[]);
+                set_active("en");
+                let via_en = t(key, &[]);
+                assert_eq!(
+                    via_locale, via_en,
+                    "overlay '{}' lacks '{key}' → must render the en fallback verbatim",
+                    loc.id
+                );
+            }
+        }
+        set_active("en");
     }
 
     #[test]

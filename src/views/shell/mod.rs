@@ -112,7 +112,7 @@ impl ShellWindow {
 
 impl WindowView for ShellWindow {
     fn title(&self) -> String {
-        "Shell".into()
+        crate::i18n::window_title("Shell")
     }
 
     fn type_name(&self) -> &'static str {
