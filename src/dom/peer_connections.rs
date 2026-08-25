@@ -22,9 +22,15 @@ use web_sys::Element;
 const ADDRESS_FIELD: &str = "address";
 
 /// Drafts keys for the add-a-connector form.
-const CONNECTOR_ID_FIELD: &str = "connector_id";
+///
+/// The address is the only required one. The peer-id used to sit at the top of
+/// this form as a mandatory Base58 string; it is
+/// [`ConnectorDraft::expect_peer_id`](crate::connectors::ConnectorDraft), an
+/// optional pin, and it lives behind Advanced with the rest of what most people
+/// never fill in.
 const CONNECTOR_ADDR_FIELD: &str = "connector_addr";
 const CONNECTOR_LABEL_FIELD: &str = "connector_label";
+const CONNECTOR_EXPECT_FIELD: &str = "connector_expect";
 const CONNECTOR_ICE_FIELD: &str = "connector_ice";
 /// Relay (TURN) URI list + its credentials. Three fields rather than one,
 /// because all three must be present together — `parse_relay` refuses a partial
@@ -50,8 +56,13 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
     render_bound_header(&wrapper, output, ctx);
     render_known_devices(&wrapper, output, ctx);
     render_connect(&wrapper, output, ctx);
-    render_connectors(&wrapper, output, ctx);
+    // **Meet before the node list, and that order was asked for twice.** A
+    // rendezvous node is plumbing you configure once; meeting somebody is the
+    // thing you came here to do. The list used to sit above it, so the first
+    // thing between "connect to a device" and "find a person" was a table of
+    // infrastructure and a seven-field form.
     render_meet(&wrapper, output, ctx);
+    render_connectors(&wrapper, output, ctx);
     render_pairing_qr(&wrapper, output, ctx);
 
     util::append(container, &wrapper);
@@ -308,17 +319,8 @@ fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx
 /// the same card when it decodes a code. (Advertising *our* QR is the inbound
 /// job — [`render_pairing_qr`].)
 fn render_scan_qr(card: &Element, ctx: &DomCtx) {
-    let scan_details = util::create_element("details");
-    scan_details.set_attribute("style", &format!("margin-top:{}", theme::SP_2)).ok();
-    let scan_summary = util::create_element("summary");
-    scan_summary
-        .set_attribute("style", "cursor:pointer;font-size:12px;padding:4px 0;color:var(--accent-2,#c0c0e0)")
-        .ok();
-    util::set_text(&scan_summary, &crate::i18n::t("peers.scan_qr", &[]));
-    util::append(&scan_details, &scan_summary);
-
-    let scan_container = util::create_element("div");
-    scan_container.set_attribute("style", &format!("margin-top:{}", theme::SP_2)).ok();
+    let (scan_details, scan_container) =
+        components::disclosure(&crate::i18n::t("peers.scan_qr", &[]));
 
     let scanner_initialized = std::rc::Rc::new(std::cell::RefCell::new(false));
     {
@@ -360,7 +362,6 @@ fn render_scan_qr(card: &Element, ctx: &DomCtx) {
             }
         });
     }
-    util::append(&scan_details, &scan_container);
     util::append(card, &scan_details);
 }
 
@@ -378,16 +379,7 @@ fn render_pairing_qr(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     util::set_text(&hint, &crate::i18n::t("peers.scan_hint", &[]));
     util::append(&card, &hint);
 
-    let qr_details = util::create_element("details");
-    let qr_summary = util::create_element("summary");
-    qr_summary
-        .set_attribute("style", "cursor:pointer;font-size:12px;padding:4px 0;color:var(--accent-2,#c0c0e0)")
-        .ok();
-    util::set_text(&qr_summary, &crate::i18n::t("peers.show_qr", &[]));
-    util::append(&qr_details, &qr_summary);
-
-    let qr_content = util::create_element("div");
-    qr_content.set_attribute("style", &format!("margin-top:{}", theme::SP_2)).ok();
+    let (qr_details, qr_content) = components::disclosure(&crate::i18n::t("peers.show_qr", &[]));
     {
         let content_ref = qr_content.clone();
         let qr_initialized = std::rc::Rc::new(std::cell::RefCell::new(false));
@@ -407,7 +399,6 @@ fn render_pairing_qr(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
             ));
         });
     }
-    util::append(&qr_details, &qr_content);
     util::append(&card, &qr_details);
 
     util::append(parent, &card);
@@ -438,6 +429,10 @@ fn meet_mode_label(status: &crate::views::peer_connections::output::MeetStatusRo
 /// and an honest "nobody was there" — because a search whose state you cannot
 /// see is a spinner, and a meet writes nothing to the tree that would otherwise
 /// show for it.
+///
+/// The two mode helpers below it are shared by the initial render and the
+/// change handler — one mapping each, because two copies drift and the drift is
+/// invisible until someone picks a mode and reads a sentence about another one.
 fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     let card = components::card(&crate::i18n::t("peerconn.meet", &[]));
 
@@ -462,13 +457,38 @@ fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     // --- the form ---------------------------------------------------------
     // Unwired select + draft-tracked input: both are read at Meet-click time, so
     // a change can't trigger a rebuild that resets the pick or the typing.
+    // **The pick survives a rebuild, the same way typing does.** The selected
+    // value was hardcoded to `tag`, so any repaint put the picker back to "A
+    // word we agreed on" — and this card repaints constantly, because a running
+    // meet marks it dirty on every status change. Choosing Lobby and watching
+    // the form quietly revert is the same class of lie as the rest of this
+    // arc; drafts is the mechanism `text_input` already uses for exactly it.
+    //
+    // **`secret` is deliberately not offered here, because it is `tag`.** Both
+    // derive the same way from the same input — `derive(mode, input)`, a
+    // SHA-256 over a domain string, the mode tag and the bytes you typed — so
+    // the node sees 33 opaque bytes either way and *neither* word ever leaves
+    // this device. The only difference is which domain the hash lands in, which
+    // is invisible to the person choosing. What it is not invisible about is the
+    // failure it causes: two people typing the same word under different modes
+    // derive different keys, meet nobody, and are told "nobody else was there".
+    // The operator read the two options, said they are the same thing, and was
+    // right. The Shell keeps `meet secret <phrase>` for anyone talking to a
+    // client that uses it; entropy, not the mode, is what makes a name private.
+    let offered = [
+        ("tag", crate::i18n::t("peerconn.meet_mode_tag", &[])),
+        ("lobby", crate::i18n::t("peerconn.meet_mode_lobby", &[])),
+    ];
+    let chosen_mode = ctx
+        .drafts
+        .borrow()
+        .get(MEET_MODE_FIELD)
+        .filter(|m| offered.iter().any(|(v, _)| v == m))
+        .cloned()
+        .unwrap_or_else(|| "tag".to_string());
     let mode = components::select_el(
-        &[
-            ("tag", &crate::i18n::t("peerconn.meet_mode_tag", &[])),
-            ("secret", &crate::i18n::t("peerconn.meet_mode_secret", &[])),
-            ("lobby", &crate::i18n::t("peerconn.meet_mode_lobby", &[])),
-        ],
-        "tag",
+        &offered.iter().map(|(v, l)| (*v, l.as_str())).collect::<Vec<_>>(),
+        &chosen_mode,
     );
     mode.set_attribute("data-field", MEET_MODE_FIELD).ok();
     util::append(
@@ -476,11 +496,48 @@ fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
         &components::field(&crate::i18n::t("peerconn.meet_mode", &[]), "", &mode),
     );
 
+    // **What the chosen mode actually does**, updated as the pick changes.
+    // Three names in a dropdown are not self-explanatory — "Label (public)" and
+    // "Lobby (anyone here)" were reported as indistinguishable, which they are
+    // if nothing says that one meets at a word you agree out loud and the other
+    // meets at whatever the node itself publishes.
+    let mode_note = util::create_element("p");
+    mode_note.set_attribute("style", theme::HINT).ok();
+    util::set_text(&mode_note, &crate::i18n::t(meet_mode_note_key(&chosen_mode), &[]));
+    util::append(&card, &mode_note);
+
+    // The name field, which **Lobby must not show**. Lobby takes no input by
+    // construction (its input is the node's own constant), so rendering a box
+    // for it invites a value the mode will then refuse — which is exactly what
+    // happened: selecting Lobby with a word still in the box answered "lobby
+    // takes no input", and the refusal read as the option being broken. You
+    // cannot type into a field that is not there, so nothing is silently
+    // dropped and `Mode::parse`'s refusal stays as the backstop it is.
     let name = components::text_input(ctx, MEET_INPUT_FIELD, "", "");
-    util::append(
-        &card,
-        &components::field(&crate::i18n::t("label.name", &[]), "", &name),
-    );
+    let name_field = components::field(&crate::i18n::t("label.name", &[]), "", &name);
+    name_field.set_attribute("style", name_field_style(&chosen_mode)).ok();
+    util::append(&card, &name_field);
+
+    {
+        // Direct DOM edits on change rather than a repaint: the select is
+        // deliberately unwired so that picking a mode cannot rebuild the card
+        // and lose what the user has typed. The pick itself is recorded in
+        // drafts so it survives the repaints that happen anyway.
+        let note = mode_note.clone();
+        let field = name_field.clone();
+        let sel = mode.clone();
+        let drafts = ctx.drafts.clone();
+        ctx.listen(&mode, "change", move |_| {
+            let chosen = sel
+                .clone()
+                .dyn_into::<web_sys::HtmlSelectElement>()
+                .map(|s| s.value())
+                .unwrap_or_else(|_| "tag".to_string());
+            util::set_text(&note, &crate::i18n::t(meet_mode_note_key(&chosen), &[]));
+            field.set_attribute("style", name_field_style(&chosen)).ok();
+            drafts.borrow_mut().insert(MEET_MODE_FIELD.to_string(), chosen);
+        });
+    }
 
     let actions = util::create_element("div");
     actions.set_attribute("style", theme::BTN_ROW).ok();
@@ -500,7 +557,15 @@ fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
                 .dyn_into::<web_sys::HtmlSelectElement>()
                 .map(|s| s.value())
                 .unwrap_or_else(|_| "tag".to_string());
-            let input = drafts.borrow().get(MEET_INPUT_FIELD).cloned().unwrap_or_default();
+            // Lobby's field is hidden, so whatever is left in its draft is not
+            // the user's intent — a word typed before switching modes. Sending
+            // it would refuse the press ("lobby takes no input") over a box
+            // nobody can see, which is how this read as a broken option.
+            let input = if chosen == "lobby" {
+                String::new()
+            } else {
+                drafts.borrow().get(MEET_INPUT_FIELD).cloned().unwrap_or_default()
+            };
             // Dispatch even when the input is empty: `Mode::parse` reports what
             // is wrong (a tag with nothing to meet at, a lobby with a stray
             // input) and the notice shows it — a silently ignored press is the
@@ -603,13 +668,22 @@ fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     util::append(parent, &card);
 }
 
-/// The **connector registry** — signaling nodes this peer may rendezvous
-/// through, and which one provisioning uses.
+/// **Rendezvous nodes** — the nodes this peer may meet through, and which one
+/// is in force.
 ///
 /// Same four operations as the `connector` shell verb (add / use / rm / check),
 /// driving the same [`crate::connectors`] functions: one model, two surfaces.
 /// The rows are a table (S7 — repeated records), the whole thing one bounded
 /// card (S2), and the actions are the shared button atoms (S8).
+///
+/// # "Connector" is the code's word, not the screen's
+///
+/// The module, the shell verb, the tree path and the entity type all still say
+/// *connector*, and renaming those is a data migration for no gain. What the
+/// operator sees is *rendezvous node*, which is the same word System Overview
+/// already uses for the switch on the other side of the same relationship: a
+/// desktop **offers** rendezvous, a browser **picks** one. "Connector" named
+/// neither end of that and was reported, correctly, as meaning nothing.
 fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     let card = components::card(&crate::i18n::t("peerconn.connectors", &[]));
 
@@ -634,6 +708,9 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
             "",
         ]);
         for c in &output.connectors {
+            use crate::views::peer_connections::output::ConnectorSource;
+            let from_link = c.source == ConnectorSource::Session;
+
             // `●` marks the selection — the same glyph `connector ls` prints,
             // so the two surfaces read identically. The text label rides
             // alongside it rather than relying on the glyph alone.
@@ -647,9 +724,23 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
                 components::td_text(&c.short_pid)
             };
 
+            // A session row's "label" is where it came from, because it has no
+            // label — nobody named it, and leaving the cell blank next to a row
+            // marked *in use* invites the question this answers.
+            let label_cell = if from_link {
+                components::td_text(&crate::i18n::t("peerconn.connector_from_link", &[]))
+            } else {
+                components::td_text(&c.label)
+            };
+
             let actions = util::create_element("div");
             actions.set_attribute("style", theme::BTN_ROW).ok();
-            if !c.selected {
+            // Use / Delete are **omitted on a session row**, not disabled:
+            // there is no stored row to reselect or remove, so both would be
+            // visible no-ops — the dead-button disease this window has now
+            // fixed twice. `Check` stays, because asking a node what it serves
+            // is a question about the node and not about the row.
+            if !c.selected && !from_link {
                 let use_btn = components::button_el(
                     &crate::i18n::t("peerconn.connector_use", &[]),
                     components::ButtonKind::Primary,
@@ -667,19 +758,21 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
             ctx.on_window_event(&check_btn, "click", "connector_check", &c.node_peer_id);
             util::append(&actions, &check_btn);
 
-            let rm_btn = components::button_el(
-                &crate::i18n::t("btn.delete", &[]),
-                components::ButtonKind::Destructive,
-            );
-            ctx.on_window_event(&rm_btn, "click", "connector_rm", &c.node_peer_id);
-            util::append(&actions, &rm_btn);
+            if !from_link {
+                let rm_btn = components::button_el(
+                    &crate::i18n::t("btn.delete", &[]),
+                    components::ButtonKind::Destructive,
+                );
+                ctx.on_window_event(&rm_btn, "click", "connector_rm", &c.node_peer_id);
+                util::append(&actions, &rm_btn);
+            }
 
             util::append(
                 &tbody,
                 &components::tr(vec![
                     id_cell,
                     components::td_text(&c.node_addr),
-                    components::td_text(&c.label),
+                    label_cell,
                     components::td(&actions),
                 ]),
             );
@@ -699,6 +792,27 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
             &card,
             &components::notice(&crate::i18n::t("peerconn.connector_reload_pending", &[])),
         );
+        // **The notice asks for a reload, so it hands you one.** Everything else
+        // in this card acts on the press; this one told the user to go and do
+        // something to the browser itself, which is the only instruction in the
+        // window that the window would not carry out. It also removes the one
+        // way this state is usually left unresolved — the person reads the line,
+        // means to reload, and keeps working on a session that is still
+        // rendezvousing somewhere else.
+        let reload = components::button_el(
+            &crate::i18n::t("btn.reload", &[]),
+            components::ButtonKind::Secondary,
+        );
+        ctx.listen(&reload, "click", move |_| {
+            // No `let _ = promise` here to worry about: `reload()` returns a
+            // Result, not a Promise, so there is no rejecting future to drop
+            // (the `unhandledrejection` guard would reload the app anyway,
+            // which would be a comedy rather than a bug).
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().reload();
+            }
+        });
+        util::append(&card, &reload);
     }
 
     if let Some(notice) = &output.connector_notice {
@@ -710,25 +824,64 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
         util::append(&card, &el);
     }
 
-    // --- add a connector -------------------------------------------------
+    render_add_node_form(&card, output, ctx);
+    util::append(parent, &card);
+}
+
+/// The add-a-node form: **two visible fields, and everything else folded away.**
+///
+/// # What this used to ask for
+///
+/// Seven fields, all at once, the first of them a mandatory Base58 peer-id. Six
+/// of the seven are things a person adding their friend's desktop has no
+/// business thinking about, and the mandatory one was the worst: it had to be
+/// read off another machine's screen and retyped, which is the transcription
+/// error that presents as a *connectivity* failure — and it was being demanded
+/// for a value the node hands over the moment we dial it.
+///
+/// So: **Address**, and a **Label** if you want one. The peer-id moved behind
+/// Advanced and changed meaning (see
+/// [`ConnectorDraft`](crate::connectors::ConnectorDraft)) — it is now an
+/// expectation checked against the dial, which is a thing worth having and a
+/// thing the old required field never did.
+///
+/// Advanced is a `<details>`, not a model-held
+/// [`collapsible_header`](components::collapsible_header), and that is the
+/// right call here for the reason the atom's own doc gives: this section is
+/// closed by default and nobody types into it mid-repaint. The fields inside
+/// are draft-tracked all the same, so anything typed there survives a rebuild
+/// whether the section is open or not.
+fn render_add_node_form(card: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     // Draft-tracked atoms (S8): typing survives an unrelated repaint, and the
     // values are read at SUBMIT time, so no per-keystroke event churns the tree.
-    let id_input =
-        components::text_input(ctx, CONNECTOR_ID_FIELD, "", "2K…");
-    util::append(
-        &card,
-        &components::field(&crate::i18n::t("label.peer_id", &[]), "", &id_input),
-    );
     let addr_input =
         components::text_input(ctx, CONNECTOR_ADDR_FIELD, "", "wss://node.example:9000");
     util::append(
-        &card,
-        &components::field(&crate::i18n::t("label.address", &[]), "", &addr_input),
+        card,
+        &components::field(
+            &crate::i18n::t("label.address", &[]),
+            &crate::i18n::t("peerconn.node_addr_help", &[]),
+            &addr_input,
+        ),
     );
     let label_input = components::text_input(ctx, CONNECTOR_LABEL_FIELD, "", "");
     util::append(
-        &card,
+        card,
         &components::field(&crate::i18n::t("label.label", &[]), "", &label_input),
+    );
+
+    let (advanced, body) = components::disclosure(&crate::i18n::t("peerconn.node_advanced", &[]));
+    // The expectation. Optional, and the help says exactly what filling it in
+    // buys — "pin this node" is a real thing to want and an empty field is not
+    // a degraded version of it.
+    let expect_input = components::text_input(ctx, CONNECTOR_EXPECT_FIELD, "", "2K…");
+    util::append(
+        &body,
+        &components::field(
+            &crate::i18n::t("label.expected_peer_id", &[]),
+            &crate::i18n::t("peerconn.expect_help", &[]),
+            &expect_input,
+        ),
     );
     // Reflectors. Optional, and the help text says what leaving it empty means —
     // "host candidates only" is a real deployment (a LAN), not a broken one, and
@@ -736,14 +889,13 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     let ice_input =
         components::text_input(ctx, CONNECTOR_ICE_FIELD, "", "stun:stun.example.org:3478");
     util::append(
-        &card,
+        &body,
         &components::field(
             &crate::i18n::t("label.ice_servers", &[]),
             &crate::i18n::t("peerconn.ice_help", &[]),
             &ice_input,
         ),
     );
-
     // Relay. Optional, and separate from the reflectors above because the two
     // are different kinds of thing: a reflector is a commodity that takes no
     // credentials (§9.3) and that a node may advertise for you; a relay is
@@ -753,7 +905,7 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     let relay_input =
         components::text_input(ctx, CONNECTOR_RELAY_FIELD, "", "turn:relay.example.org:3478");
     util::append(
-        &card,
+        &body,
         &components::field(
             &crate::i18n::t("label.relay", &[]),
             &crate::i18n::t("peerconn.relay_help", &[]),
@@ -762,18 +914,19 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     );
     let relay_user_input = components::text_input(ctx, CONNECTOR_RELAY_USER_FIELD, "", "");
     util::append(
-        &card,
+        &body,
         &components::field(&crate::i18n::t("label.relay_username", &[]), "", &relay_user_input),
     );
     let relay_cred_input = components::text_input(ctx, CONNECTOR_RELAY_CRED_FIELD, "", "");
     util::append(
-        &card,
+        &body,
         &components::field(
             &crate::i18n::t("label.relay_credential", &[]),
             &crate::i18n::t("peerconn.relay_secret_help", &[]),
             &relay_cred_input,
         ),
     );
+    util::append(card, &advanced);
 
     let add_btn = components::button_el(
         &crate::i18n::t("peerconn.connector_add", &[]),
@@ -786,32 +939,54 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
         let wid = output.window_id;
         ctx.listen(&add_btn, "click", move |_| {
             let read = |k: &str| drafts.borrow().get(k).cloned().unwrap_or_default();
-            let (id, addr, label, ice) = (
-                read(CONNECTOR_ID_FIELD),
-                read(CONNECTOR_ADDR_FIELD),
-                read(CONNECTOR_LABEL_FIELD),
-                read(CONNECTOR_ICE_FIELD),
-            );
-            let (relay, ruser, rcred) = (
-                read(CONNECTOR_RELAY_FIELD),
-                read(CONNECTOR_RELAY_USER_FIELD),
-                read(CONNECTOR_RELAY_CRED_FIELD),
-            );
-            // Both halves are required, and the model says so with a notice —
-            // submitting the empty form must not look like a dead button, so we
-            // dispatch and let `add_connector` report the refusal.
+            // **Address first, because it is the one required field now.** The
+            // packing order follows the form; the handler splits on the same
+            // count. An empty submit still dispatches — the refusal comes back
+            // as a notice, because a press that does nothing at all is the
+            // dead-button disease.
             actions.borrow_mut().push(Action::WindowEvent {
                 window_id: wid,
                 event: "connector_add".to_string(),
-                // The app's multi-field packing, so one event carries the form.
-                value: format!(
-                    "{id}\u{1f}{addr}\u{1f}{label}\u{1f}{ice}\u{1f}{relay}\u{1f}{ruser}\u{1f}{rcred}"
-                ),
+                value: [
+                    CONNECTOR_ADDR_FIELD,
+                    CONNECTOR_LABEL_FIELD,
+                    CONNECTOR_EXPECT_FIELD,
+                    CONNECTOR_ICE_FIELD,
+                    CONNECTOR_RELAY_FIELD,
+                    CONNECTOR_RELAY_USER_FIELD,
+                    CONNECTOR_RELAY_CRED_FIELD,
+                ]
+                .map(read)
+                .join("\u{1f}"),
             });
             rp();
         });
     }
-    util::append(&card, &add_btn);
+    util::append(card, &add_btn);
+}
 
-    util::append(parent, &card);
+/// The catalog key explaining what a meet mode does.
+///
+/// `secret` has no note of its own any more: it is not offered in the picker
+/// (see `render_meet`), and the note it used to carry claimed it was *"not shown
+/// to the rendezvous"* — which was false about the distinction it was drawing,
+/// because a `tag` is not shown to the rendezvous either. Both are hashed
+/// locally. A shell-started `secret` meet falls through to the `tag` note, which
+/// is true of it.
+fn meet_mode_note_key(mode: &str) -> &'static str {
+    match mode {
+        "lobby" => "peerconn.meet_mode_note_lobby",
+        _ => "peerconn.meet_mode_note_tag",
+    }
+}
+
+/// Whether the Name field is shown for `mode`. **Lobby takes no input by
+/// construction** (its input is the node's own published constant), so a box
+/// for it invites a value the mode will then refuse.
+fn name_field_style(mode: &str) -> &'static str {
+    if mode == "lobby" {
+        "display:none"
+    } else {
+        ""
+    }
 }

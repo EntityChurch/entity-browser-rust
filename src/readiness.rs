@@ -339,8 +339,15 @@ pub fn assess(f: &Facts) -> Report {
                 // one thing a preflight is for.
                 "this follows from the origin above — fix that first.".into()
             } else {
-                "this engine cannot do WebRTC at all; browser-to-browser \
-                 connections are not available here."
+                // Name the half that is lost, not the product. WebRTC is how a
+                // peer with NO address is reached; a peer that has one is
+                // reached by an ordinary WebSocket and is untouched. Saying
+                // "connections are not available here" would send someone to
+                // debug a path that works.
+                "this engine cannot do WebRTC at all, so a peer with no address \
+                 — another browser — cannot be reached from here. A peer that \
+                 HAS an address is unaffected: Connect by address still reaches \
+                 a desktop install, its shared files, and anything it serves."
                     .to_string()
             }),
         },
@@ -629,6 +636,67 @@ pub fn warn_if_insecure_origin() {
     crate::storage_durability::inject_banner_with_id(
         "insecure-origin-banner",
         &crate::i18n::t("readiness.insecure_origin", &[("origin", &origin)]),
+        "#4a1e1e",
+        "#a23a3a",
+    );
+}
+
+/// **No `RTCPeerConnection` — say so at boot, on the screen.**
+///
+/// This is the second half of the rule the insecure-origin banner exists for,
+/// and it was learned the hard way: the `webrtc-api` row has been in the `net`
+/// preflight for weeks, correctly reporting `FAIL` on the desktop, and it took
+/// three sessions to find because **nobody runs a preflight on a device that
+/// appears to be working**. The desktop's WebView shipped with WebKitGTK's
+/// `enable-webrtc` off (its default), so `RTCPeerConnection` did not exist —
+/// and the visible half of the product kept working, because `meet` is an
+/// ordinary WebSocket call to the rendezvous node. Two devices found each
+/// other, showed each other's ids, and could never connect, in either
+/// direction, with no error naming the cause.
+///
+/// A precondition that fails silently on a user's machine owes a **surface**,
+/// not a row in a report they have no reason to open.
+///
+/// **The banner names the half that is lost, and its first wording did not.**
+/// It said devices could still be found but "nothing will connect, in either
+/// direction", which is false: WebRTC is how a peer with *no address* is
+/// reached, and a peer that has one is reached by an ordinary WebSocket. On a
+/// desktop with no WebRTC, connecting to another install by address, browsing
+/// and moving files through its shared folder, and everything served over that
+/// connection all keep working. A banner that overstates the damage costs the
+/// reader the paths that are fine — the cry-wolf shape, arriving as pessimism
+/// instead of as a false alarm.
+///
+/// It is deliberately not gated on being a desktop: a browser with WebRTC
+/// disabled by policy or by the user is the same product, equally limited, and
+/// equally entitled to be told.
+#[cfg(target_arch = "wasm32")]
+pub fn warn_if_no_webrtc_api() {
+    let Some(win) = web_sys::window() else { return };
+    // Feature-detect on the global rather than constructing one — the same
+    // reason `collect` does: a construction attempt throws in one engine and
+    // returns a crippled object in another, and the question here is only
+    // whether the API exists.
+    let present =
+        js_sys::Reflect::get(win.as_ref(), &wasm_bindgen::JsValue::from_str("RTCPeerConnection"))
+            .map(|v| v.is_function())
+            .unwrap_or(false);
+    if present {
+        return;
+    }
+    tracing::error!(
+        "no RTCPeerConnection — this session cannot establish a §6.5 connection in either \
+         direction, so no peer that lacks a dialable address (i.e. another browser) is \
+         reachable from here. Rung 1/2 of the §10.3 ladder is UNAFFECTED: a peer with a \
+         published address is still reached over WebSocket, which is why file transfer to \
+         a desktop's share keeps working. Meeting a device also still works (an ordinary \
+         WebSocket call to the rendezvous), which is why this presents as 'we found each \
+         other and nothing connects'. On the Linux desktop the cause is that WebKitGTK is \
+         built without the WebRTC bindings."
+    );
+    crate::storage_durability::inject_banner_with_id(
+        "no-webrtc-banner",
+        &crate::i18n::t("readiness.no_webrtc_api", &[]),
         "#4a1e1e",
         "#a23a3a",
     );

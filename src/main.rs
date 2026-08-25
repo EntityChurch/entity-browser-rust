@@ -550,6 +550,12 @@ pub async fn start() -> Result<(), JsValue> {
     // second, next to the symptom it explains. Both are `Some`-id'd and
     // idempotent, so they stack rather than replace.
     readiness::warn_if_insecure_origin();
+    // And the one that is total rather than partial: with no `RTCPeerConnection`
+    // this session cannot connect to another peer at all, in either direction,
+    // while everything up to and including `meet` keeps working. Same banner
+    // mechanism, same reason — a precondition that fails on a user's machine
+    // owes a surface, not a row in a preflight nobody opens.
+    readiness::warn_if_no_webrtc_api();
 
     // C5a + C5d: ask for persistent (non-evictable) storage for this origin,
     // then make Worker mode honest about the result. persist() is

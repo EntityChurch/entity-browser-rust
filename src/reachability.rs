@@ -158,6 +158,23 @@ pub struct Observation {
     /// `ReflectorUnreachable`.
     pub reflectors_configured: bool,
     pub outcome: Outcome,
+    /// Did the SDP exchange complete — did the far side answer at all?
+    ///
+    /// **The fact this module shipped without, and the one that made its worst
+    /// arm wrong.** Every verdict below except [`Reachability::NoCounterpart`]
+    /// is a claim about *the network between two peers*, and that network is
+    /// only exercised once both peers are talking. Reproduced in a real browser
+    /// (2026-08-22): a chat opened against a peer that was simply not running
+    /// gathered `[Host]`, failed, and was told *"no reflector is set up, so this
+    /// app can only reach devices on your local network"* — false (both were on
+    /// one machine), unactionable (a reflector fixes nothing here), and pointing
+    /// at the one thing the user could go waste money on.
+    ///
+    /// `None` = **not measurable**, never `false`: a carrier error or a policy
+    /// refusal ends the negotiation before this can be known, and reading
+    /// absence as "they did not answer" would blame a peer for our own refusal.
+    /// The classifier treats `None` as *carry on* — today's behaviour exactly.
+    pub sdp_exchange_complete: Option<bool>,
 }
 
 /// The verdict. Only three arms ever reach a user; the rest render nothing.
@@ -168,6 +185,12 @@ pub enum Reachability {
     Unknown,
     /// A live path exists.
     Connected,
+    /// The far side never answered. **Not a network verdict** — the SDP
+    /// exchange never completed, so nothing about the path between the two
+    /// peers was ever tried, and every other arm here would be a guess about a
+    /// network that was not exercised. Actionable, and by the other person:
+    /// they have to be online, in this app, through the same rendezvous.
+    NoCounterpart,
     /// Host candidates only, and no reflector was ever configured — we can only
     /// reach peers on this LAN. Actionable: add a reflector, or pick a node that
     /// advertises one.
@@ -188,7 +211,10 @@ impl Reachability {
     pub fn is_advisory(self) -> bool {
         matches!(
             self,
-            Self::NoReflector | Self::ReflectorUnreachable | Self::NoDirectPath
+            Self::NoCounterpart
+                | Self::NoReflector
+                | Self::ReflectorUnreachable
+                | Self::NoDirectPath
         )
     }
 
@@ -198,6 +224,7 @@ impl Reachability {
         match self {
             Self::Unknown => "unknown",
             Self::Connected => "connected",
+            Self::NoCounterpart => "no-counterpart",
             Self::NoReflector => "no-reflector",
             Self::ReflectorUnreachable => "reflector-unreachable",
             Self::NoDirectPath => "no-direct-path",
@@ -224,6 +251,22 @@ pub fn classify(obs: &Observation) -> Reachability {
                 // have sent the user to fix a reflector that was never asked.
                 // `gathering_nothing_at_all_is_not_a_topology_claim` caught it.
                 Reachability::Unknown
+            } else if obs.sdp_exchange_complete == Some(false) {
+                // **Nobody answered, so there is no network fact here to
+                // report.** Every arm below reasons about the path *between two
+                // peers*; that path is only exercised once both are talking, and
+                // an exchange that never completed did not exercise it. Placed
+                // above them for the same reason the empty-gather arm is placed
+                // above `reflectors_configured`: the cheaper, truer claim has to
+                // win, or a richer-sounding one is made about a network nothing
+                // touched. This is the arm the operator's report earned —
+                // "no reflector is set up" said about a peer on the same
+                // machine that was not running.
+                //
+                // `== Some(false)`, deliberately, so `None` (not measurable)
+                // falls through to exactly today's behaviour rather than
+                // becoming a silent accusation.
+                Reachability::NoCounterpart
             } else if obs.gathered.contains(CandidateKind::Relay) {
                 // A relay gathered and it still failed. Do NOT say "this network
                 // needs a relay" — they have one. The likeliest remaining cause
@@ -326,6 +369,45 @@ mod store {
         });
     }
 
+    thread_local! {
+        /// Peers that have completed an SDP exchange with us at least once this
+        /// session — i.e. peers we have *heard from*.
+        ///
+        /// **Sticky, and that is the point.** A peer that is present but
+        /// unreachable produces a MIXTURE: some negotiations complete the
+        /// exchange and fail at ICE, others never correlate at all (a busy
+        /// bucket, a retry storm, a window that closed first). Classifying the
+        /// most recent one alone makes the verdict flap between *"the network
+        /// could not carry it"* and *"nobody was there"* on a coin toss — and
+        /// the second is strictly less true once you have heard from them.
+        ///
+        /// Measured in `make e2e-webrtc-nat`, which is exactly that topology:
+        /// B's FIRST negotiation was `sdp_exchange=complete, fed=3` and a later
+        /// one `INCOMPLETE, fed=0`, so a per-negotiation reading told one
+        /// browser the reflector was missing and the other that its perfectly
+        /// live counterpart had not answered.
+        ///
+        /// Known limit, recorded rather than papered over: a peer that answered
+        /// and then genuinely left keeps the network verdict for the rest of the
+        /// session. That is the pre-existing behaviour, the chip already says
+        /// *not connected*, and the alternative — expiring the fact — would put
+        /// this map back in the business of tracking liveness.
+        static ANSWERED_EVER: RefCell<std::collections::HashSet<String>> =
+            RefCell::new(std::collections::HashSet::new());
+    }
+
+    /// Record whether `peer_id` answered in *this* negotiation, and return
+    /// whether it has **ever** answered.
+    pub(super) fn note_exchange(peer_id: &str, answered_now: bool) -> bool {
+        ANSWERED_EVER.with(|s| {
+            let mut s = s.borrow_mut();
+            if answered_now {
+                s.insert(peer_id.to_string());
+            }
+            s.contains(peer_id)
+        })
+    }
+
     pub(super) fn get(peer_id: &str) -> Reachability {
         VERDICTS.with(|m| m.borrow().get(peer_id).copied().unwrap_or(Reachability::Unknown))
     }
@@ -333,6 +415,10 @@ mod store {
     #[cfg(test)]
     pub(super) fn clear() {
         VERDICTS.with(|m| m.borrow_mut().clear());
+        // Both maps, or a test that recorded an answered exchange leaks that
+        // fact into the next one and the `NoCounterpart` arm becomes
+        // unreachable — silently, and only in whichever test runs second.
+        ANSWERED_EVER.with(|s| s.borrow_mut().clear());
     }
 }
 
@@ -364,11 +450,18 @@ pub fn record_negotiation(
     local_candidates: &[String],
     reflectors_configured: bool,
     established: bool,
+    sdp_exchange_complete: Option<bool>,
 ) {
+    // **"Have they ever answered" is a fact about the peer, not about this
+    // negotiation** — see `store::ANSWERED_EVER`. Folded here rather than in
+    // `classify`, which stays pure over one observation.
+    let ever_answered =
+        store::note_exchange(peer_id, established || sdp_exchange_complete == Some(true));
     let obs = Observation {
         gathered: GatheredTypes::from_sdp_lines(local_candidates.iter().map(|s| s.as_str())),
         reflectors_configured,
         outcome: if established { Outcome::Connected } else { Outcome::Failed },
+        sdp_exchange_complete: if ever_answered { Some(true) } else { sdp_exchange_complete },
     };
     let verdict = classify(&obs);
     tracing::debug!(
@@ -376,6 +469,8 @@ pub fn record_negotiation(
         gathered = ?obs.gathered.kinds(),
         reflectors_configured,
         established,
+        sdp_exchange_complete = ?sdp_exchange_complete,
+        ever_answered,
         verdict = verdict.as_token(),
         "reachability: negotiation classified"
     );
@@ -433,12 +528,13 @@ impl EstablisherObserver {
 
 #[cfg(target_arch = "wasm32")]
 impl entity_wasm_worker_proxy::IceObserver for EstablisherObserver {
-    fn negotiation_finished(&self, peer_id: &str, local_candidates: &[String], established: bool) {
+    fn negotiation_finished(&self, report: entity_wasm_worker_proxy::NegotiationReport<'_>) {
         record_negotiation(
-            peer_id,
-            local_candidates,
+            report.peer_id,
+            report.local_candidates,
             self.reflectors_configured,
-            established,
+            report.established,
+            report.sdp_exchange_complete,
         );
     }
 }
@@ -513,12 +609,18 @@ mod tests {
         let with_srflx = GatheredTypes::from_sdp_lines([RAW_HOST, SRFLX]);
         let with_relay = GatheredTypes::from_sdp_lines([RAW_HOST, SRFLX, RELAY]);
 
+        // Every row here is a genuine ICE failure: the far side answered, so a
+        // claim about the network between the two is legitimate. That is what
+        // `sdp_exchange_complete: Some(true)` is asserting, and it is a
+        // PRECONDITION of the whole table rather than a detail of one row.
+        //
         // host only, nobody configured a reflector → they can add one.
         assert_eq!(
             classify(&Observation {
                 gathered: host_only.clone(),
                 reflectors_configured: false,
                 outcome: Outcome::Failed,
+                sdp_exchange_complete: Some(true),
             }),
             Reachability::NoReflector
         );
@@ -531,6 +633,7 @@ mod tests {
                 gathered: host_only,
                 reflectors_configured: true,
                 outcome: Outcome::Failed,
+                sdp_exchange_complete: Some(true),
             }),
             Reachability::ReflectorUnreachable
         );
@@ -542,6 +645,7 @@ mod tests {
                 gathered: with_srflx,
                 reflectors_configured: true,
                 outcome: Outcome::Failed,
+                sdp_exchange_complete: Some(true),
             }),
             Reachability::NoDirectPath
         );
@@ -555,6 +659,7 @@ mod tests {
                 gathered: with_relay,
                 reflectors_configured: true,
                 outcome: Outcome::Failed,
+                sdp_exchange_complete: Some(true),
             }),
             Reachability::Unknown
         );
@@ -568,6 +673,10 @@ mod tests {
     fn nothing_in_flight_or_unattempted_ever_classifies() {
         for outcome in [Outcome::NotAttempted, Outcome::InFlight] {
             for reflectors_configured in [false, true] {
+                // Over every exchange state too: `NoCounterpart` is the newest
+                // arm and it must be as unable to speak mid-establishment as
+                // every other one.
+                for sdp_exchange_complete in [None, Some(false), Some(true)] {
                 for gathered in [
                     GatheredTypes::default(),
                     GatheredTypes::from_sdp_lines([RAW_HOST]),
@@ -577,6 +686,7 @@ mod tests {
                         gathered: gathered.clone(),
                         reflectors_configured,
                         outcome,
+                        sdp_exchange_complete,
                     });
                     assert_eq!(
                         v,
@@ -584,6 +694,7 @@ mod tests {
                         "{outcome:?} with {gathered:?} must stay silent"
                     );
                     assert!(!v.is_advisory(), "and must render nothing");
+                }
                 }
             }
         }
@@ -603,10 +714,73 @@ mod tests {
                 gathered,
                 reflectors_configured: true,
                 outcome: Outcome::Connected,
+                sdp_exchange_complete: Some(true),
             });
             assert_eq!(v, Reachability::Connected);
             assert!(!v.is_advisory());
         }
+    }
+
+    /// **The operator's bug, as a table.** A chat opened against a peer that was
+    /// not running was told *"no reflector is set up, so this app can only reach
+    /// devices on your local network"* — on one machine, where a reflector fixes
+    /// nothing and no reflector was the problem. Measured in a real browser
+    /// against the desktop's own served app, 2026-08-22.
+    ///
+    /// The property is *an unanswered exchange makes no claim about the
+    /// network*, so it is asserted over every network shape rather than the one
+    /// that was reported: no gather is a topology claim if nobody was there to
+    /// have a topology with.
+    #[test]
+    fn an_exchange_nobody_answered_is_not_a_claim_about_the_network() {
+        for gathered in [
+            GatheredTypes::from_sdp_lines([RAW_HOST]),
+            GatheredTypes::from_sdp_lines([RAW_HOST, SRFLX]),
+            GatheredTypes::from_sdp_lines([RAW_HOST, SRFLX, RELAY]),
+        ] {
+            for reflectors_configured in [false, true] {
+                assert_eq!(
+                    classify(&Observation {
+                        gathered: gathered.clone(),
+                        reflectors_configured,
+                        outcome: Outcome::Failed,
+                        sdp_exchange_complete: Some(false),
+                    }),
+                    Reachability::NoCounterpart,
+                    "{gathered:?} with reflectors={reflectors_configured} — nobody answered, so \
+                     none of the network arms may speak"
+                );
+            }
+        }
+
+        // An agent that gathered NOTHING still classifies `Unknown`: it is not a
+        // topology claim either, and it is about **us**, so it outranks a
+        // statement about them. Ordering, asserted rather than commented.
+        assert_eq!(
+            classify(&Observation {
+                gathered: GatheredTypes::default(),
+                reflectors_configured: false,
+                outcome: Outcome::Failed,
+                sdp_exchange_complete: Some(false),
+            }),
+            Reachability::Unknown
+        );
+
+        // **`None` is not `false`.** A carrier error or a policy refusal cannot
+        // say whether the far side answered, and reading that silence as "they
+        // did not" would blame a peer for our own refusal. It falls through to
+        // exactly the pre-existing behaviour — which is also what keeps the NAT
+        // gate's `NoReflector` expectation intact on any path that cannot
+        // measure the exchange.
+        assert_eq!(
+            classify(&Observation {
+                gathered: GatheredTypes::from_sdp_lines([RAW_HOST]),
+                reflectors_configured: false,
+                outcome: Outcome::Failed,
+                sdp_exchange_complete: None,
+            }),
+            Reachability::NoReflector
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -621,10 +795,45 @@ mod tests {
         store::clear();
         assert_eq!(verdict_for("2KAlice"), Reachability::Unknown, "nothing known yet");
 
-        record_negotiation("2KAlice", &[RAW_HOST.into(), SRFLX.into()], true, false);
+        record_negotiation("2KAlice", &[RAW_HOST.into(), SRFLX.into()], true, false, Some(true));
         assert_eq!(verdict_for("2KAlice"), Reachability::NoDirectPath);
         // Keyed, not global: one peer's verdict must not answer for another.
         assert_eq!(verdict_for("2KBob"), Reachability::Unknown);
+    }
+
+    /// **A peer that HAS answered must not later be called absent — the NAT rig
+    /// found this, and it is why "have they answered" is sticky.**
+    ///
+    /// A present-but-unreachable peer produces a mixture: some negotiations
+    /// complete the SDP exchange and fail at ICE, others never correlate (a full
+    /// bucket, a retry storm, a window that closed first). Measured in
+    /// `make e2e-webrtc-nat` — B's first negotiation `sdp_exchange=complete,
+    /// fed=3`, a later one `INCOMPLETE, fed=0` — so classifying the most recent
+    /// one alone told one browser its reflector was missing and the other that
+    /// its perfectly live counterpart had never answered. Same topology, two
+    /// different sentences, decided by which negotiation ran last.
+    #[test]
+    fn a_counterpart_that_answered_once_is_not_called_absent_by_a_later_miss() {
+        store::clear();
+        let host_only = [RAW_HOST.to_string()];
+
+        // 1. They answered, and ICE failed: the network verdict is legitimate.
+        record_negotiation("2KAlice", &host_only, false, false, Some(true));
+        assert_eq!(verdict_for("2KAlice"), Reachability::NoReflector);
+
+        // 2. A later negotiation never correlates. Same peer, same topology —
+        //    it must not un-say what we already know about them.
+        record_negotiation("2KAlice", &host_only, false, false, Some(false));
+        assert_eq!(
+            verdict_for("2KAlice"),
+            Reachability::NoReflector,
+            "a miss after a hit is a miss, not evidence that nobody is there"
+        );
+
+        // 3. And the stickiness is PER PEER, not global — otherwise one working
+        //    counterpart would silence the arm for every other peer.
+        record_negotiation("2KBob", &host_only, false, false, Some(false));
+        assert_eq!(verdict_for("2KBob"), Reachability::NoCounterpart);
     }
 
     /// **The success half of the observer contract, and it is the cry-wolf
@@ -635,10 +844,10 @@ mod tests {
     #[test]
     fn a_later_success_clears_the_advice_it_was_showing() {
         store::clear();
-        record_negotiation("2KAlice", &[RAW_HOST.into(), SRFLX.into()], true, false);
+        record_negotiation("2KAlice", &[RAW_HOST.into(), SRFLX.into()], true, false, Some(true));
         assert!(verdict_for("2KAlice").is_advisory(), "precondition: advice is showing");
 
-        record_negotiation("2KAlice", &[RAW_HOST.into(), SRFLX.into()], true, true);
+        record_negotiation("2KAlice", &[RAW_HOST.into(), SRFLX.into()], true, true, Some(true));
         assert!(
             !verdict_for("2KAlice").is_advisory(),
             "a working connection must carry no leftover diagnosis"
@@ -710,6 +919,7 @@ mod tests {
                     gathered: GatheredTypes::default(),
                     reflectors_configured,
                     outcome: Outcome::Failed,
+                    sdp_exchange_complete: Some(true),
                 }),
                 Reachability::Unknown
             );

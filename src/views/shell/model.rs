@@ -1072,11 +1072,17 @@ impl ShellModel {
     ///
     /// ```text
     /// connector ls                              list; ● marks the selected one
+    /// connector add <addr> [label…]             add; the node says who it is
     /// connector add <peer-id> <addr> [ice=<stun:…>] [label…]   add or overwrite
     /// connector rm  <peer-id>                   remove (clears the selection)
     /// connector use <peer-id>                   select for provisioning
     /// connector check [peer-id]                 advertise(): endpoint + lobby
     /// ```
+    ///
+    /// The one- and two-argument `add` forms are told apart by a `/` in the
+    /// first argument, which a peer-id cannot contain (`validate_node_peer_id`)
+    /// and every address does. The two-argument form stays because it is what
+    /// System Overview's pairing line emits.
     ///
     /// Output is plain scrollback text and deliberately **not** localized — the
     /// shell is a CLI surface and this module makes no `i18n::t` calls at all.
@@ -1104,7 +1110,8 @@ impl ShellModel {
         let push = |e: ScrollbackEntry| self.inner.lock().unwrap().push(e);
         let usage = || {
             ScrollbackEntry::ErrorText(
-                "usage: connector ls | add <peer-id> <addr> [label…] | \
+                "usage: connector ls | add <addr> [label…] | \
+                 add <peer-id> <addr> [label…] | \
                  rm <peer-id> | use <peer-id> | check [peer-id]" // i18n-ignore — dev-facing CLI
                     .to_string(),
             )
@@ -1153,6 +1160,20 @@ impl ShellModel {
                 }
             }
             "add" => {
+                // **`connector add <addr>` and `connector add <peer-id> <addr>`
+                // are both accepted, and the discriminator is exact rather than
+                // a guess.** `validate_node_peer_id` refuses any id containing
+                // `/`, so a first argument with one cannot be an id — it is an
+                // address, and the peer-id is learned by dialing it (the same
+                // rule the window's form now runs on).
+                //
+                // The two-argument form is kept because it is what System
+                // Overview's pairing line emits, and that line's whole-string
+                // shape is pinned by a test.
+                if first_arg_is_an_address(&args) {
+                    self.add_connector_by_address(peers, &registry_pid, &args, dirty);
+                    return;
+                }
                 let (Some(id), Some(addr)) = (args.get(1), args.get(2)) else {
                     push(usage());
                     return;
@@ -1254,17 +1275,18 @@ impl ShellModel {
                 // The row, not just the id: asking a node anything needs a
                 // route to it, and a connector nobody has dialed has none
                 // (`connectors::reach_node`). The address is in the row.
+                // Bare `connector check` means "check the one I am using", and
+                // `connector check <id>` naming that same node means the same
+                // thing — on a URL- or build-provisioned session neither is a
+                // registry row, and asking for a row answered "no such
+                // connector" about the node `net` reports as connected.
                 let target = match args.get(1) {
-                    Some(id) => connectors::read_connectors(peers, &registry_pid)
-                        .into_iter()
-                        .find(|c| c.node_peer_id == **id),
-                    // Bare `connector check` means "check the one I am using",
-                    // which on a URL- or build-provisioned session is not a
-                    // registry row at all. Asking for a row answered "no such
-                    // connector" about the node `net` reports as connected.
-                    None => connectors::node_in_force(peers, &registry_pid),
+                    Some(id) => connectors::resolve_node(peers, &registry_pid, id),
+                    None => connectors::node_in_force(peers, &registry_pid).and_then(|n| {
+                        connectors::resolve_node(peers, &registry_pid, &n.node_peer_id)
+                    }),
                 };
-                let Some(node_row) = target else {
+                let Some(resolved) = target else {
                     push(ScrollbackEntry::ErrorText(
                         "no such connector — `connector ls`, then `connector check <peer-id>` \
                          or `connector use <peer-id>`" // i18n-ignore — dev-facing CLI
@@ -1272,6 +1294,10 @@ impl ShellModel {
                     ));
                     return;
                 };
+                let node_row = resolved.node().clone();
+                // Only a durable row has somewhere to record what the node
+                // advertised; a synthesized one must not be written back.
+                let writable_row = resolved.row().cloned();
                 let node = node_row.node_peer_id.clone();
                 push(ScrollbackEntry::Info(format!(
                     "asking {} what it serves…", // i18n-ignore — dev-facing CLI
@@ -1285,17 +1311,24 @@ impl ShellModel {
                 // §4.5.1's automatic half — the same recording the Peer
                 // Connections `Check` does, because it is the same round trip.
                 let writer = peers.writer_handle();
-                let sys_for_write = self.peer_id.clone();
+                // **The registry peer, not this window's bound peer.** The
+                // connector registry is deployment infrastructure and lives on
+                // the system peer — writing it under the bound peer is how a
+                // second, invisible registry gets managed (the bug this verb's
+                // own `use`/`rm`/`ls` were fixed for).
+                let sys_for_write = registry_pid.clone();
                 spawn_task(async move {
                     let entry = match reach.await {
                         Err(e) => ScrollbackEntry::ErrorText(e),
                         Ok(()) => match fut.await {
                             Ok(ad) => {
-                                if let Some(w) = writer.as_ref() {
+                                if let (Some(w), Some(row)) =
+                                    (writer.as_ref(), writable_row.as_ref())
+                                {
                                     connectors::record_advertised_reflectors(
                                         w,
                                         &sys_for_write,
-                                        &node_row,
+                                        row,
                                         &ad.reflection_endpoints,
                                     );
                                 }
@@ -1328,25 +1361,60 @@ impl ShellModel {
         }
     }
 
-    /// `meet` — find a peer by **name** instead of by its 44-character id
-    /// (`crate::rendezvous`).
+    // (see `first_arg_is_an_address` below the impl for the one-vs-two-argument
+    // discriminator this dispatch uses)
+
+    /// `connector add <addr> [label…]` — the form that names no peer-id, because
+    /// the node will.
     ///
-    /// ```text
-    /// meet tag <label>       anyone who knows the label — public, not a gate
-    /// meet secret <string>   anyone who knows the string — as strong as its entropy
-    /// meet lobby             anyone at the node's lobby, right now
-    /// meet                   how the current search is going
-    /// meet stop              end it, keeping what was found
-    /// ```
-    ///
-    /// The search runs through the **selected connector** (`connector use`),
-    /// from this shell's **bound peer** — that peer's pool carries the calls,
-    /// and its id is the one we announce, so it is the identity a counterpart
-    /// comes away with.
-    ///
-    /// Output is plain scrollback and deliberately not localized, like the rest
-    /// of this module; the Peer Connections window is the localized surface over
-    /// the same operations.
+    /// Routes through the **same**
+    /// [`crate::connectors::add_connector_by_address`] the window's Add uses, so
+    /// the validation, the normalization, the preserve-what-the-node-advertised
+    /// rule and the first-node-becomes-the-selection rule cannot differ between
+    /// the two surfaces. What differs is only how the answer is reported.
+    fn add_connector_by_address(
+        &self,
+        peers: &Peers,
+        registry_pid: &str,
+        args: &[&str],
+        dirty: &crate::window_watch::DirtyFlag,
+    ) {
+        let addr = args.get(1).copied().unwrap_or("").to_string();
+        let draft = crate::connectors::ConnectorDraft {
+            node_addr: addr.clone(),
+            label: args[2.min(args.len())..].join(" "),
+            ..Default::default()
+        };
+        let push = |e: ScrollbackEntry| self.inner.lock().unwrap().push(e);
+        let fut = match crate::connectors::add_connector_by_address(peers, registry_pid, &draft) {
+            Ok(f) => f,
+            // Everything judgeable offline comes back here, synchronously —
+            // a bad reflector URI must not cost a dial timeout first.
+            Err(e) => return push(ScrollbackEntry::ErrorText(e)),
+        };
+        push(ScrollbackEntry::Info(format!("asking {addr} who it is…"))); // i18n-ignore — dev-facing CLI
+        let inner = self.inner.clone();
+        let dirty = dirty.clone();
+        spawn_task(async move {
+            // The node is read once at boot, so an add that does not mention
+            // the reload leaves the reader watching a correct registry do
+            // nothing [AP25] — the same sentence the two-argument form prints.
+            let entry = match fut.await {
+                Ok(outcome) if outcome.selected => ScrollbackEntry::Info(format!(
+                    "added {addr} and selected it (nothing was) — \
+                     reload the page to rendezvous through it" // i18n-ignore — dev-facing CLI
+                )),
+                Ok(_) => ScrollbackEntry::Info(format!(
+                    "added {addr} — `connector ls` for its peer-id, then \
+                     `connector use <peer-id>` and reload" // i18n-ignore — dev-facing CLI
+                )),
+                Err(e) => ScrollbackEntry::ErrorText(e),
+            };
+            inner.lock().unwrap().push(entry);
+            dirty.mark();
+        });
+    }
+
     /// `net` — the **preflight**: can another machine's browser reach this peer
     /// right now, and if not, which half is missing.
     ///
@@ -1391,6 +1459,25 @@ impl ShellModel {
         }
     }
 
+    /// `meet` — find a peer by **name** instead of by its 44-character id
+    /// (`crate::rendezvous`).
+    ///
+    /// ```text
+    /// meet tag <label>       anyone who knows the label — public, not a gate
+    /// meet secret <string>   anyone who knows the string — as strong as its entropy
+    /// meet lobby             anyone at the node's lobby, right now
+    /// meet                   how the current search is going
+    /// meet stop              end it, keeping what was found
+    /// ```
+    ///
+    /// The search runs through the **selected connector** (`connector use`),
+    /// from this shell's **bound peer** — that peer's pool carries the calls,
+    /// and its id is the one we announce, so it is the identity a counterpart
+    /// comes away with.
+    ///
+    /// Output is plain scrollback and deliberately not localized, like the rest
+    /// of this module; the Peer Connections window is the localized surface over
+    /// the same operations.
     fn meet_verb(&self, line: &str, peers: &Peers) {
         use crate::rendezvous::{MeetSession, Mode};
 
@@ -1942,6 +2029,24 @@ impl ShellModel {
     }
 }
 
+/// Is `connector add`'s first argument an **address** (the one-argument form,
+/// where the node's peer-id is learned by dialing) rather than a peer-id?
+///
+/// **The discriminator is exact, not a heuristic.**
+/// [`crate::connectors::validate_node_peer_id`] refuses any id containing `/`,
+/// and there is no address form without one (`ws://…`, `wss://…`,
+/// `memory://…`). So a first argument with a slash cannot be an id and a
+/// peer-id can never be mistaken for an address — which matters, because
+/// getting it backwards would send `connector add <peer-id> <addr>` down the
+/// dial path with a peer-id as the address, and that failure would surface as
+/// "the node is down".
+///
+/// `args` is the whole `connector …` argument list, so `args[0]` is the
+/// sub-command and `args[1]` is the first real argument.
+pub(crate) fn first_arg_is_an_address(args: &[&str]) -> bool {
+    args.get(1).is_some_and(|a| a.contains('/'))
+}
+
 pub const PEER_SUBCOMMANDS: &[&str] = &["list", "create", "delete", "rename"];
 pub const PEER_CREATE_MODES: &[&str] = &["frontend", "memory", "opfs"];
 
@@ -2075,6 +2180,37 @@ impl ShellModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`connector add` reads its own arguments correctly in both forms.**
+    ///
+    /// Getting this backwards is quiet and expensive in both directions: a
+    /// peer-id taken for an address is dialed and reported as *"the node is
+    /// down"*, and an address taken for a peer-id writes a registry row keyed
+    /// by `ws://…` that nothing can ever resolve. The rule holds because
+    /// `validate_node_peer_id` refuses a `/` in an id — so this asserts against
+    /// that function rather than against a hand-listed alphabet.
+    #[test]
+    fn connector_add_tells_an_address_from_a_peer_id_by_the_slash() {
+        // One argument, an address: the dial path.
+        for a in ["ws://192.168.1.10:4041", "wss://node.example:9000", "memory://n"] {
+            assert!(first_arg_is_an_address(&["add", a]), "{a}");
+            assert!(first_arg_is_an_address(&["add", a, "my", "box"]), "{a} with a label");
+            // …and the property the discriminator rests on.
+            assert!(
+                crate::connectors::validate_node_peer_id(a).is_err(),
+                "{a} must be unusable as a peer-id, or the rule is a guess"
+            );
+        }
+        // Two arguments, peer-id first: the classic path — including the exact
+        // line System Overview's pairing row emits.
+        let pairing: Vec<&str> = "add 2KNodeSevenFullBase58Id ws://192.168.1.10:4041"
+            .split(' ')
+            .collect();
+        assert!(!first_arg_is_an_address(&pairing));
+        assert!(crate::connectors::validate_node_peer_id(pairing[1]).is_ok());
+        // No argument at all falls through to the usage line, not to a dial.
+        assert!(!first_arg_is_an_address(&["add"]));
+    }
 
     /// A meet from a peer that cannot be connected back to says so — and one
     /// that can, does not.

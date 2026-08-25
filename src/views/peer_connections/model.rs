@@ -303,18 +303,13 @@ impl PeerConnectionsModel {
         // one. The row list above keeps using `selected` — a synthesized node is
         // not a row, and marking it as one would offer a Remove that removes
         // nothing.
-        let node_in_force = crate::connectors::node_in_force(peers, &sys_pid)
-            .map(|c| c.node_peer_id);
-        let connectors = crate::connectors::read_connectors(peers, &sys_pid)
-            .into_iter()
-            .map(|c| crate::views::peer_connections::output::ConnectorRow {
-                short_pid: crate::views::short_pid(&c.node_peer_id),
-                selected: Some(&c.node_peer_id) == selected.as_ref(),
-                node_peer_id: c.node_peer_id,
-                node_addr: c.node_addr,
-                label: c.label,
-            })
-            .collect();
+        let in_force = crate::connectors::node_in_force(peers, &sys_pid);
+        let node_in_force = in_force.as_ref().map(|c| c.node_peer_id.clone());
+        let connectors = connector_rows(
+            crate::connectors::read_connectors(peers, &sys_pid),
+            selected.as_deref(),
+            in_force.as_ref(),
+        );
 
         // The Meet section. `remembered` is resolved against the rows above, so
         // a peer already in the registry is not offered a Remember that would
@@ -503,6 +498,140 @@ pub(crate) fn rewrite_for_browser(addr: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn rewrite_for_browser(addr: &str) -> String {
     addr.to_string()
+}
+
+/// The rendezvous-node list: the registry's rows, plus the node this session is
+/// actually using when that is not one of them.
+///
+/// # Why this is a free function
+///
+/// The interesting case is **unreachable from `make test` through the model**:
+/// `node_in_force` synthesizes a node from URL/build provisioning only on
+/// wasm32, and its native shadow is exactly `selected_connector` — so on native
+/// `in_force` is always already a row and the insertion below never runs. Pure
+/// and separate, the rule is testable everywhere; the same native-shadow split
+/// `WebRtcProvisioning` uses against the worker wire types.
+///
+/// What can be wrong here is the *position*, the *flags*, and whether a node
+/// gets listed twice — none of it observable from inside a render.
+pub(crate) fn connector_rows(
+    registry: Vec<crate::connectors::Connector>,
+    selected: Option<&str>,
+    in_force: Option<&crate::connectors::Connector>,
+) -> Vec<super::output::ConnectorRow> {
+    use super::output::{ConnectorRow, ConnectorSource};
+    let mut rows: Vec<ConnectorRow> = registry
+        .into_iter()
+        .map(|c| ConnectorRow {
+            short_pid: crate::views::short_pid(&c.node_peer_id),
+            selected: Some(c.node_peer_id.as_str()) == selected,
+            node_peer_id: c.node_peer_id,
+            node_addr: c.node_addr,
+            label: c.label,
+            source: ConnectorSource::Registry,
+        })
+        .collect();
+    // **The node in force is listed even when it is not a row.** A session
+    // provisioned by the served link (or by `make pair-serve`) rendezvous
+    // through a node the registry has never heard of, so this list used to
+    // render its empty state beside a Meet card that was working — a feature
+    // sitting next to an empty list of the thing it supposedly requires.
+    let Some(c) = in_force else { return rows };
+    if rows.iter().any(|r| r.node_peer_id == c.node_peer_id) {
+        // Already a row. Listing it twice would be the opposite bug: the same
+        // node offering Use and Remove in one line and not in the next.
+        return rows;
+    }
+    rows.insert(
+        0,
+        ConnectorRow {
+            short_pid: crate::views::short_pid(&c.node_peer_id),
+            // In force IS in use. `selected` asks which node this session
+            // rendezvous through, and for this row that is true by construction
+            // — it is where the answer came from.
+            selected: true,
+            node_peer_id: c.node_peer_id.clone(),
+            node_addr: c.node_addr.clone(),
+            label: c.label.clone(),
+            source: ConnectorSource::Session,
+        },
+    );
+    rows
+}
+
+#[cfg(test)]
+mod connector_row_tests {
+    use super::connector_rows;
+    use crate::connectors::Connector;
+    use crate::views::peer_connections::output::ConnectorSource;
+
+    fn node(id: &str, addr: &str) -> Connector {
+        Connector {
+            node_peer_id: id.to_string(),
+            node_addr: addr.to_string(),
+            label: String::new(),
+            ice: String::new(),
+            ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
+        }
+    }
+
+    /// **A working Meet must not sit above an empty list of the thing it uses.**
+    ///
+    /// A browser that arrived by the link this desktop serves is provisioned
+    /// before boot and never writes a registry row — the ordinary case, and the
+    /// whole point of the served URL. The list rendered "no rendezvous nodes
+    /// yet" underneath a Meet card that was rendezvousing fine.
+    #[test]
+    fn the_node_this_session_uses_is_listed_even_with_an_empty_registry() {
+        let live = node("2KFromTheLink", "ws://192.168.1.10:4041");
+        let rows = connector_rows(Vec::new(), None, Some(&live));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].node_peer_id, "2KFromTheLink");
+        assert_eq!(rows[0].source, ConnectorSource::Session);
+        assert!(rows[0].selected, "in force IS in use");
+    }
+
+    /// It leads, because it is the one being used — and the registry rows keep
+    /// their own selection flags around it.
+    #[test]
+    fn the_session_node_comes_first_and_does_not_disturb_the_rows_below() {
+        let live = node("2KFromTheLink", "ws://a:1");
+        let rows = connector_rows(
+            vec![node("2KAlice", "ws://b:2"), node("2KBob", "ws://c:3")],
+            Some("2KBob"),
+            Some(&live),
+        );
+        assert_eq!(
+            rows.iter().map(|r| r.node_peer_id.as_str()).collect::<Vec<_>>(),
+            ["2KFromTheLink", "2KAlice", "2KBob"],
+        );
+        assert!(!rows[1].selected);
+        assert!(rows[2].selected, "the registry's own selection survives");
+        assert_eq!(rows[1].source, ConnectorSource::Registry);
+    }
+
+    /// **The opposite bug, and the reason the guard is a membership test rather
+    /// than "did we synthesize".** A node the user added AND is using is one
+    /// row, not two — the duplicate would offer Use and Remove on one line and
+    /// withhold both on the next, for the same node.
+    #[test]
+    fn a_node_that_is_both_stored_and_in_force_is_listed_once() {
+        let live = node("2KAlice", "ws://b:2");
+        let rows = connector_rows(vec![node("2KAlice", "ws://b:2")], Some("2KAlice"), Some(&live));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].source, ConnectorSource::Registry, "removable, as it should be");
+        assert!(rows[0].selected);
+    }
+
+    /// No provisioning at all is the honest empty list — the empty state must
+    /// still be reachable, or the card can never say "add one".
+    #[test]
+    fn nothing_in_force_and_nothing_stored_is_an_empty_list() {
+        assert!(connector_rows(Vec::new(), None, None).is_empty());
+    }
 }
 
 #[cfg(test)]

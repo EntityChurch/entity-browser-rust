@@ -333,6 +333,12 @@ pub const EN: &[(&str, Message)] = &[
     ("label.relay_credential", Message::Simple("Relay credential")),
     ("label.role", Message::Simple("Role")),
     ("label.peer_id", Message::Simple("Peer ID")),
+    // Deliberately NOT `label.peer_id`. This field is an *expectation* checked
+    // against the dial, not the identifier of the thing being added — and it
+    // reads as optional because it is. Sharing the plain label would put a
+    // required-looking "Peer ID" box back at the top of a form whose whole
+    // point is that you no longer need one.
+    ("label.expected_peer_id", Message::Simple("Expected peer ID (optional)")),
     ("label.level", Message::Simple("Level")),
     ("label.results", Message::Simple("Results")),
     ("label.content", Message::Simple("Content")),
@@ -374,6 +380,16 @@ pub const EN: &[(&str, Message)] = &[
     ("chip.pending", Message::Simple("Pending")),
     ("chip.not_authorized", Message::Simple("Not authorized")),
     ("chip.not_verified", Message::Simple("Not verified")),
+    // -- service chips (components::service_chip) --
+    // The third vocabulary, for a switch on THIS device rather than the state
+    // of a peer. Five words and not two: a person told only "not on" cannot
+    // tell whether to wait, to flip something else, or to go and reconfigure a
+    // router — which is the one-sentence failure this whole area exists to end.
+    ("chip.service_on", Message::Simple("On")),
+    ("chip.service_incomplete", Message::Simple("Incomplete")),
+    ("chip.service_pending", Message::Simple("Asking…")),
+    ("chip.service_refused", Message::Simple("Refused")),
+    ("chip.service_off", Message::Simple("Off")),
     // -- execute console surface --
     ("execute.handler", Message::Simple("Handler")),
     ("execute.operation", Message::Simple("Operation")),
@@ -384,7 +400,7 @@ pub const EN: &[(&str, Message)] = &[
     ("execute.raw", Message::Simple("Raw")),
     // -- peer connections surface --
     ("peers.known_devices", Message::Simple("Known devices")),
-    ("peers.connect_device", Message::Simple("Connect to a device")),
+    ("peers.connect_device", Message::Simple("Connect by address")),
     ("peers.pair_qr", Message::Simple("Pair a device (QR)")),
     ("peers.scan_qr", Message::Simple("Scan a QR code")),
     (
@@ -800,7 +816,7 @@ pub const EN: &[(&str, Message)] = &[
              authorized peer is planned.",
         ),
     ),
-    // --- The three cards ---
+    // --- The two cards ---
     //
     // This window used to be ONE "Status" card holding identity facts, three
     // service switches and the pairing lines, all rendered as the same kind of
@@ -809,17 +825,20 @@ pub const EN: &[(&str, Message)] = &[
     // carry somewhere else — so the whole card read as a pile, and the operator
     // reported it as exactly that. Each card now answers ONE question, and its
     // heading is that question.
+    //
+    // (`sysoverview.card_connect` is RETIRED. A third card held the strings you
+    // carry to another machine, which made turning a switch on and finding out
+    // what it produced two separate reading tasks in two separate boxes. Each
+    // string sits under the switch that produces it now, so there is nothing
+    // left for that heading to head.)
     ("sysoverview.card_device", Message::Simple("This device")),
     (
         "sysoverview.card_services",
-        Message::Simple("What other devices can do here"),
+        Message::Simple("Other devices"),
     ),
-    (
-        "sysoverview.card_connect",
-        Message::Simple("Connect another device"),
-    ),
-    // The two steps of the connect card, ordered by `output::connect_steps`.
-    // The URL is the whole flow; the pairing lines below it are the fallback.
+    // The labels on the carry-strings, still ordered by `output::connect_steps`
+    // — the URL is the whole flow, the pairing lines are the fallback, and that
+    // ordering is now expressed as the ROW order (the app-server row leads).
     ("sysoverview.connect_url", Message::Simple("Open on other device")),
     (
         "sysoverview.connect_url_hint",
@@ -839,6 +858,8 @@ pub const EN: &[(&str, Message)] = &[
              Rendezvous is on above, it has no way to reach anybody.",
         ),
     ),
+    ("sysoverview.app_addr", Message::Simple("App at")),
+    ("sysoverview.app_not_serving", Message::Simple("(not serving the app)")),
     ("sysoverview.native_peer", Message::Simple("Native peer")),
     ("sysoverview.listen", Message::Simple("Listen")),
     ("sysoverview.not_listening", Message::Simple("(not listening)")),
@@ -860,7 +881,7 @@ pub const EN: &[(&str, Message)] = &[
     ("sysoverview.rendezvous", Message::Simple("Rendezvous")),
     (
         "sysoverview.rendezvous_on",
-        Message::Simple("Serving — browsers can meet here: {addr}"),
+        Message::Simple("Browsers can meet here — {addr}"),
     ),
     // The off-state used to read "browsers cannot use this desktop to find each
     // other", which an operator with a perfectly good WebSocket link to this
@@ -869,7 +890,7 @@ pub const EN: &[(&str, Message)] = &[
     // *other* devices — so the string says whose problem it is.
     (
         "sysoverview.rendezvous_off",
-        Message::Simple("Off — this desktop is not helping other devices find each other"),
+        Message::Simple("This desktop is not helping other devices find each other"),
     ),
     // (`rendezvous_start` / `rendezvous_stop` retired — this switch uses the
     // shared `label.turn_on` / `label.turn_off`. "Start serving" here and
@@ -892,17 +913,17 @@ pub const EN: &[(&str, Message)] = &[
     // would be pointing at something no longer beside it.
     (
         "sysoverview.appserver_on",
-        Message::Simple("On — other devices can load this app from this desktop"),
+        Message::Simple("Other devices can load this app from this desktop"),
     ),
     (
         "sysoverview.appserver_unprovisioned",
         Message::Simple(
-            "On — but they arrive with no way to reach anybody; turn on Rendezvous above",
+            "They arrive with no way to reach anybody — turn on Rendezvous below",
         ),
     ),
     (
         "sysoverview.appserver_off",
-        Message::Simple("Off — other devices cannot load the app from this desktop"),
+        Message::Simple("Other devices cannot load the app from this desktop"),
     ),
     (
         "sysoverview.appserver_hint",
@@ -932,11 +953,11 @@ pub const EN: &[(&str, Message)] = &[
     ("sysoverview.portmap", Message::Simple("Port forwarding")),
     (
         "sysoverview.portmap_on",
-        Message::Simple("Open — reachable from the internet at {addr}"),
+        Message::Simple("Reachable from the internet at {addr}"),
     ),
     (
         "sysoverview.portmap_off",
-        Message::Simple("Off — this desktop can be reached only from your own network"),
+        Message::Simple("Reachable only from your own network"),
     ),
     ("sysoverview.portmap_asking", Message::Simple("Asking your router…")),
     (
@@ -1153,6 +1174,15 @@ pub const EN: &[(&str, Message)] = &[
     //     why `no_direct_path` describes the situation instead of predicting;
     //   - never quote a TTL or a retry count.
     // Each names the fix without naming a culprit.
+    // The far side never answered. Says nothing about the network, deliberately
+    // — nothing about it was tried.
+    (
+        "chat.reach_no_counterpart",
+        Message::Simple(
+            "That device didn’t answer. It has to be online with this app open, meeting \
+             through the same rendezvous node.",
+        ),
+    ),
     (
         "chat.reach_no_reflector",
         Message::Simple(
@@ -1669,9 +1699,17 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Couldn't connect to {addr} — {reason}"),
     ),
     ("peerconn.connect_ok", Message::Simple("Connected to {peer}")),
-    // The connector registry — signaling nodes this peer may rendezvous
-    // through. The same operations the `connector` shell verb exposes.
-    ("peerconn.connectors", Message::Simple("Connectors")),
+    // The connector registry — the nodes this peer may rendezvous through. The
+    // same operations the `connector` shell verb exposes.
+    //
+    // **"Connector" survives in the code and nowhere on the screen.** It named
+    // neither end of what it describes and was reported as meaning nothing;
+    // "rendezvous node" is the same word System Overview already uses for the
+    // switch on the other side of the same relationship (a desktop *offers*
+    // rendezvous, a browser *picks* one). The module, the shell verb, the tree
+    // path and the entity type keep the old name — renaming those is a data
+    // migration for no gain — which is why these keys still read `connector`.
+    ("peerconn.connectors", Message::Simple("Rendezvous nodes")),
     // Stated at the point of choosing, deliberately: a connector learns who is
     // looking for whom and nothing else — it introduces, then gets out of the
     // way. That property is what makes running a community node safe to offer,
@@ -1685,12 +1723,49 @@ pub const EN: &[(&str, Message)] = &[
     ),
     (
         "peerconn.connector_none",
-        Message::Simple("No connectors yet — add a signaling node to rendezvous through."),
+        Message::Simple("No rendezvous nodes yet — add one below."),
+    ),
+    // The row for a node this session is using but never stored: it arrived in
+    // the link the app was opened from, or was baked into this build. Saying
+    // where it came from is the whole reason the row exists — a node with no
+    // label sitting under "in use" raises exactly the question this answers.
+    (
+        "peerconn.connector_from_link",
+        Message::Simple("from the link you opened"),
+    ),
+    // Adding is a round trip now: the node's peer-id is whatever answers at the
+    // address. A press that goes quiet for the length of a dial reads as a dead
+    // button, so both ends of that wait are said out loud.
+    (
+        "peerconn.connector_asking",
+        Message::Simple("Asking {addr} who it is…"),
+    ),
+    (
+        "peerconn.connector_added",
+        Message::Simple("Added {addr}."),
+    ),
+    (
+        "peerconn.node_addr_help",
+        Message::Simple(
+            "The only thing you need. Its peer ID is learned by dialing it — \
+             nothing to copy from the other machine.",
+        ),
+    ),
+    (
+        "peerconn.node_advanced",
+        Message::Simple("Advanced — pin a peer ID, reflectors, relay"),
+    ),
+    (
+        "peerconn.expect_help",
+        Message::Simple(
+            "Optional. Leave empty to use whoever answers at that address. \
+             Fill it in to pin one node: adding is refused if a different peer answers.",
+        ),
     ),
     (
         "peerconn.connector_reload_pending",
         Message::Simple(
-            "Your connector choice takes effect on reload — this session is still running on the previous one.",
+            "Your rendezvous node takes effect on reload — this session is still using the previous one.",
         ),
     ),
     (
@@ -1732,9 +1807,8 @@ pub const EN: &[(&str, Message)] = &[
     (
         "peerconn.meet_hint",
         Message::Simple(
-            "Find a peer by name instead of by its id. A label is public — anyone who knows \
-             it meets. A secret is only as strong as its randomness, and it introduces you; \
-             it never grants anything.",
+            "Find a device by name instead of by its id. Meeting only introduces you — it \
+             grants nothing on its own.",
         ),
     ),
     (
@@ -1755,9 +1829,38 @@ pub const EN: &[(&str, Message)] = &[
         ),
     ),
     ("peerconn.meet_mode", Message::Simple("Meet by")),
-    ("peerconn.meet_mode_tag", Message::Simple("Label (public)")),
-    ("peerconn.meet_mode_secret", Message::Simple("Secret")),
-    ("peerconn.meet_mode_lobby", Message::Simple("Lobby (anyone here)")),
+    ("peerconn.meet_mode_tag", Message::Simple("A name you both type")),
+    // Still the LABEL for a `secret` meet started from the Shell — the picker no
+    // longer offers the mode (it is `tag` with a different domain byte), but a
+    // running one still has to say what it is.
+    ("peerconn.meet_mode_secret", Message::Simple("A private phrase")),
+    ("peerconn.meet_mode_lobby", Message::Simple("Anyone at this rendezvous")),
+    // What each mode does, shown under the picker for whichever is chosen. Names
+    // in a dropdown are not self-explanatory: "Label (public)" and "Lobby
+    // (anyone here)" were reported as indistinguishable, and they are, unless
+    // something says one meets at a name you agree out loud and the other at a
+    // constant the node itself publishes.
+    //
+    // **The tag note says the name never leaves the device, because it does
+    // not** — every mode hashes its input locally and deposits 33 opaque bytes.
+    // The old pair of notes offered privacy as the difference between two modes
+    // that hash identically, so the honest thing to say about a name is about
+    // its ENTROPY, which is the only thing that actually varies.
+    (
+        "peerconn.meet_mode_note_tag",
+        Message::Simple(
+            "Both devices type the same name. It is scrambled before it leaves this device, so \
+             the rendezvous never learns it — but anyone who guesses the name meets you, so use \
+             something long and random if that matters.",
+        ),
+    ),
+    (
+        "peerconn.meet_mode_note_lobby",
+        Message::Simple(
+            "Meets everyone else waiting at this rendezvous right now. Nothing to type and \
+             nothing to agree on beforehand.",
+        ),
+    ),
     ("peerconn.meet_start", Message::Simple("Meet")),
     ("peerconn.meet_stop", Message::Simple("Stop")),
     (
@@ -1832,6 +1935,26 @@ pub const EN: &[(&str, Message)] = &[
             "This app is already open in another tab, which owns your saved data. \
              Changes in THIS tab are not being saved. Close the other tab and \
              reload here to edit your saved tree.",
+        ),
+    ),
+    (
+        // Said at boot, because everything up to and including "meet" keeps
+        // working without WebRTC and the failure is otherwise silent.
+        //
+        // **It names the half that is lost, not the whole product.** WebRTC is
+        // how we reach a peer that has no address — another browser. A peer
+        // that HAS an address is reached by an ordinary WebSocket and is
+        // untouched: connecting to a Tori install by address, browsing and
+        // moving files through its shared folder, and everything served over
+        // that connection all still work. An earlier wording said "nothing will
+        // connect, in either direction", which is false and would send someone
+        // to debug a path that is fine.
+        "readiness.no_webrtc_api",
+        Message::Simple(
+            "WebRTC is unavailable here, so this app can’t reach another browser — \
+             meeting a device by name will find it and then fail to connect. Devices \
+             that have an address still work: use Connect by address to reach a Tori \
+             install and its shared files. Run `net` in the Shell for details.",
         ),
     ),
     (

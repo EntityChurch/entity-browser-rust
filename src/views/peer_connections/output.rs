@@ -118,6 +118,33 @@ pub struct ConnectorRow {
     /// the selection is a single entity, not a per-row flag, so "exactly one"
     /// cannot drift.
     pub selected: bool,
+    /// Where this row came from, which decides what may be done to it.
+    pub source: ConnectorSource,
+}
+
+/// Where a listed node came from.
+///
+/// The distinction exists because **the node a session rendezvous through is
+/// not always a row in the registry**: provisioning resolves URL query >
+/// selected connector > build knob, and only the middle one writes anything
+/// durable. So a browser that arrived by the link this desktop serves — the
+/// ordinary case, and the whole point of the served URL — had a working
+/// establisher, a working Meet, and a list that said *"no rendezvous nodes
+/// yet"* directly underneath. A working feature beside an empty list of the
+/// thing it supposedly requires reads as a bug in whichever half you look at
+/// second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorSource {
+    /// A durable row the user added. Selectable, removable.
+    Registry,
+    /// Synthesized from the provisioning in force ([`crate::connectors::node_in_force`]).
+    ///
+    /// Rendered, and deliberately offered **no** Use or Remove: there is no
+    /// stored row to reselect or delete, so both buttons would be visible
+    /// no-ops — the dead-button disease this window has fixed twice. `Check`
+    /// stays, because asking a node what it serves is a question about the node
+    /// and not about the row.
+    Session,
 }
 
 /// The Meet section: the form's preconditions plus whatever search is running.

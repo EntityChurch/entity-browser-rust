@@ -109,6 +109,26 @@ async fn life_matches_go_oracle_tick_for_tick() {
     run_oracle("life").await;
 }
 
+/// The interactive one, and the only fixture whose schedule drives **every
+/// kind of control the standard controller has**: four axis bits (the cursor
+/// d-pad), a momentary action that edits state under the cursor, one that
+/// replaces the whole board, and one that toggles the paused flag.
+///
+/// That breadth is the point. `life` and `snake` bind no key-set at all and
+/// `asteroids` predates control roles, so until this fixture the role parser
+/// (`controls.rs`) had unit tests over hand-written keymaps and **no authored
+/// program that exercised it** — the shape this repo keeps meeting, where the
+/// mechanism is right and nothing drives it.
+///
+/// It is also the strictest agreement we ask of the two evaluators. The step
+/// resolves a priority ladder (regen > toggle > paused-hold > the B3/S23 rule)
+/// against edge-detected keys, so a divergence in *when* a press is observed —
+/// not just in the automaton — shows up as a state-hash mismatch.
+#[tokio::test]
+async fn interactive_life_matches_go_oracle_across_every_control() {
+    run_oracle("life-edit").await;
+}
+
 #[tokio::test]
 async fn snake_matches_go_oracle_with_input_schedule() {
     run_oracle("snake").await;

@@ -76,3 +76,21 @@ tempfile = "3"
 ciborium = "0.2"
 # access_log tests construct DispatchEvent fixtures (params_hash: Hash).
 entity-hash = { path = "../../entity-core-rust/core/hash" }
+
+# **The WebView's WebRTC switch, and it is not optional for this product.**
+#
+# WebKitGTK ships `WebKitSettings:enable-webrtc` DEFAULT FALSE — measured
+# against the 2.50.6 in our image (`enable-webrtc = False`, while
+# `enable-media-stream = True`) — and `wry` sets neither: zero hits for `webrtc`
+# in `wry-0.55.1/src`. So `window.RTCPeerConnection` is UNDEFINED in the desktop
+# WebView and every §6.5 establishment from Tori fails before it starts, while
+# `meet` (an ordinary WebSocket call to the node) keeps working — which is what
+# made this present as "they found each other but nothing connects".
+#
+# `lib.rs::enable_webview_webrtc` turns it on, and this crate is the only place
+# that can: `tauri`'s `PlatformWebview::inner()` hands back exactly this crate's
+# `WebView`, so the version must be the one `tauri-runtime-wry` resolves (2.0.x)
+# or the types are two different `WebView`s. `v2_38` is the feature gating
+# `set_enable_webrtc`.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", features = ["v2_38"] }

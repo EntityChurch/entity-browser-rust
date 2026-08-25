@@ -4887,20 +4887,46 @@ impl EntityApp {
             return;
         };
         let sys = self.peer_manager.system_peer_id().to_string();
-        // Idempotent by the ROW, not by a flag: this drains on every backend
-        // start and reload, and re-adding would overwrite a label the user had
-        // edited. `add_connector` already refuses to override an existing
-        // *selection*, so declining to touch an existing *row* is the other half.
-        if crate::connectors::read_connectors(&self.peer_manager, &sys)
-            .iter()
-            .any(|c| c.node_peer_id == info.peer_id)
-        {
-            return;
+        // **A label is the user's; an address is the backend's.**
+        //
+        // This used to skip outright when a row with this peer-id existed, to
+        // protect an edited label. That was half right and it produced a real
+        // failure: the backend **identity is durable** (`~/.entity/backend-peers/
+        // {peer_id}` survives every restart) while its **port is not** — the
+        // 4041 bind falls back to an ephemeral port whenever 4041 is taken,
+        // which is exactly what an earlier Tori still running does. So the row
+        // kept the port from a previous run and the desktop rendezvoused at a
+        // bucket belonging to a process that had moved, while browsers reaching
+        // the live node met each other perfectly. Measured on this box: a row
+        // reading `:33697` (a 20-hour-old process) against a live backend on
+        // `:40805`, same peer-id, `Check` disagreeing with the table.
+        //
+        // So: keep the label if there is one, take the address every time.
+        //
+        // The decision itself is `connectors::plan_self_adoption`, where a
+        // native test can read it — this method is wasm-only.
+        let existing = crate::connectors::read_connectors(&self.peer_manager, &sys)
+            .into_iter()
+            .find(|c| c.node_peer_id == info.peer_id);
+        let default_label = crate::i18n::t("connector.this_desktop", &[]);
+        let label = match crate::connectors::plan_self_adoption(
+            existing.as_ref().map(|c| (c.node_addr.as_str(), c.label.as_str())),
+            addr,
+            &default_label,
+        ) {
+            crate::connectors::AdoptPlan::Unchanged => return,
+            crate::connectors::AdoptPlan::Write { label } => label,
+        };
+        if let Some(prev) = &existing {
+            tracing::info!(
+                node = %info.peer_id, was = %prev.node_addr, now = %addr,
+                "this desktop's rendezvous moved — repointing its connector row"
+            );
         }
         let row = crate::connectors::Connector {
             node_peer_id: info.peer_id.clone(),
             node_addr: addr.to_string(),
-            label: crate::i18n::t("connector.this_desktop", &[]),
+            label,
             // No reflectors and no relay: a desktop serving its own LAN needs
             // neither (`e2e-webrtc-lan` connects on host candidates alone), and
             // inventing one here would enrol a third party the user never chose.
@@ -4916,6 +4942,7 @@ impl EntityApp {
             Ok(outcome) => {
                 tracing::info!(
                     node = %info.peer_id, %addr, selected = outcome.selected,
+                    repointed = existing.is_some(),
                     "adopted this desktop's own rendezvous"
                 );
                 // Only worth a line when it became the one in force; a row added

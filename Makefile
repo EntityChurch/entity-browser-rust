@@ -660,6 +660,28 @@ e2e-phases:
 	@echo "UNTIL=<phase> — phases of worker_boots_and_opens_all_windows, in run order:"
 	@sed -n '/^const PHASE_ORDER/,/^];/p' tests/e2e_worker.rs | sed -e '1d' -e '$$d' -e 's/^/ /'
 
+# === noscript-check — the apex, seen by something that does not run JS ======
+# ============================================================================
+# The apex is a WASM SPA, so a crawler that does not execute JavaScript sees an
+# EMPTY BODY — while the published sites sit right there under /sites/ as plain
+# crawlable HTML that nothing linked to. `index.html` carries a <noscript>
+# landing now; this is the only thing that can prove it, because **the e2e
+# suite drives a browser with JS ON by definition** and no phase there can ever
+# see this surface.
+#
+# Runs the browser BOTH ways and requires the JS-on run to hide the landing —
+# a landing that is always visible would satisfy a one-sided check and would
+# mean every ordinary visitor sees the fallback. Mutation-checked in both
+# directions (drop the `!important` -> red on visibility; drop the inline
+# `display:none` -> red on the control).
+#
+# NOT in `make lint`: it needs Selenium on :4444, which `lint` must not. Run it
+# when index.html changes. **Never beside `e2e-worker`** — that suite's
+# `setup()` DELETEs every session on the grid, so the two take each other down.
+.PHONY: noscript-check
+noscript-check: wasm
+	python3 tools/noscript-check.py $(DIST)
+
 # The two-browser §6.5 WebRTC gate — the terminal S5 validation. Unlike
 # `e2e-worker` (ONE Selenium session on :4444), this stands up TWO firefox
 # containers on a shared podman bridge + a real signaling node: the only
@@ -1003,6 +1025,19 @@ host-run: tauri
 	    echo "  Or run fully containerized instead: make tauri-run"; \
 	  fi; \
 	  exit 1; \
+	fi
+	@# **WebKitGTK's WebRTC backend is GStreamer, and a host missing its
+	@# elements gets a WebView whose RTCPeerConnection constructs and then
+	@# gathers nothing.** Not fatal — the app boots, meets, and simply never
+	@# connects — which is exactly the shape that cost three sessions to find,
+	@# so it warns rather than passing in silence. The container path has these
+	@# baked in (see the Dockerfile); host-run borrows the host's.
+	@if ! ls /usr/lib64/gstreamer-1.0/libgstwebrtc.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwebrtc.so >/dev/null 2>&1; then \
+	  echo "!! no GStreamer webrtcbin on this host — peer-to-peer connections will not work."; \
+	  echo "   The app will still boot and still MEET other devices; nothing will connect."; \
+	  echo "    sudo dnf install gstreamer1-plugins-bad-free gstreamer1-plugins-good   # Fedora"; \
+	  echo "    sudo apt install gstreamer1.0-plugins-bad gstreamer1.0-nice            # Debian / Ubuntu"; \
+	  echo "   (or run fully containerized: make tauri-run)"; \
 	fi
 	@echo "==> running the container-built binary NATIVELY on the host"
 	./src-tauri/target/debug/entity-browser-tauri
