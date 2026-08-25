@@ -103,7 +103,7 @@ impl<'a> PeerBinding for PeersBinding<'a> {
             match connect_fut.await {
                 Ok(remote_pid) => {
                     // Remember the address that worked → one-tap reconnect (§13.2).
-                    connections.add(&remote_pid, &address);
+                    connections.add(&remote_pid);
                     Ok(remote_pid)
                 }
                 Err(e) => Err(e),

@@ -1,16 +1,24 @@
-//! Tree-backed registry of remote peer connections this app has
-//! established.
+//! The app's **petname / authorization registry** for remote peers — what the
+//! app knows that the kernel does not model. **Not an address book.**
 //!
-//! One entity per connected peer at
-//! `/{system_peer}/app/entity-browser/connections/{remote_pid}`.
-//! The path's last segment is the remote peer id; presence means "we have
-//! connected to this peer at least once." The body carries the enriched
-//! **remembered-peer** record (`DESIGN-CROSS-DEVICE-FILE-TRANSFER §13.2`):
-//! `addr` (last address that worked → the one-tap reconnect target) and
-//! `last_seen` (epoch-ms of the most recent connect → how the connection
-//! lives over time). `authorized` / `label` land with their later beats
-//! (the authorize gate / known-name). When the app gains the ability to
-//! detect a remote disconnect, the entity is removed.
+//! One entity per known peer at
+//! `/{system_peer}/app/entity-browser/connections/{remote_pid}`. The path's
+//! last segment is the remote peer id; presence means "we have connected to
+//! this peer at least once." The body carries `last_seen`; `authorized` joins
+//! from the sibling `authz` entity; `label` lands with the known-name beat.
+//!
+//! ## The address is NOT here (`MODEL-REMOTE-PEER-FACTS` §1)
+//!
+//! It used to be, and that was the layering inversion the connectivity review
+//! named: the app carried the address book because the kernel's rung-2 route
+//! (`system/peer/transport/{hex}/primary`) was never published. Routes are
+//! published now, so the address has exactly one durable home — the kernel's —
+//! and [`RememberedPeer::addr`] is **resolved from it on read**, not stored.
+//!
+//! The `addr` field in an entity body is therefore **legacy**: read as a
+//! fallback so a user upgrading with no route yet doesn't lose their Address
+//! column (D16 cold return), never written, removable once a release has
+//! passed. Do not reintroduce a write — see AP17.
 //!
 //! Writes go through [`ConnectionsWriter`] (clonable, suitable for
 //! spawned tasks). Reads via [`read_connected`] from any consumer that
@@ -55,8 +63,12 @@ pub const AUTHZ_TYPE: &str = "app/entity-browser/authz";
 pub struct RememberedPeer {
     /// Remote peer id (the registry entry's last path segment).
     pub remote_pid: String,
-    /// Last address that connected — the one-tap reconnect target. Empty
-    /// for legacy entries written before enrichment (body-less `{}`).
+    /// The address this peer was last reached at — **resolved from the
+    /// kernel's route entity, not stored on this row** (`MODEL-REMOTE-PEER-FACTS`
+    /// §1). Empty when no route is published: never connected, a PeerID form
+    /// whose hex we cannot derive locally, or (Worker arm) the caller forgot to
+    /// watch `transport_profiles::routes_prefix`. Empty means "we cannot say
+    /// how to reach this peer" — never a remembered guess.
     pub addr: String,
     /// Epoch-ms of the most recent successful connect; 0 if unknown.
     pub last_seen: u64,
@@ -80,14 +92,20 @@ impl ConnectionsWriter {
         }
     }
 
-    /// Record a successful connection to `remote_pid` at `addr`. Idempotent
-    /// on the path — a repeat connect overwrites the record, refreshing
-    /// `last_seen` and the reconnect `addr`. `addr` is the address that just
-    /// worked (empty is tolerated for callers without one).
-    pub fn add(&self, remote_pid: &str, addr: &str) {
+    /// Record that we have connected to `remote_pid`. Idempotent on the path —
+    /// a repeat connect overwrites the record, refreshing `last_seen`.
+    ///
+    /// **This no longer stores an address.** The address is a kernel fact with
+    /// exactly one durable home — the transport-profile route the dispatch
+    /// ladder reads — and an app-tier copy is by construction a mirror of it
+    /// (`MODEL-REMOTE-PEER-FACTS` §1, AP17). This row now answers only what the
+    /// kernel does not model: *have I ever connected to this peer, and when*.
+    /// A caller with an address in hand does not pass it here; publishing the
+    /// route is `Peers::connect_peer` / `maintain_peer`'s job.
+    pub fn add(&self, remote_pid: &str) {
         let Some(handle) = &self.handle else { return };
         let path = app_paths::connection_entry_path(app_paths::APP_ID, &self.system_peer_id, remote_pid);
-        handle.put(path, make_connection_entity(addr, now_epoch_ms()));
+        handle.put(path, make_connection_entity(now_epoch_ms()));
     }
 
     /// Remove a connection record. No-op if not present.
@@ -118,9 +136,8 @@ impl ConnectionsWriter {
     }
 }
 
-fn make_connection_entity(addr: &str, last_seen: u64) -> Entity {
+fn make_connection_entity(last_seen: u64) -> Entity {
     let data = to_ecf(&cbor_map! {
-        "addr" => text(addr),
         "last_seen" => integer(last_seen as i64)
     });
     Entity::new(CONNECTION_TYPE, data).expect("connection entity construction is infallible")
@@ -254,10 +271,21 @@ pub fn read_connections(peers: &Peers) -> Vec<RememberedPeer> {
             if remote.is_empty() || remote.contains('/') {
                 return None;
             }
-            let (addr, last_seen) = peers
+            let (legacy_addr, last_seen) = peers
                 .get_entity(pid, &entry.path)
                 .map(|e| decode_connection(&e))
                 .unwrap_or_default();
+            // The address is a KERNEL fact with one durable home — the route
+            // entity the dispatch ladder reads (`MODEL-REMOTE-PEER-FACTS` §1).
+            // The legacy body field is a **migration read only**: a returning
+            // user has rows carrying `addr` and may have no route yet (routes
+            // are written on connect, and they have not connected since
+            // upgrading), so reading the route alone would blank the Address
+            // column and hide Reconnect on the first boot after upgrade — a
+            // D16 cold-return regression. Never written; removable once a
+            // release has passed.
+            let addr = crate::transport_profiles::address_for(peers, pid, &remote)
+                .unwrap_or(legacy_addr);
             // Join the sibling authz mirror (absent ⇒ paired, not authorized).
             let authorized = read_authz(peers, pid, &remote);
             Some(RememberedPeer {
@@ -278,7 +306,7 @@ mod tests {
     fn add_records_one_connection() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_AAAA", "ws://10.0.0.5:4041");
+        writer.add("REMOTE_AAAA");
 
         assert_eq!(read_connected(&pm), vec!["REMOTE_AAAA".to_string()]);
     }
@@ -287,9 +315,9 @@ mod tests {
     fn add_is_idempotent() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_X", "ws://a:1");
-        writer.add("REMOTE_X", "ws://a:1");
-        writer.add("REMOTE_X", "ws://a:1");
+        writer.add("REMOTE_X");
+        writer.add("REMOTE_X");
+        writer.add("REMOTE_X");
 
         assert_eq!(read_connected(&pm).len(), 1);
     }
@@ -298,9 +326,9 @@ mod tests {
     fn multiple_connections_listed_sorted() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_C", "ws://c:3");
-        writer.add("REMOTE_A", "ws://a:1");
-        writer.add("REMOTE_B", "ws://b:2");
+        writer.add("REMOTE_C");
+        writer.add("REMOTE_A");
+        writer.add("REMOTE_B");
 
         assert_eq!(
             read_connected(&pm),
@@ -316,48 +344,111 @@ mod tests {
     fn remove_drops_entry() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_KEEP", "ws://k:1");
-        writer.add("REMOTE_DROP", "ws://d:1");
+        writer.add("REMOTE_KEEP");
+        writer.add("REMOTE_DROP");
         writer.remove("REMOTE_DROP");
 
         assert_eq!(read_connected(&pm), vec!["REMOTE_KEEP".to_string()]);
     }
 
     #[test]
-    fn remembers_addr_and_last_seen() {
+    fn the_address_comes_from_the_route_not_the_row() {
         let pm = Peers::new_direct();
+        let sys = pm.system_peer_id().to_string();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_B", "ws://192.168.1.10:4041");
-        writer.add("REMOTE_A", "ws://192.168.1.11:4041");
+        let handle = pm.writer_handle().expect("Direct writer handle");
+
+        // Two real identity-form PeerIDs — the route path is keyed by the
+        // identity hash, which only derives from a genuine PeerID.
+        let a = entity_crypto::Keypair::generate().peer_id().to_string();
+        let b = entity_crypto::Keypair::generate().peer_id().to_string();
+
+        writer.add(&a);
+        writer.add(&b);
+        crate::transport_profiles::publish_dialed(&handle, &sys, &a, "ws://192.168.1.11:4041", None);
+        crate::transport_profiles::publish_dialed(&handle, &sys, &b, "ws://192.168.1.10:4041", None);
 
         let records = read_connections(&pm);
         assert_eq!(records.len(), 2);
-        // Sorted by remote peer id.
-        assert_eq!(records[0].remote_pid, "REMOTE_A");
-        assert_eq!(records[0].addr, "ws://192.168.1.11:4041");
-        assert_eq!(records[1].remote_pid, "REMOTE_B");
-        assert_eq!(records[1].addr, "ws://192.168.1.10:4041");
-        // last_seen is stamped (non-zero) on write.
+        let addr_of = |pid: &str| {
+            records
+                .iter()
+                .find(|r| r.remote_pid == pid)
+                .unwrap_or_else(|| panic!("{pid} missing"))
+                .addr
+                .clone()
+        };
+        assert_eq!(addr_of(&a), "ws://192.168.1.11:4041");
+        assert_eq!(addr_of(&b), "ws://192.168.1.10:4041");
         assert!(records[0].last_seen > 0, "last_seen should be stamped");
+
+        // The row itself must carry NO address — one durable home, and the
+        // whole point of the migration is that this body stopped being one
+        // (`MODEL-REMOTE-PEER-FACTS` §1). Asserted on the raw entity, because
+        // `read_connections` deliberately falls back to the legacy field and
+        // would mask a regression here.
+        let path = app_paths::connection_entry_path(app_paths::APP_ID, &sys, &a);
+        let raw = pm.get_entity(&sys, &path).expect("row present");
+        assert_eq!(
+            decode_connection(&raw).0,
+            "",
+            "the app row must not store an address — it is a kernel fact"
+        );
+    }
+
+    /// **The D16 cold-return case.** A user who upgrades has rows carrying the
+    /// legacy `addr` and no route yet (routes are written on connect, and they
+    /// have not connected since). Reading the route alone would blank the
+    /// Address column and hide Reconnect on that first boot. The legacy field
+    /// is a migration READ only — never written — and removable once a release
+    /// has passed.
+    #[test]
+    fn a_legacy_row_keeps_its_address_until_the_first_reconnect() {
+        let pm = Peers::new_direct();
+        let sys = pm.system_peer_id().to_string();
+        let handle = pm.writer_handle().expect("Direct writer handle");
+        let remote = entity_crypto::Keypair::generate().peer_id().to_string();
+
+        // Hand-write a pre-migration row: body carries `addr`, no route exists.
+        let legacy = to_ecf(&cbor_map! {
+            "addr" => text("ws://legacy:4041"),
+            "last_seen" => integer(1_700_000_000_000i64)
+        });
+        handle.put(
+            app_paths::connection_entry_path(app_paths::APP_ID, &sys, &remote),
+            Entity::new(CONNECTION_TYPE, legacy).expect("legacy entity"),
+        );
+
+        let records = read_connections(&pm);
+        assert_eq!(records[0].addr, "ws://legacy:4041", "legacy addr must survive the upgrade");
+
+        // Once a route exists it WINS — the kernel fact is authoritative and a
+        // stale legacy body must never shadow it.
+        crate::transport_profiles::publish_dialed(&handle, &sys, &remote, "ws://current:4041", None);
+        let records = read_connections(&pm);
+        assert_eq!(
+            records[0].addr, "ws://current:4041",
+            "the route is authoritative; the legacy field is only a fallback"
+        );
     }
 
     #[test]
     fn reconnect_refreshes_addr() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_X", "ws://old:4041");
-        writer.add("REMOTE_X", "ws://new:4041");
+        writer.add("REMOTE_X");
+        writer.add("REMOTE_X");
 
         let records = read_connections(&pm);
         assert_eq!(records.len(), 1, "same peer overwrites, not duplicates");
-        assert_eq!(records[0].addr, "ws://new:4041", "addr refreshed to latest");
+        assert!(records[0].last_seen > 0, "last_seen refreshed on reconnect");
     }
 
     #[test]
     fn unauthorized_peer_reads_none() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_A", "ws://a:1");
+        writer.add("REMOTE_A");
 
         let records = read_connections(&pm);
         assert_eq!(records[0].authorized, None, "paired but not authorized");
@@ -367,7 +458,7 @@ mod tests {
     fn set_authorized_records_profile() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_A", "ws://a:1");
+        writer.add("REMOTE_A");
         writer.set_authorized("REMOTE_A", "file-transfer");
 
         let records = read_connections(&pm);
@@ -389,7 +480,7 @@ mod tests {
             .to_string();
         let hex = entity_crypto::peer_identity_hash(&public_key).unwrap().to_hex();
 
-        writer.add(&base58, "ws://a:1");
+        writer.add(&base58);
         writer.set_authorized(&hex, "file-transfer"); // keyed as the authorize path keys it
 
         let records = read_connections(&pm);
@@ -410,13 +501,12 @@ mod tests {
     fn reconnect_preserves_authorization() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_A", "ws://old:4041");
+        writer.add("REMOTE_A");
         writer.set_authorized("REMOTE_A", "file-transfer-rw");
         // Reconnect from a new address — overwrites the connection record.
-        writer.add("REMOTE_A", "ws://new:4041");
+        writer.add("REMOTE_A");
 
         let records = read_connections(&pm);
-        assert_eq!(records[0].addr, "ws://new:4041", "addr refreshed");
         assert_eq!(
             records[0].authorized.as_deref(),
             Some("file-transfer-rw"),
@@ -428,7 +518,7 @@ mod tests {
     fn clear_authorized_revokes() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_A", "ws://a:1");
+        writer.add("REMOTE_A");
         writer.set_authorized("REMOTE_A", "trusted");
         writer.clear_authorized("REMOTE_A");
 
@@ -441,7 +531,7 @@ mod tests {
     fn reauthorize_overwrites_profile() {
         let pm = Peers::new_direct();
         let writer = ConnectionsWriter::new(&pm);
-        writer.add("REMOTE_A", "ws://a:1");
+        writer.add("REMOTE_A");
         writer.set_authorized("REMOTE_A", "file-transfer");
         writer.set_authorized("REMOTE_A", "trusted");
 

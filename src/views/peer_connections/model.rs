@@ -344,7 +344,17 @@ mod tests {
     fn known_peers_surface_the_remembered_registry_with_reconnect_addr() {
         let peers = Peers::new_direct();
         let pid = peers.system_peer_id().to_string();
-        ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
+        // A real PeerID: the reconnect address now resolves from the kernel's
+        // route entity, whose path segment derives from the identity hash.
+        let remote = entity_crypto::Keypair::generate().peer_id().to_string();
+        ConnectionsWriter::new(&peers).add(&remote);
+        crate::transport_profiles::publish_dialed(
+            &peers.writer_handle().expect("Direct writer handle"),
+            &pid,
+            &remote,
+            "ws://10.0.0.9:4041",
+            None,
+        );
 
         let model = PeerConnectionsModel::new(7, pid);
         let out = model.render_output(
@@ -354,10 +364,10 @@ mod tests {
         );
 
         assert_eq!(out.known_peers.len(), 1, "the remembered peer surfaces");
-        assert_eq!(out.known_peers[0].remote_pid, "REMOTE_B");
+        assert_eq!(out.known_peers[0].remote_pid, remote);
         assert_eq!(
             out.known_peers[0].addr, "ws://10.0.0.9:4041",
-            "reconnect address carried through for one-tap reconnect"
+            "one-tap reconnect reads its address from the route, not the row"
         );
     }
 
@@ -373,7 +383,7 @@ mod tests {
         let peers = Peers::new_direct();
         let pid = peers.system_peer_id().to_string();
         let backend = "REMOTE_SYSTEM_BACKEND";
-        ConnectionsWriter::new(&peers).add(backend, "ws://192.168.68.55:4041");
+        ConnectionsWriter::new(&peers).add(backend);
 
         let model = PeerConnectionsModel::new(7, pid);
         let out = model.render_output(
