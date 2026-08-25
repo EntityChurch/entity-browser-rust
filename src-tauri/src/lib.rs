@@ -8,6 +8,7 @@ use entity_peer::transport::{Connector, WebSocketConnector, WebSocketListener, L
 use serde::Serialize;
 use tauri::Manager;
 
+mod backend_log;
 mod manager_grant;
 mod persistence;
 
@@ -59,6 +60,14 @@ fn connectable_addr(listen_addr: &str) -> String {
 /// `entity://{backend}/local/files/shared/…`. See
 /// `docs/architecture/reviews/DESIGN-CROSS-DEVICE-FILE-TRANSFER.md` §7.
 const SHARE_PREFIX: &str = "local/files/shared/";
+
+/// Label of the canonical, auto-provisioned system backend peer (B). Exactly
+/// one exists per install; it is created idempotently at boot, is un-deletable
+/// (mirrors the frontend system peer — S can minimize away but B stays), and is
+/// the deterministic File Transfer / pairing target. Additional backend peers
+/// created via `create_backend_peer` are advanced and carry other labels.
+/// See `docs/architecture/reviews/DESIGN-SYSTEM-BACKEND-PEER.md` §10.
+const SYSTEM_BACKEND_LABEL: &str = "system-backend";
 
 /// Ensure the demo share directory exists and always has at least one
 /// file to pull, then return its filesystem path.
@@ -394,6 +403,13 @@ fn delete_backend_peer(
     peer_id: String,
 ) -> Result<(), String> {
     let mut peers = state.peers.lock().unwrap();
+    // The canonical system backend is un-deletable — it is auto-provisioned at
+    // every boot (mirrors the frontend system peer). Refuse loudly rather than
+    // let a delete succeed only to have B reappear on the next launch, which
+    // would read as a broken control. Additional backends delete normally.
+    if peers.get(&peer_id).and_then(|bp| bp.label.as_deref()) == Some(SYSTEM_BACKEND_LABEL) {
+        return Err("The system backend peer cannot be deleted".to_string());
+    }
     if let Some(mut bp) = peers.remove(&peer_id) {
         bp.stop();
         persistence::delete_peer(&peer_id);
@@ -401,6 +417,38 @@ fn delete_backend_peer(
     } else {
         Err(format!("Backend peer {} not found", peer_id))
     }
+}
+
+/// Set the backend's `tracing` level at runtime (`off`/`error`/…/`trace`), from
+/// the System Backend window's level control. Swaps the reload filter.
+#[tauri::command]
+fn set_backend_log_level(level: String) -> Result<(), String> {
+    backend_log::set_level(&level)
+}
+
+/// The backend's current `tracing` level, for the window to pre-select its
+/// level control on open.
+#[tauri::command]
+fn get_backend_log_level() -> String {
+    backend_log::current_level()
+}
+
+/// The backend's shared-files directory on disk — the real filesystem location
+/// behind the `local/files/shared/` tree prefix a paired device browses. Shown
+/// in the System Backend window so the operator knows *where* shared files land
+/// (answers "what is local/files/shared"). System-level, not per-peer.
+#[tauri::command]
+fn system_backend_share_path() -> Option<String> {
+    ensure_share_root().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Tail the backend peer's captured `tracing` output for the System Backend
+/// window's live log stream (DESIGN §4). Returns every buffered line after the
+/// caller's `after` cursor plus the new cursor to poll with next. In-memory ring
+/// (`backend_log`), so this is process-lifetime only — no durable history.
+#[tauri::command]
+fn backend_log_tail(after: u64) -> backend_log::LogTail {
+    backend_log::tail(after)
 }
 
 /// List all managed backend peers (running and stopped).
@@ -470,34 +518,39 @@ const CONSOLE_BRIDGE_JS: &str = r#"
 })();
 "#;
 
-/// Test-only autostart entry point. Drives the same listener-start logic
-/// the WebView would invoke when the user clicks Start, just without a
-/// user click. Reuses (or creates) a persisted peer labelled "autostart"
-/// so repeated test runs hit the same identity and don't accumulate
-/// junk peers in `~/.entity/peers`.
-async fn autostart_listener(
-    app_handle: &tauri::AppHandle,
-) -> Result<(String, String), String> {
-    let state = app_handle.state::<BackendPeers>();
-
+/// Reuse-or-create the persisted backend peer labelled `label`, then start it
+/// (build → seed the manager grant for `manager_peer_id` → mount the share →
+/// bind the listener). Idempotent: a second call with the same label returns
+/// the already-running peer (via `start_backend_peer`'s running short-circuit).
+/// Reusing by a stable label keeps one identity across restarts and avoids
+/// accumulating junk peers in `~/.entity/peers`.
+///
+/// The shared core behind `ensure_system_backend` (production auto-provision,
+/// label `system-backend`, manager = S) and `autostart_listener` (the E2E hook,
+/// label `autostart`, empty manager).
+async fn ensure_backend_peer(
+    state: tauri::State<'_, BackendPeers>,
+    label: &str,
+    manager_peer_id: String,
+) -> Result<BackendPeerResponse, String> {
     let peer_id = {
         let mut peers = state.peers.lock().unwrap();
         if let Some(existing) =
-            peers.values().find(|bp| bp.label.as_deref() == Some("autostart"))
+            peers.values().find(|bp| bp.label.as_deref() == Some(label))
         {
             existing.peer_id.clone()
         } else {
             let kp = Keypair::generate();
             let seed = kp.secret_key_bytes();
             let pid = kp.peer_id().to_string();
-            let label = Some("autostart".to_string());
-            let sqlite_path = persistence::save_peer(&kp, label.as_deref());
+            let lbl = Some(label.to_string());
+            let sqlite_path = persistence::save_peer(&kp, lbl.as_deref());
             peers.insert(
                 pid.clone(),
                 BackendPeer {
                     peer_id: pid.clone(),
                     seed,
-                    label,
+                    label: lbl,
                     sqlite_path,
                     runtime: None,
                 },
@@ -506,11 +559,38 @@ async fn autostart_listener(
         }
     };
 
-    // Reuse the production command implementation so the test exercises
-    // the exact same listener-build path as a real user click. No manager peer
-    // is designated in this helper's context (headless spawn) — the manager
-    // grant seed is skipped on an empty manager id.
-    let response = start_backend_peer(state, peer_id, String::new()).await?;
+    // Reuse the production command implementation so every entry point exercises
+    // the exact same listener-build path as a real user click.
+    start_backend_peer(state, peer_id, manager_peer_id).await
+}
+
+/// Auto-provision the canonical **system backend peer** (B) and return its id +
+/// WS address. Idempotent across restarts and reloads (stable `system-backend`
+/// identity + `start_backend_peer`'s running short-circuit). `manager_peer_id`
+/// is the frontend system peer (S), which B self-seeds as its manager grant so
+/// the authorize gate has an authority once `debug_open_grants` is retired.
+///
+/// Driven by the WebView (S) at boot — `src-tauri` setup does not know S's
+/// peer-id, and the manager grant is load-bearing, so S makes the call. This is
+/// the production replacement for the manual create → start dance.
+/// See `DESIGN-SYSTEM-BACKEND-PEER.md` §10.2.
+#[tauri::command]
+async fn ensure_system_backend(
+    state: tauri::State<'_, BackendPeers>,
+    manager_peer_id: String,
+) -> Result<BackendPeerResponse, String> {
+    ensure_backend_peer(state, SYSTEM_BACKEND_LABEL, manager_peer_id).await
+}
+
+/// Test-only autostart entry point. Drives the same production listener-start
+/// path as a real user click, without a click. No manager peer in this headless
+/// context (empty manager → grant seed skipped); its own `autostart` label
+/// keeps a stable per-test identity distinct from the `system-backend` peer.
+async fn autostart_listener(
+    app_handle: &tauri::AppHandle,
+) -> Result<(String, String), String> {
+    let state = app_handle.state::<BackendPeers>();
+    let response = ensure_backend_peer(state, "autostart", String::new()).await?;
     let ws_addr = response
         .ws_addr
         .ok_or_else(|| "start_backend_peer returned no ws_addr".to_string())?;
@@ -525,13 +605,12 @@ pub fn run() {
     // `info`; override with RUST_LOG (e.g. `RUST_LOG=info,entity_peer=debug`).
     // Independent of tauri-plugin-log, which handles the `log` crate (the
     // webview console bridge). `try_init` so a double-init never panics.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_target(true)
-        .try_init();
+    // Install the backend's `tracing` subscriber: a reload-able level filter
+    // (the System Backend window changes it live) feeding an ANSI-colored fmt
+    // layer that tees into the ring buffer (window's log stream, DESIGN §4) and
+    // stdout. ANSI is kept on — the window converts the escapes to colored HTML
+    // (`crate::ansi`), the terminal shows them natively.
+    backend_log::init_tracing();
 
     tauri::Builder::default()
         .plugin(
@@ -567,6 +646,11 @@ pub fn run() {
             stop_backend_peer,
             delete_backend_peer,
             list_backend_peers,
+            ensure_system_backend,
+            backend_log_tail,
+            system_backend_share_path,
+            set_backend_log_level,
+            get_backend_log_level,
         ])
         .setup(|app| {
             log::info!("Tauri backend starting");

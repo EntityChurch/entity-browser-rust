@@ -187,6 +187,18 @@ impl WindowView for FileTransferWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
+        // Auto-load the share root the first time a target resolves (ROADMAP
+        // 3d / S5) — no manual "Browse" click. Settle the cache's target first
+        // (so a switch resets the one-shot guard), claim the load, then build
+        // the output — which reports `root_loading` so the window shows
+        // "Loading…" rather than the Browse button this frame.
+        let target = self.model.effective_target(peers);
+        if !target.is_empty() {
+            self.model.browse().sync_target(&target);
+            if self.model.browse().claim_auto_load() {
+                self.load_dir(peers, &target, "", false);
+            }
+        }
         let output = self.model.render_output(peers);
         crate::dom::file_transfer::render(container, &output, ctx);
     }

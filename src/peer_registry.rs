@@ -51,12 +51,14 @@ pub struct PeerRecord {
     /// (which SDK hosts it — a runtime fact). Drives badge color, not
     /// the mode label.
     pub display: String,
-    /// Truthful human role: `system` | `frontend` | `backend (memory)`
-    /// | `backend (opfs)`. Resolved from the authoritative persisted
-    /// mode (not the old `persisted`-flag proxy that mislabeled every
-    /// backend peer as "memory").
+    /// Truthful, terse human role: `system` | `system (native)` | `main thread`
+    /// | `worker` | `worker (OPFS)` | `native`. Derived via
+    /// [`crate::peer_display::PeerDescriptor`] from real runtime facts — the
+    /// "frontend"/"backend" vocabulary (and the fall-through that mislabeled
+    /// the native system peer as "backend (memory)") is retired.
     pub role: String,
-    /// Glyph paired with `role` (`★`/`●`/`◆`/`◆⛁`).
+    /// Glyph paired with `role` (`★` system · `⚙` native · `●` main thread ·
+    /// `◆`/`◆⛁` worker).
     pub glyph: String,
     /// Whether the peer's identity is saved to the persisted store
     /// (authoritative — membership in the persisted-mode map, not the
@@ -388,7 +390,7 @@ mod tests {
                 peer_id: "FOREIGN".into(),
                 label: None,
                 display: "remote".into(),
-                role: "backend (memory)".into(),
+                role: "worker".into(),
                 glyph: "◆".into(),
                 persisted: false,
                 is_primary: false,
@@ -435,7 +437,7 @@ mod tests {
                 peer_id: "GHOST".into(),
                 label: None,
                 display: "remote".into(),
-                role: "backend (memory)".into(),
+                role: "worker".into(),
                 glyph: "◆".into(),
                 persisted: false,
                 is_primary: false,
@@ -464,7 +466,7 @@ mod tests {
             peer_id: "PEERAAAA".into(),
             label: Some("Alice".into()),
             display: "remote".into(),
-            role: "backend (opfs)".into(),
+            role: "worker (OPFS)".into(),
             glyph: "◆⛁".into(),
             persisted: true,
             is_primary: false,
@@ -482,7 +484,7 @@ mod tests {
             peer_id: "PEERBBBB".into(),
             label: None,
             display: "remote".into(),
-            role: "backend (memory)".into(),
+            role: "worker".into(),
             glyph: "◆".into(),
             persisted: false,
             is_primary: false,

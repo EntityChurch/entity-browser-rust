@@ -4,6 +4,7 @@
 //! WindowManager's active instances.
 
 pub mod chain_trace;
+pub mod components;
 pub mod content_site;
 pub mod content_stream;
 pub mod entity_tree;
@@ -26,6 +27,7 @@ pub mod site_overlay;
 pub mod shell;
 pub mod storage;
 pub mod style;
+pub mod system_backend;
 pub mod theme;
 pub mod util;
 pub mod wire_recorder;

@@ -83,6 +83,11 @@ pub enum Action {
         handler_uri: String,
         path: String,
         bytes: Vec<u8>,
+        /// The File Transfer window that initiated the upload — so a verified
+        /// success can re-list its share (S5 write-refresh): the app enqueues a
+        /// `ft_refresh` WindowEvent for this window once the write lands. The
+        /// user never manually refreshes a change the app just caused.
+        window_id: crate::window::WindowId,
     },
     /// Refresh the **backend-auth observability** surface for one backend
     /// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`). Reads B's

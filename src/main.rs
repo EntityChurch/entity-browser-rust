@@ -18,7 +18,9 @@ mod deployment_config;
 #[cfg(target_arch = "wasm32")]
 mod capabilities;
 mod inspect_router;
+mod ansi;
 mod connections;
+mod connection_health;
 mod content_site;
 mod peer_auth;
 mod backend_auth;

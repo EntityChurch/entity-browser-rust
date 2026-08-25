@@ -56,6 +56,10 @@ struct Inner {
     selected: Option<String>,
     /// Last browse error (surfaced loudly; D13).
     error: Option<String>,
+    /// Whether the one-shot auto-load of the root has been claimed for the
+    /// current target. Reset (with the rest of `Inner`) on a target switch, so
+    /// each target auto-loads exactly once.
+    auto_attempted: bool,
 }
 
 /// Cheap-to-clone handle to the browse state.
@@ -78,6 +82,21 @@ impl FsBrowseCache {
         }
         *inner = Inner { target: target.to_string(), ..Inner::default() };
         true
+    }
+
+    /// Claim the one-shot auto-load of the share root (S5 / ROADMAP 3d — no
+    /// first "Browse" click). Returns `true` at most once per target (the cache
+    /// resets on a target switch via [`sync_target`]), and only when the root
+    /// isn't already loaded or loading. A failed load leaves the root un-listed
+    /// but keeps `auto_attempted` set, so it does **not** retry every frame —
+    /// the user re-triggers with Browse/Refresh.
+    pub fn claim_auto_load(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.auto_attempted {
+            return false;
+        }
+        inner.auto_attempted = true;
+        !inner.loading.contains("") && !inner.listed.contains("")
     }
 
     /// Toggle a directory open/closed. Returns the new expanded state.

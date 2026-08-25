@@ -7,7 +7,7 @@
 //! is still consulted for the two non-per-peer footer facts
 //! (`sdk_count`, Tauri availability).
 
-use crate::peer_display::PeerDisplay;
+use crate::peer_display::{PeerDescriptor, PeerDisplay, PeerRole, PeerRuntime};
 use crate::peer_registry::read_registry;
 use crate::peers::Peers;
 
@@ -33,48 +33,49 @@ impl PeerManagementModel {
         let recs = read_registry(peers);
         let mut rows = Vec::with_capacity(recs.len());
 
-        // Start/Stop/"stopped" is a *Tauri-native* backend-peer
-        // lifecycle concept (native process bound to ws://). A browser
-        // backend peer runs in an in-process Web Worker — it has no
-        // listen address but is *running*. Showing it "stopped" with a
-        // Start button (which calls Tauri IPC → no-op in a browser) is
-        // a flat misrepresentation, so gate that affordance on Tauri.
-        let tauri = tauri_available();
+        // Authoritative persisted-mode map — the storage facet for user peers.
+        let modes = crate::persistence::peer_modes();
 
         for r in &recs {
             let kind = PeerDisplay::from_tag(&r.display);
-            let is_backend = r.role.starts_with("backend");
-            // Worker-spawned backend peers (Action::CreatePeerWithMode
-            // with BackendMemory/BackendOpfs) live in a Web Worker
-            // SDK — NOT the Tauri native process. They're always
-            // running and have no Tauri-side IPC handle, so the
-            // Start/Stop affordance must be hidden for them even in
-            // Tauri. Discriminator: `is_backend_hosted` is true iff
-            // the peer is in a worker SDK; Tauri-native backend peers
-            // are registered into the primary SDK and return false.
-            let is_tauri_native_backend =
-                is_backend && tauri && !peers.is_backend_hosted(&r.peer_id);
+            // The truthful role · runtime · storage facets. `describe` owns the
+            // native-vs-worker-vs-main-thread call (replacing the old
+            // `role.starts_with("backend")` string sniff, which is exactly what
+            // let the native system peer read as "backend (memory)").
+            let descriptor = PeerDescriptor::describe(peers, &r.peer_id, &modes);
+
+            // Start/Stop/"stopped" is a *native-process* backend-peer lifecycle
+            // concept (a peer bound to ws://). A worker peer runs in-page and is
+            // always running — no listen address, not "stopped". So the affordance
+            // gates on the Native runtime.
+            let is_native = descriptor.runtime == PeerRuntime::Native;
+            // The canonical system native peer is infrastructure: always-on and
+            // un-deletable (the backend refuses both). Its Start/Stop and Delete
+            // are unsupported ⇒ hidden — like the in-app system peer
+            // (REFERENCE-UI-DESIGN S3 "no dead controls"). Among native peers,
+            // only the system one carries `PeerRole::System`.
+            let is_system_native = is_native && descriptor.role == PeerRole::System;
 
             let address = if !r.listen_addresses.is_empty() {
                 AddressDisplay::Addresses(r.listen_addresses.join(", "))
-            } else if is_tauri_native_backend {
-                // Tauri native backend peer with no listener = stopped.
+            } else if is_native {
+                // Native-process peer with no listener = stopped.
                 AddressDisplay::Stopped
             } else {
-                // Browser worker backend (running, no listener) or a
-                // frontend peer — no network address, not "stopped".
+                // Worker peer (running, no listener) or a main-thread peer —
+                // no network address, not "stopped".
                 AddressDisplay::None
             };
 
-            let backend_button = if is_tauri_native_backend {
+            let backend_button = if is_native && !is_system_native {
                 Some(if r.listen_addresses.is_empty() {
                     BackendButton::Start
                 } else {
                     BackendButton::Stop
                 })
             } else {
-                // Browser worker backend peers are always running —
-                // there is nothing to start/stop.
+                // Worker peers are always running, and the system native peer is
+                // always-on — nothing to start/stop.
                 None
             };
 
@@ -82,14 +83,13 @@ impl PeerManagementModel {
                 peer_id: r.peer_id.clone(),
                 short_pid: crate::views::short_pid(&r.peer_id),
                 kind,
-                role_glyph: r.glyph.clone(),
-                role_name: r.role.clone(),
+                descriptor,
                 label: r.label.clone(),
                 persisted: r.persisted,
                 address,
                 show_open_tree: r.has_context,
                 backend_button,
-                show_delete: r.deletable,
+                show_delete: r.deletable && !is_system_native,
             });
         }
 

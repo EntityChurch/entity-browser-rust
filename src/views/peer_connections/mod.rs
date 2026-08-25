@@ -67,13 +67,14 @@ impl PeerConnectionsWindow {
                     &sys_pid,
                     crate::app_paths::listener_state_path(crate::app_paths::APP_ID, &sys_pid),
                 );
-                // Authorize-gate observability mirror (§3 Step 3): the async
-                // remote read writes derived pending/authorized rows here; wake
-                // the render when they land.
+                // (Device authorizations moved to the System Backend window,
+                // Direction A — the backend-auth mirror is watched there now.)
+                // Connection-health mirror: known-device rows show live
+                // Connected/Unreachable, so watch it to repaint on a health change.
                 pm.watch_prefix(
                     &mut window.watch,
                     &sys_pid,
-                    crate::app_paths::backend_auth_prefix(crate::app_paths::APP_ID, &sys_pid),
+                    crate::app_paths::connection_health_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
                 // Wake on roster changes via the tree-backed registry
                 // instead of the content-free signal.

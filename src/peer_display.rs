@@ -81,45 +81,208 @@ impl std::fmt::Display for PeerDisplay {
     }
 }
 
-/// Resolve a hosted peer's display role truthfully.
+/// Whether a peer is app infrastructure (System) or user-created (User).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerRole {
+    /// An always-on, un-deletable control-plane peer: the in-app system peer,
+    /// or the native system peer in a desktop deployment.
+    System,
+    /// A peer the user created.
+    User,
+}
+
+/// Where a peer's isolation host runs — the "where does it live" fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerRuntime {
+    /// The main browser/WebView thread (in-page).
+    MainThread,
+    /// A dedicated in-page Web Worker (own thread, same process).
+    Worker,
+    /// A separate native OS process, reached over the network.
+    Native,
+}
+
+impl PeerRuntime {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MainThread => "main thread",
+            Self::Worker => "worker",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// Where a peer's tree is persisted — the "does it survive / what backs it" fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerStorage {
+    /// RAM only — gone on reload.
+    InMemory,
+    /// Browser IndexedDB (durable).
+    IndexedDb,
+    /// Origin-Private File System (durable).
+    Opfs,
+    /// The native process's own on-disk store.
+    NativeStore,
+}
+
+impl PeerStorage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InMemory => "in-memory",
+            Self::IndexedDb => "IndexedDB",
+            Self::Opfs => "OPFS",
+            Self::NativeStore => "native store",
+        }
+    }
+
+    /// Whether the tree survives a reload. `false` only for [`Self::InMemory`].
+    #[allow(dead_code)] // Phase 2: the create-peer form + a durability hint consume this.
+    pub fn is_durable(self) -> bool {
+        !matches!(self, Self::InMemory)
+    }
+}
+
+/// The three orthogonal, truthful facts about a peer — replaces the single
+/// "role" string whose fall-through mislabeled the **native** system peer as
+/// "backend (memory)". Each facet is derived from real runtime state:
+/// - `role` — System (always-on infra) vs User (you created it).
+/// - `runtime` — where the isolation host runs (main thread / worker / native).
+/// - `storage` — where the tree is persisted (memory / IndexedDB / OPFS / native).
 ///
-/// Returns `(kind, glyph, role_name)`:
-/// - `kind` — structural classification (Primary/Local/Remote), a
-///   *runtime* fact from `classify` (which SDK hosts it). Correct as-is.
-/// - `glyph` / `role_name` — the **mode**, resolved from the
-///   authoritative `modes` map (`peer_id` → [`PeerMode`], built from
-///   the persisted store via [`crate::persistence::peer_modes`]). This
-///   replaces the old `persisted`-flag proxy, which misrepresented
-///   every backend peer as "memory" and OPFS peers as memory.
+/// "Frontend" / "backend" are retired: they conflated *three* different runtimes
+/// (in-page worker + memory, in-page worker + OPFS, and a separate native
+/// process). `(runtime, storage)` says what those words never did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerDescriptor {
+    pub role: PeerRole,
+    pub runtime: PeerRuntime,
+    pub storage: PeerStorage,
+}
+
+impl PeerDescriptor {
+    /// Terse scan glyph: `★` in-app system · `⚙` native process ·
+    /// `●` main-thread user peer · `◆` worker · `◆⛁` worker (OPFS).
+    pub fn glyph(self) -> &'static str {
+        match (self.role, self.runtime) {
+            (_, PeerRuntime::Native) => "⚙",
+            (PeerRole::System, _) => "★",
+            (PeerRole::User, PeerRuntime::MainThread) => "●",
+            (PeerRole::User, PeerRuntime::Worker) => {
+                if self.storage == PeerStorage::Opfs {
+                    "◆⛁"
+                } else {
+                    "◆"
+                }
+            }
+        }
+    }
+
+    /// A single, terse human role string (registry `role` field + logs), free
+    /// of "frontend"/"backend".
+    pub fn role_name(self) -> &'static str {
+        match (self.role, self.runtime) {
+            (PeerRole::System, PeerRuntime::Native) => "system (native)",
+            (PeerRole::System, _) => "system",
+            (PeerRole::User, PeerRuntime::Native) => "native",
+            (PeerRole::User, PeerRuntime::MainThread) => "main thread",
+            (PeerRole::User, PeerRuntime::Worker) => {
+                if self.storage == PeerStorage::Opfs {
+                    "worker (OPFS)"
+                } else {
+                    "worker"
+                }
+            }
+        }
+    }
+
+    /// Derive the descriptor for a **hosted/registry** peer from authoritative
+    /// `Peers` state + the persisted-mode map. Pure read; no tree writes.
+    ///
+    /// Native detection is *structural*, not label-based: within the local peer
+    /// registry, the only `Remote`-classified peer that isn't worker-hosted is a
+    /// native-process backend (connection-pool remotes aren't in this set). The
+    /// `system-backend` label only distinguishes the always-on *system* native
+    /// peer (→ [`PeerRole::System`]) from a user-created native backend, a
+    /// lifecycle concern — both share the same runtime + storage.
+    pub fn describe(
+        peers: &Peers,
+        peer_id: &str,
+        modes: &HashMap<String, PeerMode>,
+    ) -> Self {
+        let is_system_peer = peer_id == peers.system_peer_id();
+        let is_backend_hosted = peers.is_backend_hosted(peer_id);
+        // A registry peer with no local context and no dedicated worker SDK is a
+        // native-process backend (see the structural note above).
+        let is_native = !is_system_peer
+            && !is_backend_hosted
+            && PeerDisplay::classify(peers, peer_id) == PeerDisplay::Remote;
+
+        let is_system_native = is_native
+            && peers
+                .peer_metadata(peer_id)
+                .and_then(|m| m.label)
+                .as_deref()
+                == Some(crate::views::system_backend::model::SYSTEM_BACKEND_LABEL);
+
+        let runtime = if is_native {
+            PeerRuntime::Native
+        } else if is_backend_hosted {
+            PeerRuntime::Worker
+        } else {
+            PeerRuntime::MainThread
+        };
+
+        let role = if is_system_peer || is_system_native {
+            PeerRole::System
+        } else {
+            PeerRole::User
+        };
+
+        let storage = if is_native {
+            PeerStorage::NativeStore
+        } else if is_system_peer {
+            // The boot/system peer: IndexedDB on the Direct arm (the main-thread
+            // default), OPFS on the Worker arm (`?worker=1` opt-in).
+            if peers.primary_as_direct().is_some() {
+                PeerStorage::IndexedDb
+            } else {
+                PeerStorage::Opfs
+            }
+        } else {
+            match modes.get(peer_id) {
+                Some(PeerMode::Frontend) => PeerStorage::InMemory,
+                Some(PeerMode::BackendMemory) => PeerStorage::InMemory,
+                Some(PeerMode::BackendOpfs) => PeerStorage::Opfs,
+                // Unpersisted/ephemeral user peer (backends are normally
+                // persisted, so this is the rare unsaved case).
+                None => PeerStorage::InMemory,
+            }
+        };
+
+        Self {
+            role,
+            runtime,
+            storage,
+        }
+    }
+}
+
+/// Resolve a hosted peer's display role truthfully — the legacy
+/// `(kind, glyph, role_name)` triple, now expressed through
+/// [`PeerDescriptor::describe`] so there is one source of truth and the native
+/// system peer can never fall through to "backend (memory)" again.
 ///
-/// Glyphs: `★` system · `●` frontend · `◆` backend (memory) ·
-/// `◆⛁` backend (opfs).
-///
-/// A hosted peer not in `modes` is an in-session/ephemeral peer (not
-/// persisted); fall back to the structural kind. Connected-remote
-/// peers aren't in the hosted set this is called over.
+/// - `kind` — structural classification (Primary/Local/Remote), a *runtime*
+///   fact from `classify` (which SDK hosts it). Drives badge color.
+/// - `glyph` / `role_name` — from the descriptor's `(role, runtime, storage)`.
 pub fn resolve_role(
     peers: &Peers,
     peer_id: &str,
     modes: &HashMap<String, PeerMode>,
 ) -> (PeerDisplay, &'static str, &'static str) {
     let kind = PeerDisplay::classify(peers, peer_id);
-    if kind == PeerDisplay::Primary {
-        return (kind, "★", "system");
-    }
-    let (glyph, role) = match modes.get(peer_id) {
-        Some(PeerMode::Frontend) => ("●", "frontend"),
-        Some(PeerMode::BackendMemory) => ("◆", "backend (memory)"),
-        Some(PeerMode::BackendOpfs) => ("◆⛁", "backend (opfs)"),
-        None => match kind {
-            PeerDisplay::Local => ("●", "frontend"),
-            // Hosted, non-primary, not persisted, no local context:
-            // an ephemeral backend peer (backends are normally
-            // persisted, so this is the rare unsaved case).
-            _ => ("◆", "backend (memory)"),
-        },
-    };
-    (kind, glyph, role)
+    let desc = PeerDescriptor::describe(peers, peer_id, modes);
+    (kind, desc.glyph(), desc.role_name())
 }
 
 /// Whether the user interface should allow deleting this peer.
@@ -176,5 +339,57 @@ mod tests {
         let pid = "2KOtherPeerId999".to_string();
         peers.register_backend_peer_primary(pid.clone(), None, Vec::new());
         assert!(is_user_deletable(&peers, &pid));
+    }
+
+    // --- PeerDescriptor::describe — the truthful role · runtime · storage ---
+
+    #[test]
+    fn system_peer_describes_as_system_main_thread_indexeddb() {
+        let peers = make_peers();
+        let sys = peers.system_peer_id().to_string();
+        let d = PeerDescriptor::describe(&peers, &sys, &HashMap::new());
+        assert_eq!(d.role, PeerRole::System);
+        assert_eq!(d.runtime, PeerRuntime::MainThread);
+        // Direct arm → IndexedDB (the main-thread default).
+        assert_eq!(d.storage, PeerStorage::IndexedDb);
+        assert_eq!(d.glyph(), "★");
+        assert_eq!(d.role_name(), "system");
+    }
+
+    /// Regression lock: the native system peer must NEVER read as
+    /// "backend (memory)" again — the fall-through bug the descriptor replaced.
+    #[test]
+    fn native_system_backend_describes_as_system_native() {
+        let mut peers = make_peers();
+        let pid = "2KNativeSystemBackend1".to_string();
+        peers.register_backend_peer_primary(
+            pid.clone(),
+            Some(crate::views::system_backend::model::SYSTEM_BACKEND_LABEL.to_string()),
+            vec!["ws://127.0.0.1:4042".to_string()],
+        );
+        let d = PeerDescriptor::describe(&peers, &pid, &HashMap::new());
+        assert_eq!(d.role, PeerRole::System, "the labeled native peer is infra");
+        assert_eq!(d.runtime, PeerRuntime::Native);
+        assert_eq!(d.storage, PeerStorage::NativeStore);
+        assert_eq!(d.glyph(), "⚙");
+        assert_eq!(d.role_name(), "system (native)");
+    }
+
+    /// A native-process peer the user created (any non-system label) is Native
+    /// runtime but a User role — Start/Stop-able, unlike the system one.
+    #[test]
+    fn user_native_backend_describes_as_user_native() {
+        let mut peers = make_peers();
+        let pid = "2KUserNativeBackend1".to_string();
+        peers.register_backend_peer_primary(
+            pid.clone(),
+            Some("my-server".to_string()),
+            vec!["ws://127.0.0.1:5001".to_string()],
+        );
+        let d = PeerDescriptor::describe(&peers, &pid, &HashMap::new());
+        assert_eq!(d.role, PeerRole::User);
+        assert_eq!(d.runtime, PeerRuntime::Native);
+        assert_eq!(d.storage, PeerStorage::NativeStore);
+        assert_eq!(d.role_name(), "native");
     }
 }
