@@ -32,6 +32,13 @@ podman run -d --rm --name e2e-firefox --network=host \
 # Terminal 2: build wasm + run the test.
 make e2e-worker            # = `make wasm` then `cargo test --test e2e_worker -- --nocapture`
 
+# When done:
+podman stop e2e-firefox
+```
+
+`make e2e-worker` fails in ~2 s with the start-Selenium command if nothing is
+answering on :4444, rather than after a wasted wasm build.
+
 **On a machine WITH a display, first build the Tauri binary** — Phase 14 spawns
 `./src-tauri/target/debug/entity-browser-tauri` for the ConnectPeer test and
 **hard-errors** if it is missing (headless it self-skips instead, so this only
@@ -46,14 +53,58 @@ exercised** — which is exactly how two stale assertions after it went unnotice
 for several commits. If you are changing anything the later phases cover, build
 it.
 
-# When done:
-podman stop e2e-firefox
-```
+**What the display gate may and may not cover.** Phases 14 and 15.6 are the
+*only* ones that need a window server, and headless they self-skip loudly. Keep
+it that way: on `2026-07-22` Phase 11 — the OPFS reload-persistence acceptance
+test, and the page reload the phases after it assume — was found sitting inside
+the `if let Some(tauri)` block, re-indented into it by the display-gating commit
+(`d24ee12`). It had been silently skipped on every headless run since, so the
+headless suite reported green while never exercising the one failure mode
+Phase 11 exists to catch. It is back in the function body. When you gate
+something on a display, gate the phase that needs the display and nothing else.
 
 `make e2e-worker` builds the **default** wasm (`KB_DOCS_ROOT` unset →
 **0 embedded docs**; do NOT set `KB_DOCS_ROOT` for the e2e — a large
 embedded corpus floods the worker's OPFS on load and destabilises the
-KB-persistence phases). Runtime is ~45s with the empty default.
+KB-persistence phases).
+
+**Runtime: ~4.5 min** for the whole suite (measured `2026-07-22`, 13 tests,
+266 s of test + ~7 s build on a warm cache). Most of that is the one
+monolithic test; see Filtering below for how not to pay it.
+
+## Filtering — don't run the whole suite to check one thing
+
+The suite is 13 `#[tokio::test]`s. Twelve are independent (each does its own
+`setup()`); the thirteenth, `worker_boots_and_opens_all_windows`, is a 53-phase
+stateful chain and is most of the wall-clock.
+
+```bash
+make e2e-phases                     # list every test name and every phase label
+make e2e-worker T=frontend_idb      # only tests whose name contains this  (~25 s)
+make e2e-worker UNTIL=20            # run the monolith through Phase 20, then stop
+make e2e-worker T=worker_boots UNTIL=2b   # combine  (~30 s)
+make e2e-worker SKIP_BUILD=1        # reuse dist/, skip the trunk rebuild
+```
+
+- **`T=`** is cargo's own substring filter over test names. Fully sound — the
+  twelve satellite tests share nothing but the port and the Selenium slot.
+- **`UNTIL=`** takes a phase *label* (`2f.1`, `15.6`, `26.8` — the strings in
+  `PHASE_ORDER` in `tests/e2e_worker.rs`) and stops the monolith once that phase
+  is done. An unknown label fails loudly with the roster, never silently runs
+  everything. Stopping early can only run *fewer* assertions, so it cannot turn
+  a red green — and the stop line says how far it got (`37/53 phases ran`).
+- **There is deliberately no `FROM=`.** Phases 1–17 share one browser session
+  and every later phase re-navigates into state its predecessors built (spawned
+  windows, created peers, persisted session config, published sites). Jumping
+  into the middle would fail on absent prerequisites and read exactly like a
+  regression. **If you want a surface runnable on its own, write it as its own
+  `#[tokio::test]`** — that is what the twelve satellites are, and it is the
+  preferred home for new coverage.
+- **`SKIP_BUILD=1` is a dev shortcut, never a gate run.** It reuses whatever is
+  in `dist/`; if that was built by `make wasm` it has no `demo-apps`, and
+  Phase 2h.2 fails for that reason rather than a real one.
+
+Before landing anything, run the suite unfiltered.
 
 ### Port: NOT 8081
 
@@ -65,15 +116,28 @@ said 8081 / "don't run make serve in parallel" — no longer true.)
 
 ## Troubleshooting
 
-- **`New session request timed out` / `connectionFailure` / "failed to
-  connect to WebDriver at :4444"** — infra, not a code failure. The
-  standalone image allows one session at a time; a killed/abandoned
-  prior run leaves it stuck. Fix:
+- **`New session request timed out` (after a 300 s stall)** — a *leaked
+  session*, and since `2026-07-22` the suite reaps it for you.
+
+  The cause, for the record: every test calls `client.close()` on its success
+  path, but an assertion failure — or a Ctrl-C, or an `UNTIL=` early exit —
+  unwinds straight past it. The standalone image serves **one session at a
+  time** and queues further requests for its `--session-timeout` (300 s), so
+  the run *after* a failing run blocked five minutes and then died with an
+  infra error that looks nothing like the real failure that caused it. That
+  made "re-run to confirm the intermittent" cost ten minutes instead of one.
+
+  `setup()` now calls `reap_stale_sessions()` on the way **in** (the only
+  cleanup a panicking run cannot skip) and prints what it reaped. If you still
+  see the stall, the grid itself is wedged:
   ```bash
   podman restart e2e-firefox
   # wait until ready:
   until curl -s -m2 localhost:4444/status | grep -q '"ready": *true'; do sleep 2; done
   ```
+
+- **`connectionFailure` / "failed to connect to WebDriver at :4444"** — the
+  container isn't running at all. Start it (see Running above).
 - Capture full output to a file, **not** `| tail` — the panic line and
   per-phase `println!`s must survive for diagnosis.
 - A failure deep in a later phase still means earlier phases passed —
