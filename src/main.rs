@@ -66,6 +66,10 @@ mod reach_keeper;
 // types. `dial_markers`' shape (local, in-flight, in-memory) — NOT a fourth
 // liveness store; the kernel owns connection state and this only advises.
 mod reachability;
+// Preflight: can this machine reach another machine's peer, and if not which
+// half is missing. The pure model + its remedies are native-tested; the
+// collector is wasm-only. Read by the Shell's `net` verb.
+mod readiness;
 mod rendezvous;
 mod roster;
 mod transport_profiles;
@@ -540,6 +544,12 @@ pub async fn start() -> Result<(), JsValue> {
     // C5c: honest "not saved" banner for the in-memory modes (no-op for
     // durable Worker mode; suppressed under Tauri — separate persistence story).
     storage_durability::show_storage_banner(storage_status, in_tauri);
+    // And the *other* honesty banner, one layer under storage: an origin the
+    // browser will not let us do WebRTC or OPFS on. Deliberately after the
+    // storage one — when both apply, the origin is the cause and reads better
+    // second, next to the symptom it explains. Both are `Some`-id'd and
+    // idempotent, so they stack rather than replace.
+    readiness::warn_if_insecure_origin();
 
     // C5a + C5d: ask for persistent (non-evictable) storage for this origin,
     // then make Worker mode honest about the result. persist() is

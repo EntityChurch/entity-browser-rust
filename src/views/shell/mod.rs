@@ -49,6 +49,13 @@ impl ShellWindow {
                     window.window_id,
                 );
                 pm.watch_prefix(&mut window.watch, &window.peer_id, state);
+                // The kernel liveness surface, because `net` reports whether
+                // the signaling node is answering. On the Worker arm an
+                // unsubscribed read hits an unseeded cache mirror and returns
+                // `Unknown` forever — a preflight that always says "nothing has
+                // dialled it" would be worse than no row at all. Every vantage,
+                // never a subset (see the helper).
+                crate::peer_liveness::watch_all_vantages(pm, &mut window.watch);
                 Box::new(window)
             },
         }

@@ -231,6 +231,7 @@ fn all_verbs() -> Vec<&'static str> {
     v.push("clear");
     v.push("connector");
     v.push("meet");
+    v.push("net");
     v.push("offer");
     v.push("offers");
     v.push("pull");
@@ -662,6 +663,12 @@ impl ShellModel {
             // manages. Also app-local, for the same reason: the registry it
             // meets through lives in this app.
             "meet" => self.meet_verb(trimmed, peers),
+            // Preflight. App-local for the same reason as its neighbours, and
+            // placed beside `connector`/`meet` on purpose: it is the verb you
+            // run *before* those two when a cross-machine connection will not
+            // come up, and the one whose output you paste to the person at the
+            // other machine.
+            "net" => self.net_verb(peers),
             // The transfer verbs (`crate::file_offer`) — a browser as the
             // SERVING side of a file transfer, over whatever transport reaches
             // the peer. App-local for the same reason as the two above: the
@@ -1150,15 +1157,29 @@ impl ShellModel {
                     relay_credential,
                     };
                 match connectors::add_connector(peers, &registry_pid, &c) {
-                    Ok(()) => {
+                    Ok(outcome) => {
                         // Same as the window's Add: ask the node what it serves
                         // so §4.5.1's reflectors need no separate `connector
                         // check` (D13 — the automatic half must be automatic).
                         connectors::learn_node_reflectors(peers, &registry_pid, &c);
-                        push(ScrollbackEntry::Info(format!(
-                            "added connector {}", // i18n-ignore — dev-facing CLI
-                            crate::views::short_pid(id)
-                        )))
+                        // Say that the selection moved, and say what is still
+                        // outstanding. The node is read once at boot, so an add
+                        // that does not mention the reload leaves the reader
+                        // watching a correct registry do nothing [AP25].
+                        push(ScrollbackEntry::Info(if outcome.selected {
+                            format!(
+                                "added connector {} and selected it (nothing was) — \
+                                 reload the page to rendezvous through it", // i18n-ignore — dev-facing CLI
+                                crate::views::short_pid(id)
+                            )
+                        } else {
+                            format!(
+                                "added connector {} — `connector use {}` then reload to \
+                                 rendezvous through it", // i18n-ignore — dev-facing CLI
+                                crate::views::short_pid(id),
+                                crate::views::short_pid(id)
+                            )
+                        }))
                     }
                     Err(e) => push(ScrollbackEntry::ErrorText(e)),
                 }
@@ -1284,6 +1305,50 @@ impl ShellModel {
     /// Output is plain scrollback and deliberately not localized, like the rest
     /// of this module; the Peer Connections window is the localized surface over
     /// the same operations.
+    /// `net` — the **preflight**: can another machine's browser reach this peer
+    /// right now, and if not, which half is missing.
+    ///
+    /// ```text
+    /// net    one report — origin, WebRTC API, rendezvous, establisher,
+    ///        node link, reflectors, relay, and this peer's id
+    /// ```
+    ///
+    /// **Why this is a shell verb and not (only) a panel.** It is written to be
+    /// *read out loud and pasted*: the person hitting the failure is at the
+    /// second machine, and the fastest path from "it doesn't work" to a
+    /// diagnosis is a fixed-width block they can copy into a chat window. Every
+    /// row that is not `OK` carries the next action on its own line, because a
+    /// preflight that names a fault without naming the remedy has just moved
+    /// the guessing somewhere else.
+    ///
+    /// The judging lives in [`crate::readiness::assess`] — pure, native-tested,
+    /// including that every non-`OK` row has a remedy. This function only
+    /// collects and prints.
+    fn net_verb(&self, peers: &Peers) {
+        use crate::readiness::{self, Level};
+
+        // The **bound** peer, not the primary: `meet` from this shell announces
+        // this peer's id, and the establisher is primary-only. Asking about the
+        // primary here would report a healthy session to someone whose meet is
+        // about to hand out an unreachable id.
+        let facts = readiness::collect(peers, &self.peer_id);
+        let report = readiness::assess(&facts);
+
+        let push = |e: ScrollbackEntry| self.inner.lock().unwrap().push(e);
+        push(ScrollbackEntry::Info(report.verdict().to_string()));
+        for (level, line) in report.rows() {
+            // A failure is the one thing that must survive skim-reading, so it
+            // goes to the error style; everything else, limits included, reads
+            // as information. Two styles, not four — a colour per level makes
+            // the block harder to scan, not easier.
+            if level == Level::Fail {
+                push(ScrollbackEntry::ErrorText(line));
+            } else {
+                push(ScrollbackEntry::Info(line));
+            }
+        }
+    }
+
     fn meet_verb(&self, line: &str, peers: &Peers) {
         use crate::rendezvous::{MeetSession, Mode};
 
@@ -3599,6 +3664,44 @@ mod tests {
         // to meet at would otherwise derive a key from the empty string.
         model.handle_submit("meet tag", &peers, 1, flag());
         assert!(model.state_snapshot().scrollback.iter().any(|l| l.is_error()));
+    }
+
+    /// `net` is wired, produces a row per check, and is reachable by tab
+    /// completion.
+    ///
+    /// **What this covers that `readiness`' own tests cannot**: the verb
+    /// existing at all. The judging is pure and covered there; the failure this
+    /// catches is the one where a perfectly good report is unreachable because
+    /// the match arm or the completion table was missed — which is exactly how
+    /// `resolve_name` sat in this tree with zero callers.
+    #[test]
+    fn the_net_verb_reports_a_row_per_check() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let model = ShellModel::new(1, pid);
+
+        model.handle_submit("net", &peers, 1, flag());
+        let s = model.state_snapshot();
+        let text: String = s
+            .scrollback
+            .iter()
+            .map(|l| l.render_text())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Not "unknown verb" — the app-local arm ran.
+        assert!(!text.contains("unknown verb"), "{text}");
+        // Every check id the model emits must reach the scrollback. Asserting
+        // on the ids rather than the prose keeps this from re-testing wording
+        // that `readiness` already owns.
+        let report = crate::readiness::assess(&crate::readiness::collect(&peers, "irrelevant"));
+        for c in &report.checks {
+            assert!(text.contains(c.id), "`{}` never reached the shell: {text}", c.id);
+        }
+        assert!(
+            all_verbs().contains(&"net"),
+            "a verb missing from the completion table is a verb nobody finds"
+        );
     }
 
     /// The `connector` verb is app-local: the crate dispatcher does not know

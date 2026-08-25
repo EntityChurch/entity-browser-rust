@@ -56,7 +56,14 @@ pub(super) const DEMO_FIGURE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/
 ///    short for the jump to be observable, so the prose was the only evidence,
 ///    and it was false. Height is what makes it a gate.
 ///
-/// Keep all three if you edit this. They are the only reason it isn't prose.
+/// 4. `#entity-demo-doc-chapters` — **eight** further links, because one jump
+///    is not evidence about navigation. The `blob:` URL was originally revoked
+///    on the frame's `load` event, on a measurement that clicked a single
+///    anchor; a revoked URL serves the first few same-document navigations and
+///    then stops, so every book died after ~5 chapter jumps while this gate
+///    stayed green. The chapter run is what makes the repetition observable.
+///
+/// Keep all four if you edit this. They are the only reason it isn't prose.
 pub(super) const DEMO_DOCUMENT_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -77,6 +84,8 @@ pub(super) const DEMO_DOCUMENT_HTML: &str = r##"<!DOCTYPE html>
      it the document runs out of scroll and the target stops part-way down —
      still a working jump, but one the gate can only assert loosely. */
   #entity-demo-doc-tail { height: 1600px; }
+  /* One jump is not evidence about navigation. See the chapter list below. */
+  .demo-chapter { height: 900px; }
 </style>
 </head>
 <body>
@@ -105,6 +114,25 @@ app instead, and this document was replaced by it.</p>
 document runs out of scroll and the target lands part-way down the frame,
 which is a working jump the gate can only check loosely.</p>
 </div>
+<nav id="entity-demo-doc-chapters">
+<p>A reader does not click one link. This list is the repetition:</p>
+<a class="demo-ch" href="#entity-demo-ch1">1</a>
+<a class="demo-ch" href="#entity-demo-ch2">2</a>
+<a class="demo-ch" href="#entity-demo-ch3">3</a>
+<a class="demo-ch" href="#entity-demo-ch4">4</a>
+<a class="demo-ch" href="#entity-demo-ch5">5</a>
+<a class="demo-ch" href="#entity-demo-ch6">6</a>
+<a class="demo-ch" href="#entity-demo-ch7">7</a>
+<a class="demo-ch" href="#entity-demo-ch8">8</a>
+</nav>
+<h2 id="entity-demo-ch1">Chapter 1</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch2">Chapter 2</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch3">Chapter 3</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch4">Chapter 4</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch5">Chapter 5</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch6">Chapter 6</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch7">Chapter 7</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch8">Chapter 8</h2><div class="demo-chapter"></div>
 <script>
   document.getElementById('script-probe').textContent =
     'SCRIPT RAN — the document sandbox is not restricting scripts';

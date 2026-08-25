@@ -777,6 +777,15 @@ fn render_content(
         util::append(&pane, &l);
     } else {
         match &output.body {
+            // **Do NOT retire the live document URL here.** It looks like the
+            // obvious place — a markup render is "the reader left the document",
+            // so the book we were holding should go. It is not: this surface
+            // renders markup *between* document renders, and the retire then
+            // revokes the URL of the document that is still on screen. Measured,
+            // with the mount and the retire both traced: `mount A · retire A ·
+            // mount B · retire B`, leaving the visible frame holding a revoked
+            // URL and its anchors dead after ~5 jumps. A document URL is retired
+            // by the NEXT document mount and by nothing else.
             PageRender::Markup(html) => {
                 let body = util::create_element_with_class("div", "cs-doc");
                 body.set_inner_html(html);
@@ -787,9 +796,7 @@ fn render_content(
             // An untrusted `format:html` document. It never touches our
             // document — neither rewriter runs, by construction: they operate
             // on elements, and there are no elements of ours to operate on.
-            PageRender::Document(doc) => {
-                render_document_frame(ctx, &pane, doc, &output.page_title)
-            }
+            PageRender::Document(doc) => render_document_frame(&pane, doc, &output.page_title),
         }
     }
 
@@ -857,8 +864,8 @@ fn render_content(
 /// one-sided decision on our side alone.)
 const DOCUMENT_SANDBOX: &str = "allow-same-origin";
 
-/// Mount the document from a `blob:` URL of its own, and revoke that URL as
-/// soon as the frame has loaded it.
+/// Mount the document from a `blob:` URL of its own, keeping that URL alive for
+/// as long as the document is mounted and retiring the previous one.
 ///
 /// **The document needs a base URL of its own, and that is the whole point of
 /// not using `srcdoc`.** A `srcdoc` document inherits the *parent's* base URL,
@@ -888,19 +895,18 @@ const DOCUMENT_SANDBOX: &str = "allow-same-origin";
 /// only the real payload crosses is exactly the shape a 500-byte demo document
 /// cannot catch.
 ///
-/// **The revoke is what makes `blob:` affordable** (D9 accounting). This
-/// surface rebuilds on a subscription tick, so an unrevoked URL would pin a
-/// whole book in memory *per rebuild*. Revoking on the frame's `load` event
-/// bounds the lifetime to the load itself, and — measured in both engines,
-/// because "should" is not evidence — **fragment navigation still works after
-/// the URL is revoked**: a jump is a same-document navigation and refetches
-/// nothing. A frame that never loads leaks one URL; that is the bounded case,
-/// and it is the one we can live with.
+/// **The revoke is what makes `blob:` affordable** (D9 accounting) — but it
+/// must retire the document we are *replacing*, never the one we just mounted.
+/// Revoking on the frame's own `load` shipped first and **broke every book after
+/// a handful of anchor jumps**; the reasoning, the measurement that missed it,
+/// and the numbers are in [`retire_live_document_url`]. What survives is the
+/// accounting: this surface rebuilds on a subscription tick, so the invariant is
+/// **exactly one live object URL at a time**, not one per rebuild.
 ///
 /// **The blob MUST carry `type: "text/html"`.** Without it the frame renders
 /// the book as plain text — a failure that looks like a rendering bug in the
 /// document rather than a missing property bag here.
-fn mount_document_blob(ctx: &DomCtx, frame: &Element, doc: &str) {
+fn mount_document_blob(frame: &Element, doc: &str) {
     let parts = js_sys::Array::new();
     parts.push(&wasm_bindgen::JsValue::from_str(doc));
     let opts = web_sys::BlobPropertyBag::new();
@@ -914,16 +920,72 @@ fn mount_document_blob(ctx: &DomCtx, frame: &Element, doc: &str) {
         return;
     };
 
-    // The revoke rides `DomCtx.listen`, so the closure lives in `ctx.closures`
-    // and is freed on the next rebuild like every other handler here — never
-    // `Closure::forget`, which would trade a bounded blob leak for an unbounded
-    // closure one.
-    let revoke_url = url.clone();
-    ctx.listen(frame, "load", move |_| {
-        let _ = web_sys::Url::revoke_object_url(&revoke_url);
-    });
+    // Retire the PREVIOUS document's URL, never this one — see
+    // [`retire_live_document_url`]. At most one book is ever held.
+    retire_live_document_url();
+    LIVE_DOCUMENT_URL.with(|slot| *slot.borrow_mut() = Some(url.clone()));
 
     util::set_attr(frame, "src", &url);
+}
+
+thread_local! {
+    /// The object URL of the document currently mounted, and the only one alive.
+    static LIVE_DOCUMENT_URL: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Revoke the object URL of the document we are replacing.
+///
+/// **REVOKING ON THE FRAME'S OWN `load` IS WHAT SHIPPED, AND IT BREAKS THE
+/// DOCUMENT AFTER A HANDFUL OF ANCHOR JUMPS.** The reasoning behind it was that
+/// a fragment jump is a same-document navigation and refetches nothing, so the
+/// URL is dead weight the moment the frame has it. That was *measured* — and
+/// measured on **one** jump, which is exactly how long it holds. Each fragment
+/// navigation pushes a session-history entry, and once the browser needs the
+/// URL again to service that history, a revoked one yields nothing: the hash
+/// stops changing and the document simply stops responding to its own table of
+/// contents, with no error anywhere.
+///
+/// Measured on the real 7.9 MB corpus book, clicking TOC links one at a time
+/// with the frame otherwise untouched (`sandbox="allow-same-origin"`, `blob:`,
+/// only the revoke varied):
+///
+/// | revoke | jumps that work |
+/// |---|---|
+/// | on the frame's `load` (shipped) | **6, then dead at `#part6`** |
+/// | **on replacement (here)** | **8/8, and on to `#part8`** |
+///
+/// So the URL must stay alive for as long as the document is *mounted*, and the
+/// accounting D9 wants is bought a different way: exactly one is ever live, and
+/// mounting the next one retires the last. A surface left on a document holds
+/// one book — bounded, and the same order as the rendered document itself —
+/// rather than one per rebuild, which was the unbounded case the revoke existed
+/// to prevent.
+///
+/// **The lesson this repeats, in the same feature, one layer along:** the 2 MiB
+/// `data:` ceiling was invisible because the fixture never approached it. This
+/// was invisible because the *interaction* never approached it — one click
+/// where a reader makes twenty. When a claim is about a repeated action,
+/// measure the repetition, not the first one.
+///
+/// **And the second retire site — the one that looked obviously right — is the
+/// trap.** The first fix also retired here when the surface rendered *markup*,
+/// reasoning that a markup render means the reader left the document. It does
+/// not: this surface renders markup **between** document renders, so that
+/// retire revoked the URL of the document still on screen and the bug survived
+/// its own fix. Traced, with both sites logged: `mount A · retire A · mount B ·
+/// retire B`. A document URL is retired by the NEXT document mount and by
+/// nothing else.
+///
+/// **The gate does not cover this** — `e2e_worker` Phase 19-doc stays green
+/// with the original bug reintroduced (mutation-checked). See the note there;
+/// the check that works is a real book and a dozen TOC clicks.
+fn retire_live_document_url() {
+    LIVE_DOCUMENT_URL.with(|slot| {
+        if let Some(url) = slot.borrow_mut().take() {
+            let _ = web_sys::Url::revoke_object_url(&url);
+        }
+    });
 }
 
 /// Mount an untrusted HTML document in a fully-restricted frame.
@@ -942,7 +1004,7 @@ fn mount_document_blob(ctx: &DomCtx, frame: &Element, doc: &str) {
 /// of the delivery. **When a note says a failure is invisible, the useful
 /// question is which *other* causes produce the same invisible outcome** — here
 /// it was the one that mattered for every real book.
-fn render_document_frame(ctx: &DomCtx, pane: &Element, doc: &str, title: &str) {
+fn render_document_frame(pane: &Element, doc: &str, title: &str) {
     if doc.trim().is_empty() {
         let empty = util::create_element("div");
         util::set_attr(&empty, "style", "color:var(--site-text-muted, #9aa3b2);");
@@ -965,7 +1027,7 @@ fn render_document_frame(ctx: &DomCtx, pane: &Element, doc: &str, title: &str) {
     // A `blob:` URL on `src`, NOT `srcdoc` — see [`mount_document_blob`]. The
     // document needs a base URL of its own or its own table of contents
     // navigates the frame away from it.
-    mount_document_blob(ctx, &frame, doc);
+    mount_document_blob(&frame, doc);
     util::append(pane, &frame);
 }
 

@@ -1361,6 +1361,25 @@ impl Peers {
         self.webrtc_peers.contains(peer_id)
     }
 
+    /// Which arm hosts `peer_id` — `"direct"`, `"worker"`, or `"unknown"` for a
+    /// peer this router has never heard of.
+    ///
+    /// Diagnostics only, and deliberately a display string rather than an enum:
+    /// nothing branches on it (per-peer routing goes through `sdk_for`, which is
+    /// the point of that method), and an enum would invite exactly the
+    /// arm-deciding-at-a-call-site pattern the router exists to prevent. What it
+    /// is for is a preflight report saying which substrate the reader is
+    /// actually on — the difference decides whether Worker/OPFS applies, and it
+    /// is invisible from the page otherwise.
+    pub fn arm_of(&self, peer_id: &str) -> &'static str {
+        match self.sdk_for(peer_id) {
+            Ok(Sdk::Direct(_)) => "direct",
+            #[cfg(target_arch = "wasm32")]
+            Ok(Sdk::Worker(_)) => "worker",
+            Err(_) => "unknown",
+        }
+    }
+
     /// Pretend `peer_id` got an establisher — tests only.
     ///
     /// Native has no WebRTC, so without this a test can only ever observe the

@@ -106,21 +106,7 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
             // its own banner reads as a whole area of the product, when what it
             // is is a second launcher. Keeping it here, directly after Apps,
             // says "another thing you can run" without the promotion.
-            vec![
-                "Apps",
-                "Programs",
-                "Chat",
-                "Site Browser",
-                // Beside Site Browser deliberately, not under System: a person
-                // looking for "how do I find a site that isn't already listed"
-                // looks here, and the registry is the answer to that question.
-                // It is System-*scoped* (a pin is deployment infrastructure) —
-                // scope and category are orthogonal, which is exactly the case
-                // this pairing exercises.
-                "Registry Browser",
-                "Site Creator",
-                "Knowledge Base",
-            ],
+            vec!["Apps", "Programs", "Chat", "Site Browser", "Site Creator", "Knowledge Base"],
         ),
         (
             System,
@@ -131,6 +117,21 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
                 "Peers",
                 "Peer Connections",
                 "File Transfer",
+                // **Moved out of Apps & Content, 2026-08-21, operator's call.**
+                // It sat beside Site Browser on the argument that "how do I find
+                // a site that isn't listed" is answered by the registry — which
+                // is true and is not what the menu is for. "Registry Browser" is
+                // protocol vocabulary, and a top-level row in the group a person
+                // browses for *things to use* makes them stop and ask what it is.
+                // Under System it reads as plumbing, which is what it is until
+                // naming has a surface a non-implementer would go looking for.
+                //
+                // It was already `WindowScope::System` throughout — only the menu
+                // group moved, so this is not a scope change and nothing about
+                // the pin's lifetime moved with it. (The old comment used the
+                // split as the live proof that scope and category are orthogonal;
+                // that is still demonstrated, just no longer by this row.)
+                "Registry Browser",
                 "Key Manager",
                 "Storage",
                 "Access Log",
@@ -180,13 +181,15 @@ mod tests {
         // 24 → 25: the Registry Browser — the naming chain's product surface,
         // where before it was reachable only from the Shell's `name` verb.
         assert_eq!(meta.len(), 25, "the standard roster is 25 windows");
-        // **System-scoped, and that is the interesting part of this row.** A
-        // registry pin is deployment infrastructure read from the durable
-        // `SessionConfig`, not a property of whichever peer a window is bound to
-        // — the same split the `connector` verb got wrong once by using the bound
-        // peer and quietly managing a second registry. It nonetheless sits in the
-        // AppsContent *menu group*, which is what makes it the live proof that
-        // scope and category are orthogonal.
+        // **System-scoped, and it was already so while it sat in the Apps &
+        // Content menu.** A registry pin is deployment infrastructure read from
+        // the durable `SessionConfig`, not a property of whichever peer a window
+        // is bound to — the same split the `connector` verb got wrong once by
+        // using the bound peer and quietly managing a second registry. The menu
+        // move (2026-08-21) touched the group and not this, which is the point
+        // worth keeping: **scope and category are orthogonal**, so re-categorising
+        // a window must never be allowed to drag its scope along. This assert is
+        // what would catch that.
         let registry =
             meta.iter().find(|(n, _)| *n == "Registry Browser").expect("Registry Browser present");
         assert_eq!(registry.1, WindowScope::System);

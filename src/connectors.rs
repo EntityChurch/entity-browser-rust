@@ -328,9 +328,23 @@ pub fn read_connectors(peers: &Peers, peer_id: &str) -> Vec<Connector> {
 /// silent fallback to a *different* node is the "silent never-meet" failure
 /// §2.2 warns about — both peers must land on the same node, so guessing one is
 /// worse than having none.
-pub fn selected_connector(peers: &Peers, peer_id: &str) -> Option<Connector> {
+/// The node-id the selection entity *names*, whether or not that node is still
+/// in the registry.
+///
+/// Distinct from [`selected_connector`] on purpose, and the distinction is
+/// load-bearing exactly once: a **dangling** selection resolves to no connector
+/// and is still an expressed choice. [`add_connector`] must not treat it as
+/// "nothing is selected" and quietly repoint the user at a node they have not
+/// picked — that is the §2.2 silent-substitution this module refuses everywhere
+/// else. So the auto-select asks this, and every reader that wants a usable
+/// node asks the other one.
+fn selection_marker(peers: &Peers, peer_id: &str) -> Option<String> {
     let path = app_paths::connector_selection_path(app_paths::APP_ID, peer_id);
-    let chosen = peers.get_entity(peer_id, &path).and_then(|e| selection_from_entity(&e))?;
+    peers.get_entity(peer_id, &path).and_then(|e| selection_from_entity(&e))
+}
+
+pub fn selected_connector(peers: &Peers, peer_id: &str) -> Option<Connector> {
+    let chosen = selection_marker(peers, peer_id)?;
     let found = read_connectors(peers, peer_id).into_iter().find(|c| c.node_peer_id == chosen);
     if found.is_none() {
         tracing::warn!(
@@ -342,12 +356,43 @@ pub fn selected_connector(peers: &Peers, peer_id: &str) -> Option<Connector> {
     found
 }
 
+/// What [`add_connector`] did beyond writing the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddOutcome {
+    /// The add also became the selection, because nothing was selected. The
+    /// caller owes the user a word about it — a selection changing under you is
+    /// exactly the kind of helpfulness that must be stated, not inferred
+    /// [AP25].
+    pub selected: bool,
+}
+
 /// Add (or overwrite) a connector. Keyed by node peer-id, so re-adding the same
 /// node updates it instead of creating a duplicate pointing at one node.
 ///
 /// Rejects a node with a missing half — see the module doc. Returns the reason
 /// so a caller with a surface can report it (D13: a refusal must be sayable).
-pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<(), String> {
+///
+/// # It selects the row when nothing is selected, and that is not a convenience
+///
+/// A registry holding connectors with **no selection** resolves to no
+/// provisioning at all: [`provisioning_from_registry`] starts at
+/// [`selected_connector`]. So "I added my node" leaves an app that looks
+/// configured, installs no establisher, and hands out peer ids nobody can reach
+/// — the same both-halves-or-neither failure [AP22] that shipped once already
+/// (a resolved node with no establisher), arriving through the registry instead
+/// of through the install.
+///
+/// The fix is structural rather than a note in a doc: adding the first node
+/// *is* choosing it, in one expression, so no surface can do one half. It never
+/// overrides an existing choice — a second node is added and not selected,
+/// because at that point the user has expressed one.
+///
+/// The selection is written directly rather than through [`select_connector`]
+/// on purpose: that function validates against `read_connectors`, and the row
+/// we just wrote is a *dispatched* write which has not landed yet on either arm
+/// — so the validating path would refuse the row it is being asked about. Here
+/// the row is known to exist because we are the one writing it.
+pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<AddOutcome, String> {
     validate_node_peer_id(&c.node_peer_id)?;
     if c.node_addr.trim().is_empty() {
         return Err("a connector needs an address to dial".to_string());
@@ -383,9 +428,19 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<(), 
         relay_username: c.relay_username.trim().to_string(),
         relay_credential: c.relay_credential.trim().to_string(),
     };
+    // Read the pre-existing selection BEFORE writing, so the answer is about
+    // what the user had chosen and not about the row going in. The *marker*,
+    // not the resolved connector: a selection left dangling by a removed node
+    // is still a choice, and repointing it at whatever gets added next is the
+    // silent substitution `selected_connector` exists to refuse.
+    let had_selection = selection_marker(peers, peer_id).is_some();
     let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &normalized.node_peer_id);
     peers.dispatch_write(peer_id, path, connector_to_entity(&normalized));
-    Ok(())
+    if !had_selection {
+        let sel = app_paths::connector_selection_path(app_paths::APP_ID, peer_id);
+        peers.dispatch_write(peer_id, sel, selection_to_entity(&normalized.node_peer_id));
+    }
+    Ok(AddOutcome { selected: !had_selection })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -833,6 +888,47 @@ pub fn resolve_provisioning_quietly(
     Some((p, "the build knob"))
 }
 
+/// Resolve the provisioning for **this session** and remember it, in one
+/// expression.
+///
+/// Two surfaces need the booted value: `EntityApp` (for the reload notice) and
+/// [`crate::readiness`] (for the preflight report). They must be the *same*
+/// value, and the capture is order-sensitive — `ConnectorRegistry::sync`
+/// rewrites the localStorage mirror on its first dirty frame, so a second
+/// resolve taken later would read the live selection and quietly become "what a
+/// reload would use", making every comparison against it vacuous.
+///
+/// So there is one call, at boot, and it both returns and records. A caller
+/// cannot take one half: the same shape as `signaling_node::mount` returning
+/// the handler and its grant together [AP22], for the same reason — two
+/// expressions of one decision is how the halves drift.
+#[cfg(target_arch = "wasm32")]
+pub fn capture_booted(url_query: &str) -> Option<WebRtcProvisioning> {
+    // The *quiet* resolver: `webrtc_init_config` already logs which source won
+    // during the same boot, and a second identical line reads as two
+    // provisioning decisions having been taken.
+    let booted = resolve_provisioning_quietly(url_query).map(|(p, _)| p);
+    BOOTED.with(|b| *b.borrow_mut() = booted.clone());
+    booted
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// What [`capture_booted`] resolved. Set once at boot and never again — the
+    /// property that makes it safe for a render input to read without a dirty
+    /// signal (the *moving* side is the mirror, which `ConnectorRegistry`
+    /// watches).
+    static BOOTED: std::cell::RefCell<Option<WebRtcProvisioning>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What this session booted with, for surfaces that hold no `EntityApp`
+/// reference (the Shell's verbs get `&Peers` and nothing else).
+#[cfg(target_arch = "wasm32")]
+pub fn booted_snapshot() -> Option<WebRtcProvisioning> {
+    BOOTED.with(|b| b.borrow().clone())
+}
+
 /// Has the provisioning a reload would use drifted from what this session
 /// actually booted with?
 ///
@@ -1174,6 +1270,12 @@ pub(crate) mod tests {
         assert!(read_connectors(&peers, &me).is_empty());
 
         add_connector(&peers, &me, &conn("2KBeta", "ws://b:1")).unwrap();
+        // Let the first add land before the second. Every write here is
+        // *dispatched*, so back-to-back adds read each other's pre-image — the
+        // same property `add_connector`'s own `ice_advertised` lookup has. A
+        // user adds one node at a time; a test that does not settle is testing
+        // the race, not the rule.
+        settle(|| selected_connector(&peers, &me).is_some()).await;
         add_connector(&peers, &me, &conn("2KAlpha", "ws://a:1")).unwrap();
         settle(|| read_connectors(&peers, &me).len() == 2).await;
         let list = read_connectors(&peers, &me);
@@ -1183,7 +1285,16 @@ pub(crate) mod tests {
             vec!["2KAlpha", "2KBeta"]
         );
 
-        assert!(selected_connector(&peers, &me).is_none(), "nothing selected yet");
+        // The FIRST add is also the selection — a registry with rows and no
+        // selection provisions nothing, so adding one node has to be enough to
+        // have a node. The second add must NOT move it: by then the user has
+        // expressed a choice.
+        assert_eq!(
+            selected_connector(&peers, &me).unwrap().node_peer_id,
+            "2KBeta",
+            "the first add selects; the second leaves the choice alone"
+        );
+
         select_connector(&peers, &me, "2KBeta").unwrap();
         settle(|| selected_connector(&peers, &me).is_some()).await;
         assert_eq!(selected_connector(&peers, &me).unwrap().node_addr, "ws://b:1");
@@ -1195,6 +1306,37 @@ pub(crate) mod tests {
         assert!(
             selected_connector(&peers, &me).is_none(),
             "removing the selected node clears the selection instead of leaving it dangling"
+        );
+    }
+
+    /// Adding the first node **is** choosing it, and the outcome says so.
+    ///
+    /// The state this closes is a registry with rows and no selection, which
+    /// resolves to no provisioning at all — an app that looks configured,
+    /// installs no establisher, and hands out ids nobody can reach [AP22]. It
+    /// is only reachable through a surface that adds without selecting, which
+    /// is what both of ours used to do.
+    ///
+    /// The reported `selected` flag is asserted as hard as the tree state,
+    /// because a caller that cannot tell the two adds apart cannot tell the
+    /// user which one still needs `connector use` [AP25].
+    #[tokio::test]
+    async fn the_first_connector_added_becomes_the_selection_and_later_ones_do_not() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+
+        let first = add_connector(&peers, &me, &conn("2KFirst", "ws://first:1")).unwrap();
+        assert!(first.selected, "an empty registry has no choice to respect");
+        settle(|| selected_connector(&peers, &me).is_some()).await;
+        assert_eq!(selected_connector(&peers, &me).unwrap().node_peer_id, "2KFirst");
+
+        let second = add_connector(&peers, &me, &conn("2KSecond", "ws://second:1")).unwrap();
+        assert!(!second.selected, "a second node must not steal an expressed choice");
+        settle(|| read_connectors(&peers, &me).len() == 2).await;
+        assert_eq!(
+            selected_connector(&peers, &me).unwrap().node_peer_id,
+            "2KFirst",
+            "adding a node is not switching to it"
         );
     }
 

@@ -464,7 +464,7 @@ fn provisioning_to_wire(
 /// dev/showcase provisioning channel (the e2e's dynamic signaling-node address
 /// arrives here — the compile-time knob can't carry a per-test port).
 #[cfg(target_arch = "wasm32")]
-fn webrtc_url_query() -> String {
+pub fn webrtc_url_query() -> String {
     web_sys::window()
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default()
@@ -1406,8 +1406,10 @@ impl EntityApp {
         // the two sides of the comparison would be the same value by
         // construction (a notice that can never fire).
         #[cfg(target_arch = "wasm32")]
-        let webrtc_booted = crate::connectors::resolve_provisioning_quietly(&webrtc_url_query())
-            .map(|(p, _)| p);
+        // One call that both returns and records — `readiness::collect` reads
+        // the recorded half, and a second resolve taken later would be "what a
+        // reload would use", not "what we booted with".
+        let webrtc_booted = crate::connectors::capture_booted(&webrtc_url_query());
 
         // If running in Tauri, fetch persisted backend peers so they
         // appear in the Peers window on startup (as stopped).

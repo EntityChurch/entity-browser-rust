@@ -37,7 +37,7 @@
 #   make site*     — pure-cargo publish targets (in container)
 #
 # Host-only targets (NOT part of the bare-box gate, and depend on host services
-# or an attached display): the `python3 -m http.server` serve steps (serve /
+# or an attached display): the `tools/cors-serve.py` serve steps (serve /
 # build-serve / site-serve), `e2e-worker` (external Selenium on :4444), and
 # `tauri-run` (needs a desktop session). `make native` is a deprecation stub.
 IMAGE       := entity-browser-rust-build
@@ -221,12 +221,26 @@ endef
 # `--network host`: the container binds the host port directly (rootless `-p`
 # port-forwarding resets connections under pasta/slirp; host-net is reliable and
 # is what a local dev server wants). Foreground; Ctrl-C stops it.
+#
+# **THROUGH `tools/cors-serve.py`, NEVER `python3 -m http.server` — and the
+# reason is a bug this shipped for months.** `http.server` sends no
+# `Cache-Control` at all, only `Last-Modified`. A response with no
+# `Cache-Control` is not "uncached": browsers apply *heuristic freshness* and
+# will serve it from cache without revalidating, so `make wasm` + reload showed
+# the OLD build and the only reliable way to see a change was a private window.
+# That is the same "opt-IN to immutable" rule `cors-serve.py` already
+# implements for a CDN — `no-store` for the mutable shell, `immutable` only for
+# bytes whose name is their hash — and every local serve target was bypassing
+# the one file that knows it. It also sends the CORS headers, so a local serve
+# now behaves like a real deployment in both respects rather than only in the
+# one we happened to test. `cors-serve.py` takes (directory, port) positionally
+# and binds 0.0.0.0.
 define RUN_SERVE
 	podman run --rm $(PODMAN_RUN_CAPS) --network host $(2) \
 		-v $(PARENT):/src/entity-systems:z \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
-		python3 -m http.server $(PORT) --bind 0.0.0.0 --directory $(1)
+		python3 tools/cors-serve.py $(1) $(PORT)
 endef
 
 # Repo-local, gitignored HOME for the containerized desktop app so its durable
@@ -529,6 +543,86 @@ endif
 	# forever in CI or an agent loop. --signal=KILL because a wedged podman
 	# child may not honour TERM.
 	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
+
+# The MULTI-HOST federation origin — the publisher on its own host, so a
+# consumer's fetches are real network hops rather than loopback ones. Prints the
+# two strings a consumer needs (`E2E_FED_ORIGIN`, `E2E_FED_REGISTRY`); the e2e's
+# `federation_target()` reads them and refuses a loopback origin.
+#
+# `federation-multihost` stands the rig up and prints the consumer's environment
+# (logs go to stderr, so stdout is pure `KEY=value`); `DOWN=1` tears it down.
+# `e2e-federation` is the GATE: rig up → the browser walk against it → rig down,
+# with the teardown running whatever the result, so a red run does not leave
+# three containers and a network behind.
+federation-multihost:
+	@bash tools/e2e/federation-multihost.sh $(if $(DOWN),down,up)
+
+# The multi-host gate. Deliberately NOT part of `e2e-worker`: it needs its own
+# network and its own browser, and folding it in would make the everyday suite
+# depend on both. Run it before claiming the naming chain works off loopback.
+e2e-federation: image
+	@bash tools/e2e/federation-multihost.sh up > $(FEDENV)
+	@cat $(FEDENV)
+	# The rig's stdout becomes `-e` flags, so a line that is not KEY=value becomes
+	# a bogus env var on the test container. That is not hypothetical: `podman
+	# exec -d` printed its exec ID here and shipped `-e <64-hex>` for one run.
+	# Cheap check, and it fails the gate instead of quietly mis-configuring it.
+	@grep -qvE '^[A-Z0-9_]+=' $(FEDENV) && { echo "FATAL: non-KEY=value line in $(FEDENV):"; cat $(FEDENV); exit 1; } || true
+	@set -e; trap 'bash tools/e2e/federation-multihost.sh down >/dev/null 2>&1' EXIT; \
+	 $(MAKE) --no-print-directory e2e-federation-run \
+	   EXTRA_RUN_ENV="$$(sed 's/^/-e /' $(FEDENV) | tr '\n' ' ')"
+
+FEDENV = target/federation-multihost.env
+
+# The inner half — never call directly; `e2e-federation` supplies the env.
+# `--network host` so cargo reaches the browser's published control port; the
+# browser's own fetches do not come back this way, they stay on the bridge.
+e2e-federation-run:
+	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e \
+	  --test e2e_worker a_name_resolves_cross_origin -- --nocapture --test-threads=1,--network host)
+
+# THE CROSS-IMPL MULTI-HOST LEG — C-7 / `COHORT-OPEN-ITEMS` §1b.
+#
+# `e2e-federation` closed the TOPOLOGY half: three containers, three distinct
+# addresses, a real hop. What it cannot close is the CDN-corridor meta-rule it
+# cites, because both ends of that chain are our code — one implementation
+# consuming its own emitter across two hosts. This target supplies the other
+# implementation: `entity-core-go`'s publisher, stood up through THEIR OWN
+# published interface (`scripts/federation-publish.sh`), consumed by our reader.
+#
+# Two things are deliberate. The test container joins **go's** bridge
+# (`--network`), because under rootless podman the host has no route into one —
+# so the socket in `crossimpl_go_live.rs` is the consumer's vantage, not an
+# orchestrator's. And the contract is renamed `FED_* → GO_FED_*` on the way in,
+# so it cannot collide with our own federation rig's variables in a shell that
+# has both.
+#
+# Prerequisite it does NOT hide: go's script builds their binary with the host's
+# `go` toolchain. That is one more host tool than this repo's `make + podman`
+# floor, and it belongs to their leg, not ours.
+GO_REPO   ?= $(PARENT)/entity-core-go
+GO_FED_NET ?= entity-go-fed
+GOFEDENV   = target/crossimpl-go.env
+
+crossimpl-go: image
+	@test -x $(GO_REPO)/scripts/federation-publish.sh || { \
+	  echo "FATAL: no $(GO_REPO)/scripts/federation-publish.sh — this leg consumes"; \
+	  echo "       entity-core-go's own publisher; it does not reimplement one."; exit 1; }
+	@mkdir -p target
+	@bash $(GO_REPO)/scripts/federation-publish.sh up > $(GOFEDENV)
+	@cat $(GOFEDENV)
+	# Same guard as the federation rig, for the same reason: this stdout becomes
+	# `-e` flags, and one non-KEY=value line becomes a bogus env var.
+	@grep -qvE '^[A-Z0-9_]+=' $(GOFEDENV) && { echo "FATAL: non-KEY=value line in $(GOFEDENV):"; cat $(GOFEDENV); exit 1; } || true
+	@set -e; trap 'bash $(GO_REPO)/scripts/federation-publish.sh down >/dev/null 2>&1' EXIT; \
+	 bash $(GO_REPO)/scripts/federation-publish.sh probe; \
+	 $(MAKE) --no-print-directory crossimpl-go-run \
+	   EXTRA_RUN_ENV="$$(sed -e 's/^FED_/GO_FED_/' $(GOFEDENV) | sed -e 's/^/-e /' | tr '\n' ' ')"
+
+# The inner half — never call directly; `crossimpl-go` supplies the env and the
+# teardown. Without `GO_FED_ORIGIN` the gates skip loudly rather than passing.
+crossimpl-go-run:
+	$(call RUN,cargo test crossimpl_go_live -- --include-ignored --nocapture --test-threads=1,--network $(GO_FED_NET))
 
 # List what `T=` and `UNTIL=` accept. Reads the test source, so it can never
 # drift from what actually runs — and needs neither the image nor Selenium.
