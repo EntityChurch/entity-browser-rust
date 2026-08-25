@@ -1,0 +1,240 @@
+{
+  "btn.save": "저장",
+  "btn.cancel": "취소",
+  "btn.delete": "삭제",
+  "btn.copy": "복사",
+  "btn.connect": "연결",
+  "btn.edit": "편집",
+  "btn.refresh": "새로고침",
+  "btn.back": "← 뒤로",
+  "btn.revert": "되돌리기",
+
+  "label.status": "상태",
+  "label.title": "제목",
+  "label.peer": "피어",
+  "label.target": "대상",
+  "label.address": "주소",
+  "label.name": "이름",
+  "label.label": "레이블",
+
+  "status.copied": "복사됨 ✓",
+
+  "execute.handler": "핸들러",
+  "execute.operation": "작업",
+  "execute.handler_uri": "핸들러 URI",
+  "execute.resource": "리소스",
+
+  "peers.known_devices": "알려진 기기",
+  "peers.connect_device": "기기에 연결",
+  "peers.pair_qr": "기기 페어링(QR)",
+
+  "tooltip.close_window": "창 닫기",
+  "tooltip.open_windows": "열린 창",
+  "tooltip.fill_window": "창 최대화",
+  "tooltip.restore_size": "원래 크기로 복원",
+  "tooltip.menu": "메뉴",
+  "tooltip.back": "뒤로",
+  "tooltip.site_home": "사이트 홈으로 이동",
+  "tooltip.unsaved": "저장되지 않은 변경 사항",
+
+  "kb.title_placeholder": "문서 제목",
+  "theme.name_placeholder": "이름(a-z, 0-9, 하이픈)",
+  "theme.label_placeholder": "표시 레이블",
+
+  "filetransfer.device": "기기",
+  "filetransfer.shared_files": "공유 파일",
+  "filetransfer.send_file": "파일 보내기",
+  "filetransfer.from_peer": "보낸 피어",
+  "filetransfer.results": "결과",
+
+  "syspeers.system_peer": "시스템 피어",
+  "syspeers.system_backend": "시스템 백엔드",
+
+  "sysoverview.clear_logs": "로그 지우기",
+  "sysoverview.logs": "로그",
+  "sysoverview.device_auth": "기기 권한 부여",
+  "sysoverview.grant_backend_hint": "백엔드에서 승인됨. 구체적인 범위는 로컬에 기록되지 않습니다.",
+
+  "kb.new_article": "＋ 새 문서",
+  "kb.back_to_list": "← 목록으로 돌아가기",
+
+  "settings.appearance": "모양",
+  "settings.theme": "테마",
+  "settings.language": "언어",
+  "settings.windows": "창",
+  "settings.site_surface": "사이트 및 표시",
+  "settings.rendering": "렌더링",
+  "settings.network": "네트워크",
+  "settings.language.hint": "인터페이스 언어와 레이아웃 방향을 설정합니다.",
+
+  "theme.themes": "테마",
+  "theme.new_from": "다음에서 새 테마 만들기",
+
+  "category.apps": "앱 및 콘텐츠",
+  "category.system": "시스템",
+  "category.developer": "개발자",
+  "category.apps.desc": "사이트 탐색, 게임 플레이, 앱 실행",
+  "category.system.desc": "피어, 키, 연결, 설정, 저장소",
+  "category.developer.desc": "엔티티 트리, 쿼리 및 실행 콘솔, 셸, 로그",
+
+  "window.entity_tree": "엔티티 트리",
+  "window.games": "게임",
+  "window.apps": "앱",
+  "window.knowledge_base": "지식 베이스",
+  "window.key_manager": "키 관리자",
+  "window.peer_connections": "피어 연결",
+  "window.file_transfer": "파일 전송",
+  "window.execute_console": "실행 콘솔",
+  "window.query_console": "쿼리 콘솔",
+  "window.settings": "설정",
+  "window.event_log": "이벤트 로그",
+  "window.peers": "피어",
+  "window.shell": "셸",
+  "window.chain_trace": "체인 추적",
+  "window.path_tap": "경로 탭",
+  "window.wire_recorder": "와이어 레코더",
+  "window.content_stream": "콘텐츠 스트림",
+  "window.site_browser": "사이트 브라우저",
+  "window.storage": "저장소",
+  "window.site_creator": "사이트 만들기",
+  "window.system_overview": "시스템 개요",
+  "window.access_log": "접근 로그",
+  "window.theme_editor": "테마 편집기",
+
+  "btn.create": "만들기",
+  "btn.move": "이동",
+  "btn.authorize": "권한 부여",
+  "btn.add_peer": "피어 추가",
+  "btn.find": "찾기",
+  "btn.count": "개수",
+  "btn.trace": "추적",
+
+  "execute.execute": "실행",
+  "execute.guided": "가이드",
+  "execute.raw": "원시",
+
+  "filetransfer.pull_selected": "⬇ 선택한 파일 가져오기",
+  "filetransfer.upload_file": "파일 업로드",
+
+  "siteeditor.create_site": "사이트 만들기",
+  "siteeditor.delete_site": "사이트 삭제",
+  "siteeditor.save_page": "페이지 저장",
+  "siteeditor.delete_page": "페이지 삭제",
+  "siteeditor.title_optional": "제목(선택 사항)",
+  "siteeditor.page_title_ph": "페이지 제목",
+
+  "entitytree.source_none": "없음(수동)",
+  "entitytree.source_app": "앱 집계(피어: {peer})",
+
+  "settings.boot_into": "시작 위치",
+  "settings.boot_chrome": "데스크톱",
+  "settings.boot_site": "사이트",
+  "settings.boot_window": "창",
+
+  "theme.scheme_dark": "어두운",
+  "theme.scheme_light": "밝은",
+
+  "sysoverview.profile_pull": "가져오기만",
+  "sysoverview.profile_twoway": "양방향",
+
+  "label.level": "수준",
+  "label.results": "결과",
+  "label.content": "콘텐츠",
+  "label.system": "시스템",
+  "status.loading": "불러오는 중…",
+
+  "peers.scan_qr": "QR 코드 스캔",
+  "peers.scan_hint": "다른 기기에서 이것을 스캔하여 여기에 연결하세요.",
+  "peers.show_qr": "QR 코드 표시",
+
+  "sitedir.sites_menu": "사이트 ▾",
+  "sitedir.sites": "사이트",
+
+  "contentsite.enter_peer": "피어 입장",
+  "contentsite.contents_menu": "콘텐츠 ▾",
+
+  "storage.origin_disk": "오리진 디스크(IndexedDB ＋ 캐시 — 전체 오리진)",
+  "storage.backend_native": "시스템 백엔드 — 네이티브 저장소",
+  "storage.native_sqlite": "네이티브 / SQLite",
+  "storage.by_path": "최상위 경로별:",
+
+  "chaintrace.chain_id": "체인 ID:",
+  "chaintrace.continuations": "연속 항목",
+  "chaintrace.error_markers": "체인 오류 마커",
+
+  "siteeditor.move_rename": "이동/이름 변경 대상:",
+
+  "entitytree.up": "위로",
+  "entitytree.selection_source": "선택 소스",
+  "entitytree.select_prompt": "트리에서 엔티티를 선택하세요",
+  "entitytree.inspector": "인스펙터",
+  "entitytree.none_selected": "선택된 엔티티 없음",
+  "entitytree.raw_hash": "원시 해시",
+
+  "settings.lockdown_active": "잠금이 활성화되어 있습니다(이 배포의 구성에 의해 설정됨).",
+
+  "windows.none_open": "열린 창 없음",
+  "windows.open_windows": "열린 창",
+  "mod.learn_more": "자세히 알아보고 참여하기 ",
+
+  "status.saved": "저장됨",
+  "status.stopped": "중지됨",
+  "status.granted": "허가됨",
+
+  "chip.connected": "연결됨",
+  "chip.connecting": "연결 중…",
+  "chip.offline": "오프라인",
+  "chip.authorized": "승인됨",
+  "chip.pending": "대기 중",
+  "chip.not_authorized": "승인되지 않음",
+  "chip.not_verified": "확인되지 않음",
+
+  "label.state_path": "상태: {path}",
+
+  "accesslog.operations": "작업: {n}",
+  "accesslog.authorized_head": "승인됨: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "엔티티가 없습니다: {path}",
+
+  "siteeditor.editing": "편집 중: {id}",
+  "siteeditor.adding_to": "추가 대상: {target}",
+  "siteeditor.confirm_move_unsaved": "이 페이지에는 이동 시 손실될 저장되지 않은 변경 사항이 있습니다. 그래도 이동하시겠습니까?",
+
+  "storage.peer_not_created": "피어가 생성되지 않음 — {reason}",
+
+  "kb.body_placeholder": "Markdown 본문",
+
+  "chaintrace.enter_hint": "(chain_id를 입력하고 추적을 누르세요)",
+
+  "scanner.scanned_codes": "스캔된 코드",
+  "scanner.scanned_codes_count": "스캔된 코드({n}개 고유)",
+  "scanner.photo_capture": "사진 촬영",
+  "scanner.photo_hint": "QR 코드 사진을 찍으세요",
+  "scanner.take_photo": "사진 촬영",
+  "scanner.processing": "처리 중...",
+  "scanner.no_detector": "BarcodeDetector 없음 — 코드를 직접 입력하세요",
+  "scanner.detector_init_failed": "검출기 초기화 실패",
+  "scanner.detect_call_failed": "검출 호출 실패",
+  "scanner.qr_found": "QR 코드를 찾았습니다!",
+  "scanner.no_qr": "QR을 찾을 수 없습니다 — 다시 시도하세요",
+  "scanner.decode_error": "디코딩 오류",
+  "scanner.live_scanner": "실시간 스캐너",
+  "scanner.live_hint": "실시간 카메라 스캔",
+  "scanner.start_live": "실시간 스캔 시작",
+  "scanner.stop": "중지",
+  "scanner.stopped": "중지됨",
+  "scanner.camera_unavailable": "카메라를 사용할 수 없음",
+  "scanner.camera_denied": "카메라 거부됨",
+  "scanner.starting_camera": "카메라 시작 중...",
+  "scanner.stream_error": "스트림 오류",
+  "scanner.scanning": "스캔 중...",
+  "scanner.detector_failed": "검출기 실패",
+  "scanner.scan_detect_error": "스캔 {n} — 검출 오류",
+  "scanner.found_continuing": "찾았습니다! 스캔을 계속합니다...",
+  "scanner.scan_n": "스캔 {n}...",
+  "scanner.scan_error": "스캔 {n} — 오류",
+
+  "peer.count": {
+    "other": "피어 {n}개"
+  }
+}

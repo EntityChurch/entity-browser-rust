@@ -1,0 +1,241 @@
+{
+  "btn.save": "Tallenna",
+  "btn.cancel": "Peruuta",
+  "btn.delete": "Poista",
+  "btn.copy": "Kopioi",
+  "btn.connect": "Yhdistä",
+  "btn.edit": "Muokkaa",
+  "btn.refresh": "Päivitä",
+  "btn.back": "← Takaisin",
+  "btn.revert": "Palauta",
+
+  "label.status": "Tila",
+  "label.title": "Otsikko",
+  "label.peer": "Vertainen",
+  "label.target": "Kohde",
+  "label.address": "Osoite",
+  "label.name": "Nimi",
+  "label.label": "Nimike",
+
+  "status.copied": "Kopioitu ✓",
+
+  "execute.handler": "Käsittelijä",
+  "execute.operation": "Toiminto",
+  "execute.handler_uri": "Käsittelijän URI",
+  "execute.resource": "Resurssi",
+
+  "peers.known_devices": "Tunnetut laitteet",
+  "peers.connect_device": "Yhdistä laitteeseen",
+  "peers.pair_qr": "Paritä laite (QR)",
+
+  "tooltip.close_window": "Sulje ikkuna",
+  "tooltip.open_windows": "Avoimet ikkunat",
+  "tooltip.fill_window": "Suurenna ikkuna",
+  "tooltip.restore_size": "Takaisin normaalikokoon",
+  "tooltip.menu": "Valikko",
+  "tooltip.back": "Takaisin",
+  "tooltip.site_home": "Siirry sivuston etusivulle",
+  "tooltip.unsaved": "Tallentamattomat muutokset",
+
+  "kb.title_placeholder": "Artikkelin otsikko",
+  "theme.name_placeholder": "nimi (a-z, 0-9, väliviivat)",
+  "theme.label_placeholder": "näyttönimike",
+
+  "filetransfer.device": "Laite",
+  "filetransfer.shared_files": "Jaetut tiedostot",
+  "filetransfer.send_file": "Lähetä tiedosto",
+  "filetransfer.from_peer": "Vertaiselta",
+  "filetransfer.results": "Tulokset",
+
+  "syspeers.system_peer": "Järjestelmävertainen",
+  "syspeers.system_backend": "Järjestelmän taustaosa",
+
+  "sysoverview.clear_logs": "Tyhjennä lokit",
+  "sysoverview.logs": "Lokit",
+  "sysoverview.device_auth": "Laitevaltuutukset",
+  "sysoverview.grant_backend_hint": "Valtuutettu taustaosassa; tarkkaa laajuutta ei tallenneta paikallisesti.",
+
+  "kb.new_article": "+ Uusi artikkeli",
+  "kb.back_to_list": "← Takaisin luetteloon",
+
+  "settings.appearance": "Ulkoasu",
+  "settings.theme": "Teema",
+  "settings.language": "Kieli",
+  "settings.windows": "Ikkunat",
+  "settings.site_surface": "Sivusto ja pinta",
+  "settings.rendering": "Renderöinti",
+  "settings.network": "Verkko",
+  "settings.language.hint": "Määrittää käyttöliittymän kielen ja tekstin suunnan.",
+
+  "theme.themes": "Teemat",
+  "theme.new_from": "Uusi teema pohjasta",
+
+  "category.apps": "Sovellukset ja sisältö",
+  "category.system": "Järjestelmä",
+  "category.developer": "Kehittäjä",
+  "category.apps.desc": "Selaa sivustoja, pelaa pelejä, suorita sovelluksia",
+  "category.system.desc": "Vertaiset, avaimet, yhteydet, asetukset, tallennustila",
+  "category.developer.desc": "Entiteettipuu, kysely- ja suorituskonsolit, komentotulkki, lokit",
+
+  "window.entity_tree": "Entiteettipuu",
+  "window.games": "Pelit",
+  "window.apps": "Sovellukset",
+  "window.knowledge_base": "Tietämyskanta",
+  "window.key_manager": "Avainten hallinta",
+  "window.peer_connections": "Vertaisyhteydet",
+  "window.file_transfer": "Tiedostonsiirto",
+  "window.execute_console": "Suorituskonsoli",
+  "window.query_console": "Kyselykonsoli",
+  "window.settings": "Asetukset",
+  "window.event_log": "Tapahtumaloki",
+  "window.peers": "Vertaiset",
+  "window.shell": "Komentotulkki",
+  "window.chain_trace": "Ketjun jäljitys",
+  "window.path_tap": "Polun kuuntelu",
+  "window.wire_recorder": "Protokollan tallennin",
+  "window.content_stream": "Sisältövirta",
+  "window.site_browser": "Sivustoselain",
+  "window.storage": "Tallennustila",
+  "window.site_creator": "Sivuston luonti",
+  "window.system_overview": "Järjestelmän yleiskatsaus",
+  "window.access_log": "Käyttöloki",
+  "window.theme_editor": "Teemamuokkain",
+
+  "btn.create": "Luo",
+  "btn.move": "Siirrä",
+  "btn.authorize": "Valtuuta",
+  "btn.add_peer": "Lisää vertainen",
+  "btn.find": "Etsi",
+  "btn.count": "Laske",
+  "btn.trace": "Jäljitä",
+
+  "execute.execute": "Suorita",
+  "execute.guided": "Ohjattu",
+  "execute.raw": "Raaka",
+
+  "filetransfer.pull_selected": "⬇ Lataa valittu tiedosto",
+  "filetransfer.upload_file": "Lähetä tiedosto palvelimelle",
+
+  "siteeditor.create_site": "Luo sivusto",
+  "siteeditor.delete_site": "Poista sivusto",
+  "siteeditor.save_page": "Tallenna sivu",
+  "siteeditor.delete_page": "Poista sivu",
+  "siteeditor.title_optional": "Otsikko (valinnainen)",
+  "siteeditor.page_title_ph": "Sivun otsikko",
+
+  "entitytree.source_none": "Ei mitään (manuaalinen)",
+  "entitytree.source_app": "Sovelluksen koonti (vertainen: {peer})",
+
+  "settings.boot_into": "Käynnistä tilaan",
+  "settings.boot_chrome": "Työpöytä",
+  "settings.boot_site": "Sivusto",
+  "settings.boot_window": "Ikkuna",
+
+  "theme.scheme_dark": "Tumma",
+  "theme.scheme_light": "Vaalea",
+
+  "sysoverview.profile_pull": "Vain nouto",
+  "sysoverview.profile_twoway": "Kaksisuuntainen",
+
+  "label.level": "Taso",
+  "label.results": "Tulokset",
+  "label.content": "Sisältö",
+  "label.system": "Järjestelmä",
+  "status.loading": "Ladataan…",
+
+  "peers.scan_qr": "Skannaa QR-koodi",
+  "peers.scan_hint": "Skannaa tämä toisella laitteella yhdistääksesi sen tähän.",
+  "peers.show_qr": "Näytä QR-koodi",
+
+  "sitedir.sites_menu": "Sivustot ▾",
+  "sitedir.sites": "Sivustot",
+
+  "contentsite.enter_peer": "Siirry vertaiseen",
+  "contentsite.contents_menu": "Sisältö ▾",
+
+  "storage.origin_disk": "Alkuperälevy (IndexedDB + välimuistit — koko alkuperä)",
+  "storage.backend_native": "Järjestelmän taustaosa — natiivitallennus",
+  "storage.native_sqlite": "Natiivi / SQLite",
+  "storage.by_path": "Ylätason polun mukaan:",
+
+  "chaintrace.chain_id": "Ketjun tunnus:",
+  "chaintrace.continuations": "Jatkot",
+  "chaintrace.error_markers": "Ketjuvirhemerkinnät",
+
+  "siteeditor.move_rename": "Siirrä/nimeä uudelleen kohteeseen:",
+
+  "entitytree.up": "Ylös",
+  "entitytree.selection_source": "Valinnan lähde",
+  "entitytree.select_prompt": "Valitse entiteetti puusta",
+  "entitytree.inspector": "Tarkastin",
+  "entitytree.none_selected": "Entiteettiä ei valittu",
+  "entitytree.raw_hash": "Raaka tiiviste",
+
+  "settings.lockdown_active": "Lukitus on käytössä (tämän käyttöönoton määrityksen asettama).",
+
+  "windows.none_open": "Ei avoimia ikkunoita",
+  "windows.open_windows": "Avoimet ikkunat",
+  "mod.learn_more": "Lue lisää ja osallistu osoitteessa ",
+
+  "status.saved": "tallennettu",
+  "status.stopped": "pysäytetty",
+  "status.granted": "myönnetty",
+
+  "chip.connected": "Yhdistetty",
+  "chip.connecting": "Yhdistetään…",
+  "chip.offline": "Ei yhteyttä",
+  "chip.authorized": "Valtuutettu",
+  "chip.pending": "Odottaa",
+  "chip.not_authorized": "Ei valtuutettu",
+  "chip.not_verified": "Ei vahvistettu",
+
+  "label.state_path": "Tila: {path}",
+
+  "accesslog.operations": "toiminnot: {n}",
+  "accesslog.authorized_head": "Valtuutettu: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Ei entiteettiä kohteessa: {path}",
+
+  "siteeditor.editing": "Muokataan: {id}",
+  "siteeditor.adding_to": "Lisätään kohteeseen: {target}",
+  "siteeditor.confirm_move_unsaved": "Tällä sivulla on tallentamattomia muutoksia, jotka menetetään siirrettäessä. Siirrä silti?",
+
+  "storage.peer_not_created": "Vertaista ei luotu — {reason}",
+
+  "kb.body_placeholder": "Markdown-teksti",
+
+  "chaintrace.enter_hint": "(anna chain_id ja paina Jäljitä)",
+
+  "scanner.scanned_codes": "Skannatut koodit",
+  "scanner.scanned_codes_count": "Skannatut koodit ({n} uniikkia)",
+  "scanner.photo_capture": "Valokuvan otto",
+  "scanner.photo_hint": "Ota kuva QR-koodista",
+  "scanner.take_photo": "Ota kuva",
+  "scanner.processing": "Käsitellään...",
+  "scanner.no_detector": "Ei BarcodeDetectoria — anna koodi manuaalisesti",
+  "scanner.detector_init_failed": "Tunnistimen alustus epäonnistui",
+  "scanner.detect_call_failed": "Tunnistuskutsu epäonnistui",
+  "scanner.qr_found": "QR-koodi löytyi!",
+  "scanner.no_qr": "QR-koodia ei löytynyt — yritä uudelleen",
+  "scanner.decode_error": "Dekoodausvirhe",
+  "scanner.live_scanner": "Reaaliaikainen skanneri",
+  "scanner.live_hint": "Reaaliaikainen kameraskannaus",
+  "scanner.start_live": "Aloita reaaliaikainen skannaus",
+  "scanner.stop": "Pysäytä",
+  "scanner.stopped": "Pysäytetty",
+  "scanner.camera_unavailable": "Kamera ei käytettävissä",
+  "scanner.camera_denied": "Kamera evätty",
+  "scanner.starting_camera": "Käynnistetään kameraa...",
+  "scanner.stream_error": "Virtausvirhe",
+  "scanner.scanning": "Skannataan...",
+  "scanner.detector_failed": "Tunnistin epäonnistui",
+  "scanner.scan_detect_error": "Skannaus {n} — tunnistusvirhe",
+  "scanner.found_continuing": "Löytyi! Jatketaan skannausta...",
+  "scanner.scan_n": "Skannaus {n}...",
+  "scanner.scan_error": "Skannaus {n} — virhe",
+
+  "peer.count": {
+    "one": "{n} vertainen",
+    "other": "{n} vertaista"
+  }
+}

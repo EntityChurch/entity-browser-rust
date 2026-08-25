@@ -355,7 +355,7 @@ fn grant_cell(profile: Option<&str>) -> Element {
             span.set_attribute("title", p.scope_summary()).ok();
         }
         None => {
-            util::set_text(&span, "granted");
+            util::set_text(&span, &crate::i18n::t("status.granted", &[]));
             span.set_attribute(
                 "title",
                 &crate::i18n::t("sysoverview.grant_backend_hint", &[]),

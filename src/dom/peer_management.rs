@@ -269,7 +269,7 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
 
     if row.persisted {
         let saved = util::create_element_with_class("span", "peer-saved");
-        util::set_text(&saved, "saved");
+        util::set_text(&saved, &crate::i18n::t("status.saved", &[]));
         util::append(&td_kind, &saved);
     }
     util::append(&tr, &td_kind);
@@ -284,7 +284,7 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
     let td_addr = match &row.address {
         AddressDisplay::Stopped => {
             let td = util::create_element_with_class("td", "addr-stopped");
-            util::set_text(&td, "stopped");
+            util::set_text(&td, &crate::i18n::t("status.stopped", &[]));
             td
         }
         AddressDisplay::Addresses(s) => {

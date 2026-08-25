@@ -177,6 +177,35 @@
   "windows.open_windows": "النوافذ المفتوحة",
   "mod.learn_more": "اعرف المزيد وشارك في ",
 
+  "status.saved": "تم الحفظ",
+  "status.stopped": "متوقف",
+  "status.granted": "مُمنوح",
+
+  "chip.connected": "متصل",
+  "chip.connecting": "جارٍ الاتصال…",
+  "chip.offline": "غير متصل",
+  "chip.authorized": "مُصرَّح",
+  "chip.pending": "قيد الانتظار",
+  "chip.not_authorized": "غير مُصرَّح",
+  "chip.not_verified": "غير مُتحقَّق",
+
+  "label.state_path": "الحالة: {path}",
+
+  "accesslog.operations": "العمليات: {n}",
+  "accesslog.authorized_head": "مُصرَّح: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "لا يوجد كيان في: {path}",
+
+  "siteeditor.editing": "تحرير: {id}",
+  "siteeditor.adding_to": "إضافة إلى: {target}",
+  "siteeditor.confirm_move_unsaved": "تحتوي هذه الصفحة على تغييرات غير محفوظة ستُفقد عند نقلها. النقل على أي حال؟",
+
+  "storage.peer_not_created": "لم يُنشأ النظير — {reason}",
+
+  "kb.body_placeholder": "المحتوى بصيغة Markdown",
+
+  "chaintrace.enter_hint": "(أدخل chain_id واضغط على تتبّع)",
+
   "scanner.scanned_codes": "الرموز الممسوحة",
   "scanner.scanned_codes_count": "الرموز الممسوحة ({n} فريدة)",
   "scanner.photo_capture": "التقاط صورة",

@@ -204,7 +204,7 @@ fn inject_banner(msg: &str, bg: &str, border: &str) {
 pub fn show_action_refused_banner(reason: &str) {
     inject_banner_with_id(
         "create-refused-banner",
-        &format!("Peer not created — {reason}"),
+        &crate::i18n::t("storage.peer_not_created", &[("reason", reason)]),
         "#4a1e1e",
         "#a23a3a",
     );

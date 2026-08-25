@@ -1,0 +1,240 @@
+{
+  "btn.save": "保存",
+  "btn.cancel": "取消",
+  "btn.delete": "删除",
+  "btn.copy": "复制",
+  "btn.connect": "连接",
+  "btn.edit": "编辑",
+  "btn.refresh": "刷新",
+  "btn.back": "← 返回",
+  "btn.revert": "还原",
+
+  "label.status": "状态",
+  "label.title": "标题",
+  "label.peer": "对等节点",
+  "label.target": "目标",
+  "label.address": "地址",
+  "label.name": "名称",
+  "label.label": "标签",
+
+  "status.copied": "已复制 ✓",
+
+  "execute.handler": "处理器",
+  "execute.operation": "操作",
+  "execute.handler_uri": "处理器 URI",
+  "execute.resource": "资源",
+
+  "peers.known_devices": "已知设备",
+  "peers.connect_device": "连接到设备",
+  "peers.pair_qr": "配对设备（QR）",
+
+  "tooltip.close_window": "关闭窗口",
+  "tooltip.open_windows": "打开的窗口",
+  "tooltip.fill_window": "最大化窗口",
+  "tooltip.restore_size": "恢复正常大小",
+  "tooltip.menu": "菜单",
+  "tooltip.back": "返回",
+  "tooltip.site_home": "转到站点主页",
+  "tooltip.unsaved": "未保存的更改",
+
+  "kb.title_placeholder": "文章标题",
+  "theme.name_placeholder": "名称（a-z、0-9、连字符）",
+  "theme.label_placeholder": "显示标签",
+
+  "filetransfer.device": "设备",
+  "filetransfer.shared_files": "共享文件",
+  "filetransfer.send_file": "发送文件",
+  "filetransfer.from_peer": "来自对等节点",
+  "filetransfer.results": "结果",
+
+  "syspeers.system_peer": "系统对等节点",
+  "syspeers.system_backend": "系统后端",
+
+  "sysoverview.clear_logs": "清除日志",
+  "sysoverview.logs": "日志",
+  "sysoverview.device_auth": "设备授权",
+  "sysoverview.grant_backend_hint": "已在后端授权；具体范围未在本地记录。",
+
+  "kb.new_article": "+ 新建文章",
+  "kb.back_to_list": "← 返回列表",
+
+  "settings.appearance": "外观",
+  "settings.theme": "主题",
+  "settings.language": "语言",
+  "settings.windows": "窗口",
+  "settings.site_surface": "站点与界面",
+  "settings.rendering": "渲染",
+  "settings.network": "网络",
+  "settings.language.hint": "设置界面语言和布局方向。",
+
+  "theme.themes": "主题",
+  "theme.new_from": "基于以下项新建主题",
+
+  "category.apps": "应用与内容",
+  "category.system": "系统",
+  "category.developer": "开发者",
+  "category.apps.desc": "浏览站点、玩游戏、运行应用",
+  "category.system.desc": "对等节点、密钥、连接、设置、存储",
+  "category.developer.desc": "实体树、查询与执行控制台、Shell、日志",
+
+  "window.entity_tree": "实体树",
+  "window.games": "游戏",
+  "window.apps": "应用",
+  "window.knowledge_base": "知识库",
+  "window.key_manager": "密钥管理器",
+  "window.peer_connections": "对等连接",
+  "window.file_transfer": "文件传输",
+  "window.execute_console": "执行控制台",
+  "window.query_console": "查询控制台",
+  "window.settings": "设置",
+  "window.event_log": "事件日志",
+  "window.peers": "对等节点",
+  "window.shell": "Shell",
+  "window.chain_trace": "链路追踪",
+  "window.path_tap": "路径探针",
+  "window.wire_recorder": "协议记录器",
+  "window.content_stream": "内容流",
+  "window.site_browser": "站点浏览器",
+  "window.storage": "存储",
+  "window.site_creator": "站点创建器",
+  "window.system_overview": "系统概览",
+  "window.access_log": "访问日志",
+  "window.theme_editor": "主题编辑器",
+
+  "btn.create": "创建",
+  "btn.move": "移动",
+  "btn.authorize": "授权",
+  "btn.add_peer": "添加对等节点",
+  "btn.find": "查找",
+  "btn.count": "计数",
+  "btn.trace": "追踪",
+
+  "execute.execute": "执行",
+  "execute.guided": "向导",
+  "execute.raw": "原始",
+
+  "filetransfer.pull_selected": "⬇ 下载所选文件",
+  "filetransfer.upload_file": "上传文件",
+
+  "siteeditor.create_site": "创建站点",
+  "siteeditor.delete_site": "删除站点",
+  "siteeditor.save_page": "保存页面",
+  "siteeditor.delete_page": "删除页面",
+  "siteeditor.title_optional": "标题（可选）",
+  "siteeditor.page_title_ph": "页面标题",
+
+  "entitytree.source_none": "无（手动）",
+  "entitytree.source_app": "应用聚合（对等节点：{peer}）",
+
+  "settings.boot_into": "启动到",
+  "settings.boot_chrome": "桌面",
+  "settings.boot_site": "站点",
+  "settings.boot_window": "窗口",
+
+  "theme.scheme_dark": "深色",
+  "theme.scheme_light": "浅色",
+
+  "sysoverview.profile_pull": "仅拉取",
+  "sysoverview.profile_twoway": "双向",
+
+  "label.level": "级别",
+  "label.results": "结果",
+  "label.content": "内容",
+  "label.system": "系统",
+  "status.loading": "加载中…",
+
+  "peers.scan_qr": "扫描二维码",
+  "peers.scan_hint": "从另一台设备扫描此码即可在此连接。",
+  "peers.show_qr": "显示二维码",
+
+  "sitedir.sites_menu": "站点 ▾",
+  "sitedir.sites": "站点",
+
+  "contentsite.enter_peer": "进入对等节点",
+  "contentsite.contents_menu": "目录 ▾",
+
+  "storage.origin_disk": "源磁盘（IndexedDB + 缓存 — 整个源）",
+  "storage.backend_native": "系统后端 — 原生存储",
+  "storage.native_sqlite": "原生 / SQLite",
+  "storage.by_path": "按顶层路径：",
+
+  "chaintrace.chain_id": "链路 ID：",
+  "chaintrace.continuations": "延续",
+  "chaintrace.error_markers": "链路错误标记",
+
+  "siteeditor.move_rename": "移动/重命名到：",
+
+  "entitytree.up": "上一级",
+  "entitytree.selection_source": "选择来源",
+  "entitytree.select_prompt": "从树中选择一个实体",
+  "entitytree.inspector": "检查器",
+  "entitytree.none_selected": "未选择实体",
+  "entitytree.raw_hash": "原始哈希",
+
+  "settings.lockdown_active": "锁定已激活（由此部署的配置设置）。",
+
+  "windows.none_open": "没有打开的窗口",
+  "windows.open_windows": "打开的窗口",
+  "mod.learn_more": "了解更多并参与： ",
+
+  "status.saved": "已保存",
+  "status.stopped": "已停止",
+  "status.granted": "已授予",
+
+  "chip.connected": "已连接",
+  "chip.connecting": "连接中…",
+  "chip.offline": "离线",
+  "chip.authorized": "已授权",
+  "chip.pending": "待处理",
+  "chip.not_authorized": "未授权",
+  "chip.not_verified": "未验证",
+
+  "label.state_path": "状态：{path}",
+
+  "accesslog.operations": "操作数：{n}",
+  "accesslog.authorized_head": "已授权：{profile} — {summary}",
+
+  "entitytree.no_entity_at": "此路径没有实体：{path}",
+
+  "siteeditor.editing": "正在编辑：{id}",
+  "siteeditor.adding_to": "添加到：{target}",
+  "siteeditor.confirm_move_unsaved": "此页面有未保存的更改，移动后将丢失。仍要移动吗？",
+
+  "storage.peer_not_created": "未创建对等节点 — {reason}",
+
+  "kb.body_placeholder": "Markdown 正文",
+
+  "chaintrace.enter_hint": "（输入 chain_id 并按“追踪”）",
+
+  "scanner.scanned_codes": "已扫描的代码",
+  "scanner.scanned_codes_count": "已扫描的代码（{n} 个唯一）",
+  "scanner.photo_capture": "照片捕获",
+  "scanner.photo_hint": "拍摄二维码照片",
+  "scanner.take_photo": "拍照",
+  "scanner.processing": "处理中...",
+  "scanner.no_detector": "无 BarcodeDetector — 请手动输入代码",
+  "scanner.detector_init_failed": "检测器初始化失败",
+  "scanner.detect_call_failed": "检测调用失败",
+  "scanner.qr_found": "找到二维码！",
+  "scanner.no_qr": "未找到二维码 — 请重试",
+  "scanner.decode_error": "解码错误",
+  "scanner.live_scanner": "实时扫描器",
+  "scanner.live_hint": "实时相机扫描",
+  "scanner.start_live": "开始实时扫描",
+  "scanner.stop": "停止",
+  "scanner.stopped": "已停止",
+  "scanner.camera_unavailable": "相机不可用",
+  "scanner.camera_denied": "相机被拒绝",
+  "scanner.starting_camera": "正在启动相机...",
+  "scanner.stream_error": "流错误",
+  "scanner.scanning": "扫描中...",
+  "scanner.detector_failed": "检测器失败",
+  "scanner.scan_detect_error": "扫描 {n} — 检测错误",
+  "scanner.found_continuing": "已找到！继续扫描...",
+  "scanner.scan_n": "扫描 {n}...",
+  "scanner.scan_error": "扫描 {n} — 错误",
+
+  "peer.count": {
+    "other": "{n} 个对等节点"
+  }
+}

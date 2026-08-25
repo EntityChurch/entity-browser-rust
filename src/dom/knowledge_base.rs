@@ -338,7 +338,7 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
     util::append(parent, &content_label);
 
     let textarea = util::tracked_textarea(parent, ctx, "content", &draft.initial_content, theme::TEXTAREA);
-    util::set_attr(&textarea, "placeholder", "Markdown body");
+    util::set_attr(&textarea, "placeholder", &crate::i18n::t("kb.body_placeholder", &[]));
 
     // Button row on its own line, below the form.
     let row = util::create_element("div");

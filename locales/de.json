@@ -1,0 +1,241 @@
+{
+  "btn.save": "Speichern",
+  "btn.cancel": "Abbrechen",
+  "btn.delete": "Löschen",
+  "btn.copy": "Kopieren",
+  "btn.connect": "Verbinden",
+  "btn.edit": "Bearbeiten",
+  "btn.refresh": "Aktualisieren",
+  "btn.back": "← Zurück",
+  "btn.revert": "Zurücksetzen",
+
+  "label.status": "Status",
+  "label.title": "Titel",
+  "label.peer": "Peer",
+  "label.target": "Ziel",
+  "label.address": "Adresse",
+  "label.name": "Name",
+  "label.label": "Bezeichnung",
+
+  "status.copied": "Kopiert ✓",
+
+  "execute.handler": "Handler",
+  "execute.operation": "Operation",
+  "execute.handler_uri": "Handler-URI",
+  "execute.resource": "Ressource",
+
+  "peers.known_devices": "Bekannte Geräte",
+  "peers.connect_device": "Mit einem Gerät verbinden",
+  "peers.pair_qr": "Gerät koppeln (QR)",
+
+  "tooltip.close_window": "Fenster schließen",
+  "tooltip.open_windows": "Offene Fenster",
+  "tooltip.fill_window": "Fenster maximieren",
+  "tooltip.restore_size": "Zurück zur normalen Größe",
+  "tooltip.menu": "Menü",
+  "tooltip.back": "Zurück",
+  "tooltip.site_home": "Zur Startseite der Site",
+  "tooltip.unsaved": "Nicht gespeicherte Änderungen",
+
+  "kb.title_placeholder": "Artikeltitel",
+  "theme.name_placeholder": "Name (a-z, 0-9, Bindestriche)",
+  "theme.label_placeholder": "Anzeigename",
+
+  "filetransfer.device": "Gerät",
+  "filetransfer.shared_files": "Geteilte Dateien",
+  "filetransfer.send_file": "Datei senden",
+  "filetransfer.from_peer": "Vom Peer",
+  "filetransfer.results": "Ergebnisse",
+
+  "syspeers.system_peer": "System-Peer",
+  "syspeers.system_backend": "System-Backend",
+
+  "sysoverview.clear_logs": "Protokolle löschen",
+  "sysoverview.logs": "Protokolle",
+  "sysoverview.device_auth": "Geräteautorisierungen",
+  "sysoverview.grant_backend_hint": "Im Backend autorisiert; der genaue Umfang wird lokal nicht aufgezeichnet.",
+
+  "kb.new_article": "+ Neuer Artikel",
+  "kb.back_to_list": "← Zurück zur Liste",
+
+  "settings.appearance": "Darstellung",
+  "settings.theme": "Design",
+  "settings.language": "Sprache",
+  "settings.windows": "Fenster",
+  "settings.site_surface": "Site & Oberfläche",
+  "settings.rendering": "Rendering",
+  "settings.network": "Netzwerk",
+  "settings.language.hint": "Legt die Oberflächensprache und die Textrichtung fest.",
+
+  "theme.themes": "Designs",
+  "theme.new_from": "Neues Design aus",
+
+  "category.apps": "Apps & Inhalte",
+  "category.system": "System",
+  "category.developer": "Entwickler",
+  "category.apps.desc": "Sites durchsuchen, Spiele spielen, Apps ausführen",
+  "category.system.desc": "Peers, Schlüssel, Verbindungen, Einstellungen, Speicher",
+  "category.developer.desc": "Entitätsbaum, Abfrage- und Ausführungskonsolen, Shell, Protokolle",
+
+  "window.entity_tree": "Entitätsbaum",
+  "window.games": "Spiele",
+  "window.apps": "Apps",
+  "window.knowledge_base": "Wissensdatenbank",
+  "window.key_manager": "Schlüsselverwaltung",
+  "window.peer_connections": "Peer-Verbindungen",
+  "window.file_transfer": "Dateiübertragung",
+  "window.execute_console": "Ausführungskonsole",
+  "window.query_console": "Abfragekonsole",
+  "window.settings": "Einstellungen",
+  "window.event_log": "Ereignisprotokoll",
+  "window.peers": "Peers",
+  "window.shell": "Shell",
+  "window.chain_trace": "Ketten-Trace",
+  "window.path_tap": "Pfad-Tap",
+  "window.wire_recorder": "Protokoll-Rekorder",
+  "window.content_stream": "Inhalts-Stream",
+  "window.site_browser": "Site-Browser",
+  "window.storage": "Speicher",
+  "window.site_creator": "Site-Ersteller",
+  "window.system_overview": "Systemübersicht",
+  "window.access_log": "Zugriffsprotokoll",
+  "window.theme_editor": "Design-Editor",
+
+  "btn.create": "Erstellen",
+  "btn.move": "Verschieben",
+  "btn.authorize": "Autorisieren",
+  "btn.add_peer": "Peer hinzufügen",
+  "btn.find": "Suchen",
+  "btn.count": "Zählen",
+  "btn.trace": "Verfolgen",
+
+  "execute.execute": "Ausführen",
+  "execute.guided": "Geführt",
+  "execute.raw": "Roh",
+
+  "filetransfer.pull_selected": "⬇ Ausgewählte Datei herunterladen",
+  "filetransfer.upload_file": "Datei hochladen",
+
+  "siteeditor.create_site": "Site erstellen",
+  "siteeditor.delete_site": "Site löschen",
+  "siteeditor.save_page": "Seite speichern",
+  "siteeditor.delete_page": "Seite löschen",
+  "siteeditor.title_optional": "Titel (optional)",
+  "siteeditor.page_title_ph": "Seitentitel",
+
+  "entitytree.source_none": "Keine (manuell)",
+  "entitytree.source_app": "App-Aggregat (Peer: {peer})",
+
+  "settings.boot_into": "Starten in",
+  "settings.boot_chrome": "Desktop",
+  "settings.boot_site": "Site",
+  "settings.boot_window": "Fenster",
+
+  "theme.scheme_dark": "Dunkel",
+  "theme.scheme_light": "Hell",
+
+  "sysoverview.profile_pull": "Nur abrufen",
+  "sysoverview.profile_twoway": "Bidirektional",
+
+  "label.level": "Stufe",
+  "label.results": "Ergebnisse",
+  "label.content": "Inhalt",
+  "label.system": "System",
+  "status.loading": "Wird geladen…",
+
+  "peers.scan_qr": "QR-Code scannen",
+  "peers.scan_hint": "Scannen Sie dies von einem anderen Gerät, um es hier zu verbinden.",
+  "peers.show_qr": "QR-Code anzeigen",
+
+  "sitedir.sites_menu": "Sites ▾",
+  "sitedir.sites": "Sites",
+
+  "contentsite.enter_peer": "Peer betreten",
+  "contentsite.contents_menu": "Inhalt ▾",
+
+  "storage.origin_disk": "Origin-Speicher (IndexedDB + Caches — gesamte Origin)",
+  "storage.backend_native": "System-Backend — nativer Speicher",
+  "storage.native_sqlite": "Nativ / SQLite",
+  "storage.by_path": "Nach oberstem Pfad:",
+
+  "chaintrace.chain_id": "Ketten-ID:",
+  "chaintrace.continuations": "Fortsetzungen",
+  "chaintrace.error_markers": "Kettenfehler-Markierungen",
+
+  "siteeditor.move_rename": "Verschieben/umbenennen zu:",
+
+  "entitytree.up": "Nach oben",
+  "entitytree.selection_source": "Auswahlquelle",
+  "entitytree.select_prompt": "Wählen Sie eine Entität aus dem Baum",
+  "entitytree.inspector": "Inspektor",
+  "entitytree.none_selected": "Keine Entität ausgewählt",
+  "entitytree.raw_hash": "Roh-Hash",
+
+  "settings.lockdown_active": "Sperrmodus ist aktiv (durch die Konfiguration dieser Bereitstellung festgelegt).",
+
+  "windows.none_open": "Keine Fenster offen",
+  "windows.open_windows": "Offene Fenster",
+  "mod.learn_more": "Mehr erfahren und mitmachen unter ",
+
+  "status.saved": "gespeichert",
+  "status.stopped": "gestoppt",
+  "status.granted": "gewährt",
+
+  "chip.connected": "Verbunden",
+  "chip.connecting": "Verbinden…",
+  "chip.offline": "Offline",
+  "chip.authorized": "Autorisiert",
+  "chip.pending": "Ausstehend",
+  "chip.not_authorized": "Nicht autorisiert",
+  "chip.not_verified": "Nicht verifiziert",
+
+  "label.state_path": "Status: {path}",
+
+  "accesslog.operations": "Operationen: {n}",
+  "accesslog.authorized_head": "Autorisiert: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Keine Entität bei: {path}",
+
+  "siteeditor.editing": "Bearbeiten: {id}",
+  "siteeditor.adding_to": "Hinzufügen zu: {target}",
+  "siteeditor.confirm_move_unsaved": "Diese Seite hat nicht gespeicherte Änderungen, die beim Verschieben verloren gehen. Trotzdem verschieben?",
+
+  "storage.peer_not_created": "Peer nicht erstellt — {reason}",
+
+  "kb.body_placeholder": "Markdown-Text",
+
+  "chaintrace.enter_hint": "(chain_id eingeben und Verfolgen drücken)",
+
+  "scanner.scanned_codes": "Gescannte Codes",
+  "scanner.scanned_codes_count": "Gescannte Codes ({n} eindeutig)",
+  "scanner.photo_capture": "Fotoaufnahme",
+  "scanner.photo_hint": "Machen Sie ein Foto eines QR-Codes",
+  "scanner.take_photo": "Foto aufnehmen",
+  "scanner.processing": "Wird verarbeitet...",
+  "scanner.no_detector": "Kein BarcodeDetector — Code manuell eingeben",
+  "scanner.detector_init_failed": "Detektor-Initialisierung fehlgeschlagen",
+  "scanner.detect_call_failed": "Erkennungsaufruf fehlgeschlagen",
+  "scanner.qr_found": "QR-Code gefunden!",
+  "scanner.no_qr": "Kein QR gefunden — erneut versuchen",
+  "scanner.decode_error": "Dekodierungsfehler",
+  "scanner.live_scanner": "Live-Scanner",
+  "scanner.live_hint": "Echtzeit-Kamerascan",
+  "scanner.start_live": "Live-Scan starten",
+  "scanner.stop": "Stoppen",
+  "scanner.stopped": "Gestoppt",
+  "scanner.camera_unavailable": "Kamera nicht verfügbar",
+  "scanner.camera_denied": "Kamera verweigert",
+  "scanner.starting_camera": "Kamera wird gestartet...",
+  "scanner.stream_error": "Stream-Fehler",
+  "scanner.scanning": "Wird gescannt...",
+  "scanner.detector_failed": "Detektor fehlgeschlagen",
+  "scanner.scan_detect_error": "Scan {n} — Erkennungsfehler",
+  "scanner.found_continuing": "Gefunden! Scan wird fortgesetzt...",
+  "scanner.scan_n": "Scan {n}...",
+  "scanner.scan_error": "Scan {n} — Fehler",
+
+  "peer.count": {
+    "one": "{n} Peer",
+    "other": "{n} Peers"
+  }
+}

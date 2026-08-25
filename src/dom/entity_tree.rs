@@ -235,7 +235,7 @@ fn render_document_panel(container: &Element, view: &DocumentView) {
         }
         DocumentView::NotFound { path } => {
             let h1 = util::create_element("h1");
-            util::set_text(&h1, &format!("No entity at: {}", path));
+            util::set_text(&h1, &crate::i18n::t("entitytree.no_entity_at", &[("path", path)]));
             util::append(container, &h1);
         }
         DocumentView::Entity {
@@ -283,7 +283,7 @@ fn render_inspector_panel(container: &Element, view: &InspectorView) {
         }
         InspectorView::NotFound { path } => {
             let p = util::create_element("p");
-            util::set_text(&p, &format!("No entity at: {}", path));
+            util::set_text(&p, &crate::i18n::t("entitytree.no_entity_at", &[("path", path)]));
             util::append(container, &p);
         }
         InspectorView::Entity {

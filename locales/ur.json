@@ -1,0 +1,241 @@
+{
+  "btn.save": "محفوظ کریں",
+  "btn.cancel": "منسوخ کریں",
+  "btn.delete": "حذف کریں",
+  "btn.copy": "کاپی کریں",
+  "btn.connect": "منسلک کریں",
+  "btn.edit": "ترمیم کریں",
+  "btn.refresh": "تازہ کریں",
+  "btn.back": "→ واپس",
+  "btn.revert": "واپس پلٹیں",
+
+  "label.status": "حیثیت",
+  "label.title": "عنوان",
+  "label.peer": "پیئر",
+  "label.target": "ہدف",
+  "label.address": "پتہ",
+  "label.name": "نام",
+  "label.label": "لیبل",
+
+  "status.copied": "کاپی ہو گیا ✓",
+
+  "execute.handler": "ہینڈلر",
+  "execute.operation": "آپریشن",
+  "execute.handler_uri": "ہینڈلر URI",
+  "execute.resource": "وسیلہ",
+
+  "peers.known_devices": "معلوم آلات",
+  "peers.connect_device": "کسی آلے سے منسلک کریں",
+  "peers.pair_qr": "کسی آلے کو جوڑیں (QR)",
+
+  "tooltip.close_window": "ونڈو بند کریں",
+  "tooltip.open_windows": "کھلی ونڈوز",
+  "tooltip.fill_window": "ونڈو کو بڑا کریں",
+  "tooltip.restore_size": "معمول کے سائز پر واپس",
+  "tooltip.menu": "مینو",
+  "tooltip.back": "واپس",
+  "tooltip.site_home": "سائٹ کے ہوم پر جائیں",
+  "tooltip.unsaved": "غیر محفوظ تبدیلیاں",
+
+  "kb.title_placeholder": "مضمون کا عنوان",
+  "theme.name_placeholder": "نام (a-z، 0-9، ڈیش)",
+  "theme.label_placeholder": "ظاہر ہونے والا لیبل",
+
+  "filetransfer.device": "آلہ",
+  "filetransfer.shared_files": "مشترکہ فائلیں",
+  "filetransfer.send_file": "ایک فائل بھیجیں",
+  "filetransfer.from_peer": "پیئر سے",
+  "filetransfer.results": "نتائج",
+
+  "syspeers.system_peer": "سسٹم پیئر",
+  "syspeers.system_backend": "سسٹم بیک اینڈ",
+
+  "sysoverview.clear_logs": "لاگز صاف کریں",
+  "sysoverview.logs": "لاگز",
+  "sysoverview.device_auth": "آلات کی اجازتیں",
+  "sysoverview.grant_backend_hint": "بیک اینڈ پر اجازت دی گئی؛ مخصوص دائرہ کار مقامی طور پر ریکارڈ نہیں ہوتا۔",
+
+  "kb.new_article": "＋ نیا مضمون",
+  "kb.back_to_list": "→ فہرست پر واپس جائیں",
+
+  "settings.appearance": "ظاہری شکل",
+  "settings.theme": "تھیم",
+  "settings.language": "زبان",
+  "settings.windows": "ونڈوز",
+  "settings.site_surface": "سائٹ اور سطح",
+  "settings.rendering": "رینڈرنگ",
+  "settings.network": "نیٹ ورک",
+  "settings.language.hint": "انٹرفیس کی زبان اور ترتیب کی سمت مقرر کرتا ہے۔",
+
+  "theme.themes": "تھیمز",
+  "theme.new_from": "اس سے نئی تھیم",
+
+  "category.apps": "ایپس اور مواد",
+  "category.system": "سسٹم",
+  "category.developer": "ڈویلپر",
+  "category.apps.desc": "سائٹس براؤز کریں، گیمز کھیلیں، ایپس چلائیں",
+  "category.system.desc": "پیئرز، کلیدیں، کنکشنز، ترتیبات، اسٹوریج",
+  "category.developer.desc": "اینٹیٹی ٹری، کوئری اور ایگزیکیوٹ کنسولز، شیل، لاگز",
+
+  "window.entity_tree": "اینٹیٹی ٹری",
+  "window.games": "گیمز",
+  "window.apps": "ایپس",
+  "window.knowledge_base": "نالج بیس",
+  "window.key_manager": "کلید مینیجر",
+  "window.peer_connections": "پیئر کنکشنز",
+  "window.file_transfer": "فائل منتقلی",
+  "window.execute_console": "ایگزیکیوٹ کنسول",
+  "window.query_console": "کوئری کنسول",
+  "window.settings": "ترتیبات",
+  "window.event_log": "ایونٹ لاگ",
+  "window.peers": "پیئرز",
+  "window.shell": "شیل",
+  "window.chain_trace": "چین ٹریس",
+  "window.path_tap": "پاتھ ٹیپ",
+  "window.wire_recorder": "پروٹوکول ریکارڈر",
+  "window.content_stream": "مواد اسٹریم",
+  "window.site_browser": "سائٹ براؤزر",
+  "window.storage": "اسٹوریج",
+  "window.site_creator": "سائٹ تخلیق کار",
+  "window.system_overview": "سسٹم کا جائزہ",
+  "window.access_log": "رسائی لاگ",
+  "window.theme_editor": "تھیم ایڈیٹر",
+
+  "btn.create": "تخلیق کریں",
+  "btn.move": "منتقل کریں",
+  "btn.authorize": "اجازت دیں",
+  "btn.add_peer": "پیئر شامل کریں",
+  "btn.find": "تلاش کریں",
+  "btn.count": "شمار کریں",
+  "btn.trace": "ٹریس کریں",
+
+  "execute.execute": "ایگزیکیوٹ کریں",
+  "execute.guided": "رہنمائی شدہ",
+  "execute.raw": "خام",
+
+  "filetransfer.pull_selected": "⬇ منتخب فائل حاصل کریں",
+  "filetransfer.upload_file": "ایک فائل اپ لوڈ کریں",
+
+  "siteeditor.create_site": "سائٹ تخلیق کریں",
+  "siteeditor.delete_site": "سائٹ حذف کریں",
+  "siteeditor.save_page": "صفحہ محفوظ کریں",
+  "siteeditor.delete_page": "صفحہ حذف کریں",
+  "siteeditor.title_optional": "عنوان (اختیاری)",
+  "siteeditor.page_title_ph": "صفحے کا عنوان",
+
+  "entitytree.source_none": "کوئی نہیں (دستی)",
+  "entitytree.source_app": "ایپ مجموعہ (پیئر: {peer})",
+
+  "settings.boot_into": "اس میں بوٹ کریں",
+  "settings.boot_chrome": "ڈیسک ٹاپ",
+  "settings.boot_site": "سائٹ",
+  "settings.boot_window": "ونڈو",
+
+  "theme.scheme_dark": "گہرا",
+  "theme.scheme_light": "ہلکا",
+
+  "sysoverview.profile_pull": "صرف حاصل کریں",
+  "sysoverview.profile_twoway": "دو طرفہ",
+
+  "label.level": "سطح",
+  "label.results": "نتائج",
+  "label.content": "مواد",
+  "label.system": "سسٹم",
+  "status.loading": "لوڈ ہو رہا ہے…",
+
+  "peers.scan_qr": "ایک QR کوڈ اسکین کریں",
+  "peers.scan_hint": "یہاں منسلک کرنے کے لیے اسے کسی دوسرے آلے سے اسکین کریں۔",
+  "peers.show_qr": "QR کوڈ دکھائیں",
+
+  "sitedir.sites_menu": "سائٹس ▾",
+  "sitedir.sites": "سائٹس",
+
+  "contentsite.enter_peer": "پیئر میں داخل ہوں",
+  "contentsite.contents_menu": "مواد ▾",
+
+  "storage.origin_disk": "اصل ڈسک (IndexedDB ＋ کیشز — پوری اصل)",
+  "storage.backend_native": "سسٹم بیک اینڈ — مقامی اسٹور",
+  "storage.native_sqlite": "مقامی / SQLite",
+  "storage.by_path": "اعلیٰ سطحی راستے کے مطابق:",
+
+  "chaintrace.chain_id": "چین ID:",
+  "chaintrace.continuations": "تسلسل",
+  "chaintrace.error_markers": "چین کی خرابی کے نشانات",
+
+  "siteeditor.move_rename": "یہاں منتقل/نام تبدیل کریں:",
+
+  "entitytree.up": "اوپر",
+  "entitytree.selection_source": "انتخاب کا ذریعہ",
+  "entitytree.select_prompt": "ٹری سے ایک اینٹیٹی منتخب کریں",
+  "entitytree.inspector": "معائنہ کار",
+  "entitytree.none_selected": "کوئی اینٹیٹی منتخب نہیں",
+  "entitytree.raw_hash": "خام ہیش",
+
+  "settings.lockdown_active": "لاک ڈاؤن فعال ہے (اس تعیناتی کی ترتیب سے مقرر)۔",
+
+  "windows.none_open": "کوئی ونڈو کھلی نہیں",
+  "windows.open_windows": "کھلی ونڈوز",
+  "mod.learn_more": "مزید جانیں اور شامل ہوں ",
+
+  "status.saved": "محفوظ ہو گیا",
+  "status.stopped": "رک گیا",
+  "status.granted": "عطا کیا گیا",
+
+  "chip.connected": "منسلک",
+  "chip.connecting": "منسلک ہو رہا ہے…",
+  "chip.offline": "آف لائن",
+  "chip.authorized": "مجاز",
+  "chip.pending": "زیر التوا",
+  "chip.not_authorized": "غیر مجاز",
+  "chip.not_verified": "غیر تصدیق شدہ",
+
+  "label.state_path": "حیثیت: {path}",
+
+  "accesslog.operations": "آپریشنز: {n}",
+  "accesslog.authorized_head": "مجاز: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "اس مقام پر کوئی اینٹیٹی نہیں: {path}",
+
+  "siteeditor.editing": "ترمیم ہو رہی ہے: {id}",
+  "siteeditor.adding_to": "اس میں شامل کیا جا رہا ہے: {target}",
+  "siteeditor.confirm_move_unsaved": "اس صفحے میں غیر محفوظ تبدیلیاں ہیں جو منتقلی پر ضائع ہو جائیں گی۔ پھر بھی منتقل کریں؟",
+
+  "storage.peer_not_created": "پیئر تخلیق نہیں ہوا — {reason}",
+
+  "kb.body_placeholder": "Markdown متن",
+
+  "chaintrace.enter_hint": "(ایک chain_id درج کریں اور ٹریس دبائیں)",
+
+  "scanner.scanned_codes": "اسکین شدہ کوڈز",
+  "scanner.scanned_codes_count": "اسکین شدہ کوڈز ({n} منفرد)",
+  "scanner.photo_capture": "تصویر کھینچیں",
+  "scanner.photo_hint": "ایک QR کوڈ کی تصویر لیں",
+  "scanner.take_photo": "تصویر لیں",
+  "scanner.processing": "پروسیسنگ...",
+  "scanner.no_detector": "کوئی BarcodeDetector نہیں — کوڈ دستی طور پر درج کریں",
+  "scanner.detector_init_failed": "ڈیٹیکٹر کی ابتدا ناکام",
+  "scanner.detect_call_failed": "ڈیٹیکٹ کال ناکام",
+  "scanner.qr_found": "QR کوڈ مل گیا!",
+  "scanner.no_qr": "کوئی QR نہیں ملا — دوبارہ کوشش کریں",
+  "scanner.decode_error": "ڈی کوڈ خرابی",
+  "scanner.live_scanner": "لائیو اسکینر",
+  "scanner.live_hint": "حقیقی وقت کیمرہ اسکیننگ",
+  "scanner.start_live": "لائیو اسکین شروع کریں",
+  "scanner.stop": "روکیں",
+  "scanner.stopped": "رک گیا",
+  "scanner.camera_unavailable": "کیمرہ دستیاب نہیں",
+  "scanner.camera_denied": "کیمرہ مسترد",
+  "scanner.starting_camera": "کیمرہ شروع ہو رہا ہے...",
+  "scanner.stream_error": "اسٹریم خرابی",
+  "scanner.scanning": "اسکین ہو رہا ہے...",
+  "scanner.detector_failed": "ڈیٹیکٹر ناکام",
+  "scanner.scan_detect_error": "اسکین {n} — ڈیٹیکٹ خرابی",
+  "scanner.found_continuing": "مل گیا! اسکیننگ جاری ہے...",
+  "scanner.scan_n": "اسکین {n}...",
+  "scanner.scan_error": "اسکین {n} — خرابی",
+
+  "peer.count": {
+    "one": "{n} پیئر",
+    "other": "{n} پیئرز"
+  }
+}

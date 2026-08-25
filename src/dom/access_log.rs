@@ -74,7 +74,10 @@ pub fn render(container: &Element, output: &AccessLogOutput, view: AccessView, c
     let count = util::create_element("div");
     count.set_attribute("style", theme::HINT).ok();
     count.set_attribute("data-field", "access-log-count").ok();
-    util::set_text(&count, &format!("operations: {}", output.entries.len()));
+    util::set_text(
+        &count,
+        &crate::i18n::t("accesslog.operations", &[("n", &output.entries.len().to_string())]),
+    );
     util::append(&wrapper, &count);
 
     let scroll = util::create_element("div");
@@ -185,7 +188,13 @@ fn authorized_line(peer: &PeerCapabilities) -> Element {
         Some(a) => {
             let head = util::create_element("div");
             head.set_attribute("style", &format!("color:{}", theme_tokens::STATUS_OK)).ok();
-            util::set_text(&head, &format!("Authorized: {} — {}", a.profile_label, a.summary));
+            util::set_text(
+                &head,
+                &crate::i18n::t(
+                    "accesslog.authorized_head",
+                    &[("profile", &a.profile_label), ("summary", &a.summary)],
+                ),
+            );
             util::append(&line, &head);
 
             let bits = util::create_element("div");

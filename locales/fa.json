@@ -1,0 +1,241 @@
+{
+  "btn.save": "ذخیره",
+  "btn.cancel": "لغو",
+  "btn.delete": "حذف",
+  "btn.copy": "کپی",
+  "btn.connect": "اتصال",
+  "btn.edit": "ویرایش",
+  "btn.refresh": "بازخوانی",
+  "btn.back": "→ بازگشت",
+  "btn.revert": "بازگرداندن",
+
+  "label.status": "وضعیت",
+  "label.title": "عنوان",
+  "label.peer": "همتا",
+  "label.target": "هدف",
+  "label.address": "نشانی",
+  "label.name": "نام",
+  "label.label": "برچسب",
+
+  "status.copied": "کپی شد ✓",
+
+  "execute.handler": "کنترل‌کننده",
+  "execute.operation": "عملیات",
+  "execute.handler_uri": "URI کنترل‌کننده",
+  "execute.resource": "منبع",
+
+  "peers.known_devices": "دستگاه‌های شناخته‌شده",
+  "peers.connect_device": "اتصال به یک دستگاه",
+  "peers.pair_qr": "جفت کردن یک دستگاه (QR)",
+
+  "tooltip.close_window": "بستن پنجره",
+  "tooltip.open_windows": "پنجره‌های باز",
+  "tooltip.fill_window": "بزرگ کردن پنجره",
+  "tooltip.restore_size": "بازگشت به اندازهٔ عادی",
+  "tooltip.menu": "منو",
+  "tooltip.back": "بازگشت",
+  "tooltip.site_home": "رفتن به صفحهٔ اصلی سایت",
+  "tooltip.unsaved": "تغییرات ذخیره‌نشده",
+
+  "kb.title_placeholder": "عنوان مقاله",
+  "theme.name_placeholder": "نام (a-z، 0-9، خط تیره)",
+  "theme.label_placeholder": "برچسب نمایشی",
+
+  "filetransfer.device": "دستگاه",
+  "filetransfer.shared_files": "فایل‌های اشتراکی",
+  "filetransfer.send_file": "ارسال یک فایل",
+  "filetransfer.from_peer": "از همتا",
+  "filetransfer.results": "نتایج",
+
+  "syspeers.system_peer": "همتای سیستم",
+  "syspeers.system_backend": "بک‌اند سیستم",
+
+  "sysoverview.clear_logs": "پاک کردن گزارش‌ها",
+  "sysoverview.logs": "گزارش‌ها",
+  "sysoverview.device_auth": "مجوزهای دستگاه",
+  "sysoverview.grant_backend_hint": "در بک‌اند مجاز شد؛ دامنهٔ مشخص به‌صورت محلی ثبت نمی‌شود.",
+
+  "kb.new_article": "＋ مقالهٔ جدید",
+  "kb.back_to_list": "→ بازگشت به فهرست",
+
+  "settings.appearance": "ظاهر",
+  "settings.theme": "پوسته",
+  "settings.language": "زبان",
+  "settings.windows": "پنجره‌ها",
+  "settings.site_surface": "سایت و سطح",
+  "settings.rendering": "رندرینگ",
+  "settings.network": "شبکه",
+  "settings.language.hint": "زبان رابط و جهت چیدمان را تنظیم می‌کند.",
+
+  "theme.themes": "پوسته‌ها",
+  "theme.new_from": "پوستهٔ جدید از",
+
+  "category.apps": "برنامه‌ها و محتوا",
+  "category.system": "سیستم",
+  "category.developer": "توسعه‌دهنده",
+  "category.apps.desc": "مرور سایت‌ها، بازی، اجرای برنامه‌ها",
+  "category.system.desc": "همتاها، کلیدها، اتصالات، تنظیمات، ذخیره‌سازی",
+  "category.developer.desc": "درخت موجودیت، کنسول‌های پرس‌وجو و اجرا، پوسته، گزارش‌ها",
+
+  "window.entity_tree": "درخت موجودیت",
+  "window.games": "بازی‌ها",
+  "window.apps": "برنامه‌ها",
+  "window.knowledge_base": "پایگاه دانش",
+  "window.key_manager": "مدیر کلید",
+  "window.peer_connections": "اتصالات همتا",
+  "window.file_transfer": "انتقال فایل",
+  "window.execute_console": "کنسول اجرا",
+  "window.query_console": "کنسول پرس‌وجو",
+  "window.settings": "تنظیمات",
+  "window.event_log": "گزارش رویداد",
+  "window.peers": "همتاها",
+  "window.shell": "پوسته",
+  "window.chain_trace": "ردیابی زنجیره",
+  "window.path_tap": "شنود مسیر",
+  "window.wire_recorder": "ضبط‌کنندهٔ پروتکل",
+  "window.content_stream": "جریان محتوا",
+  "window.site_browser": "مرورگر سایت",
+  "window.storage": "ذخیره‌سازی",
+  "window.site_creator": "سازندهٔ سایت",
+  "window.system_overview": "نمای کلی سیستم",
+  "window.access_log": "گزارش دسترسی",
+  "window.theme_editor": "ویرایشگر پوسته",
+
+  "btn.create": "ایجاد",
+  "btn.move": "انتقال",
+  "btn.authorize": "مجاز کردن",
+  "btn.add_peer": "افزودن همتا",
+  "btn.find": "یافتن",
+  "btn.count": "شمارش",
+  "btn.trace": "ردیابی",
+
+  "execute.execute": "اجرا",
+  "execute.guided": "راهنمایی‌شده",
+  "execute.raw": "خام",
+
+  "filetransfer.pull_selected": "⬇ دریافت فایل انتخاب‌شده",
+  "filetransfer.upload_file": "بارگذاری یک فایل",
+
+  "siteeditor.create_site": "ایجاد سایت",
+  "siteeditor.delete_site": "حذف سایت",
+  "siteeditor.save_page": "ذخیرهٔ صفحه",
+  "siteeditor.delete_page": "حذف صفحه",
+  "siteeditor.title_optional": "عنوان (اختیاری)",
+  "siteeditor.page_title_ph": "عنوان صفحه",
+
+  "entitytree.source_none": "هیچ‌کدام (دستی)",
+  "entitytree.source_app": "تجمیع برنامه (همتا: {peer})",
+
+  "settings.boot_into": "راه‌اندازی در",
+  "settings.boot_chrome": "دسکتاپ",
+  "settings.boot_site": "سایت",
+  "settings.boot_window": "پنجره",
+
+  "theme.scheme_dark": "تیره",
+  "theme.scheme_light": "روشن",
+
+  "sysoverview.profile_pull": "فقط دریافت",
+  "sysoverview.profile_twoway": "دوطرفه",
+
+  "label.level": "سطح",
+  "label.results": "نتایج",
+  "label.content": "محتوا",
+  "label.system": "سیستم",
+  "status.loading": "در حال بارگذاری…",
+
+  "peers.scan_qr": "اسکن یک کد QR",
+  "peers.scan_hint": "این را از دستگاه دیگری اسکن کنید تا اینجا متصل شود.",
+  "peers.show_qr": "نمایش کد QR",
+
+  "sitedir.sites_menu": "سایت‌ها ▾",
+  "sitedir.sites": "سایت‌ها",
+
+  "contentsite.enter_peer": "ورود به همتا",
+  "contentsite.contents_menu": "محتوا ▾",
+
+  "storage.origin_disk": "دیسک مبدأ (IndexedDB ＋ حافظه‌های پنهان — کل مبدأ)",
+  "storage.backend_native": "بک‌اند سیستم — ذخیرهٔ بومی",
+  "storage.native_sqlite": "بومی / SQLite",
+  "storage.by_path": "بر اساس مسیر سطح بالا:",
+
+  "chaintrace.chain_id": "شناسهٔ زنجیره:",
+  "chaintrace.continuations": "ادامه‌ها",
+  "chaintrace.error_markers": "نشانگرهای خطای زنجیره",
+
+  "siteeditor.move_rename": "انتقال/تغییر نام به:",
+
+  "entitytree.up": "بالا",
+  "entitytree.selection_source": "منبع انتخاب",
+  "entitytree.select_prompt": "یک موجودیت را از درخت انتخاب کنید",
+  "entitytree.inspector": "بازرس",
+  "entitytree.none_selected": "هیچ موجودیتی انتخاب نشده",
+  "entitytree.raw_hash": "هش خام",
+
+  "settings.lockdown_active": "قفل فعال است (توسط پیکربندی این استقرار تنظیم شده).",
+
+  "windows.none_open": "هیچ پنجره‌ای باز نیست",
+  "windows.open_windows": "پنجره‌های باز",
+  "mod.learn_more": "بیشتر بدانید و مشارکت کنید در ",
+
+  "status.saved": "ذخیره شد",
+  "status.stopped": "متوقف شد",
+  "status.granted": "اعطا شد",
+
+  "chip.connected": "متصل",
+  "chip.connecting": "در حال اتصال…",
+  "chip.offline": "آفلاین",
+  "chip.authorized": "مجاز",
+  "chip.pending": "در انتظار",
+  "chip.not_authorized": "غیرمجاز",
+  "chip.not_verified": "تأیید نشده",
+
+  "label.state_path": "وضعیت: {path}",
+
+  "accesslog.operations": "عملیات: {n}",
+  "accesslog.authorized_head": "مجاز: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "هیچ موجودیتی در: {path}",
+
+  "siteeditor.editing": "در حال ویرایش: {id}",
+  "siteeditor.adding_to": "در حال افزودن به: {target}",
+  "siteeditor.confirm_move_unsaved": "این صفحه تغییرات ذخیره‌نشده‌ای دارد که هنگام انتقال از بین می‌روند. با این حال منتقل شود؟",
+
+  "storage.peer_not_created": "همتا ایجاد نشد — {reason}",
+
+  "kb.body_placeholder": "متن Markdown",
+
+  "chaintrace.enter_hint": "(یک chain_id وارد کنید و ردیابی را فشار دهید)",
+
+  "scanner.scanned_codes": "کدهای اسکن‌شده",
+  "scanner.scanned_codes_count": "کدهای اسکن‌شده ({n} یکتا)",
+  "scanner.photo_capture": "ثبت عکس",
+  "scanner.photo_hint": "از یک کد QR عکس بگیرید",
+  "scanner.take_photo": "گرفتن عکس",
+  "scanner.processing": "در حال پردازش...",
+  "scanner.no_detector": "بدون BarcodeDetector — کد را دستی وارد کنید",
+  "scanner.detector_init_failed": "راه‌اندازی آشکارساز ناموفق بود",
+  "scanner.detect_call_failed": "فراخوانی آشکارسازی ناموفق بود",
+  "scanner.qr_found": "کد QR پیدا شد!",
+  "scanner.no_qr": "QR پیدا نشد — دوباره تلاش کنید",
+  "scanner.decode_error": "خطای رمزگشایی",
+  "scanner.live_scanner": "اسکنر زنده",
+  "scanner.live_hint": "اسکن دوربین در زمان واقعی",
+  "scanner.start_live": "شروع اسکن زنده",
+  "scanner.stop": "توقف",
+  "scanner.stopped": "متوقف شد",
+  "scanner.camera_unavailable": "دوربین در دسترس نیست",
+  "scanner.camera_denied": "دوربین رد شد",
+  "scanner.starting_camera": "در حال راه‌اندازی دوربین...",
+  "scanner.stream_error": "خطای جریان",
+  "scanner.scanning": "در حال اسکن...",
+  "scanner.detector_failed": "آشکارساز ناموفق بود",
+  "scanner.scan_detect_error": "اسکن {n} — خطای آشکارسازی",
+  "scanner.found_continuing": "پیدا شد! ادامهٔ اسکن...",
+  "scanner.scan_n": "اسکن {n}...",
+  "scanner.scan_error": "اسکن {n} — خطا",
+
+  "peer.count": {
+    "one": "{n} همتا",
+    "other": "{n} همتا"
+  }
+}

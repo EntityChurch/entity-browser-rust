@@ -1,0 +1,242 @@
+{
+  "btn.save": "Salvează",
+  "btn.cancel": "Anulează",
+  "btn.delete": "Șterge",
+  "btn.copy": "Copiază",
+  "btn.connect": "Conectează",
+  "btn.edit": "Editează",
+  "btn.refresh": "Reîmprospătează",
+  "btn.back": "← Înapoi",
+  "btn.revert": "Revino",
+
+  "label.status": "Stare",
+  "label.title": "Titlu",
+  "label.peer": "Peer",
+  "label.target": "Țintă",
+  "label.address": "Adresă",
+  "label.name": "Nume",
+  "label.label": "Etichetă",
+
+  "status.copied": "Copiat ✓",
+
+  "execute.handler": "Handler",
+  "execute.operation": "Operație",
+  "execute.handler_uri": "URI handler",
+  "execute.resource": "Resursă",
+
+  "peers.known_devices": "Dispozitive cunoscute",
+  "peers.connect_device": "Conectează-te la un dispozitiv",
+  "peers.pair_qr": "Împerechează un dispozitiv (QR)",
+
+  "tooltip.close_window": "Închide fereastra",
+  "tooltip.open_windows": "Ferestre deschise",
+  "tooltip.fill_window": "Maximizează fereastra",
+  "tooltip.restore_size": "Revino la dimensiunea normală",
+  "tooltip.menu": "Meniu",
+  "tooltip.back": "Înapoi",
+  "tooltip.site_home": "Mergi la pagina principală a site-ului",
+  "tooltip.unsaved": "Modificări nesalvate",
+
+  "kb.title_placeholder": "Titlul articolului",
+  "theme.name_placeholder": "nume (a-z, 0-9, cratime)",
+  "theme.label_placeholder": "etichetă afișată",
+
+  "filetransfer.device": "Dispozitiv",
+  "filetransfer.shared_files": "Fișiere partajate",
+  "filetransfer.send_file": "Trimite un fișier",
+  "filetransfer.from_peer": "De la peer",
+  "filetransfer.results": "Rezultate",
+
+  "syspeers.system_peer": "Peer de sistem",
+  "syspeers.system_backend": "Backend de sistem",
+
+  "sysoverview.clear_logs": "Șterge jurnalele",
+  "sysoverview.logs": "Jurnale",
+  "sysoverview.device_auth": "Autorizări de dispozitive",
+  "sysoverview.grant_backend_hint": "Autorizat pe backend; domeniul specific nu este înregistrat local.",
+
+  "kb.new_article": "＋ Articol nou",
+  "kb.back_to_list": "← Înapoi la listă",
+
+  "settings.appearance": "Aspect",
+  "settings.theme": "Temă",
+  "settings.language": "Limbă",
+  "settings.windows": "Ferestre",
+  "settings.site_surface": "Site și suprafață",
+  "settings.rendering": "Randare",
+  "settings.network": "Rețea",
+  "settings.language.hint": "Setează limba interfeței și direcția aspectului.",
+
+  "theme.themes": "Teme",
+  "theme.new_from": "Temă nouă din",
+
+  "category.apps": "Aplicații și conținut",
+  "category.system": "Sistem",
+  "category.developer": "Dezvoltator",
+  "category.apps.desc": "Explorează site-uri, joacă jocuri, rulează aplicații",
+  "category.system.desc": "Peeri, chei, conexiuni, setări, stocare",
+  "category.developer.desc": "Arbore de entități, console de interogare și execuție, shell, jurnale",
+
+  "window.entity_tree": "Arbore de entități",
+  "window.games": "Jocuri",
+  "window.apps": "Aplicații",
+  "window.knowledge_base": "Bază de cunoștințe",
+  "window.key_manager": "Manager de chei",
+  "window.peer_connections": "Conexiuni peer",
+  "window.file_transfer": "Transfer de fișiere",
+  "window.execute_console": "Consolă de execuție",
+  "window.query_console": "Consolă de interogare",
+  "window.settings": "Setări",
+  "window.event_log": "Jurnal de evenimente",
+  "window.peers": "Peeri",
+  "window.shell": "Shell",
+  "window.chain_trace": "Urmărire lanț",
+  "window.path_tap": "Derivație de cale",
+  "window.wire_recorder": "Înregistrator de protocol",
+  "window.content_stream": "Flux de conținut",
+  "window.site_browser": "Navigator de site-uri",
+  "window.storage": "Stocare",
+  "window.site_creator": "Creator de site-uri",
+  "window.system_overview": "Prezentare generală a sistemului",
+  "window.access_log": "Jurnal de acces",
+  "window.theme_editor": "Editor de teme",
+
+  "btn.create": "Creează",
+  "btn.move": "Mută",
+  "btn.authorize": "Autorizează",
+  "btn.add_peer": "Adaugă peer",
+  "btn.find": "Găsește",
+  "btn.count": "Numără",
+  "btn.trace": "Urmărește",
+
+  "execute.execute": "Execută",
+  "execute.guided": "Ghidat",
+  "execute.raw": "Brut",
+
+  "filetransfer.pull_selected": "⬇ Descarcă fișierul selectat",
+  "filetransfer.upload_file": "Încarcă un fișier",
+
+  "siteeditor.create_site": "Creează site",
+  "siteeditor.delete_site": "Șterge site",
+  "siteeditor.save_page": "Salvează pagina",
+  "siteeditor.delete_page": "Șterge pagina",
+  "siteeditor.title_optional": "Titlu (opțional)",
+  "siteeditor.page_title_ph": "Titlul paginii",
+
+  "entitytree.source_none": "Niciuna (manual)",
+  "entitytree.source_app": "Agregat de aplicație (peer: {peer})",
+
+  "settings.boot_into": "Pornește în",
+  "settings.boot_chrome": "Desktop",
+  "settings.boot_site": "Site",
+  "settings.boot_window": "Fereastră",
+
+  "theme.scheme_dark": "Întunecat",
+  "theme.scheme_light": "Luminos",
+
+  "sysoverview.profile_pull": "Doar descărcare",
+  "sysoverview.profile_twoway": "Bidirecțional",
+
+  "label.level": "Nivel",
+  "label.results": "Rezultate",
+  "label.content": "Conținut",
+  "label.system": "Sistem",
+  "status.loading": "Se încarcă…",
+
+  "peers.scan_qr": "Scanează un cod QR",
+  "peers.scan_hint": "Scanează asta de pe alt dispozitiv pentru a-l conecta aici.",
+  "peers.show_qr": "Arată codul QR",
+
+  "sitedir.sites_menu": "Site-uri ▾",
+  "sitedir.sites": "Site-uri",
+
+  "contentsite.enter_peer": "Intră în peer",
+  "contentsite.contents_menu": "Conținut ▾",
+
+  "storage.origin_disk": "Disc de origine (IndexedDB ＋ cache-uri — întreaga origine)",
+  "storage.backend_native": "Backend de sistem — stocare nativă",
+  "storage.native_sqlite": "Nativ / SQLite",
+  "storage.by_path": "După calea de nivel superior:",
+
+  "chaintrace.chain_id": "ID lanț:",
+  "chaintrace.continuations": "Continuări",
+  "chaintrace.error_markers": "Marcatori de eroare de lanț",
+
+  "siteeditor.move_rename": "Mută/redenumește în:",
+
+  "entitytree.up": "Sus",
+  "entitytree.selection_source": "Sursa selecției",
+  "entitytree.select_prompt": "Selectează o entitate din arbore",
+  "entitytree.inspector": "Inspector",
+  "entitytree.none_selected": "Nicio entitate selectată",
+  "entitytree.raw_hash": "Hash brut",
+
+  "settings.lockdown_active": "Blocarea este activă (setată de configurația acestei implementări).",
+
+  "windows.none_open": "Nicio fereastră deschisă",
+  "windows.open_windows": "Ferestre deschise",
+  "mod.learn_more": "Află mai multe și implică-te la ",
+
+  "status.saved": "salvat",
+  "status.stopped": "oprit",
+  "status.granted": "acordat",
+
+  "chip.connected": "Conectat",
+  "chip.connecting": "Se conectează…",
+  "chip.offline": "Deconectat",
+  "chip.authorized": "Autorizat",
+  "chip.pending": "În așteptare",
+  "chip.not_authorized": "Neautorizat",
+  "chip.not_verified": "Neverificat",
+
+  "label.state_path": "Stare: {path}",
+
+  "accesslog.operations": "operații: {n}",
+  "accesslog.authorized_head": "Autorizat: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Nicio entitate la: {path}",
+
+  "siteeditor.editing": "Se editează: {id}",
+  "siteeditor.adding_to": "Se adaugă la: {target}",
+  "siteeditor.confirm_move_unsaved": "Această pagină are modificări nesalvate care se vor pierde la mutare. Muți oricum?",
+
+  "storage.peer_not_created": "Peer necreat — {reason}",
+
+  "kb.body_placeholder": "Corp Markdown",
+
+  "chaintrace.enter_hint": "(introdu un chain_id și apasă Urmărește)",
+
+  "scanner.scanned_codes": "Coduri scanate",
+  "scanner.scanned_codes_count": "Coduri scanate ({n} unice)",
+  "scanner.photo_capture": "Captură foto",
+  "scanner.photo_hint": "Fotografiază un cod QR",
+  "scanner.take_photo": "Fotografiază",
+  "scanner.processing": "Se procesează...",
+  "scanner.no_detector": "Fără BarcodeDetector — introdu codul manual",
+  "scanner.detector_init_failed": "Inițializarea detectorului a eșuat",
+  "scanner.detect_call_failed": "Apelul de detectare a eșuat",
+  "scanner.qr_found": "Cod QR găsit!",
+  "scanner.no_qr": "Niciun QR găsit — încearcă din nou",
+  "scanner.decode_error": "Eroare de decodare",
+  "scanner.live_scanner": "Scaner live",
+  "scanner.live_hint": "Scanare live cu camera",
+  "scanner.start_live": "Pornește scanarea live",
+  "scanner.stop": "Oprește",
+  "scanner.stopped": "Oprit",
+  "scanner.camera_unavailable": "Camera indisponibilă",
+  "scanner.camera_denied": "Cameră refuzată",
+  "scanner.starting_camera": "Se pornește camera...",
+  "scanner.stream_error": "Eroare de flux",
+  "scanner.scanning": "Se scanează...",
+  "scanner.detector_failed": "Detectorul a eșuat",
+  "scanner.scan_detect_error": "Scanare {n} — eroare de detectare",
+  "scanner.found_continuing": "Găsit! Se continuă scanarea...",
+  "scanner.scan_n": "Scanare {n}...",
+  "scanner.scan_error": "Scanare {n} — eroare",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "few": "{n} peeri",
+    "other": "{n} de peeri"
+  }
+}

@@ -1,0 +1,241 @@
+{
+  "btn.save": "Spara",
+  "btn.cancel": "Avbryt",
+  "btn.delete": "Ta bort",
+  "btn.copy": "Kopiera",
+  "btn.connect": "Anslut",
+  "btn.edit": "Redigera",
+  "btn.refresh": "Uppdatera",
+  "btn.back": "← Tillbaka",
+  "btn.revert": "Återställ",
+
+  "label.status": "Status",
+  "label.title": "Titel",
+  "label.peer": "Peer",
+  "label.target": "Mål",
+  "label.address": "Adress",
+  "label.name": "Namn",
+  "label.label": "Etikett",
+
+  "status.copied": "Kopierat ✓",
+
+  "execute.handler": "Hanterare",
+  "execute.operation": "Operation",
+  "execute.handler_uri": "Hanterar-URI",
+  "execute.resource": "Resurs",
+
+  "peers.known_devices": "Kända enheter",
+  "peers.connect_device": "Anslut till en enhet",
+  "peers.pair_qr": "Para ihop en enhet (QR)",
+
+  "tooltip.close_window": "Stäng fönster",
+  "tooltip.open_windows": "Öppna fönster",
+  "tooltip.fill_window": "Maximera fönstret",
+  "tooltip.restore_size": "Tillbaka till normal storlek",
+  "tooltip.menu": "Meny",
+  "tooltip.back": "Tillbaka",
+  "tooltip.site_home": "Gå till webbplatsens startsida",
+  "tooltip.unsaved": "Osparade ändringar",
+
+  "kb.title_placeholder": "Artikelns titel",
+  "theme.name_placeholder": "namn (a-z, 0-9, bindestreck)",
+  "theme.label_placeholder": "visningsetikett",
+
+  "filetransfer.device": "Enhet",
+  "filetransfer.shared_files": "Delade filer",
+  "filetransfer.send_file": "Skicka en fil",
+  "filetransfer.from_peer": "Från peer",
+  "filetransfer.results": "Resultat",
+
+  "syspeers.system_peer": "Systempeer",
+  "syspeers.system_backend": "Systembackend",
+
+  "sysoverview.clear_logs": "Rensa loggar",
+  "sysoverview.logs": "Loggar",
+  "sysoverview.device_auth": "Enhetsauktoriseringar",
+  "sysoverview.grant_backend_hint": "Auktoriserad på backend; det specifika omfånget registreras inte lokalt.",
+
+  "kb.new_article": "+ Ny artikel",
+  "kb.back_to_list": "← Tillbaka till listan",
+
+  "settings.appearance": "Utseende",
+  "settings.theme": "Tema",
+  "settings.language": "Språk",
+  "settings.windows": "Fönster",
+  "settings.site_surface": "Webbplats och yta",
+  "settings.rendering": "Rendering",
+  "settings.network": "Nätverk",
+  "settings.language.hint": "Ställer in gränssnittsspråket och läsriktningen.",
+
+  "theme.themes": "Teman",
+  "theme.new_from": "Nytt tema från",
+
+  "category.apps": "Appar och innehåll",
+  "category.system": "System",
+  "category.developer": "Utvecklare",
+  "category.apps.desc": "Bläddra bland webbplatser, spela spel, kör appar",
+  "category.system.desc": "Peers, nycklar, anslutningar, inställningar, lagring",
+  "category.developer.desc": "Entitetsträd, fråge- och exekveringskonsoler, shell, loggar",
+
+  "window.entity_tree": "Entitetsträd",
+  "window.games": "Spel",
+  "window.apps": "Appar",
+  "window.knowledge_base": "Kunskapsbas",
+  "window.key_manager": "Nyckelhanterare",
+  "window.peer_connections": "Peer-anslutningar",
+  "window.file_transfer": "Filöverföring",
+  "window.execute_console": "Exekveringskonsol",
+  "window.query_console": "Frågekonsol",
+  "window.settings": "Inställningar",
+  "window.event_log": "Händelselogg",
+  "window.peers": "Peers",
+  "window.shell": "Shell",
+  "window.chain_trace": "Kedjespårning",
+  "window.path_tap": "Sökvägsavlyssning",
+  "window.wire_recorder": "Protokollinspelare",
+  "window.content_stream": "Innehållsström",
+  "window.site_browser": "Webbplatsläsare",
+  "window.storage": "Lagring",
+  "window.site_creator": "Webbplatsskapare",
+  "window.system_overview": "Systemöversikt",
+  "window.access_log": "Åtkomstlogg",
+  "window.theme_editor": "Temaredigerare",
+
+  "btn.create": "Skapa",
+  "btn.move": "Flytta",
+  "btn.authorize": "Auktorisera",
+  "btn.add_peer": "Lägg till peer",
+  "btn.find": "Sök",
+  "btn.count": "Räkna",
+  "btn.trace": "Spåra",
+
+  "execute.execute": "Kör",
+  "execute.guided": "Guidad",
+  "execute.raw": "Rå",
+
+  "filetransfer.pull_selected": "⬇ Ladda ner vald fil",
+  "filetransfer.upload_file": "Ladda upp en fil",
+
+  "siteeditor.create_site": "Skapa webbplats",
+  "siteeditor.delete_site": "Ta bort webbplats",
+  "siteeditor.save_page": "Spara sida",
+  "siteeditor.delete_page": "Ta bort sida",
+  "siteeditor.title_optional": "Titel (valfritt)",
+  "siteeditor.page_title_ph": "Sidtitel",
+
+  "entitytree.source_none": "Ingen (manuell)",
+  "entitytree.source_app": "App-aggregat (peer: {peer})",
+
+  "settings.boot_into": "Starta i",
+  "settings.boot_chrome": "Skrivbord",
+  "settings.boot_site": "Webbplats",
+  "settings.boot_window": "Fönster",
+
+  "theme.scheme_dark": "Mörkt",
+  "theme.scheme_light": "Ljust",
+
+  "sysoverview.profile_pull": "Endast hämta",
+  "sysoverview.profile_twoway": "Dubbelriktad",
+
+  "label.level": "Nivå",
+  "label.results": "Resultat",
+  "label.content": "Innehåll",
+  "label.system": "System",
+  "status.loading": "Läser in…",
+
+  "peers.scan_qr": "Skanna en QR-kod",
+  "peers.scan_hint": "Skanna detta från en annan enhet för att ansluta den här.",
+  "peers.show_qr": "Visa QR-kod",
+
+  "sitedir.sites_menu": "Webbplatser ▾",
+  "sitedir.sites": "Webbplatser",
+
+  "contentsite.enter_peer": "Gå in i peer",
+  "contentsite.contents_menu": "Innehåll ▾",
+
+  "storage.origin_disk": "Ursprungsdisk (IndexedDB + cacher — hela ursprunget)",
+  "storage.backend_native": "Systembackend — inbyggd lagring",
+  "storage.native_sqlite": "Inbyggd / SQLite",
+  "storage.by_path": "Efter sökväg på översta nivån:",
+
+  "chaintrace.chain_id": "Kedje-ID:",
+  "chaintrace.continuations": "Fortsättningar",
+  "chaintrace.error_markers": "Kedjefelmarkörer",
+
+  "siteeditor.move_rename": "Flytta/byt namn till:",
+
+  "entitytree.up": "Upp",
+  "entitytree.selection_source": "Urvalskälla",
+  "entitytree.select_prompt": "Välj en entitet från trädet",
+  "entitytree.inspector": "Inspektör",
+  "entitytree.none_selected": "Ingen entitet vald",
+  "entitytree.raw_hash": "Rå hash",
+
+  "settings.lockdown_active": "Låsning är aktiv (inställd av den här distributionens konfiguration).",
+
+  "windows.none_open": "Inga fönster öppna",
+  "windows.open_windows": "Öppna fönster",
+  "mod.learn_more": "Läs mer och engagera dig på ",
+
+  "status.saved": "sparad",
+  "status.stopped": "stoppad",
+  "status.granted": "beviljad",
+
+  "chip.connected": "Ansluten",
+  "chip.connecting": "Ansluter…",
+  "chip.offline": "Offline",
+  "chip.authorized": "Auktoriserad",
+  "chip.pending": "Väntande",
+  "chip.not_authorized": "Ej auktoriserad",
+  "chip.not_verified": "Ej verifierad",
+
+  "label.state_path": "Status: {path}",
+
+  "accesslog.operations": "operationer: {n}",
+  "accesslog.authorized_head": "Auktoriserad: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Ingen entitet vid: {path}",
+
+  "siteeditor.editing": "Redigerar: {id}",
+  "siteeditor.adding_to": "Lägger till i: {target}",
+  "siteeditor.confirm_move_unsaved": "Den här sidan har osparade ändringar som går förlorade när den flyttas. Flytta ändå?",
+
+  "storage.peer_not_created": "Peer skapades inte — {reason}",
+
+  "kb.body_placeholder": "Markdown-brödtext",
+
+  "chaintrace.enter_hint": "(ange ett chain_id och tryck på Spåra)",
+
+  "scanner.scanned_codes": "Skannade koder",
+  "scanner.scanned_codes_count": "Skannade koder ({n} unika)",
+  "scanner.photo_capture": "Fotografering",
+  "scanner.photo_hint": "Ta ett foto av en QR-kod",
+  "scanner.take_photo": "Ta foto",
+  "scanner.processing": "Bearbetar...",
+  "scanner.no_detector": "Ingen BarcodeDetector — ange koden manuellt",
+  "scanner.detector_init_failed": "Initiering av detektor misslyckades",
+  "scanner.detect_call_failed": "Detekteringsanrop misslyckades",
+  "scanner.qr_found": "QR-kod hittad!",
+  "scanner.no_qr": "Ingen QR hittad — försök igen",
+  "scanner.decode_error": "Avkodningsfel",
+  "scanner.live_scanner": "Liveskanner",
+  "scanner.live_hint": "Kameraskanning i realtid",
+  "scanner.start_live": "Starta liveskanning",
+  "scanner.stop": "Stoppa",
+  "scanner.stopped": "Stoppad",
+  "scanner.camera_unavailable": "Kameran är inte tillgänglig",
+  "scanner.camera_denied": "Kamera nekad",
+  "scanner.starting_camera": "Startar kameran...",
+  "scanner.stream_error": "Strömfel",
+  "scanner.scanning": "Skannar...",
+  "scanner.detector_failed": "Detektorn misslyckades",
+  "scanner.scan_detect_error": "Skanning {n} — detekteringsfel",
+  "scanner.found_continuing": "Hittad! Fortsätter skanna...",
+  "scanner.scan_n": "Skanning {n}...",
+  "scanner.scan_error": "Skanning {n} — fel",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "other": "{n} peers"
+  }
+}
