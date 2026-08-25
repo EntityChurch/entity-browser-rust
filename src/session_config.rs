@@ -370,7 +370,53 @@ pub struct SessionConfig {
     /// Absent in a pre-1b persisted config → defaults true (from `default()`),
     /// so existing full deployments are unaffected.
     pub peer_creation_enabled: bool,
+    /// **This resolver's own ceiling on a name binding's lifetime, in ms**
+    /// (`EXTENSION-REGISTRY` §6a, 1.11) — set by `/entity-deployment.json`'s
+    /// `name_resolver_max_ttl_ms`. `None` = no ceiling declared, which is
+    /// conformant (§6a makes it a MAY) and is what we ship, because there is no
+    /// defensible constant and baking one in makes every unconfigured
+    /// deployment look configured.
+    ///
+    /// It rides the durable config rather than being read from the deployment
+    /// doc at use time, because a **returning** profile never fetches that doc
+    /// (persisted > fetched, D16) — a ceiling read only at fetch time would
+    /// apply on a fresh boot and silently not on a warm one, which is the
+    /// security-half-nobody-can-reach shape. Known limit, inherited from the
+    /// same model and not new here: a profile that already persisted a config
+    /// keeps its old ceiling until that config is refreshed.
+    pub name_resolver_max_ttl_ms: Option<u64>,
 }
+
+/// The resolver ceiling this session will honor, mirrored out of the durable
+/// [`SessionConfig`] for the paths that cannot reach one.
+///
+/// Same shape and same reason as [`crate::boot_fast_paint`]'s localStorage
+/// mirror: the shell's `name` verb resolves inside a `spawn_task` and holds no
+/// config handle, and threading one through every future call site is how a
+/// security half ends up applied on some paths and not others. Set once at boot
+/// from the resolved config; read wherever a resolution happens.
+///
+/// A `Cell<Option<u64>>` rather than anything shared: the browser arm is
+/// single-threaded, and on native this is only read by tests.
+mod resolver_ceiling {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ACTIVE: Cell<Option<u64>> = const { Cell::new(None) };
+    }
+
+    /// Install the ceiling the resolved config declares. Called at boot.
+    pub fn set(ms: Option<u64>) {
+        ACTIVE.with(|c| c.set(ms));
+    }
+
+    /// The ceiling in force, in ms. `None` = none declared (conformant).
+    pub fn get() -> Option<u64> {
+        ACTIVE.with(|c| c.get())
+    }
+}
+
+pub use resolver_ceiling::{get as active_resolver_ceiling_ms, set as set_active_resolver_ceiling};
 
 impl Default for SessionConfig {
     /// The chrome-first default posture — the workspace (window manager),
@@ -384,6 +430,9 @@ impl Default for SessionConfig {
             boot_surface: BootSurface::Chrome,
             home_site: home_site_default(),
             site_mode: SiteModePosture { enabled: true, show_toggle: true, locked: false },
+            // No ceiling declared by default — see the field docs. Conformant,
+            // and honest: we do not ship a number nobody can defend.
+            name_resolver_max_ttl_ms: None,
             active: false,
             fast_paint: true,
             peer_creation_enabled: true,
@@ -498,6 +547,15 @@ impl SessionConfig {
                         cfg.peer_creation_enabled = b;
                     }
                 }
+                // Absent in any config written before the resolver ceiling
+                // existed → stays `None` (no ceiling declared). Zero is dropped
+                // for the same reason the deployment parser drops it: it would
+                // expire every binding instantly and read as a broken registry.
+                Some("name_resolver_max_ttl_ms") => {
+                    if let Some(ms) = entity_ecf::ValueExt::as_u64(v) {
+                        cfg.name_resolver_max_ttl_ms = Some(ms).filter(|m| *m > 0);
+                    }
+                }
                 _ => {}
             }
         }
@@ -536,7 +594,12 @@ impl SessionConfig {
             "locked" => entity_ecf::bool_val(self.site_mode.locked),
             "active" => entity_ecf::bool_val(self.active),
             "fast_paint" => entity_ecf::bool_val(self.fast_paint),
-            "peer_creation_enabled" => entity_ecf::bool_val(self.peer_creation_enabled)
+            "peer_creation_enabled" => entity_ecf::bool_val(self.peer_creation_enabled),
+            // `0` encodes "no ceiling declared" on the wire; `from_entity`
+            // drops a zero back to `None`, so the round-trip is total and an
+            // undeclared ceiling never comes back as an instant expiry.
+            "name_resolver_max_ttl_ms" =>
+                entity_ecf::uinteger(self.name_resolver_max_ttl_ms.unwrap_or(0))
         });
         Entity::new(STATE_TYPE, data).unwrap()
     }
@@ -894,6 +957,11 @@ mod tests {
             active: true,
             fast_paint: false,
             peer_creation_enabled: false,
+            // A declared ceiling rides the round-trip too: it is `Option<u64>`
+            // over a wire that has no null, so `0` encodes "undeclared" and
+            // `from_entity` maps it back — a field that survived `to_entity` and
+            // came back as an instant expiry would expire every name.
+            name_resolver_max_ttl_ms: Some(3_600_000),
         };
         assert_eq!(SessionConfig::from_entity(&cfg.to_entity()), cfg);
     }

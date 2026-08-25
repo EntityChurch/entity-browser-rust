@@ -68,6 +68,7 @@ use super::signed_root::{RootProjector, SignedRootReport};
 pub const DEFAULT_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
 /// One `name → peer-id` binding to issue.
+#[derive(Debug)]
 pub struct BindingSpec {
     pub name: String,
     pub target_peer_id: String,
@@ -135,6 +136,38 @@ pub fn emit_registry(
              peer-id the consumer has no way to reach",
             no_transport.len(),
             no_transport.join(", ")
+        ));
+    }
+
+    // **The target must be a peer-id (audit F9), refused in the same place and
+    // the same style as D10 above.** Nothing checked this, so a typo became a
+    // *signed* binding naming a target that is not a peer at all — found by
+    // making one: `--bind=example.test=foundation@…` (a slug where the id
+    // belonged) emitted happily, and the only symptom arrived at the far end of
+    // the chain as *"the named peer-id carries no public key"* on a stranger's
+    // machine. The registry operator, the one person who can fix it, saw nothing.
+    //
+    // `PeerId::validate` is the right line and not a stricter one: it accepts
+    // BOTH Ed25519 forms, so a legacy SHA-256-form target — which our own
+    // consumer cannot pin without an out-of-band key, but which is a perfectly
+    // legal binding another consumer can use — is still issuable. What is
+    // refused is a string that is not a peer-id in any form.
+    let bad_target: Vec<String> = bindings
+        .iter()
+        .filter_map(|b| {
+            entity_crypto::PeerId::from(b.target_peer_id.clone())
+                .validate()
+                .err()
+                .map(|e| format!("{} → {:?} ({e})", b.name, b.target_peer_id))
+        })
+        .collect();
+    if !bad_target.is_empty() {
+        return Err(format!(
+            "{} binding(s) name a target that is not a peer-id: {}. A registry signs \
+             name → peer-id; signing a name → typo produces a binding whose only symptom is a \
+             resolver failure on someone else's machine",
+            bad_target.len(),
+            bad_target.join("; ")
         ));
     }
 
@@ -353,23 +386,59 @@ fn write_pointer(dir: &Path, peer_id: &str, key: &str, hash: &Hash) -> Result<()
 /// SHOULD NOT share an identity with a content publisher** — the two answer
 /// different questions and a consumer pins them separately — so the default is
 /// a distinct `registry/` keypair, and sharing one takes an explicit seed.
-pub fn run(args: &[String]) -> std::process::ExitCode {
-    use std::process::ExitCode;
+/// What a `registry` command line asked for.
+///
+/// **This is a separate function from [`run`] on purpose.** The CLI's usage
+/// strings and refusals *are* a surface, and until audit F2 no test read one — so
+/// the printed help drifted into teaching a `--bind` spelling the parser rejected,
+/// and the refusal for it claimed no binding had been passed at all. Parsing here
+/// returns the operator-facing message as a value, which is the only way a gate
+/// can assert on it (`AUDIT-NAMING-AND-PUBLISHING-ARC-2026-08-18` §5, AP25).
+#[derive(Debug)]
+pub struct RegistryArgs {
+    pub out_dir: std::path::PathBuf,
+    pub bindings: Vec<BindingSpec>,
+    pub ttl_ms: u64,
+    /// Inspect an already-emitted tree instead of writing one.
+    pub verify: bool,
+}
+
+/// Parse a `registry` command line. `Err` is the message to print, verbatim.
+pub fn parse_registry_args(args: &[String]) -> Result<RegistryArgs, String> {
+    // **Every flag here takes `=`** — and a bare `--bind` used to be dropped by
+    // the `strip_prefix("--bind=")` filter below, which then reported *"at least
+    // one --bind is required"* to someone who had just passed four. The printed
+    // help taught the space form, so following it could not succeed (audit F2).
+    // Checked BEFORE `out_dir`, because with a space form the *value* is the
+    // first non-flag argument and would otherwise be adopted as the output
+    // directory — a wrong answer instead of a refusal.
+    if let Some(bare) =
+        args.iter().find(|a| matches!(a.as_str(), "--bind" | "--ttl-days" | "--identity-seed"))
+    {
+        return Err(format!(
+            "{bare} takes `=`, not a space — write {bare}=VALUE. (With a space the value becomes \
+             a positional argument, which would have been read as the output directory.)"
+        ));
+    }
 
     let out_dir = match args.iter().skip(1).find(|a| !a.starts_with("--")) {
         Some(d) => std::path::PathBuf::from(d),
         None => {
-            eprintln!("registry: an output directory is required");
-            eprintln!("  entity-browser registry OUT_DIR --bind NAME=PEER_ID [--bind ...]");
-            return ExitCode::FAILURE;
+            return Err("an output directory is required\n  entity-browser registry OUT_DIR \
+                        --bind=NAME=PEER_ID@ORIGIN [--bind=...]"
+                .into())
         }
     };
+    let verify = args.iter().any(|a| a == "--verify");
 
     let mut bindings = Vec::new();
     for a in args.iter().filter_map(|a| a.strip_prefix("--bind=")) {
         // NAME=PEER_ID, or NAME=PEER_ID@ORIGIN to publish where that peer is
         // served. `@` is unambiguous here: it appears in neither Base58 nor a
-        // bare origin's scheme+host.
+        // bare origin's scheme+host. Split on the FIRST `@`, which is the
+        // correct end here: a Base58 peer-id cannot contain one, while an origin
+        // can (`http://user@host`), so the first is always the separator and the
+        // last would eat into the origin.
         match a.split_once('=') {
             Some((name, rest)) if !name.is_empty() && !rest.is_empty() => {
                 let (target, origin) = match rest.split_once('@') {
@@ -377,34 +446,50 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
                         (t.to_string(), Some(o.to_string()))
                     }
                     Some(_) => {
-                        eprintln!("registry: --bind NAME=PEER_ID@ORIGIN needs both sides, got {a:?}");
-                        return ExitCode::FAILURE;
+                        return Err(format!(
+                            "--bind=NAME=PEER_ID@ORIGIN needs both sides, got {a:?}"
+                        ))
                     }
                     None => (rest.to_string(), None),
                 };
-                bindings.push(BindingSpec { name: name.to_string(), target_peer_id: target, origin });
+                bindings
+                    .push(BindingSpec { name: name.to_string(), target_peer_id: target, origin });
             }
-            _ => {
-                eprintln!("registry: --bind expects NAME=PEER_ID[@ORIGIN], got {a:?}");
-                return ExitCode::FAILURE;
-            }
+            _ => return Err(format!("--bind expects NAME=PEER_ID@ORIGIN, got {a:?}")),
         }
     }
-    if bindings.is_empty() {
-        eprintln!("registry: at least one --bind=NAME=PEER_ID is required");
-        return ExitCode::FAILURE;
+    // A verify reads a tree that already exists, so it needs no bindings — and
+    // demanding them would make the check unreachable for the person most likely
+    // to want it (someone verifying a directory they were handed).
+    if bindings.is_empty() && !verify {
+        return Err("at least one --bind=NAME=PEER_ID@ORIGIN is required\n  the @ORIGIN half is \
+                    not optional (arch D10) — it becomes the binding's http-poll transport \
+                    profile, and without it a consumer resolves WHO but not WHERE"
+            .into());
     }
 
     let ttl_ms = match args.iter().find_map(|a| a.strip_prefix("--ttl-days=")) {
         Some(d) => match d.parse::<u64>() {
             Ok(n) if n > 0 => n * 24 * 60 * 60 * 1000,
-            _ => {
-                eprintln!("registry: --ttl-days expects a positive integer, got {d:?}");
-                return ExitCode::FAILURE;
-            }
+            _ => return Err(format!("--ttl-days expects a positive integer, got {d:?}")),
         },
         None => DEFAULT_TTL_MS,
     };
+
+    Ok(RegistryArgs { out_dir, bindings, ttl_ms, verify })
+}
+
+pub fn run(args: &[String]) -> std::process::ExitCode {
+    use std::process::ExitCode;
+
+    let parsed = match parse_registry_args(args) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("registry: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let RegistryArgs { out_dir, bindings, ttl_ms, verify } = parsed;
 
     let keypair = match super::publish::resolve_registry_keypair(args) {
         Ok(kp) => kp,
@@ -413,6 +498,38 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // **`--verify` belongs on THIS verb, not on `publish`** — and that is a
+    // correctness point, not ergonomics. The two verbs resolve *different*
+    // durable identities (`persistence::publisher_keypair` vs
+    // `registry_keypair`), so `publish <registry-dir> --verify` with no
+    // `--identity-seed=` looks for `{out}/{publisher-peer}/` — a directory the
+    // registry emit never wrote — and would report a clean tree as unverifiable.
+    // Whoever owns the identity owns the verification (audit F1/F3).
+    if verify {
+        // `Keypair` is not `Clone`, and the peer-id must come from the SAME
+        // derivation the emit used (`RootProjector` → `PeerBuilder`), not from a
+        // second one that merely looks equivalent — the directory name is that
+        // id. So build the projector to derive it, then resolve a fresh keypair
+        // for the verify; both resolutions read the same seed or the same durable
+        // file, so they cannot disagree.
+        let peer_id = match RootProjector::new(keypair) {
+            Ok(p) => p.peer_id().to_string(),
+            Err(e) => {
+                eprintln!("registry --verify: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let key = match super::publish::resolve_registry_keypair(args) {
+            Ok(kp) => kp,
+            Err(e) => {
+                eprintln!("registry --verify: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        // No prefix: a registry publishes at the root of its own origin.
+        return super::publish::run_verify(&out_dir, &peer_id, "", &key);
+    }
 
     let issued_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -482,6 +599,17 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
+    }
+
+    /// A **real** target peer-id for the fixtures.
+    ///
+    /// These used to say `"2PEERTARGET"`, which is not a peer-id in any form —
+    /// and nothing noticed until the emitter started checking (audit F9). Worth
+    /// keeping the lesson attached: a fixture that could not exist in production
+    /// proves less than it appears to, and here it was hiding the fact that the
+    /// emitter would sign a binding naming a string that is not a peer.
+    fn target_pid() -> String {
+        entity_crypto::Keypair::from_seed([0x7A; 32]).peer_id().as_str().to_string()
     }
 
     /// Publish a content domain into `dir`, returning `(peer_id, pubkey, key_type)`.
@@ -639,7 +767,7 @@ mod tests {
     #[test]
     fn every_issued_binding_carries_a_non_null_ttl() {
         let dir = tempfile::tempdir().unwrap();
-        let report = emit_at(dir.path(), NAME, "2PEERWHATEVER", DEFAULT_TTL_MS, ISSUED_AT_MS);
+        let report = emit_at(dir.path(), NAME, &target_pid(), DEFAULT_TTL_MS, ISSUED_AT_MS);
         let (cs, li) = warm_from_dir(dir.path(), &report.registry_peer_id);
 
         let path = entity_registry::by_name_pointer_path(&report.registry_peer_id, NAME);
@@ -662,7 +790,7 @@ mod tests {
         let err = emit_registry(
             dir.path(),
             entity_crypto::Keypair::from_seed([0xB2; 32]),
-            &[BindingSpec { name: NAME.into(), target_peer_id: "2PEER".into(), origin: Some(TEST_ORIGIN.into()) }],
+            &[BindingSpec { name: NAME.into(), target_peer_id: target_pid(), origin: Some(TEST_ORIGIN.into()) }],
             0,
             ISSUED_AT_MS,
         )
@@ -685,7 +813,7 @@ mod tests {
         let report = emit_registry(
             dir.path(),
             entity_crypto::Keypair::from_seed([0xC3; 32]),
-            &[BindingSpec { name: NAME.into(), target_peer_id: "2PEER".into(), origin: Some(TEST_ORIGIN.into()) }],
+            &[BindingSpec { name: NAME.into(), target_peer_id: target_pid(), origin: Some(TEST_ORIGIN.into()) }],
             60_000,
             1_000_000_000,
         )
@@ -712,7 +840,7 @@ mod tests {
         let report = emit_registry(
             dir.path(),
             kp,
-            &[BindingSpec { name: NAME.into(), target_peer_id: "2PEERTARGET".into(), origin: Some(TEST_ORIGIN.into()) }],
+            &[BindingSpec { name: NAME.into(), target_peer_id: target_pid(), origin: Some(TEST_ORIGIN.into()) }],
             DEFAULT_TTL_MS,
             ISSUED_AT_MS,
         )
@@ -761,7 +889,7 @@ mod tests {
             .iter()
             .map(|n| BindingSpec {
                 name: (*n).into(),
-                target_peer_id: "2PEERTARGET".into(),
+                target_peer_id: target_pid(),
                 origin: Some("https://origin.example".into()),
             })
             .collect();
@@ -816,7 +944,7 @@ mod tests {
             .iter()
             .map(|n| BindingSpec {
                 name: n.clone(),
-                target_peer_id: "2PEERTARGET".into(),
+                target_peer_id: target_pid(),
                 origin: Some("https://origin.example".into()),
             })
             .collect();
@@ -914,5 +1042,254 @@ mod tests {
             }
             _ => None,
         })
+    }
+
+    // ===================================================================
+    // The CLI surface. Everything below asserts on what an OPERATOR sees —
+    // the class of defect no test in this module could previously reach,
+    // because every one of them constructs `BindingSpec` directly and never
+    // parses a command line (audit F2 / AP25).
+    // ===================================================================
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// **F2, the worst message in the audit's telemetry-gap map.** The printed
+    /// help taught `--bind NAME=…` (a space); the parser matched only
+    /// `--bind=`, so the flag was dropped and the refusal claimed *"at least
+    /// one --bind is required"* — of someone who had just passed one.
+    ///
+    /// Mutation check: delete the bare-flag guard and this fails on the message
+    /// assertion, because parsing then falls through to the empty-bindings
+    /// refusal. An exit-code-only assertion would NOT have caught it — both
+    /// paths fail — which is exactly why the parse returns its message as a
+    /// value.
+    #[test]
+    fn a_space_separated_flag_is_refused_by_name_not_reported_as_absent() {
+        let err = parse_registry_args(&argv(&[
+            "registry",
+            "out",
+            "--bind",
+            "a.example=2PEER@https://a.example",
+        ]))
+        .expect_err("a space-separated --bind must be refused");
+        assert!(err.contains("--bind takes `=`"), "must name the actual mistake, got: {err}");
+        assert!(
+            !err.contains("at least one"),
+            "must NOT claim the flag was absent — it was passed, just spelled wrong: {err}"
+        );
+    }
+
+    /// The same guard's second job: with a space form, the *value* is the first
+    /// non-flag argument, so without the guard it would have been adopted as the
+    /// output directory — a wrong answer rather than a refusal.
+    #[test]
+    fn a_space_separated_value_is_never_adopted_as_the_output_directory() {
+        let err = parse_registry_args(&argv(&["registry", "--bind", "a.example=2PEER@o"]))
+            .expect_err("refused before out_dir is chosen");
+        assert!(err.contains("output directory"), "must say what it would have become: {err}");
+    }
+
+    /// D10 in the *usage* text, not just in the emitter. The refusal has to name
+    /// the `@ORIGIN` half, because a reader who omitted it has no other way to
+    /// learn it is mandatory.
+    #[test]
+    fn the_no_bindings_refusal_states_that_origin_is_mandatory() {
+        let err = parse_registry_args(&argv(&["registry", "out"])).expect_err("no bindings");
+        assert!(err.contains("@ORIGIN"), "the required form must appear: {err}");
+        assert!(err.contains("D10"), "and where the requirement comes from: {err}");
+    }
+
+    /// `--verify` reads a tree that already exists, so it must NOT demand
+    /// bindings — otherwise the check is unreachable for the person most likely
+    /// to want it: someone verifying a directory they were handed.
+    #[test]
+    fn verify_needs_no_bindings() {
+        let parsed = parse_registry_args(&argv(&["registry", "out", "--verify"]))
+            .expect("a verify with no bindings must parse");
+        assert!(parsed.verify);
+        assert!(parsed.bindings.is_empty());
+        assert_eq!(parsed.out_dir, std::path::PathBuf::from("out"));
+    }
+
+    /// An origin may legitimately contain `@` (`http://user@host`); a Base58
+    /// peer-id may not. So the separator is the FIRST `@`, and this pins it —
+    /// `rsplit_once` here would silently truncate the origin.
+    #[test]
+    fn the_bind_separator_is_the_first_at_so_an_origin_may_contain_one() {
+        let parsed = parse_registry_args(&argv(&[
+            "registry",
+            "out",
+            "--bind=a.example=2PEERTARGET@http://user@host/path",
+        ]))
+        .expect("parses");
+        assert_eq!(parsed.bindings[0].target_peer_id, "2PEERTARGET");
+        assert_eq!(parsed.bindings[0].origin.as_deref(), Some("http://user@host/path"));
+    }
+
+    /// **F1 — the check that existed and nothing called.** `make federation`
+    /// verified four domains and skipped the registry, which is the one tree the
+    /// whole chain hangs from: a consumer pins this key and nothing else, so an
+    /// unwalkable registry root means every name resolves to nothing while every
+    /// domain below it verifies clean.
+    ///
+    /// It also pins **why the check lives on this verb**: `publish --verify`
+    /// resolves a different durable identity, so it would look for
+    /// `{out}/{publisher-peer}/` — a directory a registry emit never wrote.
+    ///
+    /// Mutation-checked in both directions: the clean tree must pass, and
+    /// withholding one interior node — which leaves every pointer resolving and
+    /// every body hashing correctly — must fail with
+    /// [`super::super::publish::VERIFY_DEFECT_EXIT`].
+    #[test]
+    fn registry_verify_passes_a_clean_tree_and_fails_a_withheld_interior_node() {
+        use std::process::ExitCode;
+        let dir = tempfile::tempdir().unwrap();
+        let seed_hex = "c1".repeat(32);
+        let kp = entity_crypto::Keypair::from_seed([0xC1; 32]);
+        let specs: Vec<BindingSpec> = (0..24)
+            .map(|i| BindingSpec {
+                name: format!("v{i:02}.example"),
+                target_peer_id: target_pid(),
+                origin: Some(TEST_ORIGIN.into()),
+            })
+            .collect();
+        let report =
+            emit_registry(dir.path(), kp, &specs, DEFAULT_TTL_MS, ISSUED_AT_MS).expect("emits");
+
+        let verify = || {
+            run(&argv(&[
+                "registry",
+                dir.path().to_str().unwrap(),
+                &format!("--identity-seed={seed_hex}"),
+                "--verify",
+            ]))
+        };
+        assert_eq!(verify(), ExitCode::SUCCESS, "the tree we just emitted must verify");
+
+        // Withhold one interior node, chosen by EFFECT (a link whose subtree
+        // actually carries a name) — position is not a stable referent under
+        // hash-keyed routing.
+        let (cs, _li) = warm_from_dir(dir.path(), &report.registry_peer_id);
+        let client = PublishedRootClient::new(
+            DirFetcher::new(dir.path(), &report.registry_peer_id),
+            entity_crypto::Keypair::from_seed([0xC1; 32]).public_key_bytes().to_vec(),
+            entity_crypto::Keypair::from_seed([0xC1; 32]).key_type(),
+            Some(report.registry_peer_id.clone()),
+        );
+        let root = client.fetch_root().expect("root verifies");
+        let victim = hiding_link_below_root(cs.as_ref(), root.root_hash, &report.registry_peer_id)
+            .expect("a 24-name registry has such a link");
+        let removed = remove_blob(dir.path(), &victim);
+        assert!(removed, "the victim node must exist on disk as a content blob");
+
+        assert_eq!(
+            verify(),
+            ExitCode::from(crate::content_site::publish::VERIFY_DEFECT_EXIT),
+            "an incomplete closure must FAIL — every pointer still resolves and every body \
+             still hashes, so this is the only check that can see it"
+        );
+    }
+
+    /// **F9 — a registry signs `name → peer-id`, so the target has to BE one.**
+    ///
+    /// Found by typing the wrong thing: a `--bind=example.test=foundation@…` that
+    /// put a directory slug where the peer-id belonged emitted a fully signed
+    /// binding, and the only symptom appeared at the far end of the chain, on a
+    /// consumer's machine, as *"the named peer-id carries no public key"*. The
+    /// operator who could fix it saw a success message.
+    ///
+    /// Refused at the emitter, like D10, and **before anything is written** —
+    /// with every offender named, not the first.
+    #[test]
+    fn a_target_that_is_not_a_peer_id_is_refused_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = emit_registry(
+            dir.path(),
+            entity_crypto::Keypair::from_seed([0xE9; 32]),
+            &[
+                BindingSpec {
+                    name: "ok.example".into(),
+                    target_peer_id: target_pid(),
+                    origin: Some(TEST_ORIGIN.into()),
+                },
+                BindingSpec {
+                    name: "slug.example".into(),
+                    target_peer_id: "foundation".into(),
+                    origin: Some(TEST_ORIGIN.into()),
+                },
+                BindingSpec {
+                    name: "empty.example".into(),
+                    target_peer_id: String::new(),
+                    origin: Some(TEST_ORIGIN.into()),
+                },
+            ],
+            DEFAULT_TTL_MS,
+            ISSUED_AT_MS,
+        )
+        .expect_err("a non-peer-id target must be refused");
+
+        assert!(err.contains("slug.example"), "must name the offender: {err}");
+        assert!(err.contains("empty.example"), "must name EVERY offender, not the first: {err}");
+        assert!(!err.contains("ok.example"), "must not blame the valid one: {err}");
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "a refusal that leaves a half-registry behind is worse than the emit it prevented"
+        );
+    }
+
+    /// The other half of F9's line, and the reason it is `validate` rather than
+    /// `from_peer_id`: a **legacy SHA-256-form** peer-id is a legal target that
+    /// our own consumer cannot pin without an out-of-band key. Refusing it would
+    /// be this emitter deciding what other consumers may resolve, which is not
+    /// its call. Well-formed is the bar; pinnable-by-us is not.
+    #[test]
+    fn a_legacy_form_target_is_still_issuable_because_it_is_still_a_peer_id() {
+        let legacy = entity_crypto::Keypair::from_seed([0x7B; 32])
+            .peer_id_with_hash_type(entity_crypto::HASH_TYPE_SHA256);
+        let Ok(legacy) = legacy else {
+            // Upstream refuses to CONSTRUCT this form for Ed25519 now
+            // ("SHA-256-form is legacy-decode-only", Amendment 3). If it cannot
+            // be built, it cannot be issued, and there is nothing to assert —
+            // recorded rather than silently skipped.
+            println!("legacy SHA-256-form is no longer constructible upstream — nothing to test");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = emit_registry(
+            dir.path(),
+            entity_crypto::Keypair::from_seed([0xEA; 32]),
+            &[BindingSpec {
+                name: "legacy.example".into(),
+                target_peer_id: legacy.as_str().to_string(),
+                origin: Some(TEST_ORIGIN.into()),
+            }],
+            DEFAULT_TTL_MS,
+            ISSUED_AT_MS,
+        );
+        assert!(out.is_ok(), "a well-formed legacy-form target must still issue: {out:?}");
+    }
+
+    /// Delete the content blob for `hash`, wherever the sharded layout put it.
+    /// Located by file NAME rather than by recomputing the shard path, so this
+    /// keeps working if the layout changes.
+    fn remove_blob(dir: &Path, hash: &Hash) -> bool {
+        let want = hash.to_hex();
+        fn walk(at: &Path, want: &str) -> bool {
+            let Ok(rd) = fs::read_dir(at) else { return false };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    if walk(&p, want) {
+                        return true;
+                    }
+                } else if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == want) {
+                    return fs::remove_file(&p).is_ok();
+                }
+            }
+            false
+        }
+        walk(&dir.join("content"), &want)
     }
 }

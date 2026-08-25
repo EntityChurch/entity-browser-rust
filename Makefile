@@ -315,7 +315,14 @@ test-tauri: image
 # and `rm -rf` — a different target's directory. Per-target output vars get
 # per-target names. The path must be INSIDE the repo, since the build runs in a
 # container whose only bind mount is the repo.
-FED_OUT ?= dist/federation
+# **NOT under `dist/`** — audit F10, found by doing it: `make wasm` runs trunk,
+# trunk WIPES its dist dir, and the old default `dist/federation` sat inside it.
+# So publishing a federation and then building the app silently deleted the
+# federation; the next serve 404s and reads as a broken publish. Same hazard the
+# `site-serve` block calls out for `SERVE_DIR`, and the same answer: a sibling
+# directory. It must stay INSIDE the repo — the container's only bind mount is
+# the repo — so a `/tmp` path is not available here the way it is for SERVE_DIR.
+FED_OUT ?= dist-federation
 federation: image
 	$(call RUN,./tools/local-federation.sh $(FED_OUT))
 
@@ -1020,6 +1027,34 @@ site: image
 OUT_BARE ?= dist/static-bare
 site-bare: image
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT_BARE) --bare-root $(if $(SITE),--site=$(SITE),) $(if $(LIVE),--live=$(LIVE),))
+
+# Publish a NAME REGISTRY — the second half of the naming chain, and until now
+# the only publish verb with no make target (audit F3): the sole route was a bare
+# `cargo run`, which a podman-only host does not have. `make site` publishes
+# content; this publishes the names that point at it, under a DIFFERENT identity
+# (a name-issuer that is also the thing it names is one key doing two jobs).
+#
+#   make registry BIND='--bind=foundation.example=2KGT…@https://foundation.example'
+#   make registry REGISTRY_OUT=dist-reg TTL_DAYS=90 BIND='--bind=a=PID@ORIGIN --bind=b=PID2@ORIGIN2'
+#
+# Keep REGISTRY_OUT OUT of `dist/` — trunk wipes it (see the `federation` note).
+#
+# BIND is passed through verbatim, so every flag keeps its `=` (the CLI takes no
+# space-separated values — see `registry_publish::run`). The @ORIGIN half is
+# REQUIRED (arch D10). The identity is the durable registry keypair under
+# $(PUBLISH_DATA_DIR) unless you pass --identity-seed= inside SEED.
+# `make federation` is the batteries-included version of this for local testing.
+REGISTRY_OUT ?= dist-registry
+registry: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
+registry: image
+	@[ -n "$(BIND)" ] || { echo "make registry: BIND is required, e.g."; \
+	  echo "  make registry BIND='--bind=NAME=PEER_ID@ORIGIN'"; \
+	  echo "  (the @ORIGIN half is not optional — arch D10)"; exit 1; }
+	@mkdir -p $(PUBLISH_DATA_DIR)
+	$(call RUN,cargo run --quiet --bin entity-browser -- registry $(REGISTRY_OUT) $(BIND) $(if $(TTL_DAYS),--ttl-days=$(TTL_DAYS),) $(SEED))
+	@echo ""
+	@echo "==> verifying the tree we just emitted (the chain hangs from this root)"
+	$(call RUN,cargo run --quiet --bin entity-browser -- registry $(REGISTRY_OUT) $(SEED) --verify)
 
 # === THE standard "build everything fresh, publish, and serve" command ===
 # One command, ONE origin, to test the whole round-trip end-to-end. It ALWAYS

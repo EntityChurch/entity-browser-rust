@@ -42,6 +42,27 @@
 //! Across a cold start there is no floor, and the bound falls back to the
 //! binding's **TTL**. That is precisely why arch's D3 makes a non-null `ttl` a
 //! MUST and why [`super::registry_publish`] cannot express a null one.
+//!
+//! ## Arch's §4 invariant — we already satisfy it, and it was worth checking
+//!
+//! `ROUTING-2026-08-18-j` §4: *"the absence of a node is never an answer"* — a
+//! node that resolved without the key is `not_found`; a node that did not
+//! resolve is a failed walk. Arch dispositioned our consumer side as *"closes
+//! when the engines land it"*, on the assumption we inherit
+//! `collect_bindings_into`'s tolerant walk. **We do not**, because resolution
+//! here is `trie_get` behind [`SignedSession`]'s pump: a miss inside the walk is
+//! *recorded*, the pump then **fetches** it, and a withheld blob turns that into
+//! [`SignedFetchError::Transport`]. `Absent` is reachable only when the walk
+//! completed with nothing outstanding. Verified rather than argued —
+//! `an_unwalkable_tree_terminates_rather_than_spinning` (mutation-checked) and
+//! `a_withheld_node_can_never_produce_a_resolved_name` (6 blobs on the walk,
+//! each withheld in turn, none became an answer).
+//!
+//! That is what makes the revocation probe **fail closed**: a withheld node on
+//! that path lands in `NameError::Registry`, not in the `Absent` arm that means
+//! "not revoked". The remaining gap is a *fixture* gap, named at
+//! `the_revocation_probe_adds_no_fetches_of_its_own` — we cannot emit a
+//! published-then-withheld revocation, so that exact shape is unproven.
 
 use entity_hash::Hash;
 use entity_registry::data::{normalize_name, BindingData, KIND_PEER_ISSUED};
@@ -94,6 +115,60 @@ impl std::fmt::Display for NameError {
 /// not look alike, so every success carries the evidence that produced it.
 ///
 /// Nothing here is a boolean the caller can set: each field records a check that
+/// **A resolver's own bound on how long it will believe a binding** —
+/// `EXTENSION-REGISTRY` §6a's resolver-side ceiling (1.11, arch `d1584a1`).
+///
+/// A resolver that declares a local maximum MUST treat a binding's effective
+/// lifetime as **`min(binding.ttl, local_max)`**, computed at resolution and
+/// **never written back**: the binding's content hash is unchanged, because this
+/// is a *use* bound and not a re-issue.
+///
+/// **This is the half that protects the consumer, and it is the only half we
+/// can hold.** §6a.3's whole argument is about the party bearing the risk — a
+/// hostile origin withholds a revocation and `ttl` bounds the exposure — so a
+/// ceiling enforced by the *registry* cannot defend anyone against that
+/// registry, which simply issues itself a long one. The split is DNS's: the
+/// authority sets the record's TTL, the **resolver** caps what it will honor,
+/// because the resolver is the one holding stale data.
+///
+/// It bites us specifically. Our `SignedSession` `seq` floor lives for the life
+/// of the session, so across a **cold start** the only bound on a withheld
+/// revocation is the TTL the registry chose (this is the narrowed-not-closed
+/// half of F2). A ceiling here is what shortens that window.
+///
+/// **`None` is the default and is conformant** — §6a makes the ceiling a MAY,
+/// and a MUST only once declared. We ship no number for the reason arch writes
+/// none: there is no defensible constant, and picking one makes every
+/// unconfigured deployment *look* configured. A deployment that wants the
+/// protection states its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResolverPolicy {
+    /// The resolver's ceiling in **milliseconds**, matching `binding.ttl`'s
+    /// unit (`issued_at`/`ttl` are ms — emitting seconds yields a permanently
+    /// expired binding, which reads as a broken registry).
+    pub max_ttl_ms: Option<u64>,
+}
+
+impl ResolverPolicy {
+    /// No ceiling declared. Conformant, and the honest default.
+    pub const fn undeclared() -> Self {
+        Self { max_ttl_ms: None }
+    }
+
+    /// Declare a ceiling. From here on the MUST binds: every resolution clamps.
+    pub const fn with_max_ttl_ms(ms: u64) -> Self {
+        Self { max_ttl_ms: Some(ms) }
+    }
+
+    /// `min(ttl, local_max)`. The whole rule.
+    pub fn effective_ttl_ms(&self, binding_ttl_ms: u64) -> u64 {
+        match self.max_ttl_ms {
+            Some(cap) => binding_ttl_ms.min(cap),
+            None => binding_ttl_ms,
+        }
+    }
+}
+
 /// actually ran on this resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameEvidence {
@@ -111,8 +186,24 @@ pub struct NameEvidence {
     /// The §6a.6 by-target revocation key was probed **inside the signed tree**.
     pub revocation_checked: bool,
     /// When this binding stops being believable — the bound on a withheld
-    /// revocation, and the reason a null TTL is refused.
+    /// revocation, and the reason a null TTL is refused. **Already clamped** by
+    /// [`ResolverPolicy`], so a surface that displays this is showing what this
+    /// resolver will actually honor.
     pub expires_at_ms: u64,
+    /// The TTL the registry **issued**, before any local ceiling. Kept beside
+    /// the clamped answer so a surface can say *why* an expiry is sooner than
+    /// the registry said, and so "we clamped" is never inferred from a
+    /// subtraction.
+    pub issued_ttl_ms: u64,
+    /// The lifetime this resolver will actually honor: `min(issued, local_max)`.
+    pub effective_ttl_ms: u64,
+}
+
+impl NameEvidence {
+    /// Whether this resolver's own ceiling shortened the registry's TTL.
+    pub fn ttl_was_clamped(&self) -> bool {
+        self.effective_ttl_ms < self.issued_ttl_ms
+    }
 }
 
 /// A name, resolved.
@@ -128,6 +219,11 @@ pub struct NamedTarget {
     /// and the origin has to come from `entity-deployment.json` or a
     /// registration it already holds. With `Some`, one pinned registry is enough
     /// to reach a domain nothing configured.
+    ///
+    /// `None` covers **two** cases the caller must not conflate in its wording:
+    /// no `http-poll` profile at all, and a profile whose layout this client
+    /// cannot consume ([`http_poll_origin`]'s known limit). Both mean "no
+    /// fetchable origin"; neither means the binding is invalid.
     pub origin: Option<String>,
     pub evidence: NameEvidence,
 }
@@ -138,11 +234,17 @@ pub struct NamedTarget {
 /// across resolutions for the `seq` floor and the cache (see its docs).
 /// `now_ms` is passed in rather than read so a caller can be deterministic and
 /// so this compiles identically on wasm, where the clock is a different API.
+/// `policy` is this resolver's own ceiling ([`ResolverPolicy`]). It is a
+/// required argument rather than an optional one deliberately: it is the half
+/// of §6a's TTL bound that protects the *consumer*, and an overload that
+/// silently skips it is how one half of a gate ends up unreachable from the
+/// surface that needed it.
 pub async fn resolve_name<S: BinSource + ?Sized>(
     src: &S,
     registry: &SignedSession,
     name: &str,
     now_ms: u64,
+    policy: &ResolverPolicy,
 ) -> Result<NamedTarget, NameError> {
     let registry_id = registry.pin().peer_id.clone();
     // Same normalization the resolver uses, from the same function — see
@@ -172,7 +274,11 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
 
     // D3 — a null TTL is refused rather than treated as "never expires".
     let ttl = binding.ttl.ok_or(NameError::NoTtl)?;
-    let expires_at_ms = binding.issued_at.saturating_add(ttl);
+    // §6a resolver-side ceiling: min(binding.ttl, local_max), computed HERE and
+    // never written back — `binding_hash` below is the hash of the binding as
+    // published, because this is a use bound, not a re-issue.
+    let effective_ttl = policy.effective_ttl_ms(ttl);
+    let expires_at_ms = binding.issued_at.saturating_add(effective_ttl);
     if expires_at_ms <= now_ms {
         return Err(NameError::Expired { expired_at_ms: expires_at_ms });
     }
@@ -189,7 +295,7 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
 
     Ok(NamedTarget {
         name: norm,
-        origin: http_poll_origin(&binding.transports),
+        origin: http_poll_origin(&binding.transports, &binding.target_peer_id),
         peer_id: binding.target_peer_id,
         evidence: NameEvidence {
             registry_peer_id: registry_id,
@@ -197,6 +303,8 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
             association_committed: true,
             name_checked: true,
             revocation_checked: true,
+            issued_ttl_ms: ttl,
+            effective_ttl_ms: effective_ttl,
             expires_at_ms,
         },
     })
@@ -208,8 +316,31 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
 /// the trailing `/{peer_id}` our layout puts there — the profile describes URL
 /// prefixes while [`PinnedPublisher`] wants the origin they were built from.
 ///
+/// ## The strip is CONDITIONAL, and that is the whole point
+///
+/// It fires only when the last path segment is exactly `target_peer_id`. An
+/// unconditional `rsplit_once('/')` — what this did until audit F6 — turns a
+/// perfectly legal `tree_url_prefix: "https://x.example"` into **`"https:/"`**,
+/// and hop 2 then fails as a transport error that reads as *"the origin is
+/// down"*. Returning `None` sends the caller down the already-correct
+/// "resolved WHO but not WHERE" path instead of fetching from a mangled URL.
+///
+/// ## Known limit, recorded rather than guessed at
+///
+/// We are consuming a profile that states its layout in full —
+/// `content_url_prefix`, `manifest_url_prefix`, `tree_leaf_suffix`,
+/// `content_layout` — and then **ignoring all of it** to re-derive our own
+/// (`PinnedPublisher::manifest_url`). That round-trips because we publish and
+/// consume both ends; it means a publisher who is *not us* is unconsumable even
+/// when their profile told us everything we needed, and a split origin (immutable
+/// `content/` on a CDN, mutable root elsewhere — exactly what
+/// `RUNBOOK-CDN-BROWSER-DEPLOYMENT` §3 wants) is expressible in the profile and
+/// inexpressible here. Honouring the endpoint properly means
+/// [`PinnedPublisher`] carrying the endpoint instead of an origin string, which
+/// is a trust-chain refactor and deliberately not this cleanup.
+///
 /// [`PinnedPublisher`]: super::signed_fetch::PinnedPublisher
-fn http_poll_origin(transports: &[entity_ecf::Value]) -> Option<String> {
+fn http_poll_origin(transports: &[entity_ecf::Value], target_peer_id: &str) -> Option<String> {
     for t in transports {
         let Some(map) = t.as_map() else { continue };
         let get = |k: &str| {
@@ -226,12 +357,18 @@ fn http_poll_origin(transports: &[entity_ecf::Value]) -> Option<String> {
             entity_ecf::Value::Text(s) if s == "tree_url_prefix" => mv.as_text(),
             _ => None,
         })?;
-        // `{origin}/{peer_id}` → `{origin}`. Splitting on the LAST separator so
-        // an origin that itself contains path segments survives.
-        return Some(match tree_prefix.rsplit_once('/') {
-            Some((origin, _peer)) => origin.to_string(),
-            None => tree_prefix.to_string(),
-        });
+        // `{origin}/{peer_id}` → `{origin}`, and ONLY that shape. Splitting on
+        // the last separator so an origin that itself carries path segments
+        // survives — but the segment we drop has to be the peer we are about to
+        // pin, or we are not looking at a layout this client can fetch.
+        return match tree_prefix.rsplit_once('/') {
+            Some((origin, peer)) if peer == target_peer_id && !origin.is_empty() => {
+                Some(origin.to_string())
+            }
+            // A legal profile in a layout we cannot consume. See the fn docs:
+            // mangling it into `https:/` was audit F6.
+            _ => None,
+        };
     }
     None
 }
@@ -252,12 +389,34 @@ fn rel(peer_id: &str, absolute: &str) -> String {
 /// `sites.list`. Returns the names as offered; **every one of them still has to
 /// be resolved** through [`resolve_name`] before it means anything.
 ///
-/// **This list is not authoritative and cannot be made so.** A signed root
-/// answers *"what is at this key"* and never *"what keys exist"* — the HAMT walk
-/// has no enumeration — so nothing commits to the list being complete. A hostile
-/// origin can hide a name (invisible either way; no mechanism promises
-/// completeness) or invent one (it fails to resolve). Treat it as a menu, never
-/// as an inventory.
+/// **This list is not authoritative — but not for the reason this doc used to
+/// give.** It claimed a signed root cannot answer *"what keys exist"*. That is
+/// **false and was refuted by arch** (`1782d6d`): `EXTENSION-TREE` §3.1's leaf is
+/// `[key, value_hash]`, so the keys are *in* the nodes, and upstream
+/// `entity_tree::trie::collect_all_bindings` recovers the whole reachable key set
+/// — see [`super::registry_publish`]'s tests, which do exactly that. Publish at
+/// `system/registry/binding/by-name/` and the trie's key set **is** the name set.
+///
+/// Two real reasons it is still a menu rather than an inventory:
+///
+/// 1. **This reader has no trie decoder.** `collect_all_bindings` is a native
+///    `ContentStore` walk; the browser side ([`SignedSession`]) resolves *keys*
+///    and never decodes node structure. Enumerating from the signed root here is
+///    buildable, not built.
+/// 2. **Even the signed walk is silently short.** `collect_bindings_into` skips a
+///    missing `Entry::Link` with a bare `if let Some(..)` and returns a
+///    `BTreeMap`, not a `Result` — so an origin withholding one interior node
+///    hides names with no error and a root hash that still verifies (measured:
+///    1 of 24, `withholding_a_trie_node_shortens_the_walk_silently`). Arch's D9
+///    says a walk MUST NOT be shortened without failing; the detection half is
+///    upstream and not landed.
+///
+/// So: a hostile origin can hide a name (invisible on **either** path today) or
+/// invent one (it fails to resolve). **Every name here must still go through
+/// [`resolve_name`] before it means anything**, and any surface built on this
+/// must treat an unresolvable entry as a failure, never as the end of a branch.
+///
+/// [`SignedSession`]: super::signed_fetch::SignedSession
 pub async fn list_names<S: BinSource + ?Sized>(
     src: &S,
     registry: &super::signed_fetch::PinnedPublisher,
@@ -334,7 +493,7 @@ mod tests {
             self.fetched.borrow_mut().push(url.clone());
             let rel = url.trim_start_matches('/');
             let r = std::fs::read(self.root.join(rel))
-                .map_err(|e| PollError::Decode(format!("read {rel}: {e}")));
+                .map_err(|e| crate::content_site::http_poll::poll_error_for_io(rel, &e));
             Box::pin(std::future::ready(r))
         }
     }
@@ -432,7 +591,7 @@ mod tests {
             .expect("a canonical peer-id yields its own pin");
         let registry = SignedSession::new(reg_pin);
 
-        let target = block_on(resolve_name(web, &registry, name, now_ms()))?;
+        let target = block_on(resolve_name(web, &registry, name, now_ms(), &ResolverPolicy::undeclared()))?;
 
         // Hop 2 pins the DOMAIN by the peer-id the registry named, at the origin
         // the registry ALSO named. Nothing here consults the registry again, and
@@ -558,7 +717,7 @@ mod tests {
         let reg_pin = PinnedPublisher::from_peer_id("registry", &registry_id).unwrap();
         let registry = SignedSession::new(reg_pin);
         for (name, slug, _) in DOMAINS {
-            let t = block_on(resolve_name(&web, &registry, name, now_ms())).unwrap();
+            let t = block_on(resolve_name(&web, &registry, name, now_ms(), &ResolverPolicy::undeclared())).unwrap();
             assert_eq!(
                 t.origin.as_deref(),
                 Some(*slug),
@@ -611,7 +770,293 @@ mod tests {
     /// "no transport published" from "the origin is empty".
     #[test]
     fn a_binding_with_no_transports_yields_no_origin_rather_than_a_guess() {
-        assert_eq!(super::http_poll_origin(&[]), None);
+        assert_eq!(super::http_poll_origin(&[], "2PEERTARGET"), None);
+    }
+
+    /// **F6 — the strip must be conditional, and a mangled origin is worse than
+    /// none.**
+    ///
+    /// `http_poll_origin` recovers an origin by dropping the trailing
+    /// `/{peer_id}` *our* emitter appends. Until this test it did that with an
+    /// unconditional `rsplit_once('/')`, so a perfectly legal
+    /// `tree_url_prefix: "https://x.example"` — a publisher who is not us —
+    /// became **`"https:/"`**. Hop 2 then fetched from a non-URL and failed as a
+    /// transport error, which reads as *"the origin is down"* rather than *"we
+    /// cannot consume this layout"*.
+    ///
+    /// Three shapes, and the middle one is the regression:
+    /// our layout strips; a prefix whose last segment is not the target peer is
+    /// refused; a peer-id appearing at a different position does not count.
+    ///
+    /// Mutation check: restore the unconditional split and case 2 yields
+    /// `Some("https:/")`, failing here.
+    #[test]
+    fn an_http_poll_prefix_we_cannot_consume_yields_none_rather_than_a_mangled_origin() {
+        use crate::content_site::registry_publish::http_poll_profile;
+        let peer = "2PEERTARGET";
+
+        // 1. Our own layout — `{origin}/{peer_id}` — strips cleanly, including
+        //    an origin that itself carries path segments.
+        assert_eq!(
+            super::http_poll_origin(&[http_poll_profile(peer, "https://x.example")], peer),
+            Some("https://x.example".to_string())
+        );
+        assert_eq!(
+            super::http_poll_origin(&[http_poll_profile(peer, "https://x.example/base")], peer),
+            Some("https://x.example/base".to_string())
+        );
+
+        // 2. **The regression.** A profile with no peer segment at all. Legal,
+        //    and unconsumable by this client — which must say so by returning
+        //    `None`, not by inventing `https:/`.
+        let bare = hand_rolled_profile(peer, "https://x.example");
+        assert_eq!(
+            super::http_poll_origin(&[bare], peer),
+            None,
+            "a prefix that does not end in /{{peer-id}} must be refused, not truncated"
+        );
+
+        // 3. A prefix ending in some OTHER peer's id is equally unconsumable —
+        //    the segment we drop has to be the peer we are about to pin.
+        let wrong = hand_rolled_profile(peer, "https://x.example/2SOMEONEELSE");
+        assert_eq!(super::http_poll_origin(&[wrong], peer), None);
+    }
+
+    /// **Arch's §4 invariant, on the path where it is a security property.**
+    ///
+    /// `ROUTING-2026-08-18-j` §4: *"the absence of a node is never an answer"* —
+    /// a node that resolved and did not hold the key is `not_found`; a node that
+    /// did not resolve is a failed walk. §6a.6's revocation lookup is that
+    /// distinction **at leaf depth**, and it is the one place where getting it
+    /// wrong is not a diagnostic complaint: [`resolve_name`] reads
+    /// `SignedFetchError::Absent` on the revocation key as **"not revoked"**. If a
+    /// withheld node could produce `Absent`, a hostile origin would suppress a
+    /// revocation by *deleting a file*, and we would hand back a `NamedTarget`
+    /// whose evidence says `revocation_checked: true`.
+    ///
+    /// It cannot, and this is why: a miss inside the walk is recorded by
+    /// `PumpFetcher`, the pump then **fetches** it, and a withheld blob makes that
+    /// fetch fail → `Transport` → [`NameError::Registry`]. `Absent` is reachable
+    /// only when the walk completed with **nothing outstanding** — every node on
+    /// the path resolved, and none held the key.
+    ///
+    /// So the answer is fail-closed, and the name does not resolve at all.
+    ///
+    /// Mutation check: make the pump's content fetch treat a 404 as `Absent`
+    /// instead of `Transport` and this test fails with a resolved name whose
+    /// evidence claims the revocation was checked.
+    #[test]
+    fn a_withheld_node_can_never_produce_a_resolved_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (registry_id, _map) = stand_up(dir.path());
+        let web = LocalWeb::new(dir.path());
+
+        // Control: the intact registry resolves, and reports the revocation as
+        // checked. Without this the assertion below could pass on a fixture that
+        // never resolved anything.
+        let (ok, _) = visit(&web, &registry_id, "entitychurch.org", "foundation")
+            .expect("the intact chain resolves");
+        assert!(ok.evidence.revocation_checked, "precondition: the probe ran");
+
+        // **Withhold exactly the files this walk READ, one at a time.** The
+        // candidate set is the control run's own fetch log, which is the precise
+        // definition of "on the path": a registry carries four bindings, so most
+        // of its blobs belong to names we are not resolving and withholding one
+        // of those correctly changes nothing. (Measured — the first version of
+        // this test swept every blob under `registry/content` and failed on a
+        // body for a different name, which is the fixture being wrong, not the
+        // code.) Under hash-keyed routing there is no stable referent for "the
+        // node covering this key", so the fetch log is the only honest selector.
+        let read: Vec<String> = web
+            .fetched
+            .borrow()
+            .iter()
+            .filter(|u| u.contains("/content/"))
+            .cloned()
+            .collect::<std::collections::BTreeSet<String>>()
+            .into_iter()
+            .collect();
+        assert!(read.len() > 2, "precondition: the walk reads several blobs, got {}", read.len());
+
+        for url in &read {
+            let path = dir.path().join(url.trim_start_matches('/'));
+            let saved = std::fs::read(&path).expect("read blob");
+            std::fs::remove_file(&path).expect("withhold it");
+
+            let probe = LocalWeb::new(dir.path());
+            let got = visit(&probe, &registry_id, "entitychurch.org", "foundation");
+            std::fs::write(&path, &saved).expect("restore");
+
+            match got {
+                Err(_) => {}
+                Ok((t, _)) => panic!(
+                    "withholding {url} — a blob this walk READS — still produced a RESOLVED \
+                     name (revocation_checked={}). A hostile origin can suppress a revocation \
+                     by deleting one file.",
+                    t.evidence.revocation_checked
+                ),
+            }
+        }
+
+        // The chain is intact again — so the loop measured withholding, not
+        // accumulated damage.
+        let after = LocalWeb::new(dir.path());
+        visit(&after, &registry_id, "entitychurch.org", "foundation")
+            .expect("restoring every blob restores the chain");
+        println!(
+            "§4 invariant: {} blobs on the walk, each withheld in turn; every one failed the \
+             walk and none became an answer",
+            read.len()
+        );
+    }
+
+    /// **Why the revocation probe cannot be selectively starved — measured.**
+    ///
+    /// The composed test above survives a mutation that turns a withheld blob
+    /// into `Absent`, which looked at first like a weak gate. It is not: it is a
+    /// structural fact worth pinning, because the whole fail-closed argument for
+    /// §6a.6 rests on it.
+    ///
+    /// Within one [`SignedSession`] the by-name walk and the revocation probe
+    /// share a content cache, and the by-target key sits under trie nodes the
+    /// by-name walk has already fetched. Measured fetch sequence for one full
+    /// `resolve_name`: manifest, signature, **3 content blobs**, manifest again
+    /// (it is mutable, so re-read) — and then **nothing**. The probe adds zero
+    /// content fetches.
+    ///
+    /// So a hostile origin has no blob it can withhold that starves *only* the
+    /// revocation probe: every blob the probe needs, hop 1 needed first, and hop
+    /// 1 fails closed before any "not revoked" conclusion is reached.
+    ///
+    /// **The case this does NOT cover, stated plainly:** a registry that has
+    /// *published* a revocation puts the by-target leaf in its own blob, fetched
+    /// only by the probe — and withholding **that** is exactly F2. We cannot
+    /// build the fixture, because [`super::registry_publish::emit_registry`]
+    /// emits bindings and has no way to emit a revocation. That is a fixture
+    /// gap on the security-critical path, not a proven property. Do not read
+    /// **§6a's resolver-side ceiling: `min(binding.ttl, local_max)`, and it is
+    /// a USE bound — never a re-issue.** `EXTENSION-REGISTRY` 1.11 (arch
+    /// `d1584a1`) makes this the half that protects the consumer, because a
+    /// ceiling the registry enforces cannot defend anyone against *that*
+    /// registry — it simply issues itself a long one.
+    ///
+    /// Three properties, and the third is the one that would rot quietly:
+    /// the clamp applies, an undeclared ceiling changes nothing, and the
+    /// **binding's content hash is identical either way**. If a future refactor
+    /// ever "helpfully" rewrote the binding to carry the clamped TTL, the
+    /// content address would move and every signature over it would stop
+    /// verifying — so this asserts the artifact was left alone, not merely that
+    /// the arithmetic was right.
+    #[test]
+    fn a_local_ceiling_clamps_the_lifetime_without_rewriting_the_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry_id, _expected) = stand_up(root.path());
+        let web = LocalWeb::new(root.path());
+        let registry =
+            SignedSession::new(PinnedPublisher::from_peer_id("registry", &registry_id).unwrap());
+        let name = "docs.entitychurch.org";
+
+        // No ceiling: we honor exactly what the registry issued.
+        let open = block_on(resolve_name(
+            &web,
+            &registry,
+            name,
+            now_ms(),
+            &ResolverPolicy::undeclared(),
+        ))
+        .expect("resolves with no ceiling");
+        let issued = open.evidence.issued_ttl_ms;
+        assert!(issued > 0, "precondition: the fixture issues a real ttl");
+        assert_eq!(open.evidence.effective_ttl_ms, issued, "nothing to clamp");
+        assert!(!open.evidence.ttl_was_clamped());
+
+        // A ceiling BELOW the issued ttl: we honor ours, and the expiry moves in.
+        let cap = issued / 2;
+        assert!(cap > 0, "precondition: the fixture ttl is divisible enough to halve");
+        let capped = block_on(resolve_name(
+            &web,
+            &registry,
+            name,
+            now_ms(),
+            &ResolverPolicy::with_max_ttl_ms(cap),
+        ))
+        .expect("resolves with a ceiling");
+        assert_eq!(capped.evidence.effective_ttl_ms, cap, "min(issued, local_max)");
+        assert_eq!(capped.evidence.issued_ttl_ms, issued, "what the registry said is preserved");
+        assert!(capped.evidence.ttl_was_clamped());
+        assert!(
+            capped.evidence.expires_at_ms < open.evidence.expires_at_ms,
+            "a ceiling must shorten the window, not just be recorded"
+        );
+
+        // A ceiling ABOVE it does NOT extend: the rule is a minimum, and a
+        // resolver cannot grant a binding more life than its issuer did.
+        let generous = block_on(resolve_name(
+            &web,
+            &registry,
+            name,
+            now_ms(),
+            &ResolverPolicy::with_max_ttl_ms(issued.saturating_mul(10)),
+        ))
+        .expect("resolves");
+        assert_eq!(generous.evidence.effective_ttl_ms, issued, "a ceiling never extends");
+
+        // THE USE-BOUND PROPERTY: same binding, same content address, whatever
+        // this resolver decided to honor.
+        assert_eq!(
+            open.evidence.binding_hash, capped.evidence.binding_hash,
+            "the clamp must not rewrite the binding — this is a use bound, not a re-issue"
+        );
+        assert_eq!(open.peer_id, capped.peer_id, "and it resolves to the same peer");
+    }
+
+    /// this test as covering it.
+    #[test]
+    fn the_revocation_probe_adds_no_fetches_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let (registry_id, _map) = stand_up(dir.path());
+        let web = LocalWeb::new(dir.path());
+        let pin = PinnedPublisher::from_peer_id("registry", &registry_id).unwrap();
+        let session = SignedSession::new(pin);
+
+        let target = block_on(resolve_name(&web, &session, "entitychurch.org", now_ms(), &ResolverPolicy::undeclared()))
+            .expect("resolves");
+        assert!(target.evidence.revocation_checked);
+        let after_resolve = content_fetches(&web);
+
+        // Probe the same revocation key again on the same session. If it needed
+        // any blob of its own, this would fetch it.
+        let rev_key = rel(
+            &registry_id,
+            &revocation_by_target_path(&registry_id, &target.evidence.binding_hash),
+        );
+        let got = block_on(session.resolve(&web, &rev_key));
+        assert_eq!(got.err(), Some(SignedFetchError::Absent), "nothing is revoked here");
+        assert_eq!(
+            content_fetches(&web),
+            after_resolve,
+            "the revocation probe must add no content fetches — if it does, there is a blob a \
+             hostile origin can withhold that starves ONLY the probe, and the fail-closed \
+             argument for §6a.6 no longer follows from hop 1 failing first"
+        );
+    }
+
+    /// Content-blob fetches so far (the manifest is mutable and re-read by
+    /// design, so it is excluded).
+    fn content_fetches(web: &LocalWeb) -> usize {
+        web.fetched.borrow().iter().filter(|u| u.contains("/content/")).count()
+    }
+
+    /// An `http-poll` profile with a caller-chosen `tree_url_prefix` — what a
+    /// publisher who is not our emitter may legitimately publish.
+    fn hand_rolled_profile(peer_id: &str, tree_url_prefix: &str) -> entity_ecf::Value {
+        entity_ecf::cbor_map! {
+            "peer_id" => entity_ecf::Value::Text(peer_id.to_string()),
+            "transport_type" => entity_ecf::Value::Text("http-poll".into()),
+            "endpoint" => entity_ecf::cbor_map! {
+                "tree_url_prefix" => entity_ecf::Value::Text(tree_url_prefix.to_string()),
+            },
+        }
     }
 
     /// **What the origin actually learns when you resolve a name through it.**
@@ -639,7 +1084,7 @@ mod tests {
             SignedSession::new(PinnedPublisher::from_peer_id("registry", &registry_id).unwrap());
 
         let name = "docs.entitychurch.org";
-        let t = block_on(resolve_name(&web, &registry, name, now_ms())).unwrap();
+        let t = block_on(resolve_name(&web, &registry, name, now_ms(), &ResolverPolicy::undeclared())).unwrap();
         assert_eq!(t.peer_id, expected[name], "precondition: the resolve succeeded");
 
         let urls = web.fetched.borrow().clone();
@@ -677,7 +1122,7 @@ mod tests {
             SignedSession::new(PinnedPublisher::from_peer_id("registry", &registry_id).unwrap());
 
         let private = "payroll.internal.example";
-        let got = block_on(resolve_name(&web, &registry, private, now_ms()));
+        let got = block_on(resolve_name(&web, &registry, private, now_ms(), &ResolverPolicy::undeclared()));
         assert!(got.is_err(), "a name the registry does not carry must not resolve");
 
         let urls = web.fetched.borrow().clone();
@@ -711,7 +1156,7 @@ mod tests {
         // through the signed root, which is the only thing that means anything.
         let registry = SignedSession::new(reg_pin);
         for name in &listed {
-            let t = block_on(resolve_name(&web, &registry, name, now_ms()))
+            let t = block_on(resolve_name(&web, &registry, name, now_ms(), &ResolverPolicy::undeclared()))
                 .unwrap_or_else(|e| panic!("{name} listed but does not resolve: {e}"));
             assert_eq!(&t.peer_id, expected.get(name).unwrap());
         }
@@ -739,7 +1184,7 @@ mod tests {
         assert!(listed.contains(&"evil.example".to_string()), "the host really did inject it");
 
         let registry = SignedSession::new(reg_pin);
-        let got = block_on(resolve_name(&web, &registry, "evil.example", now_ms()));
+        let got = block_on(resolve_name(&web, &registry, "evil.example", now_ms(), &ResolverPolicy::undeclared()));
         assert!(matches!(got, Err(NameError::NotBound)), "got {got:?}");
     }
 
@@ -883,6 +1328,11 @@ mod tests {
                     self.statuses.borrow_mut().push(status);
                     if status == 200 {
                         Ok(body)
+                    } else if status == 404 || status == 410 {
+                        // Same line the browser fetcher draws — the origin
+                        // answered "absent", which over a real socket is what
+                        // a withheld blob looks like.
+                        Err(PollError::NotFound(status))
                     } else {
                         Err(PollError::Decode(format!("HTTP {status} for {rest}")))
                     }
@@ -945,7 +1395,7 @@ mod tests {
 
         for (name, slug, _) in DOMAINS {
             // Hop 1 — the name, through the registry's signed root.
-            let target = block_on(resolve_name(&web, &registry, name, now_ms()))
+            let target = block_on(resolve_name(&web, &registry, name, now_ms(), &ResolverPolicy::undeclared()))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(&target.peer_id, &expected[*name], "{name} resolved to the wrong peer");
             let origin = target.origin.clone().unwrap_or_else(|| panic!("{name} published no origin"));

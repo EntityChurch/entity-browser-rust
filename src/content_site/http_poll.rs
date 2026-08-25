@@ -74,6 +74,23 @@ pub enum PollError {
     /// The fetched content did **not** hash to the address we asked for —
     /// a corrupt or lying origin. The content-network auth gate.
     HashMismatch,
+    /// The origin **answered**, and the answer was "that is not here" — HTTP
+    /// 404/410, or a filesystem source with no such file.
+    ///
+    /// Distinct from every other failure in this enum because it is the one an
+    /// origin *chooses*. Fetching a hash that a signed root **declares** and
+    /// getting this back is the origin failing to produce its own committed
+    /// closure — `tree/incomplete-walk`, which `EXTENSION-TREE` §3.3a rules
+    /// **terminal** (arch `ROUTING-2026-08-18-l` §5). A 5xx or a dropped
+    /// connection is not this: it is retryable, and collapsing the two is how
+    /// "withheld" and "unreachable" arrive as the same value.
+    ///
+    /// **Only 404/410 map here, deliberately.** A 403 or a 5xx on a declared
+    /// blob may well be a misconfigured CDN that will serve it next minute;
+    /// calling those terminal would turn a transient origin fault into a
+    /// permanent resolution failure. The conservative line is "the origin said
+    /// it is absent", and nothing weaker.
+    NotFound(u16),
 }
 
 impl std::fmt::Display for PollError {
@@ -85,7 +102,23 @@ impl std::fmt::Display for PollError {
             PollError::HashMismatch => {
                 write!(f, "content did not hash to its address (integrity check failed)")
             }
+            PollError::NotFound(status) => write!(f, "origin served no such entity (HTTP {status})"),
         }
+    }
+}
+
+/// Map a filesystem read error onto the same distinction an HTTP origin draws.
+///
+/// A file that is not there is a withheld blob; anything else (permissions, a
+/// short read) is a transport fault. Shared by every filesystem-backed
+/// [`BinSource`] so a fixture cannot accidentally report a withholding as a
+/// retryable failure — which is precisely the confusion the gates exist to
+/// catch.
+pub fn poll_error_for_io(what: &str, e: &std::io::Error) -> PollError {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        PollError::NotFound(404)
+    } else {
+        PollError::Decode(format!("read {what}: {e}"))
     }
 }
 
@@ -330,7 +363,13 @@ async fn fetch_bytes(url: &str, freshness: Freshness) -> Result<Vec<u8>, PollErr
     let resp: web_sys::Response =
         resp_val.dyn_into().map_err(|_| PollError::Decode("not a Response".into()))?;
     if !resp.ok() {
-        return Err(PollError::Decode(format!("HTTP {} for {url}", resp.status())));
+        let status = resp.status();
+        // 404/410 is the origin *answering* that the entity is absent. Every
+        // other non-ok status stays retryable — see `PollError::NotFound`.
+        if status == 404 || status == 410 {
+            return Err(PollError::NotFound(status));
+        }
+        return Err(PollError::Decode(format!("HTTP {status} for {url}")));
     }
     let buf_promise =
         resp.array_buffer().map_err(|e| PollError::Decode(format!("array_buffer: {e:?}")))?;

@@ -302,7 +302,7 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PollError>>>> {
             let rel = url.strip_prefix(&self.origin).unwrap_or(&url).trim_start_matches('/');
             let path = self.root.join(rel);
-            let r = fs::read(&path).map_err(|e| PollError::Decode(format!("read {rel}: {e}")));
+            let r = fs::read(&path).map_err(|e| crate::content_site::http_poll::poll_error_for_io(rel, &e));
             Box::pin(std::future::ready(r))
         }
     }

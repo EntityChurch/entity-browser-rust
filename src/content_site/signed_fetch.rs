@@ -67,7 +67,7 @@ use entity_entity::Entity;
 use entity_hash::Hash;
 use entity_peer::published_root::{ContentFetcher, PublishedRootClient, PublishedRootError};
 
-use super::http_poll::{content_url, crack_pointer, BinSource, Freshness};
+use super::http_poll::{content_url, crack_pointer, BinSource, Freshness, PollError};
 use super::paths::PUBLISHED_ROOT_REL;
 
 /// How many pump rounds before we give up. The walk is HAMT-depth deep and the
@@ -145,6 +145,28 @@ pub enum SignedFetchError {
     /// The key is genuinely not in the signed tree. Not a failure of the
     /// origin; a fabricated binding cannot appear here, which is the point.
     Absent,
+    /// The origin did not produce a blob **its own signed root declares** —
+    /// `tree/incomplete-walk`. **Terminal**, per `EXTENSION-TREE` §3.3a as
+    /// ruled in arch `ROUTING-2026-08-18-l` §5: an origin failing to serve its
+    /// committed closure is not a transient fault, and retrying grants a
+    /// hostile origin unbounded attempts to be believed while turning a
+    /// withholding into a hang.
+    ///
+    /// **This is the discriminator [`Transport`] used to swallow.** A withheld
+    /// blob and an unreachable origin both arrived as `Transport`, which is the
+    /// fourth appearance in this arc of *"absent" and "withheld" reaching the
+    /// caller as the same value* (B14's `Ok(None)`; `--verify` over an
+    /// incomplete closure; the structural fix for that one). The signal exists
+    /// at the fetcher — an origin that answers 404 has *chosen* — and it was
+    /// simply being discarded one layer down.
+    ///
+    /// **Not reachable from the manifest fetch, deliberately.** Incompleteness
+    /// is only definable against a root you already hold; a 404 on the manifest
+    /// means this origin serves no published root for this publisher at all,
+    /// which is an unreachable publisher, not a short walk.
+    ///
+    /// [`Transport`]: Self::Transport
+    IncompleteWalk(String),
     /// The pump did not converge. A structural bug or a pathological tree —
     /// reported rather than spun on.
     Budget,
@@ -156,6 +178,9 @@ impl std::fmt::Display for SignedFetchError {
             Self::Transport(e) => write!(f, "transport: {e}"),
             Self::Verify(e) => write!(f, "verification failed: {e}"),
             Self::Absent => write!(f, "not in the signed tree"),
+            Self::IncompleteWalk(e) => {
+                write!(f, "the origin withheld an entity its signed root declares: {e}")
+            }
             Self::Budget => write!(f, "the walk did not converge"),
         }
     }
@@ -306,10 +331,15 @@ impl SignedSession {
                 }
             }
             for want in content_wanted {
+                // `want` came out of the miss log, which means a trie node the
+                // signed root commits to NAMED this hash. So a 404 here is the
+                // origin refusing its own committed closure — terminal — while
+                // a 5xx or a dead socket is not. See
+                // `SignedFetchError::IncompleteWalk`.
                 let bytes = src
                     .get(content_url(&self.pin.origin, &want), Freshness::Immutable)
                     .await
-                    .map_err(|e| SignedFetchError::Transport(format!("{}: {e}", want.to_hex())))?;
+                    .map_err(|e| declared_fetch_error(&want.to_hex(), e))?;
                 if let Ok(mut c) = self.state.content.lock() {
                     c.insert(want, bytes);
                 }
@@ -341,14 +371,28 @@ async fn fetch_signature<S: BinSource + ?Sized>(
     let ptr = src
         .get(pin.signature_pointer_url(target), Freshness::Immutable)
         .await
-        .map_err(|e| SignedFetchError::Transport(format!("signature pointer: {e}")))?;
+        .map_err(|e| declared_fetch_error("signature pointer", e))?;
     // A malformed pointer is the ORIGIN's failure to serve a chain, not a
     // transport hiccup — retrying it would spin.
     let hash = crack_pointer(&ptr)
         .map_err(|e| SignedFetchError::Verify(format!("signature pointer: {e}")))?;
     src.get(content_url(&pin.origin, &hash), Freshness::Immutable)
         .await
-        .map_err(|e| SignedFetchError::Transport(format!("signature body: {e}")))
+        .map_err(|e| declared_fetch_error("signature body", e))
+}
+
+/// Classify a fetch failure for an entity the signed root **declares**.
+///
+/// The one place the terminal/retryable split is decided, so a new call site
+/// cannot re-collapse it by reaching for `Transport` out of habit. Only reach
+/// for this where the hash or path came from inside the committed chain — for
+/// anything the root has not named yet (the manifest), a failure is plain
+/// transport.
+fn declared_fetch_error(what: &str, e: PollError) -> SignedFetchError {
+    match e {
+        PollError::NotFound(_) => SignedFetchError::IncompleteWalk(format!("{what}: {e}")),
+        _ => SignedFetchError::Transport(format!("{what}: {e}")),
+    }
 }
 
 fn drain(set: &Arc<Mutex<BTreeSet<Hash>>>) -> Vec<Hash> {
@@ -387,6 +431,10 @@ mod tests {
         fetched: RefCell<Vec<String>>,
         /// URLs to answer with the bytes of a DIFFERENT (validly authored) blob.
         substitute: RefCell<BTreeMap<String, Vec<u8>>>,
+        /// Substrings whose URLs fail as a **transport fault** rather than a
+        /// 404 — a 5xx or a dead socket. The origin never says "absent", so a
+        /// blob that is genuinely present is simply unreachable this attempt.
+        unreachable: RefCell<Vec<String>>,
     }
 
     impl DirSource {
@@ -395,7 +443,13 @@ mod tests {
                 root: root.to_path_buf(),
                 fetched: RefCell::new(Vec::new()),
                 substitute: RefCell::new(BTreeMap::new()),
+                unreachable: RefCell::new(Vec::new()),
             }
+        }
+        /// Make every URL containing `needle` fail the way an overloaded origin
+        /// fails: an answer that is not "absent".
+        fn make_unreachable(&self, needle: &str) {
+            self.unreachable.borrow_mut().push(needle.to_string());
         }
         fn count(&self) -> usize {
             self.fetched.borrow().len()
@@ -412,9 +466,14 @@ mod tests {
             if let Some(bytes) = self.substitute.borrow().get(&url) {
                 return Box::pin(std::future::ready(Ok(bytes.clone())));
             }
+            if self.unreachable.borrow().iter().any(|n| url.contains(n.as_str())) {
+                return Box::pin(std::future::ready(Err(PollError::Decode(
+                    "HTTP 503 (origin unreachable)".into(),
+                ))));
+            }
             let rel = url.trim_start_matches('/');
             let r = std::fs::read(self.root.join(rel))
-                .map_err(|e| PollError::Decode(format!("read {rel}: {e}")));
+                .map_err(|e| crate::content_site::http_poll::poll_error_for_io(rel, &e));
             Box::pin(std::future::ready(r))
         }
     }
@@ -541,7 +600,15 @@ mod tests {
     /// client would see `SignatureMissing` — terminal — on the very first round,
     /// and every page on a correctly signed origin would fail. Proven by
     /// observing that the signature IS fetched, and that removing it from the
-    /// origin surfaces as a transport error rather than "unsigned".
+    /// origin surfaces as the origin's failure rather than as "unsigned".
+    ///
+    /// **The failure it surfaces as tightened when the 404 discriminator
+    /// landed**: a deleted signature is an artifact the root *declares*, so it
+    /// is [`SignedFetchError::IncompleteWalk`] — terminal — not the retryable
+    /// `Transport` this asserted while every origin failure shared one variant.
+    /// The property under test is unchanged and is the `assert_ne` below: it
+    /// must never be `Verify`, because that would mean the pump concluded
+    /// "unsigned" from a file it had not fetched yet.
     #[test]
     fn the_signature_is_fetched_by_the_pump_not_assumed_absent() {
         let dir = tempfile::tempdir().unwrap();
@@ -554,19 +621,106 @@ mod tests {
             src.fetched.borrow()
         );
 
-        // With the signature gone, this is a TRANSPORT failure — the origin
-        // failed to serve a file — not a claim that the publisher never signed.
+        // With the signature gone, this is the ORIGIN withholding an artifact
+        // its own root declares — not a claim that the publisher never signed.
         let sig_dir = dir.path().join(&pin.peer_id).join("system/signature");
         std::fs::remove_dir_all(&sig_dir).unwrap();
         let src2 = DirSource::new(dir.path());
         let got = block_on(resolve_signed(&src2, &pin, KEY));
-        assert!(matches!(got, Err(SignedFetchError::Transport(_))), "got {got:?}");
+        assert!(matches!(got, Err(SignedFetchError::IncompleteWalk(_))), "got {got:?}");
+        assert!(
+            !matches!(got, Err(SignedFetchError::Verify(_))),
+            "a signature that was never fetched must not be read as unsigned: {got:?}"
+        );
+    }
+
+    /// **The discriminator itself: the SAME declared blob, failing two ways,
+    /// must classify two ways.** `EXTENSION-TREE` §3.3a (arch
+    /// `ROUTING-2026-08-18-l` §5) rules an incomplete walk **terminal** and a
+    /// transport failure **retryable**, and before this the two were one
+    /// variant — a withheld blob and an unreachable origin both arrived as
+    /// `Transport`.
+    ///
+    /// That collapse is the fourth appearance of one seam in this arc: *"absent"
+    /// and "withheld" keep reaching the caller as the same value.* The signal
+    /// was never missing — an origin that answers 404 has **chosen**, and an
+    /// origin that drops the connection has not — it was being discarded one
+    /// layer below `SignedFetchError`.
+    ///
+    /// **Mutation-checked both ways**, which is the only reason this is a gate
+    /// and not a restatement: collapse `declared_fetch_error` to always-
+    /// `Transport` and the first half fails; to always-`IncompleteWalk` and the
+    /// second half fails. A single-arm version of this test passes under one of
+    /// those mutations, which is how the collapse survived in the first place.
+    #[test]
+    fn a_withheld_blob_is_terminal_while_an_unreachable_origin_stays_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let pin = publish_into(dir.path(), 0x2b, BODY);
+
+        // A clean resolve first, to learn which content blobs this walk
+        // actually declares — picking one by position would be guessing at the
+        // HAMT shape, and the shape is hash-keyed.
+        let warm = DirSource::new(dir.path());
+        block_on(resolve_signed(&warm, &pin, KEY)).expect("resolves clean");
+        let declared: Vec<String> = warm
+            .fetched
+            .borrow()
+            .iter()
+            .filter(|u| u.contains("/content/"))
+            .cloned()
+            .collect();
+        assert!(!declared.is_empty(), "the walk must fetch content blobs to withhold one");
+        // (a) WITHHELD — EVERY declared blob in turn, not one. The walk fetches
+        // a trie node, a page body and the signature body through the same
+        // classifier, and picking one victim covers whichever the HAMT happened
+        // to order first: the first draft of this test picked `declared[0]` and
+        // silently only ever exercised the signature path.
+        for victim_url in &declared {
+            let victim_path = dir.path().join(victim_url.trim_start_matches('/'));
+            assert!(victim_path.exists(), "victim must exist: {victim_path:?}");
+            let withheld = std::fs::read(&victim_path).unwrap();
+            std::fs::remove_file(&victim_path).unwrap();
+
+            let src = DirSource::new(dir.path());
+            let got = block_on(resolve_signed(&src, &pin, KEY));
+            assert!(
+                matches!(got, Err(SignedFetchError::IncompleteWalk(_))),
+                "withholding {victim_url} must be tree/incomplete-walk — got {got:?}"
+            );
+
+            // (b) UNREACHABLE — that same blob, restored and correct, behind an
+            // origin that is merely failing. Nothing was withheld; retrying is
+            // legitimate. Same blob, same walk, opposite classification.
+            std::fs::write(&victim_path, &withheld).unwrap();
+            let src = DirSource::new(dir.path());
+            src.make_unreachable(victim_url.trim_start_matches('/'));
+            let got = block_on(resolve_signed(&src, &pin, KEY));
+            assert!(
+                matches!(got, Err(SignedFetchError::Transport(_))),
+                "an unreachable origin serving {victim_url} must stay retryable — got {got:?}"
+            );
+        }
+        println!("discriminator: {} declared blob(s), each terminal when withheld and retryable when unreachable", declared.len());
     }
 
     /// A tree with its trie closure stripped resolves nothing, and does so
     /// **without spinning** — the miss log empties and the pump stops. This is
-    /// the pre-B14 projection, and it is why `Absent` and "unwalkable" are the
-    /// same observable: exactly the ambiguity the emitter side had to fix.
+    /// the pre-B14 projection.
+    ///
+    /// **This assertion used to accept `Transport(_) | Absent` and its doc said
+    /// the two were "the same observable".** That is arch's §4 invariant stated
+    /// backwards (`ROUTING-2026-08-18-j`): *the absence of a node is never an
+    /// answer.* Tightened to `Transport` alone and **it passed unchanged**, so
+    /// the tolerance was never describing our behaviour — it was describing the
+    /// emitter-side ambiguity and quietly generalising it to the consumer.
+    ///
+    /// Why we already satisfy it: a miss inside the walk is recorded by
+    /// `PumpFetcher`, the pump then *fetches* it, and a withheld blob makes that
+    /// fetch fail → `Transport`. [`SignedFetchError::Absent`] is reachable only
+    /// when the walk completes with **nothing outstanding** — every node on the
+    /// path resolved and none held the key. Paired with
+    /// `a_key_absent_from_the_signed_tree_is_absent_not_a_transport_error`,
+    /// which pins the other half; neither test means much without the other.
     #[test]
     fn an_unwalkable_tree_terminates_rather_than_spinning() {
         let dir = tempfile::tempdir().unwrap();
@@ -589,9 +743,15 @@ mod tests {
 
         let src = DirSource::new(dir.path());
         let got = block_on(resolve_signed(&src, &pin, KEY));
+        // Tightened a second time. It first accepted `Transport | Absent`
+        // (arch's invariant stated backwards); then `Transport` alone, which
+        // passed unchanged and proved the tolerance never described us. Now the
+        // withheld blob has its own terminal variant, so the assertion says the
+        // specific true thing: the ORIGIN failed to produce its committed
+        // closure. `Absent` remains unreachable here, which is the invariant.
         assert!(
-            matches!(got, Err(SignedFetchError::Transport(_)) | Err(SignedFetchError::Absent)),
-            "got {got:?}"
+            matches!(got, Err(SignedFetchError::IncompleteWalk(_))),
+            "an unwalkable tree must be a FAILURE, never an absence — got {got:?}"
         );
         assert!(src.count() < 32, "the pump must not spin: {} fetches", src.count());
     }
