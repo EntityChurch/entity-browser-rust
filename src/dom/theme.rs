@@ -71,6 +71,15 @@ pub const TOGGLE_INACTIVE: &str = "background:var(--bg,#1a1a2e);color:var(--text
     border:1px solid var(--border-strong,#444);\
     padding:4px 12px;border-radius:3px;cursor:pointer;font-size:12px";
 
+/// Collapsible section header (the shared disclosure primitive —
+/// `components::collapsible_header`). A full-width, left-aligned toggle button
+/// carrying a ▾/▸ marker + label. One look for every "New/section" disclosure,
+/// so Peers, Site Creator, etc. can't drift into bespoke reveals.
+pub const COLLAPSIBLE_HEADER: &str = "display:flex;align-items:center;gap:8px;width:100%;\
+    text-align:left;background:var(--surface-sunken,#15152a);color:var(--text,#e0e0e0);\
+    border:1px solid var(--border,#2a2a4e);border-radius:6px;padding:9px 12px;margin-top:12px;\
+    font-size:15px;font-weight:bold;cursor:pointer";
+
 /// Pre-formatted output area (event log, results).
 pub const PRE_OUTPUT: &str = "background:var(--surface-sunken,#0a0a1a);padding:8px;border-radius:4px;\
     font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap;margin:0";

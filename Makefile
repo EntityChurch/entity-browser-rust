@@ -332,13 +332,18 @@ e2e-worker: image
 	# Selenium container on :4444 and Selenium reaches the test's :8092 server.
 	$(call RUN,cargo test --features e2e --test e2e_worker -- --nocapture --test-threads=1,--network host)
 
-# Tauri desktop (size-optimized release WASM + debug backend, logs to stdout).
-# Use this for development — stable WASM (no overflow panics). Right-click
-# in the WebView → Inspect Element for the WebKit Inspector (Console, DOM,
-# Performance, Memory). NOTE (C8): the release profile is now size-optimized
-# (debug=false + wasm-opt -Oz), so the Inspector no longer source-maps Rust.
-# To debug Rust here, set [profile.release] debug=true in Cargo.toml and
-# index.html data-wasm-opt="0" temporarily.
+# Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
+# Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:
+# the `[profile.dev.package.*]` overrides in Cargo.toml (curve25519-dalek,
+# ed25519-dalek, sha2, block-buffer → overflow-checks=false) already neutralize
+# the only debug-build panics, so there is NO reason to pay the release tax to
+# just run the app. The old default was `wasm-release` (fat LTO + codegen-
+# units=1 + wasm-opt -Oz) — three whole-module, non-incremental passes that
+# re-run from scratch every launch (caching can't touch them), which is why it
+# took "forever". Those belong to `tauri-bundle` (shipping size), not the dev
+# loop. Want the size-optimized artifact here anyway? `make tauri-run
+# TAURI_WASM=wasm-release`. (With debug WASM the WebKit Inspector source-maps
+# Rust again; the release profile strips that.)
 #
 # NOTE: Same unified bundle as `make wasm`; runtime boot detects Tauri
 # and forces Direct mode (src/main.rs). WebKitGTK ≤ 2.52 lacks
@@ -348,7 +353,8 @@ e2e-worker: image
 # in Tauri to skip that wasted failed-worker spawn. Browser deployments get
 # worker-mode automatically via capability detection. Tracked in
 # WORKER-MODE-LIVING-DOC §3.6.
-tauri: wasm-release
+TAURI_WASM ?= wasm
+tauri: $(TAURI_WASM)
 	# Re-embed the freshly-built frontend. `tauri::generate_context!()`
 	# (src-tauri/src/lib.rs) reads ../dist at macro-expansion time, but
 	# cargo's incremental compiler can't see that dependency — so when only
@@ -356,7 +362,8 @@ tauri: wasm-release
 	# frontend (you launch an old UI). We bypass Tauri's CLI asset pipeline
 	# here (raw `cargo build`), so nothing else tracks it. Touching the
 	# embedding source forces a re-expand + re-embed every build. Cheap:
-	# this target always reruns wasm-release anyway, so it's never a no-op.
+	# the $(TAURI_WASM) prerequisite reran the frontend build anyway (trunk
+	# rewrites dist/), so this is never a wasted no-op.
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
 	@echo "Built: ./src-tauri/target/debug/entity-browser-tauri"

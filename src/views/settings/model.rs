@@ -442,7 +442,8 @@ impl SettingsModel {
                     .into_iter()
                     .map(|name| TargetOption {
                         selected: name == window_type,
-                        label: name.to_string(),
+                        // Display the friendly label; the durable key stays in `value`.
+                        label: crate::window::window_display_name(name).to_string(),
                         value: name.to_string(),
                     })
                     .collect();

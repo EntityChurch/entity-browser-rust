@@ -8,21 +8,31 @@ use crate::dom::components::{self, AuthState, ConnState};
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::views::system_backend::output::{AuthorizationsView, AuthRow, SystemBackendOutput};
+use crate::views::system_overview::output::SystemOverviewOutput;
 
 use web_sys::Element;
 
-pub fn render(container: &Element, output: &SystemBackendOutput, ctx: &DomCtx) {
+/// Render the merged System Overview window: the system peer(s) + posture
+/// (`overview`) up top, then the native peer's live detail (`output` — status,
+/// device authorizations, logs, share). One window, one job (S2): the old
+/// standalone "System Peer (Native)" window and its drill-in are retired.
+pub fn render(
+    container: &Element,
+    output: &SystemBackendOutput,
+    overview: &SystemOverviewOutput,
+    ctx: &DomCtx,
+) {
     util::clear_children(container);
 
     let wrapper = util::create_element_with_class("div", "system-backend");
     wrapper.set_attribute("style", theme::SECTION).ok();
 
-    // --- Header (title + Clear) ---
+    // --- Header (title + log controls) ---
     let header = util::create_element("div");
     header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
     h2.set_attribute("style", "margin:0").ok();
-    util::set_text(&h2, "System Peer (Native)");
+    util::set_text(&h2, "System Overview");
     util::append(&header, &h2);
     if output.tauri {
         // Right-aligned controls group: level selector + Clear.
@@ -61,6 +71,10 @@ pub fn render(container: &Element, output: &SystemBackendOutput, ctx: &DomCtx) {
         util::append(&header, &controls);
     }
     util::append(&wrapper, &header);
+
+    // System peers + posture (always — this is the browser view too). The
+    // native peer's identity card here is terse; its live detail follows below.
+    crate::dom::system_overview::render_system_peers(&wrapper, overview);
 
     if !output.tauri {
         // Not a dead end — the backend simply isn't reachable from a plain

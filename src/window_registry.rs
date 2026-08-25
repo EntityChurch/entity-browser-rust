@@ -34,9 +34,11 @@ use crate::views::{
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
 
-/// The 19 standard window types, in registration order. The single source —
+/// The 21 standard window types, in registration order. The single source —
 /// `build_wasm_app` registers exactly these, and the settings UI reads their
 /// metadata from the same list. Add a window here and it shows up in both.
+/// (Was 22 until the standalone "System Overview" window was merged into
+/// "System Backend" — one System window, S2.)
 pub fn standard_window_types() -> Vec<WindowType> {
     vec![
         EntityTreeWindow::window_type(),
@@ -92,10 +94,10 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
         (
             System,
             vec![
+                "System Backend",
                 "Settings",
                 "Peers",
                 "Peer Connections",
-                "System Backend",
                 "File Transfer",
                 "Key Manager",
                 "Storage",

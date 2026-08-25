@@ -169,6 +169,31 @@ pub struct WindowType {
     pub create: fn(WindowId, &str, &Peers) -> Box<dyn WindowView>,
 }
 
+/// Human display label for a window-type key. Menus, pickers, and taskbars show
+/// THIS, never the raw key — `name` is a durable identifier (spawn matching,
+/// persisted boot-surface `window_type`), so where we want a friendlier label
+/// than the key we override it here in one place, rather than renaming the key
+/// (which would strand persisted references). Keep in sync with the matching
+/// `WindowView::title()`.
+pub fn window_display_name(name: &'static str) -> &'static str {
+    match name {
+        // The durable key is still "System Backend", but the window now IS the
+        // merged System Overview (system peers + posture on top, native detail
+        // below) — S2, one System window. Key unchanged (no boot-surface strand);
+        // only the label moved.
+        "System Backend" => "System Overview",
+        // Default: the key already reads well as a label.
+        other => other,
+    }
+}
+
+impl WindowType {
+    /// Display label for menus/pickers (see [`window_display_name`]).
+    pub fn display_name(&self) -> &'static str {
+        window_display_name(self.name)
+    }
+}
+
 /// A living window instance.
 pub struct WindowInstance {
     pub id: WindowId,

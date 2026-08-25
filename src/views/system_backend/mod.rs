@@ -76,6 +76,21 @@ impl SystemBackendWindow {
                     &sys_pid,
                     crate::app_paths::authz_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // Merged-in overview projection: watch the peer registry (roster
+                // → the native peer appears/leaves, counts move) and the system
+                // config (posture) so the peer cards + posture line up top react.
+                // In Worker mode these also seed the sync cache the projection
+                // reads (subscribe-don't-poll: read only what you watch).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::peers_registry_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::session_config::state_path(&sys_pid),
+                );
                 // Kick the background poll loop (status + log tail). No-op in a
                 // browser (guards on `is_tauri`); ends when the window closes.
                 #[cfg(target_arch = "wasm32")]
@@ -88,7 +103,7 @@ impl SystemBackendWindow {
 
 impl WindowView for SystemBackendWindow {
     fn title(&self) -> String {
-        "System Peer (Native)".into()
+        "System Overview".into()
     }
 
     fn type_name(&self) -> &'static str {
@@ -140,6 +155,10 @@ impl WindowView for SystemBackendWindow {
         ctx: &crate::dom::DomCtx,
     ) {
         let output = self.model.render_output(peers);
+        // Merged overview projection (stateless): re-derived from Peers + the
+        // watched registry/config prefixes each render.
+        let overview =
+            crate::views::system_overview::model::SystemOverviewModel::new().render_output(peers);
 
         // Reactive device authorizations (no button): while connected and a
         // backend is present, auto-fire the backend-auth re-read on a throttle.
@@ -162,6 +181,6 @@ impl WindowView for SystemBackendWindow {
             }
         }
 
-        crate::dom::system_backend::render(container, &output, ctx);
+        crate::dom::system_backend::render(container, &output, &overview, ctx);
     }
 }

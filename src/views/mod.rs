@@ -19,6 +19,7 @@ pub mod shell;
 pub mod site_editor;
 pub mod storage;
 pub mod system_backend;
+pub mod system_overview;
 pub mod wire_recorder;
 
 /// Shorten a peer ID for display.
