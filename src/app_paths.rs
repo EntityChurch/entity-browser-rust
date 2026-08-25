@@ -204,6 +204,30 @@ pub fn offer_path(app_id: &str, peer_id: &str, offer_id: &str) -> String {
     format!("{}{}", offers_prefix(app_id, peer_id), offer_id)
 }
 
+/// Prefix for the **shares** this peer publishes — the generalization of
+/// [`offers_prefix`] to any kind of published thing (`crate::share`). Like
+/// offers, a counterpart lists this prefix *on our tree*, so it is app-tier
+/// state read by strangers.
+///
+/// **This path is provisional and lives here alone on purpose.** The design
+/// argues a share belongs in a system namespace — a share only one app's
+/// namespace can name is not shareable, and `entity-workbench-go` put its
+/// equivalent at `system/config/local/files/*`. But inventing a `system/`
+/// convention unilaterally is what AGENTS-STANDARD forbids, so it stays app-tier
+/// until arch rules (`ROUTING-2026-08-16-g` Q2). Keeping both helpers as the
+/// only construction sites makes that migration one edit.
+pub fn shares_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/shares/", peer_id, app_id)
+}
+
+/// Path for one share. `share_id` is [`crate::share::Share::id`] — the blob hex
+/// for a content share, a prefix slug for a subtree share; both already safe
+/// single segments, and both content/target-derived so a re-share is an
+/// idempotent overwrite rather than a duplicate row.
+pub fn share_path(app_id: &str, peer_id: &str, share_id: &str) -> String {
+    format!("{}{}", shares_prefix(app_id, peer_id), share_id)
+}
+
 /// Build a per-window results path.
 pub fn window_results_path(app_id: &str, peer_id: &str, window_id: WindowId) -> String {
     workspace_path(app_id, peer_id, &format!("windows/{}/results", window_id))

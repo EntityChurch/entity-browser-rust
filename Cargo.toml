@@ -70,6 +70,30 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
     # `drain_system_backend_connect`). Pulls `entity-network` (tokio sync+rt,
     # wasm-safe) + inbox/continuation/subscription (already enabled).
     "network",
+    # V7 §6.2 `system/capability` (request / delegate / revoke / configure).
+    # Registered at `core/peer/src/lib.rs` behind this gate. Until now it was in
+    # `[dev-dependencies]` ONLY (for `tests/authorize_gate.rs`), which is why a
+    # browser peer could not author policy on its own tree — buildout item 22's
+    # real mechanism, which we had recorded as "structural". It is not: the
+    # crate (`extensions/capability`) carries ZERO `cfg(target_arch)` gates,
+    # depends on `web-time`, and compiles clean for wasm32.
+    #
+    # **Enabling it does NOT flip enforcement.** The open posture is
+    # `PeerConfig::debug_open_grants`, which the app sets true (`peers.rs`,
+    # `connectors.rs`) and the kernel checks at `connection.rs:557`
+    # independently of whether this handler is registered. What this buys is the
+    # ability to *author and read* a policy entry — which is where a Share's
+    # grant is written (`DESIGN-SHARE-FOLLOW-AND-THE-GRANT-AS-INTERFACE` §2).
+    "capability-handler",
+    # EXTENSION-REGISTRY: the `system/registry` meta-resolver (`:resolve` /
+    # `:invalidate-cache`) + the local-name backend. This app had THREE partial
+    # naming systems (`connectors.rs`, `connections.rs`, `content_site/origins.rs`)
+    # and resolved no registry name at all, while this — spec'd, implemented,
+    # three-way converged, and in `entity-peer`'s DEFAULT features — sat one path
+    # dependency away. Also wasm32-clean (checked). NOT `discovery`: its only v1
+    # backend is mDNS, which a browser cannot speak, so turning it on would add
+    # bytes for a handler with no reachable backend here.
+    "registry",
 ] }
 
 # The signaling extension, as a DIRECT edge — for its **codec and constants**

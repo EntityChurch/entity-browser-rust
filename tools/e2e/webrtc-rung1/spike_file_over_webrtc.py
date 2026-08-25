@@ -194,6 +194,29 @@ def main():
             meet.log_has(A_BASE, sa, "establisher") and meet.log_has(B_BASE, sb, "establisher")
         )
 
+        # MODE=worker is a claim about an env var until the app agrees. Worker
+        # mode is secure-context-gated (OPFS), and on a non-secure origin the
+        # bootstrap fails and the app **silently falls back to Direct** — so a
+        # run that believes it exercised the Worker arm would pass exactly as it
+        # does now, proving the arm it did not run. Assert both halves: the boot
+        # elected Worker (`try_worker=true`) and nothing logged the downgrade.
+        if meet.MODE == "worker":
+            # The console bridge renders tracing fields as `key = value`, so
+            # match on a space-normalized blob rather than guessing a spelling.
+            def elected_worker(base, sid):
+                blob = " ".join(meet.log_lines(base, sid)).replace(" = ", "=").lower()
+                return "try_worker=true" in blob
+
+            elected = all(
+                elected_worker(base, sid) for base, sid in ((A_BASE, sa), (B_BASE, sb))
+            )
+            downgraded = any(
+                meet.log_has(base, sid, "falling back to Direct mode")
+                for base, sid in ((A_BASE, sa), (B_BASE, sb))
+            )
+            print(f"  worker arm: elected={elected} downgraded={downgraded}")
+            checks["both browsers really are on the Worker arm"] = elected and not downgraded
+
         meet.open_shell(A_BASE, sa, "A")
         meet.open_shell(B_BASE, sb, "B")
         pa = meet.bound_peer_id(A_BASE, sa, "A")

@@ -457,6 +457,32 @@ for us — it's the substrate that the connective fabric of this
 application is going to depend on. See `ENTITY-SDK-API.md` Phase
 5 for the concrete API direction.
 
+### The Network Is a Layer This Doc Did Not Have a Name For
+
+The Capability Stages above describe what this *application* grows into. They do not
+describe what the **network between applications** is — and after the connectivity arc
+closed (two browsers, two NATs, a file), that became the missing orientation.
+
+Its home is **`../reviews/DESIGN-THE-CONTENT-NETWORK-AND-THE-USER-MODEL.md`**, and the two
+ideas worth carrying up here:
+
+**Four rings, one mechanism.** This device → my devices → my people & groups → the open
+network. The rings differ in exactly three variables — who resolves a name, what the default
+audience is, how reachability is obtained — and *who resolves the name* is the axis
+`EXTENSION-REGISTRY` already defines by making backends parallel. So the rings are three
+configurations of one substrate, not a trust hierarchy bolted on top. Ring 1 (my devices) is
+the largest hole between here and daily use.
+
+**Two missing nouns.** A **Share** (a thing published, under a name, for an audience) and a
+**Follow** (a remote prefix mirrored locally, incrementally, with a budget). Both already
+exist several times each in the tree under private per-app conventions. Naming them is what
+makes sites, files, chats, feeds and pictures one system instead of four demos — and it is
+the reason the product reads as thin on P2P while the transport is green: the network is not
+*visible* anywhere, because nothing in the data model means "what we share."
+
+This does not change the pillars. It says the entity-backed-state pillar has a network-facing
+half we had only been building bottom-up.
+
 ### Knowledge Base as the First Application
 
 The knowledge base wiki PoC isn't just one of many possible
