@@ -15,7 +15,7 @@ pub fn render(container: &Element, output: &WireRecorderOutput, _ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Wire Recorder");
+    util::set_text(&h2, &crate::i18n::t("window.wire_recorder", &[]));
     util::append(&wrapper, &h2);
 
     let hint = util::create_element("div");

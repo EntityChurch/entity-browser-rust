@@ -38,7 +38,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     let header = util::create_element_with_class("div", "peer-mgmt-header");
 
     let h2 = util::create_element("h2");
-    util::set_text(&h2, "Peers");
+    util::set_text(&h2, &crate::i18n::t("window.peers", &[]));
     util::append(&header, &h2);
     // The title row stands alone; the create form is a collapsible block below
     // it, so a peer list isn't permanently topped by a form you rarely use.

@@ -29,7 +29,7 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
     wrapper.set_attribute("style", theme::SECTION).ok();
 
     let h2 = util::create_element("h2");
-    util::set_text(&h2, "Peer Connections");
+    util::set_text(&h2, &crate::i18n::t("window.peer_connections", &[]));
     util::append(&wrapper, &h2);
 
     render_bound_header(&wrapper, output);
@@ -212,7 +212,7 @@ fn render_scan_qr(card: &Element, ctx: &DomCtx) {
     scan_summary
         .set_attribute("style", "cursor:pointer;font-size:12px;padding:4px 0;color:var(--accent-2,#c0c0e0)")
         .ok();
-    util::set_text(&scan_summary, "Scan a QR code");
+    util::set_text(&scan_summary, &crate::i18n::t("peers.scan_qr", &[]));
     util::append(&scan_details, &scan_summary);
 
     let scan_container = util::create_element("div");
@@ -273,7 +273,7 @@ fn render_pairing_qr(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
 
     let hint = util::create_element("p");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(&hint, "Scan this from another device to connect it here.");
+    util::set_text(&hint, &crate::i18n::t("peers.scan_hint", &[]));
     util::append(&card, &hint);
 
     let qr_details = util::create_element("details");
@@ -281,7 +281,7 @@ fn render_pairing_qr(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     qr_summary
         .set_attribute("style", "cursor:pointer;font-size:12px;padding:4px 0;color:var(--accent-2,#c0c0e0)")
         .ok();
-    util::set_text(&qr_summary, "Show QR code");
+    util::set_text(&qr_summary, &crate::i18n::t("peers.show_qr", &[]));
     util::append(&qr_details, &qr_summary);
 
     let qr_content = util::create_element("div");

@@ -30,7 +30,7 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
     h2.set_attribute("style", "margin:0").ok();
-    util::set_text(&h2, "Storage");
+    util::set_text(&h2, &crate::i18n::t("window.storage", &[]));
     util::append(&header, &h2);
     // Counts update live via subscription; this re-probes the disk estimate.
     let refresh = crate::dom::components::button(
@@ -83,7 +83,7 @@ fn origin_block(est: &OriginEstimate) -> Element {
 
     let title = util::create_element("div");
     title.set_attribute("style", "font-weight:bold;font-size:13px;margin-bottom:4px").ok();
-    util::set_text(&title, "Origin disk (IndexedDB + caches — whole origin)");
+    util::set_text(&title, &crate::i18n::t("storage.origin_disk", &[]));
     util::append(&block, &title);
 
     let pct = if est.quota_bytes > 0.0 {
@@ -122,11 +122,11 @@ fn backend_card(b: &BackendStoreView) -> Element {
     title.set_attribute("style", "margin-bottom:6px;display:flex;align-items:center").ok();
     let name = util::create_element("span");
     name.set_attribute("style", "font-weight:bold;font-size:13px").ok();
-    util::set_text(&name, "System backend — native store");
+    util::set_text(&name, &crate::i18n::t("storage.backend_native", &[]));
     util::append(&title, &name);
     let badge = util::create_element("span");
     badge.set_attribute("style", BADGE).ok();
-    util::set_text(&badge, "Native / SQLite");
+    util::set_text(&badge, &crate::i18n::t("storage.native_sqlite", &[]));
     util::append(&title, &badge);
     util::append(&card, &title);
 
@@ -210,7 +210,7 @@ fn peer_card(peer: &PeerStorage) -> Element {
     } else if !peer.buckets.is_empty() {
         let sub = util::create_element("div");
         sub.set_attribute("style", "margin-top:6px;font-size:11px;color:var(--text-dim,#888)").ok();
-        util::set_text(&sub, "By top-level path:");
+        util::set_text(&sub, &crate::i18n::t("storage.by_path", &[]));
         util::append(&card, &sub);
 
         let mut buckets: Vec<&_> = peer.buckets.iter().collect();

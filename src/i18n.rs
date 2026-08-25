@@ -285,8 +285,13 @@ pub const EN: &[(&str, Message)] = &[
     ("label.address", Message::Simple("Address")),
     ("label.name", Message::Simple("Name")),
     ("label.label", Message::Simple("Label")),
+    ("label.level", Message::Simple("Level")),
+    ("label.results", Message::Simple("Results")),
+    ("label.content", Message::Simple("Content")),
+    ("label.system", Message::Simple("System")),
     // Transient status glyphs.
     ("status.copied", Message::Simple("Copied ✓")),
+    ("status.loading", Message::Simple("Loading…")),
     // -- execute console surface --
     ("execute.handler", Message::Simple("Handler")),
     ("execute.operation", Message::Simple("Operation")),
@@ -299,6 +304,12 @@ pub const EN: &[(&str, Message)] = &[
     ("peers.known_devices", Message::Simple("Known devices")),
     ("peers.connect_device", Message::Simple("Connect to a device")),
     ("peers.pair_qr", Message::Simple("Pair a device (QR)")),
+    ("peers.scan_qr", Message::Simple("Scan a QR code")),
+    (
+        "peers.scan_hint",
+        Message::Simple("Scan this from another device to connect it here."),
+    ),
+    ("peers.show_qr", Message::Simple("Show QR code")),
     // -- window-chrome tooltips (title attrs) --
     ("tooltip.close_window", Message::Simple("Close window")),
     ("tooltip.open_windows", Message::Simple("Open windows")),
@@ -325,6 +336,24 @@ pub const EN: &[(&str, Message)] = &[
     ("siteeditor.delete_site", Message::Simple("Delete site")),
     ("siteeditor.save_page", Message::Simple("Save page")),
     ("siteeditor.delete_page", Message::Simple("Delete page")),
+    ("siteeditor.title_optional", Message::Simple("Title (optional)")),
+    ("siteeditor.page_title_ph", Message::Simple("Page title")),
+    ("siteeditor.move_rename", Message::Simple("Move/rename to:")),
+    // -- entity tree surface --
+    ("entitytree.source_none", Message::Simple("None (manual)")),
+    (
+        "entitytree.source_app",
+        Message::Simple("App aggregate (peer: {peer})"),
+    ),
+    ("entitytree.up", Message::Simple("Up")),
+    ("entitytree.selection_source", Message::Simple("Selection source")),
+    (
+        "entitytree.select_prompt",
+        Message::Simple("Select an entity from the tree"),
+    ),
+    ("entitytree.inspector", Message::Simple("Inspector")),
+    ("entitytree.none_selected", Message::Simple("No entity selected")),
+    ("entitytree.raw_hash", Message::Simple("Raw Hash")),
     // -- system peers surface --
     ("syspeers.system_peer", Message::Simple("System peer")),
     ("syspeers.system_backend", Message::Simple("System backend")),
@@ -332,6 +361,8 @@ pub const EN: &[(&str, Message)] = &[
     ("sysoverview.clear_logs", Message::Simple("Clear logs")),
     ("sysoverview.logs", Message::Simple("Logs")),
     ("sysoverview.device_auth", Message::Simple("Device authorizations")),
+    ("sysoverview.profile_pull", Message::Simple("Pull only")),
+    ("sysoverview.profile_twoway", Message::Simple("Two-way")),
     (
         "sysoverview.grant_backend_hint",
         Message::Simple("Authorized on the backend; the specific scope isn't recorded locally."),
@@ -347,9 +378,19 @@ pub const EN: &[(&str, Message)] = &[
     ("settings.site_surface", Message::Simple("Site & Surface")),
     ("settings.rendering", Message::Simple("Rendering")),
     ("settings.network", Message::Simple("Network")),
+    ("settings.boot_into", Message::Simple("Boot into")),
+    ("settings.boot_chrome", Message::Simple("Chrome")),
+    ("settings.boot_site", Message::Simple("Site")),
+    ("settings.boot_window", Message::Simple("Window")),
+    (
+        "settings.lockdown_active",
+        Message::Simple("Lockdown is active (set by this deployment's config)."),
+    ),
     // -- theme editor surface --
     ("theme.themes", Message::Simple("Themes")),
     ("theme.new_from", Message::Simple("New theme from")),
+    ("theme.scheme_dark", Message::Simple("Dark")),
+    ("theme.scheme_light", Message::Simple("Light")),
     (
         "settings.language.hint",
         Message::Simple("Sets the interface language and layout direction."),
@@ -394,6 +435,34 @@ pub const EN: &[(&str, Message)] = &[
     ("window.system_overview", Message::Simple("System Overview")),
     ("window.access_log", Message::Simple("Access Log")),
     ("window.theme_editor", Message::Simple("Theme Editor")),
+    // -- site directory rail --
+    ("sitedir.sites_menu", Message::Simple("Sites \u{25be}")),
+    ("sitedir.sites", Message::Simple("Sites")),
+    // -- content-site surface --
+    ("contentsite.enter_peer", Message::Simple("Enter Peer")),
+    ("contentsite.contents_menu", Message::Simple("Contents \u{25be}")),
+    // -- storage surface --
+    (
+        "storage.origin_disk",
+        Message::Simple("Origin disk (IndexedDB + caches — whole origin)"),
+    ),
+    (
+        "storage.backend_native",
+        Message::Simple("System backend — native store"),
+    ),
+    ("storage.native_sqlite", Message::Simple("Native / SQLite")),
+    ("storage.by_path", Message::Simple("By top-level path:")),
+    // -- chain trace surface --
+    ("chaintrace.chain_id", Message::Simple("Chain ID:")),
+    ("chaintrace.continuations", Message::Simple("Continuations")),
+    ("chaintrace.error_markers", Message::Simple("Chain-error markers")),
+    // -- window switcher / desktop chrome --
+    ("windows.none_open", Message::Simple("No windows open")),
+    ("windows.open_windows", Message::Simple("Open Windows")),
+    (
+        "mod.learn_more",
+        Message::Simple("Learn more and get involved at "),
+    ),
     // -- QR scanner surface (dom/scanner.rs) --
     ("scanner.scanned_codes", Message::Simple("Scanned Codes")),
     ("scanner.scanned_codes_count", Message::Simple("Scanned Codes ({n} unique)")),

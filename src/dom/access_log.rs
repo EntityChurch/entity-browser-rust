@@ -247,7 +247,7 @@ fn window_header(wrapper: &Element, view: AccessView, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", "margin:0").ok();
-    util::set_text(&h2, "Access Log");
+    util::set_text(&h2, &crate::i18n::t("window.access_log", &[]));
     util::append(&bar, &h2);
 
     let switch = compact_select("access-log-view");

@@ -120,6 +120,62 @@
   "siteeditor.delete_site": "حذف موقع",
   "siteeditor.save_page": "حفظ الصفحة",
   "siteeditor.delete_page": "حذف الصفحة",
+  "siteeditor.title_optional": "العنوان (اختياري)",
+  "siteeditor.page_title_ph": "عنوان الصفحة",
+
+  "entitytree.source_none": "بلا (يدوي)",
+  "entitytree.source_app": "تجميع التطبيق (النظير: {peer})",
+
+  "settings.boot_into": "الإقلاع إلى",
+  "settings.boot_chrome": "سطح المكتب",
+  "settings.boot_site": "موقع",
+  "settings.boot_window": "نافذة",
+
+  "theme.scheme_dark": "داكن",
+  "theme.scheme_light": "فاتح",
+
+  "sysoverview.profile_pull": "السحب فقط",
+  "sysoverview.profile_twoway": "ثنائي الاتجاه",
+
+  "label.level": "المستوى",
+  "label.results": "النتائج",
+  "label.content": "المحتوى",
+  "label.system": "النظام",
+  "status.loading": "جارٍ التحميل…",
+
+  "peers.scan_qr": "مسح رمز QR",
+  "peers.scan_hint": "امسح هذا من جهاز آخر لتوصيله هنا.",
+  "peers.show_qr": "إظهار رمز QR",
+
+  "sitedir.sites_menu": "المواقع ▾",
+  "sitedir.sites": "المواقع",
+
+  "contentsite.enter_peer": "دخول النظير",
+  "contentsite.contents_menu": "المحتويات ▾",
+
+  "storage.origin_disk": "قرص الأصل (IndexedDB + ذاكرات التخزين المؤقت — الأصل بأكمله)",
+  "storage.backend_native": "الواجهة الخلفية للنظام — مخزن أصلي",
+  "storage.native_sqlite": "أصلي / SQLite",
+  "storage.by_path": "حسب المسار العلوي:",
+
+  "chaintrace.chain_id": "معرّف السلسلة:",
+  "chaintrace.continuations": "الاستمرارات",
+  "chaintrace.error_markers": "علامات خطأ السلسلة",
+
+  "siteeditor.move_rename": "نقل/إعادة تسمية إلى:",
+
+  "entitytree.up": "أعلى",
+  "entitytree.selection_source": "مصدر التحديد",
+  "entitytree.select_prompt": "اختر كيانًا من الشجرة",
+  "entitytree.inspector": "المفتّش",
+  "entitytree.none_selected": "لم يتم تحديد أي كيان",
+  "entitytree.raw_hash": "التجزئة الخام",
+
+  "settings.lockdown_active": "وضع الإغلاق نشط (مضبوط بواسطة إعدادات هذا النشر).",
+
+  "windows.none_open": "لا توجد نوافذ مفتوحة",
+  "windows.open_windows": "النوافذ المفتوحة",
+  "mod.learn_more": "اعرف المزيد وشارك في ",
 
   "scanner.scanned_codes": "الرموز الممسوحة",
   "scanner.scanned_codes_count": "الرموز الممسوحة ({n} فريدة)",

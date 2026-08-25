@@ -21,7 +21,7 @@ pub fn render(container: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Settings");
+    util::set_text(&h2, &crate::i18n::t("window.settings", &[]));
     util::append(&wrapper, &h2);
 
     render_appearance(&wrapper, output, ctx);
@@ -145,18 +145,22 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     // -- Startup surface: kind radios --
     let kind_label = util::create_element("span");
     kind_label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&kind_label, "Boot into");
+    util::set_text(&kind_label, &crate::i18n::t("settings.boot_into", &[]));
     util::append(&card, &kind_label);
     let kind_row = util::create_element("div");
     kind_row.set_attribute("style", "display:flex;gap:12px;margin:2px 0 8px").ok();
-    for (value, text) in [("chrome", "Chrome"), ("site", "Site"), ("window", "Window")] {
+    for (value, key) in [
+        ("chrome", "settings.boot_chrome"),
+        ("site", "settings.boot_site"),
+        ("window", "settings.boot_window"),
+    ] {
         let (row, radio) = components::radio(
             ctx,
             &format!("boot_kind-{}", output.window_id),
             value,
             s.boot_kind == value,
             "set_boot_kind",
-            &format!(" {}", text),
+            &format!(" {}", crate::i18n::t(key, &[])),
         );
         // Stable hook so e2e can target a specific kind regardless of window id.
         radio.set_attribute("data-kind", value).ok();
@@ -253,7 +257,7 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     if s.locked {
         let note = util::create_element("p");
         note.set_attribute("style", theme::HINT).ok();
-        util::set_text(&note, "Lockdown is active (set by this deployment's config).");
+        util::set_text(&note, &crate::i18n::t("settings.lockdown_active", &[]));
         util::append(&card, &note);
     }
 

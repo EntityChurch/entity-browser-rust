@@ -647,7 +647,7 @@ impl DomRenderer {
     /// more than one peer is bindable (see caller).
     fn append_peer_selector(&self, parent: &Element, peers: &Peers, selectable: &[String]) {
         let label = util::create_element("h3");
-        util::set_text(&label, "Peer");
+        util::set_text(&label, &crate::i18n::t("label.peer", &[]));
         util::append(parent, &label);
 
         let select = util::create_element("select");
@@ -1096,7 +1096,7 @@ fn build_empty_state() -> Element {
         "style",
         "font-size:18px;font-weight:600;color:var(--text, #e0e0e0);",
     );
-    util::set_text(&title, "No windows open");
+    util::set_text(&title, &crate::i18n::t("windows.none_open", &[]));
     util::append(&wrap, &title);
 
     let body = util::create_element("div");
@@ -1140,7 +1140,7 @@ fn build_empty_state() -> Element {
             "style",
             "color:var(--accent, #90d0ff);font-weight:600;",
         );
-        util::set_text(&name, "Open Windows");
+        util::set_text(&name, &crate::i18n::t("windows.open_windows", &[]));
         util::append(&row, &name);
         let desc = util::create_element("span");
         util::set_text(&desc, " — jump to or close your active windows");
@@ -1173,7 +1173,7 @@ fn build_empty_state() -> Element {
         "font-size:12.5px;max-width:380px;line-height:1.5;margin-top:8px;",
     );
     let learn_text = util::create_element("span");
-    util::set_text(&learn_text, "Learn more and get involved at ");
+    util::set_text(&learn_text, &crate::i18n::t("mod.learn_more", &[]));
     util::append(&learn, &learn_text);
     let link = util::create_element("a");
     util::set_attr(&link, "href", "https://entitychurchfoundation.org");

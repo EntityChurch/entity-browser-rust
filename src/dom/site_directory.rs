@@ -29,7 +29,7 @@ pub fn render(rail: &Element, dir: &SiteDirectory, ctx: &DomCtx, window_id: Wind
 
     let toggle = util::create_element_with_class("button", "cs-rail-toggle");
     util::set_attr(&toggle, "type", "button");
-    util::set_text(&toggle, "Sites \u{25be}");
+    util::set_text(&toggle, &crate::i18n::t("sitedir.sites_menu", &[]));
     ctx.listen(&toggle, "click", {
         let rail = rail.clone();
         move |evt: web_sys::Event| {
@@ -42,7 +42,7 @@ pub fn render(rail: &Element, dir: &SiteDirectory, ctx: &DomCtx, window_id: Wind
     let list = util::create_element_with_class("div", "cs-rail-list");
 
     let header = util::create_element("div");
-    util::set_text(&header, "Sites");
+    util::set_text(&header, &crate::i18n::t("sitedir.sites", &[]));
     util::set_attr(
         &header,
         "style",

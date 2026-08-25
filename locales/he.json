@@ -120,6 +120,62 @@
   "siteeditor.delete_site": "מחיקת אתר",
   "siteeditor.save_page": "שמירת עמוד",
   "siteeditor.delete_page": "מחיקת עמוד",
+  "siteeditor.title_optional": "כותרת (אופציונלי)",
+  "siteeditor.page_title_ph": "כותרת העמוד",
+
+  "entitytree.source_none": "ללא (ידני)",
+  "entitytree.source_app": "צבירת האפליקציה (עמית: {peer})",
+
+  "settings.boot_into": "אתחול אל",
+  "settings.boot_chrome": "שולחן עבודה",
+  "settings.boot_site": "אתר",
+  "settings.boot_window": "חלון",
+
+  "theme.scheme_dark": "כהה",
+  "theme.scheme_light": "בהיר",
+
+  "sysoverview.profile_pull": "משיכה בלבד",
+  "sysoverview.profile_twoway": "דו-כיווני",
+
+  "label.level": "רמה",
+  "label.results": "תוצאות",
+  "label.content": "תוכן",
+  "label.system": "מערכת",
+  "status.loading": "טוען…",
+
+  "peers.scan_qr": "סריקת קוד QR",
+  "peers.scan_hint": "סרוק זאת ממכשיר אחר כדי לחבר אותו כאן.",
+  "peers.show_qr": "הצגת קוד QR",
+
+  "sitedir.sites_menu": "אתרים ▾",
+  "sitedir.sites": "אתרים",
+
+  "contentsite.enter_peer": "כניסה לעמית",
+  "contentsite.contents_menu": "תוכן העניינים ▾",
+
+  "storage.origin_disk": "דיסק המקור (IndexedDB + מטמונים — כל המקור)",
+  "storage.backend_native": "צד שרת של המערכת — אחסון מקומי",
+  "storage.native_sqlite": "מקומי / SQLite",
+  "storage.by_path": "לפי נתיב עליון:",
+
+  "chaintrace.chain_id": "מזהה שרשרת:",
+  "chaintrace.continuations": "המשכים",
+  "chaintrace.error_markers": "סמני שגיאת שרשרת",
+
+  "siteeditor.move_rename": "העברה/שינוי שם אל:",
+
+  "entitytree.up": "למעלה",
+  "entitytree.selection_source": "מקור הבחירה",
+  "entitytree.select_prompt": "בחר ישות מהעץ",
+  "entitytree.inspector": "מפקח",
+  "entitytree.none_selected": "לא נבחרה ישות",
+  "entitytree.raw_hash": "גיבוב גולמי",
+
+  "settings.lockdown_active": "מצב נעילה פעיל (נקבע על ידי תצורת הפריסה הזו).",
+
+  "windows.none_open": "אין חלונות פתוחים",
+  "windows.open_windows": "חלונות פתוחים",
+  "mod.learn_more": "מידע נוסף והצטרפות ב־",
 
   "scanner.scanned_codes": "קודים שנסרקו",
   "scanner.scanned_codes_count": "קודים שנסרקו ({n} ייחודיים)",

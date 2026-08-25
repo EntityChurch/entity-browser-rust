@@ -84,7 +84,7 @@ pub fn render(container: &Element, output: &SiteEditorOutput, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::TITLE_INLINE).ok();
-    util::set_text(&h2, "Site Creator");
+    util::set_text(&h2, &crate::i18n::t("window.site_creator", &[]));
     util::append(&wrapper, &h2);
 
     let hint = util::create_element("p");
@@ -187,7 +187,7 @@ fn create_block(ctx: &DomCtx) -> Element {
     let id_input = util::tracked_input(&block, ctx, "new_site_id", "", theme::INPUT);
     id_input.set_attribute("placeholder", "new site-id (letters, digits, - _)").ok();
     let title_input = util::tracked_input(&block, ctx, "new_site_title", "", theme::INPUT);
-    title_input.set_attribute("placeholder", "Title (optional)").ok();
+    title_input.set_attribute("placeholder", &crate::i18n::t("siteeditor.title_optional", &[])).ok();
 
     let create = components::button_el(&crate::i18n::t("siteeditor.create_site", &[]), components::ButtonKind::Primary);
     {
@@ -419,7 +419,7 @@ fn page_editor(
     let title_field = format!("title::{site}::{page}");
     let title_input =
         util::tracked_input(&block, ctx, &title_field, title, &format!("{};margin-bottom:6px", theme::INPUT));
-    title_input.set_attribute("placeholder", "Page title").ok();
+    title_input.set_attribute("placeholder", &crate::i18n::t("siteeditor.page_title_ph", &[])).ok();
 
     // The current buffer = the live draft if present, else the saved body — so
     // both the textarea and the preview reflect unsaved edits across rebuilds.
@@ -584,7 +584,7 @@ fn page_editor(
     move_row.set_attribute("style", ROW).ok();
     let move_label = util::create_element("span");
     move_label.set_attribute("style", "font-size:12px;color:var(--text-dim,#888)").ok();
-    util::set_text(&move_label, "Move/rename to:");
+    util::set_text(&move_label, &crate::i18n::t("siteeditor.move_rename", &[]));
     util::append(&move_row, &move_label);
     let move_field = format!("rename::{site}::{page}");
     let move_input =

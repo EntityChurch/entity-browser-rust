@@ -21,7 +21,7 @@ pub fn render(container: &Element, output: &ChainTraceOutput, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Chain Trace");
+    util::set_text(&h2, &crate::i18n::t("window.chain_trace", &[]));
     util::append(&wrapper, &h2);
 
     render_input_row(&wrapper, output, ctx);
@@ -33,7 +33,7 @@ pub fn render(container: &Element, output: &ChainTraceOutput, ctx: &DomCtx) {
 fn render_input_row(parent: &Element, output: &ChainTraceOutput, ctx: &DomCtx) {
     let label = util::create_element("label");
     label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&label, "Chain ID:");
+    util::set_text(&label, &crate::i18n::t("chaintrace.chain_id", &[]));
     util::append(parent, &label);
 
     let hint = util::create_element("div");
@@ -133,7 +133,7 @@ fn render_results(parent: &Element, output: &ChainTraceOutput) {
     if !output.continuations.is_empty() {
         let h3 = util::create_element("h3");
         h3.set_attribute("style", "margin:12px 0 4px").ok();
-        util::set_text(&h3, "Continuations");
+        util::set_text(&h3, &crate::i18n::t("chaintrace.continuations", &[]));
         util::append(parent, &h3);
         render_entries(parent, &output.continuations, false);
     }
@@ -141,7 +141,7 @@ fn render_results(parent: &Element, output: &ChainTraceOutput) {
     if !output.markers.is_empty() {
         let h3 = util::create_element("h3");
         h3.set_attribute("style", "margin:12px 0 4px").ok();
-        util::set_text(&h3, "Chain-error markers");
+        util::set_text(&h3, &crate::i18n::t("chaintrace.error_markers", &[]));
         util::append(parent, &h3);
         render_entries(parent, &output.markers, true);
     }
