@@ -31,6 +31,10 @@ entity-ecf = { path = "../entity-core-rust/core/ecf" }
 entity-hash = { path = "../entity-core-rust/core/hash" }
 entity-entity = { path = "../entity-core-rust/core/entity" }
 entity-store = { path = "../entity-core-rust/core/store" }
+# Content reassembly (blob → chunks → bytes) for materializing pulled files
+# onto the device (`src/ops/download.rs`). Already compiled transitively via
+# the peer's `content`/`local-files` features; direct dep for `reassemble`.
+entity-content = { path = "../entity-core-rust/extensions/content" }
 
 # Peer runtime (WASM-safe with default-features=false). Direct because
 # `Peer`/`Connection`/`MemoryConnector` etc. are referenced by app-tier
@@ -135,6 +139,12 @@ audit-worker-reads = []
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "process"] }
 tempfile = "3"
+# Test-only: enable the SQLite-backed tree so the cross-peer upload
+# persistence test can build the backend peer exactly as the Tauri desktop
+# does (`.sqlite()`), which the in-memory store does not exercise. Feature is
+# unioned onto the main entity-peer dep for native test builds ONLY — dev-deps
+# never affect the `make wasm` lib build.
+entity-peer = { path = "../entity-core-rust/core/peer", default-features = false, features = ["sqlite", "websocket"] }
 # E2E browser tests — drives a Selenium-standalone-firefox container via
 # WebDriver. See tests/e2e_worker.rs and tools/e2e/README.md.
 fantoccini = "0.22"

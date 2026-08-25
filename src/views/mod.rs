@@ -7,6 +7,7 @@ pub mod entity_tree;
 pub mod path_tap;
 pub mod event_log;
 pub mod execute_console;
+pub mod file_transfer;
 pub mod games;
 pub mod key_manager;
 pub mod knowledge_base;
