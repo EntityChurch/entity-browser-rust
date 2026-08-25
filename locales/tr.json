@@ -1,0 +1,241 @@
+{
+  "btn.save": "Kaydet",
+  "btn.cancel": "İptal",
+  "btn.delete": "Sil",
+  "btn.copy": "Kopyala",
+  "btn.connect": "Bağlan",
+  "btn.edit": "Düzenle",
+  "btn.refresh": "Yenile",
+  "btn.back": "← Geri",
+  "btn.revert": "Geri al",
+
+  "label.status": "Durum",
+  "label.title": "Başlık",
+  "label.peer": "Peer",
+  "label.target": "Hedef",
+  "label.address": "Adres",
+  "label.name": "Ad",
+  "label.label": "Etiket",
+
+  "status.copied": "Kopyalandı ✓",
+
+  "execute.handler": "İşleyici",
+  "execute.operation": "İşlem",
+  "execute.handler_uri": "İşleyici URI",
+  "execute.resource": "Kaynak",
+
+  "peers.known_devices": "Bilinen cihazlar",
+  "peers.connect_device": "Bir cihaza bağlan",
+  "peers.pair_qr": "Bir cihaz eşleştir (QR)",
+
+  "tooltip.close_window": "Pencereyi kapat",
+  "tooltip.open_windows": "Açık pencereler",
+  "tooltip.fill_window": "Pencereyi büyüt",
+  "tooltip.restore_size": "Normal boyuta dön",
+  "tooltip.menu": "Menü",
+  "tooltip.back": "Geri",
+  "tooltip.site_home": "Site ana sayfasına git",
+  "tooltip.unsaved": "Kaydedilmemiş değişiklikler",
+
+  "kb.title_placeholder": "Makale başlığı",
+  "theme.name_placeholder": "ad (a-z, 0-9, tire)",
+  "theme.label_placeholder": "görünen etiket",
+
+  "filetransfer.device": "Cihaz",
+  "filetransfer.shared_files": "Paylaşılan dosyalar",
+  "filetransfer.send_file": "Bir dosya gönder",
+  "filetransfer.from_peer": "Peer'den",
+  "filetransfer.results": "Sonuçlar",
+
+  "syspeers.system_peer": "Sistem peer'i",
+  "syspeers.system_backend": "Sistem arka ucu",
+
+  "sysoverview.clear_logs": "Günlükleri temizle",
+  "sysoverview.logs": "Günlükler",
+  "sysoverview.device_auth": "Cihaz yetkilendirmeleri",
+  "sysoverview.grant_backend_hint": "Arka uçta yetkilendirildi; belirli kapsam yerel olarak kaydedilmez.",
+
+  "kb.new_article": "＋ Yeni makale",
+  "kb.back_to_list": "← Listeye dön",
+
+  "settings.appearance": "Görünüm",
+  "settings.theme": "Tema",
+  "settings.language": "Dil",
+  "settings.windows": "Pencereler",
+  "settings.site_surface": "Site ve Yüzey",
+  "settings.rendering": "Oluşturma",
+  "settings.network": "Ağ",
+  "settings.language.hint": "Arayüz dilini ve düzen yönünü ayarlar.",
+
+  "theme.themes": "Temalar",
+  "theme.new_from": "Şundan yeni tema",
+
+  "category.apps": "Uygulamalar ve İçerik",
+  "category.system": "Sistem",
+  "category.developer": "Geliştirici",
+  "category.apps.desc": "Sitelere göz atın, oyun oynayın, uygulama çalıştırın",
+  "category.system.desc": "Peer'ler, anahtarlar, bağlantılar, ayarlar, depolama",
+  "category.developer.desc": "Varlık ağacı, sorgu ve yürütme konsolları, kabuk, günlükler",
+
+  "window.entity_tree": "Varlık Ağacı",
+  "window.games": "Oyunlar",
+  "window.apps": "Uygulamalar",
+  "window.knowledge_base": "Bilgi Tabanı",
+  "window.key_manager": "Anahtar Yöneticisi",
+  "window.peer_connections": "Peer Bağlantıları",
+  "window.file_transfer": "Dosya Aktarımı",
+  "window.execute_console": "Yürütme Konsolu",
+  "window.query_console": "Sorgu Konsolu",
+  "window.settings": "Ayarlar",
+  "window.event_log": "Olay Günlüğü",
+  "window.peers": "Peer'ler",
+  "window.shell": "Kabuk",
+  "window.chain_trace": "Zincir İzleme",
+  "window.path_tap": "Yol Dinleme",
+  "window.wire_recorder": "Protokol Kaydedici",
+  "window.content_stream": "İçerik Akışı",
+  "window.site_browser": "Site Tarayıcısı",
+  "window.storage": "Depolama",
+  "window.site_creator": "Site Oluşturucu",
+  "window.system_overview": "Sistem Genel Bakışı",
+  "window.access_log": "Erişim Günlüğü",
+  "window.theme_editor": "Tema Düzenleyici",
+
+  "btn.create": "Oluştur",
+  "btn.move": "Taşı",
+  "btn.authorize": "Yetkilendir",
+  "btn.add_peer": "Peer ekle",
+  "btn.find": "Bul",
+  "btn.count": "Say",
+  "btn.trace": "İzle",
+
+  "execute.execute": "Yürüt",
+  "execute.guided": "Rehberli",
+  "execute.raw": "Ham",
+
+  "filetransfer.pull_selected": "⬇ Seçili dosyayı indir",
+  "filetransfer.upload_file": "Bir dosya yükle",
+
+  "siteeditor.create_site": "Site oluştur",
+  "siteeditor.delete_site": "Siteyi sil",
+  "siteeditor.save_page": "Sayfayı kaydet",
+  "siteeditor.delete_page": "Sayfayı sil",
+  "siteeditor.title_optional": "Başlık (isteğe bağlı)",
+  "siteeditor.page_title_ph": "Sayfa başlığı",
+
+  "entitytree.source_none": "Yok (manuel)",
+  "entitytree.source_app": "Uygulama toplamı (peer: {peer})",
+
+  "settings.boot_into": "Şuraya başlat",
+  "settings.boot_chrome": "Masaüstü",
+  "settings.boot_site": "Site",
+  "settings.boot_window": "Pencere",
+
+  "theme.scheme_dark": "Koyu",
+  "theme.scheme_light": "Açık",
+
+  "sysoverview.profile_pull": "Yalnızca indir",
+  "sysoverview.profile_twoway": "Çift yönlü",
+
+  "label.level": "Düzey",
+  "label.results": "Sonuçlar",
+  "label.content": "İçerik",
+  "label.system": "Sistem",
+  "status.loading": "Yükleniyor…",
+
+  "peers.scan_qr": "Bir QR kodu tara",
+  "peers.scan_hint": "Buraya bağlamak için bunu başka bir cihazdan tarayın.",
+  "peers.show_qr": "QR kodunu göster",
+
+  "sitedir.sites_menu": "Siteler ▾",
+  "sitedir.sites": "Siteler",
+
+  "contentsite.enter_peer": "Peer'e gir",
+  "contentsite.contents_menu": "İçerik ▾",
+
+  "storage.origin_disk": "Kaynak disk (IndexedDB ＋ önbellekler — tüm kaynak)",
+  "storage.backend_native": "Sistem arka ucu — yerel depo",
+  "storage.native_sqlite": "Yerel / SQLite",
+  "storage.by_path": "Üst düzey yola göre:",
+
+  "chaintrace.chain_id": "Zincir kimliği:",
+  "chaintrace.continuations": "Devamlar",
+  "chaintrace.error_markers": "Zincir hatası işaretleri",
+
+  "siteeditor.move_rename": "Şuraya taşı/yeniden adlandır:",
+
+  "entitytree.up": "Yukarı",
+  "entitytree.selection_source": "Seçim kaynağı",
+  "entitytree.select_prompt": "Ağaçtan bir varlık seçin",
+  "entitytree.inspector": "İnceleyici",
+  "entitytree.none_selected": "Seçili varlık yok",
+  "entitytree.raw_hash": "Ham karma",
+
+  "settings.lockdown_active": "Kilitleme etkin (bu dağıtımın yapılandırmasıyla ayarlandı).",
+
+  "windows.none_open": "Açık pencere yok",
+  "windows.open_windows": "Açık pencereler",
+  "mod.learn_more": "Daha fazla bilgi edinin ve katılın: ",
+
+  "status.saved": "kaydedildi",
+  "status.stopped": "durduruldu",
+  "status.granted": "verildi",
+
+  "chip.connected": "Bağlandı",
+  "chip.connecting": "Bağlanıyor…",
+  "chip.offline": "Çevrimdışı",
+  "chip.authorized": "Yetkili",
+  "chip.pending": "Beklemede",
+  "chip.not_authorized": "Yetkisiz",
+  "chip.not_verified": "Doğrulanmadı",
+
+  "label.state_path": "Durum: {path}",
+
+  "accesslog.operations": "işlemler: {n}",
+  "accesslog.authorized_head": "Yetkilendirildi: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Şurada varlık yok: {path}",
+
+  "siteeditor.editing": "Düzenleniyor: {id}",
+  "siteeditor.adding_to": "Şuraya ekleniyor: {target}",
+  "siteeditor.confirm_move_unsaved": "Bu sayfada taşındığında kaybolacak kaydedilmemiş değişiklikler var. Yine de taşınsın mı?",
+
+  "storage.peer_not_created": "Peer oluşturulmadı — {reason}",
+
+  "kb.body_placeholder": "Markdown gövdesi",
+
+  "chaintrace.enter_hint": "(bir chain_id girin ve İzle'ye basın)",
+
+  "scanner.scanned_codes": "Taranan Kodlar",
+  "scanner.scanned_codes_count": "Taranan Kodlar ({n} benzersiz)",
+  "scanner.photo_capture": "Fotoğraf Çekimi",
+  "scanner.photo_hint": "Bir QR kodunun fotoğrafını çekin",
+  "scanner.take_photo": "Fotoğraf Çek",
+  "scanner.processing": "İşleniyor...",
+  "scanner.no_detector": "BarcodeDetector yok — kodu manuel olarak girin",
+  "scanner.detector_init_failed": "Dedektör başlatma başarısız",
+  "scanner.detect_call_failed": "Algılama çağrısı başarısız",
+  "scanner.qr_found": "QR kodu bulundu!",
+  "scanner.no_qr": "QR bulunamadı — tekrar deneyin",
+  "scanner.decode_error": "Kod çözme hatası",
+  "scanner.live_scanner": "Canlı Tarayıcı",
+  "scanner.live_hint": "Gerçek zamanlı kamera taraması",
+  "scanner.start_live": "Canlı Taramayı Başlat",
+  "scanner.stop": "Durdur",
+  "scanner.stopped": "Durduruldu",
+  "scanner.camera_unavailable": "Kamera kullanılamıyor",
+  "scanner.camera_denied": "Kamera reddedildi",
+  "scanner.starting_camera": "Kamera başlatılıyor...",
+  "scanner.stream_error": "Akış hatası",
+  "scanner.scanning": "Taranıyor...",
+  "scanner.detector_failed": "Dedektör başarısız oldu",
+  "scanner.scan_detect_error": "Tarama {n} — algılama hatası",
+  "scanner.found_continuing": "Bulundu! Tarama sürüyor...",
+  "scanner.scan_n": "Tarama {n}...",
+  "scanner.scan_error": "Tarama {n} — hata",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "other": "{n} peer"
+  }
+}

@@ -1,0 +1,241 @@
+{
+  "btn.save": "सहेजें",
+  "btn.cancel": "रद्द करें",
+  "btn.delete": "हटाएं",
+  "btn.copy": "कॉपी करें",
+  "btn.connect": "कनेक्ट करें",
+  "btn.edit": "संपादित करें",
+  "btn.refresh": "ताज़ा करें",
+  "btn.back": "← वापस",
+  "btn.revert": "पूर्ववत करें",
+
+  "label.status": "स्थिति",
+  "label.title": "शीर्षक",
+  "label.peer": "पीयर",
+  "label.target": "लक्ष्य",
+  "label.address": "पता",
+  "label.name": "नाम",
+  "label.label": "लेबल",
+
+  "status.copied": "कॉपी किया गया ✓",
+
+  "execute.handler": "हैंडलर",
+  "execute.operation": "ऑपरेशन",
+  "execute.handler_uri": "हैंडलर URI",
+  "execute.resource": "संसाधन",
+
+  "peers.known_devices": "ज्ञात डिवाइस",
+  "peers.connect_device": "किसी डिवाइस से कनेक्ट करें",
+  "peers.pair_qr": "किसी डिवाइस को पेयर करें (QR)",
+
+  "tooltip.close_window": "विंडो बंद करें",
+  "tooltip.open_windows": "खुली विंडो",
+  "tooltip.fill_window": "विंडो को अधिकतम करें",
+  "tooltip.restore_size": "सामान्य आकार पर लौटें",
+  "tooltip.menu": "मेन्यू",
+  "tooltip.back": "वापस",
+  "tooltip.site_home": "साइट के होम पर जाएं",
+  "tooltip.unsaved": "असहेजे गए परिवर्तन",
+
+  "kb.title_placeholder": "लेख का शीर्षक",
+  "theme.name_placeholder": "नाम (a-z, 0-9, हाइफ़न)",
+  "theme.label_placeholder": "प्रदर्शित लेबल",
+
+  "filetransfer.device": "डिवाइस",
+  "filetransfer.shared_files": "साझा की गई फ़ाइलें",
+  "filetransfer.send_file": "एक फ़ाइल भेजें",
+  "filetransfer.from_peer": "पीयर से",
+  "filetransfer.results": "परिणाम",
+
+  "syspeers.system_peer": "सिस्टम पीयर",
+  "syspeers.system_backend": "सिस्टम बैकएंड",
+
+  "sysoverview.clear_logs": "लॉग साफ़ करें",
+  "sysoverview.logs": "लॉग",
+  "sysoverview.device_auth": "डिवाइस प्राधिकरण",
+  "sysoverview.grant_backend_hint": "बैकएंड पर प्राधिकृत; विशिष्ट दायरा स्थानीय रूप से रिकॉर्ड नहीं किया जाता।",
+
+  "kb.new_article": "＋ नया लेख",
+  "kb.back_to_list": "← सूची पर वापस जाएं",
+
+  "settings.appearance": "स्वरूप",
+  "settings.theme": "थीम",
+  "settings.language": "भाषा",
+  "settings.windows": "विंडो",
+  "settings.site_surface": "साइट और सतह",
+  "settings.rendering": "रेंडरिंग",
+  "settings.network": "नेटवर्क",
+  "settings.language.hint": "इंटरफ़ेस की भाषा और लेआउट दिशा सेट करता है।",
+
+  "theme.themes": "थीम",
+  "theme.new_from": "इससे नई थीम",
+
+  "category.apps": "ऐप्स और सामग्री",
+  "category.system": "सिस्टम",
+  "category.developer": "डेवलपर",
+  "category.apps.desc": "साइटें ब्राउज़ करें, गेम खेलें, ऐप्स चलाएं",
+  "category.system.desc": "पीयर, कुंजियां, कनेक्शन, सेटिंग्स, स्टोरेज",
+  "category.developer.desc": "एंटिटी ट्री, क्वेरी और निष्पादन कंसोल, शेल, लॉग",
+
+  "window.entity_tree": "एंटिटी ट्री",
+  "window.games": "गेम",
+  "window.apps": "ऐप्स",
+  "window.knowledge_base": "नॉलेज बेस",
+  "window.key_manager": "कुंजी प्रबंधक",
+  "window.peer_connections": "पीयर कनेक्शन",
+  "window.file_transfer": "फ़ाइल स्थानांतरण",
+  "window.execute_console": "निष्पादन कंसोल",
+  "window.query_console": "क्वेरी कंसोल",
+  "window.settings": "सेटिंग्स",
+  "window.event_log": "इवेंट लॉग",
+  "window.peers": "पीयर",
+  "window.shell": "शेल",
+  "window.chain_trace": "चेन ट्रेस",
+  "window.path_tap": "पाथ टैप",
+  "window.wire_recorder": "प्रोटोकॉल रिकॉर्डर",
+  "window.content_stream": "सामग्री स्ट्रीम",
+  "window.site_browser": "साइट ब्राउज़र",
+  "window.storage": "स्टोरेज",
+  "window.site_creator": "साइट निर्माता",
+  "window.system_overview": "सिस्टम अवलोकन",
+  "window.access_log": "एक्सेस लॉग",
+  "window.theme_editor": "थीम संपादक",
+
+  "btn.create": "बनाएं",
+  "btn.move": "स्थानांतरित करें",
+  "btn.authorize": "प्राधिकृत करें",
+  "btn.add_peer": "पीयर जोड़ें",
+  "btn.find": "खोजें",
+  "btn.count": "गिनें",
+  "btn.trace": "ट्रेस करें",
+
+  "execute.execute": "निष्पादित करें",
+  "execute.guided": "निर्देशित",
+  "execute.raw": "कच्चा",
+
+  "filetransfer.pull_selected": "⬇ चयनित फ़ाइल खींचें",
+  "filetransfer.upload_file": "एक फ़ाइल अपलोड करें",
+
+  "siteeditor.create_site": "साइट बनाएं",
+  "siteeditor.delete_site": "साइट हटाएं",
+  "siteeditor.save_page": "पेज सहेजें",
+  "siteeditor.delete_page": "पेज हटाएं",
+  "siteeditor.title_optional": "शीर्षक (वैकल्पिक)",
+  "siteeditor.page_title_ph": "पेज का शीर्षक",
+
+  "entitytree.source_none": "कोई नहीं (मैनुअल)",
+  "entitytree.source_app": "ऐप समुच्चय (पीयर: {peer})",
+
+  "settings.boot_into": "इसमें बूट करें",
+  "settings.boot_chrome": "डेस्कटॉप",
+  "settings.boot_site": "साइट",
+  "settings.boot_window": "विंडो",
+
+  "theme.scheme_dark": "गहरा",
+  "theme.scheme_light": "हल्का",
+
+  "sysoverview.profile_pull": "केवल खींचें",
+  "sysoverview.profile_twoway": "दो-तरफ़ा",
+
+  "label.level": "स्तर",
+  "label.results": "परिणाम",
+  "label.content": "सामग्री",
+  "label.system": "सिस्टम",
+  "status.loading": "लोड हो रहा है…",
+
+  "peers.scan_qr": "एक QR कोड स्कैन करें",
+  "peers.scan_hint": "इसे यहां कनेक्ट करने के लिए किसी अन्य डिवाइस से स्कैन करें।",
+  "peers.show_qr": "QR कोड दिखाएं",
+
+  "sitedir.sites_menu": "साइटें ▾",
+  "sitedir.sites": "साइटें",
+
+  "contentsite.enter_peer": "पीयर में प्रवेश करें",
+  "contentsite.contents_menu": "सामग्री ▾",
+
+  "storage.origin_disk": "मूल डिस्क (IndexedDB ＋ कैश — संपूर्ण मूल)",
+  "storage.backend_native": "सिस्टम बैकएंड — नेटिव स्टोर",
+  "storage.native_sqlite": "नेटिव / SQLite",
+  "storage.by_path": "शीर्ष-स्तरीय पथ के अनुसार:",
+
+  "chaintrace.chain_id": "चेन ID:",
+  "chaintrace.continuations": "निरंतरताएं",
+  "chaintrace.error_markers": "चेन-त्रुटि मार्कर",
+
+  "siteeditor.move_rename": "यहां स्थानांतरित/नाम बदलें:",
+
+  "entitytree.up": "ऊपर",
+  "entitytree.selection_source": "चयन स्रोत",
+  "entitytree.select_prompt": "ट्री से एक एंटिटी चुनें",
+  "entitytree.inspector": "इंस्पेक्टर",
+  "entitytree.none_selected": "कोई एंटिटी चयनित नहीं",
+  "entitytree.raw_hash": "कच्चा हैश",
+
+  "settings.lockdown_active": "लॉकडाउन सक्रिय है (इस परिनियोजन के कॉन्फ़िगरेशन द्वारा सेट)।",
+
+  "windows.none_open": "कोई विंडो खुली नहीं है",
+  "windows.open_windows": "खुली विंडो",
+  "mod.learn_more": "अधिक जानें और शामिल हों ",
+
+  "status.saved": "सहेजा गया",
+  "status.stopped": "रुका हुआ",
+  "status.granted": "प्रदान किया गया",
+
+  "chip.connected": "कनेक्ट किया गया",
+  "chip.connecting": "कनेक्ट हो रहा है…",
+  "chip.offline": "ऑफ़लाइन",
+  "chip.authorized": "प्राधिकृत",
+  "chip.pending": "लंबित",
+  "chip.not_authorized": "प्राधिकृत नहीं",
+  "chip.not_verified": "सत्यापित नहीं",
+
+  "label.state_path": "स्थिति: {path}",
+
+  "accesslog.operations": "ऑपरेशन: {n}",
+  "accesslog.authorized_head": "प्राधिकृत: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "यहां कोई एंटिटी नहीं: {path}",
+
+  "siteeditor.editing": "संपादन: {id}",
+  "siteeditor.adding_to": "इसमें जोड़ा जा रहा है: {target}",
+  "siteeditor.confirm_move_unsaved": "इस पेज में असहेजे गए परिवर्तन हैं जो स्थानांतरित करने पर खो जाएंगे। फिर भी स्थानांतरित करें?",
+
+  "storage.peer_not_created": "पीयर नहीं बनाया गया — {reason}",
+
+  "kb.body_placeholder": "Markdown मुख्य भाग",
+
+  "chaintrace.enter_hint": "(एक chain_id दर्ज करें और ट्रेस दबाएं)",
+
+  "scanner.scanned_codes": "स्कैन किए गए कोड",
+  "scanner.scanned_codes_count": "स्कैन किए गए कोड ({n} अद्वितीय)",
+  "scanner.photo_capture": "फ़ोटो कैप्चर",
+  "scanner.photo_hint": "किसी QR कोड की फ़ोटो लें",
+  "scanner.take_photo": "फ़ोटो लें",
+  "scanner.processing": "प्रोसेसिंग...",
+  "scanner.no_detector": "कोई BarcodeDetector नहीं — कोड मैन्युअल रूप से दर्ज करें",
+  "scanner.detector_init_failed": "डिटेक्टर आरंभीकरण विफल",
+  "scanner.detect_call_failed": "डिटेक्ट कॉल विफल",
+  "scanner.qr_found": "QR कोड मिला!",
+  "scanner.no_qr": "कोई QR नहीं मिला — फिर से प्रयास करें",
+  "scanner.decode_error": "डिकोड त्रुटि",
+  "scanner.live_scanner": "लाइव स्कैनर",
+  "scanner.live_hint": "रीयल-टाइम कैमरा स्कैनिंग",
+  "scanner.start_live": "लाइव स्कैन प्रारंभ करें",
+  "scanner.stop": "रोकें",
+  "scanner.stopped": "रुका हुआ",
+  "scanner.camera_unavailable": "कैमरा उपलब्ध नहीं",
+  "scanner.camera_denied": "कैमरा अस्वीकृत",
+  "scanner.starting_camera": "कैमरा प्रारंभ हो रहा है...",
+  "scanner.stream_error": "स्ट्रीम त्रुटि",
+  "scanner.scanning": "स्कैन हो रहा है...",
+  "scanner.detector_failed": "डिटेक्टर विफल",
+  "scanner.scan_detect_error": "स्कैन {n} — डिटेक्ट त्रुटि",
+  "scanner.found_continuing": "मिल गया! स्कैनिंग जारी है...",
+  "scanner.scan_n": "स्कैन {n}...",
+  "scanner.scan_error": "स्कैन {n} — त्रुटि",
+
+  "peer.count": {
+    "one": "{n} पीयर",
+    "other": "{n} पीयर"
+  }
+}

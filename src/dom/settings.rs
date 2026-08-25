@@ -32,7 +32,7 @@ pub fn render(container: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 
     let info = util::create_element("p");
     info.set_attribute("style", "color:var(--text-faint, #666);margin-top:12px;font-size:11px").ok();
-    util::set_text(&info, &format!("State: {}", output.state_path));
+    util::set_text(&info, &crate::i18n::t("label.state_path", &[("path", &output.state_path)]));
     util::append(&wrapper, &info);
 
     util::append(container, &wrapper);

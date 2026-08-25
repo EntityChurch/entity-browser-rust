@@ -1,0 +1,241 @@
+{
+  "btn.save": "Lagre",
+  "btn.cancel": "Avbryt",
+  "btn.delete": "Slett",
+  "btn.copy": "Kopier",
+  "btn.connect": "Koble til",
+  "btn.edit": "Rediger",
+  "btn.refresh": "Oppdater",
+  "btn.back": "← Tilbake",
+  "btn.revert": "Tilbakestill",
+
+  "label.status": "Status",
+  "label.title": "Tittel",
+  "label.peer": "Peer",
+  "label.target": "Mål",
+  "label.address": "Adresse",
+  "label.name": "Navn",
+  "label.label": "Etikett",
+
+  "status.copied": "Kopiert ✓",
+
+  "execute.handler": "Behandler",
+  "execute.operation": "Operasjon",
+  "execute.handler_uri": "Behandler-URI",
+  "execute.resource": "Ressurs",
+
+  "peers.known_devices": "Kjente enheter",
+  "peers.connect_device": "Koble til en enhet",
+  "peers.pair_qr": "Par en enhet (QR)",
+
+  "tooltip.close_window": "Lukk vindu",
+  "tooltip.open_windows": "Åpne vinduer",
+  "tooltip.fill_window": "Maksimer vinduet",
+  "tooltip.restore_size": "Tilbake til normal størrelse",
+  "tooltip.menu": "Meny",
+  "tooltip.back": "Tilbake",
+  "tooltip.site_home": "Gå til nettstedets startside",
+  "tooltip.unsaved": "Ulagrede endringer",
+
+  "kb.title_placeholder": "Artikkelens tittel",
+  "theme.name_placeholder": "navn (a-z, 0-9, bindestreker)",
+  "theme.label_placeholder": "visningsetikett",
+
+  "filetransfer.device": "Enhet",
+  "filetransfer.shared_files": "Delte filer",
+  "filetransfer.send_file": "Send en fil",
+  "filetransfer.from_peer": "Fra peer",
+  "filetransfer.results": "Resultater",
+
+  "syspeers.system_peer": "Systempeer",
+  "syspeers.system_backend": "Systembackend",
+
+  "sysoverview.clear_logs": "Tøm logger",
+  "sysoverview.logs": "Logger",
+  "sysoverview.device_auth": "Enhetsautorisasjoner",
+  "sysoverview.grant_backend_hint": "Autorisert på backend; det spesifikke omfanget registreres ikke lokalt.",
+
+  "kb.new_article": "+ Ny artikkel",
+  "kb.back_to_list": "← Tilbake til listen",
+
+  "settings.appearance": "Utseende",
+  "settings.theme": "Tema",
+  "settings.language": "Språk",
+  "settings.windows": "Vinduer",
+  "settings.site_surface": "Nettsted og overflate",
+  "settings.rendering": "Gjengivelse",
+  "settings.network": "Nettverk",
+  "settings.language.hint": "Angir grensesnittspråket og leseretningen.",
+
+  "theme.themes": "Temaer",
+  "theme.new_from": "Nytt tema fra",
+
+  "category.apps": "Apper og innhold",
+  "category.system": "System",
+  "category.developer": "Utvikler",
+  "category.apps.desc": "Bla gjennom nettsteder, spill spill, kjør apper",
+  "category.system.desc": "Peers, nøkler, tilkoblinger, innstillinger, lagring",
+  "category.developer.desc": "Entitetstre, spørrings- og kjørekonsoller, shell, logger",
+
+  "window.entity_tree": "Entitetstre",
+  "window.games": "Spill",
+  "window.apps": "Apper",
+  "window.knowledge_base": "Kunnskapsbase",
+  "window.key_manager": "Nøkkelbehandler",
+  "window.peer_connections": "Peer-tilkoblinger",
+  "window.file_transfer": "Filoverføring",
+  "window.execute_console": "Kjørekonsoll",
+  "window.query_console": "Spørringskonsoll",
+  "window.settings": "Innstillinger",
+  "window.event_log": "Hendelseslogg",
+  "window.peers": "Peers",
+  "window.shell": "Shell",
+  "window.chain_trace": "Kjedesporing",
+  "window.path_tap": "Sti-avlytting",
+  "window.wire_recorder": "Protokollopptaker",
+  "window.content_stream": "Innholdsstrøm",
+  "window.site_browser": "Nettstedsleser",
+  "window.storage": "Lagring",
+  "window.site_creator": "Nettstedsoppretter",
+  "window.system_overview": "Systemoversikt",
+  "window.access_log": "Tilgangslogg",
+  "window.theme_editor": "Tema-redigerer",
+
+  "btn.create": "Opprett",
+  "btn.move": "Flytt",
+  "btn.authorize": "Autoriser",
+  "btn.add_peer": "Legg til peer",
+  "btn.find": "Finn",
+  "btn.count": "Tell",
+  "btn.trace": "Spor",
+
+  "execute.execute": "Kjør",
+  "execute.guided": "Veiledet",
+  "execute.raw": "Rå",
+
+  "filetransfer.pull_selected": "⬇ Last ned valgt fil",
+  "filetransfer.upload_file": "Last opp en fil",
+
+  "siteeditor.create_site": "Opprett nettsted",
+  "siteeditor.delete_site": "Slett nettsted",
+  "siteeditor.save_page": "Lagre side",
+  "siteeditor.delete_page": "Slett side",
+  "siteeditor.title_optional": "Tittel (valgfritt)",
+  "siteeditor.page_title_ph": "Sidetittel",
+
+  "entitytree.source_none": "Ingen (manuell)",
+  "entitytree.source_app": "App-aggregat (peer: {peer})",
+
+  "settings.boot_into": "Start i",
+  "settings.boot_chrome": "Skrivebord",
+  "settings.boot_site": "Nettsted",
+  "settings.boot_window": "Vindu",
+
+  "theme.scheme_dark": "Mørk",
+  "theme.scheme_light": "Lys",
+
+  "sysoverview.profile_pull": "Kun hent",
+  "sysoverview.profile_twoway": "Toveis",
+
+  "label.level": "Nivå",
+  "label.results": "Resultater",
+  "label.content": "Innhold",
+  "label.system": "System",
+  "status.loading": "Laster inn…",
+
+  "peers.scan_qr": "Skann en QR-kode",
+  "peers.scan_hint": "Skann dette fra en annen enhet for å koble den til her.",
+  "peers.show_qr": "Vis QR-kode",
+
+  "sitedir.sites_menu": "Nettsteder ▾",
+  "sitedir.sites": "Nettsteder",
+
+  "contentsite.enter_peer": "Gå inn i peer",
+  "contentsite.contents_menu": "Innhold ▾",
+
+  "storage.origin_disk": "Opprinnelsesdisk (IndexedDB + cacher — hele opprinnelsen)",
+  "storage.backend_native": "Systembackend — innebygd lagring",
+  "storage.native_sqlite": "Innebygd / SQLite",
+  "storage.by_path": "Etter sti på øverste nivå:",
+
+  "chaintrace.chain_id": "Kjede-ID:",
+  "chaintrace.continuations": "Fortsettelser",
+  "chaintrace.error_markers": "Kjedefeilmarkører",
+
+  "siteeditor.move_rename": "Flytt/gi nytt navn til:",
+
+  "entitytree.up": "Opp",
+  "entitytree.selection_source": "Utvalgskilde",
+  "entitytree.select_prompt": "Velg en entitet fra treet",
+  "entitytree.inspector": "Inspektør",
+  "entitytree.none_selected": "Ingen entitet valgt",
+  "entitytree.raw_hash": "Rå hash",
+
+  "settings.lockdown_active": "Lås er aktiv (angitt av konfigurasjonen for denne utrullingen).",
+
+  "windows.none_open": "Ingen vinduer åpne",
+  "windows.open_windows": "Åpne vinduer",
+  "mod.learn_more": "Lær mer og bli med på ",
+
+  "status.saved": "lagret",
+  "status.stopped": "stoppet",
+  "status.granted": "innvilget",
+
+  "chip.connected": "Tilkoblet",
+  "chip.connecting": "Kobler til…",
+  "chip.offline": "Frakoblet",
+  "chip.authorized": "Autorisert",
+  "chip.pending": "Venter",
+  "chip.not_authorized": "Ikke autorisert",
+  "chip.not_verified": "Ikke verifisert",
+
+  "label.state_path": "Status: {path}",
+
+  "accesslog.operations": "operasjoner: {n}",
+  "accesslog.authorized_head": "Autorisert: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Ingen entitet ved: {path}",
+
+  "siteeditor.editing": "Redigerer: {id}",
+  "siteeditor.adding_to": "Legger til i: {target}",
+  "siteeditor.confirm_move_unsaved": "Denne siden har ulagrede endringer som går tapt når den flyttes. Flytt likevel?",
+
+  "storage.peer_not_created": "Peer ikke opprettet — {reason}",
+
+  "kb.body_placeholder": "Markdown-brødtekst",
+
+  "chaintrace.enter_hint": "(skriv inn en chain_id og trykk på Spor)",
+
+  "scanner.scanned_codes": "Skannede koder",
+  "scanner.scanned_codes_count": "Skannede koder ({n} unike)",
+  "scanner.photo_capture": "Fotoopptak",
+  "scanner.photo_hint": "Ta et bilde av en QR-kode",
+  "scanner.take_photo": "Ta bilde",
+  "scanner.processing": "Behandler...",
+  "scanner.no_detector": "Ingen BarcodeDetector — skriv inn koden manuelt",
+  "scanner.detector_init_failed": "Initialisering av detektor mislyktes",
+  "scanner.detect_call_failed": "Deteksjonskall mislyktes",
+  "scanner.qr_found": "QR-kode funnet!",
+  "scanner.no_qr": "Ingen QR funnet — prøv igjen",
+  "scanner.decode_error": "Dekodingsfeil",
+  "scanner.live_scanner": "Live-skanner",
+  "scanner.live_hint": "Kameraskanning i sanntid",
+  "scanner.start_live": "Start live-skanning",
+  "scanner.stop": "Stopp",
+  "scanner.stopped": "Stoppet",
+  "scanner.camera_unavailable": "Kamera utilgjengelig",
+  "scanner.camera_denied": "Kamera avvist",
+  "scanner.starting_camera": "Starter kamera...",
+  "scanner.stream_error": "Strømfeil",
+  "scanner.scanning": "Skanner...",
+  "scanner.detector_failed": "Detektor mislyktes",
+  "scanner.scan_detect_error": "Skanning {n} — deteksjonsfeil",
+  "scanner.found_continuing": "Funnet! Fortsetter skanning...",
+  "scanner.scan_n": "Skanning {n}...",
+  "scanner.scan_error": "Skanning {n} — feil",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "other": "{n} peers"
+  }
+}

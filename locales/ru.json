@@ -1,0 +1,242 @@
+{
+  "btn.save": "Сохранить",
+  "btn.cancel": "Отмена",
+  "btn.delete": "Удалить",
+  "btn.copy": "Копировать",
+  "btn.connect": "Подключить",
+  "btn.edit": "Изменить",
+  "btn.refresh": "Обновить",
+  "btn.back": "← Назад",
+  "btn.revert": "Откатить",
+
+  "label.status": "Статус",
+  "label.title": "Заголовок",
+  "label.peer": "Пир",
+  "label.target": "Цель",
+  "label.address": "Адрес",
+  "label.name": "Имя",
+  "label.label": "Метка",
+
+  "status.copied": "Скопировано ✓",
+
+  "execute.handler": "Обработчик",
+  "execute.operation": "Операция",
+  "execute.handler_uri": "URI обработчика",
+  "execute.resource": "Ресурс",
+
+  "peers.known_devices": "Известные устройства",
+  "peers.connect_device": "Подключиться к устройству",
+  "peers.pair_qr": "Сопряжение устройства (QR)",
+
+  "tooltip.close_window": "Закрыть окно",
+  "tooltip.open_windows": "Открытые окна",
+  "tooltip.fill_window": "Развернуть окно",
+  "tooltip.restore_size": "Вернуть обычный размер",
+  "tooltip.menu": "Меню",
+  "tooltip.back": "Назад",
+  "tooltip.site_home": "На главную страницу сайта",
+  "tooltip.unsaved": "Несохранённые изменения",
+
+  "kb.title_placeholder": "Заголовок статьи",
+  "theme.name_placeholder": "имя (a-z, 0-9, дефисы)",
+  "theme.label_placeholder": "отображаемая метка",
+
+  "filetransfer.device": "Устройство",
+  "filetransfer.shared_files": "Общие файлы",
+  "filetransfer.send_file": "Отправить файл",
+  "filetransfer.from_peer": "От пира",
+  "filetransfer.results": "Результаты",
+
+  "syspeers.system_peer": "Системный пир",
+  "syspeers.system_backend": "Системный бэкенд",
+
+  "sysoverview.clear_logs": "Очистить журналы",
+  "sysoverview.logs": "Журналы",
+  "sysoverview.device_auth": "Авторизации устройств",
+  "sysoverview.grant_backend_hint": "Авторизовано на бэкенде; конкретная область не записывается локально.",
+
+  "kb.new_article": "+ Новая статья",
+  "kb.back_to_list": "← Назад к списку",
+
+  "settings.appearance": "Оформление",
+  "settings.theme": "Тема",
+  "settings.language": "Язык",
+  "settings.windows": "Окна",
+  "settings.site_surface": "Сайт и поверхность",
+  "settings.rendering": "Отрисовка",
+  "settings.network": "Сеть",
+  "settings.language.hint": "Задаёт язык интерфейса и направление текста.",
+
+  "theme.themes": "Темы",
+  "theme.new_from": "Новая тема на основе",
+
+  "category.apps": "Приложения и контент",
+  "category.system": "Система",
+  "category.developer": "Разработчик",
+  "category.apps.desc": "Просмотр сайтов, игры, запуск приложений",
+  "category.system.desc": "Пиры, ключи, соединения, настройки, хранилище",
+  "category.developer.desc": "Дерево сущностей, консоли запросов и выполнения, оболочка, журналы",
+
+  "window.entity_tree": "Дерево сущностей",
+  "window.games": "Игры",
+  "window.apps": "Приложения",
+  "window.knowledge_base": "База знаний",
+  "window.key_manager": "Менеджер ключей",
+  "window.peer_connections": "Соединения пиров",
+  "window.file_transfer": "Передача файлов",
+  "window.execute_console": "Консоль выполнения",
+  "window.query_console": "Консоль запросов",
+  "window.settings": "Настройки",
+  "window.event_log": "Журнал событий",
+  "window.peers": "Пиры",
+  "window.shell": "Оболочка",
+  "window.chain_trace": "Трассировка цепочки",
+  "window.path_tap": "Перехват пути",
+  "window.wire_recorder": "Запись протокола",
+  "window.content_stream": "Поток контента",
+  "window.site_browser": "Браузер сайтов",
+  "window.storage": "Хранилище",
+  "window.site_creator": "Создатель сайтов",
+  "window.system_overview": "Обзор системы",
+  "window.access_log": "Журнал доступа",
+  "window.theme_editor": "Редактор тем",
+
+  "btn.create": "Создать",
+  "btn.move": "Переместить",
+  "btn.authorize": "Авторизовать",
+  "btn.add_peer": "Добавить пир",
+  "btn.find": "Найти",
+  "btn.count": "Подсчитать",
+  "btn.trace": "Трассировать",
+
+  "execute.execute": "Выполнить",
+  "execute.guided": "С подсказками",
+  "execute.raw": "Сырой",
+
+  "filetransfer.pull_selected": "⬇ Скачать выбранный файл",
+  "filetransfer.upload_file": "Загрузить файл",
+
+  "siteeditor.create_site": "Создать сайт",
+  "siteeditor.delete_site": "Удалить сайт",
+  "siteeditor.save_page": "Сохранить страницу",
+  "siteeditor.delete_page": "Удалить страницу",
+  "siteeditor.title_optional": "Заголовок (необязательно)",
+  "siteeditor.page_title_ph": "Заголовок страницы",
+
+  "entitytree.source_none": "Нет (вручную)",
+  "entitytree.source_app": "Агрегат приложения (пир: {peer})",
+
+  "settings.boot_into": "Загружаться в",
+  "settings.boot_chrome": "Рабочий стол",
+  "settings.boot_site": "Сайт",
+  "settings.boot_window": "Окно",
+
+  "theme.scheme_dark": "Тёмная",
+  "theme.scheme_light": "Светлая",
+
+  "sysoverview.profile_pull": "Только приём",
+  "sysoverview.profile_twoway": "Двусторонний",
+
+  "label.level": "Уровень",
+  "label.results": "Результаты",
+  "label.content": "Контент",
+  "label.system": "Система",
+  "status.loading": "Загрузка…",
+
+  "peers.scan_qr": "Сканировать QR-код",
+  "peers.scan_hint": "Отсканируйте это с другого устройства, чтобы подключить его здесь.",
+  "peers.show_qr": "Показать QR-код",
+
+  "sitedir.sites_menu": "Сайты ▾",
+  "sitedir.sites": "Сайты",
+
+  "contentsite.enter_peer": "Войти в пир",
+  "contentsite.contents_menu": "Содержание ▾",
+
+  "storage.origin_disk": "Диск источника (IndexedDB + кеши — весь источник)",
+  "storage.backend_native": "Системный бэкенд — нативное хранилище",
+  "storage.native_sqlite": "Нативное / SQLite",
+  "storage.by_path": "По пути верхнего уровня:",
+
+  "chaintrace.chain_id": "ID цепочки:",
+  "chaintrace.continuations": "Продолжения",
+  "chaintrace.error_markers": "Маркеры ошибок цепочки",
+
+  "siteeditor.move_rename": "Переместить/переименовать в:",
+
+  "entitytree.up": "Вверх",
+  "entitytree.selection_source": "Источник выбора",
+  "entitytree.select_prompt": "Выберите сущность из дерева",
+  "entitytree.inspector": "Инспектор",
+  "entitytree.none_selected": "Сущность не выбрана",
+  "entitytree.raw_hash": "Сырой хеш",
+
+  "settings.lockdown_active": "Режим блокировки активен (задан конфигурацией этого развёртывания).",
+
+  "windows.none_open": "Нет открытых окон",
+  "windows.open_windows": "Открытые окна",
+  "mod.learn_more": "Узнать больше и присоединиться на ",
+
+  "status.saved": "сохранено",
+  "status.stopped": "остановлено",
+  "status.granted": "предоставлено",
+
+  "chip.connected": "Подключено",
+  "chip.connecting": "Подключение…",
+  "chip.offline": "Не в сети",
+  "chip.authorized": "Авторизовано",
+  "chip.pending": "Ожидание",
+  "chip.not_authorized": "Не авторизовано",
+  "chip.not_verified": "Не проверено",
+
+  "label.state_path": "Состояние: {path}",
+
+  "accesslog.operations": "операции: {n}",
+  "accesslog.authorized_head": "Авторизовано: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Нет сущности по пути: {path}",
+
+  "siteeditor.editing": "Редактирование: {id}",
+  "siteeditor.adding_to": "Добавление в: {target}",
+  "siteeditor.confirm_move_unsaved": "На этой странице есть несохранённые изменения, которые будут потеряны при перемещении. Всё равно переместить?",
+
+  "storage.peer_not_created": "Пир не создан — {reason}",
+
+  "kb.body_placeholder": "Текст в Markdown",
+
+  "chaintrace.enter_hint": "(введите chain_id и нажмите «Трассировать»)",
+
+  "scanner.scanned_codes": "Отсканированные коды",
+  "scanner.scanned_codes_count": "Отсканированные коды (уникальных: {n})",
+  "scanner.photo_capture": "Съёмка фото",
+  "scanner.photo_hint": "Сфотографируйте QR-код",
+  "scanner.take_photo": "Сделать фото",
+  "scanner.processing": "Обработка...",
+  "scanner.no_detector": "Нет BarcodeDetector — введите код вручную",
+  "scanner.detector_init_failed": "Не удалось инициализировать детектор",
+  "scanner.detect_call_failed": "Сбой вызова обнаружения",
+  "scanner.qr_found": "QR-код найден!",
+  "scanner.no_qr": "QR не найден — попробуйте снова",
+  "scanner.decode_error": "Ошибка декодирования",
+  "scanner.live_scanner": "Живой сканер",
+  "scanner.live_hint": "Сканирование камерой в реальном времени",
+  "scanner.start_live": "Запустить живое сканирование",
+  "scanner.stop": "Остановить",
+  "scanner.stopped": "Остановлено",
+  "scanner.camera_unavailable": "Камера недоступна",
+  "scanner.camera_denied": "Доступ к камере отклонён",
+  "scanner.starting_camera": "Запуск камеры...",
+  "scanner.stream_error": "Ошибка потока",
+  "scanner.scanning": "Сканирование...",
+  "scanner.detector_failed": "Сбой детектора",
+  "scanner.scan_detect_error": "Сканирование {n} — ошибка обнаружения",
+  "scanner.found_continuing": "Найдено! Продолжаем сканирование...",
+  "scanner.scan_n": "Сканирование {n}...",
+  "scanner.scan_error": "Сканирование {n} — ошибка",
+
+  "peer.count": {
+    "one": "{n} пир",
+    "few": "{n} пира",
+    "many": "{n} пиров"
+  }
+}

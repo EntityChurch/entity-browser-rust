@@ -73,6 +73,38 @@ pub const LOCALES: &[Locale] = &[
     Locale { id: "es", label: "Español", dir: "ltr", pseudo: false },
     Locale { id: "he", label: "עברית", dir: "rtl", pseudo: false },
     Locale { id: "ar", label: "العربية", dir: "rtl", pseudo: false },
+    // The broader major-language roster. Endonym labels; `fa`/`ur` are RTL. A
+    // row is pickable (and flips `dir`) as soon as it lands here; its catalog
+    // (`locales/<id>.json`) can arrive later — until then strings fall back to
+    // `en` (the roster and the embedded catalog are independent). Plural rules
+    // for every id here are pinned in `plural_category`.
+    Locale { id: "fr", label: "Français", dir: "ltr", pseudo: false },
+    Locale { id: "de", label: "Deutsch", dir: "ltr", pseudo: false },
+    Locale { id: "it", label: "Italiano", dir: "ltr", pseudo: false },
+    Locale { id: "pt", label: "Português", dir: "ltr", pseudo: false },
+    Locale { id: "nl", label: "Nederlands", dir: "ltr", pseudo: false },
+    Locale { id: "sv", label: "Svenska", dir: "ltr", pseudo: false },
+    Locale { id: "da", label: "Dansk", dir: "ltr", pseudo: false },
+    Locale { id: "no", label: "Norsk", dir: "ltr", pseudo: false },
+    Locale { id: "fi", label: "Suomi", dir: "ltr", pseudo: false },
+    Locale { id: "ru", label: "Русский", dir: "ltr", pseudo: false },
+    Locale { id: "uk", label: "Українська", dir: "ltr", pseudo: false },
+    Locale { id: "pl", label: "Polski", dir: "ltr", pseudo: false },
+    Locale { id: "cs", label: "Čeština", dir: "ltr", pseudo: false },
+    Locale { id: "ro", label: "Română", dir: "ltr", pseudo: false },
+    Locale { id: "el", label: "Ελληνικά", dir: "ltr", pseudo: false },
+    Locale { id: "hu", label: "Magyar", dir: "ltr", pseudo: false },
+    Locale { id: "tr", label: "Türkçe", dir: "ltr", pseudo: false },
+    Locale { id: "zh", label: "中文", dir: "ltr", pseudo: false },
+    Locale { id: "ja", label: "日本語", dir: "ltr", pseudo: false },
+    Locale { id: "ko", label: "한국어", dir: "ltr", pseudo: false },
+    Locale { id: "vi", label: "Tiếng Việt", dir: "ltr", pseudo: false },
+    Locale { id: "th", label: "ไทย", dir: "ltr", pseudo: false },
+    Locale { id: "id", label: "Bahasa Indonesia", dir: "ltr", pseudo: false },
+    Locale { id: "hi", label: "हिन्दी", dir: "ltr", pseudo: false },
+    Locale { id: "bn", label: "বাংলা", dir: "ltr", pseudo: false },
+    Locale { id: "fa", label: "فارسی", dir: "rtl", pseudo: false },
+    Locale { id: "ur", label: "اردو", dir: "rtl", pseudo: false },
     // Pseudo-locale: RTL, no translation. The RTL-blindside detector.
     Locale { id: "en-XA", label: "Pseudo (RTL)", dir: "rtl", pseudo: true },
 ];
@@ -289,9 +321,21 @@ pub const EN: &[(&str, Message)] = &[
     ("label.results", Message::Simple("Results")),
     ("label.content", Message::Simple("Content")),
     ("label.system", Message::Simple("System")),
+    ("label.state_path", Message::Simple("State: {path}")),
     // Transient status glyphs.
     ("status.copied", Message::Simple("Copied ✓")),
     ("status.loading", Message::Simple("Loading…")),
+    ("status.saved", Message::Simple("saved")),
+    ("status.stopped", Message::Simple("stopped")),
+    ("status.granted", Message::Simple("granted")),
+    // -- status chips (components::conn_chip / auth_chip) --
+    ("chip.connected", Message::Simple("Connected")),
+    ("chip.connecting", Message::Simple("Connecting…")),
+    ("chip.offline", Message::Simple("Offline")),
+    ("chip.authorized", Message::Simple("Authorized")),
+    ("chip.pending", Message::Simple("Pending")),
+    ("chip.not_authorized", Message::Simple("Not authorized")),
+    ("chip.not_verified", Message::Simple("Not verified")),
     // -- execute console surface --
     ("execute.handler", Message::Simple("Handler")),
     ("execute.operation", Message::Simple("Operation")),
@@ -339,6 +383,12 @@ pub const EN: &[(&str, Message)] = &[
     ("siteeditor.title_optional", Message::Simple("Title (optional)")),
     ("siteeditor.page_title_ph", Message::Simple("Page title")),
     ("siteeditor.move_rename", Message::Simple("Move/rename to:")),
+    ("siteeditor.editing", Message::Simple("Editing: {id}")),
+    ("siteeditor.adding_to", Message::Simple("Adding to: {target}")),
+    (
+        "siteeditor.confirm_move_unsaved",
+        Message::Simple("This page has unsaved changes that will be lost when it moves. Move anyway?"),
+    ),
     // -- entity tree surface --
     ("entitytree.source_none", Message::Simple("None (manual)")),
     (
@@ -354,6 +404,7 @@ pub const EN: &[(&str, Message)] = &[
     ("entitytree.inspector", Message::Simple("Inspector")),
     ("entitytree.none_selected", Message::Simple("No entity selected")),
     ("entitytree.raw_hash", Message::Simple("Raw Hash")),
+    ("entitytree.no_entity_at", Message::Simple("No entity at: {path}")),
     // -- system peers surface --
     ("syspeers.system_peer", Message::Simple("System peer")),
     ("syspeers.system_backend", Message::Simple("System backend")),
@@ -370,6 +421,7 @@ pub const EN: &[(&str, Message)] = &[
     // -- knowledge base surface --
     ("kb.new_article", Message::Simple("+ New article")),
     ("kb.back_to_list", Message::Simple("← Back to list")),
+    ("kb.body_placeholder", Message::Simple("Markdown body")),
     // -- settings surface (the P1 demonstrators — wired through t()) --
     ("settings.appearance", Message::Simple("Appearance")),
     ("settings.theme", Message::Simple("Theme")),
@@ -452,13 +504,27 @@ pub const EN: &[(&str, Message)] = &[
     ),
     ("storage.native_sqlite", Message::Simple("Native / SQLite")),
     ("storage.by_path", Message::Simple("By top-level path:")),
+    (
+        "storage.peer_not_created",
+        Message::Simple("Peer not created — {reason}"),
+    ),
     // -- chain trace surface --
     ("chaintrace.chain_id", Message::Simple("Chain ID:")),
     ("chaintrace.continuations", Message::Simple("Continuations")),
     ("chaintrace.error_markers", Message::Simple("Chain-error markers")),
+    (
+        "chaintrace.enter_hint",
+        Message::Simple("(enter a chain_id and press Trace)"),
+    ),
     // -- window switcher / desktop chrome --
     ("windows.none_open", Message::Simple("No windows open")),
     ("windows.open_windows", Message::Simple("Open Windows")),
+    // -- access log surface --
+    ("accesslog.operations", Message::Simple("operations: {n}")),
+    (
+        "accesslog.authorized_head",
+        Message::Simple("Authorized: {profile} — {summary}"),
+    ),
     (
         "mod.learn_more",
         Message::Simple("Learn more and get involved at "),
@@ -668,30 +734,52 @@ pub fn t_plural(key: &str, n: i64, args: &[(&str, &str)]) -> String {
 
 /// Select the CLDR **cardinal** plural category for `n` in `locale_id`.
 ///
-/// Rules pinned to the authoritative CLDR source (`unicode.org/cldr` v47 +
-/// `unicode-org/cldr-json`, corroborated — ADR-0001 §"Plural resolution"), for
-/// the **integer-count scope** the app actually renders (every count is a
-/// non-negative integer, so the CLDR `v`/`f`/`e` operands are 0 and `i = n`):
+/// Rules pinned to the authoritative CLDR source (`unicode-org/cldr-json`
+/// `supplemental/plurals.json`, corroborated against the `unicode.org/cldr`
+/// chart — ADR-0001 §"Plural resolution"), for the **integer-count scope** the
+/// app actually renders: every count is a non-negative integer, so the CLDR
+/// operands collapse to `v=t=f=e=0` and `i=n`. Under that scope each language's
+/// rule reduces to one of a handful of families:
 ///
-/// - `en` / `es` (+ the `en`-derived pseudo): `One` ⇔ n=1, else `Other`. (`es`
-///   also has a CLDR `many`, but **only for compact notation** — "1 M", the `e`
-///   exponent operand — which we never emit.)
-/// - `he`: `One` ⇔ n=1, `Two` ⇔ n=2, else `Other`. **No `many`** (removed from
-///   CLDR in v42). The CLDR `one` branch `i=0 and v!=0` is fraction-only and
-///   can't arise from an integer count.
-/// - `ar`: the full six. `Zero`/`One`/`Two` are exact; `Few` ⇔ n%100∈3..10,
-///   `Many` ⇔ n%100∈11..99; everything else (incl. n%100∈{0,1,2} for n≥100) is
-///   `Other`.
+/// - **`other`-only** (no count distinction): `zh` `ja` `ko` `vi` `th` `id`.
+/// - **`one`⇔n=1** (+ the `en`-derived pseudo): `en` `es` `de` `it` `nl` `sv`
+///   `da` `nb`/`no` `fi` `el` `hu` `tr` `ur`. (CLDR `da`'s `t≠0` branch is
+///   fraction-only; several carry a compact-notation `many` we never emit.)
+/// - **`one`⇔n∈{0,1}**: `fr` `pt` `hi` `bn` `fa`.
+/// - **`he`**: `one`⇔1, `two`⇔2, else `other` (no `many` since CLDR v42).
+/// - **`ar`**: the full six — `zero`/`one`/`two` exact, `few`⇔n%100∈3..10,
+///   `many`⇔n%100∈11..99, else `other`.
+/// - **`ru`/`uk`**: `one`⇔n%10=1∧n%100≠11; `few`⇔n%10∈2..4∧n%100∉12..14; else
+///   `many` (`other` is fraction-only, unreachable for integers).
+/// - **`pl`**: `one`⇔n=1; `few`⇔n%10∈2..4∧n%100∉12..14; else `many`.
+/// - **`cs`**: `one`⇔1, `few`⇔2..4, else `other` (`many` is fraction-only).
+/// - **`ro`**: `one`⇔1; `few`⇔n=0∨n%100∈1..19; else `other`.
 ///
 /// An unknown locale falls through to the `en` rule — documented, not silent —
-/// until its own catalog + rules land.
+/// until its own rule lands here.
 #[allow(dead_code)] // reached via t_plural (the plural seam); live once counts route through it.
 fn plural_category(locale_id: &str, n: i64) -> PluralCategory {
     use PluralCategory::*;
     let base = locale_id.split('-').next().unwrap_or(locale_id);
+    // CLDR operands under the integer scope; rem_euclid keeps the modulo correct
+    // even if a negative ever slips in (counts are non-negative in practice).
+    let m10 = n.rem_euclid(10);
+    let m100 = n.rem_euclid(100);
     match base {
-        "en" | "es" => {
+        // other-only — no grammatical count distinction.
+        "zh" | "ja" | "ko" | "vi" | "th" | "id" => Other,
+        // one ⇔ n = 1.
+        "en" | "es" | "de" | "it" | "nl" | "sv" | "da" | "nb" | "no" | "fi" | "el" | "hu"
+        | "tr" | "ur" => {
             if n == 1 {
+                One
+            } else {
+                Other
+            }
+        }
+        // one ⇔ n ∈ {0, 1}.
+        "fr" | "pt" | "hi" | "bn" | "fa" => {
+            if n == 0 || n == 1 {
                 One
             } else {
                 Other
@@ -702,17 +790,45 @@ fn plural_category(locale_id: &str, n: i64) -> PluralCategory {
             2 => Two,
             _ => Other,
         },
-        "ar" => {
-            // CLDR operand n is the absolute value; counts are non-negative, but
-            // rem_euclid keeps the modulo correct even if a negative ever slips in.
-            let m = n.rem_euclid(100);
-            match n {
-                0 => Zero,
-                1 => One,
-                2 => Two,
-                _ if (3..=10).contains(&m) => Few,
-                _ if (11..=99).contains(&m) => Many,
-                _ => Other,
+        "ar" => match n {
+            0 => Zero,
+            1 => One,
+            2 => Two,
+            _ if (3..=10).contains(&m100) => Few,
+            _ if (11..=99).contains(&m100) => Many,
+            _ => Other,
+        },
+        // East Slavic — one/few/many; `other` is fraction-only (unreachable here).
+        "ru" | "uk" => {
+            if m10 == 1 && m100 != 11 {
+                One
+            } else if (2..=4).contains(&m10) && !(12..=14).contains(&m100) {
+                Few
+            } else {
+                Many
+            }
+        }
+        "pl" => {
+            if n == 1 {
+                One
+            } else if (2..=4).contains(&m10) && !(12..=14).contains(&m100) {
+                Few
+            } else {
+                Many
+            }
+        }
+        "cs" => match n {
+            1 => One,
+            2..=4 => Few,
+            _ => Other,
+        },
+        "ro" => {
+            if n == 1 {
+                One
+            } else if n == 0 || (1..=19).contains(&m100) {
+                Few
+            } else {
+                Other
             }
         }
         _ => {
@@ -852,6 +968,24 @@ mod tests {
         assert!(!d.pseudo, "the default must be a real, selectable locale");
     }
 
+    #[test]
+    fn roster_is_well_formed() {
+        use std::collections::HashSet;
+        let mut ids = HashSet::new();
+        for l in LOCALES {
+            assert!(ids.insert(l.id), "duplicate roster id: {}", l.id);
+            assert!(l.dir == "ltr" || l.dir == "rtl", "{} bad dir '{}'", l.id, l.dir);
+            assert!(!l.label.is_empty(), "{} has an empty picker label", l.id);
+        }
+        // plural_category is total over the roster — every selectable locale
+        // resolves a category across a wide range without panicking.
+        for l in LOCALES {
+            for n in [0i64, 1, 2, 5, 11, 21, 100, 1001] {
+                let _ = plural_category(l.id, n);
+            }
+        }
+    }
+
     // -- P1: catalog + t() -------------------------------------------------
 
     #[test]
@@ -942,6 +1076,94 @@ mod tests {
         // other: n%100 ∈ {0,1,2} for n≥100 (CLDR examples: 100~102, 200~202, 1000)
         for n in [100, 101, 102, 200, 202, 1000] {
             assert_eq!(plural_category("ar", n), Other, "ar other n={n}");
+        }
+    }
+
+    #[test]
+    fn cldr_plural_family_one_other_variants() {
+        use PluralCategory::One;
+        // one⇔n=1 family: 0 and 2+ are other.
+        for loc in ["de", "it", "nl", "sv", "da", "nb", "no", "fi", "el", "hu", "tr", "ur"] {
+            assert_eq!(plural_category(loc, 1), One, "{loc} n=1");
+            for n in [0, 2, 5, 11, 21, 100] {
+                assert_eq!(plural_category(loc, n), Other, "{loc} n={n}");
+            }
+        }
+        // one⇔n∈{0,1} family (fr/pt/hi/bn/fa): 0 is ALSO one.
+        for loc in ["fr", "pt", "hi", "bn", "fa"] {
+            assert_eq!(plural_category(loc, 0), One, "{loc} n=0 must be one");
+            assert_eq!(plural_category(loc, 1), One, "{loc} n=1");
+            for n in [2, 5, 11, 100] {
+                assert_eq!(plural_category(loc, n), Other, "{loc} n={n}");
+            }
+        }
+    }
+
+    #[test]
+    fn cldr_plural_family_other_only() {
+        // No count distinction — every n is other (incl. 1).
+        for loc in ["zh", "ja", "ko", "vi", "th", "id"] {
+            for n in [0, 1, 2, 5, 11, 100] {
+                assert_eq!(plural_category(loc, n), Other, "{loc} n={n}");
+            }
+        }
+    }
+
+    #[test]
+    fn cldr_plural_ru_uk_one_few_many() {
+        use PluralCategory::One;
+        // Pinned to CLDR ru/uk cardinal examples (integer scope; other is
+        // fraction-only and unreachable here).
+        for loc in ["ru", "uk"] {
+            // one: n%10=1 and n%100≠11 (1, 21, 31, 101; NOT 11)
+            for n in [1, 21, 31, 101, 1001] {
+                assert_eq!(plural_category(loc, n), One, "{loc} one n={n}");
+            }
+            // few: n%10=2..4 and n%100∉12..14 (2~4, 22~24, 102~104)
+            for n in [2, 3, 4, 22, 24, 104] {
+                assert_eq!(plural_category(loc, n), Few, "{loc} few n={n}");
+            }
+            // many: n%10=0, or n%10=5..9, or n%100=11..14 (0,5~9,11~14,25~29,111)
+            for n in [0, 5, 9, 11, 12, 13, 14, 25, 100, 111] {
+                assert_eq!(plural_category(loc, n), Many, "{loc} many n={n}");
+            }
+        }
+    }
+
+    #[test]
+    fn cldr_plural_pl_differs_from_ru_at_teens_and_ones() {
+        use PluralCategory::One;
+        // pl: one is ONLY n=1 (not 21/31 — that's where it diverges from ru).
+        assert_eq!(plural_category("pl", 1), One);
+        assert_eq!(plural_category("pl", 21), Many, "pl 21 is many, not one (≠ ru)");
+        // few: n%10=2..4 and n%100∉12..14
+        for n in [2, 3, 4, 22, 23, 24] {
+            assert_eq!(plural_category("pl", n), Few, "pl few n={n}");
+        }
+        // many: everything else (0, 5~21, 25, teens…)
+        for n in [0, 5, 11, 12, 14, 25, 111] {
+            assert_eq!(plural_category("pl", n), Many, "pl many n={n}");
+        }
+    }
+
+    #[test]
+    fn cldr_plural_cs_and_ro() {
+        use PluralCategory::One;
+        // cs: one⇔1, few⇔2..4, else other (many is fraction-only).
+        assert_eq!(plural_category("cs", 1), One);
+        for n in [2, 3, 4] {
+            assert_eq!(plural_category("cs", n), Few, "cs few n={n}");
+        }
+        for n in [0, 5, 11, 22, 100] {
+            assert_eq!(plural_category("cs", n), Other, "cs other n={n}");
+        }
+        // ro: one⇔1, few⇔n=0 or n%100∈1..19, else other.
+        assert_eq!(plural_category("ro", 1), One);
+        for n in [0, 2, 12, 19, 101, 119] {
+            assert_eq!(plural_category("ro", n), Few, "ro few n={n}");
+        }
+        for n in [20, 21, 99, 100, 120] {
+            assert_eq!(plural_category("ro", n), Other, "ro other n={n}");
         }
     }
 

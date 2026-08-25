@@ -1,0 +1,242 @@
+{
+  "btn.save": "Uložit",
+  "btn.cancel": "Zrušit",
+  "btn.delete": "Smazat",
+  "btn.copy": "Kopírovat",
+  "btn.connect": "Připojit",
+  "btn.edit": "Upravit",
+  "btn.refresh": "Obnovit",
+  "btn.back": "← Zpět",
+  "btn.revert": "Vrátit",
+
+  "label.status": "Stav",
+  "label.title": "Název",
+  "label.peer": "Peer",
+  "label.target": "Cíl",
+  "label.address": "Adresa",
+  "label.name": "Jméno",
+  "label.label": "Štítek",
+
+  "status.copied": "Zkopírováno ✓",
+
+  "execute.handler": "Obslužná rutina",
+  "execute.operation": "Operace",
+  "execute.handler_uri": "URI obslužné rutiny",
+  "execute.resource": "Zdroj",
+
+  "peers.known_devices": "Známá zařízení",
+  "peers.connect_device": "Připojit k zařízení",
+  "peers.pair_qr": "Spárovat zařízení (QR)",
+
+  "tooltip.close_window": "Zavřít okno",
+  "tooltip.open_windows": "Otevřená okna",
+  "tooltip.fill_window": "Maximalizovat okno",
+  "tooltip.restore_size": "Zpět na normální velikost",
+  "tooltip.menu": "Nabídka",
+  "tooltip.back": "Zpět",
+  "tooltip.site_home": "Přejít na domovskou stránku webu",
+  "tooltip.unsaved": "Neuložené změny",
+
+  "kb.title_placeholder": "Název článku",
+  "theme.name_placeholder": "název (a-z, 0-9, pomlčky)",
+  "theme.label_placeholder": "zobrazovaný štítek",
+
+  "filetransfer.device": "Zařízení",
+  "filetransfer.shared_files": "Sdílené soubory",
+  "filetransfer.send_file": "Odeslat soubor",
+  "filetransfer.from_peer": "Od peera",
+  "filetransfer.results": "Výsledky",
+
+  "syspeers.system_peer": "Systémový peer",
+  "syspeers.system_backend": "Systémový backend",
+
+  "sysoverview.clear_logs": "Vymazat protokoly",
+  "sysoverview.logs": "Protokoly",
+  "sysoverview.device_auth": "Autorizace zařízení",
+  "sysoverview.grant_backend_hint": "Autorizováno na backendu; konkrétní rozsah se lokálně nezaznamenává.",
+
+  "kb.new_article": "＋ Nový článek",
+  "kb.back_to_list": "← Zpět na seznam",
+
+  "settings.appearance": "Vzhled",
+  "settings.theme": "Motiv",
+  "settings.language": "Jazyk",
+  "settings.windows": "Okna",
+  "settings.site_surface": "Web a povrch",
+  "settings.rendering": "Vykreslování",
+  "settings.network": "Síť",
+  "settings.language.hint": "Nastaví jazyk rozhraní a směr rozvržení.",
+
+  "theme.themes": "Motivy",
+  "theme.new_from": "Nový motiv z",
+
+  "category.apps": "Aplikace a obsah",
+  "category.system": "Systém",
+  "category.developer": "Vývojář",
+  "category.apps.desc": "Procházejte weby, hrajte hry, spouštějte aplikace",
+  "category.system.desc": "Peeři, klíče, připojení, nastavení, úložiště",
+  "category.developer.desc": "Strom entit, konzole dotazů a spouštění, shell, protokoly",
+
+  "window.entity_tree": "Strom entit",
+  "window.games": "Hry",
+  "window.apps": "Aplikace",
+  "window.knowledge_base": "Znalostní báze",
+  "window.key_manager": "Správce klíčů",
+  "window.peer_connections": "Připojení peerů",
+  "window.file_transfer": "Přenos souborů",
+  "window.execute_console": "Konzole spouštění",
+  "window.query_console": "Konzole dotazů",
+  "window.settings": "Nastavení",
+  "window.event_log": "Protokol událostí",
+  "window.peers": "Peeři",
+  "window.shell": "Shell",
+  "window.chain_trace": "Trasování řetězce",
+  "window.path_tap": "Odbočka cesty",
+  "window.wire_recorder": "Záznamník protokolu",
+  "window.content_stream": "Proud obsahu",
+  "window.site_browser": "Prohlížeč webů",
+  "window.storage": "Úložiště",
+  "window.site_creator": "Tvůrce webů",
+  "window.system_overview": "Přehled systému",
+  "window.access_log": "Protokol přístupů",
+  "window.theme_editor": "Editor motivů",
+
+  "btn.create": "Vytvořit",
+  "btn.move": "Přesunout",
+  "btn.authorize": "Autorizovat",
+  "btn.add_peer": "Přidat peera",
+  "btn.find": "Najít",
+  "btn.count": "Spočítat",
+  "btn.trace": "Trasovat",
+
+  "execute.execute": "Spustit",
+  "execute.guided": "S průvodcem",
+  "execute.raw": "Surový",
+
+  "filetransfer.pull_selected": "⬇ Stáhnout vybraný soubor",
+  "filetransfer.upload_file": "Nahrát soubor",
+
+  "siteeditor.create_site": "Vytvořit web",
+  "siteeditor.delete_site": "Smazat web",
+  "siteeditor.save_page": "Uložit stránku",
+  "siteeditor.delete_page": "Smazat stránku",
+  "siteeditor.title_optional": "Název (nepovinné)",
+  "siteeditor.page_title_ph": "Název stránky",
+
+  "entitytree.source_none": "Žádný (ručně)",
+  "entitytree.source_app": "Agregát aplikace (peer: {peer})",
+
+  "settings.boot_into": "Spustit do",
+  "settings.boot_chrome": "Plocha",
+  "settings.boot_site": "Web",
+  "settings.boot_window": "Okno",
+
+  "theme.scheme_dark": "Tmavý",
+  "theme.scheme_light": "Světlý",
+
+  "sysoverview.profile_pull": "Pouze stahování",
+  "sysoverview.profile_twoway": "Obousměrný",
+
+  "label.level": "Úroveň",
+  "label.results": "Výsledky",
+  "label.content": "Obsah",
+  "label.system": "Systém",
+  "status.loading": "Načítání…",
+
+  "peers.scan_qr": "Naskenovat QR kód",
+  "peers.scan_hint": "Naskenujte toto z jiného zařízení a připojte jej sem.",
+  "peers.show_qr": "Zobrazit QR kód",
+
+  "sitedir.sites_menu": "Weby ▾",
+  "sitedir.sites": "Weby",
+
+  "contentsite.enter_peer": "Vstoupit do peera",
+  "contentsite.contents_menu": "Obsah ▾",
+
+  "storage.origin_disk": "Disk původu (IndexedDB ＋ mezipaměti — celý původ)",
+  "storage.backend_native": "Systémový backend — nativní úložiště",
+  "storage.native_sqlite": "Nativní / SQLite",
+  "storage.by_path": "Podle cesty nejvyšší úrovně:",
+
+  "chaintrace.chain_id": "ID řetězce:",
+  "chaintrace.continuations": "Pokračování",
+  "chaintrace.error_markers": "Značky chyb řetězce",
+
+  "siteeditor.move_rename": "Přesunout/přejmenovat na:",
+
+  "entitytree.up": "Nahoru",
+  "entitytree.selection_source": "Zdroj výběru",
+  "entitytree.select_prompt": "Vyberte entitu ze stromu",
+  "entitytree.inspector": "Inspektor",
+  "entitytree.none_selected": "Není vybrána žádná entita",
+  "entitytree.raw_hash": "Surový hash",
+
+  "settings.lockdown_active": "Uzamčení je aktivní (nastaveno konfigurací tohoto nasazení).",
+
+  "windows.none_open": "Žádná otevřená okna",
+  "windows.open_windows": "Otevřená okna",
+  "mod.learn_more": "Zjistěte více a zapojte se na ",
+
+  "status.saved": "uloženo",
+  "status.stopped": "zastaveno",
+  "status.granted": "uděleno",
+
+  "chip.connected": "Připojeno",
+  "chip.connecting": "Připojování…",
+  "chip.offline": "Offline",
+  "chip.authorized": "Autorizováno",
+  "chip.pending": "Čeká se",
+  "chip.not_authorized": "Neautorizováno",
+  "chip.not_verified": "Neověřeno",
+
+  "label.state_path": "Stav: {path}",
+
+  "accesslog.operations": "operace: {n}",
+  "accesslog.authorized_head": "Autorizováno: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Žádná entita na: {path}",
+
+  "siteeditor.editing": "Úprava: {id}",
+  "siteeditor.adding_to": "Přidávání do: {target}",
+  "siteeditor.confirm_move_unsaved": "Tato stránka má neuložené změny, které se při přesunu ztratí. Přesto přesunout?",
+
+  "storage.peer_not_created": "Peer nebyl vytvořen — {reason}",
+
+  "kb.body_placeholder": "Tělo v Markdownu",
+
+  "chaintrace.enter_hint": "(zadejte chain_id a stiskněte Trasovat)",
+
+  "scanner.scanned_codes": "Naskenované kódy",
+  "scanner.scanned_codes_count": "Naskenované kódy ({n} unikátních)",
+  "scanner.photo_capture": "Pořízení fotografie",
+  "scanner.photo_hint": "Vyfoťte QR kód",
+  "scanner.take_photo": "Vyfotit",
+  "scanner.processing": "Zpracování...",
+  "scanner.no_detector": "Žádný BarcodeDetector — zadejte kód ručně",
+  "scanner.detector_init_failed": "Inicializace detektoru selhala",
+  "scanner.detect_call_failed": "Volání detekce selhalo",
+  "scanner.qr_found": "QR kód nalezen!",
+  "scanner.no_qr": "QR nenalezen — zkuste to znovu",
+  "scanner.decode_error": "Chyba dekódování",
+  "scanner.live_scanner": "Živý skener",
+  "scanner.live_hint": "Skenování kamerou v reálném čase",
+  "scanner.start_live": "Spustit živé skenování",
+  "scanner.stop": "Zastavit",
+  "scanner.stopped": "Zastaveno",
+  "scanner.camera_unavailable": "Kamera není k dispozici",
+  "scanner.camera_denied": "Kamera zamítnuta",
+  "scanner.starting_camera": "Spouštění kamery...",
+  "scanner.stream_error": "Chyba streamu",
+  "scanner.scanning": "Skenování...",
+  "scanner.detector_failed": "Detektor selhal",
+  "scanner.scan_detect_error": "Sken {n} — chyba detekce",
+  "scanner.found_continuing": "Nalezeno! Pokračování ve skenování...",
+  "scanner.scan_n": "Sken {n}...",
+  "scanner.scan_error": "Sken {n} — chyba",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "few": "{n} peery",
+    "other": "{n} peerů"
+  }
+}

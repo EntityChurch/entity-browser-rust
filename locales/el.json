@@ -1,0 +1,241 @@
+{
+  "btn.save": "Αποθήκευση",
+  "btn.cancel": "Άκυρο",
+  "btn.delete": "Διαγραφή",
+  "btn.copy": "Αντιγραφή",
+  "btn.connect": "Σύνδεση",
+  "btn.edit": "Επεξεργασία",
+  "btn.refresh": "Ανανέωση",
+  "btn.back": "← Πίσω",
+  "btn.revert": "Επαναφορά",
+
+  "label.status": "Κατάσταση",
+  "label.title": "Τίτλος",
+  "label.peer": "Ομότιμος",
+  "label.target": "Στόχος",
+  "label.address": "Διεύθυνση",
+  "label.name": "Όνομα",
+  "label.label": "Ετικέτα",
+
+  "status.copied": "Αντιγράφηκε ✓",
+
+  "execute.handler": "Χειριστής",
+  "execute.operation": "Λειτουργία",
+  "execute.handler_uri": "URI χειριστή",
+  "execute.resource": "Πόρος",
+
+  "peers.known_devices": "Γνωστές συσκευές",
+  "peers.connect_device": "Σύνδεση σε συσκευή",
+  "peers.pair_qr": "Σύζευξη συσκευής (QR)",
+
+  "tooltip.close_window": "Κλείσιμο παραθύρου",
+  "tooltip.open_windows": "Ανοιχτά παράθυρα",
+  "tooltip.fill_window": "Μεγιστοποίηση παραθύρου",
+  "tooltip.restore_size": "Επιστροφή στο κανονικό μέγεθος",
+  "tooltip.menu": "Μενού",
+  "tooltip.back": "Πίσω",
+  "tooltip.site_home": "Μετάβαση στην αρχική του ιστότοπου",
+  "tooltip.unsaved": "Μη αποθηκευμένες αλλαγές",
+
+  "kb.title_placeholder": "Τίτλος άρθρου",
+  "theme.name_placeholder": "όνομα (a-z, 0-9, παύλες)",
+  "theme.label_placeholder": "εμφανιζόμενη ετικέτα",
+
+  "filetransfer.device": "Συσκευή",
+  "filetransfer.shared_files": "Κοινόχρηστα αρχεία",
+  "filetransfer.send_file": "Αποστολή αρχείου",
+  "filetransfer.from_peer": "Από ομότιμο",
+  "filetransfer.results": "Αποτελέσματα",
+
+  "syspeers.system_peer": "Ομότιμος συστήματος",
+  "syspeers.system_backend": "Backend συστήματος",
+
+  "sysoverview.clear_logs": "Εκκαθάριση αρχείων καταγραφής",
+  "sysoverview.logs": "Αρχεία καταγραφής",
+  "sysoverview.device_auth": "Εξουσιοδοτήσεις συσκευών",
+  "sysoverview.grant_backend_hint": "Εξουσιοδοτήθηκε στο backend· το συγκεκριμένο εύρος δεν καταγράφεται τοπικά.",
+
+  "kb.new_article": "＋ Νέο άρθρο",
+  "kb.back_to_list": "← Επιστροφή στη λίστα",
+
+  "settings.appearance": "Εμφάνιση",
+  "settings.theme": "Θέμα",
+  "settings.language": "Γλώσσα",
+  "settings.windows": "Παράθυρα",
+  "settings.site_surface": "Ιστότοπος και επιφάνεια",
+  "settings.rendering": "Απόδοση",
+  "settings.network": "Δίκτυο",
+  "settings.language.hint": "Ορίζει τη γλώσσα της διεπαφής και την κατεύθυνση διάταξης.",
+
+  "theme.themes": "Θέματα",
+  "theme.new_from": "Νέο θέμα από",
+
+  "category.apps": "Εφαρμογές και περιεχόμενο",
+  "category.system": "Σύστημα",
+  "category.developer": "Προγραμματιστής",
+  "category.apps.desc": "Περιήγηση σε ιστότοπους, παιχνίδια, εκτέλεση εφαρμογών",
+  "category.system.desc": "Ομότιμοι, κλειδιά, συνδέσεις, ρυθμίσεις, αποθήκευση",
+  "category.developer.desc": "Δέντρο οντοτήτων, κονσόλες ερωτημάτων και εκτέλεσης, κέλυφος, αρχεία καταγραφής",
+
+  "window.entity_tree": "Δέντρο οντοτήτων",
+  "window.games": "Παιχνίδια",
+  "window.apps": "Εφαρμογές",
+  "window.knowledge_base": "Βάση γνώσεων",
+  "window.key_manager": "Διαχειριστής κλειδιών",
+  "window.peer_connections": "Συνδέσεις ομότιμων",
+  "window.file_transfer": "Μεταφορά αρχείων",
+  "window.execute_console": "Κονσόλα εκτέλεσης",
+  "window.query_console": "Κονσόλα ερωτημάτων",
+  "window.settings": "Ρυθμίσεις",
+  "window.event_log": "Αρχείο συμβάντων",
+  "window.peers": "Ομότιμοι",
+  "window.shell": "Κέλυφος",
+  "window.chain_trace": "Ιχνηλάτηση αλυσίδας",
+  "window.path_tap": "Παρακολούθηση διαδρομής",
+  "window.wire_recorder": "Καταγραφέας πρωτοκόλλου",
+  "window.content_stream": "Ροή περιεχομένου",
+  "window.site_browser": "Πρόγραμμα περιήγησης ιστότοπων",
+  "window.storage": "Αποθήκευση",
+  "window.site_creator": "Δημιουργός ιστότοπων",
+  "window.system_overview": "Επισκόπηση συστήματος",
+  "window.access_log": "Αρχείο πρόσβασης",
+  "window.theme_editor": "Επεξεργαστής θεμάτων",
+
+  "btn.create": "Δημιουργία",
+  "btn.move": "Μετακίνηση",
+  "btn.authorize": "Εξουσιοδότηση",
+  "btn.add_peer": "Προσθήκη ομότιμου",
+  "btn.find": "Εύρεση",
+  "btn.count": "Καταμέτρηση",
+  "btn.trace": "Ιχνηλάτηση",
+
+  "execute.execute": "Εκτέλεση",
+  "execute.guided": "Καθοδηγούμενο",
+  "execute.raw": "Ακατέργαστο",
+
+  "filetransfer.pull_selected": "⬇ Λήψη επιλεγμένου αρχείου",
+  "filetransfer.upload_file": "Μεταφόρτωση αρχείου",
+
+  "siteeditor.create_site": "Δημιουργία ιστότοπου",
+  "siteeditor.delete_site": "Διαγραφή ιστότοπου",
+  "siteeditor.save_page": "Αποθήκευση σελίδας",
+  "siteeditor.delete_page": "Διαγραφή σελίδας",
+  "siteeditor.title_optional": "Τίτλος (προαιρετικό)",
+  "siteeditor.page_title_ph": "Τίτλος σελίδας",
+
+  "entitytree.source_none": "Καμία (μη αυτόματα)",
+  "entitytree.source_app": "Συγκεντρωτικό εφαρμογής (ομότιμος: {peer})",
+
+  "settings.boot_into": "Εκκίνηση σε",
+  "settings.boot_chrome": "Επιφάνεια εργασίας",
+  "settings.boot_site": "Ιστότοπος",
+  "settings.boot_window": "Παράθυρο",
+
+  "theme.scheme_dark": "Σκούρο",
+  "theme.scheme_light": "Φωτεινό",
+
+  "sysoverview.profile_pull": "Μόνο λήψη",
+  "sysoverview.profile_twoway": "Αμφίδρομο",
+
+  "label.level": "Επίπεδο",
+  "label.results": "Αποτελέσματα",
+  "label.content": "Περιεχόμενο",
+  "label.system": "Σύστημα",
+  "status.loading": "Φόρτωση…",
+
+  "peers.scan_qr": "Σάρωση κωδικού QR",
+  "peers.scan_hint": "Σαρώστε το από άλλη συσκευή για να τη συνδέσετε εδώ.",
+  "peers.show_qr": "Εμφάνιση κωδικού QR",
+
+  "sitedir.sites_menu": "Ιστότοποι ▾",
+  "sitedir.sites": "Ιστότοποι",
+
+  "contentsite.enter_peer": "Είσοδος σε ομότιμο",
+  "contentsite.contents_menu": "Περιεχόμενο ▾",
+
+  "storage.origin_disk": "Δίσκος προέλευσης (IndexedDB ＋ κρυφές μνήμες — όλη η προέλευση)",
+  "storage.backend_native": "Backend συστήματος — εγγενής αποθήκευση",
+  "storage.native_sqlite": "Εγγενές / SQLite",
+  "storage.by_path": "Ανά διαδρομή ανώτατου επιπέδου:",
+
+  "chaintrace.chain_id": "ID αλυσίδας:",
+  "chaintrace.continuations": "Συνέχειες",
+  "chaintrace.error_markers": "Δείκτες σφαλμάτων αλυσίδας",
+
+  "siteeditor.move_rename": "Μετακίνηση/μετονομασία σε:",
+
+  "entitytree.up": "Επάνω",
+  "entitytree.selection_source": "Πηγή επιλογής",
+  "entitytree.select_prompt": "Επιλέξτε μια οντότητα από το δέντρο",
+  "entitytree.inspector": "Επιθεωρητής",
+  "entitytree.none_selected": "Δεν επιλέχθηκε οντότητα",
+  "entitytree.raw_hash": "Ακατέργαστο hash",
+
+  "settings.lockdown_active": "Το κλείδωμα είναι ενεργό (ορίστηκε από τη διαμόρφωση αυτής της ανάπτυξης).",
+
+  "windows.none_open": "Δεν υπάρχουν ανοιχτά παράθυρα",
+  "windows.open_windows": "Ανοιχτά παράθυρα",
+  "mod.learn_more": "Μάθετε περισσότερα και συμμετέχετε στο ",
+
+  "status.saved": "αποθηκεύτηκε",
+  "status.stopped": "σταμάτησε",
+  "status.granted": "χορηγήθηκε",
+
+  "chip.connected": "Συνδεδεμένο",
+  "chip.connecting": "Σύνδεση…",
+  "chip.offline": "Εκτός σύνδεσης",
+  "chip.authorized": "Εξουσιοδοτημένο",
+  "chip.pending": "Σε εκκρεμότητα",
+  "chip.not_authorized": "Μη εξουσιοδοτημένο",
+  "chip.not_verified": "Μη επαληθευμένο",
+
+  "label.state_path": "Κατάσταση: {path}",
+
+  "accesslog.operations": "λειτουργίες: {n}",
+  "accesslog.authorized_head": "Εξουσιοδοτήθηκε: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Καμία οντότητα στο: {path}",
+
+  "siteeditor.editing": "Επεξεργασία: {id}",
+  "siteeditor.adding_to": "Προσθήκη σε: {target}",
+  "siteeditor.confirm_move_unsaved": "Αυτή η σελίδα έχει μη αποθηκευμένες αλλαγές που θα χαθούν κατά τη μετακίνηση. Μετακίνηση ούτως ή άλλως;",
+
+  "storage.peer_not_created": "Ο ομότιμος δεν δημιουργήθηκε — {reason}",
+
+  "kb.body_placeholder": "Σώμα σε Markdown",
+
+  "chaintrace.enter_hint": "(εισαγάγετε ένα chain_id και πατήστε Ιχνηλάτηση)",
+
+  "scanner.scanned_codes": "Σαρωμένοι κωδικοί",
+  "scanner.scanned_codes_count": "Σαρωμένοι κωδικοί ({n} μοναδικοί)",
+  "scanner.photo_capture": "Λήψη φωτογραφίας",
+  "scanner.photo_hint": "Τραβήξτε μια φωτογραφία κωδικού QR",
+  "scanner.take_photo": "Λήψη φωτογραφίας",
+  "scanner.processing": "Επεξεργασία...",
+  "scanner.no_detector": "Δεν υπάρχει BarcodeDetector — εισαγάγετε τον κωδικό μη αυτόματα",
+  "scanner.detector_init_failed": "Απέτυχε η αρχικοποίηση ανιχνευτή",
+  "scanner.detect_call_failed": "Απέτυχε η κλήση ανίχνευσης",
+  "scanner.qr_found": "Βρέθηκε κωδικός QR!",
+  "scanner.no_qr": "Δεν βρέθηκε QR — δοκιμάστε ξανά",
+  "scanner.decode_error": "Σφάλμα αποκωδικοποίησης",
+  "scanner.live_scanner": "Ζωντανός σαρωτής",
+  "scanner.live_hint": "Σάρωση κάμερας σε πραγματικό χρόνο",
+  "scanner.start_live": "Έναρξη ζωντανής σάρωσης",
+  "scanner.stop": "Διακοπή",
+  "scanner.stopped": "Διακόπηκε",
+  "scanner.camera_unavailable": "Η κάμερα δεν είναι διαθέσιμη",
+  "scanner.camera_denied": "Η κάμερα απορρίφθηκε",
+  "scanner.starting_camera": "Εκκίνηση κάμερας...",
+  "scanner.stream_error": "Σφάλμα ροής",
+  "scanner.scanning": "Σάρωση...",
+  "scanner.detector_failed": "Ο ανιχνευτής απέτυχε",
+  "scanner.scan_detect_error": "Σάρωση {n} — σφάλμα ανίχνευσης",
+  "scanner.found_continuing": "Βρέθηκε! Συνέχιση σάρωσης...",
+  "scanner.scan_n": "Σάρωση {n}...",
+  "scanner.scan_error": "Σάρωση {n} — σφάλμα",
+
+  "peer.count": {
+    "one": "{n} ομότιμος",
+    "other": "{n} ομότιμοι"
+  }
+}

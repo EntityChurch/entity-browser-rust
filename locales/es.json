@@ -177,6 +177,35 @@
   "windows.open_windows": "Ventanas abiertas",
   "mod.learn_more": "Más información y participa en ",
 
+  "status.saved": "guardado",
+  "status.stopped": "detenido",
+  "status.granted": "concedido",
+
+  "chip.connected": "Conectado",
+  "chip.connecting": "Conectando…",
+  "chip.offline": "Sin conexión",
+  "chip.authorized": "Autorizado",
+  "chip.pending": "Pendiente",
+  "chip.not_authorized": "No autorizado",
+  "chip.not_verified": "No verificado",
+
+  "label.state_path": "Estado: {path}",
+
+  "accesslog.operations": "operaciones: {n}",
+  "accesslog.authorized_head": "Autorizado: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "No hay ninguna entidad en: {path}",
+
+  "siteeditor.editing": "Editando: {id}",
+  "siteeditor.adding_to": "Añadiendo a: {target}",
+  "siteeditor.confirm_move_unsaved": "Esta página tiene cambios sin guardar que se perderán al moverla. ¿Mover de todos modos?",
+
+  "storage.peer_not_created": "Par no creado — {reason}",
+
+  "kb.body_placeholder": "Cuerpo en Markdown",
+
+  "chaintrace.enter_hint": "(introduce un chain_id y pulsa Rastrear)",
+
   "scanner.scanned_codes": "Códigos escaneados",
   "scanner.scanned_codes_count": "Códigos escaneados ({n} únicos)",
   "scanner.photo_capture": "Captura de foto",

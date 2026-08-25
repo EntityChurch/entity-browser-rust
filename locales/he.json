@@ -177,6 +177,35 @@
   "windows.open_windows": "חלונות פתוחים",
   "mod.learn_more": "מידע נוסף והצטרפות ב־",
 
+  "status.saved": "נשמר",
+  "status.stopped": "נעצר",
+  "status.granted": "הוענק",
+
+  "chip.connected": "מחובר",
+  "chip.connecting": "מתחבר…",
+  "chip.offline": "לא מקוון",
+  "chip.authorized": "מורשה",
+  "chip.pending": "ממתין",
+  "chip.not_authorized": "לא מורשה",
+  "chip.not_verified": "לא מאומת",
+
+  "label.state_path": "מצב: {path}",
+
+  "accesslog.operations": "פעולות: {n}",
+  "accesslog.authorized_head": "מורשה: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "אין ישות בנתיב: {path}",
+
+  "siteeditor.editing": "עריכה: {id}",
+  "siteeditor.adding_to": "הוספה אל: {target}",
+  "siteeditor.confirm_move_unsaved": "בעמוד זה יש שינויים שלא נשמרו ויאבדו בעת ההעברה. להעביר בכל זאת?",
+
+  "storage.peer_not_created": "העמית לא נוצר — {reason}",
+
+  "kb.body_placeholder": "גוף ב-Markdown",
+
+  "chaintrace.enter_hint": "(הזן chain_id ולחץ על מעקב)",
+
   "scanner.scanned_codes": "קודים שנסרקו",
   "scanner.scanned_codes_count": "קודים שנסרקו ({n} ייחודיים)",
   "scanner.photo_capture": "צילום תמונה",

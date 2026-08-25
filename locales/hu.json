@@ -1,0 +1,241 @@
+{
+  "btn.save": "Mentés",
+  "btn.cancel": "Mégse",
+  "btn.delete": "Törlés",
+  "btn.copy": "Másolás",
+  "btn.connect": "Csatlakozás",
+  "btn.edit": "Szerkesztés",
+  "btn.refresh": "Frissítés",
+  "btn.back": "← Vissza",
+  "btn.revert": "Visszaállítás",
+
+  "label.status": "Állapot",
+  "label.title": "Cím",
+  "label.peer": "Peer",
+  "label.target": "Cél",
+  "label.address": "Cím",
+  "label.name": "Név",
+  "label.label": "Címke",
+
+  "status.copied": "Másolva ✓",
+
+  "execute.handler": "Kezelő",
+  "execute.operation": "Művelet",
+  "execute.handler_uri": "Kezelő URI",
+  "execute.resource": "Erőforrás",
+
+  "peers.known_devices": "Ismert eszközök",
+  "peers.connect_device": "Csatlakozás eszközhöz",
+  "peers.pair_qr": "Eszköz párosítása (QR)",
+
+  "tooltip.close_window": "Ablak bezárása",
+  "tooltip.open_windows": "Nyitott ablakok",
+  "tooltip.fill_window": "Ablak teljes méretre",
+  "tooltip.restore_size": "Vissza a normál méretre",
+  "tooltip.menu": "Menü",
+  "tooltip.back": "Vissza",
+  "tooltip.site_home": "Ugrás a webhely kezdőlapjára",
+  "tooltip.unsaved": "Nem mentett módosítások",
+
+  "kb.title_placeholder": "Cikk címe",
+  "theme.name_placeholder": "név (a-z, 0-9, kötőjelek)",
+  "theme.label_placeholder": "megjelenített címke",
+
+  "filetransfer.device": "Eszköz",
+  "filetransfer.shared_files": "Megosztott fájlok",
+  "filetransfer.send_file": "Fájl küldése",
+  "filetransfer.from_peer": "Peertől",
+  "filetransfer.results": "Eredmények",
+
+  "syspeers.system_peer": "Rendszer-peer",
+  "syspeers.system_backend": "Rendszer-háttérrendszer",
+
+  "sysoverview.clear_logs": "Naplók törlése",
+  "sysoverview.logs": "Naplók",
+  "sysoverview.device_auth": "Eszközengedélyezések",
+  "sysoverview.grant_backend_hint": "Engedélyezve a háttérrendszeren; a konkrét hatókör nincs helyben rögzítve.",
+
+  "kb.new_article": "＋ Új cikk",
+  "kb.back_to_list": "← Vissza a listához",
+
+  "settings.appearance": "Megjelenés",
+  "settings.theme": "Téma",
+  "settings.language": "Nyelv",
+  "settings.windows": "Ablakok",
+  "settings.site_surface": "Webhely és felület",
+  "settings.rendering": "Megjelenítés",
+  "settings.network": "Hálózat",
+  "settings.language.hint": "Beállítja a felület nyelvét és az elrendezés irányát.",
+
+  "theme.themes": "Témák",
+  "theme.new_from": "Új téma innen",
+
+  "category.apps": "Alkalmazások és tartalom",
+  "category.system": "Rendszer",
+  "category.developer": "Fejlesztő",
+  "category.apps.desc": "Webhelyek böngészése, játék, alkalmazások futtatása",
+  "category.system.desc": "Peerek, kulcsok, kapcsolatok, beállítások, tárhely",
+  "category.developer.desc": "Entitásfa, lekérdezési és végrehajtási konzolok, shell, naplók",
+
+  "window.entity_tree": "Entitásfa",
+  "window.games": "Játékok",
+  "window.apps": "Alkalmazások",
+  "window.knowledge_base": "Tudásbázis",
+  "window.key_manager": "Kulcskezelő",
+  "window.peer_connections": "Peerkapcsolatok",
+  "window.file_transfer": "Fájlátvitel",
+  "window.execute_console": "Végrehajtási konzol",
+  "window.query_console": "Lekérdezési konzol",
+  "window.settings": "Beállítások",
+  "window.event_log": "Eseménynapló",
+  "window.peers": "Peerek",
+  "window.shell": "Shell",
+  "window.chain_trace": "Láncnyomkövetés",
+  "window.path_tap": "Útvonal-lehallgatás",
+  "window.wire_recorder": "Protokollrögzítő",
+  "window.content_stream": "Tartalomfolyam",
+  "window.site_browser": "Webhelyböngésző",
+  "window.storage": "Tárhely",
+  "window.site_creator": "Webhelykészítő",
+  "window.system_overview": "Rendszeráttekintés",
+  "window.access_log": "Hozzáférési napló",
+  "window.theme_editor": "Témaszerkesztő",
+
+  "btn.create": "Létrehozás",
+  "btn.move": "Áthelyezés",
+  "btn.authorize": "Engedélyezés",
+  "btn.add_peer": "Peer hozzáadása",
+  "btn.find": "Keresés",
+  "btn.count": "Számlálás",
+  "btn.trace": "Nyomkövetés",
+
+  "execute.execute": "Végrehajtás",
+  "execute.guided": "Vezetett",
+  "execute.raw": "Nyers",
+
+  "filetransfer.pull_selected": "⬇ Kijelölt fájl letöltése",
+  "filetransfer.upload_file": "Fájl feltöltése",
+
+  "siteeditor.create_site": "Webhely létrehozása",
+  "siteeditor.delete_site": "Webhely törlése",
+  "siteeditor.save_page": "Oldal mentése",
+  "siteeditor.delete_page": "Oldal törlése",
+  "siteeditor.title_optional": "Cím (nem kötelező)",
+  "siteeditor.page_title_ph": "Oldal címe",
+
+  "entitytree.source_none": "Nincs (kézi)",
+  "entitytree.source_app": "Alkalmazás-összesítés (peer: {peer})",
+
+  "settings.boot_into": "Indítás ide",
+  "settings.boot_chrome": "Asztal",
+  "settings.boot_site": "Webhely",
+  "settings.boot_window": "Ablak",
+
+  "theme.scheme_dark": "Sötét",
+  "theme.scheme_light": "Világos",
+
+  "sysoverview.profile_pull": "Csak letöltés",
+  "sysoverview.profile_twoway": "Kétirányú",
+
+  "label.level": "Szint",
+  "label.results": "Eredmények",
+  "label.content": "Tartalom",
+  "label.system": "Rendszer",
+  "status.loading": "Betöltés…",
+
+  "peers.scan_qr": "QR-kód beolvasása",
+  "peers.scan_hint": "Olvassa be ezt egy másik eszközről, hogy csatlakoztassa ide.",
+  "peers.show_qr": "QR-kód megjelenítése",
+
+  "sitedir.sites_menu": "Webhelyek ▾",
+  "sitedir.sites": "Webhelyek",
+
+  "contentsite.enter_peer": "Belépés a peerbe",
+  "contentsite.contents_menu": "Tartalom ▾",
+
+  "storage.origin_disk": "Forráslemez (IndexedDB ＋ gyorsítótárak — a teljes forrás)",
+  "storage.backend_native": "Rendszer-háttérrendszer — natív tároló",
+  "storage.native_sqlite": "Natív / SQLite",
+  "storage.by_path": "Felső szintű útvonal szerint:",
+
+  "chaintrace.chain_id": "Lánc-azonosító:",
+  "chaintrace.continuations": "Folytatások",
+  "chaintrace.error_markers": "Lánchiba-jelölők",
+
+  "siteeditor.move_rename": "Áthelyezés/átnevezés ide:",
+
+  "entitytree.up": "Fel",
+  "entitytree.selection_source": "Kijelölés forrása",
+  "entitytree.select_prompt": "Válasszon egy entitást a fából",
+  "entitytree.inspector": "Vizsgáló",
+  "entitytree.none_selected": "Nincs kijelölt entitás",
+  "entitytree.raw_hash": "Nyers hash",
+
+  "settings.lockdown_active": "A zárolás aktív (ennek a telepítésnek a konfigurációja állította be).",
+
+  "windows.none_open": "Nincs nyitott ablak",
+  "windows.open_windows": "Nyitott ablakok",
+  "mod.learn_more": "Tudjon meg többet és csatlakozzon itt: ",
+
+  "status.saved": "mentve",
+  "status.stopped": "leállítva",
+  "status.granted": "megadva",
+
+  "chip.connected": "Csatlakozva",
+  "chip.connecting": "Csatlakozás…",
+  "chip.offline": "Offline",
+  "chip.authorized": "Engedélyezve",
+  "chip.pending": "Függőben",
+  "chip.not_authorized": "Nincs engedélyezve",
+  "chip.not_verified": "Nincs ellenőrizve",
+
+  "label.state_path": "Állapot: {path}",
+
+  "accesslog.operations": "műveletek: {n}",
+  "accesslog.authorized_head": "Engedélyezve: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Nincs entitás itt: {path}",
+
+  "siteeditor.editing": "Szerkesztés: {id}",
+  "siteeditor.adding_to": "Hozzáadás ehhez: {target}",
+  "siteeditor.confirm_move_unsaved": "Ezen az oldalon nem mentett módosítások vannak, amelyek elvesznek áthelyezéskor. Mindenképp áthelyezi?",
+
+  "storage.peer_not_created": "A peer nem jött létre — {reason}",
+
+  "kb.body_placeholder": "Markdown törzs",
+
+  "chaintrace.enter_hint": "(adjon meg egy chain_id-t, és nyomja meg a Nyomkövetést)",
+
+  "scanner.scanned_codes": "Beolvasott kódok",
+  "scanner.scanned_codes_count": "Beolvasott kódok ({n} egyedi)",
+  "scanner.photo_capture": "Fényképrögzítés",
+  "scanner.photo_hint": "Készítsen fényképet egy QR-kódról",
+  "scanner.take_photo": "Fénykép készítése",
+  "scanner.processing": "Feldolgozás...",
+  "scanner.no_detector": "Nincs BarcodeDetector — adja meg a kódot kézzel",
+  "scanner.detector_init_failed": "A detektor inicializálása sikertelen",
+  "scanner.detect_call_failed": "Az észlelési hívás sikertelen",
+  "scanner.qr_found": "QR-kód megtalálva!",
+  "scanner.no_qr": "Nem található QR — próbálja újra",
+  "scanner.decode_error": "Dekódolási hiba",
+  "scanner.live_scanner": "Élő szkenner",
+  "scanner.live_hint": "Valós idejű kameraszkennelés",
+  "scanner.start_live": "Élő szkennelés indítása",
+  "scanner.stop": "Leállítás",
+  "scanner.stopped": "Leállítva",
+  "scanner.camera_unavailable": "A kamera nem érhető el",
+  "scanner.camera_denied": "Kamera elutasítva",
+  "scanner.starting_camera": "Kamera indítása...",
+  "scanner.stream_error": "Adatfolyamhiba",
+  "scanner.scanning": "Szkennelés...",
+  "scanner.detector_failed": "A detektor meghibásodott",
+  "scanner.scan_detect_error": "{n}. szkennelés — észlelési hiba",
+  "scanner.found_continuing": "Megtalálva! Szkennelés folytatása...",
+  "scanner.scan_n": "{n}. szkennelés...",
+  "scanner.scan_error": "{n}. szkennelés — hiba",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "other": "{n} peer"
+  }
+}

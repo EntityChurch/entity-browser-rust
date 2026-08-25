@@ -1,0 +1,242 @@
+{
+  "btn.save": "Зберегти",
+  "btn.cancel": "Скасувати",
+  "btn.delete": "Видалити",
+  "btn.copy": "Копіювати",
+  "btn.connect": "З’єднати",
+  "btn.edit": "Редагувати",
+  "btn.refresh": "Оновити",
+  "btn.back": "← Назад",
+  "btn.revert": "Повернути",
+
+  "label.status": "Статус",
+  "label.title": "Заголовок",
+  "label.peer": "Пір",
+  "label.target": "Ціль",
+  "label.address": "Адреса",
+  "label.name": "Ім’я",
+  "label.label": "Мітка",
+
+  "status.copied": "Скопійовано ✓",
+
+  "execute.handler": "Обробник",
+  "execute.operation": "Операція",
+  "execute.handler_uri": "URI обробника",
+  "execute.resource": "Ресурс",
+
+  "peers.known_devices": "Відомі пристрої",
+  "peers.connect_device": "З’єднатися з пристроєм",
+  "peers.pair_qr": "Спарувати пристрій (QR)",
+
+  "tooltip.close_window": "Закрити вікно",
+  "tooltip.open_windows": "Відкриті вікна",
+  "tooltip.fill_window": "Розгорнути вікно",
+  "tooltip.restore_size": "Повернути звичайний розмір",
+  "tooltip.menu": "Меню",
+  "tooltip.back": "Назад",
+  "tooltip.site_home": "На головну сайту",
+  "tooltip.unsaved": "Незбережені зміни",
+
+  "kb.title_placeholder": "Заголовок статті",
+  "theme.name_placeholder": "назва (a-z, 0-9, дефіси)",
+  "theme.label_placeholder": "видима мітка",
+
+  "filetransfer.device": "Пристрій",
+  "filetransfer.shared_files": "Спільні файли",
+  "filetransfer.send_file": "Надіслати файл",
+  "filetransfer.from_peer": "Від піра",
+  "filetransfer.results": "Результати",
+
+  "syspeers.system_peer": "Системний пір",
+  "syspeers.system_backend": "Системний бекенд",
+
+  "sysoverview.clear_logs": "Очистити журнали",
+  "sysoverview.logs": "Журнали",
+  "sysoverview.device_auth": "Авторизації пристроїв",
+  "sysoverview.grant_backend_hint": "Авторизовано на бекенді; конкретна область не записується локально.",
+
+  "kb.new_article": "＋ Нова стаття",
+  "kb.back_to_list": "← Назад до списку",
+
+  "settings.appearance": "Зовнішній вигляд",
+  "settings.theme": "Тема",
+  "settings.language": "Мова",
+  "settings.windows": "Вікна",
+  "settings.site_surface": "Сайт і поверхня",
+  "settings.rendering": "Рендеринг",
+  "settings.network": "Мережа",
+  "settings.language.hint": "Встановлює мову інтерфейсу та напрямок макета.",
+
+  "theme.themes": "Теми",
+  "theme.new_from": "Нова тема з",
+
+  "category.apps": "Застосунки та вміст",
+  "category.system": "Система",
+  "category.developer": "Розробник",
+  "category.apps.desc": "Перегляд сайтів, ігри, запуск застосунків",
+  "category.system.desc": "Піри, ключі, з’єднання, налаштування, сховище",
+  "category.developer.desc": "Дерево сутностей, консолі запитів і виконання, оболонка, журнали",
+
+  "window.entity_tree": "Дерево сутностей",
+  "window.games": "Ігри",
+  "window.apps": "Застосунки",
+  "window.knowledge_base": "База знань",
+  "window.key_manager": "Менеджер ключів",
+  "window.peer_connections": "З’єднання пірів",
+  "window.file_transfer": "Передавання файлів",
+  "window.execute_console": "Консоль виконання",
+  "window.query_console": "Консоль запитів",
+  "window.settings": "Налаштування",
+  "window.event_log": "Журнал подій",
+  "window.peers": "Піри",
+  "window.shell": "Оболонка",
+  "window.chain_trace": "Трасування ланцюга",
+  "window.path_tap": "Відгалуження шляху",
+  "window.wire_recorder": "Записувач протоколу",
+  "window.content_stream": "Потік вмісту",
+  "window.site_browser": "Браузер сайтів",
+  "window.storage": "Сховище",
+  "window.site_creator": "Створювач сайтів",
+  "window.system_overview": "Огляд системи",
+  "window.access_log": "Журнал доступу",
+  "window.theme_editor": "Редактор тем",
+
+  "btn.create": "Створити",
+  "btn.move": "Перемістити",
+  "btn.authorize": "Авторизувати",
+  "btn.add_peer": "Додати пір",
+  "btn.find": "Знайти",
+  "btn.count": "Порахувати",
+  "btn.trace": "Трасувати",
+
+  "execute.execute": "Виконати",
+  "execute.guided": "З підказками",
+  "execute.raw": "Сирий",
+
+  "filetransfer.pull_selected": "⬇ Завантажити вибраний файл",
+  "filetransfer.upload_file": "Вивантажити файл",
+
+  "siteeditor.create_site": "Створити сайт",
+  "siteeditor.delete_site": "Видалити сайт",
+  "siteeditor.save_page": "Зберегти сторінку",
+  "siteeditor.delete_page": "Видалити сторінку",
+  "siteeditor.title_optional": "Заголовок (необов’язково)",
+  "siteeditor.page_title_ph": "Заголовок сторінки",
+
+  "entitytree.source_none": "Немає (вручну)",
+  "entitytree.source_app": "Агрегат застосунку (пір: {peer})",
+
+  "settings.boot_into": "Завантажуватися в",
+  "settings.boot_chrome": "Робочий стіл",
+  "settings.boot_site": "Сайт",
+  "settings.boot_window": "Вікно",
+
+  "theme.scheme_dark": "Темна",
+  "theme.scheme_light": "Світла",
+
+  "sysoverview.profile_pull": "Лише завантаження",
+  "sysoverview.profile_twoway": "Двостороння",
+
+  "label.level": "Рівень",
+  "label.results": "Результати",
+  "label.content": "Вміст",
+  "label.system": "Система",
+  "status.loading": "Завантаження…",
+
+  "peers.scan_qr": "Сканувати QR-код",
+  "peers.scan_hint": "Відскануйте це з іншого пристрою, щоб під’єднати його тут.",
+  "peers.show_qr": "Показати QR-код",
+
+  "sitedir.sites_menu": "Сайти ▾",
+  "sitedir.sites": "Сайти",
+
+  "contentsite.enter_peer": "Увійти в пір",
+  "contentsite.contents_menu": "Вміст ▾",
+
+  "storage.origin_disk": "Диск джерела (IndexedDB ＋ кеші — усе джерело)",
+  "storage.backend_native": "Системний бекенд — рідне сховище",
+  "storage.native_sqlite": "Рідне / SQLite",
+  "storage.by_path": "За шляхом верхнього рівня:",
+
+  "chaintrace.chain_id": "ID ланцюга:",
+  "chaintrace.continuations": "Продовження",
+  "chaintrace.error_markers": "Маркери помилок ланцюга",
+
+  "siteeditor.move_rename": "Перемістити/перейменувати на:",
+
+  "entitytree.up": "Вгору",
+  "entitytree.selection_source": "Джерело вибору",
+  "entitytree.select_prompt": "Виберіть сутність з дерева",
+  "entitytree.inspector": "Інспектор",
+  "entitytree.none_selected": "Сутність не вибрано",
+  "entitytree.raw_hash": "Сирий хеш",
+
+  "settings.lockdown_active": "Блокування активне (встановлено конфігурацією цього розгортання).",
+
+  "windows.none_open": "Немає відкритих вікон",
+  "windows.open_windows": "Відкриті вікна",
+  "mod.learn_more": "Дізнайтеся більше та долучайтеся на ",
+
+  "status.saved": "збережено",
+  "status.stopped": "зупинено",
+  "status.granted": "надано",
+
+  "chip.connected": "З’єднано",
+  "chip.connecting": "З’єднання…",
+  "chip.offline": "Офлайн",
+  "chip.authorized": "Авторизовано",
+  "chip.pending": "Очікування",
+  "chip.not_authorized": "Не авторизовано",
+  "chip.not_verified": "Не перевірено",
+
+  "label.state_path": "Стан: {path}",
+
+  "accesslog.operations": "операції: {n}",
+  "accesslog.authorized_head": "Авторизовано: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Немає сутності за: {path}",
+
+  "siteeditor.editing": "Редагування: {id}",
+  "siteeditor.adding_to": "Додавання до: {target}",
+  "siteeditor.confirm_move_unsaved": "Ця сторінка має незбережені зміни, які буде втрачено під час переміщення. Перемістити попри це?",
+
+  "storage.peer_not_created": "Пір не створено — {reason}",
+
+  "kb.body_placeholder": "Текст у Markdown",
+
+  "chaintrace.enter_hint": "(введіть chain_id і натисніть Трасувати)",
+
+  "scanner.scanned_codes": "Відскановані коди",
+  "scanner.scanned_codes_count": "Відскановані коди ({n} унікальних)",
+  "scanner.photo_capture": "Фотозйомка",
+  "scanner.photo_hint": "Зробіть фото QR-коду",
+  "scanner.take_photo": "Зробити фото",
+  "scanner.processing": "Обробка...",
+  "scanner.no_detector": "Немає BarcodeDetector — введіть код вручну",
+  "scanner.detector_init_failed": "Не вдалося ініціалізувати детектор",
+  "scanner.detect_call_failed": "Не вдалося виконати виклик виявлення",
+  "scanner.qr_found": "QR-код знайдено!",
+  "scanner.no_qr": "QR не знайдено — спробуйте ще раз",
+  "scanner.decode_error": "Помилка декодування",
+  "scanner.live_scanner": "Живий сканер",
+  "scanner.live_hint": "Сканування камерою в реальному часі",
+  "scanner.start_live": "Почати живе сканування",
+  "scanner.stop": "Зупинити",
+  "scanner.stopped": "Зупинено",
+  "scanner.camera_unavailable": "Камера недоступна",
+  "scanner.camera_denied": "Доступ до камери відхилено",
+  "scanner.starting_camera": "Запуск камери...",
+  "scanner.stream_error": "Помилка потоку",
+  "scanner.scanning": "Сканування...",
+  "scanner.detector_failed": "Збій детектора",
+  "scanner.scan_detect_error": "Сканування {n} — помилка виявлення",
+  "scanner.found_continuing": "Знайдено! Продовження сканування...",
+  "scanner.scan_n": "Сканування {n}...",
+  "scanner.scan_error": "Сканування {n} — помилка",
+
+  "peer.count": {
+    "one": "{n} пір",
+    "few": "{n} піри",
+    "many": "{n} пірів"
+  }
+}

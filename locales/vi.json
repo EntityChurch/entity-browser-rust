@@ -1,0 +1,240 @@
+{
+  "btn.save": "Lưu",
+  "btn.cancel": "Hủy",
+  "btn.delete": "Xóa",
+  "btn.copy": "Sao chép",
+  "btn.connect": "Kết nối",
+  "btn.edit": "Chỉnh sửa",
+  "btn.refresh": "Làm mới",
+  "btn.back": "← Quay lại",
+  "btn.revert": "Hoàn nguyên",
+
+  "label.status": "Trạng thái",
+  "label.title": "Tiêu đề",
+  "label.peer": "Điểm ngang hàng",
+  "label.target": "Đích",
+  "label.address": "Địa chỉ",
+  "label.name": "Tên",
+  "label.label": "Nhãn",
+
+  "status.copied": "Đã sao chép ✓",
+
+  "execute.handler": "Trình xử lý",
+  "execute.operation": "Thao tác",
+  "execute.handler_uri": "URI trình xử lý",
+  "execute.resource": "Tài nguyên",
+
+  "peers.known_devices": "Thiết bị đã biết",
+  "peers.connect_device": "Kết nối với một thiết bị",
+  "peers.pair_qr": "Ghép nối thiết bị (QR)",
+
+  "tooltip.close_window": "Đóng cửa sổ",
+  "tooltip.open_windows": "Cửa sổ đang mở",
+  "tooltip.fill_window": "Phóng to cửa sổ",
+  "tooltip.restore_size": "Trở về kích thước bình thường",
+  "tooltip.menu": "Menu",
+  "tooltip.back": "Quay lại",
+  "tooltip.site_home": "Về trang chủ của trang web",
+  "tooltip.unsaved": "Thay đổi chưa lưu",
+
+  "kb.title_placeholder": "Tiêu đề bài viết",
+  "theme.name_placeholder": "tên (a-z, 0-9, gạch nối)",
+  "theme.label_placeholder": "nhãn hiển thị",
+
+  "filetransfer.device": "Thiết bị",
+  "filetransfer.shared_files": "Tệp chia sẻ",
+  "filetransfer.send_file": "Gửi một tệp",
+  "filetransfer.from_peer": "Từ điểm ngang hàng",
+  "filetransfer.results": "Kết quả",
+
+  "syspeers.system_peer": "Điểm ngang hàng hệ thống",
+  "syspeers.system_backend": "Phần phụ trợ hệ thống",
+
+  "sysoverview.clear_logs": "Xóa nhật ký",
+  "sysoverview.logs": "Nhật ký",
+  "sysoverview.device_auth": "Ủy quyền thiết bị",
+  "sysoverview.grant_backend_hint": "Đã ủy quyền trên phần phụ trợ; phạm vi cụ thể không được ghi lại cục bộ.",
+
+  "kb.new_article": "＋ Bài viết mới",
+  "kb.back_to_list": "← Trở lại danh sách",
+
+  "settings.appearance": "Giao diện",
+  "settings.theme": "Chủ đề",
+  "settings.language": "Ngôn ngữ",
+  "settings.windows": "Cửa sổ",
+  "settings.site_surface": "Trang web & bề mặt",
+  "settings.rendering": "Kết xuất",
+  "settings.network": "Mạng",
+  "settings.language.hint": "Đặt ngôn ngữ giao diện và hướng bố cục.",
+
+  "theme.themes": "Chủ đề",
+  "theme.new_from": "Chủ đề mới từ",
+
+  "category.apps": "Ứng dụng & Nội dung",
+  "category.system": "Hệ thống",
+  "category.developer": "Nhà phát triển",
+  "category.apps.desc": "Duyệt trang web, chơi trò chơi, chạy ứng dụng",
+  "category.system.desc": "Điểm ngang hàng, khóa, kết nối, cài đặt, lưu trữ",
+  "category.developer.desc": "Cây thực thể, bảng điều khiển truy vấn và thực thi, shell, nhật ký",
+
+  "window.entity_tree": "Cây thực thể",
+  "window.games": "Trò chơi",
+  "window.apps": "Ứng dụng",
+  "window.knowledge_base": "Cơ sở kiến thức",
+  "window.key_manager": "Trình quản lý khóa",
+  "window.peer_connections": "Kết nối ngang hàng",
+  "window.file_transfer": "Truyền tệp",
+  "window.execute_console": "Bảng điều khiển thực thi",
+  "window.query_console": "Bảng điều khiển truy vấn",
+  "window.settings": "Cài đặt",
+  "window.event_log": "Nhật ký sự kiện",
+  "window.peers": "Điểm ngang hàng",
+  "window.shell": "Shell",
+  "window.chain_trace": "Truy vết chuỗi",
+  "window.path_tap": "Điểm chạm đường dẫn",
+  "window.wire_recorder": "Trình ghi giao thức",
+  "window.content_stream": "Luồng nội dung",
+  "window.site_browser": "Trình duyệt trang web",
+  "window.storage": "Lưu trữ",
+  "window.site_creator": "Trình tạo trang web",
+  "window.system_overview": "Tổng quan hệ thống",
+  "window.access_log": "Nhật ký truy cập",
+  "window.theme_editor": "Trình chỉnh sửa chủ đề",
+
+  "btn.create": "Tạo",
+  "btn.move": "Di chuyển",
+  "btn.authorize": "Ủy quyền",
+  "btn.add_peer": "Thêm điểm ngang hàng",
+  "btn.find": "Tìm",
+  "btn.count": "Đếm",
+  "btn.trace": "Truy vết",
+
+  "execute.execute": "Thực thi",
+  "execute.guided": "Có hướng dẫn",
+  "execute.raw": "Thô",
+
+  "filetransfer.pull_selected": "⬇ Lấy tệp đã chọn",
+  "filetransfer.upload_file": "Tải tệp lên",
+
+  "siteeditor.create_site": "Tạo trang web",
+  "siteeditor.delete_site": "Xóa trang web",
+  "siteeditor.save_page": "Lưu trang",
+  "siteeditor.delete_page": "Xóa trang",
+  "siteeditor.title_optional": "Tiêu đề (tùy chọn)",
+  "siteeditor.page_title_ph": "Tiêu đề trang",
+
+  "entitytree.source_none": "Không (thủ công)",
+  "entitytree.source_app": "Tổng hợp ứng dụng (điểm ngang hàng: {peer})",
+
+  "settings.boot_into": "Khởi động vào",
+  "settings.boot_chrome": "Màn hình nền",
+  "settings.boot_site": "Trang web",
+  "settings.boot_window": "Cửa sổ",
+
+  "theme.scheme_dark": "Tối",
+  "theme.scheme_light": "Sáng",
+
+  "sysoverview.profile_pull": "Chỉ lấy về",
+  "sysoverview.profile_twoway": "Hai chiều",
+
+  "label.level": "Cấp độ",
+  "label.results": "Kết quả",
+  "label.content": "Nội dung",
+  "label.system": "Hệ thống",
+  "status.loading": "Đang tải…",
+
+  "peers.scan_qr": "Quét mã QR",
+  "peers.scan_hint": "Quét mã này từ thiết bị khác để kết nối tại đây.",
+  "peers.show_qr": "Hiển thị mã QR",
+
+  "sitedir.sites_menu": "Trang web ▾",
+  "sitedir.sites": "Trang web",
+
+  "contentsite.enter_peer": "Vào điểm ngang hàng",
+  "contentsite.contents_menu": "Nội dung ▾",
+
+  "storage.origin_disk": "Đĩa gốc (IndexedDB ＋ bộ nhớ đệm — toàn bộ nguồn gốc)",
+  "storage.backend_native": "Phần phụ trợ hệ thống — kho lưu trữ gốc",
+  "storage.native_sqlite": "Gốc / SQLite",
+  "storage.by_path": "Theo đường dẫn cấp cao nhất:",
+
+  "chaintrace.chain_id": "ID chuỗi:",
+  "chaintrace.continuations": "Phần tiếp nối",
+  "chaintrace.error_markers": "Dấu lỗi chuỗi",
+
+  "siteeditor.move_rename": "Di chuyển/đổi tên thành:",
+
+  "entitytree.up": "Lên",
+  "entitytree.selection_source": "Nguồn lựa chọn",
+  "entitytree.select_prompt": "Chọn một thực thể từ cây",
+  "entitytree.inspector": "Trình kiểm tra",
+  "entitytree.none_selected": "Chưa chọn thực thể nào",
+  "entitytree.raw_hash": "Hash thô",
+
+  "settings.lockdown_active": "Chế độ khóa đang hoạt động (do cấu hình của bản triển khai này đặt).",
+
+  "windows.none_open": "Không có cửa sổ nào đang mở",
+  "windows.open_windows": "Cửa sổ đang mở",
+  "mod.learn_more": "Tìm hiểu thêm và tham gia tại ",
+
+  "status.saved": "đã lưu",
+  "status.stopped": "đã dừng",
+  "status.granted": "đã cấp",
+
+  "chip.connected": "Đã kết nối",
+  "chip.connecting": "Đang kết nối…",
+  "chip.offline": "Ngoại tuyến",
+  "chip.authorized": "Đã ủy quyền",
+  "chip.pending": "Đang chờ",
+  "chip.not_authorized": "Chưa ủy quyền",
+  "chip.not_verified": "Chưa xác minh",
+
+  "label.state_path": "Trạng thái: {path}",
+
+  "accesslog.operations": "thao tác: {n}",
+  "accesslog.authorized_head": "Đã ủy quyền: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Không có thực thể tại: {path}",
+
+  "siteeditor.editing": "Đang chỉnh sửa: {id}",
+  "siteeditor.adding_to": "Đang thêm vào: {target}",
+  "siteeditor.confirm_move_unsaved": "Trang này có các thay đổi chưa lưu sẽ bị mất khi di chuyển. Vẫn di chuyển?",
+
+  "storage.peer_not_created": "Chưa tạo điểm ngang hàng — {reason}",
+
+  "kb.body_placeholder": "Nội dung Markdown",
+
+  "chaintrace.enter_hint": "(nhập chain_id và nhấn Truy vết)",
+
+  "scanner.scanned_codes": "Mã đã quét",
+  "scanner.scanned_codes_count": "Mã đã quét ({n} mã duy nhất)",
+  "scanner.photo_capture": "Chụp ảnh",
+  "scanner.photo_hint": "Chụp ảnh một mã QR",
+  "scanner.take_photo": "Chụp ảnh",
+  "scanner.processing": "Đang xử lý...",
+  "scanner.no_detector": "Không có BarcodeDetector — nhập mã thủ công",
+  "scanner.detector_init_failed": "Khởi tạo bộ dò thất bại",
+  "scanner.detect_call_failed": "Lệnh gọi dò thất bại",
+  "scanner.qr_found": "Đã tìm thấy mã QR!",
+  "scanner.no_qr": "Không tìm thấy QR — thử lại",
+  "scanner.decode_error": "Lỗi giải mã",
+  "scanner.live_scanner": "Máy quét trực tiếp",
+  "scanner.live_hint": "Quét camera theo thời gian thực",
+  "scanner.start_live": "Bắt đầu quét trực tiếp",
+  "scanner.stop": "Dừng",
+  "scanner.stopped": "Đã dừng",
+  "scanner.camera_unavailable": "Camera không khả dụng",
+  "scanner.camera_denied": "Camera bị từ chối",
+  "scanner.starting_camera": "Đang khởi động camera...",
+  "scanner.stream_error": "Lỗi luồng",
+  "scanner.scanning": "Đang quét...",
+  "scanner.detector_failed": "Bộ dò thất bại",
+  "scanner.scan_detect_error": "Quét {n} — lỗi dò",
+  "scanner.found_continuing": "Đã tìm thấy! Tiếp tục quét...",
+  "scanner.scan_n": "Quét {n}...",
+  "scanner.scan_error": "Quét {n} — lỗi",
+
+  "peer.count": {
+    "other": "{n} điểm ngang hàng"
+  }
+}

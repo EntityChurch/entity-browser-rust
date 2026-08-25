@@ -314,7 +314,7 @@ fn render_footer(parent: &Element, output: &ShellOutput) {
          text-overflow:ellipsis;overflow:hidden;white-space:nowrap",
     )
     .ok();
-    util::set_text(&info, &format!("State: {}", output.state_path));
+    util::set_text(&info, &crate::i18n::t("label.state_path", &[("path", &output.state_path)]));
     util::append(parent, &info);
 }
 

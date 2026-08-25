@@ -1,0 +1,241 @@
+{
+  "btn.save": "Opslaan",
+  "btn.cancel": "Annuleren",
+  "btn.delete": "Verwijderen",
+  "btn.copy": "Kopiëren",
+  "btn.connect": "Verbinden",
+  "btn.edit": "Bewerken",
+  "btn.refresh": "Vernieuwen",
+  "btn.back": "← Terug",
+  "btn.revert": "Terugdraaien",
+
+  "label.status": "Status",
+  "label.title": "Titel",
+  "label.peer": "Peer",
+  "label.target": "Doel",
+  "label.address": "Adres",
+  "label.name": "Naam",
+  "label.label": "Label",
+
+  "status.copied": "Gekopieerd ✓",
+
+  "execute.handler": "Handler",
+  "execute.operation": "Bewerking",
+  "execute.handler_uri": "Handler-URI",
+  "execute.resource": "Bron",
+
+  "peers.known_devices": "Bekende apparaten",
+  "peers.connect_device": "Verbinden met een apparaat",
+  "peers.pair_qr": "Apparaat koppelen (QR)",
+
+  "tooltip.close_window": "Venster sluiten",
+  "tooltip.open_windows": "Open vensters",
+  "tooltip.fill_window": "Venster maximaliseren",
+  "tooltip.restore_size": "Terug naar normale grootte",
+  "tooltip.menu": "Menu",
+  "tooltip.back": "Terug",
+  "tooltip.site_home": "Naar de startpagina van de site",
+  "tooltip.unsaved": "Niet-opgeslagen wijzigingen",
+
+  "kb.title_placeholder": "Artikeltitel",
+  "theme.name_placeholder": "naam (a-z, 0-9, streepjes)",
+  "theme.label_placeholder": "weergavelabel",
+
+  "filetransfer.device": "Apparaat",
+  "filetransfer.shared_files": "Gedeelde bestanden",
+  "filetransfer.send_file": "Een bestand verzenden",
+  "filetransfer.from_peer": "Van peer",
+  "filetransfer.results": "Resultaten",
+
+  "syspeers.system_peer": "Systeem-peer",
+  "syspeers.system_backend": "Systeem-backend",
+
+  "sysoverview.clear_logs": "Logboeken wissen",
+  "sysoverview.logs": "Logboeken",
+  "sysoverview.device_auth": "Apparaatautorisaties",
+  "sysoverview.grant_backend_hint": "Geautoriseerd op de backend; de specifieke reikwijdte wordt niet lokaal vastgelegd.",
+
+  "kb.new_article": "+ Nieuw artikel",
+  "kb.back_to_list": "← Terug naar lijst",
+
+  "settings.appearance": "Weergave",
+  "settings.theme": "Thema",
+  "settings.language": "Taal",
+  "settings.windows": "Vensters",
+  "settings.site_surface": "Site & oppervlak",
+  "settings.rendering": "Rendering",
+  "settings.network": "Netwerk",
+  "settings.language.hint": "Stelt de interfacetaal en de leesrichting in.",
+
+  "theme.themes": "Thema's",
+  "theme.new_from": "Nieuw thema op basis van",
+
+  "category.apps": "Apps & inhoud",
+  "category.system": "Systeem",
+  "category.developer": "Ontwikkelaar",
+  "category.apps.desc": "Blader door sites, speel games, voer apps uit",
+  "category.system.desc": "Peers, sleutels, verbindingen, instellingen, opslag",
+  "category.developer.desc": "Entiteitsboom, query- en uitvoerconsoles, shell, logboeken",
+
+  "window.entity_tree": "Entiteitsboom",
+  "window.games": "Games",
+  "window.apps": "Apps",
+  "window.knowledge_base": "Kennisbank",
+  "window.key_manager": "Sleutelbeheer",
+  "window.peer_connections": "Peer-verbindingen",
+  "window.file_transfer": "Bestandsoverdracht",
+  "window.execute_console": "Uitvoerconsole",
+  "window.query_console": "Queryconsole",
+  "window.settings": "Instellingen",
+  "window.event_log": "Gebeurtenislogboek",
+  "window.peers": "Peers",
+  "window.shell": "Shell",
+  "window.chain_trace": "Ketentracering",
+  "window.path_tap": "Pad-tap",
+  "window.wire_recorder": "Protocolrecorder",
+  "window.content_stream": "Inhoudsstroom",
+  "window.site_browser": "Sitebrowser",
+  "window.storage": "Opslag",
+  "window.site_creator": "Site-maker",
+  "window.system_overview": "Systeemoverzicht",
+  "window.access_log": "Toegangslogboek",
+  "window.theme_editor": "Thema-editor",
+
+  "btn.create": "Aanmaken",
+  "btn.move": "Verplaatsen",
+  "btn.authorize": "Autoriseren",
+  "btn.add_peer": "Peer toevoegen",
+  "btn.find": "Zoeken",
+  "btn.count": "Tellen",
+  "btn.trace": "Traceren",
+
+  "execute.execute": "Uitvoeren",
+  "execute.guided": "Begeleid",
+  "execute.raw": "Ruw",
+
+  "filetransfer.pull_selected": "⬇ Geselecteerd bestand downloaden",
+  "filetransfer.upload_file": "Een bestand uploaden",
+
+  "siteeditor.create_site": "Site aanmaken",
+  "siteeditor.delete_site": "Site verwijderen",
+  "siteeditor.save_page": "Pagina opslaan",
+  "siteeditor.delete_page": "Pagina verwijderen",
+  "siteeditor.title_optional": "Titel (optioneel)",
+  "siteeditor.page_title_ph": "Paginatitel",
+
+  "entitytree.source_none": "Geen (handmatig)",
+  "entitytree.source_app": "App-aggregaat (peer: {peer})",
+
+  "settings.boot_into": "Opstarten in",
+  "settings.boot_chrome": "Bureaublad",
+  "settings.boot_site": "Site",
+  "settings.boot_window": "Venster",
+
+  "theme.scheme_dark": "Donker",
+  "theme.scheme_light": "Licht",
+
+  "sysoverview.profile_pull": "Alleen ophalen",
+  "sysoverview.profile_twoway": "Tweerichting",
+
+  "label.level": "Niveau",
+  "label.results": "Resultaten",
+  "label.content": "Inhoud",
+  "label.system": "Systeem",
+  "status.loading": "Laden…",
+
+  "peers.scan_qr": "Een QR-code scannen",
+  "peers.scan_hint": "Scan dit vanaf een ander apparaat om het hier te verbinden.",
+  "peers.show_qr": "QR-code tonen",
+
+  "sitedir.sites_menu": "Sites ▾",
+  "sitedir.sites": "Sites",
+
+  "contentsite.enter_peer": "Peer betreden",
+  "contentsite.contents_menu": "Inhoud ▾",
+
+  "storage.origin_disk": "Oorsprongschijf (IndexedDB + caches — hele oorsprong)",
+  "storage.backend_native": "Systeem-backend — native opslag",
+  "storage.native_sqlite": "Native / SQLite",
+  "storage.by_path": "Op pad op hoogste niveau:",
+
+  "chaintrace.chain_id": "Keten-ID:",
+  "chaintrace.continuations": "Voortzettingen",
+  "chaintrace.error_markers": "Ketenfoutmarkeringen",
+
+  "siteeditor.move_rename": "Verplaatsen/hernoemen naar:",
+
+  "entitytree.up": "Omhoog",
+  "entitytree.selection_source": "Selectiebron",
+  "entitytree.select_prompt": "Selecteer een entiteit uit de boom",
+  "entitytree.inspector": "Inspecteur",
+  "entitytree.none_selected": "Geen entiteit geselecteerd",
+  "entitytree.raw_hash": "Ruwe hash",
+
+  "settings.lockdown_active": "Vergrendeling is actief (ingesteld door de configuratie van deze implementatie).",
+
+  "windows.none_open": "Geen vensters open",
+  "windows.open_windows": "Open vensters",
+  "mod.learn_more": "Meer informatie en doe mee op ",
+
+  "status.saved": "opgeslagen",
+  "status.stopped": "gestopt",
+  "status.granted": "verleend",
+
+  "chip.connected": "Verbonden",
+  "chip.connecting": "Verbinden…",
+  "chip.offline": "Offline",
+  "chip.authorized": "Geautoriseerd",
+  "chip.pending": "In behandeling",
+  "chip.not_authorized": "Niet geautoriseerd",
+  "chip.not_verified": "Niet geverifieerd",
+
+  "label.state_path": "Status: {path}",
+
+  "accesslog.operations": "bewerkingen: {n}",
+  "accesslog.authorized_head": "Geautoriseerd: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Geen entiteit op: {path}",
+
+  "siteeditor.editing": "Bewerken: {id}",
+  "siteeditor.adding_to": "Toevoegen aan: {target}",
+  "siteeditor.confirm_move_unsaved": "Deze pagina heeft niet-opgeslagen wijzigingen die verloren gaan bij het verplaatsen. Toch verplaatsen?",
+
+  "storage.peer_not_created": "Peer niet aangemaakt — {reason}",
+
+  "kb.body_placeholder": "Markdown-tekst",
+
+  "chaintrace.enter_hint": "(voer een chain_id in en druk op Traceren)",
+
+  "scanner.scanned_codes": "Gescande codes",
+  "scanner.scanned_codes_count": "Gescande codes ({n} uniek)",
+  "scanner.photo_capture": "Foto maken",
+  "scanner.photo_hint": "Maak een foto van een QR-code",
+  "scanner.take_photo": "Foto maken",
+  "scanner.processing": "Verwerken...",
+  "scanner.no_detector": "Geen BarcodeDetector — voer de code handmatig in",
+  "scanner.detector_init_failed": "Initialisatie van detector mislukt",
+  "scanner.detect_call_failed": "Detectieaanroep mislukt",
+  "scanner.qr_found": "QR-code gevonden!",
+  "scanner.no_qr": "Geen QR gevonden — probeer opnieuw",
+  "scanner.decode_error": "Decodeerfout",
+  "scanner.live_scanner": "Live scanner",
+  "scanner.live_hint": "Realtime camerascan",
+  "scanner.start_live": "Live scan starten",
+  "scanner.stop": "Stoppen",
+  "scanner.stopped": "Gestopt",
+  "scanner.camera_unavailable": "Camera niet beschikbaar",
+  "scanner.camera_denied": "Camera geweigerd",
+  "scanner.starting_camera": "Camera starten...",
+  "scanner.stream_error": "Streamfout",
+  "scanner.scanning": "Scannen...",
+  "scanner.detector_failed": "Detector mislukt",
+  "scanner.scan_detect_error": "Scan {n} — detectiefout",
+  "scanner.found_continuing": "Gevonden! Scan wordt voortgezet...",
+  "scanner.scan_n": "Scan {n}...",
+  "scanner.scan_error": "Scan {n} — fout",
+
+  "peer.count": {
+    "one": "{n} peer",
+    "other": "{n} peers"
+  }
+}

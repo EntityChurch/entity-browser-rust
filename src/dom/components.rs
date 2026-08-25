@@ -286,12 +286,13 @@ pub enum AuthState {
 }
 
 impl ConnState {
-    /// (glyph, word, color) — the single definition of how each state looks.
+    /// (glyph, word-key, color) — the single definition of how each state looks.
+    /// The middle element is an i18n catalog key resolved by [`chip`].
     fn parts(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            ConnState::Connected => ("\u{25cf}", "Connected", "var(--status-ok,#4c4)"), // ●
-            ConnState::Connecting => ("\u{25d0}", "Connecting\u{2026}", "var(--text-dim,#888)"), // ◐
-            ConnState::Offline => ("\u{25cb}", "Offline", "var(--text-dim,#888)"),       // ○
+            ConnState::Connected => ("\u{25cf}", "chip.connected", "var(--status-ok,#4c4)"), // ●
+            ConnState::Connecting => ("\u{25d0}", "chip.connecting", "var(--text-dim,#888)"), // ◐
+            ConnState::Offline => ("\u{25cb}", "chip.offline", "var(--text-dim,#888)"),       // ○
         }
     }
 }
@@ -299,17 +300,18 @@ impl ConnState {
 impl AuthState {
     fn parts(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            AuthState::Authorized => ("\u{2713}", "Authorized", "var(--status-ok,#4c4)"), // ✓
-            AuthState::Pending => ("\u{2022}", "Pending", "var(--text-dim,#888)"),         // •
-            AuthState::NotAuthorized => ("\u{26d4}", "Not authorized", "var(--status-err,#f66)"), // ⛔
-            AuthState::Unverified => ("\u{2022}", "Not verified", "var(--text-dim,#888)"), // •
+            AuthState::Authorized => ("\u{2713}", "chip.authorized", "var(--status-ok,#4c4)"), // ✓
+            AuthState::Pending => ("\u{2022}", "chip.pending", "var(--text-dim,#888)"),         // •
+            AuthState::NotAuthorized => ("\u{26d4}", "chip.not_authorized", "var(--status-err,#f66)"), // ⛔
+            AuthState::Unverified => ("\u{2022}", "chip.not_verified", "var(--text-dim,#888)"), // •
         }
     }
 }
 
 /// The one chip look — a compact pill (glyph + word) in the state's color.
-/// Private so every chip in the app is byte-identical in shape.
-fn chip(glyph: &str, word: &str, color: &str) -> Element {
+/// Private so every chip in the app is byte-identical in shape. `word_key` is
+/// an i18n catalog key, resolved here so every chip localizes in one place.
+fn chip(glyph: &str, word_key: &str, color: &str) -> Element {
     let el = util::create_element("span");
     el.set_attribute(
         "style",
@@ -321,7 +323,7 @@ fn chip(glyph: &str, word: &str, color: &str) -> Element {
         ),
     )
     .ok();
-    util::set_text(&el, &format!("{glyph} {word}"));
+    util::set_text(&el, &format!("{glyph} {}", crate::i18n::t(word_key, &[])));
     el
 }
 

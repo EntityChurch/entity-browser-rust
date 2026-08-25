@@ -222,7 +222,7 @@ fn editor_block(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     head.set_attribute("style", theme::HEADER_ROW).ok();
     let title = util::create_element("div");
     title.set_attribute("style", "font-weight:bold;font-size:14px").ok();
-    util::set_text(&title, &format!("Editing: {}", sel.site_id));
+    util::set_text(&title, &crate::i18n::t("siteeditor.editing", &[("id", &sel.site_id)]));
     util::append(&head, &title);
     let del_site = components::button_el(&crate::i18n::t("siteeditor.delete_site", &[]), components::ButtonKind::Destructive);
     on_confirmed_event(
@@ -288,7 +288,7 @@ fn navigator(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     } else {
         format!("/{}", sel.add_target)
     };
-    util::set_text(&target_label, &format!("Adding to: {where_}"));
+    util::set_text(&target_label, &crate::i18n::t("siteeditor.adding_to", &[("target", &where_)]));
     util::append(&nav, &target_label);
     util::append(&nav, &add_controls(ctx));
     nav
@@ -612,7 +612,7 @@ fn page_editor(
                     || d.get(&title_key).is_some_and(|t| t != &saved_title)
             };
             if dirty
-                && !confirm("This page has unsaved changes that will be lost when it moves. Move anyway?")
+                && !confirm(&crate::i18n::t("siteeditor.confirm_move_unsaved", &[]))
             {
                 return;
             }

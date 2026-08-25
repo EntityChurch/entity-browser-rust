@@ -1,0 +1,240 @@
+{
+  "btn.save": "Simpan",
+  "btn.cancel": "Batal",
+  "btn.delete": "Hapus",
+  "btn.copy": "Salin",
+  "btn.connect": "Hubungkan",
+  "btn.edit": "Edit",
+  "btn.refresh": "Segarkan",
+  "btn.back": "← Kembali",
+  "btn.revert": "Kembalikan",
+
+  "label.status": "Status",
+  "label.title": "Judul",
+  "label.peer": "Peer",
+  "label.target": "Target",
+  "label.address": "Alamat",
+  "label.name": "Nama",
+  "label.label": "Label",
+
+  "status.copied": "Disalin ✓",
+
+  "execute.handler": "Handler",
+  "execute.operation": "Operasi",
+  "execute.handler_uri": "URI handler",
+  "execute.resource": "Sumber daya",
+
+  "peers.known_devices": "Perangkat dikenal",
+  "peers.connect_device": "Hubungkan ke perangkat",
+  "peers.pair_qr": "Pasangkan perangkat (QR)",
+
+  "tooltip.close_window": "Tutup jendela",
+  "tooltip.open_windows": "Jendela terbuka",
+  "tooltip.fill_window": "Perbesar jendela",
+  "tooltip.restore_size": "Kembali ke ukuran normal",
+  "tooltip.menu": "Menu",
+  "tooltip.back": "Kembali",
+  "tooltip.site_home": "Ke beranda situs",
+  "tooltip.unsaved": "Perubahan belum disimpan",
+
+  "kb.title_placeholder": "Judul artikel",
+  "theme.name_placeholder": "nama (a-z, 0-9, tanda hubung)",
+  "theme.label_placeholder": "label tampilan",
+
+  "filetransfer.device": "Perangkat",
+  "filetransfer.shared_files": "File yang dibagikan",
+  "filetransfer.send_file": "Kirim file",
+  "filetransfer.from_peer": "Dari peer",
+  "filetransfer.results": "Hasil",
+
+  "syspeers.system_peer": "Peer sistem",
+  "syspeers.system_backend": "Backend sistem",
+
+  "sysoverview.clear_logs": "Bersihkan log",
+  "sysoverview.logs": "Log",
+  "sysoverview.device_auth": "Otorisasi perangkat",
+  "sysoverview.grant_backend_hint": "Diotorisasi di backend; cakupan spesifik tidak dicatat secara lokal.",
+
+  "kb.new_article": "＋ Artikel baru",
+  "kb.back_to_list": "← Kembali ke daftar",
+
+  "settings.appearance": "Tampilan",
+  "settings.theme": "Tema",
+  "settings.language": "Bahasa",
+  "settings.windows": "Jendela",
+  "settings.site_surface": "Situs & Permukaan",
+  "settings.rendering": "Perenderan",
+  "settings.network": "Jaringan",
+  "settings.language.hint": "Menetapkan bahasa antarmuka dan arah tata letak.",
+
+  "theme.themes": "Tema",
+  "theme.new_from": "Tema baru dari",
+
+  "category.apps": "Aplikasi & Konten",
+  "category.system": "Sistem",
+  "category.developer": "Pengembang",
+  "category.apps.desc": "Jelajahi situs, mainkan game, jalankan aplikasi",
+  "category.system.desc": "Peer, kunci, koneksi, pengaturan, penyimpanan",
+  "category.developer.desc": "Pohon entitas, konsol kueri & eksekusi, shell, log",
+
+  "window.entity_tree": "Pohon Entitas",
+  "window.games": "Game",
+  "window.apps": "Aplikasi",
+  "window.knowledge_base": "Basis Pengetahuan",
+  "window.key_manager": "Pengelola Kunci",
+  "window.peer_connections": "Koneksi Peer",
+  "window.file_transfer": "Transfer File",
+  "window.execute_console": "Konsol Eksekusi",
+  "window.query_console": "Konsol Kueri",
+  "window.settings": "Pengaturan",
+  "window.event_log": "Log Peristiwa",
+  "window.peers": "Peer",
+  "window.shell": "Shell",
+  "window.chain_trace": "Pelacakan Rantai",
+  "window.path_tap": "Ketuk Jalur",
+  "window.wire_recorder": "Perekam Protokol",
+  "window.content_stream": "Aliran Konten",
+  "window.site_browser": "Peramban Situs",
+  "window.storage": "Penyimpanan",
+  "window.site_creator": "Pembuat Situs",
+  "window.system_overview": "Ikhtisar Sistem",
+  "window.access_log": "Log Akses",
+  "window.theme_editor": "Editor Tema",
+
+  "btn.create": "Buat",
+  "btn.move": "Pindahkan",
+  "btn.authorize": "Otorisasi",
+  "btn.add_peer": "Tambah peer",
+  "btn.find": "Cari",
+  "btn.count": "Hitung",
+  "btn.trace": "Lacak",
+
+  "execute.execute": "Jalankan",
+  "execute.guided": "Terpandu",
+  "execute.raw": "Mentah",
+
+  "filetransfer.pull_selected": "⬇ Tarik file terpilih",
+  "filetransfer.upload_file": "Unggah file",
+
+  "siteeditor.create_site": "Buat situs",
+  "siteeditor.delete_site": "Hapus situs",
+  "siteeditor.save_page": "Simpan halaman",
+  "siteeditor.delete_page": "Hapus halaman",
+  "siteeditor.title_optional": "Judul (opsional)",
+  "siteeditor.page_title_ph": "Judul halaman",
+
+  "entitytree.source_none": "Tidak ada (manual)",
+  "entitytree.source_app": "Agregat aplikasi (peer: {peer})",
+
+  "settings.boot_into": "Boot ke",
+  "settings.boot_chrome": "Desktop",
+  "settings.boot_site": "Situs",
+  "settings.boot_window": "Jendela",
+
+  "theme.scheme_dark": "Gelap",
+  "theme.scheme_light": "Terang",
+
+  "sysoverview.profile_pull": "Hanya tarik",
+  "sysoverview.profile_twoway": "Dua arah",
+
+  "label.level": "Tingkat",
+  "label.results": "Hasil",
+  "label.content": "Konten",
+  "label.system": "Sistem",
+  "status.loading": "Memuat…",
+
+  "peers.scan_qr": "Pindai kode QR",
+  "peers.scan_hint": "Pindai ini dari perangkat lain untuk menghubungkannya di sini.",
+  "peers.show_qr": "Tampilkan kode QR",
+
+  "sitedir.sites_menu": "Situs ▾",
+  "sitedir.sites": "Situs",
+
+  "contentsite.enter_peer": "Masuk Peer",
+  "contentsite.contents_menu": "Konten ▾",
+
+  "storage.origin_disk": "Disk asal (IndexedDB ＋ cache — seluruh asal)",
+  "storage.backend_native": "Backend sistem — penyimpanan native",
+  "storage.native_sqlite": "Native / SQLite",
+  "storage.by_path": "Menurut jalur tingkat atas:",
+
+  "chaintrace.chain_id": "ID rantai:",
+  "chaintrace.continuations": "Kelanjutan",
+  "chaintrace.error_markers": "Penanda kesalahan rantai",
+
+  "siteeditor.move_rename": "Pindahkan/ganti nama ke:",
+
+  "entitytree.up": "Naik",
+  "entitytree.selection_source": "Sumber pilihan",
+  "entitytree.select_prompt": "Pilih entitas dari pohon",
+  "entitytree.inspector": "Inspektur",
+  "entitytree.none_selected": "Tidak ada entitas terpilih",
+  "entitytree.raw_hash": "Hash mentah",
+
+  "settings.lockdown_active": "Penguncian aktif (ditetapkan oleh konfigurasi penerapan ini).",
+
+  "windows.none_open": "Tidak ada jendela terbuka",
+  "windows.open_windows": "Jendela Terbuka",
+  "mod.learn_more": "Pelajari lebih lanjut dan ikut terlibat di ",
+
+  "status.saved": "disimpan",
+  "status.stopped": "dihentikan",
+  "status.granted": "diberikan",
+
+  "chip.connected": "Terhubung",
+  "chip.connecting": "Menghubungkan…",
+  "chip.offline": "Luring",
+  "chip.authorized": "Diotorisasi",
+  "chip.pending": "Tertunda",
+  "chip.not_authorized": "Tidak diotorisasi",
+  "chip.not_verified": "Belum diverifikasi",
+
+  "label.state_path": "Status: {path}",
+
+  "accesslog.operations": "operasi: {n}",
+  "accesslog.authorized_head": "Diotorisasi: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "Tidak ada entitas di: {path}",
+
+  "siteeditor.editing": "Mengedit: {id}",
+  "siteeditor.adding_to": "Menambahkan ke: {target}",
+  "siteeditor.confirm_move_unsaved": "Halaman ini memiliki perubahan belum disimpan yang akan hilang saat dipindahkan. Tetap pindahkan?",
+
+  "storage.peer_not_created": "Peer tidak dibuat — {reason}",
+
+  "kb.body_placeholder": "Isi Markdown",
+
+  "chaintrace.enter_hint": "(masukkan chain_id lalu tekan Lacak)",
+
+  "scanner.scanned_codes": "Kode yang Dipindai",
+  "scanner.scanned_codes_count": "Kode yang Dipindai ({n} unik)",
+  "scanner.photo_capture": "Ambil Foto",
+  "scanner.photo_hint": "Ambil foto kode QR",
+  "scanner.take_photo": "Ambil Foto",
+  "scanner.processing": "Memproses...",
+  "scanner.no_detector": "Tidak ada BarcodeDetector — masukkan kode secara manual",
+  "scanner.detector_init_failed": "Inisialisasi detektor gagal",
+  "scanner.detect_call_failed": "Panggilan deteksi gagal",
+  "scanner.qr_found": "Kode QR ditemukan!",
+  "scanner.no_qr": "QR tidak ditemukan — coba lagi",
+  "scanner.decode_error": "Kesalahan dekode",
+  "scanner.live_scanner": "Pemindai Langsung",
+  "scanner.live_hint": "Pemindaian kamera waktu nyata",
+  "scanner.start_live": "Mulai Pindai Langsung",
+  "scanner.stop": "Berhenti",
+  "scanner.stopped": "Dihentikan",
+  "scanner.camera_unavailable": "Kamera tidak tersedia",
+  "scanner.camera_denied": "Kamera ditolak",
+  "scanner.starting_camera": "Memulai kamera...",
+  "scanner.stream_error": "Kesalahan aliran",
+  "scanner.scanning": "Memindai...",
+  "scanner.detector_failed": "Detektor gagal",
+  "scanner.scan_detect_error": "Pindai {n} — kesalahan deteksi",
+  "scanner.found_continuing": "Ditemukan! Melanjutkan pemindaian...",
+  "scanner.scan_n": "Pindai {n}...",
+  "scanner.scan_error": "Pindai {n} — kesalahan",
+
+  "peer.count": {
+    "other": "{n} peer"
+  }
+}

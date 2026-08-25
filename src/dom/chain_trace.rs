@@ -112,7 +112,10 @@ fn render_results(parent: &Element, output: &ChainTraceOutput) {
     if output.chain_id.is_empty() {
         let pre = util::create_element("pre");
         pre.set_attribute("style", theme::PRE_OUTPUT).ok();
-        pre.set_inner_html("<span style='color:var(--text-dim, #888)'>(enter a chain_id and press Trace)</span>");
+        pre.set_inner_html(&format!(
+            "<span style='color:var(--text-dim, #888)'>{}</span>",
+            crate::i18n::t("chaintrace.enter_hint", &[])
+        ));
         util::append(parent, &pre);
         return;
     }

@@ -1,0 +1,240 @@
+{
+  "btn.save": "保存",
+  "btn.cancel": "キャンセル",
+  "btn.delete": "削除",
+  "btn.copy": "コピー",
+  "btn.connect": "接続",
+  "btn.edit": "編集",
+  "btn.refresh": "更新",
+  "btn.back": "← 戻る",
+  "btn.revert": "元に戻す",
+
+  "label.status": "ステータス",
+  "label.title": "タイトル",
+  "label.peer": "ピア",
+  "label.target": "対象",
+  "label.address": "アドレス",
+  "label.name": "名前",
+  "label.label": "ラベル",
+
+  "status.copied": "コピーしました ✓",
+
+  "execute.handler": "ハンドラー",
+  "execute.operation": "操作",
+  "execute.handler_uri": "ハンドラー URI",
+  "execute.resource": "リソース",
+
+  "peers.known_devices": "既知のデバイス",
+  "peers.connect_device": "デバイスに接続",
+  "peers.pair_qr": "デバイスをペアリング（QR）",
+
+  "tooltip.close_window": "ウィンドウを閉じる",
+  "tooltip.open_windows": "開いているウィンドウ",
+  "tooltip.fill_window": "ウィンドウを最大化",
+  "tooltip.restore_size": "元のサイズに戻す",
+  "tooltip.menu": "メニュー",
+  "tooltip.back": "戻る",
+  "tooltip.site_home": "サイトのホームへ移動",
+  "tooltip.unsaved": "未保存の変更",
+
+  "kb.title_placeholder": "記事のタイトル",
+  "theme.name_placeholder": "名前（a-z、0-9、ハイフン）",
+  "theme.label_placeholder": "表示ラベル",
+
+  "filetransfer.device": "デバイス",
+  "filetransfer.shared_files": "共有ファイル",
+  "filetransfer.send_file": "ファイルを送信",
+  "filetransfer.from_peer": "送信元ピア",
+  "filetransfer.results": "結果",
+
+  "syspeers.system_peer": "システムピア",
+  "syspeers.system_backend": "システムバックエンド",
+
+  "sysoverview.clear_logs": "ログを消去",
+  "sysoverview.logs": "ログ",
+  "sysoverview.device_auth": "デバイスの承認",
+  "sysoverview.grant_backend_hint": "バックエンドで承認済み。具体的な範囲はローカルには記録されません。",
+
+  "kb.new_article": "＋ 新しい記事",
+  "kb.back_to_list": "← 一覧に戻る",
+
+  "settings.appearance": "外観",
+  "settings.theme": "テーマ",
+  "settings.language": "言語",
+  "settings.windows": "ウィンドウ",
+  "settings.site_surface": "サイトと表示",
+  "settings.rendering": "レンダリング",
+  "settings.network": "ネットワーク",
+  "settings.language.hint": "インターフェースの言語とレイアウト方向を設定します。",
+
+  "theme.themes": "テーマ",
+  "theme.new_from": "次のテーマから作成",
+
+  "category.apps": "アプリとコンテンツ",
+  "category.system": "システム",
+  "category.developer": "開発者",
+  "category.apps.desc": "サイトの閲覧、ゲーム、アプリの実行",
+  "category.system.desc": "ピア、鍵、接続、設定、ストレージ",
+  "category.developer.desc": "エンティティツリー、クエリと実行コンソール、シェル、ログ",
+
+  "window.entity_tree": "エンティティツリー",
+  "window.games": "ゲーム",
+  "window.apps": "アプリ",
+  "window.knowledge_base": "ナレッジベース",
+  "window.key_manager": "鍵マネージャー",
+  "window.peer_connections": "ピア接続",
+  "window.file_transfer": "ファイル転送",
+  "window.execute_console": "実行コンソール",
+  "window.query_console": "クエリコンソール",
+  "window.settings": "設定",
+  "window.event_log": "イベントログ",
+  "window.peers": "ピア",
+  "window.shell": "シェル",
+  "window.chain_trace": "チェーントレース",
+  "window.path_tap": "パスタップ",
+  "window.wire_recorder": "ワイヤーレコーダー",
+  "window.content_stream": "コンテンツストリーム",
+  "window.site_browser": "サイトブラウザー",
+  "window.storage": "ストレージ",
+  "window.site_creator": "サイト作成",
+  "window.system_overview": "システム概要",
+  "window.access_log": "アクセスログ",
+  "window.theme_editor": "テーマエディター",
+
+  "btn.create": "作成",
+  "btn.move": "移動",
+  "btn.authorize": "承認",
+  "btn.add_peer": "ピアを追加",
+  "btn.find": "検索",
+  "btn.count": "カウント",
+  "btn.trace": "トレース",
+
+  "execute.execute": "実行",
+  "execute.guided": "ガイド付き",
+  "execute.raw": "生",
+
+  "filetransfer.pull_selected": "⬇ 選択したファイルを取得",
+  "filetransfer.upload_file": "ファイルをアップロード",
+
+  "siteeditor.create_site": "サイトを作成",
+  "siteeditor.delete_site": "サイトを削除",
+  "siteeditor.save_page": "ページを保存",
+  "siteeditor.delete_page": "ページを削除",
+  "siteeditor.title_optional": "タイトル（任意）",
+  "siteeditor.page_title_ph": "ページタイトル",
+
+  "entitytree.source_none": "なし（手動）",
+  "entitytree.source_app": "アプリ集約（ピア：{peer}）",
+
+  "settings.boot_into": "起動先",
+  "settings.boot_chrome": "デスクトップ",
+  "settings.boot_site": "サイト",
+  "settings.boot_window": "ウィンドウ",
+
+  "theme.scheme_dark": "ダーク",
+  "theme.scheme_light": "ライト",
+
+  "sysoverview.profile_pull": "取得のみ",
+  "sysoverview.profile_twoway": "双方向",
+
+  "label.level": "レベル",
+  "label.results": "結果",
+  "label.content": "コンテンツ",
+  "label.system": "システム",
+  "status.loading": "読み込み中…",
+
+  "peers.scan_qr": "QR コードをスキャン",
+  "peers.scan_hint": "別のデバイスからこれをスキャンして、ここに接続します。",
+  "peers.show_qr": "QR コードを表示",
+
+  "sitedir.sites_menu": "サイト ▾",
+  "sitedir.sites": "サイト",
+
+  "contentsite.enter_peer": "ピアに入る",
+  "contentsite.contents_menu": "コンテンツ ▾",
+
+  "storage.origin_disk": "オリジンディスク（IndexedDB ＋ キャッシュ — オリジン全体）",
+  "storage.backend_native": "システムバックエンド — ネイティブストア",
+  "storage.native_sqlite": "ネイティブ / SQLite",
+  "storage.by_path": "トップレベルパス別：",
+
+  "chaintrace.chain_id": "チェーン ID：",
+  "chaintrace.continuations": "継続",
+  "chaintrace.error_markers": "チェーンエラーマーカー",
+
+  "siteeditor.move_rename": "移動 / 名前変更先：",
+
+  "entitytree.up": "上へ",
+  "entitytree.selection_source": "選択元",
+  "entitytree.select_prompt": "ツリーからエンティティを選択",
+  "entitytree.inspector": "インスペクター",
+  "entitytree.none_selected": "エンティティが選択されていません",
+  "entitytree.raw_hash": "生ハッシュ",
+
+  "settings.lockdown_active": "ロックダウンが有効です（このデプロイの設定による）。",
+
+  "windows.none_open": "開いているウィンドウはありません",
+  "windows.open_windows": "開いているウィンドウ",
+  "mod.learn_more": "詳細と参加はこちら ",
+
+  "status.saved": "保存済み",
+  "status.stopped": "停止済み",
+  "status.granted": "許可済み",
+
+  "chip.connected": "接続済み",
+  "chip.connecting": "接続中…",
+  "chip.offline": "オフライン",
+  "chip.authorized": "承認済み",
+  "chip.pending": "保留中",
+  "chip.not_authorized": "未承認",
+  "chip.not_verified": "未検証",
+
+  "label.state_path": "状態：{path}",
+
+  "accesslog.operations": "操作：{n}",
+  "accesslog.authorized_head": "承認済み：{profile} — {summary}",
+
+  "entitytree.no_entity_at": "エンティティがありません：{path}",
+
+  "siteeditor.editing": "編集中：{id}",
+  "siteeditor.adding_to": "追加先：{target}",
+  "siteeditor.confirm_move_unsaved": "このページには移動時に失われる未保存の変更があります。移動しますか？",
+
+  "storage.peer_not_created": "ピアが作成されませんでした — {reason}",
+
+  "kb.body_placeholder": "Markdown 本文",
+
+  "chaintrace.enter_hint": "（chain_id を入力してトレースを押してください）",
+
+  "scanner.scanned_codes": "スキャンしたコード",
+  "scanner.scanned_codes_count": "スキャンしたコード（{n} 件）",
+  "scanner.photo_capture": "写真撮影",
+  "scanner.photo_hint": "QR コードの写真を撮ります",
+  "scanner.take_photo": "写真を撮る",
+  "scanner.processing": "処理中...",
+  "scanner.no_detector": "BarcodeDetector がありません — コードを手動で入力してください",
+  "scanner.detector_init_failed": "検出器の初期化に失敗しました",
+  "scanner.detect_call_failed": "検出呼び出しに失敗しました",
+  "scanner.qr_found": "QR コードが見つかりました！",
+  "scanner.no_qr": "QR が見つかりません — もう一度お試しください",
+  "scanner.decode_error": "デコードエラー",
+  "scanner.live_scanner": "ライブスキャナー",
+  "scanner.live_hint": "リアルタイムのカメラスキャン",
+  "scanner.start_live": "ライブスキャンを開始",
+  "scanner.stop": "停止",
+  "scanner.stopped": "停止しました",
+  "scanner.camera_unavailable": "カメラを利用できません",
+  "scanner.camera_denied": "カメラが拒否されました",
+  "scanner.starting_camera": "カメラを起動中...",
+  "scanner.stream_error": "ストリームエラー",
+  "scanner.scanning": "スキャン中...",
+  "scanner.detector_failed": "検出器が失敗しました",
+  "scanner.scan_detect_error": "スキャン {n} — 検出エラー",
+  "scanner.found_continuing": "見つかりました！スキャンを続行中...",
+  "scanner.scan_n": "スキャン {n}...",
+  "scanner.scan_error": "スキャン {n} — エラー",
+
+  "peer.count": {
+    "other": "{n} 個のピア"
+  }
+}

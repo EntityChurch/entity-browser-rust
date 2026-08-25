@@ -1,0 +1,240 @@
+{
+  "btn.save": "บันทึก",
+  "btn.cancel": "ยกเลิก",
+  "btn.delete": "ลบ",
+  "btn.copy": "คัดลอก",
+  "btn.connect": "เชื่อมต่อ",
+  "btn.edit": "แก้ไข",
+  "btn.refresh": "รีเฟรช",
+  "btn.back": "← กลับ",
+  "btn.revert": "ย้อนกลับ",
+
+  "label.status": "สถานะ",
+  "label.title": "ชื่อ",
+  "label.peer": "เพียร์",
+  "label.target": "เป้าหมาย",
+  "label.address": "ที่อยู่",
+  "label.name": "ชื่อ",
+  "label.label": "ป้ายกำกับ",
+
+  "status.copied": "คัดลอกแล้ว ✓",
+
+  "execute.handler": "ตัวจัดการ",
+  "execute.operation": "การดำเนินการ",
+  "execute.handler_uri": "URI ตัวจัดการ",
+  "execute.resource": "ทรัพยากร",
+
+  "peers.known_devices": "อุปกรณ์ที่รู้จัก",
+  "peers.connect_device": "เชื่อมต่อกับอุปกรณ์",
+  "peers.pair_qr": "จับคู่อุปกรณ์ (QR)",
+
+  "tooltip.close_window": "ปิดหน้าต่าง",
+  "tooltip.open_windows": "หน้าต่างที่เปิดอยู่",
+  "tooltip.fill_window": "ขยายหน้าต่างเต็มจอ",
+  "tooltip.restore_size": "กลับสู่ขนาดปกติ",
+  "tooltip.menu": "เมนู",
+  "tooltip.back": "กลับ",
+  "tooltip.site_home": "ไปที่หน้าแรกของไซต์",
+  "tooltip.unsaved": "การเปลี่ยนแปลงที่ยังไม่บันทึก",
+
+  "kb.title_placeholder": "ชื่อบทความ",
+  "theme.name_placeholder": "ชื่อ (a-z, 0-9, ขีดกลาง)",
+  "theme.label_placeholder": "ป้ายกำกับที่แสดง",
+
+  "filetransfer.device": "อุปกรณ์",
+  "filetransfer.shared_files": "ไฟล์ที่แชร์",
+  "filetransfer.send_file": "ส่งไฟล์",
+  "filetransfer.from_peer": "จากเพียร์",
+  "filetransfer.results": "ผลลัพธ์",
+
+  "syspeers.system_peer": "เพียร์ระบบ",
+  "syspeers.system_backend": "แบ็กเอนด์ระบบ",
+
+  "sysoverview.clear_logs": "ล้างบันทึก",
+  "sysoverview.logs": "บันทึก",
+  "sysoverview.device_auth": "การอนุญาตอุปกรณ์",
+  "sysoverview.grant_backend_hint": "อนุญาตบนแบ็กเอนด์แล้ว ขอบเขตเฉพาะไม่ได้บันทึกไว้ในเครื่อง",
+
+  "kb.new_article": "＋ บทความใหม่",
+  "kb.back_to_list": "← กลับไปที่รายการ",
+
+  "settings.appearance": "ลักษณะที่ปรากฏ",
+  "settings.theme": "ธีม",
+  "settings.language": "ภาษา",
+  "settings.windows": "หน้าต่าง",
+  "settings.site_surface": "ไซต์และพื้นผิว",
+  "settings.rendering": "การเรนเดอร์",
+  "settings.network": "เครือข่าย",
+  "settings.language.hint": "ตั้งค่าภาษาของอินเทอร์เฟซและทิศทางการจัดวาง",
+
+  "theme.themes": "ธีม",
+  "theme.new_from": "ธีมใหม่จาก",
+
+  "category.apps": "แอปและเนื้อหา",
+  "category.system": "ระบบ",
+  "category.developer": "นักพัฒนา",
+  "category.apps.desc": "เรียกดูไซต์ เล่นเกม เรียกใช้แอป",
+  "category.system.desc": "เพียร์ คีย์ การเชื่อมต่อ การตั้งค่า พื้นที่เก็บข้อมูล",
+  "category.developer.desc": "แผนผังเอนทิตี คอนโซลคิวรีและเรียกใช้ เชลล์ บันทึก",
+
+  "window.entity_tree": "แผนผังเอนทิตี",
+  "window.games": "เกม",
+  "window.apps": "แอป",
+  "window.knowledge_base": "ฐานความรู้",
+  "window.key_manager": "ตัวจัดการคีย์",
+  "window.peer_connections": "การเชื่อมต่อเพียร์",
+  "window.file_transfer": "การถ่ายโอนไฟล์",
+  "window.execute_console": "คอนโซลเรียกใช้",
+  "window.query_console": "คอนโซลคิวรี",
+  "window.settings": "การตั้งค่า",
+  "window.event_log": "บันทึกเหตุการณ์",
+  "window.peers": "เพียร์",
+  "window.shell": "เชลล์",
+  "window.chain_trace": "การติดตามเชน",
+  "window.path_tap": "การแตะเส้นทาง",
+  "window.wire_recorder": "ตัวบันทึกโปรโตคอล",
+  "window.content_stream": "สตรีมเนื้อหา",
+  "window.site_browser": "เบราว์เซอร์ไซต์",
+  "window.storage": "พื้นที่เก็บข้อมูล",
+  "window.site_creator": "ตัวสร้างไซต์",
+  "window.system_overview": "ภาพรวมระบบ",
+  "window.access_log": "บันทึกการเข้าถึง",
+  "window.theme_editor": "ตัวแก้ไขธีม",
+
+  "btn.create": "สร้าง",
+  "btn.move": "ย้าย",
+  "btn.authorize": "อนุญาต",
+  "btn.add_peer": "เพิ่มเพียร์",
+  "btn.find": "ค้นหา",
+  "btn.count": "นับ",
+  "btn.trace": "ติดตาม",
+
+  "execute.execute": "เรียกใช้",
+  "execute.guided": "แบบมีคำแนะนำ",
+  "execute.raw": "แบบดิบ",
+
+  "filetransfer.pull_selected": "⬇ ดึงไฟล์ที่เลือก",
+  "filetransfer.upload_file": "อัปโหลดไฟล์",
+
+  "siteeditor.create_site": "สร้างไซต์",
+  "siteeditor.delete_site": "ลบไซต์",
+  "siteeditor.save_page": "บันทึกหน้า",
+  "siteeditor.delete_page": "ลบหน้า",
+  "siteeditor.title_optional": "ชื่อ (ไม่บังคับ)",
+  "siteeditor.page_title_ph": "ชื่อหน้า",
+
+  "entitytree.source_none": "ไม่มี (ด้วยตนเอง)",
+  "entitytree.source_app": "การรวมของแอป (เพียร์: {peer})",
+
+  "settings.boot_into": "เริ่มต้นไปที่",
+  "settings.boot_chrome": "เดสก์ท็อป",
+  "settings.boot_site": "ไซต์",
+  "settings.boot_window": "หน้าต่าง",
+
+  "theme.scheme_dark": "มืด",
+  "theme.scheme_light": "สว่าง",
+
+  "sysoverview.profile_pull": "ดึงอย่างเดียว",
+  "sysoverview.profile_twoway": "สองทาง",
+
+  "label.level": "ระดับ",
+  "label.results": "ผลลัพธ์",
+  "label.content": "เนื้อหา",
+  "label.system": "ระบบ",
+  "status.loading": "กำลังโหลด…",
+
+  "peers.scan_qr": "สแกนรหัส QR",
+  "peers.scan_hint": "สแกนสิ่งนี้จากอุปกรณ์อื่นเพื่อเชื่อมต่อที่นี่",
+  "peers.show_qr": "แสดงรหัส QR",
+
+  "sitedir.sites_menu": "ไซต์ ▾",
+  "sitedir.sites": "ไซต์",
+
+  "contentsite.enter_peer": "เข้าสู่เพียร์",
+  "contentsite.contents_menu": "เนื้อหา ▾",
+
+  "storage.origin_disk": "ดิสก์ต้นทาง (IndexedDB ＋ แคช — ทั้งต้นทาง)",
+  "storage.backend_native": "แบ็กเอนด์ระบบ — ที่เก็บข้อมูลเนทีฟ",
+  "storage.native_sqlite": "เนทีฟ / SQLite",
+  "storage.by_path": "ตามเส้นทางระดับบนสุด:",
+
+  "chaintrace.chain_id": "รหัสเชน:",
+  "chaintrace.continuations": "ความต่อเนื่อง",
+  "chaintrace.error_markers": "เครื่องหมายข้อผิดพลาดของเชน",
+
+  "siteeditor.move_rename": "ย้าย/เปลี่ยนชื่อเป็น:",
+
+  "entitytree.up": "ขึ้น",
+  "entitytree.selection_source": "แหล่งที่มาของการเลือก",
+  "entitytree.select_prompt": "เลือกเอนทิตีจากแผนผัง",
+  "entitytree.inspector": "ตัวตรวจสอบ",
+  "entitytree.none_selected": "ไม่ได้เลือกเอนทิตี",
+  "entitytree.raw_hash": "แฮชดิบ",
+
+  "settings.lockdown_active": "การล็อกดาวน์เปิดใช้งานอยู่ (กำหนดโดยการกำหนดค่าของการปรับใช้นี้)",
+
+  "windows.none_open": "ไม่มีหน้าต่างเปิดอยู่",
+  "windows.open_windows": "หน้าต่างที่เปิดอยู่",
+  "mod.learn_more": "เรียนรู้เพิ่มเติมและมีส่วนร่วมได้ที่ ",
+
+  "status.saved": "บันทึกแล้ว",
+  "status.stopped": "หยุดแล้ว",
+  "status.granted": "อนุญาตแล้ว",
+
+  "chip.connected": "เชื่อมต่อแล้ว",
+  "chip.connecting": "กำลังเชื่อมต่อ…",
+  "chip.offline": "ออฟไลน์",
+  "chip.authorized": "อนุญาตแล้ว",
+  "chip.pending": "รอดำเนินการ",
+  "chip.not_authorized": "ไม่ได้รับอนุญาต",
+  "chip.not_verified": "ยังไม่ยืนยัน",
+
+  "label.state_path": "สถานะ: {path}",
+
+  "accesslog.operations": "การดำเนินการ: {n}",
+  "accesslog.authorized_head": "อนุญาตแล้ว: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "ไม่มีเอนทิตีที่: {path}",
+
+  "siteeditor.editing": "กำลังแก้ไข: {id}",
+  "siteeditor.adding_to": "กำลังเพิ่มไปยัง: {target}",
+  "siteeditor.confirm_move_unsaved": "หน้านี้มีการเปลี่ยนแปลงที่ยังไม่บันทึกซึ่งจะสูญหายเมื่อย้าย ย้ายต่อไปหรือไม่?",
+
+  "storage.peer_not_created": "ไม่ได้สร้างเพียร์ — {reason}",
+
+  "kb.body_placeholder": "เนื้อหา Markdown",
+
+  "chaintrace.enter_hint": "(ป้อน chain_id แล้วกดติดตาม)",
+
+  "scanner.scanned_codes": "รหัสที่สแกน",
+  "scanner.scanned_codes_count": "รหัสที่สแกน ({n} รหัสที่ไม่ซ้ำ)",
+  "scanner.photo_capture": "ถ่ายภาพ",
+  "scanner.photo_hint": "ถ่ายภาพรหัส QR",
+  "scanner.take_photo": "ถ่ายภาพ",
+  "scanner.processing": "กำลังประมวลผล...",
+  "scanner.no_detector": "ไม่มี BarcodeDetector — ป้อนรหัสด้วยตนเอง",
+  "scanner.detector_init_failed": "การเริ่มต้นตัวตรวจจับล้มเหลว",
+  "scanner.detect_call_failed": "การเรียกตรวจจับล้มเหลว",
+  "scanner.qr_found": "พบรหัส QR!",
+  "scanner.no_qr": "ไม่พบ QR — ลองอีกครั้ง",
+  "scanner.decode_error": "ข้อผิดพลาดในการถอดรหัส",
+  "scanner.live_scanner": "เครื่องสแกนสด",
+  "scanner.live_hint": "การสแกนกล้องแบบเรียลไทม์",
+  "scanner.start_live": "เริ่มสแกนสด",
+  "scanner.stop": "หยุด",
+  "scanner.stopped": "หยุดแล้ว",
+  "scanner.camera_unavailable": "กล้องไม่พร้อมใช้งาน",
+  "scanner.camera_denied": "กล้องถูกปฏิเสธ",
+  "scanner.starting_camera": "กำลังเริ่มกล้อง...",
+  "scanner.stream_error": "ข้อผิดพลาดของสตรีม",
+  "scanner.scanning": "กำลังสแกน...",
+  "scanner.detector_failed": "ตัวตรวจจับล้มเหลว",
+  "scanner.scan_detect_error": "สแกน {n} — ข้อผิดพลาดในการตรวจจับ",
+  "scanner.found_continuing": "พบแล้ว! กำลังสแกนต่อ...",
+  "scanner.scan_n": "สแกน {n}...",
+  "scanner.scan_error": "สแกน {n} — ข้อผิดพลาด",
+
+  "peer.count": {
+    "other": "{n} เพียร์"
+  }
+}

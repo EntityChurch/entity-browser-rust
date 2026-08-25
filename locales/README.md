@@ -38,20 +38,33 @@ compiled-in data with **no runtime JSON parser**.
 
 ## ⚠️ Translation status — INITIAL, PENDING NATIVE REVIEW
 
-The `es` / `he` / `ar` catalogs here now cover the **full extracted shell-chrome
-catalog** (every `en` key — window titles, menu categories, tooltips,
-placeholders, and the shared base vocabulary; 1:1 with `EN`, verified by the
-`overlay`/orphan tests). They are a **machine-assisted first pass, not yet
-reviewed by native speakers.** Before this ships as a user-facing localization,
-each catalog must be reviewed by a fluent speaker. Known judgment calls a
-reviewer should weigh:
+**Coverage: complete — all 31 non-pseudo locales.** Every catalog here is 1:1
+with the full `EN` base (all 193 keys — window titles, menu categories,
+tooltips, placeholders, status chips, prose, and the shared base vocabulary;
+verified by the `overlay`/orphan tests). The full roster (30 overlays + the `en`
+base = 31 languages): **`es he ar` · `fr de it pt nl sv da no fi ru zh` ·
+`ja ko vi th id` · `uk pl cs ro` · `el hu tr` · `hi bn fa ur`**. Every language
+is pickable, flips `dir` (6 RTL: `ar he fa ur`), and carries its CLDR-correct
+`peer.count` plural forms. No pending catalogs remain.
+
+Every catalog is a **machine-assisted first pass, not yet reviewed by native
+speakers.** Before this ships as a user-facing localization, each must be
+reviewed by a fluent speaker. Known judgment calls a reviewer should weigh:
 
 - **`peer.count` plural forms** — Arabic's six CLDR forms and Hebrew's
   one/two/other, where counted-noun grammar is subtle (Arabic's dual `نظيران`
   vs. the numeral-prefixed singular currently used, etc.).
 - **RTL "back" arrows** — `btn.back` / `kb.back_to_list` use a right-pointing
-  `→` in `he`/`ar` (the glyph isn't auto-mirrored by the bidi algorithm);
-  confirm that reads correctly in context.
+  `→` in all four RTL locales (`he ar fa ur` — the glyph isn't auto-mirrored by
+  the bidi algorithm); confirm that reads correctly in context.
+- **Counted-noun grammar in the plural-invariant languages** — `ja ko vi th id`
+  (other-only) and `hu tr fa` keep the noun uninflected after a numeral, so both
+  `peer.count` forms read alike; a reviewer should confirm the counter/measure
+  word (e.g. Japanese `個`, Korean `개`) and any classifier reads naturally.
+- **Loanword vs. native term for `Peer`** — kept as a Latin/transliterated
+  loanword in most catalogs (`pl/cs/ro/hu/tr` "peer", `ru` Пир, `uk` Пір,
+  `hi/bn` पीयर/পিয়ার, `fa` همتا, `ur` پیئر, `el` ομότιμος); a reviewer should
+  confirm the register the audience expects.
 - **Product/jargon terms** — whether to translate vs. keep: `Shell`
   (מעטפת / الصدفة), `Wire Recorder`, `Path Tap`, `Chain Trace`, and whether
   `Entity` (the core concept) should localize (`Entidad` / ישויות / كيانات).

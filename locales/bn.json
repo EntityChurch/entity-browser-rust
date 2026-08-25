@@ -1,0 +1,241 @@
+{
+  "btn.save": "সংরক্ষণ",
+  "btn.cancel": "বাতিল",
+  "btn.delete": "মুছুন",
+  "btn.copy": "কপি",
+  "btn.connect": "সংযোগ",
+  "btn.edit": "সম্পাদনা",
+  "btn.refresh": "রিফ্রেশ",
+  "btn.back": "← পিছনে",
+  "btn.revert": "প্রত্যাবর্তন",
+
+  "label.status": "অবস্থা",
+  "label.title": "শিরোনাম",
+  "label.peer": "পিয়ার",
+  "label.target": "লক্ষ্য",
+  "label.address": "ঠিকানা",
+  "label.name": "নাম",
+  "label.label": "লেবেল",
+
+  "status.copied": "কপি হয়েছে ✓",
+
+  "execute.handler": "হ্যান্ডলার",
+  "execute.operation": "অপারেশন",
+  "execute.handler_uri": "হ্যান্ডলার URI",
+  "execute.resource": "রিসোর্স",
+
+  "peers.known_devices": "পরিচিত ডিভাইস",
+  "peers.connect_device": "একটি ডিভাইসে সংযোগ করুন",
+  "peers.pair_qr": "একটি ডিভাইস পেয়ার করুন (QR)",
+
+  "tooltip.close_window": "উইন্ডো বন্ধ করুন",
+  "tooltip.open_windows": "খোলা উইন্ডো",
+  "tooltip.fill_window": "উইন্ডো সর্বোচ্চ করুন",
+  "tooltip.restore_size": "স্বাভাবিক আকারে ফিরে যান",
+  "tooltip.menu": "মেনু",
+  "tooltip.back": "পিছনে",
+  "tooltip.site_home": "সাইটের হোমে যান",
+  "tooltip.unsaved": "অসংরক্ষিত পরিবর্তন",
+
+  "kb.title_placeholder": "নিবন্ধের শিরোনাম",
+  "theme.name_placeholder": "নাম (a-z, 0-9, হাইফেন)",
+  "theme.label_placeholder": "প্রদর্শিত লেবেল",
+
+  "filetransfer.device": "ডিভাইস",
+  "filetransfer.shared_files": "শেয়ার করা ফাইল",
+  "filetransfer.send_file": "একটি ফাইল পাঠান",
+  "filetransfer.from_peer": "পিয়ার থেকে",
+  "filetransfer.results": "ফলাফল",
+
+  "syspeers.system_peer": "সিস্টেম পিয়ার",
+  "syspeers.system_backend": "সিস্টেম ব্যাকএন্ড",
+
+  "sysoverview.clear_logs": "লগ পরিষ্কার করুন",
+  "sysoverview.logs": "লগ",
+  "sysoverview.device_auth": "ডিভাইস অনুমোদন",
+  "sysoverview.grant_backend_hint": "ব্যাকএন্ডে অনুমোদিত; নির্দিষ্ট পরিসর স্থানীয়ভাবে রেকর্ড করা হয় না।",
+
+  "kb.new_article": "＋ নতুন নিবন্ধ",
+  "kb.back_to_list": "← তালিকায় ফিরে যান",
+
+  "settings.appearance": "চেহারা",
+  "settings.theme": "থিম",
+  "settings.language": "ভাষা",
+  "settings.windows": "উইন্ডো",
+  "settings.site_surface": "সাইট এবং সারফেস",
+  "settings.rendering": "রেন্ডারিং",
+  "settings.network": "নেটওয়ার্ক",
+  "settings.language.hint": "ইন্টারফেসের ভাষা এবং লেআউটের দিক নির্ধারণ করে।",
+
+  "theme.themes": "থিম",
+  "theme.new_from": "এটি থেকে নতুন থিম",
+
+  "category.apps": "অ্যাপ ও কন্টেন্ট",
+  "category.system": "সিস্টেম",
+  "category.developer": "ডেভেলপার",
+  "category.apps.desc": "সাইট ব্রাউজ করুন, গেম খেলুন, অ্যাপ চালান",
+  "category.system.desc": "পিয়ার, কী, সংযোগ, সেটিংস, স্টোরেজ",
+  "category.developer.desc": "এন্টিটি ট্রি, কোয়েরি ও এক্সিকিউট কনসোল, শেল, লগ",
+
+  "window.entity_tree": "এন্টিটি ট্রি",
+  "window.games": "গেম",
+  "window.apps": "অ্যাপ",
+  "window.knowledge_base": "নলেজ বেস",
+  "window.key_manager": "কী ম্যানেজার",
+  "window.peer_connections": "পিয়ার সংযোগ",
+  "window.file_transfer": "ফাইল স্থানান্তর",
+  "window.execute_console": "এক্সিকিউট কনসোল",
+  "window.query_console": "কোয়েরি কনসোল",
+  "window.settings": "সেটিংস",
+  "window.event_log": "ইভেন্ট লগ",
+  "window.peers": "পিয়ার",
+  "window.shell": "শেল",
+  "window.chain_trace": "চেইন ট্রেস",
+  "window.path_tap": "পাথ ট্যাপ",
+  "window.wire_recorder": "প্রোটোকল রেকর্ডার",
+  "window.content_stream": "কন্টেন্ট স্ট্রিম",
+  "window.site_browser": "সাইট ব্রাউজার",
+  "window.storage": "স্টোরেজ",
+  "window.site_creator": "সাইট নির্মাতা",
+  "window.system_overview": "সিস্টেম ওভারভিউ",
+  "window.access_log": "অ্যাক্সেস লগ",
+  "window.theme_editor": "থিম সম্পাদক",
+
+  "btn.create": "তৈরি করুন",
+  "btn.move": "সরান",
+  "btn.authorize": "অনুমোদন করুন",
+  "btn.add_peer": "পিয়ার যোগ করুন",
+  "btn.find": "খুঁজুন",
+  "btn.count": "গণনা করুন",
+  "btn.trace": "ট্রেস করুন",
+
+  "execute.execute": "এক্সিকিউট করুন",
+  "execute.guided": "নির্দেশিত",
+  "execute.raw": "কাঁচা",
+
+  "filetransfer.pull_selected": "⬇ নির্বাচিত ফাইল টানুন",
+  "filetransfer.upload_file": "একটি ফাইল আপলোড করুন",
+
+  "siteeditor.create_site": "সাইট তৈরি করুন",
+  "siteeditor.delete_site": "সাইট মুছুন",
+  "siteeditor.save_page": "পৃষ্ঠা সংরক্ষণ করুন",
+  "siteeditor.delete_page": "পৃষ্ঠা মুছুন",
+  "siteeditor.title_optional": "শিরোনাম (ঐচ্ছিক)",
+  "siteeditor.page_title_ph": "পৃষ্ঠার শিরোনাম",
+
+  "entitytree.source_none": "কোনোটি নয় (ম্যানুয়াল)",
+  "entitytree.source_app": "অ্যাপ সমষ্টি (পিয়ার: {peer})",
+
+  "settings.boot_into": "এতে বুট করুন",
+  "settings.boot_chrome": "ডেস্কটপ",
+  "settings.boot_site": "সাইট",
+  "settings.boot_window": "উইন্ডো",
+
+  "theme.scheme_dark": "গাঢ়",
+  "theme.scheme_light": "হালকা",
+
+  "sysoverview.profile_pull": "শুধু টানুন",
+  "sysoverview.profile_twoway": "দ্বিমুখী",
+
+  "label.level": "স্তর",
+  "label.results": "ফলাফল",
+  "label.content": "কন্টেন্ট",
+  "label.system": "সিস্টেম",
+  "status.loading": "লোড হচ্ছে…",
+
+  "peers.scan_qr": "একটি QR কোড স্ক্যান করুন",
+  "peers.scan_hint": "এখানে সংযোগ করতে অন্য ডিভাইস থেকে এটি স্ক্যান করুন।",
+  "peers.show_qr": "QR কোড দেখান",
+
+  "sitedir.sites_menu": "সাইট ▾",
+  "sitedir.sites": "সাইট",
+
+  "contentsite.enter_peer": "পিয়ারে প্রবেশ করুন",
+  "contentsite.contents_menu": "কন্টেন্ট ▾",
+
+  "storage.origin_disk": "মূল ডিস্ক (IndexedDB ＋ ক্যাশ — সম্পূর্ণ মূল)",
+  "storage.backend_native": "সিস্টেম ব্যাকএন্ড — নেটিভ স্টোর",
+  "storage.native_sqlite": "নেটিভ / SQLite",
+  "storage.by_path": "শীর্ষ-স্তরের পাথ অনুসারে:",
+
+  "chaintrace.chain_id": "চেইন ID:",
+  "chaintrace.continuations": "ধারাবাহিকতা",
+  "chaintrace.error_markers": "চেইন-ত্রুটি মার্কার",
+
+  "siteeditor.move_rename": "এখানে সরান/নাম পরিবর্তন করুন:",
+
+  "entitytree.up": "উপরে",
+  "entitytree.selection_source": "নির্বাচনের উৎস",
+  "entitytree.select_prompt": "ট্রি থেকে একটি এন্টিটি নির্বাচন করুন",
+  "entitytree.inspector": "ইন্সপেক্টর",
+  "entitytree.none_selected": "কোনো এন্টিটি নির্বাচিত নয়",
+  "entitytree.raw_hash": "কাঁচা হ্যাশ",
+
+  "settings.lockdown_active": "লকডাউন সক্রিয় (এই স্থাপনার কনফিগারেশন দ্বারা সেট করা)।",
+
+  "windows.none_open": "কোনো উইন্ডো খোলা নেই",
+  "windows.open_windows": "খোলা উইন্ডো",
+  "mod.learn_more": "আরও জানুন এবং যুক্ত হন ",
+
+  "status.saved": "সংরক্ষিত",
+  "status.stopped": "বন্ধ",
+  "status.granted": "মঞ্জুর",
+
+  "chip.connected": "সংযুক্ত",
+  "chip.connecting": "সংযোগ হচ্ছে…",
+  "chip.offline": "অফলাইন",
+  "chip.authorized": "অনুমোদিত",
+  "chip.pending": "মুলতুবি",
+  "chip.not_authorized": "অননুমোদিত",
+  "chip.not_verified": "যাচাই করা হয়নি",
+
+  "label.state_path": "অবস্থা: {path}",
+
+  "accesslog.operations": "অপারেশন: {n}",
+  "accesslog.authorized_head": "অনুমোদিত: {profile} — {summary}",
+
+  "entitytree.no_entity_at": "এখানে কোনো এন্টিটি নেই: {path}",
+
+  "siteeditor.editing": "সম্পাদনা: {id}",
+  "siteeditor.adding_to": "এতে যোগ করা হচ্ছে: {target}",
+  "siteeditor.confirm_move_unsaved": "এই পৃষ্ঠায় অসংরক্ষিত পরিবর্তন রয়েছে যা সরানোর সময় হারিয়ে যাবে। তবুও সরাবেন?",
+
+  "storage.peer_not_created": "পিয়ার তৈরি হয়নি — {reason}",
+
+  "kb.body_placeholder": "Markdown মূল অংশ",
+
+  "chaintrace.enter_hint": "(একটি chain_id লিখুন এবং ট্রেস চাপুন)",
+
+  "scanner.scanned_codes": "স্ক্যান করা কোড",
+  "scanner.scanned_codes_count": "স্ক্যান করা কোড ({n}টি অনন্য)",
+  "scanner.photo_capture": "ছবি ক্যাপচার",
+  "scanner.photo_hint": "একটি QR কোডের ছবি তুলুন",
+  "scanner.take_photo": "ছবি তুলুন",
+  "scanner.processing": "প্রক্রিয়াকরণ হচ্ছে...",
+  "scanner.no_detector": "কোনো BarcodeDetector নেই — কোড ম্যানুয়ালি লিখুন",
+  "scanner.detector_init_failed": "ডিটেক্টর সূচনা ব্যর্থ",
+  "scanner.detect_call_failed": "ডিটেক্ট কল ব্যর্থ",
+  "scanner.qr_found": "QR কোড পাওয়া গেছে!",
+  "scanner.no_qr": "কোনো QR পাওয়া যায়নি — আবার চেষ্টা করুন",
+  "scanner.decode_error": "ডিকোড ত্রুটি",
+  "scanner.live_scanner": "লাইভ স্ক্যানার",
+  "scanner.live_hint": "রিয়েল-টাইম ক্যামেরা স্ক্যানিং",
+  "scanner.start_live": "লাইভ স্ক্যান শুরু করুন",
+  "scanner.stop": "থামান",
+  "scanner.stopped": "থেমেছে",
+  "scanner.camera_unavailable": "ক্যামেরা উপলব্ধ নয়",
+  "scanner.camera_denied": "ক্যামেরা প্রত্যাখ্যাত",
+  "scanner.starting_camera": "ক্যামেরা শুরু হচ্ছে...",
+  "scanner.stream_error": "স্ট্রিম ত্রুটি",
+  "scanner.scanning": "স্ক্যান হচ্ছে...",
+  "scanner.detector_failed": "ডিটেক্টর ব্যর্থ",
+  "scanner.scan_detect_error": "স্ক্যান {n} — ডিটেক্ট ত্রুটি",
+  "scanner.found_continuing": "পাওয়া গেছে! স্ক্যানিং চলছে...",
+  "scanner.scan_n": "স্ক্যান {n}...",
+  "scanner.scan_error": "স্ক্যান {n} — ত্রুটি",
+
+  "peer.count": {
+    "one": "{n} পিয়ার",
+    "other": "{n} পিয়ার"
+  }
+}
