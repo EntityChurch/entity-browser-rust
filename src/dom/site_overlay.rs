@@ -211,6 +211,9 @@ impl SiteOverlay {
             repaint,
             closures: self.closures.clone(),
             drafts: self.drafts.clone(),
+            // The site overlay renders content-site windows only — no
+            // peer/system link chip, so no dial transients to project.
+            dial_markers: crate::dial_markers::DialMarkers::default(),
         };
         let resolve_asset =
             crate::dom::content_site::make_asset_resolver(peers, &self.peer_id, &output);

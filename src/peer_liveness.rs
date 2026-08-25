@@ -5,18 +5,17 @@
 //! Projects the **kernel-owned** reactive liveness surface —
 //! `system/peer/status/{remote_hex}` (EXTENSION-NETWORK Amendment 12 §A3): the
 //! 3-state `connected` / `suspect` / `disconnected` + a transition `reason` —
-//! into an app read-model. This is the replacement for the event-sourced
-//! [`crate::connection_health`] mirror: instead of the app *writing* the
-//! liveness it guesses from connect attempts, it **subscribes** the liveness the
-//! kernel already observes — including the reactive keepalive-miss disconnect
-//! the app never saw. No mirror, no write path (the substrate rule: subscribe,
-//! don't poll; no fourth parallel store — AP12 / D1 / D8).
+//! into an app read-model. This replaced the event-sourced connection-health
+//! mirror (now deleted): instead of the app *writing* the liveness it guesses
+//! from connect attempts, it **subscribes** the liveness the kernel already
+//! observes — including the reactive keepalive-miss disconnect the app never
+//! saw. No mirror, no write path (the substrate rule: subscribe, don't poll; no
+//! fourth parallel store — AP12 / D1 / D8).
 //!
 //! **Join key.** The status entity *body* carries the remote's Base58 `peer_id`
 //! ([`PeerStatusData::peer_id`], distinct from the hex path segment), so this
 //! read-model keys by the same Base58 `remote_pid` as the [`crate::connections`]
-//! registry and the `connection_health` mirror — a direct join for shadow-parity
-//! now and the unified `Peer` object later.
+//! registry — a direct join for the unified `Peer` object later.
 //!
 //! **Worker-arm rule.** A caller MUST `watch_prefix(peer_status_prefix(vantage))`
 //! for each vantage it reads, or the Worker-arm cache mirror is unseeded and the
@@ -192,32 +191,61 @@ pub fn liveness_of(peers: &Peers, remote_pid: &str) -> LiveStatus {
         .unwrap_or_default()
 }
 
-/// **Piece A shadow-parity probe** (`DESIGN-CONNECTIVITY-UX` handoff, Piece A
-/// gate). Logs the kernel liveness surface alongside the old
-/// [`crate::connection_health`] mirror so we can eyeball convergence in the live
-/// build / e2e before migrating consumers off the mirror (Piece B). Read-only,
-/// dev-observability; carries no behaviour. WASM-only (the shadow is validated
-/// against the live substrate, not native unit tests, which already prove the
-/// read path).
-#[cfg(target_arch = "wasm32")]
-pub fn log_shadow_parity(peers: &Peers) {
-    let kernel = read_peer_liveness_all(peers);
-    if kernel.is_empty() {
-        return;
-    }
-    for row in &kernel {
-        let mirror = crate::connection_health::read(peers, &row.remote_pid);
-        // Coarse convergence: do both agree the peer is up (or not)?
-        let agree = row.status.is_connected()
-            == matches!(mirror, crate::connection_health::Liveness::Connected);
-        tracing::debug!(
-            remote = %row.remote_pid,
-            kernel = ?row.status,
-            reason = ?row.reason,
-            mirror = ?mirror,
-            agree,
-            "P2.0 shadow-parity: kernel system/peer/status vs connection_health mirror"
-        );
+/// The one connection-status vocabulary every window renders (`§4c`) — the
+/// kernel read-model's [`LiveStatus`] resolved against the **app-owned**
+/// `dialing` transient the kernel does not model (a dial in progress, before
+/// any `system/peer/status` exists). Native-safe (the DOM chip maps from it in
+/// `dom/components.rs`); centralised here so Peer Connections and System
+/// Overview cannot drift apart (the §4c "one shared vocabulary" rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnDisplay {
+    /// No kernel status and not dialing — paired but no current signal.
+    #[default]
+    Unknown,
+    /// A live kernel connection (`connected`).
+    Connected,
+    /// The app is actively dialing; the kernel has written no status yet. Its
+    /// home is the in-memory dial marker (`crate::dial_markers`) — the kernel
+    /// has no dialing state (Amendment 12 ruling D).
+    Dialing,
+    /// Kernel `suspect` — a transient failure, auto-recovering (never red, §4c).
+    Reconnecting,
+    /// Kernel `disconnected` — the drop the old mirror used to miss.
+    Offline,
+}
+
+/// The app-owned dial transient the kernel does not model — layered in only when
+/// the kernel is silent (no `system/peer/status` yet). Its home is the in-memory
+/// dial marker ([`crate::dial_markers::DialMarkers`]); `peer_liveness` stays
+/// independent of it — the caller supplies the hint at render time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DialHint {
+    /// No app dial state — defer entirely to the kernel.
+    #[default]
+    None,
+    /// A dial is in progress (no handshake yet).
+    Dialing,
+    /// A dial was attempted and gave up without ever connecting (so the kernel
+    /// wrote no status — this is the app's own "couldn't reach it" knowledge).
+    Failed,
+}
+
+/// Resolve the kernel liveness against the app-owned dial transient into the one
+/// display vocabulary. **The read-model is authoritative** — a real
+/// `connected`/`suspect`/`disconnected` always wins, which is what fixes the
+/// stale-"Connected" lie (`BUGLOG-2026-07-14`); the [`DialHint`] only speaks when
+/// the kernel is silent (`Unknown` — no status entity yet, e.g. mid-dial or a
+/// never-established peer).
+pub fn conn_display(status: LiveStatus, hint: DialHint) -> ConnDisplay {
+    match status {
+        LiveStatus::Connected => ConnDisplay::Connected,
+        LiveStatus::Suspect => ConnDisplay::Reconnecting,
+        LiveStatus::Disconnected => ConnDisplay::Offline,
+        LiveStatus::Unknown => match hint {
+            DialHint::Dialing => ConnDisplay::Dialing,
+            DialHint::Failed => ConnDisplay::Offline,
+            DialHint::None => ConnDisplay::Unknown,
+        },
     }
 }
 
@@ -328,6 +356,96 @@ mod tests {
         assert_eq!(liveness_of(&peers, "REMOTE_A"), LiveStatus::Connected);
         assert_eq!(liveness_of(&peers, "REMOTE_B"), LiveStatus::Disconnected);
         assert_eq!(liveness_of(&peers, "NEVER_SEEN"), LiveStatus::Unknown);
+    }
+
+    /// The app-tier reactive loop the live UI depends on: a kernel-written
+    /// mid-session disconnect (keepalive-miss) both **wakes** the subscribed
+    /// window and is **surfaced** by the read-model — the disconnect the app
+    /// never wrote itself. (The real-transport drop → kernel write half is
+    /// proven upstream by `a12_keepalive_miss_escalates_to_disconnected`; this
+    /// closes the app-side half deterministically, no keepalive-timing flake.)
+    #[tokio::test]
+    async fn subscription_wakes_and_read_model_sees_a_disconnect() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let ctx = peers.test_seed_ctx(&pid);
+        let prefix = peer_status_prefix(&pid);
+
+        // The window subscribes the kernel status surface (as Peer Connections
+        // now does).
+        let mut watch = crate::window_watch::WindowWatch::new();
+        watch.subscribe_prefix(ctx, prefix.clone());
+        watch.take_dirty(); // clear the initial dirty
+
+        // First: connected.
+        ctx.store()
+            .put(
+                &format!("{prefix}bb02"),
+                status_entity("REMOTE_B", PEER_STATUS_CONNECTED, None),
+            )
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(watch.take_dirty(), "connect wakes the subscribed window");
+        assert_eq!(liveness_of(&peers, "REMOTE_B"), LiveStatus::Connected);
+
+        // Then: the kernel demotes the peer on a keepalive miss.
+        ctx.store()
+            .put(
+                &format!("{prefix}bb02"),
+                status_entity(
+                    "REMOTE_B",
+                    PEER_STATUS_DISCONNECTED,
+                    Some(PEER_STATUS_REASON_KEEPALIVE_MISS),
+                ),
+            )
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            watch.take_dirty(),
+            "a kernel disconnect must reactively wake the subscribed window"
+        );
+        assert_eq!(
+            liveness_of(&peers, "REMOTE_B"),
+            LiveStatus::Disconnected,
+            "the read-model surfaces the disconnect the app never wrote itself"
+        );
+    }
+
+    #[test]
+    fn conn_display_read_model_is_authoritative_over_the_dial_hint() {
+        // A real kernel state always wins over the app dial transient — the whole
+        // point (a stale "dialing/connected" must never mask a kernel disconnect).
+        assert_eq!(
+            conn_display(LiveStatus::Connected, DialHint::Dialing),
+            ConnDisplay::Connected
+        );
+        assert_eq!(
+            conn_display(LiveStatus::Disconnected, DialHint::Dialing),
+            ConnDisplay::Offline,
+            "a kernel disconnect wins over a stale dialing hint"
+        );
+        assert_eq!(
+            conn_display(LiveStatus::Suspect, DialHint::None),
+            ConnDisplay::Reconnecting
+        );
+    }
+
+    #[test]
+    fn conn_display_dial_hint_speaks_only_when_the_kernel_is_silent() {
+        // Unknown (no status entity yet) → the app transient fills in.
+        assert_eq!(
+            conn_display(LiveStatus::Unknown, DialHint::Dialing),
+            ConnDisplay::Dialing
+        );
+        assert_eq!(
+            conn_display(LiveStatus::Unknown, DialHint::Failed),
+            ConnDisplay::Offline,
+            "a dial that never connected is app-owned Offline, not a blank dash"
+        );
+        assert_eq!(
+            conn_display(LiveStatus::Unknown, DialHint::None),
+            ConnDisplay::Unknown
+        );
     }
 
     #[test]

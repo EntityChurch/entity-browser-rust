@@ -44,6 +44,12 @@ pub struct DomCtx {
     /// fires, async result lands). Untouched by traditional manual
     /// inputs; opt-in via the helpers.
     pub drafts: DraftsMap,
+    /// App-owned in-memory dial transients (a dial in flight / a dial that gave
+    /// up before ever connecting) — the kernel liveness surface does not model
+    /// these, so the display models read them from here at render time rather
+    /// than from a tree store (`crate::dial_markers`). A cheap Arc-clone handle:
+    /// one owner (the app), read here, never a per-window copy.
+    pub dial_markers: crate::dial_markers::DialMarkers,
 }
 
 impl DomCtx {

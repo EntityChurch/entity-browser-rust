@@ -64,16 +64,21 @@ impl SystemOverviewWindow {
                     &sys_pid,
                     crate::app_paths::connections_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
-                // Watch the conn-health mirror so the link chip repaints on a
-                // pure liveness change — notably the auto-connect writing
-                // Connecting *before* any connections-registry write, which
-                // nothing else would wake. Also seeds the Worker-arm sync cache
-                // that `render_output` reads (subscribe, don't poll).
-                pm.watch_prefix(
-                    &mut window.watch,
-                    &sys_pid,
-                    crate::app_paths::connection_health_prefix(crate::app_paths::APP_ID, &sys_pid),
-                );
+                // Watch the KERNEL liveness surface (`system/peer/status`) for
+                // every local vantage — the authoritative S↔B `connected/suspect/
+                // disconnected` the link chip now reads. Seeds the Worker-arm
+                // cache and wakes the window on a kernel transition (subscribe,
+                // don't poll).
+                for vantage in pm.peer_ids() {
+                    pm.watch_prefix(
+                        &mut window.watch,
+                        &vantage,
+                        crate::peer_liveness::peer_status_prefix(&vantage),
+                    );
+                }
+                // The app-owned `Dialing` transient (a dial in flight, before the
+                // kernel writes any status) is an in-memory marker now
+                // (`crate::dial_markers`), not a tree entity — nothing to watch.
                 // Watch the backend-auth mirror so the device-authorizations
                 // surface repaints when a Check/Refresh read lands — and (Worker
                 // arm) so the synchronous `get_entity` read is seeded for this
@@ -167,7 +172,7 @@ impl WindowView for SystemOverviewWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.model.render_output(peers);
+        let output = self.model.render_output(peers, &ctx.dial_markers);
         // Merged overview projection (stateless): re-derived from Peers + the
         // watched registry/config prefixes each render.
         let overview =

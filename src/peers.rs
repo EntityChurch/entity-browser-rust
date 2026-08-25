@@ -2410,32 +2410,24 @@ fn direct_connect_future(
         return Box::pin(async move { Err(m) });
     };
     Box::pin(async move {
-        let conn = shared
-            .connector
-            .connect(&address)
+        // Dial through the kernel's `connect_and_pool` — the SAME primitive
+        // `Peer::connect_to` runs — NOT a hand-rolled `perform_connect_with_dispatch`
+        // + `remote.insert`. That hand-roll (which this used to be) skipped the four
+        // post-handshake writes `connect_and_pool` does: the R6 held-session cap, the
+        // §3.13 `active` connection entity, the Amendment 12 §A3
+        // `system/peer/status=connected` write (the whole input to the `peer_liveness`
+        // read-model), and §5 keepalive. So the app's Direct arm produced NO kernel
+        // liveness surface for connections it established — the read-model was inert
+        // (`FINDING-2026-08-10-app-connect-bypasses-kernel-liveness`). `connect_and_pool`
+        // takes `&Arc<PeerShared>`, so there's no `&Peer`-across-await borrow to dodge;
+        // it keeps the reentry-dispatch (`Some(shared)`, for the pushes a listener-less
+        // browser peer can only receive over a connection IT dialed — chat delivery,
+        // subscription `receive`) and rebinds the endpoint (fresh dial wins — the
+        // insert-if-absent B3/B4/B5 footgun `reconnect_peer` worked around is gone).
+        let endpoint = entity_peer::remote::connect_and_pool(&shared, &address)
             .await
             .map_err(|e| format!("Connect to {address} failed: {e}"))?;
-        // Reentry dispatch (`Some(shared)`): serve inbound EXECUTE *requests* the
-        // remote pushes back over the connection WE dialed — subscription
-        // `receive` notifications and any pushed delivery. A browser peer runs no
-        // listener, so a dialed connection is the ONLY path a push can reach it;
-        // plain `perform_connect` (reentry=None) drops those inbound EXECUTEs with
-        // a warning, which silently breaks cross-peer subscriptions (e.g. chat
-        // delivery). This mirrors `PeerContext::connect_to` (sdk.rs). Dial-by-
-        // address carries no §3 rendezvous key, so `established_via_rendezvous_key`
-        // is false (no reciprocal grant — §6.6), matching `reconnect_peer`.
-        let remote = entity_peer::remote::perform_connect_with_dispatch(
-            conn,
-            &shared.keypair,
-            shared.config.home_hash_format,
-            Some(shared.clone()),
-            false,
-        )
-        .await
-        .map_err(|e| format!("Handshake failed: {e}"))?;
-        let remote_peer_id = remote.remote_peer_id.clone();
-        shared.remote.insert(&remote_peer_id, remote);
-        Ok(remote_peer_id)
+        Ok(endpoint.remote_peer_id().to_string())
     })
 }
 
@@ -2503,6 +2495,109 @@ mod memory_transport_tests {
         handle_b.abort();
     }
 
+    /// **The real-transport liveness proof** — the Piece B gate the design named
+    /// (`DESIGN-CONNECTIVITY-UX §6`, Piece A: "the first e2e that doesn't exist
+    /// today: connect → kill peer → assert the row flips to `disconnected`
+    /// reactively"). Piece A's unit tests proved the read-model decodes a
+    /// *hand-seeded* status entity and that a subscription wakes; this closes the
+    /// gap they left — the full loop over a **real connection** through the app's
+    /// `Peers` router:
+    ///
+    ///   1. A real handshake makes the kernel write `system/peer/status/{B}` =
+    ///      `connected` on A's tree at establish (Amendment 12 §A3, dialer side,
+    ///      `remote::adopt_transport_connection`) — unconditional, no
+    ///      `maintain-peer`. The app read-model reads that real write back.
+    ///   2. B dies; A's next dispatch over the now-dead pooled connection fails at
+    ///      the send seam, and the kernel demotes B off `connected`
+    ///      (transport-error → `suspect`, Amendment 12 §5). The read-model
+    ///      surfaces the drop — the reactive liveness the app never observed
+    ///      before (the old connection-health mirror only ever *guessed* from
+    ///      connect attempts, so it lied "Connected" through exactly this drop —
+    ///      `BUGLOG-2026-07-14`).
+    #[tokio::test]
+    async fn read_model_sees_a_real_connection_and_its_drop() {
+        use crate::peer_liveness::{liveness_of, read_peer_liveness, LiveStatus};
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        // Hold B's `Peers` alive but abortable: killing only the server task (not
+        // the whole peer) is the honest "backend went dark mid-session" shape.
+        let (_peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        // 1. Real handshake through the app's own connect — the shipped path a
+        //    user drives via ConnectPeer. This is what must produce the kernel
+        //    liveness surface; today it does NOT (the bypass this test guards).
+        let connect_fut = peers_a.connect_peer(&pid_a, format!("memory://{pid_b}"));
+        let remote_pid = tokio::time::timeout(Duration::from_secs(2), connect_fut)
+            .await
+            .expect("connect_peer timed out")
+            .expect("connect_peer must succeed");
+        assert_eq!(remote_pid, pid_b);
+
+        // 2. The read-model reads the kernel's REAL `connected` write — a real
+        //    connection, not a seeded entity (the coverage that didn't exist).
+        let mut saw_connected = false;
+        for _ in 0..50 {
+            if liveness_of(&peers_a, &pid_b) == LiveStatus::Connected {
+                saw_connected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            saw_connected,
+            "read-model must see the kernel's `connected` write after a real handshake"
+        );
+        let rows = read_peer_liveness(&peers_a, &pid_a);
+        assert!(
+            rows.iter().any(|r| r.remote_pid == pid_b && r.status == LiveStatus::Connected),
+            "the connected row keys by B's Base58 peer_id (the entity-body join key), \
+             read straight off the kernel surface: {rows:?}"
+        );
+
+        // 3. B goes dark — abort its server task. The memory-transport channel to
+        //    A's pooled connection closes.
+        handle_b.abort();
+
+        // 4. Dispatch A→B over the dead pooled connection. Raw `Peers::execute`
+        //    (NOT `ops::execute`, which would evict+reconnect and mask the drop) so
+        //    the transport failure is the one signal. The send-seam failure demotes
+        //    B in the kernel.
+        let empty =
+            entity_entity::Entity::new("system/empty", entity_ecf::to_ecf(&entity_ecf::Value::Null))
+                .unwrap();
+        let dispatch = peers_a.execute(
+            &pid_a,
+            format!("entity://{pid_b}/system/tree"),
+            "get".into(),
+            empty,
+            entity_handler::ExecuteOptions::default(),
+        );
+        // The dispatch is expected to fail (dead conn) — we assert on the liveness
+        // side effect, not the dispatch result.
+        let _ = tokio::time::timeout(Duration::from_secs(2), dispatch).await;
+
+        // 5. The read-model reactively flips OFF `connected` — the disconnect the
+        //    app never wrote itself.
+        let mut flipped_off_connected = false;
+        for _ in 0..100 {
+            if liveness_of(&peers_a, &pid_b) != LiveStatus::Connected {
+                flipped_off_connected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            flipped_off_connected,
+            "a real transport drop must demote B off Connected in the read-model \
+             (final: {:?})",
+            liveness_of(&peers_a, &pid_b)
+        );
+
+        handle_a.abort();
+    }
+
     #[tokio::test]
     async fn peers_connect_unknown_endpoint_errors_cleanly() {
         let registry = MemoryTransportRegistry::new();
@@ -2518,19 +2613,19 @@ mod memory_transport_tests {
         );
     }
 
-    /// REPRO of the connect-refresh bug behind `BUGLOG-2026-07-14` B3/B4/B5.
-    /// The app's `connect_peer` ends in `remote.insert`, which is
-    /// **insert-if-absent** (`remote.rs` `insert_endpoint` returns the existing
-    /// entry on a key hit). So a second Connect to an already-pooled peer does
-    /// NOT establish a fresh connection — it silently keeps the existing
-    /// (possibly dead) one while the UI reports success. Tori's backend has a
-    /// **durable identity**, so after a backend restart the pool holds a stale
-    /// connection under that same id that Connect can never replace — hence
-    /// "shows connected, but I must reconnect, and even that's inconsistent."
-    /// `reconnect_peer` (evict + re-dial) is the fix; wiring the Connect button
-    /// to it closes B3/B4/B5.
+    /// The connect-refresh footgun behind `BUGLOG-2026-07-14` B3/B4/B5 is now
+    /// fixed **at the connect primitive**. `connect_peer` used to end in
+    /// `remote.insert` (insert-if-absent), so a repeat Connect to an
+    /// already-pooled peer kept the existing (possibly dead) connection while
+    /// the UI reported success — Tori's durable-identity backend, after a
+    /// restart, left a stale conn under that id that Connect could never
+    /// replace. Routing `direct_connect_future` through the kernel's
+    /// `connect_and_pool` (which `rebind_endpoint`s — "explicit dial ⇒ this
+    /// fresh connection becomes the binding unconditionally") means a repeat
+    /// Connect now establishes a genuinely NEW connection. `reconnect_peer`
+    /// (evict + re-dial) still works and is still the explicit refresh verb.
     #[tokio::test]
-    async fn connect_peer_cannot_refresh_pooled_connection_reconnect_can() {
+    async fn connect_peer_refreshes_the_pooled_connection() {
         let registry = MemoryTransportRegistry::new();
         let (peers_a, pid_a, _ha) = spawn_peer_on_registry(registry.clone());
         let (_peers_b, pid_b, _hb) = spawn_peer_on_registry(registry.clone());
@@ -2542,26 +2637,26 @@ mod memory_transport_tests {
         let shared_a = peers_a.direct_peer_shared(&pid_a).unwrap();
         let e1 = shared_a.remote.get(&pid_b).expect("pooled after connect 1");
 
-        // Second Connect to the SAME peer — THE BUG: insert-if-absent, so the
-        // pooled connection is the SAME object. A stale conn1 is unreplaceable.
+        // Second Connect to the SAME peer — THE FIX: connect_and_pool rebinds, so
+        // the pooled connection is a genuinely NEW object (a stale conn1 is
+        // replaced, not kept — B3/B4/B5 closed at the primitive).
         peers_a.connect_peer(&pid_a, addr.clone()).await.expect("connect 2");
         let e2 = shared_a.remote.get(&pid_b).expect("pooled after connect 2");
         assert!(
-            std::sync::Arc::ptr_eq(&e1, &e2),
-            "connect_peer is insert-if-absent — a repeat Connect does NOT refresh \
-             the pooled connection (B3/B4/B5 root cause)"
+            !std::sync::Arc::ptr_eq(&e1, &e2),
+            "connect_peer now refreshes the pooled connection (rebind, not \
+             insert-if-absent) — B3/B4/B5 root cause fixed"
         );
 
-        // reconnect_peer — THE FIX: evict then re-dial → a genuinely NEW conn.
+        // reconnect_peer — still evict + re-dial → also a genuinely NEW conn.
         peers_a
             .reconnect_peer(&pid_a, &pid_b, addr.clone())
             .await
             .expect("reconnect");
         let e3 = shared_a.remote.get(&pid_b).expect("pooled after reconnect");
         assert!(
-            !std::sync::Arc::ptr_eq(&e1, &e3),
-            "reconnect_peer MUST replace the pooled connection — wiring Connect to \
-             this is the B3/B4/B5 fix"
+            !std::sync::Arc::ptr_eq(&e2, &e3),
+            "reconnect_peer MUST replace the pooled connection"
         );
     }
 

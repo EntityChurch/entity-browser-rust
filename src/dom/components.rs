@@ -267,6 +267,27 @@ pub enum ConnState {
     Offline,
 }
 
+impl ConnState {
+    /// Map the app's one connection vocabulary
+    /// ([`crate::peer_liveness::ConnDisplay`]) to a chip. `Unknown` has no chip —
+    /// the caller renders a quiet dash (paired, no current signal), never a
+    /// misleading "connecting".
+    ///
+    /// `Reconnecting` (kernel `suspect`) currently renders as `Connecting` (calm,
+    /// non-red — a correct intermediate). Its distinct §4c "Reconnecting…"
+    /// label + amber is Piece C's status-vocabulary work (needs the i18n key
+    /// across the catalog); folded in there, not here.
+    pub fn from_display(d: crate::peer_liveness::ConnDisplay) -> Option<Self> {
+        use crate::peer_liveness::ConnDisplay;
+        match d {
+            ConnDisplay::Connected => Some(ConnState::Connected),
+            ConnDisplay::Dialing | ConnDisplay::Reconnecting => Some(ConnState::Connecting),
+            ConnDisplay::Offline => Some(ConnState::Offline),
+            ConnDisplay::Unknown => None,
+        }
+    }
+}
+
 /// Authorization status — the one authorization vocabulary (S4).
 ///
 /// Four honest states; each view uses the subset that applies. The backend's
