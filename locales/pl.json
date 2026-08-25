@@ -612,5 +612,7 @@
   "programs.status_running": "działa",
   "programs.status_faulted": "awaria",
   "programs.status_line": "{status} · tik {ticks} · {rate}/s",
-  "programs.display_waiting": "oczekiwanie na pierwszą klatkę"
+  "programs.display_waiting": "oczekiwanie na pierwszą klatkę",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

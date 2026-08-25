@@ -59,7 +59,7 @@ report() {
     # material"). Excludes bare `left:`/`right:` insets (ambiguous) — those are
     # caught by the pseudo-locale visual pass.
     phys_lines=$(
-        find src/dom src/views -name '*.rs' | LC_ALL=C sort | while read -r f; do
+        find src/dom src/views src/app_host -name '*.rs' | LC_ALL=C sort | while read -r f; do
             flat=$(tr '\n' ' ' <"$f")
             phys=$(count 'margin-left' "$flat")
             phys=$((phys + $(count 'margin-right' "$flat")))

@@ -1074,6 +1074,18 @@ pub const EN: &[(&str, Message)] = &[
         "programs.display_waiting",
         Message::Simple("waiting for the first frame"),
     ),
+    // -- L5 app-host (the stripped ?app-host= boot) — failure surfaces the user
+    //    sees INSIDE the sandboxed iframe. Never a blank/frozen frame (D13). The
+    //    `{reason}` slot carries the diagnostic detail (which stage / which
+    //    shape); the frame is what's translated.
+    (
+        "apphost.cannot_run",
+        Message::Simple("{program} can't run here — {reason}"),
+    ),
+    (
+        "apphost.stopped",
+        Message::Simple("{program} stopped — {reason}"),
+    ),
     ("storage.no_peers", Message::Simple("(no hosted peers)")),
     ("storage.used_quota", Message::Simple("Used / quota")),
     ("storage.persisted", Message::Simple("Persisted")),

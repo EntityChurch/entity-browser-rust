@@ -598,5 +598,7 @@
   "programs.status_running": "กำลังทำงาน",
   "programs.status_faulted": "ขัดข้อง",
   "programs.status_line": "{status} · ติ๊ก {ticks} · {rate}/วินาที",
-  "programs.display_waiting": "กำลังรอเฟรมแรก"
+  "programs.display_waiting": "กำลังรอเฟรมแรก",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

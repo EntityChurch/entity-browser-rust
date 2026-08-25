@@ -605,5 +605,7 @@
   "programs.status_running": "চলছে",
   "programs.status_faulted": "ত্রুটিপূর্ণ",
   "programs.status_line": "{status} · টিক {ticks} · {rate}/সে",
-  "programs.display_waiting": "প্রথম ফ্রেমের অপেক্ষায়"
+  "programs.display_waiting": "প্রথম ফ্রেমের অপেক্ষায়",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

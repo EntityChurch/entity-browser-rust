@@ -612,5 +612,7 @@
   "programs.status_running": "выполняется",
   "programs.status_faulted": "сбой",
   "programs.status_line": "{status} · тик {ticks} · {rate}/с",
-  "programs.display_waiting": "ожидание первого кадра"
+  "programs.display_waiting": "ожидание первого кадра",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

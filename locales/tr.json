@@ -605,5 +605,7 @@
   "programs.status_running": "çalışıyor",
   "programs.status_faulted": "hata verdi",
   "programs.status_line": "{status} · tik {ticks} · {rate}/s",
-  "programs.display_waiting": "ilk kare bekleniyor"
+  "programs.display_waiting": "ilk kare bekleniyor",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

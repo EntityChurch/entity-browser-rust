@@ -612,5 +612,7 @@
   "programs.status_running": "rulează",
   "programs.status_faulted": "eșuat",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "se așteaptă primul cadru"
+  "programs.display_waiting": "se așteaptă primul cadru",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

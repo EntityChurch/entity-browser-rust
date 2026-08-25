@@ -26,6 +26,34 @@ use super::descriptor::ProgramDescriptor;
 /// current-thread test runtime (native).
 pub type HostFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>>>>;
 
+/// Poll `fut` to completion, converting a **panic during a poll** into `Err` —
+/// so a bad tick (a debug-build arithmetic/hash overflow in the evaluator, a
+/// malformed-but-typed program) DEGRADES to a visible fault + a stopped clock
+/// instead of unwinding out of the driving `spawn_local` task and freezing the
+/// board with no marker (D13/AP3;
+/// `AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01` finding #1). This is the tick
+/// loop's twin of the rAF loop's C1 guard (`main.rs`): under the release
+/// `panic = "unwind"` profile the panic is caught here; under dev/abort (wasm)
+/// a panic is fatal regardless — the same whole-app limit, documented there.
+/// Native builds always unwind, so the unit tests exercise the catch. A future
+/// that panicked mid-poll is never polled again (the caller drops it on `Err`).
+pub async fn guarded(fut: HostFuture<()>) -> Result<(), String> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::task::Poll;
+    let mut fut = fut;
+    std::future::poll_fn(move |cx| {
+        match catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
+            Ok(poll) => poll,
+            Err(_) => Poll::Ready(Err(
+                // Diagnostic fault reason (the panic itself already printed via
+                // the panic hook) — same class as `with_timeout`'s message.
+                "tick panicked — clock stopped (see the panic above)".to_string(),
+            )),
+        }
+    })
+    .await
+}
+
 /// Namespace-qualify a program-relative path (`app/life/state` →
 /// `/{ns}/app/life/state`). `ns` is the program's ORIGIN namespace (the
 /// authoring peer's id from the bundle), not necessarily the hosting
@@ -286,4 +314,26 @@ pub fn input_future(
     };
     let path = qualify(ns, port_path);
     Box::pin(async move { writer.put_wait(path, entity).await })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `guarded` contains a panicking tick (native = unwind) so the loop sees an
+    // `Err` and can degrade visibly, instead of the panic killing the task.
+    #[tokio::test]
+    async fn guarded_converts_a_panicking_tick_to_err() {
+        let fut: HostFuture<()> = Box::pin(async { panic!("boom") });
+        assert!(guarded(fut).await.is_err());
+    }
+
+    // A clean tick and a normally-faulting tick both pass through untouched.
+    #[tokio::test]
+    async fn guarded_passes_through_ok_and_err() {
+        let ok: HostFuture<()> = Box::pin(async { Ok(()) });
+        assert_eq!(guarded(ok).await, Ok(()));
+        let err: HostFuture<()> = Box::pin(async { Err("faulted".to_string()) });
+        assert_eq!(guarded(err).await, Err("faulted".to_string()));
+    }
 }

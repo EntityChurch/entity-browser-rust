@@ -598,5 +598,7 @@
   "programs.status_running": "실행 중",
   "programs.status_faulted": "오류",
   "programs.status_line": "{status} · 틱 {ticks} · {rate}/s",
-  "programs.display_waiting": "첫 프레임을 기다리는 중"
+  "programs.display_waiting": "첫 프레임을 기다리는 중",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

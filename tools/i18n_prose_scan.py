@@ -322,7 +322,16 @@ def scan(path):
 def files():
     out = sorted(set(
         glob.glob('src/dom/**/*.rs', recursive=True) +
-        glob.glob('src/views/**/*.rs', recursive=True)))
+        glob.glob('src/views/**/*.rs', recursive=True) +
+        # app_host/* (the ?app-host= stripped boot) writes user-visible failure
+        # captions straight to the DOM — the program-refusal / boot-failure /
+        # tick-fault surfaces — from OUTSIDE the two render dirs, so it was
+        # invisible to this gate (AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01
+        # #7: the drift that let mod.rs:175 ship untranslated). In-set now so it
+        # cannot silently grow prose. debug.rs self-excludes via
+        # `//! i18n-ignore-file` (a developer overlay); mod.rs's genuine prose
+        # goes through `t()`, its diagnostics carry `i18n-ignore`.
+        glob.glob('src/app_host/**/*.rs', recursive=True)))
     # top-level files that emit UI text outside the two render dirs — status
     # bar / durability banner (app, storage_durability), peer-mode & storage
     # display labels (peer_display), byte/size formatting (format), and the

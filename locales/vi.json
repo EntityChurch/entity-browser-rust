@@ -598,5 +598,7 @@
   "programs.status_running": "đang chạy",
   "programs.status_faulted": "lỗi",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "đang chờ khung hình đầu tiên"
+  "programs.display_waiting": "đang chờ khung hình đầu tiên",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

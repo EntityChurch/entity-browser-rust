@@ -605,5 +605,7 @@
   "programs.status_running": "actief",
   "programs.status_faulted": "gefaald",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "wachten op het eerste frame"
+  "programs.display_waiting": "wachten op het eerste frame",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

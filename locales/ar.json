@@ -633,5 +633,7 @@
   "programs.status_running": "قيد التشغيل",
   "programs.status_faulted": "معطّل",
   "programs.status_line": "{status} · نبضة {ticks} · {rate}/ث",
-  "programs.display_waiting": "بانتظار الإطار الأول"
+  "programs.display_waiting": "بانتظار الإطار الأول",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

@@ -605,5 +605,7 @@
   "programs.status_running": "fut",
   "programs.status_faulted": "hibás",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "várakozás az első képkockára"
+  "programs.display_waiting": "várakozás az első képkockára",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

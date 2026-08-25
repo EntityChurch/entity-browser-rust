@@ -18,11 +18,44 @@
 //! sequence with "fetch" = embedded fixture until phase 3 swaps in a real
 //! peer fetch.
 
+//! ## Pulling in a program (the fixture pipeline, end to end)
+//!
+//! A program travels: **authored upstream → dumped → hash-verified fixture →
+//! embedded → mounted.** None of the authoring is ours; we consume the artifact.
+//!
+//! 1. **Author** (upstream, `entity-workbench-go/programs`) — the program's IR
+//!    is written once in Go. We never author here.
+//! 2. **Dump** (`tools/program-dump`, `make program-fixtures`) — a Go tool runs
+//!    the *unchanged* workbench authoring into a scratch peer, then writes every
+//!    entity under the program root as CBOR-hex + its Go-side content hash, plus
+//!    a per-tick state-hash **oracle**, to `assets/programs/<key>.json`.
+//!    (Fixture-gen only; needs the `entity-workbench-go` + `entity-core-go`
+//!    siblings via the go.mod `replace` directives. Regenerating re-dumps from
+//!    whatever upstream *currently* is — an explicit upstream-sync step, never
+//!    part of a normal build.)
+//! 3. **Embed** ([`bundle::EMBEDDED_PROGRAMS`]) — `include_str!` bakes the JSON
+//!    into the wasm at build time. **To add a program: author it upstream, add
+//!    it to program-dump's list + `make program-fixtures`, then add one
+//!    `EmbeddedProgram` row here.** The Programs launcher (`views::programs`)
+//!    lists `EMBEDDED_PROGRAMS` automatically — no launcher edit.
+//! 4. **Verify** ([`bundle::Bundle::verified_entities`]) — the cross-impl gate:
+//!    every entity's content hash must recompute identically under the *Rust*
+//!    encoder or the mount is refused, per entity, loudly. `make test`'s
+//!    `all_embedded_entities_hash_verify` + `corrupted_entity_is_refused` make a
+//!    stale/corrupt fixture a **build failure**, and `oracle_tests` pins the
+//!    per-tick evolution hash-identical to Go. This is the standing cleanliness
+//!    guarantee — the reason regeneration isn't a routine step.
+//! 5. **Mount** ([`host`]) — materialize the verified entities at their
+//!    program-relative paths → decode the descriptor → admit by shape → seed →
+//!    tick. Same shape whether run in the Programs window or behind the L5
+//!    `?app-host=` boundary (`app_host`).
+
 pub mod bundle;
 pub mod controls;
 pub mod descriptor;
 pub mod host;
 pub mod input;
+pub mod sexpr;
 pub mod shapes;
 
 #[cfg(test)]

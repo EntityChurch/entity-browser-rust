@@ -605,5 +605,7 @@
   "programs.status_running": "kører",
   "programs.status_faulted": "fejlet",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "venter på første billede"
+  "programs.display_waiting": "venter på første billede",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }
