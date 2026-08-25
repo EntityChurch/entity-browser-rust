@@ -91,6 +91,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "Conversar com outra pessoa",
   "chat.no_establisher": "Não é possível ligar de volta a este par — conseguem encontrá-lo, mas nada consegue ligar-se a si. Mude esta janela para o seu par principal.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "Esta rede precisa de um retransmissor — nenhum dos dispositivos é alcançável diretamente. Adicione um retransmissor no conetor por onde se encontram.",

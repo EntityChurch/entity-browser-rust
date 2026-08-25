@@ -91,6 +91,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "অন্য কারও সাথে চ্যাট করুন",
   "chat.no_establisher": "এই পিয়ারে ফিরে পৌঁছানো যায় না — তারা আপনাকে খুঁজে পাবে, কিন্তু কিছুই আপনার সঙ্গে সংযোগ করতে পারবে না। এই উইন্ডোটি আপনার মূল পিয়ারে বদলান।",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "এই নেটওয়ার্কের একটি রিলে প্রয়োজন — কোনো ডিভাইসেই সরাসরি পৌঁছানো যায় না। আপনি যে কানেক্টরের মাধ্যমে মিলিত হন সেখানে একটি রিলে যোগ করুন।",

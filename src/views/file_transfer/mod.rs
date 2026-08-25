@@ -277,6 +277,13 @@ impl WindowView for FileTransferWindow {
             }
             // Highlight a file (the Pull target).
             "ft_select" => self.model.browse().select(value),
+            // A wake with no state change of its own. The file picker writes
+            // the offer's progress into `offer_attempt`, which is in-memory by
+            // design — so no tree write fires, no subscription fires, and a
+            // bare repaint would schedule a frame that rebuilds nothing. This
+            // event exists so that surface can reach the same `mark_dirty`
+            // below that every other event here relies on.
+            "ft_wake" => {}
             _ => {}
         }
         // Selection/expand toggles change only in-memory state (no tree write),

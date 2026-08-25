@@ -22,13 +22,45 @@ pub fn render(container: &Element, output: &ChatOutput, ctx: &DomCtx) {
         .ok();
 
     render_header(&wrapper, output);
-    if !output.bound {
+    if output.bound {
+        render_leave(&wrapper, ctx);
+    } else {
         render_start_picker(&wrapper, output, ctx);
     }
     render_messages(&wrapper, output);
     render_compose(&wrapper, ctx);
 
     util::append(container, &wrapper);
+}
+
+/// The way back out of a bound conversation — the counterpart of the picker,
+/// and the thing this window shipped without.
+///
+/// Without it, binding was one-way: the picker renders only while unbound, so
+/// the first peer you started a chat with was the only peer that window could
+/// ever reach, and the only escape was opening a second Chat window. Reported
+/// exactly that way from a real two-device run.
+///
+/// It is deliberately a *leave*, not a *disconnect* or a *delete*: the peer
+/// stays connected (the release sweep drops only the auto-reconnect intent), the
+/// messages stay in the tree, and re-picking the same peer returns to the same
+/// conversation with its history.
+fn render_leave(parent: &Element, ctx: &DomCtx) {
+    let bar = util::create_element("div");
+    bar.set_attribute("style", crate::dom::theme::ROW_END).ok();
+
+    let btn = crate::dom::components::button_action(
+        ctx,
+        &crate::i18n::t("chat.leave", &[]),
+        crate::dom::components::ButtonKind::Small,
+        Action::ChatLeave { window_id: ctx.window_id },
+    );
+    // The hook a harness presses to prove the window can be re-pointed at a
+    // second peer without being closed and reopened.
+    btn.set_attribute("data-field", "chat-leave").ok();
+    util::append(&bar, &btn);
+
+    util::append(parent, &bar);
 }
 
 /// The start-a-chat picker, shown on the default single-peer conversation: a
@@ -153,6 +185,11 @@ fn render_header(parent: &Element, output: &ChatOutput) {
              margin-bottom:6px;flex-shrink:0",
         )
         .ok();
+    // The hook that makes "this window is now pointed at a different peer"
+    // observable. The conversation id is derived from the participant pair, so
+    // it is the one thing on screen that provably changes when the window is
+    // re-bound — the leave/re-bind gate reads it.
+    header.set_attribute("data-field", "chat-conversation").ok();
     util::set_text(
         &header,
         &crate::i18n::t("chat.conversation", &[("id", &output.conversation_id)]),

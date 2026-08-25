@@ -120,6 +120,31 @@ struct Inner {
     auto_attempted: bool,
 }
 
+/// Drop `key` and everything cached beneath it — nodes, expand/listed/loading
+/// marks, and the selection if it pointed inside.
+///
+/// Used when a re-listing says a directory is gone. Leaving the subtree behind
+/// would keep it marked `listed`, so a directory of the same name reappearing
+/// later would render from children nobody would ever re-fetch.
+fn forget_subtree(inner: &mut Inner, key: &str) {
+    let sub = format!("{key}/");
+    let doomed: Vec<String> = inner
+        .nodes
+        .keys()
+        .filter(|k| k.as_str() == key || k.starts_with(&sub))
+        .cloned()
+        .collect();
+    for k in doomed {
+        inner.nodes.remove(&k);
+        inner.listed.remove(&k);
+        inner.expanded.remove(&k);
+        inner.loading.remove(&k);
+        if inner.selected.as_deref() == Some(k.as_str()) {
+            inner.selected = None;
+        }
+    }
+}
+
 /// Cheap-to-clone handle to the browse state.
 #[derive(Clone, Default, Debug)]
 pub struct FsBrowseCache {
@@ -177,6 +202,16 @@ impl FsBrowseCache {
     /// Reserve a load for `relpath`. Returns `true` if the caller should fetch
     /// (not already listed, not already in flight); marks it loading. `force`
     /// re-fetches even a previously-listed directory (the Refresh path).
+    ///
+    /// **A refresh does NOT un-list the directory**, and that is the whole
+    /// point: `listed` is what the renderer gates the tree on, so clearing it
+    /// here turned an in-place re-ask into a *teardown* — the rows vanished the
+    /// instant Refresh was pressed and came back only if the re-list succeeded.
+    /// Against a peer whose share is absent (every browser peer) the re-list
+    /// never succeeds, so Refresh permanently replaced a working listing of
+    /// offered files with the "Browse shared files" button. Reported from a real
+    /// two-device run as *"I hit refresh and it deletes the file"*. The
+    /// in-flight state is `loading`, which the renderer shows beside the rows.
     pub fn begin_load(&self, relpath: &str, force: bool) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if inner.loading.contains(relpath) {
@@ -185,19 +220,49 @@ impl FsBrowseCache {
         if !force && inner.listed.contains(relpath) {
             return false;
         }
-        if force {
-            inner.listed.remove(relpath);
-        }
         inner.loading.insert(relpath.to_string());
         inner.share = ShareState::Fine;
         true
     }
 
     /// Record a directory's children (marks it listed, clears its loading flag).
+    ///
+    /// **This REPLACES `relpath`'s direct children rather than merging into
+    /// them.** A file deleted on the far side has to leave the listing, and a
+    /// cache that only ever inserts can never show that — Refresh would fetch
+    /// the shorter listing, add nothing, and leave the vanished file on screen
+    /// under a Pull button that 404s. Same rule and same reason as
+    /// [`apply_offers`](Self::apply_offers), which has always replaced; the
+    /// share half simply never did.
+    ///
+    /// A removed *directory* takes its whole cached subtree with it, along with
+    /// its expand/listed marks — otherwise a directory that came back later
+    /// would render already-listed from stale children nobody re-fetched.
+    /// Offered rows (`~`-keyed) are never touched: the two sources meet in this
+    /// cache without knowing about each other.
     pub fn apply_listing(&self, relpath: &str, children: Vec<FsChild>) {
         let mut inner = self.inner.lock().unwrap();
         inner.loading.remove(relpath);
         inner.listed.insert(relpath.to_string());
+
+        let prefix = if relpath.is_empty() { String::new() } else { format!("{relpath}/") };
+        let incoming: HashSet<&str> = children.iter().map(|c| c.relpath.as_str()).collect();
+        let stale: Vec<String> = inner
+            .nodes
+            .keys()
+            .filter(|k| !k.starts_with('~'))
+            .filter(|k| {
+                k.strip_prefix(prefix.as_str())
+                    .map(|rest| !rest.is_empty() && !rest.contains('/'))
+                    .unwrap_or(false)
+            })
+            .filter(|k| !incoming.contains(k.as_str()))
+            .cloned()
+            .collect();
+        for key in stale {
+            forget_subtree(&mut inner, &key);
+        }
+
         for child in children {
             inner.nodes.insert(child.relpath.clone(), child);
         }
@@ -222,16 +287,27 @@ impl FsBrowseCache {
     /// what makes the replacement safe to scope: it touches offers only, never a
     /// share row, so the two sources still meet here without knowing about each
     /// other.
+    ///
+    /// **"Changed" means any state a render can see — including the listed /
+    /// loading flags, not only the row set.** The caller repaints on `true` and
+    /// on nothing else, so reporting only the rows meant an *unchanged* offer
+    /// listing marked the root listed and then told the caller there was nothing
+    /// to paint. That is the second half of the Refresh bug: the share half's
+    /// failure repainted (correctly, showing no tree), the offers half then
+    /// repaired the state silently, and the window sat on the "Browse shared
+    /// files" button with a perfectly good listing behind it — for every Refresh
+    /// after the first, forever.
     pub fn apply_offers(&self, offers: Vec<crate::file_offer::FileOffer>) -> bool {
         let mut inner = self.inner.lock().unwrap();
+        let mut changed = false;
         if !offers.is_empty() {
             // The root counts as listed even if the share half failed: a browser
             // peer answers `local/files` with an error and its offers ARE the
             // listing, and leaving the window on "Browse" would be a lie. Only
             // on a non-empty answer, though — an empty one must not turn a
             // failed share browse into a confident "this share is empty".
-            inner.loading.remove("");
-            inner.listed.insert(String::new());
+            changed |= inner.loading.remove("");
+            changed |= inner.listed.insert(String::new());
         }
         let fresh: BTreeMap<String, FsChild> = offers
             .into_iter()
@@ -261,7 +337,7 @@ impl FsBrowseCache {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if had == fresh {
-            return false;
+            return changed;
         }
         for key in had.keys() {
             inner.nodes.remove(key);
@@ -499,6 +575,160 @@ mod tests {
         c.apply_listing("", vec![child("a.txt", false)]);
         assert!(!c.begin_load("", false), "already listed → no refetch");
         assert!(c.begin_load("", true), "force → refetch");
+    }
+
+    /// **A re-ask is not a teardown.** Refresh used to clear `listed`, which is
+    /// what the renderer gates the whole tree on — so the rows vanished the
+    /// instant the button was pressed and returned only if the re-list came
+    /// back. The in-flight state is `loading`, which renders *beside* the rows.
+    #[test]
+    fn a_refresh_keeps_the_listing_on_screen_while_it_re_asks() {
+        let c = FsBrowseCache::new();
+        c.apply_listing("", vec![child("a.txt", false)]);
+        assert!(c.begin_load("", true), "Refresh forces a re-list");
+        assert!(c.root_listed(), "the rows stay on screen while we re-ask");
+        assert!(c.root_loading(), "…and the re-ask is visible as in-flight");
+        assert_eq!(c.rows().len(), 1);
+    }
+
+    /// **The reported bug, end to end.** A peer that serves no share (every
+    /// browser peer) lists its *offers*; pressing Refresh re-asks both halves,
+    /// the share half answers `handler_not_found`, and the offers half answers
+    /// with the same offer as before. Before the fix that sequence left a
+    /// working listing showing the "Browse shared files" button — and pressing
+    /// that button repeated it, forever.
+    #[test]
+    fn refreshing_an_offers_only_peer_does_not_empty_the_pane() {
+        let c = FsBrowseCache::new();
+        c.sync_target("PEER_SERVING");
+        let file = offer("report.bin", b"the file they could download");
+
+        // First browse: no share, one offered file.
+        assert!(c.begin_load("", false));
+        c.fail_load("", classify_share_failure(404, Some("handler_not_found"), "protocol error"));
+        assert!(c.apply_offers(vec![file.clone()]));
+        assert!(c.root_listed() && c.rows().len() == 1);
+
+        // Refresh. The share half fails again (it always will), and the offers
+        // half returns exactly what it returned last time.
+        assert!(c.begin_load("", true));
+        c.fail_load("", classify_share_failure(404, Some("handler_not_found"), "protocol error"));
+        let unchanged_needs_paint = c.apply_offers(vec![file]);
+
+        assert!(c.root_listed(), "the listing survives its own Refresh");
+        assert_eq!(c.rows().len(), 1, "the offered file is still there: {:?}", c.rows().len());
+        assert!(!c.root_loading(), "both halves answered — nothing is still in flight");
+        assert!(
+            !unchanged_needs_paint,
+            "with the listing never torn down there is genuinely nothing new to \
+             paint — the repaint this used to owe was for state IT had repaired"
+        );
+    }
+
+    /// The other half of that fix, in isolation: when `apply_offers` *does*
+    /// repair render-visible state (the root going from un-listed to listed),
+    /// it must say so — the caller repaints on `true` and on nothing else.
+    #[test]
+    fn an_unchanged_offer_listing_still_reports_state_it_repaired() {
+        let c = FsBrowseCache::new();
+        let file = offer("report.bin", b"payload");
+        assert!(c.apply_offers(vec![file.clone()]), "first listing: new rows");
+
+        // Force the root back to un-listed *without* touching the rows — the
+        // shape a target switch mid-flight leaves behind.
+        c.begin_load("", true);
+        assert!(c.root_loading());
+        assert!(
+            c.apply_offers(vec![file]),
+            "the row set is identical, but the root just became listed and the \
+             spinner just stopped: that is a repaint the caller owes"
+        );
+        assert!(c.root_listed() && !c.root_loading());
+    }
+
+    /// A share file deleted on the far side must LEAVE the listing. The offers
+    /// half has always replaced; the share half only ever inserted, so a
+    /// deletion was invisible and its Pull button stayed on screen.
+    #[test]
+    fn a_file_deleted_on_the_far_side_leaves_the_listing() {
+        let c = FsBrowseCache::new();
+        c.apply_listing("", vec![child("keep.txt", false), child("gone.txt", false)]);
+        c.select("gone.txt");
+        assert_eq!(c.rows().len(), 2);
+
+        c.begin_load("", true);
+        c.apply_listing("", vec![child("keep.txt", false)]);
+
+        let names: Vec<String> = c.rows().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, vec!["keep.txt".to_string()], "the deleted file is gone");
+        assert!(
+            c.selected_pull().is_none(),
+            "…and so is the Pull button that would have 404'd"
+        );
+    }
+
+    /// A removed directory takes its cached subtree and its `listed` mark with
+    /// it — otherwise a directory of the same name reappearing later renders
+    /// from children nobody would re-fetch.
+    #[test]
+    fn a_removed_directory_takes_its_subtree_with_it() {
+        let c = FsBrowseCache::new();
+        c.apply_listing("", vec![child("sub", true)]);
+        c.set_expanded("sub");
+        c.apply_listing(
+            "sub",
+            vec![FsChild {
+                name: "deep.txt".into(),
+                relpath: "sub/deep.txt".into(),
+                full_path: format!("{SHARE_PREFIX}sub/deep.txt"),
+                is_dir: false,
+                size: Some(9),
+                offer_blob: None,
+            }],
+        );
+        assert_eq!(c.rows().len(), 2);
+
+        // The directory is gone on the far side.
+        c.begin_load("", true);
+        c.apply_listing("", vec![child("other.txt", false)]);
+        assert_eq!(c.rows().len(), 1);
+
+        // It comes back — and must be re-fetched, not served from the stale
+        // children still sitting in the cache.
+        c.begin_load("", true);
+        c.apply_listing("", vec![child("sub", true)]);
+        assert!(c.begin_load("sub", false), "the subtree's listing was forgotten too");
+    }
+
+    /// The replacement is scoped to the directory that was listed: a listing of
+    /// the root must not evict a *deeper* cached directory's children, and must
+    /// never touch an offered row.
+    #[test]
+    fn re_listing_a_directory_leaves_its_siblings_and_offers_alone() {
+        let c = FsBrowseCache::new();
+        c.apply_listing("", vec![child("sub", true), child("a.txt", false)]);
+        c.set_expanded("sub");
+        c.apply_listing(
+            "sub",
+            vec![FsChild {
+                name: "deep.txt".into(),
+                relpath: "sub/deep.txt".into(),
+                full_path: format!("{SHARE_PREFIX}sub/deep.txt"),
+                is_dir: false,
+                size: Some(9),
+                offer_blob: None,
+            }],
+        );
+        c.apply_offers(vec![offer("offered.bin", b"from the other source")]);
+        assert_eq!(c.rows().len(), 4);
+
+        // Re-list the root with the same entries: nothing may be lost.
+        c.begin_load("", true);
+        c.apply_listing("", vec![child("sub", true), child("a.txt", false)]);
+        let names: Vec<String> = c.rows().into_iter().map(|r| r.name).collect();
+        assert_eq!(names.len(), 4, "{names:?}");
+        assert!(names.iter().any(|n| n == "deep.txt"), "the subtree survives: {names:?}");
+        assert!(names.iter().any(|n| n == "offered.bin"), "the offer survives: {names:?}");
     }
 
     pub(super) fn offer(name: &str, bytes: &[u8]) -> crate::file_offer::FileOffer {

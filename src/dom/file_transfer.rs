@@ -213,6 +213,14 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     if output.root_listed {
         let header = util::create_element("div");
         header.set_attribute("style", theme::ROW_END).ok();
+        // A re-ask in flight is shown BESIDE the listing, never instead of it.
+        // The rows stay put while both halves (the share and what the peer
+        // offers) answer again — clearing them was the "Refresh deletes my
+        // file" bug, and a spinner with nothing under it is the same lie in a
+        // politer font.
+        if output.root_loading {
+            util::append(&header, &components::loading(""));
+        }
         let refresh = components::button(
             ctx,
             &crate::i18n::t("btn.refresh", &[]),
@@ -370,7 +378,20 @@ fn file_picker(
 ) {
     let input = util::create_element("input");
     input.set_attribute("type", "file").ok();
-    input.set_attribute("style", "display:none").ok();
+    // **Visually hidden, not `display:none`.** A `display:none` input is not
+    // rendered at all, and several mobile browsers decline to open a picker for
+    // an unrendered control — which presents as a button that does nothing,
+    // with no error anywhere, because no `change` event is ever dispatched.
+    // Reported from a real Android run as exactly that. Keeping it in the layout
+    // at zero size costs nothing and removes a whole class of "it just doesn't
+    // work on my phone".
+    input
+        .set_attribute(
+            "style",
+            "position:absolute;width:1px;height:1px;padding:0;margin:-1px;\
+             overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0",
+        )
+        .ok();
     input.set_attribute("data-field", &format!("{field}-input")).ok();
     util::append(parent, &input);
 
@@ -388,6 +409,27 @@ fn file_picker(
 
     let on_file = std::rc::Rc::new(on_file);
     let input_ref = input.clone();
+    let attempt = ctx.offer_attempt.clone();
+    // Waking the window is a **dirty mark, not a repaint**. Sections rebuild
+    // only when their `WindowWatch` says so, and `offer_attempt` lives in
+    // memory precisely so it never becomes a tree entity — so no write fires
+    // and no subscription fires. A bare `repaint()` schedules a frame that then
+    // rebuilds nothing, which is the same silence one layer in. The window's
+    // action handler marks itself dirty for any event it receives, so this
+    // rides that; the app-side half of the same slot pokes the `DirtyFlag`
+    // directly, which the DOM has no handle on.
+    let rp = ctx.repaint.clone();
+    let actions = ctx.actions.clone();
+    let window_id = ctx.window_id;
+    let wake = move || {
+        actions.borrow_mut().push(Action::WindowEvent {
+            window_id,
+            event: "ft_wake".into(),
+            value: String::new(),
+        });
+        rp();
+    };
+    let wake = std::rc::Rc::new(wake);
     ctx.listen(&input, "change", move |_| {
         let Ok(inp) = input_ref.clone().dyn_into::<web_sys::HtmlInputElement>() else {
             return;
@@ -395,7 +437,28 @@ fn file_picker(
         let Some(files) = inp.files() else { return };
         let Some(file) = files.get(0) else { return };
         let filename = file.name();
+
+        // Refuse on size BEFORE reading. `offer_file` refuses too and is the
+        // authority, but it can only do so once the bytes are already in wasm
+        // memory — and a camera-sized file is exactly where a phone's tab dies
+        // partway through, which is indistinguishable from the button doing
+        // nothing. `File.size` is free and needs no read.
+        let size = file.size() as u64;
+        if size > crate::file_offer::MAX_OFFER_BYTES {
+            attempt.set_failed(&filename, &crate::file_offer::too_large_message(&filename, size));
+            wake();
+            return;
+        }
+
+        // Say that something is happening the moment a file is chosen. On a
+        // phone this read is the slow step, and the silence across it is most of
+        // what "the button doesn't work" meant.
+        attempt.set_reading(&filename);
+        wake();
+
         let on_file = on_file.clone();
+        let attempt = attempt.clone();
+        let wake = wake.clone();
         // Consume the (fallible) array_buffer promise via JsFuture — a
         // dropped rejecting promise would reload the whole app (index.html
         // unhandledrejection guard).
@@ -403,9 +466,14 @@ fn file_picker(
             match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
                 Ok(buf) => on_file(filename, js_sys::Uint8Array::new(&buf).to_vec()),
                 Err(e) => {
+                    // A read that fails has no action to ride, so without this
+                    // it reached the user through the console and nowhere else.
+                    let why = format!("{e:?}");
                     web_sys::console::error_1(
                         &format!("file read failed for {}: {:?}", filename, e).into(),
                     );
+                    attempt.set_failed(&filename, &why);
+                    wake();
                 }
             }
         });
@@ -487,6 +555,8 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
         );
     }
 
+    render_offer_status(&card, ctx);
+
     if output.own_offers.is_empty() {
         util::append(&card, &components::empty(&crate::i18n::t("filetransfer.offer_none", &[])));
     } else {
@@ -534,6 +604,41 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
     }
 
     util::append(parent, &card);
+}
+
+/// What became of the last file offered, **beside the button that offered it**.
+///
+/// Every failure this button has — a file over the ceiling, an unrouted local
+/// peer, a refused ingest, a read the browser could not complete — used to
+/// arrive only as a line in the Results pane at the bottom of the window, and
+/// on a phone that is not where anyone is looking. It was reported as *"I hit
+/// the button, it doesn't work, doesn't give an error, doesn't show anything"*,
+/// which is a correct report about the feedback whatever the cause turns out to
+/// be.
+///
+/// **Success renders nothing.** The offer appears as a row in the table
+/// immediately below, which is the authority on what is being served — a
+/// success line above a list containing the same file is noise, and worse, it
+/// would survive a withdrawal and contradict the list it sits on.
+fn render_offer_status(parent: &Element, ctx: &DomCtx) {
+    use crate::offer_attempt::OfferOutcome;
+    let Some((filename, outcome)) = ctx.offer_attempt.read() else { return };
+    let el = match outcome {
+        // The catalog's own "Loading…" plus the file, because on a slow read
+        // the *name* is what tells the user the right file was picked.
+        OfferOutcome::Reading | OfferOutcome::Preparing => {
+            // Slot + punctuation composition, not prose — both halves are
+            // already a catalog string and a filename.
+            components::loading(&format!("{filename} — {}", crate::i18n::t("state.loading", &[]))) // i18n-ignore
+        }
+        // The reason is model English inside a localized frame, the same known
+        // shape as the port-mapping row's `{why}`. A translated "it failed" with
+        // the reason dropped would be worse.
+        OfferOutcome::Failed(why) => components::error(&why),
+        OfferOutcome::Offered(_) => return,
+    };
+    el.set_attribute("data-field", "ft-offer-status").ok();
+    util::append(parent, &el);
 }
 
 fn render_results(parent: &Element, output: &FileTransferOutput) {

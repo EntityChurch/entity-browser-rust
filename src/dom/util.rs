@@ -56,6 +56,15 @@ pub struct DomCtx {
     /// render. Distinct from it because a manual connect is keyed by the
     /// *address* typed, which has no peer id until the handshake lands.
     pub connect_attempt: crate::connect_attempt::ConnectAttempt,
+    /// Outcome of the last file offered (`crate::offer_attempt`) — the surface
+    /// that stops `Action::OfferFile` from completing silently. Same ownership
+    /// shape as the two above: one app-owned handle, read at render.
+    ///
+    /// Unlike them it is also **written from the DOM**, and deliberately: the
+    /// file picker and the `array_buffer()` read both sit between the tap and
+    /// the action, so a refusal on size or a failed read has no action to ride
+    /// and would otherwise be invisible to the app entirely.
+    pub offer_attempt: crate::offer_attempt::OfferAttempt,
     /// Would a reload change the §6.5 signaling node this session rendezvous
     /// through? A plain fact rather than a handle, because unlike the two above
     /// it is *derived* per frame (boot-time provisioning vs what a fresh resolve

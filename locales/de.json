@@ -91,6 +91,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "Mit jemand anderem chatten",
   "chat.no_establisher": "Zu diesem Peer kann nicht zurück verbunden werden — man findet dich, aber nichts kann dich erreichen. Wechsle dieses Fenster zu deinem Haupt-Peer.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "Dieses Netzwerk benötigt ein Relay — keines der Geräte ist direkt erreichbar. Fügen Sie ein Relay beim Connector hinzu, über den Sie sich treffen.",

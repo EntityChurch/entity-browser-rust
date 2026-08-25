@@ -24,6 +24,57 @@ use std::rc::{Rc, Weak};
 #[cfg(target_arch = "wasm32")]
 use entity_wasm_worker_proxy::{SubHandle, WebTransport};
 
+/// Gate on a subscription's **dirty-marking** — not on the subscription itself.
+///
+/// A window sometimes subscribes a prefix it must *read* but must not *rebuild
+/// on*. Closing the gate leaves the subscription fully live: writes still reach
+/// the Worker-arm cache mirror, so the next legitimate rebuild reads current
+/// data. It only stops those writes from **causing** a rebuild.
+///
+/// The case this exists for is the Apps window. It watches the save prefix
+/// because the Saves panel lists it — and on the Worker arm a read only lands
+/// in the cache mirror for a subscribed prefix, so leaving it unwatched reads
+/// empty after a reload. But a *running* app writes its own save under that
+/// same prefix every few seconds, and a section rebuild runs `render_player`,
+/// which replaces the player's `<iframe>` and so restarts the app at its start
+/// screen. While a player is mounted that prefix is write-only to this window,
+/// and the gate is how it says so. (`a_running_app_survives_its_own_save`.)
+///
+/// The general shape: a subscription does two jobs — mirror the data and
+/// trigger the rebuild — and a window that needs the first without the second
+/// has no way to say it otherwise.
+#[derive(Clone)]
+pub struct RebuildGate {
+    open: Arc<AtomicBool>,
+}
+
+#[allow(dead_code)] // consumers are WASM-only (dom render paths)
+impl RebuildGate {
+    /// A gate that starts open — writes mark the window dirty as usual.
+    pub fn open() -> Self {
+        Self {
+            open: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Open (`true`) or close (`false`) the gate. Idempotent; call it from the
+    /// render that decides, so the decision has exactly one home.
+    pub fn set_open(&self, open: bool) {
+        self.open.store(open, Ordering::Relaxed);
+    }
+
+    /// Whether writes under the gated prefixes may currently mark dirty.
+    pub fn is_open(&self) -> bool {
+        self.open.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for RebuildGate {
+    fn default() -> Self {
+        Self::open()
+    }
+}
+
 /// Cheaply-clonable handle to a window's dirty flag.
 ///
 /// Cloned into long-lived consumers (subscription callbacks running on
@@ -33,13 +84,29 @@ use entity_wasm_worker_proxy::{SubHandle, WebTransport};
 #[derive(Clone)]
 pub struct DirtyFlag {
     inner: Arc<AtomicBool>,
+    /// When present and closed, [`mark`](Self::mark) is a no-op. See
+    /// [`RebuildGate`].
+    gate: Option<RebuildGate>,
 }
 
 #[allow(dead_code)] // public surface; not used on native (dom is WASM-only)
 impl DirtyFlag {
     /// Mark the watch dirty so the next frame rebuilds the window's section.
+    /// A closed [`RebuildGate`] suppresses the mark.
     pub fn mark(&self) {
+        if !gate_allows(&self.gate) {
+            return;
+        }
         self.inner.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Whether a (possibly absent) gate permits marking. An absent gate always
+/// permits — the default for every subscription that has no reason to care.
+fn gate_allows(gate: &Option<RebuildGate>) -> bool {
+    match gate {
+        Some(g) => g.is_open(),
+        None => true,
     }
 }
 
@@ -112,8 +179,23 @@ impl WindowWatch {
     /// Subscribe to a tree prefix on `ctx`. Any write whose path begins
     /// with `prefix` flips the dirty flag.
     pub fn subscribe_prefix(&mut self, ctx: &PeerContext, prefix: impl Into<String>) {
+        self.subscribe_prefix_gated(ctx, prefix, None);
+    }
+
+    /// [`subscribe_prefix`](Self::subscribe_prefix) whose **dirty-marking** is
+    /// conditional on `gate`. The subscription itself is unconditional either
+    /// way — see [`RebuildGate`] for why those are two different things.
+    pub fn subscribe_prefix_gated(
+        &mut self,
+        ctx: &PeerContext,
+        prefix: impl Into<String>,
+        gate: Option<RebuildGate>,
+    ) {
         let dirty = self.dirty.clone();
         let handle = ctx.store().on_prefix_change(prefix, move |_event| {
+            if !gate_allows(&gate) {
+                return;
+            }
             dirty.store(true, Ordering::Relaxed);
         });
         self.handles.push(handle);
@@ -134,6 +216,17 @@ impl WindowWatch {
     pub fn flag(&self) -> DirtyFlag {
         DirtyFlag {
             inner: self.dirty.clone(),
+            gate: None,
+        }
+    }
+
+    /// [`flag`](Self::flag) whose marks are suppressed while `gate` is closed.
+    /// Used by the Worker arm's `watch_prefix`, which bridges notifications to
+    /// the flag rather than subscribing through `PeerContext` directly.
+    pub fn flag_gated(&self, gate: Option<RebuildGate>) -> DirtyFlag {
+        DirtyFlag {
+            inner: self.dirty.clone(),
+            gate,
         }
     }
 
@@ -243,6 +336,51 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         assert!(!watch.take_dirty(), "non-matching write must not flip flag");
+    }
+
+    /// A closed gate suppresses the rebuild and NOT the subscription.
+    ///
+    /// Both halves matter and they are asserted separately. Suppressing the
+    /// mark is the fix for the Apps window tearing down a running app on its
+    /// own save; keeping the subscription live is what still feeds the
+    /// Worker-arm cache mirror, so the Saves panel reads real data on the next
+    /// legitimate rebuild. A "fix" that simply dropped the subscription would
+    /// pass the first assertion and silently re-break the panel after a reload.
+    #[tokio::test]
+    async fn a_closed_gate_suppresses_the_rebuild_but_not_the_subscription() {
+        let pm = Peers::new_direct();
+        let pid = pm.primary_peer_id().to_string();
+        let ctx = pm.test_seed_ctx(&pid);
+
+        let gate = RebuildGate::open();
+        let mut watch = WindowWatch::new();
+        watch.subscribe_prefix_gated(ctx, format!("/{}/saves/", pid), Some(gate.clone()));
+        watch.take_dirty(); // clear the construction-time flag
+
+        // Closed: the write lands, the window does not rebuild.
+        gate.set_open(false);
+        ctx.store()
+            .put(&format!("/{}/saves/war", pid), entity("move-1"))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            !watch.take_dirty(),
+            "a write under a CLOSED gate must not mark the window dirty — that \
+             mark is what rebuilds the section and restarts the running app"
+        );
+
+        // Still subscribed: reopening is enough to see the very next write,
+        // with nothing re-registered.
+        gate.set_open(true);
+        ctx.store()
+            .put(&format!("/{}/saves/war", pid), entity("move-2"))
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            watch.take_dirty(),
+            "the subscription must survive a closed gate — the gate suppresses \
+             the REBUILD, not the delivery, or the Saves panel goes stale"
+        );
     }
 
     #[tokio::test]

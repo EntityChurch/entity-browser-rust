@@ -74,6 +74,26 @@ impl ChatWindow {
         participants
     }
 
+    /// Return the window to the default single-peer scratch, dropping the
+    /// delivery pipeline for the conversation it was bound to.
+    ///
+    /// **Leaving is not disconnecting, and not deleting.** The messages stay
+    /// where they are (re-binding the same peer shows the whole history again),
+    /// and the connection stays up — `maintained_remotes` going empty is what
+    /// the app's release sweep reads, and it releases with reason `idle`, which
+    /// stops the auto-reconnect machinery without hanging up on a peer the user
+    /// may still be using in another window.
+    ///
+    /// The subscriptions `bind_one_to_one` added stay registered. They cost a
+    /// rebuild on a write we no longer render, which is wasteful and never
+    /// wrong; dropping them needs a per-prefix unsubscribe `WindowWatch` does
+    /// not have, and inventing one to save a repaint is the wrong trade.
+    fn unbind(&mut self) {
+        self.model = ChatModel::new(self.peer_id.clone());
+        self.delivery = None;
+        self.watch.mark_dirty();
+    }
+
     /// Bind + await delivery subscription — the awaitable form used by tests and
     /// any non-frame-loop caller. (The live window binds via `ChatStartWith`,
     /// which spawns the subscribe off the frame loop.)
@@ -171,6 +191,11 @@ impl WindowView for ChatWindow {
                     delivery.start(peers);
                 }
             }
+            // Back to the picker. Binding used to be one-way — this window could
+            // talk to exactly one peer for the rest of its life.
+            Action::ChatLeave { window_id } if *window_id == self.window_id => {
+                self.unbind();
+            }
             _ => {}
         }
     }
@@ -239,6 +264,87 @@ mod window_tests {
 
         let prefix = model::conversation_messages_prefix(&pid, model::DEFAULT_CONVERSATION);
         assert!(peers.tree_listing(&pid, &prefix).is_empty());
+    }
+
+    /// **Binding used to be one-way.** The start picker renders only while
+    /// unbound, so the first peer a window chatted with was the only peer it
+    /// could ever reach — the escape was to open a second Chat window, and that
+    /// is how it was reported from a real two-device run.
+    ///
+    /// Three claims, because the button's wording makes all three: the picker
+    /// comes back, the maintain intent is withdrawn (the release sweep reads
+    /// `maintained_remotes`, so an intent left standing keeps re-dialing a
+    /// conversation nobody is in), and a leave addressed at a *different*
+    /// window leaves this one alone.
+    #[tokio::test]
+    async fn leaving_a_conversation_returns_the_window_to_the_picker() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        // A real 46-char id — the tree handler validates the leading segment.
+        let other = Peers::new_direct().primary_peer_id().to_string();
+        let dials = crate::dial_markers::DialMarkers::new();
+
+        let mut win = ChatWindow::new(7, pid.clone());
+        win.bind_and_subscribe(&peers, &other).await;
+        assert!(win.render_output(&peers, &dials).bound);
+        assert_eq!(win.maintained_remotes(), vec![other.clone()]);
+
+        win.handle_action(&Action::ChatLeave { window_id: 7 }, &peers);
+
+        let out = win.render_output(&peers, &dials);
+        assert!(!out.bound, "back on the default scratch, so the picker renders again");
+        assert_eq!(out.conversation_id, model::DEFAULT_CONVERSATION);
+        assert!(
+            win.maintained_remotes().is_empty(),
+            "the release sweep reads this — an intent left standing keeps a \
+             conversation nobody is in alive"
+        );
+
+        // A leave meant for another window must not unbind this one.
+        win.bind_and_subscribe(&peers, &other).await;
+        win.handle_action(&Action::ChatLeave { window_id: 999 }, &peers);
+        assert!(win.render_output(&peers, &dials).bound);
+    }
+
+    /// **Leaving is not deleting**, which is the other half of the button's
+    /// promise: switch to a second peer and the first conversation's messages
+    /// are gone from view, switch back and they are all still there.
+    #[tokio::test]
+    async fn switching_peers_swaps_the_conversation_and_keeps_both() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let alice = Peers::new_direct().primary_peer_id().to_string();
+        let bob = Peers::new_direct().primary_peer_id().to_string();
+        let dials = crate::dial_markers::DialMarkers::new();
+
+        let mut win = ChatWindow::new(7, pid.clone());
+        win.bind_and_subscribe(&peers, &alice).await;
+        win.handle_action(&Action::ChatSend { window_id: 7, body: "for alice".into() }, &peers);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let with_alice = win.render_output(&peers, &dials).conversation_id;
+
+        // Leave, then start with somebody else — the flow the missing button
+        // made impossible without opening a second window.
+        win.handle_action(&Action::ChatLeave { window_id: 7 }, &peers);
+        win.bind_and_subscribe(&peers, &bob).await;
+        let out = win.render_output(&peers, &dials);
+        assert_ne!(out.conversation_id, with_alice, "a different pair, a different conversation");
+        assert!(
+            out.messages.is_empty(),
+            "alice's messages do not leak into bob's conversation: {:?}",
+            out.messages.iter().map(|m| m.body.clone()).collect::<Vec<_>>()
+        );
+
+        // ...and going back finds the history where it was left.
+        win.handle_action(&Action::ChatLeave { window_id: 7 }, &peers);
+        win.bind_and_subscribe(&peers, &alice).await;
+        let out = win.render_output(&peers, &dials);
+        assert_eq!(out.conversation_id, with_alice);
+        assert_eq!(
+            out.messages.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(),
+            vec!["for alice"],
+            "leaving a conversation deletes nothing"
+        );
     }
 
     /// The window only offers a remote to `maintain-peer` once the user has

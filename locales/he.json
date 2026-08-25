@@ -92,6 +92,7 @@
   "chat.conversation": "conversation: {id}",
   "chat.empty": "No messages yet — say something.",
   "chat.invalid_peer_id": "Not a valid peer id — paste the peer’s full id.",
+  "chat.leave": "שיחה עם מישהו אחר",
   "chat.no_establisher": "לא ניתן להתחבר בחזרה לעמית הזה — יוכלו למצוא אתכם, אך דבר לא יוכל להתחבר אליכם. החליפו חלון זה לעמית הראשי שלכם.",
   "chat.placeholder": "Message…",
   "chat.reach_no_direct_path": "הרשת הזו זקוקה לממסר — אי אפשר להגיע לאף אחד מהמכשירים ישירות. הוסף ממסר במחבר שדרכו אתם נפגשים.",

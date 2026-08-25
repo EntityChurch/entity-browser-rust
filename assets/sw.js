@@ -13,15 +13,24 @@
 //     trunk) are IMMUTABLE: a given URL's bytes never change across
 //     builds. Cache-first forever is correct and fast.
 //
+//   * The WORKER BIN (`entity-worker.js` / `entity-worker_bg.wasm`) is
+//     immutable-per-build but carries no hash in its URL, because trunk's
+//     `data-type="worker"` pipeline emits fixed filenames. It is cache-first
+//     keyed on the BUILD ID — the main bundle's hash, read out of index.html.
+//     Same-build ⇒ zero bytes; new build ⇒ a miss, so it is fetched exactly
+//     once per deploy. In Worker mode the worker IS the peer, so a stale one
+//     is a stale runtime — which is why the key is the main bundle's hash and
+//     not a timestamp: the two halves of the runtime cannot disagree.
+//     (This was network-first until 2026-08-22, which meant a 17 MB
+//     unconditional download on every load, once per worker. See WORKER_ASSET.)
+//
 //   * Everything else is MUTABLE at a stable URL and MUST be network-first
 //     (falling back to cache only when offline):
 //       - `/` and `index.html` — the app-shell entry. It names the hashed
 //         bundles for THIS build; serving a stale copy pins the old
 //         bundle (and re-ships already-fixed panics — see below).
-//       - `entity-worker.js` / `entity-worker_bg.wasm` / the loader — the
-//         trunk worker bin is NOT content-hashed (fixed filenames, see
-//         `project_trunk_worker_layout`). In Worker mode the worker IS the
-//         peer; a cache-first stale worker is a stale runtime.
+//       - `entity-worker-loader.js` — 6 KB, and it is what carries the
+//         `?log=` level, so there is nothing to win by caching it.
 //       - `sw.js` itself.
 //
 // Why this design exists: a prior cache-first-everything SW served a stale
@@ -54,6 +63,40 @@ const CORE_ASSETS = ['/'];
 // safe to serve cache-first forever. NOT matched: `entity-worker.js`,
 // `entity-worker_bg.wasm`, `entity-worker-loader.js`, `index.html`.
 const HASHED_ASSET = /-[0-9a-f]{8,}(_bg)?\.(js|wasm)$/;
+
+// The worker bin. Trunk's `data-type="worker"` pipeline emits FIXED filenames
+// (the loader references them by a stable URL), so unlike the main bundle these
+// two carry no identity in their path and miss HASHED_ASSET above.
+//
+// That put a **17 MB wasm on the networkFirst path, which fetches with
+// `cache: 'reload'`** — a deliberate, unconditional, HTTP-cache-bypassing
+// download. Correct for a 2 KB shell and catastrophic here: measured across
+// three SW-controlled reloads of one page, the hashed 29.5 MB main bundle was
+// fetched **0** times and `entity-worker_bg.wasm` **3** — once per load, and it
+// multiplies by WORKERS, not pages (boot spawns one, every persisted `Backend*`
+// peer respawns another). Every visitor paid it on every load, forever, and no
+// HTTP cache could help because the fetch opts out of it.
+const WORKER_ASSET = /^\/entity-worker(_bg\.wasm|\.js)$/;
+
+// The build these bytes belong to, recovered from the main bundle's hash.
+//
+// We cannot key the worker on its own URL (it has no hash) and we must not key
+// it on nothing (a cached worker running against a freshly-deployed main bundle
+// is an `entity-wasm-worker-protocol` version mismatch — a WORSE failure than
+// the re-download). Trunk does stamp the main bundle, and index.html names it,
+// so the main bundle's hash IS this build's identity — and keying the worker on
+// it makes the two impossible to disagree, which is strictly stronger than
+// hashing the worker's own bytes would be.
+//
+// Deliberately not `Last-Modified`/`ETag` revalidation: `publish-serve`
+// snapshots with `cp -a` (preserves mtime), so a validator-based scheme can be
+// answered 304 for genuinely new bytes — the exact trap `cache: 'reload'` was
+// introduced to avoid. A content hash cannot be fooled that way.
+const BUNDLE_HASH = /entity-browser-([0-9a-f]{8,})(?:_bg)?\.(?:js|wasm)/;
+
+// Cache key suffix carrying the build id. Not sent to the network — it only
+// ever names an entry in the Cache API.
+const BUILD_KEY_PARAM = '__entity_build';
 
 self.addEventListener('install', (event) => {
     event.waitUntil(
@@ -91,15 +134,96 @@ self.addEventListener('fetch', (event) => {
     if (url.origin !== self.location.origin) return;
 
     // Hashed, immutable asset → cache-first (fast, offline-tolerant, and
-    // the URL guarantees freshness). Everything else (mutable shell +
-    // non-hashed worker bundle) → network-first so a new deploy reaches
-    // the browser on the first online load, falling back to cache offline.
+    // the URL guarantees freshness). The worker bin → cache-first too, but
+    // keyed on the BUILD id rather than on its own (hashless) URL. Everything
+    // else (the mutable shell, the loader, sw.js) → network-first so a new
+    // deploy reaches the browser on the first online load, falling back to
+    // cache offline.
     if (HASHED_ASSET.test(url.pathname)) {
         event.respondWith(cacheFirst(req));
+    } else if (WORKER_ASSET.test(url.pathname)) {
+        event.respondWith(buildScopedAsset(req));
     } else {
         event.respondWith(networkFirst(req));
     }
 });
+
+// This build's id, or null when it cannot be established.
+//
+// Read from the cached shell first: `networkFirst` awaits its `cache.put` for
+// navigations precisely so that by the time a page can spawn a worker, the
+// shell in cache is the one that page is running. Falling back to a fetch
+// covers the first-ever visit, where the navigation happened before this SW
+// took control and nothing was cached.
+async function currentBuildId(cache) {
+    // EXACT match on the canonical key — deliberately not `ignoreSearch`, which
+    // resolves in insertion order and would happily hand back a shell from a
+    // previous build (see the note in `networkFirst`).
+    let shell = await cache.match('/');
+    if (!shell) {
+        shell = await fetch('/index.html', { cache: 'reload' }).catch(() => null);
+        if (shell && shell.ok) await cache.put('/', shell.clone()).catch(() => {});
+    }
+    if (!shell) return null;
+    const body = await shell.clone().text().catch(() => '');
+    const m = BUNDLE_HASH.exec(body);
+    return m ? m[1] : null;
+}
+
+function buildScopedKey(rawUrl, build) {
+    const u = new URL(rawUrl);
+    u.searchParams.set(BUILD_KEY_PARAM, build);
+    return u.toString();
+}
+
+// Cache-first, keyed on (url, build id).
+//
+// A build id we do not recognise is a cache MISS, never a stale hit, so the
+// dangerous direction — serving a worker from a different build than the main
+// bundle — is unreachable by construction rather than by discipline. Entries
+// for superseded builds are swept opportunistically; they are wrong to serve,
+// not wrong to hold, so the sweep never has to win a race.
+//
+// When the build id cannot be established at all we fall back to the previous
+// behaviour exactly (network-first). That is the fail-safe direction: it costs
+// bytes, which is the failure we can afford.
+async function buildScopedAsset(req) {
+    const cache = await caches.open(CACHE_NAME);
+    const build = await currentBuildId(cache);
+    if (!build) return networkFirst(req);
+
+    const key = buildScopedKey(req.url, build);
+    const hit = await cache.match(key);
+    if (hit) return hit;
+
+    const fresh = await fetch(req, { cache: 'reload' }).catch(() => null);
+    if (fresh && fresh.ok) {
+        await cache.put(key, fresh.clone()).catch(() => {});
+        dropSupersededBuilds(cache, req.url, build);
+        return fresh;
+    }
+    // Offline with nothing cached for THIS build. An entry from another build
+    // is not a fallback — it is the protocol mismatch this whole scheme exists
+    // to prevent — so say so rather than booting a worker that cannot talk to
+    // the main bundle.
+    return offline503();
+}
+
+// Drop this asset's entries from every build except `keep`. Fire-and-forget:
+// a stale entry is inert (nothing can match it once the build id moves), so
+// failing or racing here costs disk, never correctness.
+function dropSupersededBuilds(cache, rawUrl, keep) {
+    const path = new URL(rawUrl).pathname;
+    cache.keys().then((keys) => {
+        for (const k of keys) {
+            let u;
+            try { u = new URL(k.url); } catch (_) { continue; }
+            if (u.pathname !== path) continue;
+            if (u.searchParams.get(BUILD_KEY_PARAM) === keep) continue;
+            cache.delete(k).catch(() => {});
+        }
+    }).catch(() => {});
+}
 
 // Cache-first for immutable hashed assets, with a background revalidate as
 // a belt-and-suspenders refresh (the URL changing per build is the real
@@ -132,8 +256,36 @@ async function cacheFirst(req) {
 // true latest bytes on the first online reload — dev server or CDN alike.
 async function networkFirst(req) {
     const cache = await caches.open(CACHE_NAME);
-    const fresh = await fetch(req, { cache: 'reload' }).then((resp) => {
-        if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});
+    const fresh = await fetch(req, { cache: 'reload' }).then(async (resp) => {
+        if (resp && resp.ok) {
+            if (req.mode === 'navigate') {
+                // A navigation is cached under the CANONICAL `/`, never under its own
+                // URL, and the put is AWAITED.
+                //
+                // Both halves are load-bearing and the first one cost a caught bug.
+                // `buildScopedAsset` reads this build's id out of the cached shell; an
+                // earlier version stored navigations under their full URL (`/?worker=1`)
+                // and read them back with `cache.match('/', {ignoreSearch: true})`, which
+                // matches in INSERTION order — so it kept returning the `/` entry written
+                // once at install and never updated. The build id could then never move,
+                // and a deploy served the OLD worker to the NEW bundle: precisely the
+                // protocol mismatch this scheme exists to prevent, and silent. One key,
+                // always rewritten, removes the ambiguity instead of ordering around it.
+                //
+                // Awaiting it is what makes "which build is this page running" an ordered
+                // fact rather than a race: a page cannot spawn a worker before it has
+                // received its own navigation response. A ~50 KB document is not worth a
+                // rule that only sometimes holds.
+                //
+                // Nothing is lost by dropping the per-query entry — the offline path
+                // below already falls back to `/` with `ignoreSearch`, which is how
+                // `?systemrecovery=1` boots offline — and it stops the cache growing an
+                // entry per distinct query string.
+                await cache.put('/', resp.clone()).catch(() => {});
+            } else {
+                cache.put(req, resp.clone()).catch(() => {});
+            }
+        }
         return resp;
     }).catch(() => null);
     if (fresh) return fresh;

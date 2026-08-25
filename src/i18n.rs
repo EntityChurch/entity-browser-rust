@@ -1156,6 +1156,7 @@ pub const EN: &[(&str, Message)] = &[
     ("chat.start_hint", Message::Simple("Connect to a peer (Peer Connections) to start a chat.")),
     ("chat.start_by_id_placeholder", Message::Simple("…or paste a peer id, then Enter")),
     ("chat.invalid_peer_id", Message::Simple("Not a valid peer id — paste the peer’s full id.")),
+    ("chat.leave", Message::Simple("Chat with someone else")),
     (
         "chat.no_establisher",
         Message::Simple(

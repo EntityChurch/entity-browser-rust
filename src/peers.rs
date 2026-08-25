@@ -398,16 +398,29 @@ impl Sdk {
         peer_id: &str,
         prefix: impl Into<String>,
     ) {
+        self.watch_prefix_gated(watch, peer_id, prefix, None);
+    }
+
+    /// [`watch_prefix`](Self::watch_prefix) whose **dirty-marking** is
+    /// conditional on `gate`; the subscription is registered either way. See
+    /// [`crate::window_watch::RebuildGate`].
+    pub fn watch_prefix_gated(
+        &self,
+        watch: &mut WindowWatch,
+        peer_id: &str,
+        prefix: impl Into<String>,
+        gate: Option<crate::window_watch::RebuildGate>,
+    ) {
         let prefix = prefix.into();
         match self {
             Sdk::Direct(pm) => {
                 if let Some(ctx) = pm.peer_context(peer_id) {
-                    watch.subscribe_prefix(ctx, prefix);
+                    watch.subscribe_prefix_gated(ctx, prefix, gate);
                 }
             }
             #[cfg(target_arch = "wasm32")]
             Sdk::Worker(w) => {
-                w.watch_prefix(watch, peer_id.to_string(), prefix);
+                w.watch_prefix_gated(watch, peer_id.to_string(), prefix, gate);
             }
         }
     }
@@ -1682,8 +1695,21 @@ impl Peers {
         peer_id: &str,
         prefix: impl Into<String>,
     ) {
+        self.watch_prefix_gated(watch, peer_id, prefix, None);
+    }
+
+    /// [`watch_prefix`](Self::watch_prefix) whose **dirty-marking** is
+    /// conditional on `gate`; the subscription is registered either way. See
+    /// [`crate::window_watch::RebuildGate`].
+    pub fn watch_prefix_gated(
+        &self,
+        watch: &mut WindowWatch,
+        peer_id: &str,
+        prefix: impl Into<String>,
+        gate: Option<crate::window_watch::RebuildGate>,
+    ) {
         match self.sdk_for(peer_id) {
-            Ok(sdk) => sdk.watch_prefix(watch, peer_id, prefix),
+            Ok(sdk) => sdk.watch_prefix_gated(watch, peer_id, prefix, gate),
             // No-op + loud: subscribing to the primary's tree for an
             // unrouted peer would silently feed a window the wrong
             // data (the subscribe-scoping bug class).
