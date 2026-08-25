@@ -34,6 +34,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod debug;
 mod input;
 mod onscreen;
 
@@ -192,7 +193,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     // on-screen pad — the chrome exists for EVERY program (even input-less Life),
     // so the injection is unconditional, not gated on an input port.
     let style = document.create_element("style")?;
-    style.set_text_content(Some(onscreen::CONTROLS_CSS));
+    style.set_text_content(Some(&format!("{}{}", onscreen::CONTROLS_CSS, debug::DEBUG_CSS)));
     root.append_child(&style)?;
 
     // The meta-chrome bar (`.ah-chrome`) — the slim normal-flow row ABOVE the
@@ -211,6 +212,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     chrome.append_child(&host_controls.bar)?;
     let paused = host_controls.paused.clone();
     let reset_req = host_controls.reset.clone();
+    let step_req = host_controls.step.clone();
     LIVE.with(|v| v.borrow_mut().extend(host_controls.closures));
     root.append_child(&chrome)?;
 
@@ -235,6 +237,16 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     } else {
         None
     };
+
+    // The 🐞 debug overlay (compute topology + a live entity-tree dump) — a
+    // local diagnostic surface, never crossing ③α. The chip joins the meta-
+    // chrome bar; the panel sits below the status caption, hidden by default.
+    let debug_panel = debug::build(&debug::topology_text(&desc));
+    chrome.append_child(&debug_panel.chip)?;
+    root.append_child(&debug_panel.panel)?;
+    let debug_shown = debug_panel.shown.clone();
+    let debug_tree_pre = debug_panel.tree_pre.clone();
+    LIVE.with(|v| v.borrow_mut().extend(debug_panel.closures));
 
     // Clock-driven rate → ms per tick (guarded against a 0 hint). Computed here
     // (not just inside the tick loop below) because the input install below
@@ -278,6 +290,10 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         // meta-chrome bar (they drive the pad by a held reference, so their DOM
         // home is independent of the pad's).
         if let Some(pad) = installed.pad {
+            // Reserve room below the fixed-position pad (CONTROLS_CSS) so
+            // scrolled-to-bottom content (e.g. the debug panel) isn't
+            // permanently hidden behind it.
+            root.set_attribute("data-has-pad", "")?;
             root.append_child(&pad)?;
         }
         if let Some(chips) = installed.chips {
@@ -344,6 +360,17 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
                 }
             }
         };
+        // Refresh the debug panel's live tree dump — only when it's actually
+        // shown (a `tree_listing` + N `get_entity` reads is cheap on the
+        // Direct arm, but there's no reason to pay it every tick for a
+        // hidden panel).
+        let refresh_debug = || {
+            if debug_shown.get() {
+                debug_tree_pre.set_text_content(Some(&debug::tree_dump_text(
+                    &peers, &peer_id, &ns, &desc,
+                )));
+            }
+        };
         loop {
             // Generic RESET (↻): reseed to state₀ — the `Host.Restart` semantics
             // (stop → reseed → resume), performed here because the loop owns the
@@ -361,6 +388,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
                             status_el.as_ref(), status_path.as_deref(),
                         );
                         emit_state(&mut last_hash, ticks);
+                        refresh_debug();
                     }
                     Err(e) => tracing::error!(program = %program_key, "app-host: reset reseed: {e}"),
                 }
@@ -368,8 +396,12 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
 
             // PAUSE (⏸): gate the clock without tearing anything down — hand the
             // shared main thread back and re-check next round (reset still works
-            // while paused). A stopped clock, not a busy spin.
-            if paused.get() {
+            // while paused). STEP (⏭) is the one exception: it consumes the flag
+            // unconditionally every round (so a stray click while running can't
+            // cause a surprise step later after a pause) and, while paused, lets
+            // exactly one tick fall through below instead of sleeping.
+            let stepping = step_req.replace(false);
+            if paused.get() && !stepping {
                 sleep_ms(interval_ms).await;
                 continue;
             }
@@ -412,6 +444,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
             // Emit the evolved state to the host (dedup by content hash — a
             // growing host-side `data-app-state-seq` proves distinct evolution).
             emit_state(&mut last_hash, ticks);
+            refresh_debug();
 
             let elapsed = render_done - tick_start;
             work_ms_accum += elapsed;
@@ -474,26 +507,33 @@ fn render_frame(
 }
 
 /// What [`build_host_controls`] hands back: the control-bar element to mount, the
-/// two flags the tick loop polls (`paused`, `reset`), and the pointer `Closure`s
-/// to hold for the document's lifetime (D12 — never `Closure::forget`).
+/// three flags the tick loop polls (`paused`, `reset`, `step`), and the pointer
+/// `Closure`s to hold for the document's lifetime (D12 — never `Closure::forget`).
 struct HostControls {
     bar: web_sys::Element,
     paused: Rc<Cell<bool>>,
     reset: Rc<Cell<bool>>,
+    /// Debug single-step: advance exactly one tick while paused (§debug
+    /// overlay). Consumed unconditionally every loop round regardless of
+    /// pause state, so a stray click while running can't cause a surprise
+    /// step later after the program is paused.
+    step: Rc<Cell<bool>>,
     closures: Vec<Closure<dyn FnMut(JsValue)>>,
 }
 
 /// Build the generic host run-state control bar: **reset** (↻ — request a reseed
-/// to state₀, the `Host.Restart` semantics) and **pause/resume** (⏸ ⇄ ▶ — gate
-/// the tick clock). These are HOST affordances, not program inputs: reseed and
-/// clock-gating need zero program knowledge, so every program gets the same two,
-/// keeping the chrome internally consistent across programs and (via the bridge)
-/// across frontends. The buttons only set shared flags; the tick loop, which owns
-/// the peer, does the work.
+/// to state₀, the `Host.Restart` semantics), **pause/resume** (⏸ ⇄ ▶ — gate
+/// the tick clock), and **step** (⏭ — advance one tick while paused, for the
+/// debug overlay). These are HOST affordances, not program inputs: reseed,
+/// clock-gating, and stepping need zero program knowledge, so every program
+/// gets the same three, keeping the chrome internally consistent across
+/// programs and (via the bridge) across frontends. The buttons only set
+/// shared flags; the tick loop, which owns the peer, does the work.
 fn build_host_controls() -> HostControls {
     use crate::dom::util;
     let paused = Rc::new(Cell::new(false));
     let reset = Rc::new(Cell::new(false));
+    let step = Rc::new(Cell::new(false));
 
     let bar = util::create_element("div");
     util::set_attr(&bar, "class", "ah-hostbar");
@@ -532,11 +572,28 @@ fn build_host_controls() -> HostControls {
     let _ = pause_btn.add_event_listener_with_callback("click", pause_cb.as_ref().unchecked_ref());
     util::append(&bar, &pause_btn);
 
+    // Step (⏭ — debug: advance exactly one tick while paused). Always
+    // present (consistent chrome), only meaningful while paused — the tick
+    // loop ignores a step request while running.
+    let step_btn = chip("\u{23ED}", "step one tick (while paused)", "data-host-step");
+    let step_cb = {
+        let step = step.clone();
+        Closure::wrap(Box::new(move |e: JsValue| {
+            if let Ok(ev) = e.dyn_into::<web_sys::Event>() {
+                ev.prevent_default();
+            }
+            step.set(true);
+        }) as Box<dyn FnMut(JsValue)>)
+    };
+    let _ = step_btn.add_event_listener_with_callback("click", step_cb.as_ref().unchecked_ref());
+    util::append(&bar, &step_btn);
+
     HostControls {
         bar,
         paused,
         reset,
-        closures: vec![reset_cb, pause_cb],
+        step,
+        closures: vec![reset_cb, pause_cb, step_cb],
     }
 }
 

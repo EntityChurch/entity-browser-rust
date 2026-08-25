@@ -42,6 +42,14 @@ RUN curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINA
 # backend under src-tauri/). Tauri 2 links webkit2gtk-4.1 + the GTK / libsoup /
 # appindicator / rsvg stack on Linux; without these the native `cargo build`
 # in src-tauri fails to find the system libraries.
+#
+# fonts-noto-color-emoji: this base image ships NO emoji/symbol font at all —
+# WebKitGTK renders any pictographic glyph (🐞 🎮) as a tofu box, and several
+# "media control" symbols the UI uses (⏸ ⏭) are ALSO emoji-set codepoints under
+# Unicode, so they tofu too even though they look like plain monochrome icons.
+# Plain arrows (↻ ⇄) survive because they're covered by the base Sans fallback
+# GTK pulls in transitively — this is exactly the class of "green in Firefox
+# (has a system emoji font) ≠ works in WebKitGTK (this container has none)" gap.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libwebkit2gtk-4.1-dev \
@@ -53,6 +61,7 @@ RUN apt-get update \
         libssl-dev \
         pkg-config \
         python3 \
+        fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 # The wasm browser target + the components the repo's rust-toolchain.toml
