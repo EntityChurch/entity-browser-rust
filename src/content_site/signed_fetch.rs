@@ -358,6 +358,37 @@ impl SignedSession {
                     .get(self.pin.layout.content_url(&want), Freshness::Immutable)
                     .await
                     .map_err(|e| declared_fetch_error(&want.to_hex(), e))?;
+                // **Verify before caching, or a corrupted INTERIOR node reads
+                // as "that name is not bound".**
+                //
+                // The leaf is safe without this: upstream hashes it and returns
+                // `ContentHashMismatch`, which is terminal here. An interior
+                // node is not. `VerifyingFetchStore::get` (core/peer) does
+                // `verify_content(..).ok()?` — a mismatch becomes `None`, the
+                // trie walk reads that as "no such branch", `resolve` returns
+                // `Ok(None)`, and with the bad bytes sitting happily in our
+                // cache there is no outstanding miss to re-drive the pump. The
+                // walk therefore ends as `Absent` → `NameError::NotBound`:
+                // *nobody has claimed that name*, said about an origin that
+                // just served bytes matching no hash it committed to.
+                //
+                // Measured on the shipped chain by S3
+                // (`a_single_flipped_byte_in_a_served_body_is_refused_as_a_
+                // verification_failure`), which is why the check is here rather
+                // than assumed. Fixing it upstream would mean giving that store
+                // a way to report a mismatch, which `ContentStore::get` has no
+                // room for — and `core/*` is the kernel, not ours. Our cache is
+                // ours, so the honest place is the moment we admit bytes to it.
+                //
+                // Fifth appearance of one seam: "absent" and "corrupt/withheld"
+                // keep arriving as the same value.
+                if let Err(e) = crate::content_site::http_poll::verify_and_decode(&bytes, &want) {
+                    return Err(SignedFetchError::Verify(format!(
+                        "content {}: {e:?} — the origin served bytes that do not hash to the \
+                         address its own signed root committed to",
+                        want.to_hex()
+                    )));
+                }
                 if let Ok(mut c) = self.state.content.lock() {
                     c.insert(want, bytes);
                 }

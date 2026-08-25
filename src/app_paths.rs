@@ -50,6 +50,53 @@ pub fn app_save_path(app_id: &str, peer_id: &str, set: &str, app_id_in_set: &str
     )
 }
 
+/// Prefix holding every live save for one app-set — [`app_save_path`]'s parent.
+/// Listed by the Saves panel, and **watched** by the Apps window: on the Worker
+/// arm a read only lands in the cache mirror for a subscribed prefix, so an
+/// unwatched save prefix reads empty after a reload.
+/// e.g. `app_saves_prefix(APP_ID, pid, "games")` →
+/// `"/{pid}/app/entity-browser/apps/games/state/"`
+pub fn app_saves_prefix(app_id: &str, peer_id: &str, set: &str) -> String {
+    format!("/{}/app/{}/apps/{}/state/", peer_id, app_id, set)
+}
+
+/// Prefix holding every backup of every app in one set.
+/// e.g. `"/{pid}/app/entity-browser/apps/games/backups/"`
+pub fn app_backups_prefix(app_id: &str, peer_id: &str, set: &str) -> String {
+    format!("/{}/app/{}/apps/{}/backups/", peer_id, app_id, set)
+}
+
+/// Prefix holding one app's backups.
+/// e.g. `"/{pid}/app/entity-browser/apps/games/backups/chess/"`
+pub fn app_backups_for(app_id: &str, peer_id: &str, set: &str, app_id_in_set: &str) -> String {
+    format!(
+        "{}{}/",
+        app_backups_prefix(app_id, peer_id, set),
+        app_id_in_set
+    )
+}
+
+/// One backup of one app's save, keyed by epoch-millisecond stamp.
+///
+/// The stamp is **zero-padded to 13 digits** so the tree's lexicographic
+/// listing order IS chronological order — otherwise `999…` sorts after
+/// `1000…` and the panel shows backups in an order the user cannot explain.
+/// 13 digits covers epoch-ms through the year 2286.
+/// e.g. `"/{pid}/app/entity-browser/apps/games/backups/chess/1755630000000"`
+pub fn app_backup_path(
+    app_id: &str,
+    peer_id: &str,
+    set: &str,
+    app_id_in_set: &str,
+    stamp_ms: u64,
+) -> String {
+    format!(
+        "{}{:013}",
+        app_backups_for(app_id, peer_id, set, app_id_in_set),
+        stamp_ms
+    )
+}
+
 /// Prefix for the site-origin registry — a bootstrap/override cache of
 /// `target_peer_id → static HTTP origin` for fetching another peer's
 /// published content sites over HTTP-poll. App-tier (frontend) state,

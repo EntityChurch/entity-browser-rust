@@ -6,14 +6,18 @@
 //!
 //! - [`format`] — the catalog / bundle / save-state entity formats.
 //! - [`paths`] — the `/{peer}/apps/{set}/…` tree layout.
+//! - [`category`] — the fold from published fine categories to the launcher's
+//!   filter chips.
 
 // The catalog/bundle formats and the `/{peer}/apps/{set}/…` path helpers are the
 // foundation for the ingester + catalog grid (next phase); some are not yet
 // referenced by the de-risk slice (which loads a single bundled fixture).
 #![allow(dead_code)]
 
+pub mod category;
 pub mod format;
 pub mod ingest;
 pub mod paths;
 pub mod read;
 pub mod save_retention;
+pub mod saves;

@@ -1127,6 +1127,7 @@ dependencies = [
  "entity-hash",
  "entity-store",
  "entity-types",
+ "entity-wire",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

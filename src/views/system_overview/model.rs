@@ -55,6 +55,12 @@ pub struct BackendStatus {
     /// whole struct); a field left out here is a toggle whose result never
     /// repaints.
     pub signaling_node: bool,
+    /// The internet-reachable address the router is forwarding here, when one
+    /// is open. **`None` is four situations** — not asked, probing, refused,
+    /// CGNAT — told apart by `port_mapping` + `port_mapping_note`.
+    pub external_addr: Option<String>,
+    pub port_mapping: bool,
+    pub port_mapping_note: Option<String>,
 }
 
 #[derive(Default)]
@@ -222,12 +228,25 @@ impl SystemOverviewModel {
                 .backend
                 .as_ref()
                 .is_some_and(|b| b.signaling_node);
+            // Same reasoning as `signaling_node`: only the IPC poll knows any
+            // of this, and an absent poll means "not asking", which is the
+            // truthful reading of not knowing yet.
+            let (external_addr, port_mapping, port_mapping_note) = inner
+                .backend
+                .as_ref()
+                .map(|b| {
+                    (b.external_addr.clone(), b.port_mapping, b.port_mapping_note.clone())
+                })
+                .unwrap_or((None, false, None));
             BackendStatusView {
                 short_id: short,
                 peer_id: r.peer_id.clone(),
                 status,
                 ws_addr,
                 signaling_node,
+                external_addr,
+                port_mapping,
+                port_mapping_note,
             }
         });
 
@@ -287,6 +306,41 @@ impl SystemOverviewModel {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "rendezvous toggle failed");
+                }
+            }
+            dirty.mark();
+        });
+    }
+
+    /// Turn the backend's port mapping on or off.
+    ///
+    /// **Not optimistic, for the rendezvous toggle's reason and one more.** The
+    /// backend restarts (the lease is bound to the port this run bound), and
+    /// even after the restart the answer is not known yet: asking a router
+    /// takes up to a few seconds and its usual answer is no. So this folds in
+    /// what came back — which deliberately carries **no address** — and the
+    /// real answer arrives on the next poll. Painting an address here would be
+    /// inventing one.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_port_mapping(&self, peer_id: &str, enabled: bool, dirty: crate::window_watch::DirtyFlag) {
+        let peer_id = peer_id.to_string();
+        let inner = std::sync::Arc::downgrade(&self.inner);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::tauri_ipc::set_backend_port_mapping(&peer_id, enabled).await;
+            let Some(inner) = inner.upgrade() else { return };
+            let Ok(mut inner) = inner.lock() else { return };
+            match result {
+                Ok(info) => {
+                    if let Some(b) = inner.backend.as_mut() {
+                        b.port_mapping = info.port_mapping;
+                        b.external_addr = info.external_addr;
+                        b.port_mapping_note = info.port_mapping_note;
+                        b.status = info.status;
+                        b.ws_addr = info.ws_addr;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "port-mapping toggle failed");
                 }
             }
             dirty.mark();
@@ -382,6 +436,9 @@ impl SystemOverviewModel {
                                 status: p.status,
                                 ws_addr: p.ws_addr,
                                 signaling_node: p.signaling_node,
+                                external_addr: p.external_addr,
+                                port_mapping: p.port_mapping,
+                                port_mapping_note: p.port_mapping_note,
                             });
                         if found != inner.backend {
                             inner.backend = found;

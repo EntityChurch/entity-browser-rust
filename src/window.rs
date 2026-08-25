@@ -109,7 +109,8 @@ pub trait WindowView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowCategory {
     /// Everyday surfaces — what people actually open the app for. Expanded on
-    /// first paint. Games, Apps, Content Site, Site Editor, Knowledge Base.
+    /// first paint. Apps, Entity Native Apps, Chat, Site Browser, Site Creator,
+    /// Knowledge Base.
     AppsContent,
     /// The "control panel" — manage your peers, identity, storage, settings.
     /// User-facing but occasional; collapsed by default.
@@ -121,7 +122,7 @@ pub enum WindowCategory {
 
 impl WindowCategory {
     /// Whether this group's disclosure starts open. Only the everyday group is
-    /// expanded on first paint, so a fresh user lands on Games/Apps/Sites.
+    /// expanded on first paint, so a fresh user lands on Apps / Sites.
     pub fn open_by_default(self) -> bool {
         matches!(self, WindowCategory::AppsContent)
     }
@@ -209,6 +210,11 @@ pub fn canonical_window_type(name: &str) -> &str {
         // Renamed 2026-07-13: the System governance window (see
         // TERMINOLOGY-AND-WINDOWS.md).
         "System Backend" => "System Overview", // i18n-ignore — legacy→canonical type keys, not UI
+        // Merged 2026-08-19: Games and Apps are one launcher with category
+        // filters. A persisted workspace, a baked `ENTITY_STARTUP_WINDOW_TYPE`,
+        // or a shell verb naming "Games" must still open something — without
+        // this it resolves to no factory and silently opens nothing.
+        "Games" => "Apps", // i18n-ignore — legacy→canonical type keys, not UI
         other => other,
     }
 }

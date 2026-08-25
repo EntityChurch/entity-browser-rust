@@ -30,6 +30,10 @@ use crate::peers::Peers;
 use crate::window::{WindowId, WindowType, WindowView};
 
 use crate::program_host::bundle::EMBEDDED_PROGRAMS;
+
+/// The save-path / grid key for built-in programs — distinct from the `games`
+/// and `apps` sets even though programs persist no save-state yet.
+pub const PROGRAMS_SET: &str = "programs";
 use crate::window_watch::WindowWatch;
 
 pub struct ProgramsWindow {
@@ -111,6 +115,7 @@ impl WindowView for ProgramsWindow {
             if event == crate::views::games::SELECT_EVENT {
                 let st = crate::views::games::AppViewState {
                     selected: value.clone(),
+                    ..Default::default()
                 };
                 peers.seed_write(&self.peer_id, self.state_path(), st.to_entity());
                 self.watch.mark_dirty();
@@ -142,7 +147,13 @@ impl WindowView for ProgramsWindow {
         // Nothing selected → the launcher grid over the built-in programs. Each
         // program is an L5 app (`APP_TYPE_L5`): the payload is browser-rust in
         // stripped `?app-host={key}` mode, delivered by `src`.
-        let program = EMBEDDED_PROGRAMS.iter().find(|p| p.key == selected);
+        // The shared grid emits `"{set}/{id}"` since the Apps window started
+        // hosting both app-sets; here the set is always [`PROGRAMS_SET`], and a
+        // bare key persisted before that change still resolves.
+        let selected_key = crate::views::games::parse_selection(&selected)
+            .map(|(_, id)| id)
+            .unwrap_or("");
+        let program = EMBEDDED_PROGRAMS.iter().find(|p| p.key == selected_key);
         let Some(program) = program else {
             let entries: Vec<AppEntry> = EMBEDDED_PROGRAMS
                 .iter()
@@ -155,8 +166,30 @@ impl WindowView for ProgramsWindow {
                     ..Default::default()
                 })
                 .collect();
+            let tagged: Vec<(&'static str, &AppEntry)> =
+                entries.iter().map(|e| (PROGRAMS_SET, e)).collect();
             let empty = crate::i18n::t("programs.empty", &[]);
-            crate::dom::games::render_grid(container, ctx, &entries, &title, &empty);
+            // No chips: the built-in program registry is one flat list, and a
+            // filter row over a single category is chrome pretending to be a
+            // control (the same rule `apps::category::chips_for` enforces).
+            crate::dom::games::render_grid(
+                container,
+                ctx,
+                &crate::dom::games::GridView {
+                    entries: &tagged,
+                    // No chips: the built-in program registry is one flat list,
+                    // and a filter row over a single category is chrome
+                    // pretending to be a control (the same rule
+                    // `apps::category::chips_for` enforces).
+                    chips: &[],
+                    filter: "",
+                    // No Saves either: programs persist no save state, so the
+                    // panel would always be empty.
+                    saves_entry: false,
+                    title: &title,
+                    empty_msg: &empty,
+                },
+            );
             return;
         };
 
@@ -169,8 +202,8 @@ impl WindowView for ProgramsWindow {
             peer_id: self.peer_id.clone(),
             // Keys the save path; `programs` keeps it distinct from the games /
             // apps sets even though programs don't persist save-state yet.
-            set: "programs".to_string(),
-            set_label: title,
+            set: PROGRAMS_SET.to_string(),
+            back_label: title,
             size: None,
             game_id: program.key.to_string(),
             game_name: program.name.to_string(),

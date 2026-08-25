@@ -815,6 +815,42 @@ pub const EN: &[(&str, Message)] = &[
              so nobody has to run a server. Restarts the backend, which drops open connections.",
         ),
     ),
+    // Port forwarding. Same shape as the rendezvous row above and for the same
+    // reason: the ON string carries the ADDRESS, because "it's open" is not
+    // something a person can act on and that address is exactly what someone
+    // OUTSIDE this network puts into `connector add`. The three off-states are
+    // deliberately three strings — "not asked", "asking", and "asked and got
+    // nothing, here is why" send a user to three different places, and
+    // collapsing them would rebuild the one-sentence failure on a new surface.
+    ("sysoverview.portmap", Message::Simple("Port forwarding")),
+    (
+        "sysoverview.portmap_on",
+        Message::Simple("Open — reachable from the internet at {addr}"),
+    ),
+    (
+        "sysoverview.portmap_off",
+        Message::Simple("Off — this desktop can be reached only from your own network"),
+    ),
+    ("sysoverview.portmap_asking", Message::Simple("Asking your router…")),
+    (
+        // `{why}` arrives from the backend in English (`MapError`'s Display) —
+        // a known mixed-language edge, tracked as buildout 23f. The frame is
+        // localized because the frame is what most people read; the detail is
+        // kept verbatim because "you are behind carrier-grade NAT" is worth
+        // more to the person who needs it than uniform language is.
+        "sysoverview.portmap_none",
+        Message::Simple("No opening — {why}"),
+    ),
+    ("sysoverview.portmap_start", Message::Simple("Ask my router")),
+    ("sysoverview.portmap_stop", Message::Simple("Stop asking")),
+    (
+        "sysoverview.portmap_hint",
+        Message::Simple(
+            "Asks your router to forward this port so people outside your network can reach \
+             this desktop. Most routers only answer if UPnP or NAT-PMP is switched on. \
+             Restarts the backend, which drops open connections.",
+        ),
+    ),
     (
         "sysoverview.no_backend",
         Message::Simple("No System backend provisioned."),
@@ -973,7 +1009,6 @@ pub const EN: &[(&str, Message)] = &[
     ),
     // -- window titles (title bar + menu label, via i18n::window_title) --
     ("window.entity_tree", Message::Simple("Entity Tree")),
-    ("window.games", Message::Simple("Games")),
     ("window.apps", Message::Simple("Apps")),
     ("window.knowledge_base", Message::Simple("Knowledge Base")),
     ("window.key_manager", Message::Simple("Key Manager")),
@@ -1059,9 +1094,67 @@ pub const EN: &[(&str, Message)] = &[
         "backend_auth.scope_trusted",
         Message::Simple("Full access — every handler, path, and operation on this backend."),
     ),
-    // -- embedded-app launchers (Games / Apps) --
-    ("games.empty", Message::Simple("No games available yet.")),
+    // -- embedded-app launcher (one window over every app-set) --
     ("apps.empty", Message::Simple("No apps available yet.")),
+    // Category filter chips. `apps.filter.<key>` mirrors the chip keys in
+    // `apps::category` — a rename there is a key rename here.
+    ("apps.filter.all", Message::Simple("All")),
+    ("apps.filter.games", Message::Simple("Games")),
+    ("apps.filter.music", Message::Simple("Music")),
+    ("apps.filter.art", Message::Simple("Art")),
+    ("apps.filter.tools", Message::Simple("Tools")),
+    ("apps.filter.other", Message::Simple("Other")),
+    // -- the Saves panel (back up / restore / hand to another peer) --
+    ("saves.open", Message::Simple("Saves")),
+    (
+        "saves.empty",
+        Message::Simple("No app has saved anything on this peer yet."),
+    ),
+    ("saves.col_size", Message::Simple("Size")),
+    ("saves.backup", Message::Simple("Back up")),
+    ("saves.restore", Message::Simple("Restore")),
+    ("saves.send", Message::Simple("Send")),
+    ("saves.backups", Message::Simple("Backups ({n})")),
+    ("saves.no_backups", Message::Simple("No backups yet.")),
+    (
+        "saves.import_heading",
+        Message::Simple("Bring a save from another peer"),
+    ),
+    ("saves.scan", Message::Simple("Find saves")),
+    ("saves.import", Message::Simple("Import")),
+    ("saves.backed_up", Message::Simple("Backed up {app}.")),
+    (
+        "saves.unchanged",
+        Message::Simple("{app} has not changed since its last backup."),
+    ),
+    (
+        "saves.restored",
+        Message::Simple("Restored {app} from a backup."),
+    ),
+    ("saves.backup_dropped", Message::Simple("Backup deleted.")),
+    (
+        "saves.offered",
+        Message::Simple("Offered {app} — that peer can import it now."),
+    ),
+    ("saves.scanned", Message::Simple("{n} save(s) offered.")),
+    ("saves.imported", Message::Simple("Imported {app}.")),
+    (
+        "saves.imported_replacing",
+        Message::Simple("Imported {app}. The save it replaced was backed up first."),
+    ),
+    (
+        "saves.err_no_save",
+        Message::Simple("{app} has no save on this peer."),
+    ),
+    (
+        "saves.err_no_peer",
+        Message::Simple("Connect to a peer first."),
+    ),
+    ("saves.err_offer", Message::Simple("Could not offer it: {why}")),
+    (
+        "saves.err_scan",
+        Message::Simple("Could not ask that peer: {why}"),
+    ),
     // -- site directory rail --
     ("sitedir.sites_menu", Message::Simple("Sites \u{25be}")),
     ("sitedir.sites", Message::Simple("Sites")),

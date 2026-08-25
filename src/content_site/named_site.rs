@@ -1469,6 +1469,325 @@ mod tests {
         );
     }
 
+    /// **S1 + S2 — the host-served pointers are not in the resolution path, and
+    /// a host that lies in them changes nothing.**
+    ///
+    /// This is the security property the whole two-hop design rests on, and
+    /// until now it was a claim about the code rather than a fact about it.
+    /// `system/registry/binding/by-name/{name}.bin` and the `.list` files exist
+    /// on every published tree as **host-served conveniences** — the same class
+    /// of artifact as the by-name pointer whose host-trusted read was F1. Our
+    /// resolver reaches the binding as a **trie key inside the signed root**, so
+    /// those files should be unread. "Should be" is what a test is for.
+    ///
+    /// The attack modelled is the realistic one: the origin is honest about
+    /// bytes it is asked for and dishonest about *which* bytes — it swaps two
+    /// valid, correctly-signed bindings so `entitychurch.org`'s pointer names
+    /// the lab's peer. A consumer reading the pointer gets a different domain
+    /// with the registry's own trust anchor still verifying, because everything
+    /// it then fetches is genuinely signed. Only walking the root closes it.
+    ///
+    /// **The precondition asserts are load-bearing.** If the fixture stopped
+    /// emitting these files, every assertion below would pass vacuously and the
+    /// test would report that a defence works when nothing was attacking it.
+    #[test]
+    fn the_host_served_pointers_are_not_in_the_resolution_path() {
+        let root = tempfile::tempdir().unwrap();
+        let base = serve_dir(root.path().to_path_buf());
+        let (registry_id, expected) = stand_up_at(root.path(), &base);
+
+        let resolve_all = || {
+            let web = HttpWeb::new(&base);
+            let registry = SignedSession::new(
+                PinnedPublisher::from_peer_id(format!("{base}/registry"), &registry_id).unwrap(),
+            );
+            DOMAINS
+                .iter()
+                .map(|(name, _, _)| {
+                    let t = block_on(resolve_name(
+                        &web,
+                        &registry,
+                        name,
+                        now_ms(),
+                        &ResolverPolicy::undeclared(),
+                    ))
+                    .unwrap_or_else(|e| panic!("{name}: {e}"));
+                    ((*name).to_string(), t.peer_id)
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+
+        let before = resolve_all();
+        assert_eq!(before.len(), DOMAINS.len(), "precondition: everything resolves clean");
+
+        // --- the tamper -----------------------------------------------------
+        let by_name = root
+            .path()
+            .join("registry")
+            .join(&registry_id)
+            .join("system/registry/binding/by-name");
+        let a = by_name.join(format!("{}.bin", DOMAINS[0].0));
+        let b = by_name.join(format!("{}.bin", DOMAINS[3].0));
+        assert!(a.exists() && b.exists(), "precondition: the pointers we are attacking exist");
+        let (pa, pb) = (std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+        assert_ne!(pa, pb, "precondition: the two pointers differ, so swapping them is a real lie");
+        // Swap: entitychurch.org's pointer now names the lab's binding. Both are
+        // valid and correctly signed — only the ASSOCIATION is a lie.
+        std::fs::write(&a, &pb).unwrap();
+        std::fs::write(&b, &pa).unwrap();
+        // **Prove the lie landed**, or the assertion below is vacuous. Each
+        // pointer is a small CBOR entity whose `data` is the 33-byte hash of a
+        // binding body, so after the swap `entitychurch.org`'s pointer names the
+        // LAB's binding, byte for byte. A consumer reading it would fetch that
+        // binding, find `name: "lab.entitychurch.org"`, and — if it checks D1 —
+        // fail `NameMismatch`; if it does not, it would return the wrong peer.
+        // Either outcome is a loud failure of `resolve_all` below.
+        assert_eq!(std::fs::read(&a).unwrap(), pb, "the tamper must be on disk");
+        assert_eq!(std::fs::read(&b).unwrap(), pa, "…both ways");
+
+        // And delete every enumeration artifact, to prove they are not consulted
+        // on a resolve either.
+        let mut deleted = 0usize;
+        for dir in ["registry", "foundation", "protocol", "docs", "lab"] {
+            let d = root.path().join(dir);
+            if !d.exists() {
+                continue;
+            }
+            for entry in walk_files(&d) {
+                if entry.extension().is_some_and(|e| e == "list") {
+                    std::fs::remove_file(&entry).unwrap();
+                    deleted += 1;
+                }
+            }
+        }
+        assert!(deleted > 0, "precondition: there were .list files to delete");
+
+        // --- and nothing moved ----------------------------------------------
+        let after = resolve_all();
+        assert_eq!(
+            before, after,
+            "a swapped host-served pointer changed a resolution — the by-name file is being read \
+             instead of the signed root (F1 reopened)"
+        );
+        println!(
+            "host-served pointers: 2 swapped, {deleted} .list deleted, {} names unchanged",
+            after.len()
+        );
+    }
+
+    /// **S3 — one flipped byte in a served body fails the walk closed, and does
+    /// not fail as "that name is not bound".**
+    ///
+    /// The two outcomes are a world apart for whoever is reading the error: a
+    /// verification failure means *this origin handed you bytes it should not
+    /// have*, and an absence means *ask somewhere else*. This repo has now met
+    /// four separate places where "absent" and "corrupt/withheld" arrived as one
+    /// value, so it is asserted rather than assumed.
+    ///
+    /// **Every blob the resolve actually fetches is tampered, one at a time** —
+    /// not "the first one". Under hash-keyed routing there is no stable notion
+    /// of a first blob, and a victim picked by position is how a test ends up
+    /// exercising one code path and reporting on all of them. The clean run's
+    /// own fetch log supplies the list, so the set cannot silently go empty.
+    #[test]
+    fn a_single_flipped_byte_in_a_served_body_is_refused_as_a_verification_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry_id, _) = stand_up(root.path());
+
+        // Which bodies does a clean resolve actually read? Only those can be
+        // tampered meaningfully — flipping a byte in a blob nobody fetches
+        // proves nothing and would fail this test for the wrong reason.
+        let probe = LocalWeb::new(root.path());
+        visit(&probe, &registry_id, DOMAINS[0].0, DOMAINS[0].1).expect("precondition: resolves");
+        let touched: Vec<String> = probe
+            .fetched
+            .borrow()
+            .iter()
+            .filter(|u| u.contains("/content/"))
+            .cloned()
+            .collect();
+        assert!(touched.len() >= 3, "precondition: the walk fetches content blobs: {touched:?}");
+
+        for url in &touched {
+            let path = root.path().join(url.trim_start_matches('/'));
+            let original = std::fs::read(&path).expect("the fetched blob is on disk");
+            // One byte, in the middle — enough to change the hash, small enough
+            // that the bytes are still a plausible body.
+            let mut tampered = original.clone();
+            let mid = tampered.len() / 2;
+            tampered[mid] ^= 0xff;
+            assert_ne!(tampered, original, "precondition: the flip changed the bytes");
+            std::fs::write(&path, &tampered).unwrap();
+
+            let web = LocalWeb::new(root.path());
+            let got = visit(&web, &registry_id, DOMAINS[0].0, DOMAINS[0].1);
+            match &got {
+                Err(NameError::NotBound) => panic!(
+                    "a corrupted body was reported as an unbound NAME ({url}) — 'this origin \
+                     served bad bytes' and 'nobody has claimed that name' are different answers"
+                ),
+                Err(_) => {}
+                Ok((t, _)) => panic!(
+                    "a flipped byte in {url} resolved anyway, to {} — nothing verified it",
+                    t.peer_id
+                ),
+            }
+            std::fs::write(&path, &original).unwrap();
+        }
+        // Restored: the fixture still resolves, so the failures above were the
+        // tamper and not something the loop broke on the way through.
+        let web = LocalWeb::new(root.path());
+        visit(&web, &registry_id, DOMAINS[0].0, DOMAINS[0].1).expect("restored tree resolves");
+        println!("S3: {} fetched blob(s), each one flipped byte = a refused walk", touched.len());
+    }
+
+    /// **S4 — an origin that serves an OLDER signed root mid-session is refused,
+    /// and this is the test the `seq` fix made possible.**
+    ///
+    /// The rollback is the attack that survives everything else: the older tree
+    /// was genuinely published by the registry, so every signature verifies and
+    /// every body hashes to its address. Only monotonic `seq`, remembered across
+    /// calls by the session, can see it — which is why a `SignedSession` is held
+    /// across page loads rather than built per fetch.
+    ///
+    /// Until this session, the emitter published **`seq 0` every time** (a fresh
+    /// in-memory publisher peer per CLI run, so no prior head to chain off), and
+    /// this test could not have been written: both trees would have been zero
+    /// and the floor would have accepted the rollback. It is therefore also the
+    /// consumer-side gate on `RootProjector::adopt_prior_head`.
+    ///
+    /// **Withdrawing a name is the scenario**, not an abstract rollback: v2 drops
+    /// `lab.entitychurch.org`, and serving v1 again would bring it back.
+    #[test]
+    fn a_registry_that_rolls_back_to_an_earlier_publish_is_refused_mid_session() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry_id, _) = stand_up(root.path());
+        let reg_dir = root.path().join("registry");
+
+        // Snapshot v1 (all four names), then publish v2 with one WITHDRAWN.
+        let v1 = root.path().join("registry-v1");
+        copy_dir(&reg_dir, &v1);
+        let kept: Vec<BindingSpec> = DOMAINS[..3]
+            .iter()
+            .map(|(name, slug, seed)| BindingSpec {
+                name: (*name).to_string(),
+                target_peer_id: entity_crypto::Keypair::from_seed([*seed; 32])
+                    .peer_id()
+                    .as_str()
+                    .to_string(),
+                origin: Some((*slug).to_string()),
+            })
+            .collect();
+        let v2 = emit_registry(
+            &reg_dir,
+            entity_crypto::Keypair::from_seed([REGISTRY_SEED; 32]),
+            &kept,
+            DEFAULT_TTL_MS,
+            now_ms(),
+        )
+        .expect("v2 emits");
+        assert_eq!(v2.root.seq, 1, "precondition: the republish advanced the sequence");
+
+        // ONE session, as a browsing tab holds one.
+        let registry = SignedSession::new(
+            PinnedPublisher::from_peer_id("registry", &registry_id).expect("pins"),
+        );
+        let web = LocalWeb::new(root.path());
+        let resolve = |name: &str| {
+            block_on(resolve_name(&web, &registry, name, now_ms(), &ResolverPolicy::undeclared()))
+        };
+
+        // v2 is what the session sees first: three names live, the fourth gone.
+        assert!(resolve(DOMAINS[0].0).is_ok(), "a kept name resolves under v2");
+        assert!(
+            matches!(resolve(DOMAINS[3].0), Err(NameError::NotBound)),
+            "the withdrawn name must be unbound under v2"
+        );
+
+        // The attack: serve v1 again. Same key, valid signatures, lower `seq`.
+        std::fs::remove_dir_all(&reg_dir).unwrap();
+        copy_dir(&v1, &reg_dir);
+
+        let rolled_back = resolve(DOMAINS[3].0);
+        assert!(
+            !matches!(rolled_back, Ok(_)),
+            "an older signed root resurrected a withdrawn name: {rolled_back:?}"
+        );
+        // And it fails as a REGISTRY failure, not as an absence — the origin did
+        // something wrong, and saying "not bound" would hide that.
+        assert!(
+            matches!(&rolled_back, Err(NameError::Registry(_))),
+            "a rollback must surface as an origin failure, got {rolled_back:?}"
+        );
+        println!("S4: v1(seq 0, 4 names) → v2(seq 1, 3 names) → v1 refused: {rolled_back:?}");
+    }
+
+    /// **S5 — the registry key and a publisher key are genuinely separate trust
+    /// roots.**
+    ///
+    /// The whole design rests on two identities: `make registry` signs bindings
+    /// under `{DATA}/registry/keypair`, `make site` signs content under
+    /// `{DATA}/publish/keypair`. If a tree signed by one verified under the
+    /// other's pin, "two identities" would be decoration, and a name-issuer
+    /// would implicitly be able to be the thing it names.
+    ///
+    /// Asserted in both directions, because a one-way check passes for a
+    /// verifier that refuses everything.
+    #[test]
+    fn a_registry_tree_does_not_verify_under_a_publishers_pin_or_the_reverse() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry_id, expected) = stand_up(root.path());
+        let domain_id = expected.get(DOMAINS[0].0).expect("the domain published").clone();
+        assert_ne!(registry_id, domain_id, "precondition: two identities, not one used twice");
+
+        let web = LocalWeb::new(root.path());
+
+        // (a) The registry's tree, pinned as if the DOMAIN had signed it.
+        let wrong = SignedSession::new(
+            PinnedPublisher::from_peer_id("registry", &domain_id).expect("pins"),
+        );
+        let got = block_on(resolve_name(
+            &web,
+            &wrong,
+            DOMAINS[0].0,
+            now_ms(),
+            &ResolverPolicy::undeclared(),
+        ));
+        assert!(got.is_err(), "the registry's root verified under a publisher's key: {got:?}");
+
+        // (b) The domain's tree, pinned as if the REGISTRY had signed it. Same
+        // refusal, so this is a real check and not a verifier that says no to
+        // everything: the right pin resolves the same page in the assertion
+        // after it.
+        let mistaken = SignedSession::new(
+            PinnedPublisher::from_peer_id(DOMAINS[0].1, &registry_id).expect("pins"),
+        );
+        let page = block_on(mistaken.resolve(&web, &format!("sites/{}/pages/index", DOMAINS[0].1)));
+        assert!(page.is_err(), "a domain's root verified under the registry's key: {page:?}");
+
+        let right = SignedSession::new(
+            PinnedPublisher::from_peer_id(DOMAINS[0].1, &domain_id).expect("pins"),
+        );
+        let page = block_on(right.resolve(&web, &format!("sites/{}/pages/index", DOMAINS[0].1)))
+            .expect("the correct pin resolves — otherwise (b) proves nothing");
+        assert!(String::from_utf8_lossy(&page.data).contains(&format!("served by {}", DOMAINS[0].1)));
+    }
+
+    /// Recursive file walk — `std::fs` has no equivalent and the test needs one.
+    fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(dir) else { return out };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk_files(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
+    }
+
     /// **The runbook's failure mode, asserted rather than described.** An origin
     /// that serves perfect bytes with no `Access-Control-Allow-Origin` is
     /// unusable from a browser — `curl` is happy and the app is broken. The

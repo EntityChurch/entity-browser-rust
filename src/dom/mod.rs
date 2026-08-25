@@ -4,6 +4,7 @@
 //! WindowManager's active instances.
 
 pub mod access_log;
+pub mod app_saves;
 pub mod chain_trace;
 pub mod chat;
 pub mod components;
