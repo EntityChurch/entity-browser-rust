@@ -16,6 +16,7 @@
   "label.address": "पता",
   "label.name": "नाम",
   "label.label": "लेबल",
+  "label.ice_servers": "रिफ़्लेक्टर (STUN)",
 
   "status.copied": "कॉपी किया गया ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "कनेक्टर",
   "peerconn.connectors_hint": "नोड जो साथियों का एक-दूसरे से परिचय कराते हैं। केवल मिलन — कभी डेटा पथ में नहीं।",
   "peerconn.connector_none": "अभी कोई कनेक्टर नहीं — मिलने के लिए एक सिग्नलिंग नोड जोड़ें।",
+  "peerconn.ice_help": "वैकल्पिक। अलग-अलग नेटवर्क के बीच कनेक्ट करने के लिए आवश्यक; एक ही नेटवर्क के लिए खाली छोड़ें।",
   "peerconn.connector_add": "कनेक्टर जोड़ें",
   "peerconn.connector_reload_pending": "आपका कनेक्टर चयन रीलोड पर लागू होगा — यह सत्र अभी भी पिछले पर चल रहा है।",
   "peerconn.connector_use": "उपयोग करें",

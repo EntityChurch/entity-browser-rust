@@ -16,6 +16,7 @@
   "label.address": "Adres",
   "label.name": "Nazwa",
   "label.label": "Etykieta",
+  "label.ice_servers": "Reflektory (STUN)",
 
   "status.copied": "Skopiowano ✓",
 
@@ -577,6 +578,7 @@
   "peerconn.connectors": "Łączniki",
   "peerconn.connectors_hint": "Węzły, które przedstawiają sobie węzły sieci. Tylko spotkanie — nigdy w ścieżce danych.",
   "peerconn.connector_none": "Brak łączników — dodaj węzeł sygnalizacyjny do spotkań.",
+  "peerconn.ice_help": "Opcjonalne. Wymagane do łączenia między różnymi sieciami; pozostaw puste dla tej samej sieci.",
   "peerconn.connector_add": "Dodaj łącznik",
   "peerconn.connector_reload_pending": "Wybór konektora zadziała po przeładowaniu — ta sesja nadal używa poprzedniego.",
   "peerconn.connector_use": "Użyj",

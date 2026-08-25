@@ -546,6 +546,41 @@ endif
 	 else echo ">>> e2e-webrtc-nat: FAIL (rc=$$rc) — read the RESULT line above; media crossing is the interesting case"; fi; \
 	 exit $$rc
 
+# The POSITIVE traversal rig: two peers behind two SEPARATE NAT routers, each
+# with its own external address, plus a self-hosted STUN responder on the
+# transit network (`tools/e2e/webrtc-rung1/nat_topology.sh`). This is the
+# topology `e2e-webrtc-nat` cannot build — host masquerade gives both peers ONE
+# external address, which is why a STUN result there is unreadable.
+#
+# GREEN: two peers behind two separate NATs meet at a name and exchange messages
+# over WebRTC, first negotiation, 5 offer deposits/side (inside §11.5's bound of
+# 8), 3/3 runs. This is the gate that says "works across networks" — the shared
+# bridge gates never could.
+#
+# It was red until the RIG was fixed, not the app: the routers were ACCEPTING
+# unsolicited inbound UDP, which confirmed a conntrack entry occupying the exact
+# reply tuple each peer's own outbound punch needed, so both sides were remapped
+# to ports the other had never heard of. A real NAT drops that packet. See
+# nat_topology.sh. The `bucket_full` and `Unknown ufrag` failures that looked
+# like app bugs were downstream of it and vanished with it.
+#
+# Needs `make wasm` first. Builds two small images on first run (a router with
+# iptables, a firefox with iproute2); both are cached afterwards.
+e2e-webrtc-traverse:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-traverse SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-traverse BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-traverse: two peers, two NATs, one STUN — does media cross?"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; TOPOLOGY=nat SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-traverse: PASS — media crossed two NATs (the traversal gate)"; \
+	 else echo ">>> e2e-webrtc-traverse: FAIL (rc=$$rc) — read the '§6.5 establishment' block: the FIRST failure per side is the informative one, the last reports consequences"; fi; \
+	 exit $$rc
+
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
 # Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:
 # the `[profile.dev.package.*]` overrides in Cargo.toml (curve25519-dalek,

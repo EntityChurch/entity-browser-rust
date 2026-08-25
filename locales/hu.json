@@ -16,6 +16,7 @@
   "label.address": "Cím",
   "label.name": "Név",
   "label.label": "Címke",
+  "label.ice_servers": "Reflektorok (STUN)",
 
   "status.copied": "Másolva ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Összekötők",
   "peerconn.connectors_hint": "Csomópontok, amelyek bemutatják egymásnak a társakat. Csak találkozás — soha nem az adatútvonalon.",
   "peerconn.connector_none": "Még nincs összekötő — adjon hozzá egy jelzőcsomópontot.",
+  "peerconn.ice_help": "Opcionális. Különböző hálózatok közötti kapcsolathoz szükséges; azonos hálózaton hagyja üresen.",
   "peerconn.connector_add": "Összekötő hozzáadása",
   "peerconn.connector_reload_pending": "A csatlakozó választása újratöltéskor lép életbe — ez a munkamenet még az előzőt használja.",
   "peerconn.connector_use": "Használat",

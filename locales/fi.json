@@ -16,6 +16,7 @@
   "label.address": "Osoite",
   "label.name": "Nimi",
   "label.label": "Nimike",
+  "label.ice_servers": "Heijastimet (STUN)",
 
   "status.copied": "Kopioitu ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Yhdistäjät",
   "peerconn.connectors_hint": "Solmut, jotka esittelevät vertaiset toisilleen. Vain kohtaaminen — ei koskaan datapolulla.",
   "peerconn.connector_none": "Ei vielä yhdistäjiä — lisää signalointisolmu kohtaamista varten.",
+  "peerconn.ice_help": "Valinnainen. Tarvitaan yhteyteen eri verkkojen välillä; jätä tyhjäksi samassa verkossa.",
   "peerconn.connector_add": "Lisää yhdistäjä",
   "peerconn.connector_reload_pending": "Liittimen valinta astuu voimaan uudelleenlatauksessa — tämä istunto käyttää yhä edellistä.",
   "peerconn.connector_use": "Käytä",

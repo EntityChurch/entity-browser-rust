@@ -16,6 +16,7 @@
   "label.address": "Indirizzo",
   "label.name": "Nome",
   "label.label": "Etichetta",
+  "label.ice_servers": "Riflettori (STUN)",
 
   "status.copied": "Copiato ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Connettori",
   "peerconn.connectors_hint": "Nodi che presentano i peer l'uno all'altro. Solo incontro — mai nel percorso dei dati.",
   "peerconn.connector_none": "Nessun connettore — aggiungi un nodo di segnalazione per incontrarti.",
+  "peerconn.ice_help": "Facoltativo. Necessario per connettersi tra reti diverse; lascia vuoto per la stessa rete.",
   "peerconn.connector_add": "Aggiungi connettore",
   "peerconn.connector_reload_pending": "La scelta del connettore ha effetto al ricaricamento — questa sessione usa ancora il precedente.",
   "peerconn.connector_use": "Usa",

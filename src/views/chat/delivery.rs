@@ -35,8 +35,8 @@
 //! `make e2e-webrtc-chat` refuted that: with the poll demoted to a ~5 s
 //! reconcile, delivery went **asymmetric** — B→A landed (reactively) but A→B
 //! did not within the window. Two things the fast poll was silently doing came
-//! to light: (1) it *retries* establishment (the passing run shows hundreds of
-//! offer deposits, not one), so a single warm-up under-drives the §6.5
+//! to light: (1) it *retries* establishment — each poll `execute` triggers a
+//! fresh `establish_live`, so a single warm-up under-drives the §6.5
 //! rendezvous; (2) it catches writes that the reactive path misses on one
 //! direction. So the poll is **not** a mere hack — it is load-bearing for
 //! establishment-retry and for symmetric delivery over WebRTC. Retiring it needs
@@ -45,6 +45,32 @@
 //! `DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md` / the A-series handoff), not a
 //! cadence tweak. Until then the fast poll stays, now *supplemented* by the
 //! warm-up and the reactive subscribe rather than being the sole trigger.
+//!
+//! **The cost of that retry, measured (`EXTENSION-SIGNALING` §13 item 6).**
+//! Against a peer that can never be reached, this poll re-triggers
+//! `establish_live` at its own cadence — `POLL_EVERY`/60fps = **5 Hz**, measured
+//! 5.0/s — **indefinitely**, because the establisher runs one negotiation and
+//! keeps no memory of having failed (§7.2.1 `caller_owns_retry`), and nothing
+//! here distinguishes "unreachable" from "not yet reachable". Each negotiation
+//! is individually conformant (~1.1 offer deposits; §11.5's bound is per
+//! establishment), so a node sees ~5 deposits/second/conversation from a peer
+//! that is breaking no rule. `make e2e-webrtc-nat` prints the classification;
+//! routed 2026-08-15. **Do not "fix" this by slowing the poll** — that is the
+//! A3 regression above.
+//!
+//! **Fixed upstream, and NOT here — where it lands matters.** The stop condition
+//! is a per-peer bound on §10.3 *seam consultations*, at the ladder call site in
+//! `entity-core-rust` `core/peer` (`RemoteState::note_establish_attempt`; the
+//! time-axis twin of obligation 5's single-flight dial gate), proposed in
+//! `docs/PROPOSAL-ESTABLISH-CONSULTATION-BACKOFF.md` there. Measured on the same
+//! rig: **974 → 28 negotiations** per side per 196s, ~970 → 76 deposits, while
+//! `e2e-webrtc-meet` and `e2e-webrtc-chat` stay at **4 deposits/side, unchanged**
+//! — the first several consultations are free, so a healthy establishment never
+//! reaches the ramp. That is why this file is unchanged: the poll still runs at
+//! 5 Hz and still retries establishment; the *seam* declines to re-run a
+//! negotiation it just ran. **Do not add app-tier "how many times has §6.5
+//! failed" state** — the bound exists one layer down, keyed and scoped correctly,
+//! and a second copy up here would be the `connection_health` mirror again.
 //!
 //! The **poll** feeds `notified_tx`; `pump` fetches each new path
 //! (`tree:get`) and caches it under `/{author}/…` in our own store

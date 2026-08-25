@@ -1,0 +1,17 @@
+# The NAT router for TOPOLOGY=nat — one per peer, so each peer sits behind its
+# OWN external address. That is the property the split rig cannot provide (host
+# masquerade gives both containers ONE external address), and the reason a STUN
+# result there is unreadable.
+#
+# Linux conntrack NAT gives endpoint-independent mapping for UDP — a "cone" NAT
+# in ICE terms — so a server-reflexive candidate learned through it is usable by
+# the counterpart. That is exactly what makes this a traversal test rather than
+# a connectivity accident.
+#
+# It also carries python3 so the same image serves the STUN responder and the
+# in-network dist server; one image, three roles, no extra pulls.
+FROM debian:12-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends iptables iproute2 python3 procps iputils-ping curl \
+ && rm -rf /var/lib/apt/lists/*
+CMD ["sleep", "infinity"]

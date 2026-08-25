@@ -139,13 +139,13 @@ the SVG staged and the body rendered:
 
 ## 5. Running it (no papers repo needed)
 
-The low-level `publish` target already accepts a generic `INGEST=<dir>`:
+The low-level `site` target already accepts a generic `INGEST=<dir>`:
 
 ```bash
 # OUT and INGEST must live UNDER the repo tree — publish runs in-container with
 # only the parent meta dir bind-mounted, so an absolute /tmp path writes to the
 # container's throwaway /tmp and the result never reaches the host.
-make publish INGEST=path/to/your/site-root OUT=dist/my-site
+make site INGEST=path/to/your/site-root OUT=dist/my-site
 ```
 
 Or call the binary directly on the host (native build):
@@ -173,10 +173,10 @@ Status of the fragility classes in the publish targets, prompted by the
 | Edge case | Status |
 |---|---|
 | **`PAPERS_REPO` hardcoded to a path without `render/`** | **FIXED** — `Makefile` now auto-detects the papers checkout (first candidate whose `render/` exists: sibling layout, then meta-nested layout); env/`caps.local.mk` override still wins. Was broken by a prior release-prep "leak scrub" that repointed it to the bare sibling. |
-| **`publish-papers` crashes raw when tools/render absent** | **FIXED** — `publish-papers-preflight` runs *before* the `wasm` build and fails fast with an actionable message (missing `go`/`python3`/`PAPERS_REPO`/`render`), pointing at `make publish` / `make publish-serve`. |
-| **`APPS_REPO` hardcoded sibling (`../entity-apps`)** | **OK / graceful** — same path-assumption class, but degrades to the bundled app seed when absent (`if [ -d … ]`), and exists as a real sibling here. Latent: if `APPS_REPO` exists but `python3`/`build.py` is missing, the `build.py` step in `publish-serve`/`publish-papers` fails hard (unguarded). Low risk; `python3` is near-universal. |
+| **`publish-papers` crashes raw when tools/render absent** | **FIXED** — `publish-papers-preflight` runs *before* the `wasm` build and fails fast with an actionable message (missing `go`/`python3`/`PAPERS_REPO`/`render`), pointing at `make site` / `make site-serve`. |
+| **`APPS_REPO` hardcoded sibling (`../entity-apps`)** | **OK / graceful** — same path-assumption class, but degrades to the bundled app seed when absent (`if [ -d … ]`), and exists as a real sibling here. Latent: if `APPS_REPO` exists but `python3`/`build.py` is missing, the `build.py` step in `site-serve`/`publish-papers` fails hard (unguarded). Low risk; `python3` is near-universal. |
 | **Absolute `OUT=/tmp/x` vanishes** | **DOCUMENTED** — in-container publish only persists paths under the mounted repo tree; an absolute `/tmp` OUT writes the container's throwaway `/tmp`. Caveat added at the `OUT` description; default OUT is repo-relative. |
-| **Host-tool assumptions in `publish-papers`** | **BY DESIGN** — `publish-papers` runs on the host (its `cargo run` is a bare call, not `$(call RUN,…)`), chaining host `go`→`cargo`→`python3` via `/tmp` and ending in a host server. It is explicitly outside the bare-box podman gate (Makefile header). The release publish targets (`publish`, `publish-bare`) ARE containerized and pure-cargo. |
+| **Host-tool assumptions in `publish-papers`** | **BY DESIGN** — `publish-papers` runs on the host (its `cargo run` is a bare call, not `$(call RUN,…)`), chaining host `go`→`cargo`→`python3` via `/tmp` and ending in a host server. It is explicitly outside the bare-box podman gate (Makefile header). The release publish targets (`publish`, `site-bare`) ARE containerized and pure-cargo. |
 | **Malformed / missing manifest** | **CLEAR ERRORS** — missing `site_id` → `"… : missing site_id"`; no manifest anywhere under the ingest root → `"no site.manifest.json at … or anywhere below it"`. |
 
 ---
@@ -190,15 +190,15 @@ generic core is the only path. What the cutover did:
 **KEPT — generic, ships, tool-agnostic:**
 - `entity-browser publish` + `--ingest=<dir>` and all the projection flags.
 - `src/content_site/ingest.rs` and this format. Producer-agnostic by construction.
-- `make publish INGEST=<dir>` / `make publish-bare` — the generic entry points.
+- `make site INGEST=<dir>` / `make site-bare` — the generic entry points.
 - This document + TOOLS.md §4 + the worked example `examples/demo-site/`.
 
 **REMOVED — papers-specific:**
 - The `publish-papers` + `publish-papers-preflight` Makefile targets and every
   `PAPERS_*` / `PRERENDERED` / `SKIP_STAGE0` / `NO_SERVE` variable, plus the
   `go build … render` + `./render/render …` steps (the content team's engine is
-  theirs). To publish your own content, use `make publish INGEST=<dir>` (or
-  `make publish-serve INGEST=<dir>`) per §5 — no external repo.
+  theirs). To publish your own content, use `make site INGEST=<dir>` (or
+  `make site-serve INGEST=<dir>`) per §5 — no external repo.
 
 **Apps — standardized, kept in scope:** the embedded-apps ingest is now driven by
 a single `APPS_DIST=<dir>` parameter pointing at a **pre-built** entity-apps `dist/`

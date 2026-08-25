@@ -41,11 +41,11 @@ publish that peer's tree. They are distinct steps.
 
 ```bash
 # Both sites → static HTML + .bin distribution, then serve:
-make publish INGEST=examples/entity-demo OUT=dist/demo
+make site INGEST=examples/entity-demo OUT=dist/demo
 make serve                       # → http://localhost:8081/sites/
 
 # Full build + publish + serve on one origin:
-make publish-serve INGEST=examples/entity-demo
+make site-serve INGEST=examples/entity-demo
 ```
 
 Point `INGEST` at any directory shaped like this — that is the

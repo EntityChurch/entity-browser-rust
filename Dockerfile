@@ -33,7 +33,18 @@ FROM rust:1.94.1-bookworm
 #
 # TRACKED VERSION — bump deliberately, keep in sync with any host wasm-opt:
 ARG BINARYEN_VERSION=version_119
-RUN curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz" \
+# Arch-resolved, NOT hardcoded x86_64: the release matrix builds linux-arm64 on
+# a native aarch64 runner, where the x86_64 tarball installs "successfully" and
+# then dies at `wasm-opt --version` (exec format error). Upstream publishes
+# aarch64-linux beside x86_64-linux, so resolve from `uname -m` and let the
+# version check below prove the right one landed.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  BINARYEN_ARCH=x86_64 ;; \
+      aarch64) BINARYEN_ARCH=aarch64 ;; \
+      *) echo "no pinned binaryen build for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-${BINARYEN_ARCH}-linux.tar.gz" \
         | tar -xz -C /opt \
     && ln -s "/opt/binaryen-${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt \
     && wasm-opt --version   # fail the image build early if the pin/URL is wrong
@@ -95,5 +106,33 @@ RUN apt-get update \
 # Tauri v2 CLI (drives `cargo tauri build --bundles appimage`). Matches the
 # `tauri = "2"` crate in src-tauri/Cargo.toml.
 RUN cargo install --locked tauri-cli --version '^2'
+
+# --- Windows cross-build toolchain (`make dist DIST_OS=windows`) -------------
+# Produces a real Windows installer FROM LINUX, so a contributor with only
+# make + podman can build the Windows artifact without owning a Windows box.
+# Verified: `Entity Browser_0.8.0_x64-setup.exe`, 9.4M.
+#
+#   clang + lld  — compile and link the PE (rustc's MSVC target needs an
+#                  MSVC-compatible driver; lld-link is the linker)
+#   nsis         — makensis, which Tauri drives to assemble the installer
+#   cargo-xwin   — supplies Microsoft's CRT + Windows SDK headers/libs
+#
+# The SDK itself is NOT baked in: cargo-xwin downloads it on first use (under
+# Microsoft's licence, which the Makefile makes you accept explicitly) into
+# ~/.cache/cargo-xwin — which rides the same persistent cache mount as trunk's,
+# so it downloads once, not per build.
+#
+# NOTE this buys `_setup.exe` (NSIS) only. `.msi` is WiX and tauri-bundler
+# gates it behind `#[cfg(target_os = "windows")]`; it cannot be cross-built,
+# which is why the release workflow still runs a real Windows runner.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        clang \
+        lld \
+        llvm \
+        nsis \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-pc-windows-msvc \
+    && cargo install --locked cargo-xwin
 
 WORKDIR /src/entity-systems

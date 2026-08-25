@@ -16,6 +16,7 @@
   "label.address": "پتہ",
   "label.name": "نام",
   "label.label": "لیبل",
+  "label.ice_servers": "ریفلیکٹرز (STUN)",
 
   "status.copied": "کاپی ہو گیا ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "کنیکٹر",
   "peerconn.connectors_hint": "نوڈز جو ہم مرتبہ کو ایک دوسرے سے متعارف کراتے ہیں۔ صرف ملاقات — کبھی ڈیٹا کے راستے میں نہیں۔",
   "peerconn.connector_none": "ابھی کوئی کنیکٹر نہیں — ملاقات کے لیے سگنلنگ نوڈ شامل کریں۔",
+  "peerconn.ice_help": "اختیاری۔ مختلف نیٹ ورکس کے درمیان جڑنے کے لیے ضروری؛ ایک ہی نیٹ ورک کے لیے خالی چھوڑ دیں۔",
   "peerconn.connector_add": "کنیکٹر شامل کریں",
   "peerconn.connector_reload_pending": "آپ کا کنیکٹر انتخاب دوبارہ لوڈ کرنے پر نافذ ہوگا — یہ سیشن ابھی بھی پچھلے پر چل رہا ہے۔",
   "peerconn.connector_use": "استعمال کریں",

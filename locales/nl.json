@@ -16,6 +16,7 @@
   "label.address": "Adres",
   "label.name": "Naam",
   "label.label": "Label",
+  "label.ice_servers": "Reflectors (STUN)",
 
   "status.copied": "Gekopieerd ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Verbinders",
   "peerconn.connectors_hint": "Knooppunten die peers aan elkaar voorstellen. Alleen ontmoeting — nooit in het datapad.",
   "peerconn.connector_none": "Nog geen verbinders — voeg een signaleringsknooppunt toe.",
+  "peerconn.ice_help": "Optioneel. Nodig om verbinding te maken tussen verschillende netwerken; laat leeg voor hetzelfde netwerk.",
   "peerconn.connector_add": "Verbinder toevoegen",
   "peerconn.connector_reload_pending": "Je connectorkeuze werkt na herladen — deze sessie draait nog op de vorige.",
   "peerconn.connector_use": "Gebruiken",

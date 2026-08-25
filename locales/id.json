@@ -16,6 +16,7 @@
   "label.address": "Alamat",
   "label.name": "Nama",
   "label.label": "Label",
+  "label.ice_servers": "Reflektor (STUN)",
 
   "status.copied": "Disalin ✓",
 
@@ -565,6 +566,7 @@
   "peerconn.connectors": "Konektor",
   "peerconn.connectors_hint": "Simpul yang memperkenalkan rekan satu sama lain. Hanya pertemuan — tidak pernah di jalur data.",
   "peerconn.connector_none": "Belum ada konektor — tambahkan simpul persinyalan untuk bertemu.",
+  "peerconn.ice_help": "Opsional. Diperlukan untuk terhubung antar jaringan berbeda; kosongkan untuk jaringan yang sama.",
   "peerconn.connector_add": "Tambah konektor",
   "peerconn.connector_reload_pending": "Pilihan konektor Anda berlaku setelah muat ulang — sesi ini masih memakai yang sebelumnya.",
   "peerconn.connector_use": "Gunakan",

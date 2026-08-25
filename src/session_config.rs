@@ -217,22 +217,106 @@ pub struct IceServer {
     pub credential: Option<String>,
 }
 
-/// Resolve WebRTC provisioning from a `(node_peer_id, node_addr)` pair. **Both
-/// are required** — a lone address is an unauthenticated rendezvous and a lone
-/// peer-id has nowhere to dial — so any missing/blank half yields `None` (fails
-/// closed, D3). Pure and native-testable; [`webrtc_provisioning_default`] feeds
-/// it the build-time knobs. `ice_servers` / tunables are left at their inert
-/// defaults here (rung-1 host-only); a richer source sets them.
+/// Parse a user-supplied reflector list into [`IceServer`] entries.
+///
+/// Accepts comma- and/or whitespace-separated URLs and returns them as **one**
+/// `IceServer` carrying every URL — which is what an `RTCIceServer` with no
+/// credentials is, and matches `EXTENSION-SIGNALING` §9.3 forbidding reflector
+/// authentication: no credential, nothing to expire, nothing to rotate.
+///
+/// **`turn:`/`turns:` is refused, deliberately and sayably.** A TURN server
+/// needs a username and credential, and there is nowhere to put them here yet.
+/// Accepting one would build an `RTCIceServer` that silently gathers no relay
+/// candidates — a reflector that looks configured and does nothing, which is the
+/// failure mode this whole area keeps producing. Refusing it says so where the
+/// user typed it. Carrying credentials is a later, additive shape.
+///
+/// An empty/blank input is `Ok(vec![])`, not an error: **host-candidates-only is
+/// a legal deployment** (a LAN, our own green gates), never "use a public
+/// default", which would enrol a third party invisibly.
+///
+/// The refusal strings are `i18n-ignore`d, matching the rest of this validation
+/// family (`connectors::validate_node_peer_id`, `connectors::add_connector`),
+/// which is English throughout. Extract the family together or not at all — a
+/// window where two of five refusals are translated reads as a bug.
+pub fn parse_ice_urls(raw: &str) -> Result<Vec<IceServer>, String> {
+    let urls: Vec<String> = raw
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if urls.is_empty() {
+        return Ok(Vec::new());
+    }
+    for u in &urls {
+        let scheme = u.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
+        match scheme.as_deref() {
+            // RFC 7064: `stun:host[:port]` — non-hierarchical, so there is no
+            // `//` and a `stun://…` is a typo worth catching here.
+            Some("stun") | Some("stuns") => {
+                if u.contains("//") {
+                    return Err(format!(
+                        "'{u}' is not a STUN URI — RFC 7064 is stun:host[:port], with no '//'" // i18n-ignore
+                    ));
+                }
+                if u.split_once(':').map(|(_, rest)| rest.trim().is_empty()).unwrap_or(true) {
+                    return Err(format!("'{u}' names no host")); // i18n-ignore
+                }
+            }
+            Some("turn") | Some("turns") => {
+                return Err(format!(
+                    "'{u}' is a TURN server, which needs a username and credential — \
+                     this field carries reflectors (stun:) only" // i18n-ignore
+                ))
+            }
+            _ => {
+                return Err(format!(
+                    "'{u}' is not a reflector URI — expected stun:host[:port]" // i18n-ignore
+                ))
+            }
+        }
+    }
+    Ok(vec![IceServer { urls, username: None, credential: None }])
+}
+
+/// Resolve WebRTC provisioning from a `(node_peer_id, node_addr)` pair, plus the
+/// node's optional reflectors. **Both halves of the node are required** — a lone
+/// address is an unauthenticated rendezvous and a lone peer-id has nowhere to
+/// dial — so any missing/blank half yields `None` (fails closed, D3).
+///
+/// **`ice` is optional and degrades LOUDLY, never silently.** A malformed list
+/// is warned about and dropped rather than failing the whole node: rendezvous
+/// (meet, discovery) rides the node and works fine on host candidates, so a typo
+/// in a reflector must not cost the user their signaling. The place a bad value
+/// is *refused* is where it is typed — `connectors::add_connector` — so this
+/// path only ever sees a legacy row, a URL param, or a build knob.
+///
+/// Pure and native-testable; the three provisioning sources (build knob, URL
+/// query, durable connector registry) all funnel through here, which is what
+/// keeps them from disagreeing about what a provisioned session speaks.
 pub fn resolve_webrtc_provisioning(
     node_peer_id: Option<&str>,
     node_addr: Option<&str>,
+    ice: Option<&str>,
 ) -> Option<WebRtcProvisioning> {
     let clean = |o: Option<&str>| o.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let ice_servers = match ice.map(parse_ice_urls).transpose() {
+        Ok(v) => v.unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "webrtc provisioning: ignoring a malformed reflector list — this session \
+                 will gather HOST CANDIDATES ONLY and will not traverse a NAT"
+            );
+            Vec::new()
+        }
+    };
     match (clean(node_peer_id), clean(node_addr)) {
         (Some(node_peer_id), Some(node_addr)) => Some(WebRtcProvisioning {
             node_peer_id,
             node_addr,
-            ice_servers: Vec::new(),
+            ice_servers,
             poll_interval_ms: None,
             max_deadline_ms: None,
         }),
@@ -507,6 +591,7 @@ pub fn webrtc_provisioning_default() -> Option<WebRtcProvisioning> {
     resolve_webrtc_provisioning(
         option_env!("ENTITY_WEBRTC_NODE_PEER"),
         option_env!("ENTITY_WEBRTC_NODE_ADDR"),
+        option_env!("ENTITY_WEBRTC_ICE"),
     )
 }
 
@@ -560,6 +645,10 @@ pub fn webrtc_provisioning_from_query(query: &str) -> Option<WebRtcProvisioning>
     resolve_webrtc_provisioning(
         query_param(query, "webrtc_node_peer"),
         query_param(query, "webrtc_node"),
+        // `?webrtc_ice=stun:host:3478` — the rung-2 harness channel, same reason
+        // the node halves are here: a per-test reflector has an address the
+        // compile-time knob cannot carry.
+        query_param(query, "webrtc_ice"),
     )
 }
 
@@ -1149,24 +1238,80 @@ mod tests {
         assert!(toggle_fast_paint(&peers, &pid), "back on");
     }
 
+    /// The reflector parser — the whole of what stands between a typed URL and
+    /// an ICE agent that gathers server-reflexive candidates.
+    #[test]
+    fn reflectors_parse_or_say_why_not() {
+        // One server carrying every URL: that is what an RTCIceServer with no
+        // credentials is, and §9.3 forbids authenticating a reflector.
+        let s = parse_ice_urls("stun:a.example:3478, stun:b.example:3478").expect("valid");
+        assert_eq!(s.len(), 1, "credential-free reflectors are ONE server entry");
+        assert_eq!(s[0].urls, vec!["stun:a.example:3478", "stun:b.example:3478"]);
+        assert!(s[0].username.is_none() && s[0].credential.is_none());
+        // Whitespace, commas, or both.
+        assert_eq!(parse_ice_urls("stun:a:1\n stun:b:2").unwrap()[0].urls.len(), 2);
+        // Empty is NOT an error: host-only is a legal deployment, and every
+        // build before this field shipped that way.
+        assert!(parse_ice_urls("").unwrap().is_empty());
+        assert!(parse_ice_urls("   ").unwrap().is_empty());
+
+        // TURN is refused with its reason, not silently accepted into an entry
+        // that would gather no relay candidates.
+        let e = parse_ice_urls("turn:relay.example:3478").expect_err("turn needs credentials");
+        assert!(e.contains("username"), "the refusal must say what is missing: {e}");
+        // RFC 7064 has no authority component; `stun://` is the typo to catch.
+        assert!(parse_ice_urls("stun://a.example:3478").is_err(), "no '//' in a STUN URI");
+        assert!(parse_ice_urls("stun:").is_err(), "names no host");
+        assert!(parse_ice_urls("https://a.example").is_err(), "not a reflector");
+        assert!(parse_ice_urls("a.example:3478").is_err(), "no scheme");
+    }
+
+    /// A malformed list must not cost the user their *rendezvous*. Meet and
+    /// discovery ride the node and work fine on host candidates, so a typo in an
+    /// optional field degrades to host-only (loudly, via `warn!`) rather than
+    /// failing the node. The place it is *refused* is `add_connector`, where
+    /// there is a user to tell.
+    #[test]
+    fn a_bad_reflector_list_costs_reflexivity_not_the_node() {
+        let p = resolve_webrtc_provisioning(
+            Some("node-1"),
+            Some("ws://n:9000"),
+            Some("turn:relay.example:3478"),
+        )
+        .expect("the NODE is still provisioned — rendezvous does not need ICE");
+        assert!(p.ice_servers.is_empty(), "and the session is host-only");
+    }
+
+    #[test]
+    fn provisioning_carries_the_reflectors_it_is_given() {
+        let p = resolve_webrtc_provisioning(
+            Some("node-1"),
+            Some("ws://n:9000"),
+            Some(" stun:stun.example.org:3478 "),
+        )
+        .expect("provisioned");
+        assert_eq!(p.ice_servers.len(), 1);
+        assert_eq!(p.ice_servers[0].urls, vec!["stun:stun.example.org:3478"]);
+    }
+
     #[test]
     fn webrtc_provisioning_requires_both_node_fields() {
         // Both present → provisioned, trimmed.
-        let p = resolve_webrtc_provisioning(Some(" node-1 "), Some(" ws://n:9000 "))
+        let p = resolve_webrtc_provisioning(Some(" node-1 "), Some(" ws://n:9000 "), None)
             .expect("both fields present");
         assert_eq!(p.node_peer_id, "node-1");
         assert_eq!(p.node_addr, "ws://n:9000");
-        assert!(p.ice_servers.is_empty(), "rung-1 default is host-only");
+        assert!(p.ice_servers.is_empty(), "no reflectors named → host-only");
         assert_eq!(p.poll_interval_ms, None);
 
         // A lone half is an unauthenticated rendezvous / a peer with nowhere to
         // dial — fails closed to None, never a half-config on the wire.
-        assert!(resolve_webrtc_provisioning(Some("node-1"), None).is_none(), "addr missing");
-        assert!(resolve_webrtc_provisioning(None, Some("ws://n")).is_none(), "peer-id missing");
+        assert!(resolve_webrtc_provisioning(Some("node-1"), None, None).is_none(), "addr missing");
+        assert!(resolve_webrtc_provisioning(None, Some("ws://n"), None).is_none(), "peer-id missing");
         // Blank counts as absent (a build knob left as "").
-        assert!(resolve_webrtc_provisioning(Some("node-1"), Some("   ")).is_none(), "blank addr");
-        assert!(resolve_webrtc_provisioning(Some(""), Some("ws://n")).is_none(), "blank peer-id");
-        assert!(resolve_webrtc_provisioning(None, None).is_none(), "neither → v10 inert");
+        assert!(resolve_webrtc_provisioning(Some("node-1"), Some("   "), None).is_none(), "blank addr");
+        assert!(resolve_webrtc_provisioning(Some(""), Some("ws://n"), None).is_none(), "blank peer-id");
+        assert!(resolve_webrtc_provisioning(None, None, None).is_none(), "neither → v10 inert");
     }
 
     #[test]

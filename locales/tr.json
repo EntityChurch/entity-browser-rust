@@ -16,6 +16,7 @@
   "label.address": "Adres",
   "label.name": "Ad",
   "label.label": "Etiket",
+  "label.ice_servers": "Yansıtıcılar (STUN)",
 
   "status.copied": "Kopyalandı ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Bağlayıcılar",
   "peerconn.connectors_hint": "Eşleri birbirine tanıtan düğümler. Yalnızca buluşma — asla veri yolunda değil.",
   "peerconn.connector_none": "Henüz bağlayıcı yok — buluşmak için bir sinyalleşme düğümü ekleyin.",
+  "peerconn.ice_help": "İsteğe bağlı. Farklı ağlar arasında bağlanmak için gereklidir; aynı ağ için boş bırakın.",
   "peerconn.connector_add": "Bağlayıcı ekle",
   "peerconn.connector_reload_pending": "Bağlayıcı seçiminiz yeniden yüklemede geçerli olur — bu oturum hâlâ öncekini kullanıyor.",
   "peerconn.connector_use": "Kullan",

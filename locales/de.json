@@ -16,6 +16,7 @@
   "label.address": "Adresse",
   "label.name": "Name",
   "label.label": "Bezeichnung",
+  "label.ice_servers": "Reflektoren (STUN)",
 
   "status.copied": "Kopiert ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Vermittler",
   "peerconn.connectors_hint": "Knoten, die Peers einander vorstellen. Nur Vermittlung — nie im Datenpfad.",
   "peerconn.connector_none": "Noch keine Vermittler — füge einen Signalisierungsknoten hinzu.",
+  "peerconn.ice_help": "Optional. Für Verbindungen über verschiedene Netzwerke erforderlich; für dasselbe Netzwerk leer lassen.",
   "peerconn.connector_add": "Vermittler hinzufügen",
   "peerconn.connector_reload_pending": "Deine Connector-Wahl greift erst nach dem Neuladen — diese Sitzung läuft noch mit dem vorherigen.",
   "peerconn.connector_use": "Verwenden",

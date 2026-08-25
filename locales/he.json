@@ -16,6 +16,7 @@
   "label.address": "כתובת",
   "label.name": "שם",
   "label.label": "תווית",
+  "label.ice_servers": "שרתי STUN",
 
   "status.copied": "הועתק ✓",
 
@@ -577,6 +578,7 @@
   "peerconn.connectors": "מחברים",
   "peerconn.connectors_hint": "צמתים שמציגים עמיתים זה לזה. מפגש בלבד — לעולם לא בנתיב הנתונים.",
   "peerconn.connector_none": "אין עדיין מחברים — הוסף צומת איתות להיפגש דרכו.",
+  "peerconn.ice_help": "אופציונלי. נדרש לחיבור בין רשתות שונות; השאירו ריק עבור אותה רשת בלבד.",
   "peerconn.connector_add": "הוספת מחבר",
   "peerconn.connector_reload_pending": "בחירת המחבר תיכנס לתוקף בטעינה מחדש — ההפעלה הזו עדיין רצה על הקודם.",
   "peerconn.connector_use": "שימוש",

@@ -21,14 +21,21 @@
     ],
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https:; font-src 'self' data:; connect-src 'self' ws: wss: http: https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
-      "dangerousDisableAssetCspModification": ["style-src", "script-src"]
+      "dangerousDisableAssetCspModification": [
+        "style-src",
+        "script-src"
+      ]
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png"
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ]
   }
 }

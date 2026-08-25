@@ -16,6 +16,7 @@
   "label.address": "Dirección",
   "label.name": "Nombre",
   "label.label": "Etiqueta",
+  "label.ice_servers": "Reflectores (STUN)",
 
   "status.copied": "Copiado ✓",
 
@@ -571,6 +572,7 @@
   "peerconn.connectors": "Conectores",
   "peerconn.connectors_hint": "Nodos que presentan a los pares entre sí. Solo encuentro — nunca en la ruta de datos.",
   "peerconn.connector_none": "Aún no hay conectores — añade un nodo de señalización para encontrarte a través de él.",
+  "peerconn.ice_help": "Opcional. Necesario para conectar entre redes distintas; déjalo vacío para la misma red.",
   "peerconn.connector_add": "Añadir conector",
   "peerconn.connector_reload_pending": "Tu elección de conector se aplica al recargar — esta sesión sigue usando el anterior.",
   "peerconn.connector_use": "Usar",

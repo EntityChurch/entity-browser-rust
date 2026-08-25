@@ -66,9 +66,11 @@ pub const CONNECTOR_TYPE: &str = "app/state/connector";
 pub const CONNECTOR_SELECTION_TYPE: &str = "app/state/connector-selection";
 
 /// localStorage key carrying the resolved selection for the pre-peer boot read.
-/// Value is `"{node_peer_id}\u{1f}{node_addr}"` — the same `\x1f` packing the
-/// app uses for multi-field values elsewhere, so it needs no JSON parser on the
-/// boot path.
+/// Value is `"{node_peer_id}\u{1f}{node_addr}\u{1f}{ice}"` — the same `\x1f`
+/// packing the app uses for multi-field values elsewhere, so it needs no JSON
+/// parser on the boot path. The third field is optional on read: a mirror
+/// written before reflectors existed is a host-only deployment, which is exactly
+/// what it meant.
 pub const SELECTION_MIRROR_KEY: &str = "entity_connector";
 
 /// One connector: a signaling node the user has chosen to know about.
@@ -83,6 +85,28 @@ pub struct Connector {
     /// Human label ("my box", "community node"). Free text, may be empty; the
     /// peer-id is the identity, this is only for the UI.
     pub label: String,
+    /// The node's **reflectors** — comma/whitespace-separated `stun:` URIs, as
+    /// typed. Empty means host-candidates-only, which is a legal LAN deployment
+    /// and is what every build shipped before this field existed.
+    ///
+    /// **Why it lives on the connector and not in a global setting.** A
+    /// reflector is deployment infrastructure belonging to the same operator as
+    /// the signaling node: the peer you rendezvous through is the peer who knows
+    /// which STUN server is near you. One connector, one place to configure a
+    /// rendezvous, and switching nodes switches both halves together — a global
+    /// setting would quietly outlive the node it was chosen for.
+    ///
+    /// Stored as raw text rather than parsed servers so what the user typed
+    /// survives a round trip (and so a future URI form does not need a
+    /// migration); parsed at every read by
+    /// [`crate::session_config::parse_ice_urls`], and refused at
+    /// [`add_connector`] so a malformed value never reaches the tree.
+    ///
+    /// This is the field `EXTENSION-SIGNALING` §4.5.1's node-advertised
+    /// reflectors will eventually *fill in* automatically. Until then it is the
+    /// manual half — and it makes NAT traversal reachable today without waiting
+    /// for the advertisement shape to settle.
+    pub ice: String,
 }
 
 /// Reject a node peer-id that could not be a single safe path segment.
@@ -109,7 +133,8 @@ pub fn connector_to_entity(c: &Connector) -> Entity {
     let data = entity_ecf::to_ecf(&entity_ecf::cbor_map! {
         "node_peer_id" => entity_ecf::text(&c.node_peer_id),
         "node_addr" => entity_ecf::text(&c.node_addr),
-        "label" => entity_ecf::text(&c.label)
+        "label" => entity_ecf::text(&c.label),
+        "ice" => entity_ecf::text(&c.ice)
     });
     Entity::new(CONNECTOR_TYPE, data).unwrap()
 }
@@ -134,6 +159,10 @@ pub fn connector_from_entity(entity: &Entity) -> Option<Connector> {
         node_peer_id,
         node_addr,
         label: field("label").unwrap_or_default(),
+        // Absent on every row written before reflectors existed — an empty
+        // string is exactly what those deployments meant (host-only), so a
+        // missing field is a default, never a malformed row.
+        ice: field("ice").unwrap_or_default(),
     })
 }
 
@@ -210,10 +239,15 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<(), 
     if c.node_addr.trim().is_empty() {
         return Err("a connector needs an address to dial".to_string());
     }
+    // Refuse a malformed reflector list HERE — at the surface where it was
+    // typed and can be corrected (D13). Downstream the same value only warns,
+    // because by then there is no user to tell; that split is deliberate.
+    crate::session_config::parse_ice_urls(&c.ice)?;
     let normalized = Connector {
         node_peer_id: c.node_peer_id.trim().to_string(),
         node_addr: c.node_addr.trim().to_string(),
         label: c.label.trim().to_string(),
+        ice: c.ice.trim().to_string(),
     };
     let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &normalized.node_peer_id);
     peers.dispatch_write(peer_id, path, connector_to_entity(&normalized));
@@ -256,21 +290,37 @@ pub fn select_connector(peers: &Peers, peer_id: &str, node_peer_id: &str) -> Res
 /// rule lives in exactly one place.
 pub fn provisioning_from_registry(peers: &Peers, peer_id: &str) -> Option<WebRtcProvisioning> {
     let c = selected_connector(peers, peer_id)?;
-    resolve_webrtc_provisioning(Some(&c.node_peer_id), Some(&c.node_addr))
+    resolve_webrtc_provisioning(Some(&c.node_peer_id), Some(&c.node_addr), Some(&c.ice))
 }
 
 /// Pack a selection for the localStorage mirror. Separated from the write so it
 /// is testable natively — the write itself is wasm-only.
 pub fn pack_mirror(p: &WebRtcProvisioning) -> String {
-    format!("{}\u{1f}{}", p.node_peer_id, p.node_addr)
+    let ice = p
+        .ice_servers
+        .iter()
+        .flat_map(|s| s.urls.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{}\u{1f}{}\u{1f}{}", p.node_peer_id, p.node_addr, ice)
 }
 
 /// Parse a mirror value written by [`pack_mirror`]. Fails closed on anything
-/// that isn't exactly two non-empty halves — a half-written mirror must not
+/// that isn't at least two non-empty halves — a half-written mirror must not
 /// become a half-provisioned rendezvous.
+///
+/// **The third field is optional, and that is a compatibility requirement, not
+/// laxity.** A mirror written before reflectors existed has two fields; reading
+/// it as host-only is exactly what it meant. Rejecting it would strand every
+/// returning user on the pre-peer boot path — which is precisely the read this
+/// mirror exists to serve.
 pub fn unpack_mirror(raw: &str) -> Option<WebRtcProvisioning> {
-    let (id, addr) = raw.split_once('\u{1f}')?;
-    resolve_webrtc_provisioning(Some(id), Some(addr))
+    let mut parts = raw.split('\u{1f}');
+    let id = parts.next()?;
+    let addr = parts.next()?;
+    let ice = parts.next().unwrap_or("");
+    resolve_webrtc_provisioning(Some(id), Some(addr), Some(ice))
 }
 
 // ---------------------------------------------------------------------------
@@ -554,7 +604,12 @@ pub(crate) mod tests {
     use super::*;
 
     fn conn(id: &str, addr: &str) -> Connector {
-        Connector { node_peer_id: id.to_string(), node_addr: addr.to_string(), label: String::new() }
+        Connector {
+            node_peer_id: id.to_string(),
+            node_addr: addr.to_string(),
+            label: String::new(),
+            ice: String::new(),
+        }
     }
 
     /// Wait until `done` holds. Writes here go through `dispatch_write` (L1,
@@ -581,8 +636,45 @@ pub(crate) mod tests {
             node_peer_id: "2KNode".to_string(),
             node_addr: "ws://10.0.0.4:9000".to_string(),
             label: "my box".to_string(),
+            ice: "stun:stun.example.org:3478".to_string(),
         };
         assert_eq!(connector_from_entity(&connector_to_entity(&c)), Some(c));
+    }
+
+    /// A row written before reflectors existed must still read — as host-only,
+    /// which is exactly what it meant. Anything else strands every returning
+    /// user's registry on upgrade.
+    #[test]
+    fn a_connector_written_before_reflectors_still_reads() {
+        let legacy = Entity::new(
+            CONNECTOR_TYPE,
+            entity_ecf::to_ecf(&entity_ecf::cbor_map! {
+                "node_peer_id" => entity_ecf::text("2KNode"),
+                "node_addr" => entity_ecf::text("ws://10.0.0.4:9000"),
+                "label" => entity_ecf::text("my box")
+            }),
+        )
+        .unwrap();
+        let c = connector_from_entity(&legacy).expect("a pre-reflector row is not malformed");
+        assert_eq!(c.node_addr, "ws://10.0.0.4:9000");
+        assert_eq!(c.ice, "", "absent means host-only, the posture it shipped with");
+    }
+
+    /// The refusal lands where the user typed it (D13) — and the row does not
+    /// reach the tree, so the downstream warn-and-degrade path never sees it.
+    #[tokio::test]
+    async fn a_malformed_reflector_is_refused_at_the_surface() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let bad = Connector {
+            node_peer_id: "2KNode".to_string(),
+            node_addr: "ws://n:9".to_string(),
+            label: String::new(),
+            ice: "turn:relay.example:3478".to_string(),
+        };
+        let err = add_connector(&peers, &me, &bad).expect_err("turn has no credential carrier");
+        assert!(err.contains("username"), "the reason must be sayable: {err}");
+        assert!(read_connectors(&peers, &me).is_empty(), "and nothing was written");
     }
 
     #[test]
@@ -816,6 +908,7 @@ pub(crate) mod tests {
             node_peer_id: node_pid.clone(),
             node_addr: format!("memory://{node_pid}"),
             label: "the node".to_string(),
+            ice: String::new(),
         };
 
         let no_route = advertise(&peers, &me, &node_pid).await;
@@ -911,6 +1004,29 @@ pub(crate) mod tests {
             max_deadline_ms: None,
         };
         assert_eq!(unpack_mirror(&pack_mirror(&p)), Some(p));
+
+        // The reflectors survive the boot mirror. Without this the pre-peer
+        // boot path — the ONLY read that happens before a tree exists — would
+        // provision the node and silently drop its ICE, so a returning user
+        // would be host-only until something re-synced the registry.
+        let with_ice = WebRtcProvisioning {
+            node_peer_id: "2KNode".to_string(),
+            node_addr: "ws://n:9".to_string(),
+            ice_servers: vec![crate::session_config::IceServer {
+                urls: vec!["stun:a.example:3478".to_string(), "stun:b.example:3478".to_string()],
+                username: None,
+                credential: None,
+            }],
+            poll_interval_ms: None,
+            max_deadline_ms: None,
+        };
+        assert_eq!(unpack_mirror(&pack_mirror(&with_ice)), Some(with_ice));
+
+        // A two-field mirror written before reflectors existed reads as
+        // host-only rather than failing — same compatibility rule as the row.
+        let legacy = unpack_mirror("2KNode\u{1f}ws://n:9").expect("a legacy mirror still reads");
+        assert!(legacy.ice_servers.is_empty());
+
         assert!(unpack_mirror("").is_none());
         assert!(unpack_mirror("2KNodeOnly").is_none(), "an id with no address");
         assert!(unpack_mirror("2KNode\u{1f}").is_none(), "an address that is blank");

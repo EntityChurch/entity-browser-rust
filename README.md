@@ -169,9 +169,26 @@ always run on the host (they need host `python3`):
 make serve         # serve dist/ on :8081 (plain browser, no Tauri)
 make build-serve   # build release WASM then serve the latest
 make tauri-run     # build WASM + Tauri shell, launch with stdout logs
-make publish-serve # publish all demo sites + serve one origin
+make site-serve    # publish all demo sites + serve one origin
 make native        # prints deprecation redirect (active modes are wasm / tauri)
 ```
+
+### Building a release
+
+`make dist` builds the shippable installers **for the machine you run it on** —
+`.deb` + `.rpm` + `.AppImage` on Linux, `.dmg` on macOS, `.msi` + NSIS `.exe` on
+Windows — into `artifacts/`. `make dist-web` produces the browser SPA as a
+tarball you can unpack onto any static origin.
+
+```bash
+make dist          # containerized (Linux); host needs only make + podman
+make dist-native   # host toolchain instead — the only path on macOS/Windows
+```
+
+Our tagged releases run exactly these recipes across five platforms
+(`.github/workflows/release.yml`), so nothing about building this project
+depends on our CI. Full detail — how a release is cut, and how to verify a
+download — is in [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
 
 The browser E2E suite (`make e2e-worker`) is gated behind the `e2e` cargo
 feature and needs an external Selenium-firefox container on `:4444` (see

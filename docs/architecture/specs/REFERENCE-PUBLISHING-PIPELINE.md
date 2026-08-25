@@ -2,10 +2,10 @@
 
 > **⚠ Partially superseded (pipeline cutover).** The `render → tree → CDN → live`
 > *arc* below is still accurate, but the **papers-specific Makefile wrapper it
-> uses as its running example is gone** — `make publish-papers`, `publish-papers-preflight`,
+> uses as its running example is gone** — `make site-papers`, `publish-papers-preflight`,
 > and every `PAPERS_*` / `PRERENDERED` / `SKIP_STAGE0` variable were removed, and
 > apps ingest is now the single `APPS_DIST=<dir>` parameter. The generic pipeline is
-> unchanged: use `make publish INGEST=<dir>` / `make publish-serve INGEST=<dir>`.
+> unchanged: use `make site INGEST=<dir>` / `make site-serve INGEST=<dir>`.
 > For the current, tool-agnostic contract see
 > **`docs/architecture/guides/PUBLISH-INGEST-FORMAT.md`** (§7 records the cutover).
 > Treat the `publish-papers` command examples here as historical.
@@ -60,7 +60,7 @@ origin map — see §5).
 | Stage | Owner | Artifact in / out |
 |---|---|---|
 | Author + render content | **papers team** | `paper.md` + `output/figures/*` → a site dir (`site.manifest.json`, `pages/`, `assets/figures/`) |
-| Ingest + publish | **this app** (`make publish-papers`) | site dir → `dist/` (static) |
+| Ingest + publish | **this app** (`make site-papers`) | site dir → `dist/` (static) |
 | Push to CDN | **DevOps** (not yet wired) | `dist/` → R2 bucket behind a CDN |
 | Run the site | **the browser** | static files → live SPA |
 
@@ -69,7 +69,7 @@ ingest surface described in §4 and §8. The app↔DevOps boundary is §7.
 
 ## 3. The command
 
-`make publish-papers` (`Makefile:235`) is the whole pipeline. It expands to:
+`make site-papers` (`Makefile:235`) is the whole pipeline. It expands to:
 
 ```bash
 # 1. build the papers render engine
@@ -162,7 +162,7 @@ per-domain difference. Fetched at boot (`src/deployment_config.rs`), precedence
   `peer_creation_enabled: false`.
 
 **Portability — the contract (DevOps):** publish with **empty `--live`** (the
-default of `make publish-papers` / `publish-serve`). The `origins` value is `""`,
+default of `make site-papers` / `site-serve`). The `origins` value is `""`,
 the static→live banner is root-relative, and the **same `dist/` is portable to
 any URL served at the domain ROOT** — localhost, R2 preview, R2 prod — **with no
 rebuild and no domain to specify**. This is the intended operator story: pop out
@@ -318,7 +318,7 @@ hardening if a corpus ever ships escaping relative links.
 
 | Want | Do |
 |---|---|
-| Publish billslab + serve locally | `make publish-papers` (portable, same-origin) |
+| Publish billslab + serve locally | `make site-papers` (portable, same-origin) |
 | Portable bundle for any CDN/R2 **root** | the default — **empty `--live`** (same-origin); drop `dist/` anywhere at the root |
 | Deliberately pin the banner/config to one origin | `--live=https://<public-url>` (rare; not for cross-domain nav — that's registry/resolver) |
 | Locked content-site deployment | `--surface=site --locked` |

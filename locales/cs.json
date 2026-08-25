@@ -16,6 +16,7 @@
   "label.address": "Adresa",
   "label.name": "Jméno",
   "label.label": "Štítek",
+  "label.ice_servers": "Reflektory (STUN)",
 
   "status.copied": "Zkopírováno ✓",
 
@@ -577,6 +578,7 @@
   "peerconn.connectors": "Konektory",
   "peerconn.connectors_hint": "Uzly, které si vzájemně představí protějšky. Pouze zprostředkování — nikdy v datové cestě.",
   "peerconn.connector_none": "Zatím žádné konektory — přidejte signalizační uzel pro zprostředkování.",
+  "peerconn.ice_help": "Volitelné. Potřebné pro spojení mezi různými sítěmi; pro stejnou síť nechte prázdné.",
   "peerconn.connector_add": "Přidat konektor",
   "peerconn.connector_reload_pending": "Volba konektoru se projeví po znovunačtení — tato relace stále běží na předchozím.",
   "peerconn.connector_use": "Použít",

@@ -519,7 +519,7 @@ fn render_more_dropdown(bar: &Element, overflow: &[&NavLink], ctx: &DomCtx, host
 /// **Why no "static link" here (removed):** a static permalink is
 /// peer-qualified (`/sites/{peer}/…`), but the live app shows ITS OWN
 /// (ephemeral, localStorage) system peer's site, which is NOT statically
-/// published anywhere the app knows — `make publish`/`publish-serve` exports a
+/// published anywhere the app knows — `make site`/`site-serve` exports a
 /// SEPARATE ephemeral publish peer. So a static link built from the live
 /// peer-id 404s (the reported bug). A working live→static link needs the
 /// hosting-identity piece: the live peer publishing its OWN tree, or a registry

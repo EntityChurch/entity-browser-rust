@@ -1,0 +1,15 @@
+# The selenium firefox image plus `ip`.
+#
+# TOPOLOGY=nat puts each browser on an INTERNAL network whose only way out is a
+# router container, and podman cannot hand a container a default route through
+# another container — so the route has to be set from inside, which needs
+# iproute2 the base image does not carry. Nothing else differs: same browser,
+# same geckodriver, same version pin as the other topologies, so a result here
+# is comparable with the shared-bridge gates.
+ARG BASE=docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404
+FROM ${BASE}
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+USER seluser
