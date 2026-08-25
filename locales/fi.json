@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Tämä asiakirja on tyhjä — sivulla ei ole sisältöä.",
   "contentsite.enter_peer": "Siirry vertaiseen",
   "contentsite.err_no_manifest": "Ei sivustomanifestia kohteessa '{site}' (vertainen: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Kohteessa '{site}' ei ole julkaistu mitään osoitteessa {origin}. Tämä sivusto kuuluu toiselle vertaiselle ({peer}) ja sitä isännöidään todennäköisesti omassa verkkotunnuksessaan — avaa se siellä tai etsi se kohteesta Rekisteriselain.",
   "contentsite.err_page_not_found": "Sivua '{page}' ei löytynyt sivustolta '{site}'.",
   "contentsite.err_unreachable": "Vertaiseen '{peer}' ei saatu yhteyttä — sille ei ole rekisteröityä reittiä.",
   "contentsite.loading_page": "_Ladataan live-sivua…_",

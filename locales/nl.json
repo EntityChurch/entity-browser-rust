@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Dit document is leeg — de pagina bevat geen inhoud.",
   "contentsite.enter_peer": "Peer betreden",
   "contentsite.err_no_manifest": "Geen sitemanifest op '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Er is niets gepubliceerd op '{site}' op {origin}. Deze site hoort bij een andere peer ({peer}) en wordt waarschijnlijk op een eigen domein gehost — open hem daar, of zoek hem in de Registerbrowser.",
   "contentsite.err_page_not_found": "Pagina '{page}' niet gevonden op site '{site}'.",
   "contentsite.err_unreachable": "Kon peer '{peer}' niet bereiken — er is geen route voor geregistreerd.",
   "contentsite.loading_page": "_De live pagina wordt geladen…_",

@@ -117,6 +117,7 @@
   "contentsite.document_empty": "Tento dokument je prázdný — stránka neobsahuje žádný obsah.",
   "contentsite.enter_peer": "Vstoupit do peera",
   "contentsite.err_no_manifest": "Žádný manifest webu '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Na '{site}' není na {origin} nic publikováno. Tento web patří jinému peeru ({peer}) a je pravděpodobně hostován na vlastní doméně — otevřete jej tam nebo jej najděte v Prohlížeč registru.",
   "contentsite.err_page_not_found": "Stránka '{page}' nebyla na webu '{site}' nalezena.",
   "contentsite.err_unreachable": "Nepodařilo se dosáhnout peera '{peer}' — není pro něj registrována žádná trasa.",
   "contentsite.loading_page": "_Načítání živé stránky…_",

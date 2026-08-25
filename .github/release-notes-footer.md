@@ -44,7 +44,7 @@ Each artifact also carries GitHub build provenance — which workflow, at which
 commit, produced it:
 
 ```sh
-gh attestation verify entity-browser_0.8.0_linux_x64.deb \
+gh attestation verify entity-browser_0.9.0_linux_x64.deb \
   --repo EntityChurch/entity-browser-rust
 ```
 

@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Dieses Dokument ist leer — die Seite enthält keinen Inhalt.",
   "contentsite.enter_peer": "Peer betreten",
   "contentsite.err_no_manifest": "Kein Site-Manifest unter '{site}' (Peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Unter '{site}' ist auf {origin} nichts veröffentlicht. Diese Site gehört zu einem anderen Peer ({peer}) und wird wahrscheinlich auf einer eigenen Domain gehostet — öffnen Sie sie dort oder suchen Sie sie im Register-Browser.",
   "contentsite.err_page_not_found": "Seite '{page}' wurde in der Site '{site}' nicht gefunden.",
   "contentsite.err_unreachable": "Peer '{peer}' nicht erreichbar — es ist keine Route für ihn registriert.",
   "contentsite.loading_page": "_Live-Seite wird geladen…_",

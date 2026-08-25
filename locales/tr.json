@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Bu belge boş — sayfa hiçbir içerik taşımıyor.",
   "contentsite.enter_peer": "Peer'e gir",
   "contentsite.err_no_manifest": "'{site}' konumunda site manifesti yok (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "'{site}' konumunda {origin} üzerinde hiçbir şey yayımlanmamış. Bu site başka bir eşe ({peer}) ait ve muhtemelen kendi alan adında barındırılıyor — oradan açın veya Kayıt Tarayıcısı içinde bulun.",
   "contentsite.err_page_not_found": "'{page}' sayfası '{site}' sitesinde bulunamadı.",
   "contentsite.err_unreachable": "'{peer}' peer'ine ulaşılamadı — onun için kayıtlı bir rota yok.",
   "contentsite.loading_page": "_Canlı sayfa yükleniyor…_",

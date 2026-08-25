@@ -116,6 +116,7 @@
   "contentsite.document_empty": "یہ دستاویز خالی ہے — اس صفحے میں کوئی مواد نہیں ہے۔",
   "contentsite.enter_peer": "پیئر میں داخل ہوں",
   "contentsite.err_no_manifest": "'{site}' پر کوئی سائٹ مینیفیسٹ نہیں (پیئر: {peer})۔",
+  "contentsite.err_no_manifest_foreign": "{origin} پر '{site}' کے نام سے کچھ شائع نہیں ہوا۔ یہ سائٹ کسی دوسرے پیئر ({peer}) کی ہے اور غالباً اپنے ہی ڈومین پر ہوسٹ ہے — اسے وہاں کھولیں، یا رجسٹری براؤزر میں تلاش کریں۔",
   "contentsite.err_page_not_found": "سائٹ '{site}' میں صفحہ '{page}' نہیں ملا۔",
   "contentsite.err_unreachable": "پیئر '{peer}' تک نہیں پہنچا جا سکا — اس کے لیے کوئی روٹ رجسٹرڈ نہیں۔",
   "contentsite.loading_page": "_لائیو صفحہ لوڈ ہو رہا ہے…_",

@@ -117,6 +117,7 @@
   "contentsite.document_empty": "Цей документ порожній — на сторінці немає вмісту.",
   "contentsite.enter_peer": "Увійти в пір",
   "contentsite.err_no_manifest": "Немає маніфесту сайту за '{site}' (пір: {peer}).",
+  "contentsite.err_no_manifest_foreign": "За адресою '{site}' на {origin} нічого не опубліковано. Цей сайт належить іншому вузлу ({peer}) і, ймовірно, розміщений на власному домені — відкрийте його там або знайдіть у розділі «Браузер реєстру».",
   "contentsite.err_page_not_found": "Сторінку '{page}' не знайдено на сайті '{site}'.",
   "contentsite.err_unreachable": "Не вдалося зв'язатися з піром '{peer}' — для нього не зареєстровано маршруту.",
   "contentsite.loading_page": "_Завантаження живої сторінки…_",

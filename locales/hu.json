@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Ez a dokumentum üres — az oldalon nincs tartalom.",
   "contentsite.enter_peer": "Belépés a peerbe",
   "contentsite.err_no_manifest": "Nincs webhelymanifeszt itt: '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "A(z) '{site}' helyen semmi nincs közzétéve a következőn: {origin}. Ez az oldal egy másik társhoz ({peer}) tartozik, és valószínűleg saját domainen található — nyisd meg ott, vagy keresd meg itt: Jegyzékböngésző.",
   "contentsite.err_page_not_found": "A(z) '{page}' oldal nem található a(z) '{site}' webhelyen.",
   "contentsite.err_unreachable": "A(z) '{peer}' peer nem érhető el — nincs hozzá regisztrált útvonal.",
   "contentsite.loading_page": "_Az élő oldal betöltése…_",

@@ -117,6 +117,7 @@
   "contentsite.document_empty": "Этот документ пуст — на странице нет содержимого.",
   "contentsite.enter_peer": "Войти в пир",
   "contentsite.err_no_manifest": "Нет манифеста сайта по '{site}' (пир: {peer}).",
+  "contentsite.err_no_manifest_foreign": "По адресу '{site}' на {origin} ничего не опубликовано. Этот сайт принадлежит другому узлу ({peer}) и, вероятно, размещён на собственном домене — откройте его там или найдите в разделе «Браузер реестра».",
   "contentsite.err_page_not_found": "Страница '{page}' не найдена на сайте '{site}'.",
   "contentsite.err_unreachable": "Не удалось связаться с пиром '{peer}' — для него не зарегистрирован маршрут.",
   "contentsite.loading_page": "_Загрузка живой страницы…_",

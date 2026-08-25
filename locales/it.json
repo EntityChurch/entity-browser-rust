@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Questo documento è vuoto — la pagina non contiene contenuti.",
   "contentsite.enter_peer": "Entra nel peer",
   "contentsite.err_no_manifest": "Nessun manifest del sito in '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Non c'è nulla pubblicato in '{site}' su {origin}. Questo sito appartiene a un altro peer ({peer}) ed è probabilmente ospitato sul proprio dominio: aprilo lì oppure cercalo nel Browser del registro.",
   "contentsite.err_page_not_found": "Pagina '{page}' non trovata nel sito '{site}'.",
   "contentsite.err_unreachable": "Impossibile raggiungere il peer '{peer}' — non è registrata alcuna rotta per esso.",
   "contentsite.loading_page": "_Caricamento della pagina dal vivo…_",

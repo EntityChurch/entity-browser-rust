@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Este documento está vacío — la página no contiene ningún contenido.",
   "contentsite.enter_peer": "Entrar al par",
   "contentsite.err_no_manifest": "No hay manifiesto de sitio en '{site}' (par: {peer}).",
+  "contentsite.err_no_manifest_foreign": "No hay nada publicado en '{site}' en {origin}. Este sitio pertenece a otro par ({peer}) y probablemente esté alojado en su propio dominio: ábrelo allí o búscalo en el Navegador del registro.",
   "contentsite.err_page_not_found": "No se encontró la página '{page}' en el sitio '{site}'.",
   "contentsite.err_unreachable": "No se pudo alcanzar el par '{peer}' — no hay ninguna ruta registrada para él.",
   "contentsite.loading_page": "_Cargando la página en vivo…_",

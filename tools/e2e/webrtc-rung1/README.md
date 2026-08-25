@@ -2,8 +2,8 @@
 
 Proof-of-concept harness that drives **two real entity browser peers** through the §6.5 WebRTC
 establishment path and reports where it gets to. Built 2026-08-04 while validating the WebRTC leg;
-it is the reproduction behind
-[`docs/status/ROUTING-2026-08-04-webrtc-rung1-rendezvous-encoding-mismatch-to-core-rust.md`](../../../docs/status/ROUTING-2026-08-04-webrtc-rung1-rendezvous-encoding-mismatch-to-core-rust.md).
+it is the reproduction that identified a rendezvous key-encoding mismatch between the two sides,
+routed to `entity-core-rust` and closed there on 2026-08-05 by mutual minting.
 
 **Current state (2026-08-05): BIDIRECTIONAL green — this is now a fail-closed gate.** Both browsers
 boot Worker mode, confirm the establisher, auto-escalate on a cross-peer `exec`, rendezvous at the

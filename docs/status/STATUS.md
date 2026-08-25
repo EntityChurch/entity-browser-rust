@@ -1,6 +1,6 @@
 # entity-browser-rust — status
 
-_Updated: 2026-08-23 · public: **v0.8.0** (`master`) · working branch `dev`, version **0.8.2**_
+_Updated: 2026-08-24 · public: **v0.8.0** (`master`) · working branch `dev`, version **0.8.2**_
 
 This is the tracker: where the product is, what is proven and on what, and what is open. It is a
 **published** document — so it cites files, symbols and measurements rather than commit SHAs, which
@@ -22,7 +22,7 @@ do not resolve for a reader outside this tree (see *Commit pins* below).
 | Deferred work with the reason | `docs/plans/BACKLOG.md` |
 | Connectivity open items (canonical table) | `docs/architecture/reviews/BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md` §8 |
 | What changed for a user | `CHANGELOG.md` |
-| Where the last session left off | `docs/status/HANDOFF-2026-08-24-c-static-nav-registry-button-and-the-android-picker.md` |
+| Where the last session left off | `docs/status/HANDOFF-2026-08-24-d-the-registry-open-rail-is-closed.md` |
 
 Spot-check a row before acting on it. That table has carried stale rows, and they survived by
 being read instead of run.
@@ -40,14 +40,17 @@ and `make native` prints a deprecation redirect.
 
 ## Gate state
 
-Re-measured 2026-08-23 rather than quoted:
+Re-measured **2026-08-24 (release audit)** rather than quoted — `test`, `test-tauri` and `lint` all
+re-run from a clean tree at `dev` HEAD in the same pass, with the sibling `entity-core-rust`
+checkout verified clean first (a concurrent seat editing a path dependency is this repo's known way
+to get a build that measured a moving target):
 
 | Gate | Result |
 |---|---|
-| `make test` | **1293 / 0 / 8-ignored** across **16** test binaries — re-measured 2026-08-24 (+4: the static nav marker gate and three `open_target` gates). 1289/16 the previous day; 1283/15 the day before that, when a concurrent seat landed `tests/foreign_namespace_write.rs` mid-session, which is exactly how the denominator moves without anyone noticing |
-| `make test-tauri` | **55 / 0** across 4 binaries — measured 2026-08-23, untouched since (`src-tauri` is workspace-excluded, so it is not in the number above, and nothing on 08-24 went near it) |
-| `make lint` | clean — clippy (**zero warnings**, after `subtree_holds_active` dropped an unused `LinkCtx`), ui-lint, i18n-lint, i18n-locale-check, i18n-callsite-check, i18n-untranslated, tree-hygiene |
-| `make e2e-worker` | **25 passed / 0 failed, 368.95 s** — unfiltered, 2026-08-24, R1 green, and now carrying Phase 14.3 (a refused file picker must report). Test COUNT is unchanged because a phase is not a test — quote the phase, not the denominator. Run against a **private Selenium grid** (`E2E_WEBDRIVER_URL`), because eight other containers were on the box and `setup()` reaps *every* session on whatever grid it is pointed at. 374.28 s the previous day |
+| `make test` | **1296 / 0 / 8-ignored** across **16** test binaries — re-measured 2026-08-24 (+1 for the shared-link gate). The **1293** that stood here was one session stale: +2 for the registry-open rail fix (the Site Browser's bound peer, and the warm's provenance write). 1289/16 the previous day; 1283/15 the day before that, when a concurrent seat landed `tests/foreign_namespace_write.rs` mid-session, which is exactly how the denominator moves without anyone noticing |
+| `make test-tauri` | **55 / 0** across 4 binaries — **re-measured 2026-08-24**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) Unchanged since 08-23, as expected: nothing since then went near `src-tauri` |
+| `make lint` | clean, **re-measured 2026-08-24** — all seven checks, clippy **zero warnings**. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `i18n-lint` raw=24 phys=0 · `i18n-locale-check` 30 locales × 701 keys · `i18n-callsite-check` 637 call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
+| `make e2e-worker` | **25 passed / 0 failed, 383.95 s** — unfiltered, **re-run 2026-08-24 in the release audit**, R1 green. Carries Phase 14.3 (a refused file picker must report); test COUNT is unchanged because a phase is not a test — quote the phase, not the denominator. Run against a **private Selenium grid** (`E2E_WEBDRIVER_URL`): there were **twelve** other seats' grids on the box, and `setup()` reaps *every* session on whatever grid it is pointed at, so the shared grid would both corrupt this run and take other people's work down. 368.95 s earlier the same day; 374.28 s the day before |
 
 **Read the two i18n gates as the different things they are.** `i18n-locale-check`'s *30 locales ×
 701 keys clean* is **structural** — parity, slots, plural categories, homoglyphs — and says nothing
@@ -113,7 +116,11 @@ a branch by whoever owns the release pipeline; the local build is unaffected eit
 today (`make dist`, `make dist-web`, host needs only `make` + `podman`). What is owed *here* is
 that the tree be correct and honest before it is promoted. Done 2026-08-23:
 
-- **`CORE_RUST_REF` is `v0.8.2`** — a public tag, not a dev SHA. Published commits are authored
+- **`CORE_RUST_REF` is `v0.9.0`** (was `v0.8.2`; **repointed 2026-08-24 on the operator's call**,
+  after the three cores went public at 0.9.0 — *"you can go up to the version 0.9.0 for now, we
+  think that's what it's gonna be"*). It names a tag that **does not exist yet**; DevOps cuts it on
+  public `master`, whose tip `3e3394e` already carries the symbols we call. A public tag, not a dev
+  SHA. Published commits are authored
   fresh at the release boundary (ADR-0027), so an entity-core-rust `dev` SHA never resolves for
   anyone else and no push of theirs would have rescued the old pin. The tag is anticipated: it can
   sit in the file before it exists.
@@ -137,7 +144,7 @@ costs the same as a missed one.
 | Was called a blocker | Actually |
 |---|---|
 | Branch promotion | **DevOps**, not us. Post-release the tree is reset to the public mirror on `master`, so `dev`'s relationship to it is expected to need a merge afterwards. Not an engineering task here, and not something to "fix" ahead of time |
-| `CORE_RUST_REF: v0.8.2` | **DevOps** tag it on GitHub at the release boundary. We build against the **sibling checkout on disk**, so it does not affect this repo's build at all — CI only |
+| `CORE_RUST_REF: v0.8.2` | **Changed shape 2026-08-24 — now an open DECISION that names this repo, not a DevOps to-do. See *The tagging decision* below.** Still CI-only: we build against the **sibling checkout on disk** by `path`, so no local build is affected |
 | Icons are a placeholder upscale | **Cosmetic, post-release.** Real art + `cargo tauri icon` whenever art exists |
 | macOS legs / Windows `.msi` / linux-arm64 unproven | **Post-release, GitHub Actions, DevOps.** Only comes back to this repo if a *code* bug turns up in Windows or macOS packaging — possible, but it is not pre-work |
 
@@ -153,8 +160,51 @@ doc comment it had been copied from.
 > rather than deleted, because the wrong version was published in a handoff and a reader may act
 > on it.
 
-The one thing genuinely open in this repo is R1 below, and it is not a blocker either: it is a
-**test-harness** phase that is currently green and now self-diagnosing.
+### The tagging decision — **open, operator's, and this repo is named in it**
+
+Found 2026-08-24 in the release audit, by reading meta-systems' tree rather than ours. It is not a
+defect and nothing here is broken; it is a **coordination item that was routed to us and had no
+row on this side**, which is exactly how a cross-repo decision goes quiet.
+
+**The facts, each verified rather than taken on report:**
+
+- **The three cores went public at `0.9.0`, not `0.8.2`** — meta-systems'
+  `docs/status/HANDOFF-2026-08-24-THE-THREE-CORES-ARE-PUBLIC.md`, titled *"all three cores are
+  public at 0.9.0"*.
+- **No tags were cut.** *"**No tags.** Deferred by the operator; tracker B1 carries it, and it must
+  be settled **with browser-rust in the room** because they consume core-rust by tag and were still
+  anticipating 0.8.2."* Measured on the sibling checkout: `git tag` returns **`v0.8.0` and nothing
+  else**.
+- **Our workflow pins a tag that does not exist.** `.github/workflows/release.yml:79` is
+  `CORE_RUST_REF: v0.9.0` (repointed today; was `v0.8.2`), consumed as an `actions/checkout` `ref:` in **four** jobs (lines 107,
+  148, 217, 267). `release/0.8.2` carries the same pin at its line 94. A tag today therefore fails
+  those four jobs at checkout — **before any build runs**.
+
+**So the shape is: the local build is fine and the CI release is not.** We depend on core-rust by
+`path`, so `make test` / `lint` / `dist` are all unaffected and were green in this same audit; the
+break is confined to the tagged GitHub Actions path.
+
+**What it is NOT.** meta-systems' §4.3 row reads *"`release.yml:91` pins a `dev`-only SHA … a
+public release breaks"*. The **conclusion is right and the diagnosis is stale** — the `dev`-SHA pin
+was replaced by the `v0.8.2` tag on 2026-08-23, and line 91 is now `LATEST_ALIASES`. It breaks for a
+different reason: not an unresolvable SHA, but an unresolvable *tag*. Worth keeping as a worked
+example of the standing rule that a routed finding is a claim about a moment.
+
+**DECIDED 2026-08-24 by the operator: `v0.9.0`.** The pin is repointed
+(`.github/workflows/release.yml:79`); DevOps cuts the tag on public `master`. Recorded as
+provisional in their own words — *"we think that's what it's gonna be"* — so if the cores land on a
+different number, this pin moves with them and is the only place in this repo that has to change.
+
+**The check does not retire with the tag, and it is one command**:
+`git grep <symbol> $REF -- bindings/` must find `NegotiationReport`, `IceObserver` and
+`with_ice_observer`. A tag that resolves but predates those symbols fails later and less legibly
+than one that does not resolve at all — and this check has already caught a dead pin **twice**
+(`683a4f0`, `302b7f4`), each time because the pin was right when set and the call site moved under
+it. Public `master` at `3e3394e` satisfies it today, so a tag cut there passes; **that is a
+statement about a commit, not about a tag that does not exist yet, so re-run it at cut time.**
+
+The one thing genuinely open *in this repo's own code* is R1 below, and it is not a blocker either:
+it is a **test-harness** phase that is currently green and now self-diagnosing.
 
 1. **R1 — the display-gated Tauri WebView phase. Red 3/3 then green 13/13 on one unchanged tree,
    2026-08-23. Open, not reproducible, and the trigger is unidentified.** Full record:
@@ -183,9 +233,13 @@ The one thing genuinely open in this repo is R1 below, and it is not a blocker e
      `src-tauri/src/app_server.rs` already gets this right and has a test pinning it. The earlier
      ruling that a 48× margin refutes it was wrong **in kind** — a margin bounds *slowness* and
      says nothing about a path that never completes — but "plausible mechanism" is not "found".
-   - **Scope:** this is the **debug** bundle at 29.5 MB; `make dist` ships `opt-level=z` + LTO +
-     `wasm-opt -Oz` and has never been measured on this path. The desktop is not shown broken for
-     users by a rig failure against a debug artifact — nor shown fine.
+   - **Scope:** this is the **debug** bundle at 29.5 MB. The release bundle was **measured
+     2026-08-24** for the first time — `make dist-web` gives **7,609,107 bytes**, 3.9× smaller — so
+     if the mechanism really is a stall compiling a large module in one non-streaming pass, a
+     release desktop build is carrying a quarter of the load the failing rig does. **That is a
+     reason to re-measure, not a resolution**: no release build has ever been run on this path, and
+     "smaller" is not "does not stall". The desktop is still neither shown broken for users by a rig
+     failure against a debug artifact, nor shown fine.
 
 ## Device verification — human, not agent-doable, and **none of it gates the release**
 
@@ -292,6 +346,41 @@ dropped, because a backlog that only grows is not being read.
   `system_peer_id()` while the Site Browser reads under its **bound** peer. They coincide only
   because `system_peer_id()` is still an alias for `primary_peer_id`; a Site Browser on any
   non-primary peer gets `Unreachable` on a name that resolved. Same shape as the registry-pin bug.
+- **B-3 is now LOAD-BEARING rather than optional — its trigger fired 2026-08-24, and it is still not
+  release-blocking.** Routed in by meta-devops against this repo's own rule and confirmed here:
+  the trigger is *"ANY path by which bytes reach the renderer from an origin the deployment did not
+  supply"*, and `open_in_site_browser` now registers an origin that came from a **signed registry
+  binding**. Reply: `docs/status/ROUTING-2026-08-24-f-…`. Four things, and the third is what keeps
+  the severity honest:
+  - **The thing the rule most feared did not happen.** `verified_at` is still hard `None` with the
+    reason inline, and every foreign rail row still says *not verified*. The D2 violation — a
+    verified *resolution* laundering an unverified *fetch* — has not shipped.
+  - **The exposure did not change in kind; the origin SET widened**, from the deployment's list to
+    that list plus anything the pinned registry names. What moved is whose judgement bounds the set:
+    the deployment operator, and now also the **registry operator**. Today the same people.
+  - **A registry-resolved origin is NOT an unvetted one**, which is why "prerequisite" overstates it:
+    it arrives inside a binding signature-checked through the registry's signed root, with the D1
+    name check, a non-null TTL and the §6a.6 revocation probe — *better* provenance than a
+    deployment-config origin, which is an unsigned JSON file. The residual is narrow: **a host named
+    by a legitimate signed binding serves bytes the publisher never signed.**
+  - **What is spent is the ARGUMENT, not the labelling.** *"The deployment decided every origin in
+    advance"* is no longer available; the replacement is trust in the registry operator. **When that
+    stops being us, this stops being a deferral.**
+- **Two peers publishing one site is safe in the data and ambiguous on screen — measured
+  2026-08-24** against a proposed consolidation, and the measurement is why we advised against it.
+  No corruption, no shadowing: the rail dedups on `(peer, site)`, sorts the twins **adjacent**, keys
+  prefs/provenance by the same pair (so bookmarks and counts do not bleed), compares both fields for
+  the current-row highlight, and sends the concrete foreign peer on click — over content-addressed
+  blobs at peer-namespaced paths. **The cost is presentational and lands exactly where B-3 bites:**
+  the two rows share a title and are distinguished **only by host**, a transport fact, with
+  `verified_at` `None` on both. Standing advice, agreeing with `cgid-10-235` (*one domain = one
+  identity*): **do not consolidate** — the registry replaced the need to, and a signed
+  `name → peer-id` makes serving another domain's content under this key a signed **authorship
+  claim**.
+- **`last_reconciled` is on `SiteEntry` and rendered nowhere** (zero hits in `dom/site_directory.rs`),
+  so the rail carries no freshness signal at all. Latent generally; it is the missing tiebreak in the
+  duplicate case above. Small, real, unscheduled — and note the `N×` tail is **`visit_count`**, a
+  usage counter with no provenance meaning, which has already been misread once as a provenance one.
 
 **Build & release**
 - `dist/` hygiene — ship `make wasm-release` with default features, never a debug or `demo-apps`
@@ -351,6 +440,43 @@ that, not a set of loose ends.
 4. ~~**TURN / relay credentials**~~ — **closed.** `Connector.relay` / `.relay_username` /
    `.relay_credential` ship, with a second `IceServer` on the way to the agent and
    `E2E_RELAY*` on `e2e-webrtc-meet` as the gate.
+5. **A registry binding's `ttl` is doing two jobs, and the spec defines it both ways. Known,
+   understood, and deliberately held for arch after the release** (operator's call, 2026-08-24).
+   Full routing: `docs/status/ROUTING-2026-08-24-e-ttl-is-doing-two-jobs-and-the-spec-says-so-twice.md`.
+   - **The finding.** `EXTENSION-REGISTRY` §2.1 declares `ttl` a *"positive-result **cache
+     hint**"*; §3 — which §2.1 itself names as canonical — says *"null = sticky until revoked"*;
+     §6a.1a makes it *"the only bound on a withheld revocation"*. A cache lifetime and a validity
+     duration are different parameters. **We implement only the validity half**, measured:
+     `resolve_one` refuses on `issued_at + ttl <= now_ms()` and the resolver clamps, while
+     `effective_ttl_ms` has exactly two consumers in `src/` and **both only display it** — nothing
+     caches a resolution anywhere.
+   - **The operational cost of the conflation, which is the reason it is on this list at all:**
+     the TTL is the only thing that ever stops a *withheld* revocation being believed, so a shorter
+     revocation window can be bought **only** with a more frequent republish. They are one number.
+   - **DNS is not the outlier, and this is the part worth not re-deriving.** DNSSEC carries both
+     (record TTL for cache, `RRSIG` inception/expiration for validity); X.509 carries both
+     (`notBefore`/`notAfter` plus OCSP `nextUpdate`); JWT carries `exp` plus a separate
+     introspection policy. Plain DNS needs no validity half because it has **no revocation concept
+     at all** — it has *fewer* parameters, not a different model.
+   - **Arch has already scoped the fix and we are not proposing a mechanism.** Their
+     `docs/research/explorations/EXPLORATION-NON-INTERACTIVE-FRESHNESS-AND-ANTI-REPLAY.md` §B4 names
+     this seam (*"canonical and cross-referenced but un-quantified"*) and **Knob 2** is exactly this
+     split — a declared `revocation_propagation_bound` making the window `min(TTL, declared-bound)`.
+     Part E puts it at **W7, not before-freeze**; the recommended proposal is **not written yet**
+     (checked — only the exploration and its companion analysis exist). What we asked for is the
+     narrow half: reconcile the §2.1-vs-§3 text, and confirm which job an engine must implement.
+   - **The knob, and where it actually lives.** `--ttl-days=N` →
+     `make registry TTL_DAYS=N` (`Makefile:1507`) → meta-systems'
+     `REGISTRY_TTL_DAYS` (`scripts/site-pipeline.sh:77`, passed at :697). Fully wired end to end;
+     **no code change is owed by anyone** to change the value. There is no protocol maximum — §6a.9.2
+     explicitly declines to set one — and both existing ceilings (issuer-policy `max_ttl`, the
+     resolver's local ceiling) bound it downward only.
+   - **Trap worth stating: our `DEFAULT_TTL_MS` is dead for production.** Their pipeline always
+     passes `TTL_DAYS` explicitly and carries **its own** default of 30, so editing our constant
+     changes nothing that ships. The effective default is theirs.
+   - **What it does *not* cost when bindings lapse**, measured 2026-08-24: sites a visitor has
+     already opened keep working. Origin registration persists independently of the binding, so
+     expiry stops *new* name resolution and nothing else.
 
 ## Waiting on
 

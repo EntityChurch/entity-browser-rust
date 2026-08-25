@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Det här dokumentet är tomt — sidan saknar innehåll.",
   "contentsite.enter_peer": "Gå in i peer",
   "contentsite.err_no_manifest": "Inget webbplatsmanifest på '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Ingenting är publicerat på '{site}' på {origin}. Den här webbplatsen tillhör en annan peer ({peer}) och hostas troligen på en egen domän — öppna den där, eller hitta den i Registerläsare.",
   "contentsite.err_page_not_found": "Sidan '{page}' hittades inte på webbplatsen '{site}'.",
   "contentsite.err_unreachable": "Kunde inte nå peer '{peer}' — ingen rutt är registrerad för den.",
   "contentsite.loading_page": "_Läser in den aktiva sidan…_",

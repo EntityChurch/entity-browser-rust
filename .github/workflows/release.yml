@@ -53,10 +53,14 @@ env:
   # `master` under the same SHA. No dev SHA is ever resolvable by
   # `actions/checkout`, however correct it was locally. **A tag is the only
   # identifier that is both knowable in advance and publicly resolvable**, which
-  # is also why this line can carry `v0.8.2` before entity-core-rust has tagged
-  # it. Re-pinned 2026-08-23 to `v0.8.2` (ROUTING-2026-08-23-j §2).
+  # is also why this line can carry `v0.9.0` before entity-core-rust has tagged
+  # it. Re-pinned 2026-08-23 to a tag name (ROUTING-2026-08-23-j §2); the value
+  # then moved `v0.8.2` → `v0.9.0` on 2026-08-24 when entity-core-rust shipped
+  # as 0.9.0. **Verified: that tag does NOT exist on GitHub yet** — only
+  # `v0.8.0` does — so every leg of this workflow fails at checkout until
+  # entity-core-rust is tagged. That is the ordering below, not a defect here.
   #
-  # **ORDERING, UNAVOIDABLE: entity-core-rust publishes and tags `v0.8.2` FIRST.**
+  # **ORDERING, UNAVOIDABLE: entity-core-rust publishes and tags `v0.9.0` FIRST.**
   # Every leg — including a `workflow_dispatch` dry run — checks it out from
   # GitHub, so until that tag exists every run fails at checkout, before
   # anything compiles. Failing at checkout is the *good* failure mode; the two
@@ -76,7 +80,7 @@ env:
   #   git -C ../entity-core-rust merge-base --is-ancestor $REF <github-branch>
   #   git -C ../entity-core-rust grep <symbol-we-call> $REF -- bindings/
   # A `workflow_dispatch` dry run exercises both.
-  CORE_RUST_REF: v0.8.2
+  CORE_RUST_REF: v0.9.0
   CORE_RUST_REPO: EntityChurch/entity-core-rust
 
   # Publish each artifact a second time without the version in its name, so

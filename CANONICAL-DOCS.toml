@@ -17,7 +17,7 @@ application — a multi-window manager, content sites, and embedded HTML/JS apps
 all with the entity tree as the single source of truth — and ships as a WASM
 browser app (primary) and a Tauri desktop shell. It depends on entity-core-rust;
 nothing depends on it. The only rendering path is HTML DOM (the legacy
-egui/native renderer was removed). This is a 0.8 research preview — a reference paradigm, not a
+egui/native renderer was removed). This is a 0.9 research preview — a reference paradigm, not a
 mandate, and not a hardened production deployment. Confidence: the browser path
 is solid and exercised; Tauri/WebKitGTK durability is exploratory (see README
 release notes).
@@ -26,7 +26,13 @@ release notes).
 [[doc]]
 path  = "README.md"
 title = "Entity Browser — README"
-blurb = "What the repo is, where it sits in the stack, how to build (make + podman, or host toolchain), and the v0.8 release caveats."
+blurb = "What the repo is, where it sits in the stack, how to build (make + podman, or host toolchain), and the standing research-preview caveats."
+group = "Overview"
+
+[[doc]]
+path  = "docs/PUBLISHING-QUICKSTART.md"
+title = "Publish a site — the quickstart"
+blurb = "START HERE if you want to put your own content on your own domain. Identity → content → build → verify → upload → republish, end to end: minting a publisher seed, the ingest directory format, the flags that matter, the two serving properties a CDN must get right (CORS, and cache headers keyed on mutability), a worked Cloudflare/R2 recipe, safe republishing with --plan, optional name registries, and a symptom→cause table."
 group = "Overview"
 
 [[doc]]
@@ -85,9 +91,27 @@ blurb = "The complete command surface: every make target, both binaries, the ent
 group = "Tools"
 
 [[doc]]
+path  = "docs/architecture/reviews/BUILD-FLOW-REVIEW.md"
+title = "Build flow review — the make + podman pipeline"
+blurb = "The rationale and open-work tracker for the build pipeline itself (image layout, caching, dist/ and target/ contention), as opposed to TOOLS.md's target reference. Linked from TOOLS.md; public since v0.8.0."
+group = "Tools"
+
+[[doc]]
 path  = "docs/architecture/guides/PUBLISH-INGEST-FORMAT.md"
 title = "Publish ingest format"
 blurb = "The tool-agnostic on-disk site format that `entity-browser publish --ingest` consumes (manifest + pages + assets) — how to publish content WITHOUT the papers renderer, the publish-pipeline edge-case audit, and the release rip-out plan for the papers-specific wiring."
+group = "Tools"
+
+[[doc]]
+path  = "docs/architecture/guides/GUIDE-PUBLISHING-AND-NAMES.md"
+title = "Publishing & names — the trust chain, end to end"
+blurb = "The deep companion to the quickstart: the three identities (registry key, publisher key, and why the visitor's is neither), what a signed root commits to, publishing a name registry, what a consumer verifies at each hop, the privacy property (a resolve never puts the name on the wire), and a precise table of what is NOT closed."
+group = "Tools"
+
+[[doc]]
+path  = "docs/architecture/guides/GUIDE-REPUBLISH-AND-INCREMENTAL.md"
+title = "Republish & incremental updates"
+blurb = "What changes in the output tree when you edit, add or delete a page; the --plan gate; the dangling-nav gotcha; and the CDN sync strategy (--delete, --size-only, and why a large live deployment should cut over rather than republish in place)."
 group = "Tools"
 
 [[doc]]
@@ -103,7 +127,7 @@ group = "Tools"
 [[doc]]
 path  = "docs/architecture/specs/DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md"
 title = "Discipline charter — browser substrate (the lens)"
-blurb = "THE LENS: an L5 app on a double sandwich (browser-as-userspace-OS + entity-OS kernel). 16 disciplines (D1–D11 inherited, D12–D16 browser-native, each earned by a shipped bug), 9 per-diff review questions, anti-pattern catalog AP1–AP11."
+blurb = "THE LENS: an L5 app on a double sandwich (browser-as-userspace-OS + entity-OS kernel). 16 ratified disciplines (D1–D11 inherited, D12–D16 browser-native, each earned by a shipped bug) plus candidates from D17 up, the per-diff review questions, and the anti-pattern catalog AP1–AP25 — each entry pinned to the commit that earned it."
 group = "How we work"
 
 [[doc]]
@@ -116,6 +140,30 @@ group = "How we work"
 path  = "docs/architecture/specs/MODEL-BROWSER-WASM-RUNTIME.md"
 title = "Substrate model — browser/WASM runtime (ground truth)"
 blurb = "How the browser/WASM substrate actually behaves (two heaps, the frame contract, the §10 boundary map, the §11 invariants). Read before any leak / freeze / lifetime / persistence debugging."
+group = "How we work"
+
+[[doc]]
+path  = "AGENTS.md"
+title = "AGENTS.md"
+blurb = "The durable agent context and operating agreement for this repo — the repo-specific half: build/test verbs, code conventions, boundaries, and the load-bearing gotchas each earned by a shipped bug."
+group = "How we work"
+
+[[doc]]
+path  = "AGENTS-STANDARD.md"
+title = "Agent standard"
+blurb = "The shared cross-repo standard every repo's AGENTS.md builds on."
+group = "How we work"
+
+[[doc]]
+path  = "METHODOLOGY.md"
+title = "Methodology"
+blurb = "Disciplines, doctrines, the ratchet, and the promotion ladder (ADR-0028)."
+group = "How we work"
+
+[[doc]]
+path  = "CLAUDE.md"
+title = "CLAUDE.md"
+blurb = "A one-line shim to AGENTS.md (ADR-0016)."
 group = "How we work"
 
 # ── Authoritative architecture models (CLAUDE.md: prose docs are stale; these win)
@@ -156,10 +204,32 @@ title = "Theming reference (authoritative)"
 blurb = "How theming works via CSS custom properties: how to change a color, how to add a theme, the chrome vs content-site token families."
 group = "App references"
 
+# REFERENCE-THEMING is "everything about a screen that IS color"; these are its
+# stated companions for everything that is not. Declared together — a spec whose
+# named counterpart is missing reads as an omission, and both are cited from
+# published documents and published source.
+[[doc]]
+path  = "docs/architecture/specs/REFERENCE-UI-DESIGN.md"
+title = "UI design standards — structure & interaction"
+blurb = "The authoritative standard for how a window is structured and how it behaves: grouping, hierarchy, the S1–S8 acceptance checks, status vocabulary, feedback, and language. Companion to REFERENCE-THEMING (that one is color; this one is everything else)."
+group = "App references"
+
+[[doc]]
+path  = "docs/architecture/specs/REFERENCE-UI-TERMINOLOGY.md"
+title = "UI terminology & copy style"
+blurb = "Canonical words and copy rules for every user-facing string — checked before naming a window, writing a label, or wording a message, so that 30 translations are not built on incoherent English."
+group = "App references"
+
+[[doc]]
+path  = "docs/architecture/specs/TERMINOLOGY-AND-WINDOWS.md"
+title = "Terminology & window taxonomy"
+blurb = "The single source of truth for what the two system peers are called and for where a window or feature belongs. Cited from src/window.rs and the System Overview / Access Log views; if a UI string disagrees with it, the string is wrong."
+group = "App references"
+
 [[doc]]
 path  = "docs/architecture/guides/GUIDE-DEPLOYMENT-AND-CONFIGURATION.md"
 title = "Deployment & configuration guide"
-blurb = "The operator/DevOps quick-ref: persistent PIDs, the /entity-deployment.json schema + precedence, the three profiles (full/tutorial/strict-site), deployment recipes, the make site knob table, dist/ layout, and gotchas."
+blurb = "The operator/DevOps reference, authoritative for the knob table: persistent peer-ids, the /entity-deployment.json schema + precedence, the surface/posture axes (surface is set directly — the old full/tutorial/strict-site presets are gone), deployment recipes, what each SURFACE emits for site_mode, the dist/ layout, and gotchas."
 group = "App references"
 
 # ── Design & performance detail (the Stage/Phase glossary's owning docs) ──────
@@ -189,3 +259,31 @@ path  = "docs/status/STATUS.md"
 title = "Status"
 blurb = "Current project status — where the project is, recent work, backlog, and what's next."
 group = "Overview"
+
+# ── Project / community-health files ─────────────────────────────────────────
+# Public since v0.8.0 and undeclared until now, which the keep-list read as a
+# withdrawal. SECURITY.md carries the vulnerability-reporting address; losing it
+# from a public repo is the failure this block exists to prevent.
+[[doc]]
+path  = "CHANGELOG.md"
+title = "Changelog"
+blurb = "What changed in each release, newest first. Generated release notes are cut from this file, so an entry here is a statement to a downloader."
+group = "Project"
+
+[[doc]]
+path  = "CONTRIBUTING.md"
+title = "Contributing"
+blurb = "How to propose a change, and the DCO sign-off the project requires."
+group = "Project"
+
+[[doc]]
+path  = "CODE_OF_CONDUCT.md"
+title = "Code of Conduct"
+blurb = "What we expect of each other."
+group = "Project"
+
+[[doc]]
+path  = "SECURITY.md"
+title = "Security"
+blurb = "How to report a vulnerability."
+group = "Project"

@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Dette dokumentet er tomt — siden har ikke noe innhold.",
   "contentsite.enter_peer": "Gå inn i peer",
   "contentsite.err_no_manifest": "Ingen nettstedsmanifest på '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Ingenting er publisert på '{site}' på {origin}. Dette nettstedet tilhører en annen peer ({peer}) og hostes sannsynligvis på sitt eget domene — åpne det der, eller finn det i Registerleser.",
   "contentsite.err_page_not_found": "Fant ikke siden '{page}' på nettstedet '{site}'.",
   "contentsite.err_unreachable": "Kunne ikke nå peer '{peer}' — ingen rute er registrert for den.",
   "contentsite.loading_page": "_Laster den aktive siden…_",

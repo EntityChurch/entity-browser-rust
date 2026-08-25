@@ -21,6 +21,100 @@ source of truth), not the only way to do so.
 There is **no native UI build** — the legacy native renderer was
 removed; `make native` prints a redirect to the active targets.
 
+---
+
+## 👉 I want to publish my own site
+
+**Start here: [`docs/PUBLISHING-QUICKSTART.md`](docs/PUBLISHING-QUICKSTART.md).**
+
+Entity Browser is also a **publisher**: point it at a directory of markdown and
+it emits one static tree — the app at the apex, your content beside it, all
+content-addressed — that you upload to any static host. No server, no database,
+nothing dynamic. The quickstart walks the whole path:
+
+```bash
+openssl rand -hex 32 > publisher.seed          # your publisher identity — keep it
+make site-dist INGEST=../my-content \
+     IDENTITY_SEED=$(cat publisher.seed) CONFIG_SITE=my-site
+# → dist-site/  — verified, and ready to sync to S3 / R2 / nginx
+```
+
+It covers minting the identity, the content format, the flags that matter, the
+**two serving properties a CDN must get right** (CORS, and cache headers keyed on
+mutability — the one that silently bites), a worked Cloudflare/R2 recipe, safe
+republishing, optional name registries, and a symptom→cause table for when it
+goes wrong.
+
+> Publishing needs **this source checkout** plus `make` + `podman`. The desktop
+> installers ship the *app*, not the publishing tool.
+
+---
+
+---
+
+## How it stores your data — read this before you file a bug
+
+Entity Browser keeps everything in a local entity tree: your windows, your
+peers, your sites, and every foreign site you have visited. **Where that tree
+lives, and whether it survives, depends on which mode you are in** — and the
+difference is visible in the product, so it is worth thirty seconds.
+
+### Browser: one tab owns your data
+
+Your identity is a seed in `localStorage`, shared by every tab on that origin.
+Your **tree** is an IndexedDB database — and exactly **one tab may own it at a
+time**, elected with a Web Lock. That is deliberate: two tabs writing one store
+is last-writer-wins corruption.
+
+| | Tree | Writes | On reload |
+|---|---|---|---|
+| **First / only tab** — the owner | durable IndexedDB | saved | everything is still there |
+| **Every other tab** | **in memory only** | **not saved** | gone |
+
+A secondary tab **says so**, in an amber banner across the top: *"This app is
+already open in another tab, which owns your saved data."* Peer creation is
+refused there for the same reason.
+
+**What this means in practice, and it is the part that surprises people:** a
+second tab starts from nothing. Sites you browsed, registries you pinned, and
+publishers you learned about are all in the *owner's* tree, not this one. So a
+link that works in your main tab can come up empty in a fresh one — the content
+is fine, this tab has just never heard of it. Close the other tab and reload,
+and the new tab becomes the owner with all of it back.
+
+`?worker=1` opts into a Worker + OPFS arm instead. It needs a **secure origin**
+(`https`, or `localhost`) — on a plain-http address the app silently falls back
+to the main-thread arm, which is also why `http://192.168.x.x` deployments have
+no QR scanner (`getUserMedia` is gated the same way).
+
+### Desktop (Tauri): two peers, and they are not the same peer
+
+The desktop app is the same web app in a native WebView, plus a **native Rust
+backend**. That means two distinct peers, and knowing which is which explains
+most desktop questions:
+
+| | Where it lives | Storage | Reachable by others |
+|---|---|---|---|
+| **WebView peer** — runs the UI, owns your windows/sites | the WebView's IndexedDB | durable (verified on WebKitGTK) | **no** — it cannot bind a socket |
+| **Backend peer(s)** — spawned by the Rust side | SQLite under `~/.entity/peers/{name}/` | durable | **yes** — binds `0.0.0.0:4041` |
+
+Two consequences worth knowing up front:
+
+- **`~/.entity/peers/` is shared with every entity-core tool on the machine**,
+  not just this app. The desktop only adopts the peers it created (they carry
+  `managed_by = "tauri"`); the rest are listed on demand and never touched.
+- **On Linux the desktop WebView has no WebRTC** — WebKitGTK ships without
+  `RTCPeerConnection`. Finding devices still works, and so does anything over an
+  ordinary connection (connect by address, the shared folder, and everything
+  served over that connection). What cannot work is reaching the desktop's
+  *WebView* peer from a browser with no address to dial. The app shows a red
+  banner saying so. Windows and macOS are a different engine and are unmeasured.
+
+Nothing here needs configuring. It is written down because the storage mode
+changes what you see, and "it worked in my other tab" is otherwise a mystery.
+
+---
+
 See `CLAUDE.md` for architecture orientation and `docs/architecture/` for the
 specs (and `CANONICAL-DOCS.toml` for the curated public reading order).
 
@@ -151,7 +245,10 @@ rebuilds fast. **No host `cargo`/`trunk` needed.**
 make build         # alias for `make wasm` — the conventional bare-box entry
 make wasm          # WASM debug build → dist/    (in container)
 make wasm-release  # WASM release build → dist/  (in container)
-make test          # 390+ native unit + 17 peer-integration tests (in container)
+make test          # the native suite — unit + peer-integration (in container).
+                   # For the CURRENT pass/fail count and binary count, read
+                   # docs/status/STATUS.md — it is re-measured, not quoted
+                   # forward, because a number written here goes stale in hours.
 make lint          # clippy (in container)
 make image         # (re)build the toolchain image explicitly
 ```
@@ -187,8 +284,9 @@ make dist-native   # host toolchain instead — the only path on macOS/Windows
 
 Our tagged releases run exactly these recipes across five platforms
 (`.github/workflows/release.yml`), so nothing about building this project
-depends on our CI. Full detail — how a release is cut, and how to verify a
-download — is in [`docs/RELEASE-READINESS.md`](docs/RELEASE-READINESS.md).
+depends on our CI. That workflow file is the authority on how a release is cut
+and what each artifact is built from; every published release carries checksums
+alongside the installers, so a download can be verified against it.
 
 The browser E2E suite (`make e2e-worker`) is gated behind the `e2e` cargo
 feature and needs an external Selenium-firefox container on `:4444` (see
@@ -209,25 +307,38 @@ measured peak; override per-machine via env vars or an untracked
 
 ---
 
-## Release notes — `v0.8.0` (research preview)
+## Release posture — research preview
 
-`0.8` is a **research preview**, not a 1.0. It is a worked reference
+`0.9` is a **research preview**, not a 1.0. It is a worked reference
 application on top of the entity substrate, suitable for evaluation and
 exploration — not a hardened production deployment.
 
-**Known caveats — disclosed up front:**
+**Per-version release notes live in [`CHANGELOG.md`](CHANGELOG.md)** — that is
+what the GitHub release page is generated from, and it carries the current
+feature list and known limitations. This section is only the standing posture.
 
-- **Tauri / WebKitGTK IndexedDB durability is _unverified_.** The default
-  storage arm is a durable main-thread IndexedDB system peer. That durability
-  is **confirmed on Firefox only**; under the Tauri WebKitGTK WebView it is
-  **not yet verified** (the durability banner is suppressed there pending a
-  `make tauri-run` drive). Treat desktop-WebView persistence as unconfirmed.
-  Backend peers spawned by the Tauri-side Rust process *are* durably
-  tree-persisted (SQLite under `~/.entity/peers/{name}/`).
-- This is a **development-focused** posture: backend peers run with
+**Standing caveats — disclosed up front:**
+
+- This is a **development-focused** security posture: backend peers run with
   `debug_open_grants` enabled and transports are plaintext `ws://`. Broader
   production hardening (auth, transport security) is deferred beyond the
   research preview.
+- **Browsing a foreign site trusts the serving origin** for the path→hash
+  mapping. Content is hash-verified against the pointer that origin served —
+  a real gate against corruption and truncation — but the origin supplied the
+  pointer, so it is not a defence against a lying host. The signed-root path
+  that closes this exists and is reachable through the Shell's `name` verb; it
+  is not yet wired into the browsing surface. Stated precisely in
+  [`GUIDE-PUBLISHING-AND-NAMES.md` §7](docs/architecture/guides/GUIDE-PUBLISHING-AND-NAMES.md).
+- **Storage durability, measured rather than assumed:** the default arm is a
+  durable main-thread IndexedDB system peer, verified on Firefox **and** on the
+  Tauri WebKitGTK WebView (create a site, relaunch, it is still there). Backend
+  peers spawned by the Tauri-side Rust process are durably tree-persisted
+  (SQLite under `~/.entity/peers/{name}/`). **Safari / iOS on real hardware is
+  still unchecked** — that one is genuinely open.
+  *(An earlier version of this section listed WebKitGTK durability as
+  unverified. It was, then it was verified by hand, and this note went stale in
+  the pessimistic direction.)*
 
 ## Notes
 
@@ -235,8 +346,9 @@ exploration — not a hardened production deployment.
   `0.0.0.0:4041` and is LAN-accessible by design (development /
   multi-device dogfooding). Subsequent peers bind to dynamic localhost
   ports.
-- `Cargo.lock` is currently **gitignored** (see `.gitignore`). For fully
-  reproducible bare-box builds, committing it is recommended.
+- `Cargo.lock` **is committed**, so dependency versions are pinned for
+  reproducible bare-box builds. (An earlier version of this note said it was
+  gitignored; that has not been true since it was checked in.)
 
 ---
 

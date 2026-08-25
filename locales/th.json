@@ -115,6 +115,7 @@
   "contentsite.document_empty": "เอกสารนี้ว่างเปล่า — หน้านี้ไม่มีเนื้อหา",
   "contentsite.enter_peer": "เข้าสู่เพียร์",
   "contentsite.err_no_manifest": "ไม่มีเมนิเฟสต์ไซต์ที่ '{site}' (เพียร์: {peer})",
+  "contentsite.err_no_manifest_foreign": "ไม่มีสิ่งใดเผยแพร่ที่ '{site}' บน {origin} ไซต์นี้เป็นของเพียร์อื่น ({peer}) และน่าจะโฮสต์อยู่บนโดเมนของตัวเอง — เปิดที่นั่น หรือค้นหาใน เบราว์เซอร์ทะเบียน",
   "contentsite.err_page_not_found": "ไม่พบหน้า '{page}' ในไซต์ '{site}'",
   "contentsite.err_unreachable": "ไม่สามารถเข้าถึงเพียร์ '{peer}' — ไม่มีเส้นทางที่ลงทะเบียนไว้",
   "contentsite.loading_page": "_กำลังโหลดหน้าแบบสด…_",

@@ -1439,6 +1439,20 @@ pub const EN: &[(&str, Message)] = &[
         "contentsite.err_no_manifest",
         Message::Simple("No site manifest at '{site}' (peer: {peer})."),
     ),
+    // The FOREIGN half of a missing manifest. The key above reads as "that
+    // site does not exist", which is true for our own tree and false — and
+    // badly misleading — for a site published by somebody else: measured
+    // 2026-08-24, a shared link to a live site on another domain produced it.
+    // Naming the origin we asked is the whole fix: it turns an apparently
+    // deleted site into an obviously wrong lookup.
+    (
+        "contentsite.err_no_manifest_foreign",
+        Message::Simple(
+            "Nothing is published at '{site}' on {origin}. This site belongs to another \
+             peer ({peer}) and is probably hosted on its own domain — open it there, or \
+             find it in the Registry Browser.",
+        ),
+    ),
     (
         "contentsite.err_page_not_found",
         Message::Simple("Page '{page}' not found in site '{site}'."),
