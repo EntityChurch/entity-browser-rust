@@ -30,7 +30,7 @@ use crate::window_watch::WindowWatch;
 use model::StorageModel;
 
 #[cfg(target_arch = "wasm32")]
-use output::OriginEstimate;
+use output::{BackendStoreView, OriginEstimate};
 
 /// `WindowEvent` name the Refresh button emits — re-reads counts and re-probes
 /// the origin disk estimate. Defined here so the native `handle_action`
@@ -50,6 +50,14 @@ pub struct StorageWindow {
     /// (boot + each Refresh). Guards against re-spawning on every frame.
     #[cfg(target_arch = "wasm32")]
     needs_estimate: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Native system-backend store stats, filled asynchronously over IPC (the
+    /// native store is a remote peer, invisible to the local-arm enumeration).
+    /// `None` until the first probe resolves / in a plain browser.
+    #[cfg(target_arch = "wasm32")]
+    backend_stats: std::rc::Rc<std::cell::RefCell<Option<BackendStoreView>>>,
+    /// Re-probe the native-store stats on the next render (boot + each Refresh).
+    #[cfg(target_arch = "wasm32")]
+    needs_backend_stats: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl StorageWindow {
@@ -62,6 +70,10 @@ impl StorageWindow {
             estimate: std::rc::Rc::new(std::cell::RefCell::new(None)),
             #[cfg(target_arch = "wasm32")]
             needs_estimate: std::rc::Rc::new(std::cell::Cell::new(true)),
+            #[cfg(target_arch = "wasm32")]
+            backend_stats: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            #[cfg(target_arch = "wasm32")]
+            needs_backend_stats: std::rc::Rc::new(std::cell::Cell::new(true)),
         }
     }
 
@@ -123,7 +135,10 @@ impl WindowView for StorageWindow {
                 // (no button needed). Refresh exists to re-probe the async
                 // origin **disk estimate**, which has no tree signal.
                 #[cfg(target_arch = "wasm32")]
-                self.needs_estimate.set(true);
+                {
+                    self.needs_estimate.set(true);
+                    self.needs_backend_stats.set(true);
+                }
                 self.watch.mark_dirty();
             }
         }
@@ -150,8 +165,30 @@ impl WindowView for StorageWindow {
             });
         }
 
+        // Kick a one-shot native-store IPC probe if pending (desktop only; the
+        // invoke no-ops/errs harmlessly in a browser). Same stash-then-mark
+        // pattern as the estimate — the store lives in the native process, so
+        // it has no tree signal to subscribe to.
+        if self.needs_backend_stats.replace(false) && crate::tauri_ipc::is_tauri() {
+            let slot = self.backend_stats.clone();
+            let flag = self.watch.flag();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(Some(s)) = crate::tauri_ipc::system_backend_store_stats().await {
+                    *slot.borrow_mut() = Some(BackendStoreView {
+                        short_id: s.peer_id.chars().take(12).collect(),
+                        running: s.running,
+                        sqlite_bytes: s.sqlite_bytes,
+                        entity_count: s.entity_count,
+                        path_count: s.path_count,
+                    });
+                    flag.mark();
+                }
+            });
+        }
+
         let estimate = *self.estimate.borrow();
-        let output = self.model.render_output(peers, estimate);
+        let backend = self.backend_stats.borrow().clone();
+        let output = self.model.render_output(peers, estimate, backend);
         crate::dom::storage::render(container, &output, ctx);
     }
 }

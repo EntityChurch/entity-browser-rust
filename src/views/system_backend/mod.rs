@@ -61,6 +61,16 @@ impl SystemBackendWindow {
                     &sys_pid,
                     crate::app_paths::connections_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // Watch the conn-health mirror so the link chip repaints on a
+                // pure liveness change — notably the auto-connect writing
+                // Connecting *before* any connections-registry write, which
+                // nothing else would wake. Also seeds the Worker-arm sync cache
+                // that `render_output` reads (subscribe, don't poll).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::connection_health_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
                 // Watch the backend-auth mirror so the device-authorizations
                 // surface repaints when a Check/Refresh read lands — and (Worker
                 // arm) so the synchronous `get_entity` read is seeded for this
@@ -168,7 +178,9 @@ impl WindowView for SystemBackendWindow {
         // reconnect. `frame()` drains render-time actions the same frame.
         if output.connected {
             if let Some(auth) = &output.authorizations {
-                if self.model.due_for_auth_refresh() {
+                // Adaptive cadence: fast while a device awaits authorization,
+                // backed off in the steady state (see `due_for_auth_refresh`).
+                if self.model.due_for_auth_refresh(!auth.pending.is_empty()) {
                     ctx.actions.borrow_mut().push(Action::RefreshBackendAuth {
                         local_peer_id: auth.manager_pid.clone(),
                         backend_pid: auth.backend_pid.clone(),

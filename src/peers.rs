@@ -1024,9 +1024,10 @@ impl Peers {
     /// `keypair` MUST be a stable seed-derived identity (durability depends
     /// on the same peer-id mapping to the same IDB database across reloads);
     /// `db_name` is the IndexedDB database name. This is the durable Direct
-    /// arm — the building block the persistent system peer reuses (per the
-    /// persistent-system-peer + durability-substrate design §4.2 row 2 /
-    /// §5 Shape 1).
+    /// arm — the building block the persistent system peer reuses, and the same
+    /// shape generalized to secondary user peers by the `frontend-idb` mode
+    /// (`build_idb_ctx` + `insert_built_idb_peer`; see
+    /// `docs/architecture/reviews/DESIGN-PERSISTENT-THIS-TAB-PEER.md`).
     #[cfg(target_arch = "wasm32")]
     pub async fn new_direct_idb(
         keypair: entity_crypto::Keypair,
@@ -1789,6 +1790,131 @@ impl Peers {
             return Box::pin(w.create_peer(label));
         }
         unreachable!("primary_sdk arm covered above")
+    }
+
+    /// Build a durable **`frontend-idb`** `PeerContext` off-registry — the
+    /// async half of persistent-this-tab creation, split out so it can run in a
+    /// `spawn_local` **without borrowing `Peers`** (the runtime create path
+    /// dispatches from the sync frame loop and cannot hold `&mut self` across
+    /// `build_async().await`). The built ctx is then handed to the sync
+    /// [`insert_built_idb_peer`](Self::insert_built_idb_peer).
+    ///
+    /// The db name is `entity-peer-{peer_id}` — the **same** scheme the primary
+    /// uses (`persistence::system_seed_id`) — so a later boot replay reopens the
+    /// SAME database. This derivation is the identity danger site (MAP §8 #1);
+    /// it lives HERE, in one place, shared by create and replay.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn build_idb_ctx(
+        keypair: entity_crypto::Keypair,
+    ) -> Result<entity_sdk::PeerContext, String> {
+        let peer_id = keypair.peer_id().to_string();
+        let db_name = format!("entity-peer-{peer_id}");
+        let config = entity_peer::PeerConfig {
+            debug_open_grants: true,
+            ..entity_peer::PeerConfig::default()
+        };
+        let ctx = entity_sdk::PeerContextBuilder::new()
+            .keypair(keypair)
+            .config(config)
+            .connector(std::sync::Arc::new(
+                entity_peer::transport::BrowserWebSocketConnector,
+            ))
+            .idb(&db_name)
+            .build_async()
+            .await
+            .map_err(|e| format!("durable this-tab peer build failed: {e}"))?;
+        // Identity self-check (the danger site): the built ctx's id MUST match
+        // the id we derived the db name from, or this peer would route under one
+        // id while its store lives in another id's database.
+        debug_assert_eq!(
+            ctx.peer_id().to_string(),
+            peer_id,
+            "built ctx id diverged from the id used to name its IDB database"
+        );
+        Ok(ctx)
+    }
+
+    /// Register an already-built durable `PeerContext` (from
+    /// [`build_idb_ctx`](Self::build_idb_ctx)) into the **primary Direct SDK**
+    /// and wire it up — the sync half, safe to call from the frame loop. Seeds
+    /// metadata (`persisted: true`), refreshes routes, spawns the per-peer event
+    /// bridge. Returns the registered peer-id.
+    ///
+    /// **Option A placement:** the peer lives in slot-0's Direct SDK alongside
+    /// the system peer (the tested many-peers-in-one-Direct-SDK pattern); its
+    /// store is its own isolated IDB database. Direct posture only.
+    ///
+    /// Checkpoint-on-create is the caller's job (`create` path) via
+    /// [`idb_checkpoint_for`](Self::idb_checkpoint_for) — this sync method
+    /// cannot await; replay skips it (read-side rehydrate, no fresh write).
+    #[cfg(target_arch = "wasm32")]
+    pub fn insert_built_idb_peer(
+        &mut self,
+        ctx: entity_sdk::PeerContext,
+        label: Option<String>,
+    ) -> Result<String, String> {
+        if !matches!(self.primary_sdk(), Sdk::Direct(_)) {
+            return Err(
+                "persistent this-tab peers require the Direct arm (the Worker \
+                 arm uses OPFS-backed backend peers instead)"
+                    .into(),
+            );
+        }
+        let metadata = entity_sdk::PeerMetadata {
+            label,
+            persisted: true,
+            ..entity_sdk::PeerMetadata::default()
+        };
+        let Sdk::Direct(pm) = self.primary_sdk_mut() else {
+            unreachable!("Direct arm checked above")
+        };
+        // `insert_peer` is the SDK's documented escape hatch for builder
+        // customization beyond `create_peer`'s fixed signature — no SDK change.
+        let inserted_id = pm
+            .sdk_mut()
+            .insert_peer(ctx)
+            .map_err(|e| format!("durable this-tab peer insert failed: {e}"))?;
+        pm.sdk_mut().set_metadata(&inserted_id, metadata);
+
+        // Route + per-peer event bridge, same as create_new_peer's Direct arm.
+        self.refresh_routes_for_sdk(0);
+        if let Ok(ctx) = self.direct_peer_context(&inserted_id) {
+            wasm_bindgen_futures::spawn_local(ctx.event_bridge());
+        }
+        Ok(inserted_id)
+    }
+
+    /// Reconstruct a persisted `frontend-idb` peer at boot from its **saved**
+    /// keypair, reopening its existing `entity-peer-{id}` database. The durable
+    /// analog of the in-memory `load_persisted_primary` replay. No checkpoint:
+    /// this is a read-side rehydrate (open + journal replay), not a fresh write.
+    /// Direct posture only — a `frontend-idb` entry on a Worker-primary boot is a
+    /// named deferred hole (the caller warns). Runs in `new_wasm`, which is
+    /// async and owns `peer_manager`, so build + insert can be sequenced here.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn replay_persisted_idb_peer(
+        &mut self,
+        keypair: entity_crypto::Keypair,
+        label: Option<String>,
+    ) -> Result<String, String> {
+        let ctx = Self::build_idb_ctx(keypair).await?;
+        self.insert_built_idb_peer(ctx, label)
+    }
+
+    /// The durable-commit checkpoint handle for a **specific** peer's IndexedDB
+    /// store (not just the primary's — cf. [`idb_checkpoint`](Self::idb_checkpoint)).
+    /// `Some` only for a Direct/IDB-backed peer. Owned (`IdbCheckpoint: Clone`)
+    /// so the caller can `await` it across a `spawn_local` without borrowing
+    /// `self` — used to flush a fresh `frontend-idb` create durably.
+    #[cfg(target_arch = "wasm32")]
+    pub fn idb_checkpoint_for(
+        &self,
+        peer_id: &str,
+    ) -> Option<entity_store::idb::IdbCheckpoint> {
+        self.primary_as_direct()?
+            .peer_context(peer_id)?
+            .idb_checkpoint()
+            .cloned()
     }
 
     /// Native variant — only the Direct arm exists off-wasm.

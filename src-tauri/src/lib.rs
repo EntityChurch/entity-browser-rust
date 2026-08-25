@@ -162,6 +162,19 @@ struct BackendPeerResponse {
     ws_addr: Option<String>,
 }
 
+/// Native-store stats for the system backend, surfaced to the Storage window
+/// (`system_backend_store_stats`). `entity_count`/`path_count` are `None` when
+/// the peer is stopped (no live store to read); `sqlite_bytes` is the on-disk
+/// file size, available regardless.
+#[derive(Serialize, Clone)]
+struct BackendStoreStats {
+    peer_id: String,
+    running: bool,
+    sqlite_bytes: Option<u64>,
+    entity_count: Option<usize>,
+    path_count: Option<usize>,
+}
+
 // ---------------------------------------------------------------------------
 // Tauri IPC commands
 // ---------------------------------------------------------------------------
@@ -451,6 +464,39 @@ fn backend_log_tail(after: u64) -> backend_log::LogTail {
     backend_log::tail(after)
 }
 
+/// Storage stats for the canonical system backend's **native** store, so the
+/// Storage window can surface it (it otherwise sees only the frontend arms —
+/// B is a remote peer over the connection pool, its SQLite store lives in this
+/// process and is reachable only over IPC). On-disk size comes from the SQLite
+/// file (present even when B is stopped); live entity/path counts come from the
+/// running peer's store (`None` when stopped). System-level, not per-peer.
+#[tauri::command]
+fn system_backend_store_stats(state: tauri::State<'_, BackendPeers>) -> Option<BackendStoreStats> {
+    let peers = state.peers.lock().unwrap();
+    let bp = peers
+        .values()
+        .find(|bp| bp.label.as_deref() == Some(SYSTEM_BACKEND_LABEL))?;
+    let sqlite_bytes = bp
+        .sqlite_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len());
+    let (entity_count, path_count) = match &bp.runtime {
+        Some(rt) => (
+            Some(rt.peer.content_store().len()),
+            Some(rt.peer.location_index().len_prefix("")),
+        ),
+        None => (None, None),
+    };
+    Some(BackendStoreStats {
+        peer_id: bp.peer_id.clone(),
+        running: bp.is_running(),
+        sqlite_bytes,
+        entity_count,
+        path_count,
+    })
+}
+
 /// List all managed backend peers (running and stopped).
 #[tauri::command]
 fn list_backend_peers(state: tauri::State<'_, BackendPeers>) -> Vec<BackendPeerResponse> {
@@ -649,6 +695,7 @@ pub fn run() {
             ensure_system_backend,
             backend_log_tail,
             system_backend_share_path,
+            system_backend_store_stats,
             set_backend_log_level,
             get_backend_log_level,
         ])

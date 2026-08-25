@@ -79,6 +79,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
         // no current signal), not a misleading "connecting".
         let status_cell = match kp.liveness {
             Liveness::Connected => components::td(&components::conn_chip(ConnState::Connected)),
+            Liveness::Connecting => components::td(&components::conn_chip(ConnState::Connecting)),
             Liveness::Unreachable => components::td(&components::conn_chip(ConnState::Offline)),
             Liveness::Unknown => components::td_text("—"),
         };

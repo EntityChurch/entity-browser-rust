@@ -1,5 +1,6 @@
 //! Window view implementations.
 
+pub mod access_log;
 pub mod chain_trace;
 pub mod content_site;
 pub mod content_stream;

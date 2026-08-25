@@ -115,6 +115,21 @@ impl GrantProfile {
         }
     }
 
+    /// A plain-English summary of *what* the profile actually permits — the
+    /// legibility answer to "what did I grant this device?". Kept beside the
+    /// `grants()` definition so the words never drift from the scope they name.
+    pub fn scope_summary(&self) -> &'static str {
+        match self {
+            GrantProfile::FileTransfer => "Can list and read files in the shared folder.",
+            GrantProfile::FileTransferRw => {
+                "Can list, read, write, and delete files in the shared folder."
+            }
+            GrantProfile::Trusted => {
+                "Full access — every handler, path, and operation on this backend."
+            }
+        }
+    }
+
     pub fn from_token(s: &str) -> Option<Self> {
         match s {
             "file-transfer" => Some(GrantProfile::FileTransfer),

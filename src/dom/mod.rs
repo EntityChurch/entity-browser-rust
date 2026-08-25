@@ -3,6 +3,7 @@
 //! Renders a command palette + dynamic window sections matching the
 //! WindowManager's active instances.
 
+pub mod access_log;
 pub mod chain_trace;
 pub mod components;
 pub mod content_site;

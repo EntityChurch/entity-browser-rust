@@ -170,6 +170,15 @@ pub struct EntityApp {
     /// because `WorkerProxy` holds non-`Send` `Rc`s.
     #[cfg(target_arch = "wasm32")]
     pending_sdk_attachments: std::rc::Rc<std::cell::RefCell<Vec<PendingSdkAttachment>>>,
+    /// Durable `frontend-idb` peers whose async `PeerContext` build has
+    /// completed and are waiting to be inserted into the primary Direct SDK.
+    /// The build (`Peers::build_idb_ctx`) runs in a `spawn_local` off the frame
+    /// loop (can't hold `&mut peer_manager` across `build_async().await`); the
+    /// completed ctx lands here and is drained under `&mut self` each frame by
+    /// [`drain_pending_idb_peers`]. Same defer idiom as
+    /// `pending_sdk_attachments`, main-thread flavour.
+    #[cfg(target_arch = "wasm32")]
+    pending_idb_peers: std::rc::Rc<std::cell::RefCell<Vec<PendingIdbPeer>>>,
     /// Cross-Worker MessagePort transport broker. Owns the main-side
     /// control ports for every backend Worker; routes inbound
     /// `xworker://<peer-id>` `OpenChannel` requests by transferring a
@@ -282,21 +291,33 @@ fn main_thread_log_param() -> Option<String> {
     None
 }
 
-/// Partition persisted-peer entries by mode. Stage 2C boot helper —
-/// Frontend-mode peers load into the boot SDK (Direct or Worker);
-/// Backend* peers each get respawned into their own worker. The
-/// partition preserves persisted order within each cohort so the
-/// "primary" (entries[0] within Frontend) stays stable across reloads.
+/// Partition persisted-peer entries by mode into the three boot cohorts.
+/// Stage 2C boot helper — `Frontend` peers load in-memory into the boot SDK
+/// (Direct or Worker); `FrontendIdb` peers are main-thread durable and get
+/// replayed into their own IndexedDB store (Direct posture — see
+/// `DESIGN-PERSISTENT-THIS-TAB-PEER.md`); `Backend*` peers each get respawned
+/// into their own worker. Persisted order is preserved within each cohort so
+/// the "primary" (`frontend[0]`) stays stable across reloads.
 #[cfg(target_arch = "wasm32")]
 fn partition_entries(
     entries: Vec<crate::persistence::PersistedPeerEntry>,
 ) -> (
     Vec<crate::persistence::PersistedPeerEntry>,
     Vec<crate::persistence::PersistedPeerEntry>,
+    Vec<crate::persistence::PersistedPeerEntry>,
 ) {
-    entries
-        .into_iter()
-        .partition(|e| matches!(e.mode, crate::peer_mode::PeerMode::Frontend))
+    use crate::peer_mode::PeerMode;
+    let mut frontend = Vec::new();
+    let mut frontend_idb = Vec::new();
+    let mut backend = Vec::new();
+    for e in entries {
+        match e.mode {
+            PeerMode::Frontend => frontend.push(e),
+            PeerMode::FrontendIdb => frontend_idb.push(e),
+            PeerMode::BackendMemory | PeerMode::BackendOpfs => backend.push(e),
+        }
+    }
+    (frontend, frontend_idb, backend)
 }
 
 /// Free-function spawn dispatcher used by both fresh-create and reload
@@ -481,6 +502,17 @@ struct PendingSdkAttachment {
     control_port_main_side: Option<web_sys::MessagePort>,
 }
 
+/// A durable `frontend-idb` peer whose async `PeerContext` build finished and is
+/// queued for synchronous insertion into the primary Direct SDK (drained each
+/// frame). `seed` + `label` are carried so the drain can persist the peer
+/// app-side (vault + roster) exactly as the in-memory create path does.
+#[cfg(target_arch = "wasm32")]
+struct PendingIdbPeer {
+    ctx: entity_sdk::PeerContext,
+    seed: [u8; 32],
+    label: Option<String>,
+}
+
 #[cfg(target_arch = "wasm32")]
 impl EntityApp {
 
@@ -508,6 +540,10 @@ impl EntityApp {
         // Drain any pending OPFS tombstones before any worker spawn —
         // post-spawn the sync access handles would block removeEntry.
         crate::opfs_cleanup::run_at_boot().await;
+        // Drop any deleted frontend-idb peer's IndexedDB database now, before it
+        // could be reopened (it won't be — it's off the roster), so the delete
+        // is race-free.
+        crate::idb_cleanup::run_at_boot().await;
 
         // Set A (`entity_peers`) is now the **key VAULT** (id → keypair) +
         // the cold-boot / pre-migration spawn fallback. The authoritative
@@ -633,7 +669,7 @@ impl EntityApp {
                 out
             }
         };
-        let (frontend, backend) = partition_entries(spawn_entries);
+        let (frontend, frontend_idb, backend) = partition_entries(spawn_entries);
 
         // Queue backend-peer worker spawns (each gets its own OPFS worker —
         // heavy data stays on OPFS by design; only the system peer is IDB).
@@ -646,6 +682,37 @@ impl EntityApp {
         peer_manager.load_persisted_primary(
             frontend.into_iter().map(|e| e.persisted).collect()
         );
+
+        // Durable this-tab (frontend-idb) peers: reopen each one's own
+        // IndexedDB store from its saved seed, so its tree rehydrates instead
+        // of coming back empty. Only meaningful when the primary is IDB-durable
+        // (`idb_active`); on the ephemeral fallback there is no durable arm to
+        // host them, so we skip loudly rather than silently masquerade as saved.
+        if idb_active {
+            for entry in frontend_idb {
+                let label = entry.persisted.label.clone();
+                let keypair = entry.persisted.keypair;
+                let pid = keypair.peer_id().to_string();
+                if let Err(e) = peer_manager
+                    .replay_persisted_idb_peer(keypair, label)
+                    .await
+                {
+                    tracing::warn!(
+                        peer_id = %pid,
+                        error = %e,
+                        "failed to rehydrate persistent this-tab (idb) peer; its \
+                         tree is unavailable this session"
+                    );
+                }
+            }
+        } else if !frontend_idb.is_empty() {
+            tracing::warn!(
+                count = frontend_idb.len(),
+                "persistent this-tab (idb) peers present but the primary is on the \
+                 ephemeral in-memory fallback (no durable arm) — not rehydrated \
+                 this session"
+            );
+        }
         let mut app = Self::build_wasm_app(peer_manager, pending);
         // Direct arm: the system-peer tree is durable iff the IDB store came up.
         app.boot_load(boot_class, idb_active).await;
@@ -664,12 +731,31 @@ impl EntityApp {
         // Drain any pending OPFS tombstones before any worker spawn —
         // post-spawn the sync access handles would block removeEntry.
         crate::opfs_cleanup::run_at_boot().await;
+        // Drop any deleted frontend-idb peer's IndexedDB database now, before it
+        // could be reopened (it won't be — it's off the roster), so the delete
+        // is race-free.
+        crate::idb_cleanup::run_at_boot().await;
 
         // Stage 2C: load all entries, partition by mode. Frontend-mode
         // peers go into the boot worker's SDK (primary + additional).
         // Backend* peers each get their own worker, spawned post-build.
         let entries = crate::persistence::load_all_peer_entries();
-        let (mut frontend, backend) = partition_entries(entries);
+        let (mut frontend, frontend_idb, backend) = partition_entries(entries);
+        // NAMED DEFERRED HOLE (design arm-matrix): a durable this-tab (idb) peer
+        // is a main-thread Direct/IDB construct; the Worker-primary posture has
+        // no main-thread SDK to host it. Rather than drop the peer, fold it into
+        // the worker cohort so its IDENTITY survives — but its IndexedDB tree is
+        // inaccessible this session. Worker-primary is opt-in + de-emphasized;
+        // building the cross-arm hosting is deferred until it returns (if ever).
+        if !frontend_idb.is_empty() {
+            tracing::warn!(
+                count = frontend_idb.len(),
+                "worker-primary boot: durable this-tab (idb) peers cannot be \
+                 main-thread-durable under the Worker arm — loading identity-only, \
+                 their IndexedDB trees are inaccessible this session (deferred hole)"
+            );
+            frontend.extend(frontend_idb);
+        }
         // BootClass computed ONCE, BEFORE the cold-boot keypair generate
         // below (reframe §2.2). Worker arm = durable tree (OPFS journal
         // replayed before Ready), so a returning identity is warm-durable
@@ -1037,6 +1123,7 @@ impl EntityApp {
             pending_backend_peers,
             system_backend_connect,
             pending_sdk_attachments,
+            pending_idb_peers: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             xworker_broker,
             boot_control_port: stashed_boot_port,
             status_closures,
@@ -1819,6 +1906,9 @@ impl EntityApp {
         self.drain_system_backend_connect();
         // Attach any new Worker SDKs spawned for backend-mode peer creation.
         self.drain_pending_sdk_attachments();
+        // Insert any durable this-tab (frontend-idb) peers whose async build
+        // finished since last frame.
+        self.drain_pending_idb_peers();
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
@@ -2153,6 +2243,12 @@ impl EntityApp {
                                 #[cfg(target_arch = "wasm32")]
                                 self.create_frontend_peer(label.clone());
                             }
+                            crate::peer_mode::PeerMode::FrontendIdb => {
+                                // Durable this-tab peer: async IDB build off the
+                                // frame loop, then inserted on a later frame.
+                                #[cfg(target_arch = "wasm32")]
+                                self.create_frontend_idb_peer(label.clone());
+                            }
                             crate::peer_mode::PeerMode::BackendMemory
                             | crate::peer_mode::PeerMode::BackendOpfs => {
                                 #[cfg(target_arch = "wasm32")]
@@ -2259,13 +2355,19 @@ impl EntityApp {
                         let tauri_ipc_backend =
                             is_backend && crate::tauri_ipc::is_tauri();
                         if !tauri_ipc_backend {
-                            let was_opfs = crate::persistence::load_all_peer_entries()
+                            let deleted_mode = crate::persistence::load_all_peer_entries()
                                 .iter()
                                 .find(|e| e.persisted.keypair.peer_id().to_string() == *peer_id)
-                                .map(|e| e.mode == crate::peer_mode::PeerMode::BackendOpfs)
-                                .unwrap_or(false);
-                            if was_opfs {
+                                .map(|e| e.mode);
+                            if deleted_mode == Some(crate::peer_mode::PeerMode::BackendOpfs) {
                                 crate::persistence::mark_opfs_for_cleanup(peer_id);
+                            }
+                            // A durable this-tab (frontend-idb) peer owns its own
+                            // entity-peer-{id} IndexedDB database — tombstone it for
+                            // boot-time destruction so a deleted peer doesn't orphan
+                            // its store (D9: add → paired remove).
+                            if deleted_mode == Some(crate::peer_mode::PeerMode::FrontendIdb) {
+                                crate::persistence::mark_idb_for_cleanup(peer_id);
                             }
                             crate::persistence::delete_peer(peer_id);
                             // Roster dual-write (Brick 3): remove from the
@@ -3292,6 +3394,100 @@ impl EntityApp {
         });
     }
 
+    /// Create a durable **this-tab (`frontend-idb`)** peer. The IDB
+    /// `PeerContext` build is async (`Peers::build_idb_ctx`), so it runs in a
+    /// `spawn_local` off the frame loop; the built ctx lands in
+    /// `pending_idb_peers` and is inserted + persisted on a later frame by
+    /// [`drain_pending_idb_peers`]. Direct posture only — refused loudly on a
+    /// Worker primary (the UI also gates the option to Direct).
+    #[cfg(target_arch = "wasm32")]
+    fn create_frontend_idb_peer(&self, label: Option<String>) {
+        if self.peer_manager.primary_as_direct().is_none() {
+            let reason = "persistent this-tab peers require the Direct arm";
+            tracing::warn!(reason, "frontend-idb create refused");
+            self.event_log_writer
+                .log(format!("Cannot create peer: {reason}"));
+            return;
+        }
+        let keypair = entity_crypto::Keypair::generate();
+        let seed = keypair.secret_key_bytes();
+        let queue = self.pending_idb_peers.clone();
+        let event_log = self.event_log_writer.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::peers::Peers::build_idb_ctx(keypair).await {
+                Ok(ctx) => {
+                    queue.borrow_mut().push(PendingIdbPeer { ctx, seed, label });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "durable this-tab peer build failed");
+                    event_log.log(format!("Create peer failed: {e}"));
+                }
+            }
+        });
+    }
+
+    /// Drain durable `frontend-idb` peers whose async build finished: insert
+    /// each into the primary Direct SDK, persist it app-side (vault + roster,
+    /// mode `FrontendIdb`), and checkpoint both the roster write and the new
+    /// peer's own store so the create survives an immediate reload.
+    #[cfg(target_arch = "wasm32")]
+    fn drain_pending_idb_peers(&mut self) {
+        let drained: Vec<PendingIdbPeer> =
+            self.pending_idb_peers.borrow_mut().drain(..).collect();
+        for PendingIdbPeer { ctx, seed, label } in drained {
+            let new_pid = match self.peer_manager.insert_built_idb_peer(ctx, label.clone())
+            {
+                Ok(pid) => pid,
+                Err(e) => {
+                    tracing::warn!(error = %e, "durable this-tab peer insert failed");
+                    self.event_log_writer.log(format!("Create peer failed: {e}"));
+                    continue;
+                }
+            };
+            tracing::info!(peer_id = %new_pid, "Created durable this-tab (idb) peer");
+            let keypair = entity_crypto::Keypair::from_seed(seed);
+            crate::persistence::save_peer_with_mode(
+                &new_pid,
+                &keypair,
+                label.as_deref(),
+                crate::peer_mode::PeerMode::FrontendIdb,
+            );
+            // Roster dual-write (Brick 3) on the SYSTEM peer, keyed on the
+            // seed-derived id, mode = FrontendIdb. Checkpoint makes it durable.
+            if let Some(h) = self.peer_manager.writer_handle() {
+                crate::roster::put_entry(
+                    &h,
+                    self.peer_manager.system_peer_id(),
+                    &crate::roster::RosterEntry {
+                        peer_id: new_pid.clone(),
+                        mode: crate::peer_mode::PeerMode::FrontendIdb,
+                        label: label.clone(),
+                    },
+                );
+                if let Some(cp) = self.peer_manager.idb_checkpoint() {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Err(e) = cp.checkpoint().await {
+                            tracing::warn!(error = %e, "roster create checkpoint failed (frontend-idb)");
+                        }
+                    });
+                }
+            }
+            // Checkpoint the NEW peer's own store so its initial state is durable
+            // across an immediate reload (the create-path flush, step 2 intent).
+            if let Some(cp) = self.peer_manager.idb_checkpoint_for(&new_pid) {
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Err(e) = cp.checkpoint().await {
+                        tracing::warn!(error = %e, "durable this-tab peer: create checkpoint failed");
+                    }
+                });
+            }
+            self.event_log_writer.log(format!(
+                "Created peer {}",
+                &new_pid[..12.min(new_pid.len())]
+            ));
+        }
+    }
+
     /// Spawn a new Worker SDK that hosts a fresh peer in the requested
     /// backend mode. Generates a keypair on the main thread, persists
     /// it immediately (orphans on spawn failure are benign — user can
@@ -3374,6 +3570,15 @@ impl EntityApp {
                 c.attempts = 0;
                 c.cooldown = RETRY_COOLDOWN;
                 drop(c);
+                // Burst exhausted without a handshake — genuinely unreachable
+                // for now, so the link chip drops from Connecting to Offline
+                // (honest: we're backing off, not actively dialing). A new burst
+                // after the cooldown re-arms Connecting.
+                self.connection_health_writer.record(
+                    &info.peer_id,
+                    crate::connection_health::Liveness::Unreachable,
+                    Some("backend unreachable — backing off, will retry".into()),
+                );
                 tracing::warn!("system backend unreachable after {MAX_ATTEMPTS} tries — backing off, will retry");
                 return;
             }
@@ -3406,6 +3611,18 @@ impl EntityApp {
             }
             return;
         }
+
+        // Armed and actively dialing — surface Connecting (not Offline) while
+        // the boot provision→dial→handshake latency plays out, so the operator
+        // sees progress rather than a broken-looking Offline chip that snaps to
+        // Connected. Honest per D13/S6: the async connect success records
+        // Connected; an exhausted burst records Unreachable. Deduped by the
+        // health writer, so re-recording each dial frame is a no-op.
+        self.connection_health_writer.record(
+            &target.peer_id,
+            crate::connection_health::Liveness::Connecting,
+            None,
+        );
 
         // Dial from S (the frontend system peer) — the same "from" peer as the
         // manual backend-connect affordance.
