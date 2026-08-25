@@ -54,6 +54,10 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
     "attestation", "quorum", "identity", "role", "compute",
     "history", "handlers",
     "type-system", "content", "local-files",
+    # Direct-arm §6.5 WebRTC: unlocks `entity_peer::carrier::PeerCarrier` (and
+    # `WireIceServer`), the carrier the main-thread establisher authenticates to
+    # the signaling node with. Pulls `entity-signaling` (native-buildable).
+    "signaling",
 ] }
 
 entity-crypto = { path = "../entity-core-rust/core/crypto" }   # PEM keypair load (`persistence.rs`)

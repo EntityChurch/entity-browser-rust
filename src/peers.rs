@@ -1041,12 +1041,40 @@ impl Peers {
     /// shape generalized to secondary user peers by the `frontend-idb` mode
     /// (`build_idb_ctx` + `insert_built_idb_peer`; see
     /// `docs/architecture/reviews/DESIGN-PERSISTENT-THIS-TAB-PEER.md`).
+    // Kept as the symmetric no-establisher constructor (mirrors `new_direct`);
+    // the boot path now routes through `new_direct_idb_with_establish` so a
+    // primary that provisions Direct-arm WebRTC installs the seam. Retained as a
+    // clean public API and referenced by the docs below.
     #[cfg(target_arch = "wasm32")]
+    #[allow(dead_code)]
     pub async fn new_direct_idb(
         keypair: entity_crypto::Keypair,
         db_name: &str,
     ) -> Result<Self, entity_sdk::SdkError> {
-        let pm = entity_sdk::PeerManager::with_keypair_idb(keypair, db_name).await?;
+        Self::new_direct_idb_with_establish(keypair, db_name, None).await
+    }
+
+    /// Like [`new_direct_idb`](Self::new_direct_idb) but installs an
+    /// EXTENSION-NETWORK §10.3 live-establishment seam on the primary peer —
+    /// the **Direct-arm WebRTC** establisher
+    /// (`entity_wasm_worker_proxy::MainThreadWebRtcEstablisher`). The seam is a
+    /// constructor argument because it MUST be captured before the peer's
+    /// `PeerShared` clones do (there is no `&mut Peer` on this arm). `None` is
+    /// byte-identical to [`new_direct_idb`](Self::new_direct_idb).
+    #[cfg(target_arch = "wasm32")]
+    pub async fn new_direct_idb_with_establish(
+        keypair: entity_crypto::Keypair,
+        db_name: &str,
+        live_establish: Option<
+            std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>,
+        >,
+    ) -> Result<Self, entity_sdk::SdkError> {
+        let pm = entity_sdk::PeerManager::with_keypair_idb_and_establish(
+            keypair,
+            db_name,
+            live_establish,
+        )
+        .await?;
         Ok(Self::new_direct_with_sdk(Sdk::Direct(pm)))
     }
 
