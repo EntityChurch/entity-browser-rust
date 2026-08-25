@@ -35,7 +35,7 @@ use crate::dom::util;
 use crate::dom::DomCtx;
 use crate::peers::Peers;
 
-use crate::views::games::SELECT_EVENT;
+use crate::views::games::{FILTER_EVENT, SELECT_EVENT};
 
 /// Trailing-edge debounce for save-state writes. A running app posts a `state`
 /// message on every move; coalescing them to ~one write per quiet interval
@@ -113,42 +113,62 @@ fn stage_style(size: Option<AppSize>, is_game: bool) -> String {
     style
 }
 
-/// The launcher grid: one card per catalog entry. Clicking a card emits a
-/// `select_game` window event carrying the app id. `title` heads the grid and
-/// `empty_msg` shows when there are no entries (so the window degrades cleanly
-/// to "nothing here yet" rather than a blank panel).
-pub fn render_grid(
-    container: &Element,
-    ctx: &DomCtx,
-    entries: &[AppEntry],
-    title: &str,
-    empty_msg: &str,
-) {
+/// Everything the launcher grid draws.
+///
+/// A struct rather than eight positional arguments: two callers with different
+/// answers for `saves_entry` and `chips` is exactly where a positional list
+/// starts getting mis-ordered silently.
+pub struct GridView<'a> {
+    /// Every set's entries tagged with their set. Clicking a card emits a
+    /// `select_game` window event carrying `"{set}/{id}"` — an id alone is
+    /// ambiguous once both sets share a window.
+    pub entries: &'a [(&'static str, &'a AppEntry)],
+    /// The chip row to render. Empty means "nothing worth filtering" and no
+    /// chips are drawn (see `apps::category::chips_for`).
+    pub chips: &'a [crate::apps::category::Chip],
+    /// The selected chip key; the grid shows the entries that pass it
+    /// ([`crate::apps::category::passes`]).
+    pub filter: &'a str,
+    /// Whether to offer the way into the Saves panel. The Apps launcher does;
+    /// the Entity Native launcher does **not** — built-in programs persist no
+    /// save state, and a button opening an always-empty panel is worse than no
+    /// button.
+    pub saves_entry: bool,
+    /// Heads the grid.
+    pub title: &'a str,
+    /// Shown when there are no entries at all, so the window degrades to
+    /// "nothing here yet" rather than a blank panel.
+    pub empty_msg: &'a str,
+}
+
+/// The launcher grid: a control row over one card per catalog entry.
+pub fn render_grid(container: &Element, ctx: &DomCtx, view: &GridView) {
+    let GridView {
+        entries,
+        chips,
+        filter,
+        saves_entry,
+        title,
+        empty_msg,
+    } = *view;
     util::clear_children(container);
 
     let wrap = util::create_element("div");
-    // `min-height` (NOT `height:100%`) is the floor: a percentage height
-    // collapses in an auto-height tiled window (the `.window` section is
-    // content-driven), which cramped the launcher to the ~200px section
-    // minimum. A min-height gives the grid real space in a tiled window and,
-    // via the `.window-content > *` flex-stretch, still fills a maximized one —
-    // mirroring how the player's `.gm-stage-area` floor works.
-    util::set_attr(
-        &wrap,
-        "style",
-        "min-height:480px;width:100%;overflow:auto;padding:20px;box-sizing:border-box;\
-         background:var(--bg, #101018);color:var(--text, #e2e2ea);\
-         font-family:system-ui,-apple-system,sans-serif;",
-    );
+    // The same body the Saves panel uses — see `theme::PANEL_SURFACE` for why
+    // the floor is a min-height and not 100%.
+    util::set_attr(&wrap, "style", crate::dom::theme::PANEL_SURFACE);
 
     let title_el = util::create_element("div");
-    util::set_attr(
-        &title_el,
-        "style",
-        "font-size:18px;font-weight:600;margin:0 0 16px 2px;",
-    );
+    util::set_attr(&title_el, "style", crate::dom::theme::PANEL_TITLE);
     util::set_text(&title_el, title);
     util::append(&wrap, &title_el);
+
+    // The control row comes BEFORE the empty check, deliberately. A save
+    // outlives its catalog: with no apps published (or an origin gone away) the
+    // grid is empty while the saves are still there, and hiding the way into
+    // them behind "no apps available" would make the user's own data
+    // unreachable from the only surface that manages it.
+    util::append(&wrap, &controls_row(ctx, chips, filter, saves_entry));
 
     if entries.is_empty() {
         let hint = util::create_element("div");
@@ -169,7 +189,10 @@ pub fn render_grid(
         "display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));\
          grid-auto-rows:1fr;gap:14px;",
     );
-    for e in entries {
+    for (set, e) in entries {
+        if !crate::apps::category::passes(filter, set, e.category.as_deref()) {
+            continue;
+        }
         let (fg, bg) = accent_for(&e.id);
         let card = util::create_element_with_class("button", "app-card");
         util::set_attr(
@@ -222,11 +245,65 @@ pub fn render_grid(
         util::set_text(&desc, &e.description);
         util::append(&card, &desc);
 
-        ctx.on_window_event(&card, "click", SELECT_EVENT, &e.id);
+        ctx.on_window_event(&card, "click", SELECT_EVENT, &format!("{set}/{}", e.id));
         util::append(&grid, &card);
     }
     util::append(&wrap, &grid);
     util::append(container, &wrap);
+}
+
+/// The launcher's control row: the category chips, then the way into the Saves
+/// panel.
+///
+/// One row for both, because both are launcher-level controls — and because the
+/// chips can legitimately be absent (a catalog with one category renders none)
+/// while Saves never is, so a chips-only row would sometimes vanish and take
+/// the entry point with it. Built from the shared filter atoms
+/// (`components::filter_bar` / `filter_chip`) so it cannot drift from any other
+/// filter in the app.
+fn controls_row(
+    ctx: &DomCtx,
+    chips: &[crate::apps::category::Chip],
+    filter: &str,
+    saves_entry: bool,
+) -> Element {
+    use crate::apps::category::ALL;
+    use crate::dom::components;
+    // An empty persisted filter means "no filter", which is the `all` chip —
+    // resolve it here so exactly one chip is ever highlighted.
+    let active = if filter.is_empty() { ALL } else { filter };
+    let row = components::filter_bar();
+    for chip in chips {
+        util::append(
+            &row,
+            &components::filter_chip(
+                ctx,
+                &crate::i18n::t(&format!("apps.filter.{}", chip.key), &[]),
+                chip.count,
+                chip.key == active,
+                FILTER_EVENT,
+                chip.key,
+            ),
+        );
+    }
+    if saves_entry {
+        let saves = components::button_value(
+            ctx,
+            &crate::i18n::t("saves.open", &[]),
+            components::ButtonKind::Small,
+            crate::views::games::SAVES_PANEL_EVENT,
+            // NOT "" — an empty value is the CLOSE side of this event, and a
+            // button that closes what it is supposed to open would be a silent
+            // no-op from the grid.
+            "1",
+        );
+        // Marks this a control rather than an app card, for anything scanning
+        // the grid's buttons (the e2e does, and would otherwise count it as an
+        // app).
+        util::set_attr(&saves, "data-control", "saves");
+        util::append(&row, &saves);
+    }
+    row
 }
 
 /// A stable (foreground, background-tint) color pair for a card, derived from
@@ -382,9 +459,10 @@ pub struct GamesHostConfig {
     pub peer_id: String,
     /// The app-set (`games`/`apps`) — keys the save path so ids don't collide.
     pub set: String,
-    /// The set's display label (`Games`/`Apps`) — heads the back button so the
-    /// Apps window says "← Apps", not "← Games".
-    pub set_label: String,
+    /// The label heading the back button ("← Apps") — the launcher's own title,
+    /// not the set's: one window now hosts both sets, and a running game
+    /// returning to "← Games" would name a window that no longer exists.
+    pub back_label: String,
     /// The selected app's preferred-size hint (catalog `size`), or `None` for
     /// the per-set default. Drives the stage caps via [`stage_style`].
     pub size: Option<AppSize>,
@@ -463,7 +541,7 @@ pub fn render_player(
          background:var(--surface-hover, #22223a);color:var(--text, #e2e2ea);\
          font-family:inherit;font-size:13px;",
     );
-    util::set_text(&back, &format!("← {}", cfg.set_label));
+    util::set_text(&back, &format!("← {}", cfg.back_label));
     ctx.on_window_event(&back, "click", SELECT_EVENT, "");
     util::append(&bar, &back);
     let name = util::create_element("div");

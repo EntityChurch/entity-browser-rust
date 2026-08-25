@@ -12,6 +12,9 @@ mod access_log;
 mod backend_log;
 mod manager_grant;
 mod persistence;
+// Public for the same reason `signaling_node` is: `tests/port_mapping.rs` drives
+// the real entry points against a fixture router rather than a copy of them.
+pub mod port_mapping;
 // Public so `tests/signaling_node.rs` can build a node the way
 // `start_backend_peer` does. An integration test that hand-rolled its own mount
 // would prove the extension works and say nothing about what we ship.
@@ -128,6 +131,10 @@ struct BackendPeerRuntime {
     /// (no SQLite path) the grant would be gone with it.
     manager_peer_id: String,
     listener_handle: tokio::task::JoinHandle<()>,
+    /// The live port-mapping lease, when the user asked for one. `None` means
+    /// nobody is asking the router — which is a different state from "asked and
+    /// got nothing", and the lease itself carries that second one.
+    port_map: Option<(port_mapping::Lease, tokio::task::JoinHandle<()>)>,
 }
 
 /// A backend peer managed by the Tauri process.
@@ -147,6 +154,11 @@ struct BackendPeer {
     /// the handler is mounted on `PeerBuilder`, so flipping this restarts the
     /// peer rather than taking effect live.
     signaling_node: bool,
+    /// Persisted "ask the router to forward my port" setting (`config.toml`).
+    /// Read at start like `signaling_node`, and for the same reason: the lease
+    /// is bound to the port this run actually got, so flipping it restarts the
+    /// peer rather than taking effect live.
+    port_mapping: bool,
     runtime: Option<BackendPeerRuntime>,
 }
 
@@ -169,8 +181,28 @@ impl BackendPeer {
         self.runtime.as_ref().is_some_and(|r| r.signaling_node)
     }
 
+    /// What the router is currently forwarding, if anything. `Disabled` when
+    /// nobody asked and when the peer is stopped — a stopped peer's door, if it
+    /// still existed, would forward to nothing.
+    fn port_map_state(&self) -> port_mapping::MapState {
+        self.runtime
+            .as_ref()
+            .and_then(|r| r.port_map.as_ref())
+            .map(|(l, _)| l.state())
+            .unwrap_or(port_mapping::MapState::Disabled)
+    }
+
     fn stop(&mut self) {
         if let Some(rt) = self.runtime.take() {
+            // Close the door BEFORE dropping the listener, and close it
+            // explicitly: a mapping that outlives its listener forwards
+            // strangers to a port nothing answers on. `release` marks the state
+            // closed synchronously and sends the delete detached, so a router
+            // that has stopped answering cannot wedge a stop.
+            if let Some((lease, task)) = &rt.port_map {
+                lease.release();
+                task.abort();
+            }
             rt.listener_handle.abort();
             log::info!("Stopped backend peer {}", &self.peer_id[..12.min(self.peer_id.len())]);
         }
@@ -195,6 +227,44 @@ struct BackendPeerResponse {
     /// node. Reported from the running peer so the UI cannot claim a rendezvous
     /// that is not actually mounted.
     signaling_node: bool,
+    /// The internet-reachable `ws://` address the router is forwarding to this
+    /// peer, when one is actually open.
+    ///
+    /// **`None` covers four different situations and the UI must not read it as
+    /// one** — not asked for, still probing, refused, and behind CGNAT. Which
+    /// one it is lives in `port_mapping_note`; this field is only ever an
+    /// address that currently works.
+    external_addr: Option<String>,
+    /// Whether a lease is being maintained at all, i.e. whether the user turned
+    /// this on and we found a gateway to ask. Distinct from `external_addr`
+    /// being `Some`: asking and getting nothing is the ordinary outcome.
+    port_mapping: bool,
+    /// Why there is no external address, in a sentence already written for a
+    /// person. `None` when there is one, or when nobody asked.
+    port_mapping_note: Option<String>,
+}
+
+/// The three port-mapping fields, derived from **one** state.
+///
+/// One function rather than three expressions at six construction sites: the
+/// invariant that matters is that they cannot disagree — an address beside a
+/// note, or a note beside a working door — and six hand-written copies is
+/// exactly where that starts happening.
+fn map_fields(s: &port_mapping::MapState) -> (Option<String>, bool, Option<String>) {
+    use port_mapping::MapState as M;
+    match s {
+        M::Disabled => (None, false, None),
+        // Probing is "asked, no answer yet", and it carries NO note: a reason
+        // shown before there is one would read as a failure that has not
+        // happened. The UI's own "checking…" belongs to the `true` here.
+        M::Probing => (None, true, None),
+        M::Open { external, protocol } => (
+            Some(format!("ws://{external}")),
+            true,
+            Some(format!("forwarded by your router via {protocol}")),
+        ),
+        M::Closed(why) => (None, true, Some(why.clone())),
+    }
 }
 
 /// Native-store stats for the system backend, surfaced to the Storage window
@@ -246,6 +316,9 @@ fn create_backend_peer(
         status: "stopped".into(),
         ws_addr: None,
         signaling_node: false,
+        external_addr: None,
+        port_mapping: false,
+        port_mapping_note: None,
     };
 
     state.peers.lock().unwrap().insert(peer_id.clone(), BackendPeer {
@@ -253,9 +326,11 @@ fn create_backend_peer(
         seed,
         label,
         sqlite_path,
-        // A newly created peer serves no rendezvous until asked — the same
-        // fail-closed default `persistence::PeerConfigFile` writes.
+        // A newly created peer serves no rendezvous and asks for no port map
+        // until asked — the same fail-closed defaults
+        // `persistence::PeerConfigFile` writes.
         signaling_node: false,
+        port_mapping: false,
         runtime: None,
     });
 
@@ -273,20 +348,28 @@ async fn start_backend_peer(
     manager_peer_id: String,
 ) -> Result<BackendPeerResponse, String> {
     // Extract what we need under the lock, then release it for async work.
-    let (seed, label, sqlite_path, wants_signaling) = {
+    let (seed, label, sqlite_path, wants_signaling, wants_port_mapping) = {
         let peers = state.peers.lock().unwrap();
         let bp = peers.get(&peer_id)
             .ok_or_else(|| format!("Backend peer {} not found", peer_id))?;
         if bp.is_running() {
+            let (em, pm, pn) = map_fields(&bp.port_map_state());
             return Ok(BackendPeerResponse {
                 peer_id: bp.peer_id.clone(),
                 label: bp.label.clone(),
                 status: "running".into(),
                 ws_addr: bp.ws_addr().map(String::from),
                 signaling_node: bp.serves_signaling(),
+                external_addr: em, port_mapping: pm, port_mapping_note: pn,
             });
         }
-        (bp.seed, bp.label.clone(), bp.sqlite_path.clone(), bp.signaling_node)
+        (
+            bp.seed,
+            bp.label.clone(),
+            bp.sqlite_path.clone(),
+            bp.signaling_node,
+            bp.port_mapping,
+        )
     };
     let serve_signaling = signaling_node::resolve_enabled(wants_signaling);
 
@@ -369,6 +452,16 @@ async fn start_backend_peer(
     // interfaces. Browsers can't connect to 0.0.0.0, so we
     // substitute the loopback address for the reported value.
     let ws_addr = connectable_addr(&bound_addr);
+    // The port the router is asked to forward. Parsed from the BOUND address,
+    // never from the requested one: the 4041 bind falls back to a dynamic port
+    // when it is taken, and mapping the port we wanted rather than the one we
+    // got would forward strangers to somebody else's listener.
+    //
+    // `Option`, not `unwrap_or(0)`: port 0 means "any port" to a bind and
+    // nothing at all to a router, so a parse failure must skip the mapping
+    // rather than ask for a door onto nowhere.
+    let bound_port: Option<u16> =
+        bound_addr.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0);
 
     let mut builder = PeerBuilder::new()
         .keypair(keypair)
@@ -472,12 +565,54 @@ async fn start_backend_peer(
         }
     });
 
+    // --- Ask the router for a door, if the user asked us to -------------------
+    //
+    // Runs AFTER the listener is serving and never blocks it: the probe is a
+    // few UDP packets to the gateway and its expected outcome on most routers
+    // is silence (they speak only UPnP IGD). A peer whose start depended on
+    // this would take seconds longer to boot for a feature that usually
+    // reports "no". The bound port is what gets mapped, so this necessarily
+    // follows the bind.
+    let port_map: Option<(port_mapping::Lease, tokio::task::JoinHandle<()>)> =
+        if port_mapping::resolve_enabled(wants_port_mapping) {
+            match (port_mapping::default_gateway_v4(), local_lan_ip(), bound_port) {
+                (Ok(gw), Some(std::net::IpAddr::V4(me)), Some(port)) => {
+                    let (lease, task) = port_mapping::Lease::spawn(gw, me, port);
+                    Some((lease, task))
+                }
+                (Err(e), _, _) => {
+                    log::info!("port mapping: not asking — {e}");
+                    None
+                }
+                (_, _, None) => {
+                    log::warn!("port mapping: not asking — could not read a port out of {bound_addr}");
+                    None
+                }
+                (_, me, _) => {
+                    // A v6-only or absent LAN address: PCP wants this host's v4
+                    // address on the link to the gateway, and guessing one would
+                    // earn ADDRESS_MISMATCH from the server.
+                    log::info!("port mapping: not asking — no IPv4 LAN address ({me:?})");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
     let response = BackendPeerResponse {
         peer_id: peer_id.clone(),
         label: label.clone(),
         status: "running".into(),
         ws_addr: Some(ws_addr.clone()),
         signaling_node: serve_signaling,
+        // Deliberately NOT the lease's state: the probe has only just started,
+        // so anything but "asked" here would be a guess. The UI learns the
+        // answer from the next status poll, which is where a lease that takes a
+        // second to answer belongs.
+        external_addr: None,
+        port_mapping: port_map.is_some(),
+        port_mapping_note: None,
     };
 
     // Update the peer with runtime state.
@@ -490,6 +625,7 @@ async fn start_backend_peer(
             signaling_node: serve_signaling,
             manager_peer_id,
             listener_handle,
+            port_map,
         });
     }
 
@@ -511,8 +647,13 @@ fn stop_backend_peer(
         label: bp.label.clone(),
         status: "stopped".into(),
         ws_addr: None,
-        // A stopped peer serves nothing, whatever it is configured to serve.
+        // A stopped peer serves nothing, whatever it is configured to serve —
+        // and `stop()` has just released its port mapping, so reporting an
+        // external address here would name a door that was closed a line ago.
         signaling_node: false,
+        external_addr: None,
+        port_mapping: false,
+        port_mapping_note: None,
     })
 }
 
@@ -538,9 +679,54 @@ async fn set_backend_signaling_node(
     peer_id: String,
     enabled: bool,
 ) -> Result<BackendPeerResponse, String> {
-    if !persistence::set_signaling_node(&peer_id, enabled) {
+    set_backend_flag(state, peer_id, enabled, Flag::SignalingNode).await
+}
+
+/// Ask the router to forward this backend's port, or stop asking. Persistent.
+///
+/// **Restarts the peer for the same reason the rendezvous toggle does**, and
+/// one more: the lease is bound to the port this run actually bound, so a
+/// toggle that took effect live would have to reason about a listener that may
+/// since have moved. Restarting means the lease is always for the port that is
+/// serving right now.
+///
+/// Turning it **off** releases the mapping — `stop()` does that on the way
+/// through, so the door is closed before the peer comes back up without one.
+#[tauri::command]
+async fn set_backend_port_mapping(
+    state: tauri::State<'_, BackendPeers>,
+    peer_id: String,
+    enabled: bool,
+) -> Result<BackendPeerResponse, String> {
+    set_backend_flag(state, peer_id, enabled, Flag::PortMapping).await
+}
+
+/// Which persisted per-peer capability a toggle is flipping.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flag {
+    SignalingNode,
+    PortMapping,
+}
+
+/// The body both toggles share: persist, land it in memory, restart if running.
+///
+/// Parameterized rather than copied, and the reason is the restart sequence
+/// below — reading the manager peer-id *before* `stop()` takes the runtime that
+/// holds it. A second hand-written copy of that ordering is where the
+/// designation gets lost silently on one of the two toggles.
+async fn set_backend_flag(
+    state: tauri::State<'_, BackendPeers>,
+    peer_id: String,
+    enabled: bool,
+    flag: Flag,
+) -> Result<BackendPeerResponse, String> {
+    let persisted = match flag {
+        Flag::SignalingNode => persistence::set_signaling_node(&peer_id, enabled),
+        Flag::PortMapping => persistence::set_port_mapping(&peer_id, enabled),
+    };
+    if !persisted {
         return Err(format!(
-            "Could not persist the rendezvous setting for backend peer {}",
+            "Could not persist the setting for backend peer {}",
             &peer_id[..12.min(peer_id.len())]
         ));
     }
@@ -552,7 +738,10 @@ async fn set_backend_signaling_node(
         let bp = peers
             .get_mut(&peer_id)
             .ok_or_else(|| format!("Backend peer {} not found", peer_id))?;
-        bp.signaling_node = enabled;
+        match flag {
+            Flag::SignalingNode => bp.signaling_node = enabled,
+            Flag::PortMapping => bp.port_mapping = enabled,
+        }
         // Read the manager BEFORE stopping — `stop()` takes the runtime that
         // holds it, and restarting with an empty manager loses the designation
         // silently rather than failing.
@@ -576,12 +765,14 @@ async fn set_backend_signaling_node(
         let bp = peers
             .get(&peer_id)
             .ok_or_else(|| format!("Backend peer {} not found", peer_id))?;
+        let (em, pm, pn) = map_fields(&bp.port_map_state());
         return Ok(BackendPeerResponse {
             peer_id: bp.peer_id.clone(),
             label: bp.label.clone(),
             status: bp.status().into(),
             ws_addr: bp.ws_addr().map(String::from),
             signaling_node: bp.serves_signaling(),
+            external_addr: em, port_mapping: pm, port_mapping_note: pn,
         });
     }
 
@@ -693,12 +884,16 @@ fn system_backend_store_stats(state: tauri::State<'_, BackendPeers>) -> Option<B
 #[tauri::command]
 fn list_backend_peers(state: tauri::State<'_, BackendPeers>) -> Vec<BackendPeerResponse> {
     let peers = state.peers.lock().unwrap();
-    peers.values().map(|bp| BackendPeerResponse {
-        peer_id: bp.peer_id.clone(),
-        label: bp.label.clone(),
-        status: bp.status().into(),
-        ws_addr: bp.ws_addr().map(String::from),
-        signaling_node: bp.serves_signaling(),
+    peers.values().map(|bp| {
+        let (external_addr, port_mapping, port_mapping_note) = map_fields(&bp.port_map_state());
+        BackendPeerResponse {
+            peer_id: bp.peer_id.clone(),
+            label: bp.label.clone(),
+            status: bp.status().into(),
+            ws_addr: bp.ws_addr().map(String::from),
+            signaling_node: bp.serves_signaling(),
+            external_addr, port_mapping, port_mapping_note,
+        }
     }).collect()
 }
 
@@ -792,6 +987,7 @@ async fn ensure_backend_peer(
                     label: lbl,
                     sqlite_path,
                     signaling_node: false,
+                    port_mapping: false,
                     runtime: None,
                 },
             );
@@ -875,6 +1071,7 @@ pub fn run() {
                     label: entry.label,
                     sqlite_path: entry.sqlite_path,
                     signaling_node: entry.signaling_node,
+                    port_mapping: entry.port_mapping,
                     runtime: None,
                 });
             }
@@ -888,6 +1085,7 @@ pub fn run() {
             delete_backend_peer,
             list_backend_peers,
             set_backend_signaling_node,
+            set_backend_port_mapping,
             ensure_system_backend,
             backend_log_tail,
             backend_access_log_tail,
@@ -951,4 +1149,69 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The reporting invariant: an address and a reason are never both
+    /// present as a failure, and `None` is never one thing.**
+    ///
+    /// `external_addr: None` covers four different situations — nobody asked,
+    /// still probing, refused, behind CGNAT — and the UI decides what to say
+    /// from the *pair* of `port_mapping` and `port_mapping_note`. Deriving all
+    /// three from one `MapState` in one function is what stops a surface
+    /// showing an address beside "your router refused".
+    #[test]
+    fn the_three_reported_fields_cannot_disagree() {
+        use port_mapping::MapState as M;
+
+        // Nobody asked: not a failure, and must not read like one.
+        assert_eq!(map_fields(&M::Disabled), (None, false, None));
+
+        // Asked, no answer yet: "we are trying" WITHOUT a reason — a reason
+        // here would report a failure that has not happened.
+        let (addr, on, note) = map_fields(&M::Probing);
+        assert_eq!((addr, on), (None, true));
+        assert!(note.is_none(), "probing must not carry a failure reason");
+
+        // Open: an address, and no failure note.
+        let (addr, on, note) = map_fields(&M::Open {
+            external: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(81, 2, 69, 142), 50000),
+            protocol: "PCP",
+        });
+        assert_eq!(addr.as_deref(), Some("ws://81.2.69.142:50000"));
+        assert!(on);
+        assert!(note.is_some_and(|n| n.contains("PCP")), "say how it was opened");
+
+        // Closed: the reason, and NO address — including after a mapping that
+        // used to work, which is the staleness rule this whole path exists for.
+        let (addr, on, note) = map_fields(&M::Closed("the router refused".into()));
+        assert_eq!(addr, None, "a closed door has no address, even a remembered one");
+        assert!(on, "we are still asking — that is different from not asking");
+        assert_eq!(note.as_deref(), Some("the router refused"));
+    }
+
+    /// The env override is three-way, exactly like the rendezvous toggle's.
+    /// Two capability toggles that resolve differently is how one of them ends
+    /// up meaning something nobody expects.
+    #[test]
+    fn the_port_mapping_override_matches_the_rendezvous_one() {
+        std::env::remove_var(port_mapping::ENV_ENABLE);
+        assert!(port_mapping::resolve_enabled(true));
+        assert!(!port_mapping::resolve_enabled(false));
+
+        std::env::set_var(port_mapping::ENV_ENABLE, "1");
+        assert!(port_mapping::resolve_enabled(false), "env forces on");
+        std::env::set_var(port_mapping::ENV_ENABLE, "0");
+        assert!(!port_mapping::resolve_enabled(true), "env forces off");
+
+        // A typo is not a vote — it must not silently mean "off", which would
+        // turn a misspelled override into a door nobody opened and nobody
+        // noticed was shut.
+        std::env::set_var(port_mapping::ENV_ENABLE, "please");
+        assert!(port_mapping::resolve_enabled(true), "unrecognised defers to persisted");
+        std::env::remove_var(port_mapping::ENV_ENABLE);
+    }
 }

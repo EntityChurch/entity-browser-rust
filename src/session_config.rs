@@ -560,6 +560,36 @@ pub struct SessionConfig {
     /// same model and not new here: a profile that already persisted a config
     /// keeps its old ceiling until that config is refreshed.
     pub name_resolver_max_ttl_ms: Option<u64>,
+    /// **The registry this deployment seeds as a pin** (`EXTENSION-REGISTRY`
+    /// §7.4's *"preloaded Entity System Registry"*), set by
+    /// `/entity-deployment.json`'s `name_registry_pin`. `None` = no default,
+    /// which is what a generic build ships: fail-closed, and `name pin` is the
+    /// only way to get one.
+    ///
+    /// **It seeds; it never overwrites.** A pin the user typed outranks it for
+    /// as long as that pin exists (the shell holds one per tab), because a pin
+    /// is a trust decision and a deployment does not get to revise the user's.
+    ///
+    /// Same D16 reason as the ceiling above for riding the durable config rather
+    /// than the fetched document: a returning profile never re-fetches
+    /// `/entity-deployment.json`, so a pin read only at fetch time would apply
+    /// on a cold boot and silently not on a warm one [AP22].
+    pub name_registry_pin: Option<RegistryPin>,
+}
+
+/// A registry pin: **the one string a consumer holds a priori**, plus where that
+/// registry is served from.
+///
+/// The peer-id is the whole of the trust decision — for Ed25519 canonical form
+/// it *embeds* the 32-byte public key, so nothing is fetched to learn who the
+/// registry is. The origin is trusted for nothing; it is only where bytes come
+/// from, and every byte is checked against a hash chaining to a signature by the
+/// pinned key. An empty origin means same-origin (the SPA expands it), matching
+/// the `origins` map's convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryPin {
+    pub peer_id: String,
+    pub origin: String,
 }
 
 /// The resolver ceiling this session will honor, mirrored out of the durable
@@ -593,6 +623,38 @@ mod resolver_ceiling {
 
 pub use resolver_ceiling::{get as active_resolver_ceiling_ms, set as set_active_resolver_ceiling};
 
+/// The deployment-seeded registry pin in force, mirrored out of the durable
+/// [`SessionConfig`] for the same reason and by the same mechanism as
+/// [`resolver_ceiling`]: the shell's `name` verb resolves inside a `spawn_task`
+/// holding no config handle.
+///
+/// `RefCell<Option<..>>` rather than `Cell`, only because the value is not
+/// `Copy`; the browser arm is single-threaded and on native this is read by
+/// tests. Keyed by nothing — there is exactly one, so four sites shipping the
+/// same pin converge by construction (design §4 constraint 3), and two sites
+/// shipping *different* registries means whichever origin you booted from is
+/// the one you resolve through, which is the honest per-deployment answer.
+mod registry_pin {
+    use super::RegistryPin;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static ACTIVE: RefCell<Option<RegistryPin>> = const { RefCell::new(None) };
+    }
+
+    /// Install the pin the resolved config declares. Called at boot.
+    pub fn set(pin: Option<RegistryPin>) {
+        ACTIVE.with(|c| *c.borrow_mut() = pin);
+    }
+
+    /// The deployment-seeded pin, if this deployment ships one.
+    pub fn get() -> Option<RegistryPin> {
+        ACTIVE.with(|c| c.borrow().clone())
+    }
+}
+
+pub use registry_pin::{get as active_registry_pin, set as set_active_registry_pin};
+
 impl Default for SessionConfig {
     /// The chrome-first default posture — the workspace (window manager),
     /// toggle available, demo site as home, fully creatable. Reproduces the
@@ -608,6 +670,10 @@ impl Default for SessionConfig {
             // No ceiling declared by default — see the field docs. Conformant,
             // and honest: we do not ship a number nobody can defend.
             name_resolver_max_ttl_ms: None,
+            // No default registry either — a generic build pins nothing, and
+            // `name` fails closed until someone pins one. Only a deployment that
+            // says so seeds it.
+            name_registry_pin: None,
             active: false,
             fast_paint: true,
             peer_creation_enabled: true,
@@ -654,6 +720,8 @@ impl SessionConfig {
         let mut boot_kind: Option<String> = None;
         let mut boot_peer = String::new();
         let mut boot_window = String::new();
+        let mut pin_peer = String::new();
+        let mut pin_origin = String::new();
         let mut cfg = Self::default();
         for (k, v) in map {
             match k.as_text() {
@@ -731,11 +799,30 @@ impl SessionConfig {
                         cfg.name_resolver_max_ttl_ms = Some(ms).filter(|m| *m > 0);
                     }
                 }
+                // The pin's two halves round-trip as two text fields; an empty
+                // peer-id encodes "no pin" (the origin alone is meaningless, so
+                // it is the peer-id that decides). Absent in any config written
+                // before the pin existed → stays `None`.
+                Some("name_registry_pin_peer") => {
+                    if let Some(s) = v.as_text() {
+                        pin_peer = s.to_string();
+                    }
+                }
+                Some("name_registry_pin_origin") => {
+                    if let Some(s) = v.as_text() {
+                        pin_origin = s.to_string();
+                    }
+                }
                 _ => {}
             }
         }
         // Assemble boot_surface from the structured fields. An unknown / absent
         // kind keeps the default (`Full` → Chrome) — garbage-tolerant.
+        // The peer-id decides: an origin with no peer-id is not a pin, it is a
+        // URL, and pinning it would trust the origin — the one thing this chain
+        // never does.
+        cfg.name_registry_pin = (!pin_peer.is_empty())
+            .then_some(RegistryPin { peer_id: pin_peer, origin: pin_origin });
         cfg.boot_surface = match boot_kind.as_deref() {
             Some("chrome") => BootSurface::Chrome,
             Some("site") => BootSurface::Site,
@@ -774,7 +861,15 @@ impl SessionConfig {
             // drops a zero back to `None`, so the round-trip is total and an
             // undeclared ceiling never comes back as an instant expiry.
             "name_resolver_max_ttl_ms" =>
-                entity_ecf::uinteger(self.name_resolver_max_ttl_ms.unwrap_or(0))
+                entity_ecf::uinteger(self.name_resolver_max_ttl_ms.unwrap_or(0)),
+            // An empty peer-id encodes "no pin", so the round-trip is total the
+            // same way the ceiling's zero is.
+            "name_registry_pin_peer" => entity_ecf::text(
+                self.name_registry_pin.as_ref().map(|p| p.peer_id.as_str()).unwrap_or("")
+            ),
+            "name_registry_pin_origin" => entity_ecf::text(
+                self.name_registry_pin.as_ref().map(|p| p.origin.as_str()).unwrap_or("")
+            )
         });
         Entity::new(STATE_TYPE, data).unwrap()
     }
@@ -1137,8 +1232,73 @@ mod tests {
             // `from_entity` maps it back — a field that survived `to_entity` and
             // came back as an instant expiry would expire every name.
             name_resolver_max_ttl_ms: Some(3_600_000),
+            // And the §7.4 pin. Both halves, because an origin dropped in the
+            // round-trip is a pin that resolves WHO but not WHERE — the same
+            // shape as the relay the localStorage mirror quietly ate.
+            name_registry_pin: Some(RegistryPin {
+                peer_id: "2KRegistryPeer".into(),
+                origin: "https://registry.example".into(),
+            }),
         };
         assert_eq!(SessionConfig::from_entity(&cfg.to_entity()), cfg);
+    }
+
+    /// **S6 — the pin survives the boot a default registry usually dies on.**
+    ///
+    /// A cold boot fetches `/entity-deployment.json` and applies it; every boot
+    /// after that reads the *persisted* config and fetches nothing (D16). So the
+    /// path a seeded pin has to survive is not the fetch — it is the round trip
+    /// through the durable entity, and then into the mirror that the shell's
+    /// `spawn_task` can actually read.
+    ///
+    /// Simulated here end to end, because each hop has already eaten a field
+    /// once: the relay was lost in a mirror that round-tripped through the tree
+    /// perfectly, with every native test green.
+    #[test]
+    fn a_seeded_registry_pin_survives_a_warm_boot_and_reaches_the_mirror() {
+        use crate::deployment_config::DeploymentConfig;
+
+        // Cold boot: the deployment doc, applied over the build default.
+        let deployment = DeploymentConfig::parse(
+            r#"{"name_registry_pin": {"peer_id": "2KSeeded", "origin": "https://reg.example"}}"#,
+        )
+        .expect("parses");
+        let cold = deployment.apply_to(SessionConfig::default());
+        assert_eq!(cold.name_registry_pin.as_ref().map(|p| p.peer_id.as_str()), Some("2KSeeded"));
+
+        // …persisted, and read back on a WARM boot with no fetch at all.
+        let warm = SessionConfig::from_entity(&cold.to_entity());
+        assert_eq!(
+            warm.name_registry_pin, cold.name_registry_pin,
+            "a warm boot fetches nothing, so the pin has to be in the durable config"
+        );
+
+        // …and installed where a resolution can reach it. Reading the mirror is
+        // the assertion that matters: a pin sitting in a `SessionConfig` nobody
+        // consults is the security-half-nobody-can-reach shape [AP22].
+        set_active_registry_pin(warm.name_registry_pin.clone());
+        let live = active_registry_pin().expect("the mirror carries it");
+        assert_eq!(live.peer_id, "2KSeeded");
+        assert_eq!(live.origin, "https://reg.example");
+        set_active_registry_pin(None);
+    }
+
+    /// **A config written before the pin existed comes back with no pin**, and a
+    /// pin with an empty peer-id is not a pin. Both are the same rule as the
+    /// ceiling's zero: the wire has no null, so the absent value has to encode
+    /// as something that round-trips back to `None` — and here that has to be
+    /// the *peer-id*, since an origin alone would otherwise read as a registry
+    /// to be trusted.
+    #[test]
+    fn an_origin_without_a_peer_id_is_not_a_pin() {
+        let mut cfg = SessionConfig::default();
+        cfg.name_registry_pin =
+            Some(RegistryPin { peer_id: String::new(), origin: "https://registry.example".into() });
+        assert_eq!(
+            SessionConfig::from_entity(&cfg.to_entity()).name_registry_pin,
+            None,
+            "an empty peer-id must come back as no pin, not as a pin on an origin"
+        );
     }
 
     #[test]

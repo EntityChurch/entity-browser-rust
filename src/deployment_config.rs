@@ -100,6 +100,18 @@ pub struct DeploymentConfig {
     /// window in which a withheld revocation still resolves across a cold start
     /// — the one bound our per-session `seq` floor cannot supply.
     pub name_resolver_max_ttl_ms: Option<u64>,
+    /// **The registry this deployment seeds as a pin** — `EXTENSION-REGISTRY`
+    /// §7.4's *"preloaded Entity System Registry"*, which is the whole distance
+    /// between "we built a naming system" and "a user who types nothing can use
+    /// it".
+    ///
+    /// `{"peer_id": "...", "origin": "..."}`. The peer-id is the trust decision
+    /// and the only required half (canonical form embeds the public key); an
+    /// empty/absent origin means same-origin, like the `origins` map. A pin with
+    /// no peer-id is **dropped**, not completed from the origin: pinning an
+    /// origin would trust the origin, which is the one thing this chain never
+    /// does.
+    pub name_registry_pin: Option<crate::session_config::RegistryPin>,
 }
 
 impl DeploymentConfig {
@@ -166,6 +178,17 @@ impl DeploymentConfig {
         cfg.name_resolver_max_ttl_ms =
             obj.get("name_resolver_max_ttl_ms").and_then(|v| v.as_u64()).filter(|ms| *ms > 0);
 
+        // The §7.4 preload. Tolerant like everything else here, and dropped
+        // whole when the peer-id is missing — an origin alone is not a pin.
+        if let Some(p) = obj.get("name_registry_pin").and_then(|v| v.as_object()) {
+            let field = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let peer_id = field("peer_id");
+            if !peer_id.is_empty() {
+                cfg.name_registry_pin =
+                    Some(crate::session_config::RegistryPin { peer_id, origin: field("origin") });
+            }
+        }
+
         Some(cfg)
     }
 
@@ -179,6 +202,7 @@ impl DeploymentConfig {
             && self.site_mode.is_empty()
             && self.fast_paint.is_none()
             && self.name_resolver_max_ttl_ms.is_none()
+            && self.name_registry_pin.is_none()
             && self.peer_creation_enabled.is_none()
     }
 
@@ -205,6 +229,9 @@ impl DeploymentConfig {
         }
         if self.name_resolver_max_ttl_ms.is_some() {
             cfg.name_resolver_max_ttl_ms = self.name_resolver_max_ttl_ms;
+        }
+        if self.name_registry_pin.is_some() {
+            cfg.name_registry_pin = self.name_registry_pin.clone();
         }
         if let Some(b) = self.site_mode.enabled {
             cfg.site_mode.enabled = b;
@@ -422,6 +449,53 @@ mod tests {
         let cfg = DeploymentConfig::parse(r#"{"surface": "site"}"#).unwrap();
         assert_eq!(cfg.name_resolver_max_ttl_ms, None);
         assert_eq!(cfg.apply_to(SessionConfig::default()).name_resolver_max_ttl_ms, None);
+    }
+
+    /// **The §7.4 preload reaches the durable spine, and an origin alone is not
+    /// a pin.**
+    ///
+    /// The `apply_to` half is the one that matters and is easy to skip: a pin
+    /// that lived only in the fetched document would seed a cold boot and vanish
+    /// on every warm one, because a returning profile never re-fetches
+    /// `/entity-deployment.json` (D16) — a default that works exactly once, in
+    /// the direction nobody tests [AP22].
+    #[test]
+    fn the_registry_pin_is_read_from_the_deployment_and_reaches_the_durable_config() {
+        let json = r#"{
+            "surface": "site",
+            "name_registry_pin": { "peer_id": "2KRegistryPeer", "origin": "https://reg.example" }
+        }"#;
+        let cfg = DeploymentConfig::parse(json).unwrap();
+        let pin = cfg.name_registry_pin.clone().expect("the pin parses");
+        assert_eq!(pin.peer_id, "2KRegistryPeer");
+        assert_eq!(pin.origin, "https://reg.example");
+
+        let applied = cfg.apply_to(SessionConfig::default());
+        assert_eq!(applied.name_registry_pin, Some(pin), "the pin must ride the durable config");
+
+        // An origin with no peer-id is dropped WHOLE rather than completed from
+        // the origin: a pin is a key, and pinning an origin would trust the
+        // origin — the one thing neither hop of this chain ever does.
+        let orphan =
+            DeploymentConfig::parse(r#"{"name_registry_pin": {"origin": "https://reg.example"}}"#)
+                .unwrap();
+        assert_eq!(orphan.name_registry_pin, None);
+        assert!(orphan.is_empty(), "a pin with no peer-id is not actionable config");
+
+        // A pin alone IS actionable — it is the whole §7.4 deliverable.
+        let alone =
+            DeploymentConfig::parse(r#"{"name_registry_pin": {"peer_id": "2KOnlyThis"}}"#).unwrap();
+        assert!(!alone.is_empty());
+        assert_eq!(
+            alone.name_registry_pin.unwrap().origin,
+            "",
+            "an absent origin means same-origin, like the origins map"
+        );
+
+        // Absent = no pin, which is what a generic build ships: fail-closed.
+        let none = DeploymentConfig::parse(r#"{"surface": "site"}"#).unwrap();
+        assert_eq!(none.name_registry_pin, None);
+        assert_eq!(none.apply_to(SessionConfig::default()).name_registry_pin, None);
     }
 
     #[test]

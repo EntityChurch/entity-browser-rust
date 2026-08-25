@@ -20,6 +20,15 @@ pub struct BackendStatusView {
     /// persisted setting: the handler mounts at build time, so a peer started
     /// before the toggle was flipped is configured to serve and is not serving.
     pub signaling_node: bool,
+    /// The internet-reachable address a router is forwarding to this backend.
+    /// Only ever an address that works right now — it is withdrawn the moment a
+    /// renewal fails, so a surface may render it without qualification.
+    pub external_addr: Option<String>,
+    /// Whether we are asking a router at all. `true` with `external_addr: None`
+    /// is the ordinary case on most routers, not an error.
+    pub port_mapping: bool,
+    /// Why there is no address, when there is a reason worth showing.
+    pub port_mapping_note: Option<String>,
 }
 
 /// Everything the System Backend window renders.

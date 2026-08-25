@@ -179,6 +179,17 @@ impl WindowView for SystemOverviewWindow {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _ = value;
             }
+            "sb_set_port_mapping" => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some((pid, want)) = value.split_once('\u{1f}') {
+                        self.model
+                            .set_port_mapping(pid, want == "1", self.watch.flag());
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = value;
+            }
             _ => {}
         }
     }

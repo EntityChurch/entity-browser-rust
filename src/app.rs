@@ -1920,6 +1920,13 @@ impl EntityApp {
             // returning profile's persisted one land identically.
             crate::session_config::set_active_resolver_ceiling(cfg.name_resolver_max_ttl_ms);
 
+            // And the §7.4 registry pin, by the same mechanism and for the same
+            // reason. Setting it from the RESOLVED config is the load-bearing
+            // half: a warm boot never re-fetches `/entity-deployment.json`, so a
+            // pin installed at fetch time would be present on a cold boot and
+            // absent on every one after it — a default that works once [AP22].
+            crate::session_config::set_active_registry_pin(cfg.name_registry_pin.clone());
+
             // (1.2.5) Warm-boot origin RECONCILE (P1, symptom 2 — "site source
             // unreachable"). On a warm boot we deliberately don't re-fetch the
             // deployment config: POSTURE (profile / home / toggle) is a user

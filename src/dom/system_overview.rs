@@ -124,6 +124,7 @@ pub fn render(
             // offer, and this is the only thing that can be it without anyone
             // running server infrastructure.
             render_rendezvous_row(&status, b, ctx);
+            render_port_mapping_row(&status, b, ctx);
         }
         None => {
             // Non-content states (S5): still loading vs genuinely absent.
@@ -273,6 +274,69 @@ fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) 
     );
     // Empty label: the control belongs to the row above, aligned under its
     // value rather than introducing a second key nobody needs to read.
+    add_chip_row(parent, "", btn);
+}
+
+/// The port-mapping row: whether a router is forwarding this backend from the
+/// internet, and the address if so.
+///
+/// **Four different `None`s, and they must not read as one.** The backend
+/// reports `external_addr` alongside `port_mapping` (are we asking at all) and
+/// `port_mapping_note` (why not), precisely so this row can tell apart *nobody
+/// asked*, *still asking*, *the router refused*, and *your ISP has you behind
+/// carrier-grade NAT*. Collapsing them into "not reachable" would be the
+/// one-sentence failure the reachability work exists to end, rebuilt on a
+/// different surface.
+fn render_port_mapping_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
+    let (text, color) = match (&b.external_addr, b.port_mapping) {
+        // A door is open. The address is the actionable half — it is what
+        // someone off this network puts into `connector add`.
+        (Some(addr), _) => (
+            crate::i18n::t("sysoverview.portmap_on", &[("addr", addr.as_str())]),
+            crate::theme_tokens::STATUS_OK,
+        ),
+        // Asking, no answer yet. Deliberately NOT the note: the backend sends
+        // none while probing, and inventing "checking…" as a failure string
+        // would report a refusal that has not happened.
+        (None, true) => match &b.port_mapping_note {
+            Some(note) => (
+                crate::i18n::t("sysoverview.portmap_none", &[("why", note.as_str())]),
+                "var(--text-muted, #c0c0c0)",
+            ),
+            None => (
+                crate::i18n::t("sysoverview.portmap_asking", &[]),
+                "var(--text-muted, #c0c0c0)",
+            ),
+        },
+        (None, false) => (
+            crate::i18n::t("sysoverview.portmap_off", &[]),
+            "var(--text-muted, #c0c0c0)",
+        ),
+    };
+    add_row(
+        parent,
+        &crate::i18n::t("sysoverview.portmap", &[]),
+        &text,
+        Some(&crate::i18n::t("sysoverview.portmap_hint", &[])),
+        Some(color),
+    );
+
+    // Same `\x1f`-packed which-backend + which-direction as the row above, and
+    // for the same reason: a handler that reads "the opposite of what I last
+    // painted" flips the wrong way when a poll lands between render and click.
+    let want = if b.port_mapping { "0" } else { "1" };
+    let label = if b.port_mapping {
+        crate::i18n::t("sysoverview.portmap_stop", &[])
+    } else {
+        crate::i18n::t("sysoverview.portmap_start", &[])
+    };
+    let btn = components::button_value(
+        ctx,
+        &label,
+        components::ButtonKind::Small,
+        "sb_set_port_mapping",
+        &format!("{}\u{1f}{}", b.peer_id, want),
+    );
     add_chip_row(parent, "", btn);
 }
 

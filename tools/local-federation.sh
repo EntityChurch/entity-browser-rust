@@ -73,11 +73,37 @@ mkdir -p "$OUT"
 : > "$STAMP"
 : > "$MAP"
 
+# THE PIN, ASKED FOR BEFORE THE REGISTRY EXISTS. A domain's
+# `/entity-deployment.json` seeds `name_registry_pin` so a user who types nothing
+# still resolves names — but the registry can only be emitted after the domains
+# have peer-ids, so the pin has to be known first. `registry --peer-id` answers
+# from the seed alone, using the same derivation the emit will use; the
+# alternatives were publishing every domain twice or re-deriving the id in bash,
+# and a second derivation of an identity is exactly the kind that drifts.
+REGISTRY_PEER=$($BIN registry --identity-seed="$REGISTRY_SEED" --peer-id) || {
+  echo "could not derive the registry peer-id from REGISTRY_SEED" >&2; exit 1; }
+# Where the registry itself is served. Same shape as a domain's origin.
+#
+# **The `/` default is load-bearing and used to be missing.** With an empty
+# ORIGIN_BASE the origins came out as bare slugs (`foundation`, `registry`),
+# which a browser resolves RELATIVE TO THE CURRENT PATH — so an app served at
+# `/foundation/` fetching origin `registry` asks for `/foundation/registry/…`
+# and gets a 404 that reads like a withholding origin. `expand_origin` only
+# treats a value as same-origin-relative when it starts with `/`; anything else
+# is a concrete origin. The comment on ORIGIN_BASE above always said
+# `/foundation`; the code said `foundation`, and nothing in a browser had ever
+# consumed the same-origin shape to notice (the e2e sets an absolute base).
+REGISTRY_ORIGIN="${ORIGIN_BASE:-/}registry"
+
 binds=()
 echo "=== domains ==="
 for row in "${DOMAINS[@]}"; do
   IFS='|' read -r name slug seed ingest <<<"$row"
   args=("$OUT/$slug" "--identity-seed=$seed")
+  # Each domain ships a deployment config carrying the pin. All four carry the
+  # SAME one, which is the point: the pin is keyed by registry peer-id, so four
+  # sites seeding it converge on one rather than accumulating four.
+  args+=("--deployment-config" "--registry-pin=$REGISTRY_PEER@$REGISTRY_ORIGIN")
   [ -n "$ingest" ] && args+=("--ingest=$ingest")
   # The publish prints its resolved peer-id; that id is what the registry binds
   # and what a consumer pins. Reading it back beats recomputing it here — one
@@ -96,7 +122,7 @@ for row in "${DOMAINS[@]}"; do
   # to be pre-registered out of band and the registry buys you nothing
   # operationally. `ORIGIN_BASE` is empty here (one local origin, path-prefixed);
   # set it to the real scheme+host per domain for a cross-origin deployment.
-  binds+=("--bind=$name=$peer@${ORIGIN_BASE:-}$slug")
+  binds+=("--bind=$name=$peer@${ORIGIN_BASE:-/}$slug")
 done
 
 echo
@@ -107,12 +133,25 @@ mkdir -p "$OUT/registry"
 reg_out=$($BIN registry "$OUT/registry" --identity-seed="$REGISTRY_SEED" \
   --ttl-days="$TTL_DAYS" "${binds[@]}" 2>&1) || { echo "$reg_out" >&2; exit 1; }
 printf '%s\n' "$reg_out"
-REGISTRY_PEER=$(printf '%s\n' "$reg_out" | awk '/registry peer:/ {print $3}')
+# The emit prints the id it published under; the domains were seeded with the id
+# `--peer-id` predicted. They come from the same derivation, so they cannot
+# differ — but a silent disagreement here would seed every domain with a pin at
+# a registry that does not exist, which resolves nothing and reads exactly like a
+# withholding origin. Cheap to check, and the failure it catches is not.
+EMITTED_PEER=$(printf '%s\n' "$reg_out" | awk '/registry peer:/ {print $3}')
+if [ "$EMITTED_PEER" != "$REGISTRY_PEER" ]; then
+  echo "the registry published under $EMITTED_PEER but the domains were seeded" >&2
+  echo "with a pin at $REGISTRY_PEER — every name would resolve to nothing" >&2
+  exit 1
+fi
 
 {
   echo
   echo "registry peer (THE PIN — the only thing a consumer holds a priori):"
   echo "  $REGISTRY_PEER"
+  echo
+  echo "each domain's /entity-deployment.json SEEDS that pin at $REGISTRY_ORIGIN,"
+  echo "so a user who types nothing still resolves names. \`name pin\` overrides it."
   echo
   echo "resolution: name → registry's signed root → peer-id → THAT peer's signed root → page"
 } | tee -a "$MAP"

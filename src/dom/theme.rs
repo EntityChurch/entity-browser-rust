@@ -128,6 +128,35 @@ pub const NOTE: &str = "font-size:13px;margin:8px 0";
 /// Right-aligned control row (e.g. a Refresh button above a listing).
 pub const ROW_END: &str = "display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;margin-bottom:8px";
 
+/// Left-aligned control row — [`ROW_END`]'s mirror, for controls that read with
+/// the content rather than against it (a filter-chip bar above a grid).
+pub const ROW_START: &str = "display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px";
+
+/// A left-aligned row of controls sharing a baseline with text beside them (a
+/// back button next to a heading, a timestamp next to its two actions).
+/// [`ROW_START`] with vertical centring and no bottom margin.
+pub const ROW_INLINE: &str = "display:flex;flex-wrap:wrap;align-items:center;gap:8px";
+
+/// A **full-bleed panel body** — the whole window content, scrolling, with its
+/// own background. The Apps launcher grid and the Saves panel share it, so the
+/// window does not change shape as you move between its views.
+///
+/// `min-height` (NOT `height:100%`) is the floor: a percentage height collapses
+/// in an auto-height tiled window (the `.window` section is content-driven),
+/// which cramps the body to the ~200px section minimum. A min-height gives it
+/// real space when tiled and, via the `.window-content > *` flex-stretch, still
+/// fills a maximized window.
+pub const PANEL_SURFACE: &str = "min-height:480px;width:100%;overflow:auto;padding:20px;\
+    box-sizing:border-box;background:var(--bg,#101018);color:var(--text,#e2e2ea);\
+    font-family:system-ui,-apple-system,sans-serif";
+
+/// The heading at the top of a [`PANEL_SURFACE`] body.
+pub const PANEL_TITLE: &str = "font-size:18px;font-weight:600;margin:0 0 16px 2px";
+
+/// A cell holding a nested detail block under the row it belongs to (an
+/// expanded list inside a table). Pair with `colspan`.
+pub const TD_NESTED: &str = "padding:8px 16px;border-bottom:1px solid var(--border,#333)";
+
 /// Bounded scrolling list region (tree browsers, long listings). Pair with a
 /// `data-scroll-key` attribute so scroll position survives rebuilds.
 pub const SCROLL_LIST: &str = "margin:4px 0;max-height:260px;overflow:auto";

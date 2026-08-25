@@ -24,6 +24,21 @@ pub struct BackendPeerInfo {
     /// flipped is configured to serve and is not serving. Reporting the setting
     /// here would put a "Rendezvous: on" row above a node that answers 404.
     pub signaling_node: bool,
+    /// The internet-reachable `ws://` address the router is forwarding to this
+    /// backend, when a door is actually open.
+    ///
+    /// **`None` is four different situations, not one** — nobody asked, still
+    /// probing, the router refused, or it granted an address behind CGNAT that
+    /// nobody can reach. Which one lives in [`Self::port_mapping_note`]; this
+    /// is only ever an address that works right now, and it is dropped the
+    /// moment a renewal fails.
+    pub external_addr: Option<String>,
+    /// Whether a lease is being maintained at all. Distinct from
+    /// `external_addr` being `Some`: on most routers asking and getting nothing
+    /// is the ordinary outcome, and that is not the same as not asking.
+    pub port_mapping: bool,
+    /// Why there is no external address, already written for a person.
+    pub port_mapping_note: Option<String>,
 }
 
 impl BackendPeerInfo {
@@ -48,6 +63,14 @@ impl BackendPeerInfo {
                 .ok()
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            external_addr: get_string(result, "external_addr"),
+            // Absent reads as false for the same reason: a backend that does
+            // not send the field is not asking any router for anything.
+            port_mapping: js_sys::Reflect::get(result, &JsValue::from_str("port_mapping"))
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            port_mapping_note: get_string(result, "port_mapping_note"),
         })
     }
 }
@@ -150,6 +173,33 @@ pub async fn set_backend_signaling_node(
     .map_err(|_| "failed to set enabled arg")?;
     let result = invoke("set_backend_signaling_node", &args.into()).await?;
     BackendPeerInfo::from_js(&result).ok_or("invalid set_backend_signaling_node response".into())
+}
+
+/// Ask the router to forward this backend's port, or stop asking. Persistent.
+///
+/// **Restarts the peer**, like the rendezvous toggle and for one more reason:
+/// the lease is bound to the port this run actually bound, so a toggle taking
+/// effect live would have to reason about a listener that may since have moved.
+/// Turning it off releases the mapping on the way through.
+///
+/// The returned info reports the state afterwards — but **not the answer**: the
+/// probe has only just started, so `external_addr` is `None` and the real
+/// answer arrives on the next status poll.
+pub async fn set_backend_port_mapping(
+    peer_id: &str,
+    enabled: bool,
+) -> Result<BackendPeerInfo, String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(&args, &JsValue::from_str("peerId"), &JsValue::from_str(peer_id))
+        .map_err(|_| "failed to set peerId arg")?;
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("enabled"),
+        &JsValue::from_bool(enabled),
+    )
+    .map_err(|_| "failed to set enabled arg")?;
+    let result = invoke("set_backend_port_mapping", &args.into()).await?;
+    BackendPeerInfo::from_js(&result).ok_or("invalid set_backend_port_mapping response".into())
 }
 
 /// Delete a backend peer entirely — stops + removes from disk.

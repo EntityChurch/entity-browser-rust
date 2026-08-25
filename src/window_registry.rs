@@ -37,16 +37,17 @@ use crate::views::{
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
 
-/// The 24 standard window types, in registration order. The single source —
+/// The standard window types, in registration order. The single source —
 /// `build_wasm_app` registers exactly these, and the settings UI reads their
 /// metadata from the same list. Add a window here and it shows up in both.
 /// (Was 22 until the standalone "System Overview" window was merged into the
 /// System window — one System window, S2. Its type key is now "System Overview";
-/// the legacy "System Backend" key still resolves via `canonical_window_type`.)
+/// the legacy "System Backend" key still resolves via `canonical_window_type`.
+/// 25 → 24 when Games and Apps merged into one "Apps" launcher with category
+/// filters; "Games" is likewise a legacy key resolved by the same function.)
 pub fn standard_window_types() -> Vec<WindowType> {
     vec![
         EntityTreeWindow::window_type(),
-        AppWindow::games_window_type(),
         AppWindow::apps_window_type(),
         KnowledgeBaseWindow::window_type(),
         ProgramsWindow::window_type(),
@@ -97,7 +98,20 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
     vec![
         (
             AppsContent,
-            vec!["Games", "Apps", "Programs", "Chat", "Site Browser", "Site Creator", "Knowledge Base"],
+            // "Programs" is the identity key; the label reads "Entity Native
+            // Apps". It is a WINDOW beside Apps, not a group of its own — it
+            // briefly had its own heading and that overstated it: one row under
+            // its own banner reads as a whole area of the product, when what it
+            // is is a second launcher. Keeping it here, directly after Apps,
+            // says "another thing you can run" without the promotion.
+            vec![
+                "Apps",
+                "Programs",
+                "Chat",
+                "Site Browser",
+                "Site Creator",
+                "Knowledge Base",
+            ],
         ),
         (
             System,
@@ -146,10 +160,20 @@ mod tests {
         }
     }
 
+    /// The roster count is deliberately hard-coded: a window silently appearing
+    /// or vanishing is exactly the drift this file exists to catch, so the
+    /// number moves only in a commit that meant to move it. (Name kept honest —
+    /// it has said "twentytwo" through three counts; the assertion is the fact.)
     #[test]
-    fn roster_is_twentytwo_and_settings_is_system_scoped() {
+    fn roster_is_twentyfour_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
-        assert_eq!(meta.len(), 25, "the standard roster is 25 windows"); // +Chat (app/chat)
+        // 25 → 24: Games and Apps merged into one launcher with category chips.
+        assert_eq!(meta.len(), 24, "the standard roster is 24 windows");
+        assert_eq!(
+            meta.iter().filter(|(n, _)| *n == "Games").count(),
+            0,
+            "Games is retired — it resolves to Apps via canonical_window_type"
+        );
         // Spot-check the scope partition the settings filter relies on.
         let settings = meta.iter().find(|(n, _)| *n == "Settings").expect("Settings present");
         assert_eq!(settings.1, WindowScope::System);

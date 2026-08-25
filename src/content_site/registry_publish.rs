@@ -411,6 +411,18 @@ pub struct RegistryArgs {
     pub ttl_ms: u64,
     /// Inspect an already-emitted tree instead of writing one.
     pub verify: bool,
+    /// Print the registry peer-id this identity resolves to and exit, writing
+    /// nothing.
+    ///
+    /// It exists because **the pin has to be known before the thing it pins is
+    /// emitted**: a deployment that seeds `name_registry_pin` is published by
+    /// each domain, and the registry that binds those domains can only be
+    /// emitted after they have peer-ids. Without this the only routes are
+    /// publishing every domain twice or re-deriving the id outside the emitter —
+    /// and a second derivation of an identity is exactly the kind of duplicate
+    /// that drifts (it is why `--verify` builds the projector rather than
+    /// recomputing the directory name).
+    pub peer_id_only: bool,
 }
 
 /// Parse a `registry` command line. `Err` is the message to print, verbatim.
@@ -431,8 +443,13 @@ pub fn parse_registry_args(args: &[String]) -> Result<RegistryArgs, String> {
         ));
     }
 
+    // A pure identity question touches no directory, so demanding one would be
+    // theatre — and would put a path in front of the operator asking "what is my
+    // pin?" that they would then have to invent.
+    let peer_id_only = args.iter().any(|a| a == "--peer-id");
     let out_dir = match args.iter().skip(1).find(|a| !a.starts_with("--")) {
         Some(d) => std::path::PathBuf::from(d),
+        None if peer_id_only => std::path::PathBuf::new(),
         None => {
             return Err("an output directory is required\n  entity-browser registry OUT_DIR \
                         --bind=NAME=PEER_ID@ORIGIN [--bind=...]"
@@ -471,7 +488,7 @@ pub fn parse_registry_args(args: &[String]) -> Result<RegistryArgs, String> {
     // A verify reads a tree that already exists, so it needs no bindings — and
     // demanding them would make the check unreachable for the person most likely
     // to want it (someone verifying a directory they were handed).
-    if bindings.is_empty() && !verify {
+    if bindings.is_empty() && !verify && !peer_id_only {
         return Err("at least one --bind=NAME=PEER_ID@ORIGIN is required\n  the @ORIGIN half is \
                     not optional (arch D10) — it becomes the binding's http-poll transport \
                     profile, and without it a consumer resolves WHO but not WHERE"
@@ -486,7 +503,7 @@ pub fn parse_registry_args(args: &[String]) -> Result<RegistryArgs, String> {
         None => DEFAULT_TTL_MS,
     };
 
-    Ok(RegistryArgs { out_dir, bindings, ttl_ms, verify })
+    Ok(RegistryArgs { out_dir, bindings, ttl_ms, verify, peer_id_only })
 }
 
 pub fn run(args: &[String]) -> std::process::ExitCode {
@@ -499,7 +516,7 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let RegistryArgs { out_dir, bindings, ttl_ms, verify } = parsed;
+    let RegistryArgs { out_dir, bindings, ttl_ms, verify, peer_id_only } = parsed;
 
     let keypair = match super::publish::resolve_registry_keypair(args) {
         Ok(kp) => kp,
@@ -516,6 +533,24 @@ pub fn run(args: &[String]) -> std::process::ExitCode {
     // `--identity-seed=` looks for `{out}/{publisher-peer}/` — a directory the
     // registry emit never wrote — and would report a clean tree as unverifiable.
     // Whoever owns the identity owns the verification (audit F1/F3).
+    // Answer the identity question and stop — before the verify branch, because
+    // a `--peer-id` run has nothing to verify and before any emit, because it
+    // writes nothing. The id comes from the SAME derivation the emit uses
+    // (`RootProjector` → `PeerBuilder`), so the printed pin and the directory a
+    // publish lands in cannot disagree.
+    if peer_id_only {
+        return match RootProjector::new(keypair) {
+            Ok(p) => {
+                println!("{}", p.peer_id());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("registry --peer-id: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if verify {
         // `Keypair` is not `Clone`, and the peer-id must come from the SAME
         // derivation the emit used (`RootProjector` → `PeerBuilder`), not from a
@@ -1121,6 +1156,52 @@ mod tests {
         assert!(parsed.verify);
         assert!(parsed.bindings.is_empty());
         assert_eq!(parsed.out_dir, std::path::PathBuf::from("out"));
+    }
+
+    /// **`--peer-id` answers the identity question with no directory and no
+    /// bindings** — because the question comes up *before* there is a tree.
+    ///
+    /// A deployment that seeds `name_registry_pin` needs the registry's peer-id
+    /// at the moment each domain publishes, and the registry cannot be emitted
+    /// until those domains have peer-ids. Demanding an output directory here
+    /// would make the operator invent a path for a command that writes nothing,
+    /// and demanding `--bind` would make it unreachable exactly when it is
+    /// wanted.
+    ///
+    /// The id is the one the emit uses, not a second derivation: `run` builds a
+    /// `RootProjector` for both, which is what keeps the printed pin and the
+    /// directory a publish lands in from drifting apart.
+    #[test]
+    fn peer_id_needs_neither_an_output_directory_nor_bindings() {
+        let parsed = parse_registry_args(&argv(&["registry", "--peer-id"]))
+            .expect("a bare --peer-id must parse");
+        assert!(parsed.peer_id_only);
+        assert!(parsed.bindings.is_empty());
+        assert_eq!(parsed.out_dir, std::path::PathBuf::new());
+
+        // And it is the identity the emit would use. Same seed, same derivation
+        // — a mismatch here would mean a deployment seeding a pin at a registry
+        // that publishes under a different id, which resolves nothing and looks
+        // like a withholding origin.
+        let printed = RootProjector::new(entity_crypto::Keypair::from_seed([0xB0; 32]))
+            .unwrap()
+            .peer_id()
+            .to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let emitted = emit_registry(
+            dir.path(),
+            entity_crypto::Keypair::from_seed([0xB0; 32]),
+            &[BindingSpec {
+                name: NAME.into(),
+                target_peer_id: target_pid(),
+                origin: Some(TEST_ORIGIN.into()),
+            }],
+            DEFAULT_TTL_MS,
+            now_ms(),
+        )
+        .expect("emits")
+        .registry_peer_id;
+        assert_eq!(printed, emitted, "the printed pin must be the id the emit publishes under");
     }
 
     /// An origin may legitimately contain `@` (`http://user@host`); a Base58

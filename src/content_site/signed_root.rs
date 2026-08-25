@@ -174,6 +174,88 @@ impl RootProjector {
         self.bindings.is_empty()
     }
 
+    /// Load the published root already sitting in `base` into this projector's
+    /// peer, so the next publish **chains off it** instead of restarting the
+    /// §3.3a sequence at zero.
+    ///
+    /// **Why this is load-bearing, and how it was missed for the whole arc.**
+    /// `PublishRootEngine::publish` derives `seq` from `current_head()` — the
+    /// publisher peer's *own* location index. Every CLI invocation builds a
+    /// fresh in-memory peer ([`Self::new`]), so that index was always empty and
+    /// **every emit published `seq 0`**, no matter how many times the directory
+    /// had been published before. Measured: two different registry contents,
+    /// same key, both `seq 0`.
+    ///
+    /// The consequence is not cosmetic. `SignedSession`'s rollback floor refuses
+    /// a root whose `seq` went *backwards*; two trees both at zero never do. So
+    /// a host holding yesterday's bytes could serve them forever — signature
+    /// valid, every hash valid, seq not lower — and the one defence against a
+    /// republish being rolled back was inert **against our own publisher**.
+    /// A withdrawn binding, a rotated target, a revocation: all re-servable.
+    /// The durable identity persisted the *key* across runs and nothing
+    /// persisted the *head*, which is exactly the sort of half that looks
+    /// present until someone measures it.
+    ///
+    /// A missing prior head is a first publish (`seq 0`, no predecessor). A
+    /// prior head that is *present and unreadable* is an **error**, never a
+    /// silent restart: restarting the sequence is indistinguishable from the
+    /// rollback this exists to prevent, and "absent" and "unreadable" arriving
+    /// as the same value is the seam this repo has now met five times.
+    pub fn adopt_prior_head(&self, base: &Path) -> Result<(), String> {
+        match read_prior_head(base, &self.peer_id)? {
+            Some(prior) => self.adopt_prior_head_bytes(&prior),
+            None => Ok(()),
+        }
+    }
+
+    /// [`Self::adopt_prior_head`] from bytes already read.
+    ///
+    /// The projection emitter needs this split because it **cleans
+    /// `{base}/{peer_id}/` before writing** — by the time `finish` runs, the
+    /// prior head has been deleted, and reading it there would find nothing and
+    /// silently restart the sequence. So the bytes are carried across the clean.
+    pub fn adopt_prior_head_bytes(&self, prior: &PriorHead) -> Result<(), String> {
+        let entity = entity_wire::decode_entity(&prior.manifest)
+            .map_err(|e| format!("prior published root does not decode: {e}"))?;
+        let data = entity_types::PublishedRootData::from_entity(&entity)
+            .map_err(|e| format!("prior published root is not a published-root: {e}"))?;
+        // A head published by someone else is not our sequence to continue —
+        // and adopting it would let a foreign tree in the output directory
+        // dictate our `seq`.
+        if data.peer_id != self.peer_id {
+            return Err(format!(
+                "the prior published root was published by {} — this identity is {}. \
+                 Publishing a different peer into the same directory would either restart \
+                 the sequence or continue someone else's",
+                data.peer_id, self.peer_id
+            ));
+        }
+        let shared = self.peer.shared();
+        let hash = entity.content_hash;
+        shared.content_store.put(entity).map_err(|e| format!("store prior head: {e}"))?;
+        shared
+            .location_index
+            .set(&entity_peer::published_root::published_root_head_path(&self.peer_id), hash);
+        // The signature over that head, at the invariant path `finish` reads it
+        // from — so an UNCHANGED republish, which takes `publish`'s idempotent
+        // early return and signs nothing, can still project one.
+        if let Some((sig_hash, body)) = &prior.signature {
+            // Verified against the hash the pointer named, with the same
+            // function a consumer uses — adopting a body that does not hash to
+            // its own address would re-project a signature nothing can verify.
+            let sig_entity = super::http_poll::verify_and_decode(body, sig_hash)
+                .map_err(|e| format!("prior signature does not verify: {e:?}"))?;
+            shared
+                .content_store
+                .put(sig_entity)
+                .map_err(|e| format!("store prior signature: {e}"))?;
+            shared
+                .location_index
+                .set(&invariant_signature_path(&self.peer_id, &hash), *sig_hash);
+        }
+        Ok(())
+    }
+
     /// Build the HAMT, sign a root over it, and project the closure + manifest
     /// + signature into `base` (an already-prefixed projection root).
     ///
@@ -187,6 +269,11 @@ impl RootProjector {
             return Err("nothing to sign: the projection recorded no bindings".into());
         }
         let shared = self.peer.shared();
+
+        // **Continue the sequence this directory is already at.** See
+        // [`Self::adopt_prior_head`] — without this every emit is `seq 0` and
+        // the consumer's rollback floor cannot see a rollback at all.
+        self.adopt_prior_head(base)?;
 
         let root = entity_tree::trie::build_trie(shared.content_store.as_ref(), &self.bindings)
             .map_err(|e| format!("trie builds: {e}"))?;
@@ -273,6 +360,63 @@ impl RootProjector {
 }
 
 /// Transitive hash closure of a trie root, by walking node bodies for embedded
+/// The published-root manifest already sitting in `base` for `peer_id`, as
+/// bytes — the input to [`RootProjector::adopt_prior_head_bytes`].
+///
+/// Read it **before** any clean: an emitter that wipes `{base}/{peer_id}/`
+/// destroys its own sequence marker, and a sequence that restarts at zero is
+/// indistinguishable from the rollback the sequence exists to detect.
+///
+/// `None` means genuinely absent (a first publish). An unreadable file is an
+/// error, not a `None`.
+pub fn read_prior_head(base: &Path, peer_id: &str) -> Result<Option<PriorHead>, String> {
+    let path = base.join(peer_id).join(PUBLISHED_ROOT_REL);
+    let manifest = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read prior published root {}: {e}", path.display())),
+    };
+    // The prior signature comes with it. See [`PriorHead::signature`] — without
+    // it an unchanged republish takes `publish_root`'s idempotent early return
+    // and then cannot re-project a signature it never made.
+    let head_hex = entity_wire::decode_entity(&manifest)
+        .map(|e| e.content_hash.to_hex())
+        .map_err(|e| format!("prior published root at {} does not decode: {e}", path.display()))?;
+    let ptr_path = base.join(peer_id).join(format!("system/signature/{head_hex}.bin"));
+    let signature = match fs::read(&ptr_path) {
+        Ok(ptr) => match super::http_poll::crack_pointer(&ptr) {
+            Ok(sig_hash) => {
+                let hex = sig_hash.to_hex();
+                let blob = base.join("content").join(&hex[0..2]).join(&hex[2..4]).join(&hex);
+                fs::read(&blob).ok().map(|body| (sig_hash, body))
+            }
+            Err(_) => None,
+        },
+        Err(_) => None,
+    };
+    Ok(Some(PriorHead { manifest, signature }))
+}
+
+/// A previously-published root, carried across an emitter's clean.
+pub struct PriorHead {
+    /// The `published-root` manifest, as the 3-key wire entity on disk.
+    manifest: Vec<u8>,
+    /// The §5.2 signature over that head — `(hash, bare hashable body)`.
+    ///
+    /// Carried because `PublishRootEngine::publish` **returns the prior head
+    /// unchanged when the content did not change**, and then signs nothing. That
+    /// is right for a live peer, whose store still holds the old signature; it is
+    /// wrong for a re-projecting CLI, which has just deleted its own output and
+    /// has to write every artifact again. Without it, republishing an *unchanged*
+    /// site fails with "publisher bound no signature" — the idempotent path, i.e.
+    /// the most ordinary republish there is.
+    ///
+    /// `None` if it could not be read: the publish then either makes a new one
+    /// (content changed) or fails loudly on the missing signature, which is
+    /// better than emitting a root nothing can verify.
+    signature: Option<(Hash, Vec<u8>)>,
+}
+
 /// 33-byte hashes. Deliberately structure-agnostic: a publisher must not need
 /// to know the HAMT's internal encoding to project it, and if that assumption
 /// is ever wrong this is where it shows.
@@ -520,6 +664,68 @@ mod tests {
             kt,
             Some(peer_id.to_string()),
         )
+    }
+
+    /// **A REPUBLISH CONTINUES THE SEQUENCE — and for the whole naming arc it
+    /// did not.**
+    ///
+    /// `PublishRootEngine::publish` derives `seq` from the publisher peer's own
+    /// location index, and every CLI invocation builds a **fresh in-memory
+    /// peer** — so every emit published `seq 0`, however many times the
+    /// directory had been published. Measured on the shipped binary before the
+    /// fix: two different registry contents, same key, both zero.
+    ///
+    /// That made `SignedSession`'s rollback floor inert against our own
+    /// publisher. The floor refuses a root whose `seq` went *backwards*; two
+    /// trees at zero never do, so a host holding yesterday's bytes could serve
+    /// them forever with every signature and every hash checking out. A
+    /// withdrawn binding, a rotated target, a revocation — all re-servable, with
+    /// nothing in the chain able to say so. The durable identity persisted the
+    /// *key* across runs; nothing persisted the *head*.
+    ///
+    /// **Two separate projectors, deliberately.** The existing republish test
+    /// reuses one projector, which is a live peer's shape and the case that
+    /// always worked. Two projectors over one directory is the CLI's shape, and
+    /// the only one that could catch this.
+    #[test]
+    fn a_second_publish_into_the_same_directory_advances_the_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (peer_id, pubkey, kt, first) = publish_into(dir.path());
+        assert_eq!(first.seq, 0, "a first publish is seq 0");
+
+        // A second CLI run: new process, new peer, same durable key, same dir.
+        let kp = entity_crypto::Keypair::from_seed(SEED);
+        let mut root = RootProjector::new(kp).expect("projector builds");
+        root.adopt_prior_head(dir.path()).expect("adopts the head already published here");
+        let mut changed = site(&peer_id, "signed");
+        changed.pages.push((
+            "second".into(),
+            SitePage::markdown("Second", "# Second\n\npublished later"),
+        ));
+        emit_owned_sites(dir.path(), std::slice::from_ref(&changed), "", Some(&mut root)).unwrap();
+        let second = root.finish(dir.path()).expect("signs a root");
+
+        assert_eq!(second.seq, 1, "a republish must continue the sequence, not restart it");
+        assert_ne!(second.head_hex, first.head_hex, "different content, different head");
+
+        // And the consumer can tell the two apart, which is the whole point: a
+        // session that has seen the newer root refuses the older one.
+        let newer = client(dir.path(), &peer_id, pubkey.clone(), kt);
+        let head = newer.fetch_root().expect("head fetches");
+        assert_eq!(head.seq, 1, "the consumer reads the advanced seq off disk");
+
+        // The third publish is UNCHANGED content: the engine's idempotent path,
+        // which returns the prior head and signs nothing. It must still project
+        // a complete tree — this is the most ordinary republish there is, and it
+        // failed with "publisher bound no signature" until the prior signature
+        // was carried across the clean too.
+        let kp = entity_crypto::Keypair::from_seed(SEED);
+        let mut root = RootProjector::new(kp).expect("projector builds");
+        root.adopt_prior_head(dir.path()).expect("adopts");
+        emit_owned_sites(dir.path(), std::slice::from_ref(&changed), "", Some(&mut root)).unwrap();
+        let third = root.finish(dir.path()).expect("an unchanged republish still emits");
+        assert_eq!(third.seq, 1, "unchanged content must NOT inflate the sequence");
+        assert_eq!(third.head_hex, second.head_hex);
     }
 
     /// **The B14 gate.** A publish emits a signed root, and a consumer holding

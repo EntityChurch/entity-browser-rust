@@ -381,6 +381,53 @@ pub fn auth_chip(state: AuthState) -> Element {
     chip(g, w, c)
 }
 
+/// A filter-chip bar — the wrapping row [`filter_chip`]s sit in.
+pub fn filter_bar() -> Element {
+    let bar = util::create_element("div");
+    bar.set_attribute("style", theme::ROW_START).ok();
+    bar
+}
+
+/// One filter chip: a two-state toggle carrying the value it selects.
+///
+/// The look is the app's existing toggle pair (`TOGGLE_ACTIVE` /
+/// `TOGGLE_INACTIVE`) rather than a new chip style — a filter chip *is* a
+/// toggle, and giving it its own colors is how two surfaces that mean the same
+/// thing end up looking different.
+///
+/// `count` rides in the label deliberately: a chip that says how many things it
+/// holds cannot be mistaken for a chip that is broken, which is exactly what a
+/// filter row that silently shows nothing looks like.
+pub fn filter_chip(
+    ctx: &util::DomCtx,
+    label: &str,
+    count: usize,
+    selected: bool,
+    event: &str,
+    value: &str,
+) -> Element {
+    let b = util::create_element("button");
+    b.set_attribute("type", "button").ok();
+    b.set_attribute(
+        "style",
+        if selected {
+            theme::TOGGLE_ACTIVE
+        } else {
+            theme::TOGGLE_INACTIVE
+        },
+    )
+    .ok();
+    if selected {
+        // Which chip is active must be recoverable without reading colors back
+        // out of an inline style — by assistive tech, and by the e2e.
+        b.set_attribute("aria-pressed", "true").ok();
+    }
+    b.set_attribute("data-chip", value).ok();
+    util::set_text(&b, &format!("{label} {count}"));
+    ctx.on_window_event(&b, "click", event, value);
+    b
+}
+
 // --- Grouping (S2) ----------------------------------------------------------
 
 /// A subheading for a group/section (uppercase, dim) — the group's label.
