@@ -129,7 +129,7 @@ impl FileTransferWindow {
 
 impl WindowView for FileTransferWindow {
     fn title(&self) -> String {
-        "File Transfer".into()
+        crate::i18n::window_title("File Transfer")
     }
 
     fn type_name(&self) -> &'static str {

@@ -97,7 +97,7 @@ impl SiteEditorWindow {
 
 impl WindowView for SiteEditorWindow {
     fn title(&self) -> String {
-        "Site Creator".into()
+        crate::i18n::window_title("Site Creator")
     }
 
     fn type_name(&self) -> &'static str {

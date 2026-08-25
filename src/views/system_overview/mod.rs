@@ -116,7 +116,7 @@ impl SystemOverviewWindow {
 
 impl WindowView for SystemOverviewWindow {
     fn title(&self) -> String {
-        "System Overview".into()
+        crate::i18n::window_title("System Overview")
     }
 
     fn type_name(&self) -> &'static str {

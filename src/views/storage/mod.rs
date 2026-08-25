@@ -117,7 +117,7 @@ impl StorageWindow {
 
 impl WindowView for StorageWindow {
     fn title(&self) -> String {
-        "Storage".into()
+        crate::i18n::window_title("Storage")
     }
 
     fn type_name(&self) -> &'static str {

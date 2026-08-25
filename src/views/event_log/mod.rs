@@ -62,7 +62,7 @@ impl Default for EventLogWindow {
 
 impl WindowView for EventLogWindow {
     fn title(&self) -> String {
-        "Event Log".into()
+        crate::i18n::window_title("Event Log")
     }
 
     fn type_name(&self) -> &'static str {

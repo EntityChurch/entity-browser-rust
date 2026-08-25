@@ -128,7 +128,7 @@ impl SettingsWindow {
 
 impl WindowView for SettingsWindow {
     fn title(&self) -> String {
-        "Settings".into()
+        crate::i18n::window_title("Settings")
     }
 
     fn type_name(&self) -> &'static str {

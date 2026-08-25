@@ -94,25 +94,6 @@ pub enum WindowCategory {
 }
 
 impl WindowCategory {
-    /// Section heading shown in the command palette.
-    pub fn label(self) -> &'static str {
-        match self {
-            WindowCategory::AppsContent => "Apps & Content",
-            WindowCategory::System => "System",
-            WindowCategory::Developer => "Developer",
-        }
-    }
-
-    /// One-line "what's in here" blurb — shown in the first-run empty-state so
-    /// a new user knows what each menu section offers before opening anything.
-    pub fn description(self) -> &'static str {
-        match self {
-            WindowCategory::AppsContent => "Browse sites, play games, run apps",
-            WindowCategory::System => "Peers, keys, connections, settings, storage",
-            WindowCategory::Developer => "Entity tree, query & execute consoles, shell, logs",
-        }
-    }
-
     /// Whether this group's disclosure starts open. Only the everyday group is
     /// expanded on first paint, so a fresh user lands on Games/Apps/Sites.
     pub fn open_by_default(self) -> bool {
@@ -120,12 +101,25 @@ impl WindowCategory {
     }
 
     /// Stable key used to persist this group's open/closed toggle across rebuilds.
+    /// Also the i18n key stem ([`label_i18n`]/[`description_i18n`]) — a durable
+    /// identity, unlike the translated [`label`]/[`description`] display strings.
     pub fn key(self) -> &'static str {
         match self {
             WindowCategory::AppsContent => "apps",
             WindowCategory::System => "system",
             WindowCategory::Developer => "developer",
         }
+    }
+
+    /// Localized section heading (the display form of [`label`]; `label` stays
+    /// the English canonical). Keyed `category.<key>`.
+    pub fn label_i18n(self) -> String {
+        crate::i18n::t(&format!("category.{}", self.key()), &[])
+    }
+
+    /// Localized [`description`]. Keyed `category.<key>.desc`.
+    pub fn description_i18n(self) -> String {
+        crate::i18n::t(&format!("category.{}.desc", self.key()), &[])
     }
 
     /// All categories, in display order.
@@ -170,12 +164,13 @@ pub struct WindowType {
 }
 
 /// Human display label for a window-type key. Menus, pickers, and taskbars show
-/// THIS. Today every key already reads well as a label (the System window's key
-/// was renamed "System Backend" → "System Overview" to match its title, so no
-/// override is needed); the indirection stays so a future friendlier label can
-/// be added in one place. Keep in sync with the matching `WindowView::title()`.
-pub fn window_display_name(name: &'static str) -> &'static str {
-    name
+/// THIS — now the **localized** title (`i18n::window_title`), keyed off the
+/// canonical name (`window.<slug>`), which is exactly the "friendlier label in
+/// one place" this indirection was built for. The canonical `name` stays the
+/// identity key. Resolves through the SAME `i18n::window_title` as the matching
+/// `WindowView::title()`, so the two are in sync by construction.
+pub fn window_display_name(name: &str) -> String {
+    crate::i18n::window_title(name)
 }
 
 /// Resolve a possibly-legacy window-type key to its current canonical key. A
@@ -193,8 +188,9 @@ pub fn canonical_window_type(name: &str) -> &str {
 }
 
 impl WindowType {
-    /// Display label for menus/pickers (see [`window_display_name`]).
-    pub fn display_name(&self) -> &'static str {
+    /// Display label for menus/pickers (see [`window_display_name`]) — the
+    /// localized title; the canonical `name` stays the identity key.
+    pub fn display_name(&self) -> String {
         window_display_name(self.name)
     }
 }

@@ -82,7 +82,7 @@ impl AccessLogWindow {
 
 impl WindowView for AccessLogWindow {
     fn title(&self) -> String {
-        "Access Log".into()
+        crate::i18n::window_title("Access Log")
     }
 
     fn type_name(&self) -> &'static str {

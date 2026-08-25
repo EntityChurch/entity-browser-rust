@@ -289,7 +289,7 @@ fn render_nav_bar(wrapper: &Element, output: &SiteRenderOutput, ctx: &DomCtx, ho
     if output.can_go_back {
         let back = util::create_element("button");
         util::set_text(&back, "\u{2190}");
-        util::set_attr(&back, "title", "Back");
+        util::set_attr(&back, "title", &crate::i18n::t("tooltip.back", &[]));
         util::set_attr(
             &back,
             "style",
@@ -314,7 +314,7 @@ fn render_nav_bar(wrapper: &Element, output: &SiteRenderOutput, ctx: &DomCtx, ho
     let home = util::create_element("a");
     util::set_text(&home, &format!("\u{2302}  {}", output.site_title));
     util::set_attr(&home, "href", "#");
-    util::set_attr(&home, "title", "Go to site home");
+    util::set_attr(&home, "title", &crate::i18n::t("tooltip.site_home", &[]));
     util::set_attr(
         &home,
         "style",
@@ -349,7 +349,7 @@ fn render_nav_bar(wrapper: &Element, output: &SiteRenderOutput, ctx: &DomCtx, ho
     // -- Mobile: hamburger + a single vertical dropdown of everything --
     let burger = util::create_element_with_class("button", "cs-nav-burger");
     util::set_attr(&burger, "type", "button");
-    util::set_attr(&burger, "title", "Menu");
+    util::set_attr(&burger, "title", &crate::i18n::t("tooltip.menu", &[]));
     util::set_text(&burger, "\u{2630}"); // ☰
     let menu = util::create_element_with_class("div", "cs-nav-menu");
     for link in &output.nav {
@@ -577,7 +577,7 @@ fn share_button(bar: &Element, ctx: &DomCtx, label: &str, title: &str, link: Str
                 });
             }
             // Feedback regardless of clipboard success (it may be denied).
-            el.set_text_content(Some("Copied \u{2713}"));
+            el.set_text_content(Some(&crate::i18n::t("status.copied", &[])));
         }
     });
     util::append(bar, &btn);

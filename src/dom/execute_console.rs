@@ -48,7 +48,7 @@ fn render_mode_toggle(parent: &Element, output: &ExecuteConsoleOutput, ctx: &Dom
 
     // Toggle pair — the atoms' look comes from theme::TOGGLE_*; built on the
     // shared button_el so the element itself isn't hand-rolled.
-    let guided_btn = components::button_el("Guided", components::ButtonKind::Small);
+    let guided_btn = components::button_el(&crate::i18n::t("execute.guided", &[]), components::ButtonKind::Small);
     guided_btn
         .set_attribute(
             "style",
@@ -58,7 +58,7 @@ fn render_mode_toggle(parent: &Element, output: &ExecuteConsoleOutput, ctx: &Dom
     ctx.on_window_event(&guided_btn, "click", "set_mode", "guided");
     util::append(&mode_div, &guided_btn);
 
-    let raw_btn = components::button_el("Raw", components::ButtonKind::Small);
+    let raw_btn = components::button_el(&crate::i18n::t("execute.raw", &[]), components::ButtonKind::Small);
     raw_btn
         .set_attribute(
             "style",
@@ -84,7 +84,10 @@ fn render_peer_selector(parent: &Element, output: &ExecuteConsoleOutput, ctx: &D
         .map(|o| o.value.as_str())
         .unwrap_or("");
     let select = components::select(ctx, &options, selected, "select_peer");
-    util::append(parent, &components::field("Peer", "", &select));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("label.peer", &[]), "", &select),
+    );
 }
 
 fn render_guided(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
@@ -103,7 +106,10 @@ fn render_guided(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) 
         .map(|(v, _)| v.as_str())
         .unwrap_or("");
     let h_select = components::select(ctx, &h_options, h_selected, "select_handler");
-    util::append(parent, &components::field("Handler", "", &h_select));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("execute.handler", &[]), "", &h_select),
+    );
 
     let op_values: Vec<String> = guided.operations.iter().map(|o| o.index.to_string()).collect();
     let op_options: Vec<(&str, &str)> = op_values
@@ -118,7 +124,10 @@ fn render_guided(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) 
         .map(|(v, _)| v.as_str())
         .unwrap_or("");
     let op_select = components::select(ctx, &op_options, op_selected, "select_operation");
-    util::append(parent, &components::field("Operation", "", &op_select));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("execute.operation", &[]), "", &op_select),
+    );
 }
 
 fn render_raw(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
@@ -129,19 +138,28 @@ fn render_raw(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
     // The data-field attribute (matching the execute button's query_selector)
     // comes with the atom.
     let uri = components::text_input(ctx, "raw_uri", &raw.handler_uri_initial, "");
-    util::append(parent, &components::field("Handler URI", "", &uri));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("execute.handler_uri", &[]), "", &uri),
+    );
 
     let op = components::text_input(ctx, "raw_op", &raw.operation_initial, "");
-    util::append(parent, &components::field("Operation", "", &op));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("execute.operation", &[]), "", &op),
+    );
 }
 
 fn render_resource(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
     let resource = components::text_input(ctx, "resource", &output.resource_initial, "");
-    util::append(parent, &components::field("Resource", "", &resource));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("execute.resource", &[]), "", &resource),
+    );
 }
 
 fn render_execute_button(parent: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) {
-    let exec_btn = components::button_el("Execute", components::ButtonKind::Primary);
+    let exec_btn = components::button_el(&crate::i18n::t("execute.execute", &[]), components::ButtonKind::Primary);
 
     let actions = ctx.actions.clone();
     let rp = ctx.repaint.clone();

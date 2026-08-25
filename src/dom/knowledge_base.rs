@@ -60,7 +60,12 @@ fn render_list_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx
     // Action button row on its own line.
     let actions_row = util::create_element("div");
     util::set_attr(&actions_row, "style", theme::BTN_ROW);
-    let new_btn = components::button(ctx, "+ New article", components::ButtonKind::Primary, "new");
+    let new_btn = components::button(
+        ctx,
+        &crate::i18n::t("kb.new_article", &[]),
+        components::ButtonKind::Primary,
+        "new",
+    );
     util::append(&actions_row, &new_btn);
     util::append(parent, &actions_row);
 
@@ -207,7 +212,12 @@ fn render_reader_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomC
             );
             let row = util::create_element("div");
             let btn =
-                components::button(ctx, "← Back to list", components::ButtonKind::Small, "show_list");
+                components::button(
+                    ctx,
+                    &crate::i18n::t("kb.back_to_list", &[]),
+                    components::ButtonKind::Small,
+                    "show_list",
+                );
             util::append(&row, &btn);
             util::append(parent, &row);
             return;
@@ -227,11 +237,32 @@ fn render_reader_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomC
     // and the destructive delete in the shared destructive look (S3).
     let row = util::create_element("div");
     util::set_attr(&row, "style", theme::BTN_ROW);
-    util::append(&row, &components::button(ctx, "← Back", components::ButtonKind::Small, "show_list"));
-    util::append(&row, &components::button(ctx, "Edit", components::ButtonKind::Secondary, "edit"));
     util::append(
         &row,
-        &components::button(ctx, "Delete", components::ButtonKind::Destructive, "delete"),
+        &components::button(
+            ctx,
+            &crate::i18n::t("btn.back", &[]),
+            components::ButtonKind::Small,
+            "show_list",
+        ),
+    );
+    util::append(
+        &row,
+        &components::button(
+            ctx,
+            &crate::i18n::t("btn.edit", &[]),
+            components::ButtonKind::Secondary,
+            "edit",
+        ),
+    );
+    util::append(
+        &row,
+        &components::button(
+            ctx,
+            &crate::i18n::t("btn.delete", &[]),
+            components::ButtonKind::Destructive,
+            "delete",
+        ),
     );
     util::append(parent, &row);
 
@@ -288,9 +319,17 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
 
     // Title field — the draft-tracked atom preserves typing across section
     // rebuilds (the previous set_value-on-rebuild pattern clobbered edits).
-    let title_input = components::text_input(ctx, "title", &draft.initial_title, "Article title");
+    let title_input = components::text_input(
+        ctx,
+        "title",
+        &draft.initial_title,
+        &crate::i18n::t("kb.title_placeholder", &[]),
+    );
     util::set_attr(&title_input, "autofocus", "");
-    util::append(parent, &components::field("Title", "", &title_input));
+    util::append(
+        parent,
+        &components::field(&crate::i18n::t("label.title", &[]), "", &title_input),
+    );
 
     // Content field block.
     let content_label = util::create_element("label");
@@ -305,7 +344,7 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
     let row = util::create_element("div");
     util::set_attr(&row, "style", theme::BTN_ROW);
 
-    let save_btn = components::button_el("Save", components::ButtonKind::Primary);
+    let save_btn = components::button_el(&crate::i18n::t("btn.save", &[]), components::ButtonKind::Primary);
     // The save handler reads both DOM values at click time and
     // dispatches a single packed action — no per-keystroke writes.
     {
@@ -327,7 +366,12 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
     }
     util::append(&row, &save_btn);
 
-    let cancel_btn = components::button(ctx, "Cancel", components::ButtonKind::Small, "cancel");
+    let cancel_btn = components::button(
+        ctx,
+        &crate::i18n::t("btn.cancel", &[]),
+        components::ButtonKind::Small,
+        "cancel",
+    );
     util::append(&row, &cancel_btn);
 
     util::append(parent, &row);

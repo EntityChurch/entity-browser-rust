@@ -74,7 +74,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
     if output.known_peers.is_empty() {
         return;
     }
-    let card = components::card("Known devices");
+    let card = components::card(&crate::i18n::t("peers.known_devices", &[]));
     let (tbl, body) = components::table(&["Device", "Status", "Address", ""]);
 
     for kp in &output.known_peers {
@@ -145,7 +145,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
 /// address in. One bounded card (S2) — this is what the old free-floating
 /// "Connect to Address" + scanner become.
 fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
-    let card = components::card("Connect to a device");
+    let card = components::card(&crate::i18n::t("peers.connect_device", &[]));
 
     // Draft-tracked atom (S8): typing lands in `ctx.drafts`, so an unrelated
     // repaint (e.g. a connection-health change) rebuilds the field with the
@@ -158,9 +158,12 @@ fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx
         &output.address_input_initial,
         "ws://192.168.1.10:4041",
     );
-    util::append(&card, &components::field("Address", "", &input));
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.address", &[]), "", &input),
+    );
 
-    let btn = components::button_el("Connect", components::ButtonKind::Primary);
+    let btn = components::button_el(&crate::i18n::t("btn.connect", &[]), components::ButtonKind::Primary);
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
@@ -266,7 +269,7 @@ fn render_pairing_qr(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     let Some(payload) = output.qr_payload.clone() else {
         return;
     };
-    let card = components::card("Pair a device (QR)");
+    let card = components::card(&crate::i18n::t("peers.pair_qr", &[]));
 
     let hint = util::create_element("p");
     hint.set_attribute("style", theme::HINT).ok();

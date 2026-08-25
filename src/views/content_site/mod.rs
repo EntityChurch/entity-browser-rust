@@ -151,7 +151,7 @@ impl ContentSiteWindow {
 
 impl WindowView for ContentSiteWindow {
     fn title(&self) -> String {
-        "Site Browser".into()
+        crate::i18n::window_title("Site Browser")
     }
 
     fn type_name(&self) -> &'static str {

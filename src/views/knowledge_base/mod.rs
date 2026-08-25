@@ -105,7 +105,7 @@ impl KnowledgeBaseWindow {
 
 impl WindowView for KnowledgeBaseWindow {
     fn title(&self) -> String {
-        "Knowledge Base".into()
+        crate::i18n::window_title("Knowledge Base")
     }
 
     fn type_name(&self) -> &'static str {

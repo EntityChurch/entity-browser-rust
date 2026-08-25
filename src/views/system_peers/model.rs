@@ -66,10 +66,10 @@ impl SystemPeersModel {
     }
 }
 
-/// Human one-liner for the boot surface. Window targets show the friendly
-/// display label, not the durable key. (`window_type` is a runtime `String`, so
-/// we can't route through `window_display_name`'s `&'static str` signature —
-/// the one override is applied inline; keep in sync.)
+/// Human one-liner for the boot surface. Window targets show the friendly,
+/// **localized** display label, not the durable key — routed through
+/// `window_display_name` (now `&str`), with `canonical_window_type` resolving a
+/// legacy persisted key first.
 fn describe_boot_surface(surface: &BootSurface, home_site_id: &str) -> String {
     match surface {
         BootSurface::Chrome => "Window chrome".to_string(),
@@ -81,10 +81,9 @@ fn describe_boot_surface(surface: &BootSurface, home_site_id: &str) -> String {
             }
         }
         BootSurface::Window { window_type, .. } => {
-            let label = match window_type.as_str() {
-                "System Backend" => "System Overview",
-                other => other,
-            };
+            let label = crate::window::window_display_name(crate::window::canonical_window_type(
+                window_type,
+            ));
             format!("Window: {label}")
         }
     }

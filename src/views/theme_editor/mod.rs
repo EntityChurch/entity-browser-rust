@@ -73,7 +73,7 @@ impl ThemeEditorWindow {
 
 impl WindowView for ThemeEditorWindow {
     fn title(&self) -> String {
-        "Theme Editor".into()
+        crate::i18n::window_title("Theme Editor")
     }
 
     fn type_name(&self) -> &'static str {

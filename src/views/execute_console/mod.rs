@@ -75,7 +75,7 @@ impl ExecuteConsoleWindow {
 
 impl WindowView for ExecuteConsoleWindow {
     fn title(&self) -> String {
-        "Execute Console".into()
+        crate::i18n::window_title("Execute Console")
     }
 
     fn type_name(&self) -> &'static str {

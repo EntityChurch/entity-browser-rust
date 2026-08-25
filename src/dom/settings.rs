@@ -119,7 +119,7 @@ fn render_appearance(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 
 /// "Windows" — window-manager behavior toggles.
 fn render_windows(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let card = components::card("Windows");
+    let card = components::card(&crate::i18n::t("settings.windows", &[]));
     util::append(
         &card,
         &components::checkbox(
@@ -140,7 +140,7 @@ fn render_windows(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 /// selector — the surface IS the setting.) No entity-editing (reframe §7.4).
 fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
     let s = &output.session;
-    let card = components::card("Site & Surface");
+    let card = components::card(&crate::i18n::t("settings.site_surface", &[]));
 
     // -- Startup surface: kind radios --
     let kind_label = util::create_element("span");
@@ -190,7 +190,10 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
     if s.target_disabled {
         peer_select.set_attribute("disabled", "").ok();
     }
-    util::append(&card, &components::field("Peer", "", &peer_select));
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.peer", &[]), "", &peer_select),
+    );
 
     // -- Target dropdown (site id or window type; disabled for Chrome) --
     let target_options: Vec<(&str, &str)> = s
@@ -217,7 +220,10 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
         util::set_text(&opt, "(none available)");
         util::append(&target_select, &opt);
     }
-    util::append(&card, &components::field("Target", "", &target_select));
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("label.target", &[]), "", &target_select),
+    );
 
     // Show the chrome ↔ site toggle in the status bar.
     util::append(
@@ -255,7 +261,7 @@ fn render_site_surface(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) 
 }
 
 fn render_rendering(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let card = components::card("Rendering");
+    let card = components::card(&crate::i18n::t("settings.rendering", &[]));
     util::append(
         &card,
         &components::checkbox(
@@ -270,7 +276,7 @@ fn render_rendering(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 }
 
 fn render_network(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let card = components::card("Network");
+    let card = components::card(&crate::i18n::t("settings.network", &[]));
     util::append(
         &card,
         &components::checkbox(

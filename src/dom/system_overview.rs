@@ -59,7 +59,12 @@ pub fn render(
         util::append(&controls, &select);
 
         let clear_btn =
-            components::button(ctx, "Clear logs", components::ButtonKind::Small, "sb_clear_logs");
+            components::button(
+                ctx,
+                &crate::i18n::t("sysoverview.clear_logs", &[]),
+                components::ButtonKind::Small,
+                "sb_clear_logs",
+            );
         util::append(&controls, &clear_btn);
 
         util::append(&header, &controls);
@@ -89,7 +94,7 @@ pub fn render(
     }
 
     // --- Status card ---
-    let status = components::card("Status");
+    let status = components::card(&crate::i18n::t("label.status", &[]));
     match &output.backend {
         Some(b) => {
             add_row(&status, "Native peer", &b.short_id, Some(&b.peer_id), None);
@@ -139,7 +144,7 @@ pub fn render(
     // to review access, not a second copy here.
 
     // --- Live log card ---
-    let logs = components::card("Logs");
+    let logs = components::card(&crate::i18n::t("sysoverview.logs", &[]));
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();
     if output.log_lines.is_empty() {
@@ -242,7 +247,7 @@ fn render_authorizations(parent: &Element, output: &SystemOverviewOutput, ctx: &
     let Some(auth) = &output.authorizations else {
         return;
     };
-    let card = components::card("Device authorizations");
+    let card = components::card(&crate::i18n::t("sysoverview.device_auth", &[]));
 
     if !output.connected {
         util::append(
@@ -298,7 +303,7 @@ fn append_pending_row(body: &Element, auth: &AuthorizationsView, row: &AuthRow, 
         "file-transfer",
     );
 
-    let authorize = components::button_el("Authorize", components::ButtonKind::Primary);
+    let authorize = components::button_el(&crate::i18n::t("btn.authorize", &[]), components::ButtonKind::Primary);
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
@@ -350,7 +355,7 @@ fn grant_cell(profile: Option<&str>) -> Element {
             util::set_text(&span, "granted");
             span.set_attribute(
                 "title",
-                "Authorized on the backend; the specific scope isn't recorded locally.",
+                &crate::i18n::t("sysoverview.grant_backend_hint", &[]),
             )
             .ok();
         }

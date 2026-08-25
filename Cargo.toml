@@ -19,6 +19,14 @@ path = "src/main.rs"
 name = "entity-worker"
 path = "src/bin/entity-worker.rs"
 
+# Build-time only (never linked into the wasm runtime): build.rs parses the
+# locale JSON files under I18N_LOCALES_ROOT and codegens Rust literals, so the
+# catalogs ship as compiled-in `&'static` data with no runtime JSON parser.
+# serde_json is already a runtime dep (below) — same version, no new supply
+# chain, just also available at build time.
+[build-dependencies]
+serde_json = "1"
+
 [dependencies]
 # Entity core crates (WASM-safe leaf crates — no tokio in dep chain).
 # Listed direct because view/app code imports them; the consumers are:

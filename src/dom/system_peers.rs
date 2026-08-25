@@ -38,13 +38,13 @@ pub fn render_system_peers(parent: &Element, output: &SystemPeersOutput) {
     util::append(parent, &posture);
 
     // The in-app system peer — always present.
-    let in_app = components::card("System peer");
+    let in_app = components::card(&crate::i18n::t("syspeers.system_peer", &[]));
     append_peer_facts(&in_app, &output.in_app);
     util::append(parent, &in_app);
 
     // The System backend — desktop only. Identity only; the detail is below.
     if let Some(card) = &output.native {
-        let native = components::card("System backend");
+        let native = components::card(&crate::i18n::t("syspeers.system_backend", &[]));
         append_peer_facts(&native, card);
         util::append(parent, &native);
     }

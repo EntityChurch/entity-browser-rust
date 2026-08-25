@@ -458,7 +458,7 @@ pub fn render_player(
     let expand_btn = util::create_element_with_class("button", "gm-expand-btn");
     util::set_text(&expand_btn, "⤢ Expand");
     util::set_attr(&expand_btn, "type", "button");
-    util::set_attr(&expand_btn, "title", "Fill the window");
+    util::set_attr(&expand_btn, "title", &crate::i18n::t("tooltip.fill_window", &[]));
     util::append(&bar, &expand_btn);
     util::append(&wrapper, &bar);
 
@@ -493,11 +493,11 @@ pub fn render_player(
             if expanded {
                 area.set_class_name("gm-stage-area");
                 util::set_text(&btn, "⤢ Expand");
-                util::set_attr(&btn, "title", "Fill the window");
+                util::set_attr(&btn, "title", &crate::i18n::t("tooltip.fill_window", &[]));
             } else {
                 area.set_class_name("gm-stage-area gm-expanded");
                 util::set_text(&btn, "⤡ Collapse");
-                util::set_attr(&btn, "title", "Back to normal size");
+                util::set_attr(&btn, "title", &crate::i18n::t("tooltip.restore_size", &[]));
             }
         });
     }

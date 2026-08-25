@@ -49,7 +49,7 @@ fn render_input_row(parent: &Element, output: &ChainTraceOutput, ctx: &DomCtx) {
         util::tracked_input(parent, ctx, &field_id, &output.chain_id, theme::INPUT);
 
     let button =
-        crate::dom::components::button_el("Trace", crate::dom::components::ButtonKind::Small);
+        crate::dom::components::button_el(&crate::i18n::t("btn.trace", &[]), crate::dom::components::ButtonKind::Small);
 
     let window_id = output.window_id;
     let drafts = ctx.drafts.clone();
