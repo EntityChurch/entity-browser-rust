@@ -101,25 +101,52 @@ fn chrome_override() -> bool {
 /// Auto-connect bookkeeping for the canonical system backend peer (Phase 1c,
 /// `DESIGN-SYSTEM-BACKEND-PEER.md` §10). The boot IPC fills `target` with the
 /// ensured backend's id + WS address; `drain_system_backend_connect` (each
-/// frame) dials it from S with backoff, iff it isn't already connected, and
-/// clears `target` once connected or after the attempt cap — so the frontend
-/// system peer connects to the backend with zero user action.
+/// frame) EXECUTEs `maintain-peer` from S to establish it — and hands the
+/// reconnect lifecycle to the EXTENSION-NETWORK driver. Once the first
+/// `maintain-peer` returns 200 the extension owns connect-on-drop (its §4.1
+/// reconnect continuation graph + the `system/peer/status` writes our read-model
+/// subscribes), so the app **disarms** (`target = None`) and never re-fires. The
+/// app's only remaining job is landing that first establish through the boot
+/// provision→listener-bind readiness race (the retry loop below).
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct SystemBackendConnect {
     /// The ensured backend (id + ws addr). `None` until the boot IPC returns;
-    /// then it stays armed for the session so `drain_system_backend_connect`
-    /// can **re-dial on a dropped link** (self-healing) — the drain idles while
-    /// the kernel read-model reports the peer `connected` and re-dials the
-    /// moment it drops off (a transport error → `suspect`, a keepalive miss →
-    /// `disconnected`).
+    /// armed until the first `maintain-peer` succeeds, then cleared (the
+    /// extension maintains from there — the app does not re-dial).
     target: Option<crate::tauri_ipc::BackendPeerInfo>,
-    /// Connect attempts issued so far — the cap guards against a backend that
-    /// never accepts (D13: give up loudly, don't spin forever).
+    /// First-establish attempts issued so far — the cap guards a backend that
+    /// never comes up (D13: give up loudly, don't spin forever) and surfaces the
+    /// honest Offline marker, then slow-retries.
     attempts: u32,
-    /// Frames to wait before the next attempt. Backoff covers a dial that
-    /// races the (async) listener bind or a transient connect failure.
+    /// Frames to wait before the next attempt. Backoff covers the establish
+    /// racing the (async) listener bind or a transient failure.
     cooldown: u32,
+    /// A `maintain-peer` execute is in flight this frame — don't fire a second
+    /// (the execute is async; without this the frame loop would spam it).
+    establishing: bool,
+}
+
+/// Per-(local, remote) state for the window-bound `maintain-peer` sweep
+/// ([`EntityApp::sync_maintained_peers`]) — the same hand-off the system backend
+/// gets, for a conversation the user deliberately bound: one EXECUTE, then the
+/// EXTENSION-NETWORK driver owns connect-on-drop for that pair.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct MaintainEntry {
+    /// `maintain-peer` returned 200 — the extension maintains this pair now.
+    /// Settled: never fire again for it.
+    done: bool,
+    /// An execute is in flight — don't fire a second from the next frame.
+    in_flight: bool,
+    /// Attempts issued in the current burst. Exhausting it drops to a slow
+    /// retry — never a per-frame execute, and never a permanent stop.
+    attempts: u32,
+    /// Frames to wait before the next attempt.
+    cooldown: u32,
+    /// Whether the user has already been told this pair is unreachable. Keeps
+    /// the slow retry from writing an event-log line every burst.
+    warned: bool,
 }
 
 /// Main application state. Only instantiated by the WASM frontend
@@ -195,6 +222,25 @@ pub struct EntityApp {
     /// `pending_sdk_attachments`, main-thread flavour.
     #[cfg(target_arch = "wasm32")]
     pending_idb_peers: std::rc::Rc<std::cell::RefCell<Vec<PendingIdbPeer>>>,
+    /// Local peers whose engine start is **settled**, and how it settled.
+    /// Engines and the connection pool are **per-peer**, and local peers come
+    /// and go (a durable `frontend-idb` peer lands frames after boot, a backend
+    /// peer on IPC completion) — so the start is a per-frame lifecycle sweep
+    /// ([`sync_peer_engines`]), not a boot one-off, and this map is what keeps
+    /// the settled ones from being re-examined every frame.
+    ///
+    /// The *outcome* is kept, not just membership: `sync_maintained_peers` may
+    /// only EXECUTE `maintain-peer` on a peer that actually got engines
+    /// (`Started`) — on a Worker-arm peer (`NotApplicable`) the network handler
+    /// is unbound and every call would 500.
+    #[cfg(target_arch = "wasm32")]
+    engine_state: std::collections::HashMap<String, crate::peers::EnginesStart>,
+    /// `maintain-peer` state per window-bound `(local_pid, remote_pid)` pair —
+    /// see [`sync_maintained_peers`](EntityApp::sync_maintained_peers).
+    /// `Arc<Mutex<…>>` because the execute completes off the frame loop.
+    #[cfg(target_arch = "wasm32")]
+    maintained_peers:
+        Arc<std::sync::Mutex<std::collections::HashMap<(String, String), MaintainEntry>>>,
     /// Cross-Worker MessagePort transport broker. Owns the main-side
     /// control ports for every backend Worker; routes inbound
     /// `xworker://<peer-id>` `OpenChannel` requests by transferring a
@@ -1455,6 +1501,8 @@ impl EntityApp {
             system_backend_connect,
             pending_sdk_attachments,
             pending_idb_peers: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            engine_state: std::collections::HashMap::new(),
+            maintained_peers: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             xworker_broker,
             boot_control_port: stashed_boot_port,
             status_closures,
@@ -2229,6 +2277,11 @@ impl EntityApp {
     /// Run one frame — drain actions, render DOM. Called from rAF loop.
     #[cfg(target_arch = "wasm32")]
     pub fn frame(&mut self) {
+        // Start kernel extension engines for any local peer that doesn't have
+        // them yet. FIRST in the frame: `drain_system_backend_connect` below
+        // EXECUTEs `maintain-peer` on S's own `system/network`, which 500s
+        // "network handler not bound" until S's engines run.
+        self.sync_peer_engines();
         // Register any backend peers that were created via async Tauri IPC.
         self.drain_pending_backend_peers();
         // Dial the auto-provisioned system backend from S (Phase 1c) — once B
@@ -2240,6 +2293,11 @@ impl EntityApp {
         // Insert any durable this-tab (frontend-idb) peers whose async build
         // finished since last frame.
         self.drain_pending_idb_peers();
+        // Hand any window-bound conversation to the network extension, so a
+        // deliberately-bound peer survives a drop like the backend does. After
+        // the peer drains (its local peer must exist) and after
+        // `sync_peer_engines` (that peer's network handler must be bound).
+        self.sync_maintained_peers();
 
         // Per-frame window tick — lets a window make progress every frame,
         // independent of the dirty-gated render (e.g. Chat draining its delivery
@@ -3809,6 +3867,219 @@ impl EntityApp {
         });
     }
 
+    /// Start the kernel extension engines for every local peer that lacks them —
+    /// the subscription **delivery** loop and the EXTENSION-NETWORK `PeerLink`
+    /// bind (Piece C). Runs once per peer, tracked by `engines_started`.
+    ///
+    /// **Why a per-frame sweep and not a boot call.** Engines and the connection
+    /// pool are both **per-peer** (`PeerShared::remote`) — S→R is a different
+    /// connection from P→R — so every local peer that must answer `maintain-peer`
+    /// on its own `/{peer}/system/network`, or deliver its tree changes to a
+    /// remote subscriber, needs its own start. And local peers arrive *after*
+    /// boot: a durable `frontend-idb` peer lands frames later
+    /// ([`drain_pending_idb_peers`]), a backend peer on IPC completion. Sweeping
+    /// the roster is the one wiring point that cannot miss a creation site —
+    /// per-site calls are how half the peers silently end up without engines.
+    ///
+    /// Cheap: once a peer is settled it costs one `HashSet` hit per frame. Both
+    /// *settled* outcomes are recorded — a Worker-arm peer is settled too (its
+    /// engines belong in the worker), because leaving it unrecorded would re-run
+    /// the router lookup for every Worker peer on every frame, forever. Only
+    /// `Unknown` — a peer that may simply not be registered *yet* — is retried.
+    #[cfg(target_arch = "wasm32")]
+    fn sync_peer_engines(&mut self) {
+        use crate::peers::EnginesStart;
+        // S is not guaranteed to appear in `peer_ids()` (same reason
+        // `system_overview` unions it in explicitly), and it is the one peer the
+        // backend auto-connect drain depends on — so name it rather than assume.
+        let mut candidates = self.peer_manager.peer_ids();
+        candidates.push(self.peer_manager.system_peer_id().to_string());
+        for pid in candidates {
+            if self.engine_state.contains_key(&pid) {
+                continue;
+            }
+            match self.peer_manager.start_engines(&pid) {
+                EnginesStart::Started => {
+                    self.engine_state.insert(pid.clone(), EnginesStart::Started);
+                    tracing::info!(peer = %pid, "started kernel extension engines");
+                }
+                EnginesStart::NotApplicable => {
+                    self.engine_state
+                        .insert(pid.clone(), EnginesStart::NotApplicable);
+                }
+                EnginesStart::Unknown => {}
+            }
+        }
+    }
+
+    /// Hand every window-bound conversation to the EXTENSION-NETWORK driver, so
+    /// a peer the user deliberately bound survives a drop the same way the
+    /// system backend does (Piece C step 2).
+    ///
+    /// For each open window's `(local peer, remote peer)` pair
+    /// ([`WindowView::maintained_remotes`]) this EXECUTEs `maintain-peer` on the
+    /// **local peer's own** `/{local}/system/network` — not S's. The pool is
+    /// per-peer, so maintaining S→R would do nothing for a conversation running
+    /// on P→R. That handler 500s "not bound" until the local peer's engines are
+    /// running, which [`sync_peer_engines`](Self::sync_peer_engines) guarantees
+    /// on the Direct arm.
+    ///
+    /// One EXECUTE per pair: on 200 the pair is settled and the extension owns
+    /// connect-on-drop for it. `maintain-peer` connects if needed, so binding a
+    /// chat to a remembered-but-currently-offline peer now also *establishes*
+    /// the connection rather than sitting inert.
+    ///
+    /// **Not released on unbind.** Closing the window leaves the relationship
+    /// maintained — dropping it needs the extension's `release-peer` (which
+    /// writes `disconnected`), never a bare pool eviction (AGENTS.md
+    /// "evict ≠ release"). Wiring that teardown is deliberately a separate step.
+    #[cfg(target_arch = "wasm32")]
+    fn sync_maintained_peers(&mut self) {
+        // A burst of ~1s-spaced tries (covers a peer that is up but momentarily
+        // busy), then a slow retry — never a per-frame execute, and never a
+        // permanent stop (see the burst-exhausted branch for why).
+        const BURST_ATTEMPTS: u32 = 5;
+        const BACKOFF_FRAMES: u32 = 60;
+        const RETRY_COOLDOWN: u32 = 900; // ~15s between bursts
+
+        // Collect the raw bindings — `windows` is borrowed here, and the execute
+        // below needs `&self.peer_manager`. Windows with no remote binding (the
+        // overwhelming majority, always) drop out immediately.
+        let bindings: Vec<(String, Vec<String>)> = self
+            .window_manager
+            .windows
+            .iter()
+            .filter(|w| w.open)
+            .map(|w| (w.view.peer_id().to_string(), w.view.maintained_remotes()))
+            .filter(|(_, remotes)| !remotes.is_empty())
+            .collect();
+        if bindings.is_empty() {
+            return;
+        }
+        let eligible = maintain_candidates(&bindings, &self.engine_state);
+        if eligible.is_empty() {
+            return;
+        }
+
+        // Pass 1 — tick the per-pair state and pick out what is ready to fire
+        // THIS frame. Done entirely under the lock, touching nothing else.
+        //
+        // This gate is load-bearing: `read_connections` in pass 2 is a tree
+        // listing plus an entity read per row, and this method runs EVERY FRAME
+        // (~60/s). A settled pair, a pair mid-flight, and a pair in its backoff
+        // must all cost nothing but this bookkeeping — otherwise one bound
+        // conversation would put a registry scan on every frame, forever.
+        let mut ready: Vec<(String, String)> = Vec::new();
+        let mut exhausted: Vec<(String, String)> = Vec::new();
+        {
+            let Ok(mut m) = self.maintained_peers.lock() else {
+                return;
+            };
+            for (local, remote) in &eligible {
+                let entry = m.entry((local.clone(), remote.clone())).or_default();
+                if entry.done || entry.in_flight {
+                    continue;
+                }
+                if entry.cooldown > 0 {
+                    entry.cooldown -= 1;
+                    continue;
+                }
+                if entry.attempts >= BURST_ATTEMPTS {
+                    // Burst exhausted — slow-retry rather than give up. A FIRST
+                    // maintain-peer against an unreachable peer is a 502 that
+                    // drops the session (the 200-with-retry-armed contract only
+                    // covers re-entry from the backoff continuation), so if we
+                    // stopped here a conversation bound while its peer was
+                    // offline would never become maintained — not even once the
+                    // peer came back. Keep trying, slowly, until one lands.
+                    entry.attempts = 0;
+                    entry.cooldown = RETRY_COOLDOWN;
+                    if !entry.warned {
+                        entry.warned = true;
+                        exhausted.push((local.clone(), remote.clone()));
+                    }
+                    continue;
+                }
+                ready.push((local.clone(), remote.clone()));
+            }
+        }
+
+        // Tell the user once per unreachable relationship — outside the lock,
+        // since the event log writes through the tree.
+        for (local, remote) in exhausted {
+            tracing::warn!(local = %local, remote = %remote, "maintain-peer: bound conversation unreachable — slow-retrying");
+            self.event_log_writer
+                .log(format!("Can't reach {remote} yet — still trying"));
+        }
+
+        if ready.is_empty() {
+            return;
+        }
+
+        // Pass 2 — resolve addresses and fire. Addresses come from the durable
+        // registry (the "ever connected" record, keyed by remote pid).
+        let addressed: std::collections::HashMap<String, String> =
+            crate::connections::read_connections(&self.peer_manager)
+                .into_iter()
+                .filter(|r| !r.addr.is_empty())
+                .map(|r| (r.remote_pid, r.addr))
+                .collect();
+
+        for (local, remote) in ready {
+            let key = (local.clone(), remote.clone());
+            let Some(addr) = addressed.get(&remote).cloned() else {
+                // Never paired with this peer, so there is nothing to dial.
+                // Charge an attempt anyway: the pair stays eligible (the user
+                // may pair it at any moment) and without this it would re-read
+                // the registry on every single frame.
+                if let Ok(mut m) = self.maintained_peers.lock() {
+                    let entry = m.entry(key).or_default();
+                    entry.attempts += 1;
+                    entry.cooldown = BACKOFF_FRAMES;
+                }
+                continue;
+            };
+
+            let handler_uri = format!("/{local}/system/network");
+            let params = maintain_request_entity(&remote, &addr);
+            let fut = self.peer_manager.execute(
+                &local,
+                handler_uri,
+                "maintain-peer".to_string(),
+                params,
+                entity_handler::ExecuteOptions::default(),
+            );
+
+            {
+                let Ok(mut m) = self.maintained_peers.lock() else {
+                    return;
+                };
+                let entry = m.entry(key).or_default();
+                entry.in_flight = true;
+                entry.attempts += 1;
+                entry.cooldown = BACKOFF_FRAMES;
+            }
+            tracing::debug!(local = %local, remote = %remote, "maintain-peer: offering a bound conversation to the network extension");
+
+            let state = self.maintained_peers.clone();
+            let (l, r) = (local.clone(), remote.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                // 200 ⇒ connected AND the reconnect graph is installed; the
+                // extension owns this pair from here, so settle it.
+                let ok = matches!(fut.await, Ok(res) if res.status == 200);
+                if let Ok(mut m) = state.lock() {
+                    let entry = m.entry((l.clone(), r.clone())).or_default();
+                    entry.in_flight = false;
+                    if ok {
+                        entry.done = true;
+                        entry.warned = false;
+                        tracing::info!(local = %l, remote = %r, "maintain-peer: the network extension now keeps this conversation connected");
+                    }
+                }
+            });
+        }
+    }
+
     /// Drain durable `frontend-idb` peers whose async build finished: insert
     /// each into the primary Direct SDK, persist it app-side (vault + roster,
     /// mode `FrontendIdb`), and checkpoint both the roster write and the new
@@ -3924,96 +4195,120 @@ impl EntityApp {
         );
     }
 
-    /// Dial the auto-provisioned system backend from S (Phase 1c,
-    /// `DESIGN-SYSTEM-BACKEND-PEER.md` §10.2/§10.3). Fires at most once per
-    /// cooldown window, only while `target` is armed and B isn't already in the
-    /// connections registry, and stops after a successful connect (clears
-    /// `target`) or the attempt cap (gives up loudly, D13). Backoff covers a
-    /// dial that races the (async) listener bind. Guard reads the connections
-    /// registry directly — reliable on the Tauri IDB arm this path runs under.
+    /// Establish + hand off the auto-provisioned system backend (Phase 1c,
+    /// `DESIGN-SYSTEM-BACKEND-PEER.md` §10.2/§10.3). EXECUTEs `maintain-peer`
+    /// from S against B: the EXTENSION-NETWORK driver connects if needed AND
+    /// installs the §4.1 reconnect continuation graph, so **once the first call
+    /// returns 200 the extension owns reconnect-on-drop** (with its own backoff
+    /// + the `system/peer/status` writes the read-model subscribes) and the app
+    /// disarms — it never re-dials. All this loop does is land that first
+    /// establish through the boot provision→listener-bind readiness race
+    /// (a first-call failure returns 502 with no graph, so the app must retry).
+    /// Requires the kernel engines running on S — the network handler's link
+    /// binds there, or `maintain-peer` 500s "not bound". [`sync_peer_engines`]
+    /// runs first in the frame to guarantee that.
+    /// Replaces the old hand-rolled dial-and-re-dial loop (task #3 / Piece C).
     #[cfg(target_arch = "wasm32")]
     fn drain_system_backend_connect(&mut self) {
-        // ~1s between tries at 60fps; a burst of attempts, then a slow retry.
+        // ~1s between tries at 60fps; a burst, then a slow retry.
         const MAX_ATTEMPTS: u32 = 8;
         const BACKOFF_FRAMES: u32 = 60;
         const RETRY_COOLDOWN: u32 = 600; // ~10s slow-retry after a failed burst
 
-        // Snapshot the armed target without holding the lock across the dial.
         let target = {
             let Ok(mut c) = self.system_backend_connect.lock() else {
                 return;
             };
+            // Disarmed ⇒ the first maintain-peer already succeeded; the
+            // extension maintains from here, nothing for us to do.
             let Some(info) = c.target.clone() else {
                 return;
             };
+            // A maintain-peer execute is still in flight — don't fire another.
+            if c.establishing {
+                return;
+            }
             if c.cooldown > 0 {
                 c.cooldown -= 1;
                 return;
             }
             if c.attempts >= MAX_ATTEMPTS {
-                // Don't give up permanently — back off and keep retrying so a
-                // backend that comes back later self-heals without a reload.
+                // Can't reach the backend yet — back off and keep retrying so a
+                // backend that comes up later still gets maintained without a
+                // reload. Honest per D13/S6: the kernel wrote no status (we never
+                // handshook), so this app-owned "gave up" fact is the in-memory
+                // dial marker (→ the link chip reads Offline, not a fake
+                // "Connecting…"), not a tree write.
                 c.attempts = 0;
                 c.cooldown = RETRY_COOLDOWN;
                 drop(c);
-                // Burst exhausted without a handshake — genuinely unreachable
-                // for now, so the link chip drops from Connecting to Offline
-                // (honest: we're backing off, not actively dialing). A new burst
-                // after the cooldown re-arms Connecting. The kernel wrote no
-                // status (we never handshook), so this app-owned "gave up" fact
-                // lives in the in-memory dial marker, not the tree.
                 self.dial_markers.set_failed(&info.peer_id);
-                tracing::warn!("system backend unreachable after {MAX_ATTEMPTS} tries — backing off, will retry");
+                tracing::warn!("system backend maintain-peer failed after {MAX_ATTEMPTS} tries — backing off, will retry");
                 return;
             }
             info
         };
 
         let Some(ws_addr) = target.ws_addr.clone() else {
-            // No address to dial — clear so we don't spin.
+            // No address to reach — clear so we don't spin.
             if let Ok(mut c) = self.system_backend_connect.lock() {
                 c.target = None;
             }
             return;
         };
 
-        // Live connection? Trust the KERNEL liveness read-model
-        // (`system/peer/status`), not the remembered registry — the registry
-        // stays "connected" forever after the first dial, so guarding on it
-        // would never re-dial a *dropped* link (the stale-connection bug). The
-        // read-model flips off `connected` on the kernel's own signal: a
-        // dispatch transport error → `suspect` (independent of keepalive), a
-        // keepalive miss → `disconnected`. Anything but a live `connected` ⇒
-        // re-dial (self-healing); a fresh handshake resets the budget and clears
-        // the in-memory dial marker so the chip stops saying "Connecting…".
-        let live = crate::peer_liveness::liveness_of(&self.peer_manager, &target.peer_id)
-            .is_connected();
-        if live {
-            if let Ok(mut c) = self.system_backend_connect.lock() {
-                c.attempts = 0;
-            }
-            self.dial_markers.clear(&target.peer_id);
-            return;
-        }
-
-        // Armed and actively dialing — surface Connecting (not Offline) while
-        // the boot provision→dial→handshake latency plays out, so the operator
-        // sees progress rather than a broken-looking Offline chip that snaps to
-        // Connected. Honest per D13/S6: the kernel writes `connected` on the
-        // handshake (which clears this marker via the idle-gate above); an
-        // exhausted burst sets Failed. The kernel models no dialing state, so
-        // this transient is the in-memory marker, re-set each dial frame (a
-        // cheap idempotent map insert).
+        // First establish in progress — surface "Connecting…" via the in-memory
+        // dial marker while the boot provision→handshake latency plays out. The
+        // kernel models no dialing state (ruling D); once maintain-peer lands the
+        // read-model's real `connected` supersedes this and the success path
+        // clears it.
         self.dial_markers.set_dialing(&target.peer_id);
 
-        // Dial from S (the frontend system peer) — the same "from" peer as the
-        // manual backend-connect affordance.
+        // EXECUTE `maintain-peer` from S (the frontend system peer) against B.
+        // `reconnect`/`resubscribe` default true, so the request carries only
+        // peer_id + address. A local execute on S's own `system/network` handler
+        // — no connection pool, no self-heal.
         let system_pid = self.peer_manager.system_peer_id().to_string();
-        self.handle_connect_peer(system_pid, ws_addr);
-        if let Ok(mut c) = self.system_backend_connect.lock() {
+        let handler_uri = format!("/{system_pid}/system/network");
+        let params = maintain_request_entity(&target.peer_id, &ws_addr);
+        let fut = self.peer_manager.execute(
+            &system_pid,
+            handler_uri,
+            "maintain-peer".to_string(),
+            params,
+            entity_handler::ExecuteOptions::default(),
+        );
+
+        {
+            let Ok(mut c) = self.system_backend_connect.lock() else {
+                return;
+            };
+            c.establishing = true;
             c.attempts += 1;
             c.cooldown = BACKOFF_FRAMES;
         }
+
+        let state = self.system_backend_connect.clone();
+        let markers = self.dial_markers.clone();
+        let peer_id = target.peer_id.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            // 200 ⇒ established + reconnect graph installed. Anything else (a 502
+            // boot-readiness race, a transport error) ⇒ leave `target` armed for
+            // the next backoff retry.
+            let established = matches!(fut.await, Ok(r) if r.status == 200);
+            if let Ok(mut c) = state.lock() {
+                c.establishing = false;
+                if established {
+                    // Hand off to the extension: disarm so we never fire again.
+                    c.target = None;
+                    c.attempts = 0;
+                    c.cooldown = 0;
+                }
+            }
+            if established {
+                markers.clear(&peer_id);
+            }
+        });
     }
 
     fn drain_pending_backend_peers(&mut self) {
@@ -4180,6 +4475,67 @@ fn record_auth_failure(
     writer.record(&obs);
 }
 
+/// The `(local, remote)` pairs worth considering for `maintain-peer` — the
+/// **cheap** gates, applied before any tree I/O. Pure, so the rules are testable
+/// without a DOM, a frame loop, or a wasm target; each is a way to turn a
+/// working app into a broken one:
+///
+/// 1. **The local peer's engines must be running.** `maintain-peer` executes on
+///    that peer's *own* `/{local}/system/network`; unbound, it 500s. A Worker-arm
+///    peer (engines live in the worker, unwired) is dropped **silently** — not
+///    backed off — because its chat still delivers over the poll, and burning a
+///    retry burst to tell the user a working conversation is "unreachable" would
+///    be a lie.
+/// 2. **Never self-maintain.** The handler rejects it, and an unbound chat
+///    window's conversation is with itself.
+///
+/// Duplicates are collapsed: two windows bound to the same peer are one
+/// relationship, not two.
+///
+/// The remaining gate — *do we know an address to dial?* — is deliberately NOT
+/// here: answering it costs a registry read, so it belongs in the caller's
+/// second pass, where a miss can charge a backoff instead of re-asking every
+/// frame.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn maintain_candidates(
+    bindings: &[(String, Vec<String>)],
+    engines: &std::collections::HashMap<String, crate::peers::EnginesStart>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (local, remotes) in bindings {
+        if local.is_empty() {
+            continue;
+        }
+        if engines.get(local) != Some(&crate::peers::EnginesStart::Started) {
+            continue;
+        }
+        for remote in remotes {
+            if remote == local || remote.is_empty() {
+                continue;
+            }
+            let pair = (local.clone(), remote.clone());
+            if !out.contains(&pair) {
+                out.push(pair);
+            }
+        }
+    }
+    out
+}
+
+/// Build the `maintain-peer` request entity (EXTENSION-NETWORK §2.1
+/// `system/network/maintain-request`) carrying the target's `peer_id` + dial
+/// `address`. `reconnect`/`resubscribe` default true in the handler, so they're
+/// omitted — the app wants the full maintain (connect + keep reconnecting).
+#[cfg(target_arch = "wasm32")]
+fn maintain_request_entity(peer_id: &str, address: &str) -> entity_entity::Entity {
+    let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![
+        (entity_ecf::text("peer_id"), entity_ecf::text(peer_id)),
+        (entity_ecf::text("address"), entity_ecf::text(address)),
+    ]));
+    entity_entity::Entity::new(entity_network::TYPE_MAINTAIN_REQUEST, data)
+        .expect("maintain-request entity construction is infallible")
+}
+
 /// Compose the always-on status-bar summary (`N windows · M peers · Saved`).
 /// Pure so the wording/pluralization/durability label is unit-testable without
 /// a DOM. Called from the wasm-only [`EntityApp::update_status_bar`].
@@ -4192,6 +4548,104 @@ fn status_summary(windows: usize, peers: usize, can_persist: bool) -> String {
         &[],
     );
     format!("{win} · {peer} · {durability}") // i18n-ignore — slot-only composition; parts localized above
+}
+
+#[cfg(test)]
+mod maintain_candidates_tests {
+    use super::maintain_candidates;
+    use crate::peers::EnginesStart;
+    use std::collections::HashMap;
+
+    fn engines(pairs: &[(&str, EnginesStart)]) -> HashMap<String, EnginesStart> {
+        pairs.iter().map(|(p, s)| (p.to_string(), *s)).collect()
+    }
+
+    #[test]
+    fn a_bound_conversation_on_an_engined_peer_is_maintained() {
+        let out = maintain_candidates(
+            &[("local".into(), vec!["remote".into()])],
+            &engines(&[("local", EnginesStart::Started)]),
+        );
+        assert_eq!(out, vec![("local".to_string(), "remote".to_string())]);
+    }
+
+    /// The Worker arm runs its peers' engines inside the worker, which is not
+    /// wired — `maintain-peer` there 500s "network handler not bound". Firing
+    /// anyway would burn a retry burst and tell the user a conversation that is
+    /// delivering fine over the poll is unreachable.
+    #[test]
+    fn a_worker_arm_peer_is_skipped_not_attempted() {
+        let out = maintain_candidates(
+            &[("local".into(), vec!["remote".into()])],
+            &engines(&[("local", EnginesStart::NotApplicable)]),
+        );
+        assert!(
+            out.is_empty(),
+            "no maintain without the local peer's engines"
+        );
+    }
+
+    /// A peer still being built has no entry at all — also not eligible yet.
+    #[test]
+    fn a_peer_without_settled_engines_is_skipped() {
+        let out = maintain_candidates(
+            &[("local".into(), vec!["remote".into()])],
+            &HashMap::new(),
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn self_maintain_is_never_offered() {
+        let out = maintain_candidates(
+            &[("local".into(), vec!["local".into()])],
+            &engines(&[("local", EnginesStart::Started)]),
+        );
+        assert!(out.is_empty(), "the handler rejects maintaining self");
+    }
+
+    /// Two windows bound to the same peer are ONE relationship. Without the
+    /// dedupe each would run its own burst against the same target.
+    #[test]
+    fn two_windows_on_the_same_pair_collapse_to_one() {
+        let out = maintain_candidates(
+            &[
+                ("local".into(), vec!["remote".into()]),
+                ("local".into(), vec!["remote".into()]),
+            ],
+            &engines(&[("local", EnginesStart::Started)]),
+        );
+        assert_eq!(out.len(), 1);
+    }
+
+    /// A group conversation must maintain every participant — maintaining only
+    /// the first would leave the rest of the room to drop silently.
+    #[test]
+    fn every_participant_of_a_group_is_maintained() {
+        let out = maintain_candidates(
+            &[("local".into(), vec!["r1".into(), "r2".into(), "r3".into()])],
+            &engines(&[("local", EnginesStart::Started)]),
+        );
+        assert_eq!(out.len(), 3);
+    }
+
+    /// Two different local peers may each hold their own relationship with the
+    /// SAME remote — the pool is per-peer, so those are two distinct
+    /// connections and both need maintaining.
+    #[test]
+    fn the_same_remote_under_two_local_peers_is_two_relationships() {
+        let out = maintain_candidates(
+            &[
+                ("localA".into(), vec!["remote".into()]),
+                ("localB".into(), vec!["remote".into()]),
+            ],
+            &engines(&[
+                ("localA", EnginesStart::Started),
+                ("localB", EnginesStart::Started),
+            ]),
+        );
+        assert_eq!(out.len(), 2, "per-peer pool ⇒ per-peer maintain");
+    }
 }
 
 #[cfg(test)]

@@ -40,6 +40,23 @@ pub trait WindowView {
     /// The peer this window is bound to. Used for state cleanup on close.
     fn peer_id(&self) -> &str { "" }
 
+    /// The **remote** peers this window keeps a standing relationship with — a
+    /// conversation the user deliberately bound and expects to survive a
+    /// connection drop. Empty (the default) for every window with no remote
+    /// binding.
+    ///
+    /// A list, not one peer: a conversation's roster (§6) can hold more than two
+    /// participants, and maintaining only the first would silently leave the
+    /// rest of a group to drop.
+    ///
+    /// Drives `maintain-peer`: `EntityApp::sync_maintained_peers` sweeps the
+    /// open windows and hands each pair to the EXTENSION-NETWORK driver, which
+    /// then owns connect-on-drop for it — the same treatment the system backend
+    /// gets. Return only targets the user *chose*; a target derived from
+    /// "whoever is currently connected" is circular here (it is a target
+    /// *because* it is connected) and must stay out.
+    fn maintained_remotes(&self) -> Vec<String> { Vec::new() }
+
     /// Subscription-driven dirty flag for this window. The DOM renderer
     /// uses [`WindowWatch::take_dirty`] to decide whether to rebuild
     /// the section: dirty → rebuild and clear; clean → skip entirely
