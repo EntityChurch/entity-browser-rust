@@ -1,39 +1,201 @@
-//! System-overview projection — the system peer(s) + the durable posture.
+//! System Overview window — the one System governance window (title + type key
+//! "System Overview"; see TERMINOLOGY-AND-WINDOWS.md). Renders the system-peer
+//! cards + posture up top (via `system_peers`), then the **System backend**
+//! peer's live detail: status (id, listen address, S↔B connection, share),
+//! device authorizations, and a tail of its native `tracing` output streamed in
+//! from `src-tauri` over IPC (`DESIGN-SYSTEM-BACKEND-PEER.md` §4).
 //!
-//! This is no longer a window of its own. After the S2 merge (one window, one
-//! job) the projection is folded into the **System Overview** window
-//! (`crate::views::system_backend`), which renders these system-peer cards +
-//! posture line above the native peer's live detail (status, device auth, logs,
-//! share). The model here stays the single, read-only source for that top
-//! section; the DOM lives in `crate::dom::system_overview::render_system_peers`.
+//! The backend detail is desktop-only in substance (the System backend and its
+//! logs live in the Tauri native process). In a plain browser the window shows
+//! the system-peer cards + a short "desktop app" note.
 
 pub mod model;
 pub mod output;
 
-#[cfg(test)]
-mod tests {
-    use super::model::SystemOverviewModel;
-    use crate::peers::Peers;
+#[allow(unused_imports)]
+use crate::action::Action;
+#[allow(unused_imports)]
+use crate::peers::Peers;
+#[allow(unused_imports)]
+use crate::window::{WindowType, WindowView};
 
-    #[test]
-    fn in_app_system_peer_is_always_present_and_native_absent_in_browser() {
-        let pm = Peers::new_direct();
-        // total_peers/user_peers read the tree registry, which boot's
-        // `PeerRegistry::sync` populates — do the same here.
-        let mut reg = crate::peer_registry::PeerRegistry::new(&pm);
-        reg.sync(&pm);
+use crate::window::WindowId;
+use crate::window_watch::WindowWatch;
+use model::SystemOverviewModel;
 
-        let out = SystemOverviewModel::new().render_output(&pm);
-        // The boot peer is the in-app system peer.
-        assert_eq!(out.in_app.full_id, pm.system_peer_id());
-        assert_eq!(
-            out.in_app.descriptor.role,
-            crate::peer_display::PeerRole::System
-        );
-        // A plain Direct/browser session: just the system peer, no native
-        // process, no user peers.
-        assert!(out.native.is_none(), "no native system peer without a backend");
-        assert_eq!(out.total_peers, 1, "only the system peer is hosted");
-        assert_eq!(out.user_peers, 0);
+pub struct SystemOverviewWindow {
+    // Used only on the WASM render path; native sees it as unused.
+    #[allow(dead_code)]
+    model: SystemOverviewModel,
+    watch: WindowWatch,
+    peer_id: String,
+    /// This instance's id — window-local button events (`Clear`) carry it so
+    /// `handle_action` can ignore events meant for other windows.
+    window_id: WindowId,
+}
+
+impl SystemOverviewWindow {
+    pub fn new(window_id: WindowId, peer_id: String) -> Self {
+        Self {
+            model: SystemOverviewModel::new(),
+            watch: WindowWatch::new(),
+            peer_id,
+            window_id,
+        }
+    }
+
+    pub fn window_type() -> WindowType {
+        WindowType {
+            // `name` is the durable spawn/lookup key. Renamed from the legacy
+            // "System Backend" to match the title; any old persisted boot-surface
+            // reference still resolves via `window::canonical_window_type` (the
+            // back-compat alias). Per-window state keys on the numeric id, not
+            // this, so no state was stranded. See TERMINOLOGY-AND-WINDOWS.md.
+            name: "System Overview",
+            description: "Govern the System peer and System backend: status, authorizations, share, live logs",
+            scope: crate::window::WindowScope::System,
+            create: |id, _peer_id, pm| {
+                let sys_pid = pm.system_peer_id().to_string();
+                let mut window = SystemOverviewWindow::new(id, sys_pid.clone());
+                // Watch the connections registry so the S↔B status repaints the
+                // instant S connects to B (independent of the log poll cadence).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::connections_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                // Watch the conn-health mirror so the link chip repaints on a
+                // pure liveness change — notably the auto-connect writing
+                // Connecting *before* any connections-registry write, which
+                // nothing else would wake. Also seeds the Worker-arm sync cache
+                // that `render_output` reads (subscribe, don't poll).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::connection_health_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                // Watch the backend-auth mirror so the device-authorizations
+                // surface repaints when a Check/Refresh read lands — and (Worker
+                // arm) so the synchronous `get_entity` read is seeded for this
+                // prefix. `authz` mirrors our own grant decisions (a sibling
+                // read on authorize); watch it too.
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::backend_auth_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::authz_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                // Merged-in overview projection: watch the peer registry (roster
+                // → the native peer appears/leaves, counts move) and the system
+                // config (posture) so the peer cards + posture line up top react.
+                // In Worker mode these also seed the sync cache the projection
+                // reads (subscribe-don't-poll: read only what you watch).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::peers_registry_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::session_config::state_path(&sys_pid),
+                );
+                // Kick the background poll loop (status + log tail). No-op in a
+                // browser (guards on `is_tauri`); ends when the window closes.
+                #[cfg(target_arch = "wasm32")]
+                window.model.start_polling(window.watch.flag());
+                Box::new(window)
+            },
+        }
+    }
+}
+
+impl WindowView for SystemOverviewWindow {
+    fn title(&self) -> String {
+        "System Overview".into()
+    }
+
+    fn type_name(&self) -> &'static str {
+        // Durable key — must match `window_type().name`. See the note there.
+        "System Overview"
+    }
+
+    fn peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn watch(&self) -> &WindowWatch {
+        &self.watch
+    }
+
+    fn handle_action(&mut self, action: &Action, _peers: &Peers) {
+        let Action::WindowEvent { window_id, event, value } = action else {
+            return;
+        };
+        if *window_id != self.window_id {
+            return;
+        }
+        match event.as_str() {
+            "sb_clear_logs" => {
+                self.model.clear_logs();
+                // Synchronous mutation — nothing else would repaint, so force the
+                // rebuild that shows the cleared pane.
+                self.watch.mark_dirty();
+            }
+            "sb_set_level" => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.model.set_level(value);
+                    // Reflect the new selection immediately.
+                    self.watch.mark_dirty();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = value;
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn render_dom(
+        &self,
+        container: &web_sys::Element,
+        peers: &Peers,
+        ctx: &crate::dom::DomCtx,
+    ) {
+        let output = self.model.render_output(peers);
+        // Merged overview projection (stateless): re-derived from Peers + the
+        // watched registry/config prefixes each render.
+        let overview =
+            crate::views::system_peers::model::SystemPeersModel::new().render_output(peers);
+
+        // Reactive device authorizations (no button): while connected and a
+        // backend is present, auto-fire the backend-auth re-read on a throttle.
+        // The read writes the subscribed mirror (which repaints) and dedupes, so
+        // this is quiet when nothing changed. It's also the real S↔B liveness
+        // probe — a stale link surfaces as the read failing, then self-heals on
+        // reconnect. `frame()` drains render-time actions the same frame.
+        if output.connected {
+            if let Some(auth) = &output.authorizations {
+                // Adaptive cadence: fast while a device awaits authorization,
+                // backed off in the steady state (see `due_for_auth_refresh`).
+                if self.model.due_for_auth_refresh(!auth.pending.is_empty()) {
+                    ctx.actions.borrow_mut().push(Action::RefreshBackendAuth {
+                        local_peer_id: auth.manager_pid.clone(),
+                        backend_pid: auth.backend_pid.clone(),
+                    });
+                    // Pending actions drain at the top of the next frame; nudge
+                    // one so the read fires now rather than on the next dirty.
+                    // The throttle prevents this from re-pushing → no loop.
+                    (ctx.repaint)();
+                }
+            }
+        }
+
+        crate::dom::system_overview::render(container, &output, &overview, ctx);
     }
 }

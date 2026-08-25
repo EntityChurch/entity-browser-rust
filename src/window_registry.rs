@@ -30,7 +30,7 @@ use crate::views::{
     shell::ShellWindow,
     site_editor::SiteEditorWindow,
     storage::StorageWindow,
-    system_backend::SystemBackendWindow,
+    system_overview::SystemOverviewWindow,
     wire_recorder::WireRecorderWindow,
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
@@ -38,8 +38,9 @@ use crate::window::{WindowCategory, WindowScope, WindowType};
 /// The 22 standard window types, in registration order. The single source —
 /// `build_wasm_app` registers exactly these, and the settings UI reads their
 /// metadata from the same list. Add a window here and it shows up in both.
-/// (Was 22 until the standalone "System Overview" window was merged into
-/// "System Backend" — one System window, S2.)
+/// (Was 22 until the standalone "System Overview" window was merged into the
+/// System window — one System window, S2. Its type key is now "System Overview";
+/// the legacy "System Backend" key still resolves via `canonical_window_type`.)
 pub fn standard_window_types() -> Vec<WindowType> {
     vec![
         EntityTreeWindow::window_type(),
@@ -62,7 +63,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         crate::views::content_site::ContentSiteWindow::window_type(),
         StorageWindow::window_type(),
         SiteEditorWindow::window_type(),
-        SystemBackendWindow::window_type(),
+        SystemOverviewWindow::window_type(),
         AccessLogWindow::window_type(),
     ]
 }
@@ -96,7 +97,7 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
         (
             System,
             vec![
-                "System Backend",
+                "System Overview",
                 "Settings",
                 "Peers",
                 "Peer Connections",

@@ -163,7 +163,7 @@ impl PeerConnectionsModel {
             .into_iter()
             .filter(|r| {
                 peers.peer_metadata(&r.remote_pid).and_then(|m| m.label).as_deref()
-                    != Some(crate::views::system_backend::model::SYSTEM_BACKEND_LABEL)
+                    != Some(crate::views::system_overview::model::SYSTEM_BACKEND_LABEL)
             })
             .map(|r| KnownPeer {
                 display: crate::views::display_name(peers, &r.remote_pid),
@@ -306,7 +306,7 @@ mod tests {
     }
 
     // (The device-authorization projection tests moved with the surface to
-    // `views::system_backend::model`.)
+    // `views::system_overview::model`.)
 }
 
 /// Generate an SVG for the given QR payload. Pure utility — used by

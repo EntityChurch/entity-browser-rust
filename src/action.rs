@@ -40,6 +40,10 @@ pub enum Action {
     /// bound to a non-primary peer, so defaulting to primary here was a
     /// reachable peer-scoping bug (AP2 / D15).
     ConnectPeer { peer_id: String, addr: String },
+    /// Forget a remembered connection — drop its known-devices row so a stale /
+    /// dead backend stops cluttering the list. `remote_pid` is the entry to
+    /// remove from the connections registry (+ its health mirror).
+    ForgetConnection { remote_pid: String },
     /// Start listening for inbound connections on the given address.
     StartListener(String),
     /// Execute a handler operation. `peer_id` is the originating

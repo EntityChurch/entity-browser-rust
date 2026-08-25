@@ -293,9 +293,12 @@ impl SettingsModel {
         let cfg = session_config::read(peers, &self.peer_id);
         match &cfg.boot_surface {
             BootSurface::Window { window_type, .. } => {
+                // Resolve a legacy key first so a boot choice saved before a type
+                // rename validates against its current key (not dropped to fallback).
+                let window_type = crate::window::canonical_window_type(window_type);
                 let valid = self.scope_valid_window_types(peers, value);
-                let window_type = if valid.iter().any(|t| t == window_type) {
-                    window_type.clone()
+                let window_type = if valid.iter().any(|t| *t == window_type) {
+                    window_type.to_string()
                 } else {
                     valid.first().map(|s| s.to_string()).unwrap_or_default()
                 };

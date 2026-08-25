@@ -8,6 +8,7 @@ use entity_peer::transport::{Connector, WebSocketConnector, WebSocketListener, L
 use serde::Serialize;
 use tauri::Manager;
 
+mod access_log;
 mod backend_log;
 mod manager_grant;
 mod persistence;
@@ -260,7 +261,12 @@ async fn start_backend_peer(
     let mut builder = PeerBuilder::new()
         .keypair(keypair)
         .config(config)
-        .connector(Arc::new(WebSocketConnector) as Arc<dyn Connector>);
+        .connector(Arc::new(WebSocketConnector) as Arc<dyn Connector>)
+        // Inbound access log: correlate the caller (wire hook) with the target +
+        // outcome (dispatch hook) so S can see "who reached into my share, and
+        // did I allow it" — streamed to the WebView via `backend_access_log_tail`.
+        .with_wire_hook("entity-browser/access-log", access_log::on_wire)
+        .with_dispatch_hook("entity-browser/access-log", access_log::on_dispatch);
 
     // Wire SQLite-backed tree storage when a path is configured for
     // this peer. Without this, the tree is in-memory only and resets
@@ -462,6 +468,16 @@ fn system_backend_share_path() -> Option<String> {
 #[tauri::command]
 fn backend_log_tail(after: u64) -> backend_log::LogTail {
     backend_log::tail(after)
+}
+
+/// Tail the backend peer's **inbound access log** — who reached into this
+/// device's share, what they hit, and whether it was allowed or denied. Wire +
+/// dispatch hooks are stitched by `request_id` in `access_log`; the WebView
+/// folds these into the app-tier Access Log (direction = Inbound). Same in-memory
+/// ring + cursor contract as `backend_log_tail`.
+#[tauri::command]
+fn backend_access_log_tail(after: u64) -> access_log::AccessTail {
+    access_log::tail(after)
 }
 
 /// Storage stats for the canonical system backend's **native** store, so the
@@ -694,6 +710,7 @@ pub fn run() {
             list_backend_peers,
             ensure_system_backend,
             backend_log_tail,
+            backend_access_log_tail,
             system_backend_share_path,
             system_backend_store_stats,
             set_backend_log_level,

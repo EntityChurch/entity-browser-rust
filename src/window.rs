@@ -170,19 +170,24 @@ pub struct WindowType {
 }
 
 /// Human display label for a window-type key. Menus, pickers, and taskbars show
-/// THIS, never the raw key — `name` is a durable identifier (spawn matching,
-/// persisted boot-surface `window_type`), so where we want a friendlier label
-/// than the key we override it here in one place, rather than renaming the key
-/// (which would strand persisted references). Keep in sync with the matching
-/// `WindowView::title()`.
+/// THIS. Today every key already reads well as a label (the System window's key
+/// was renamed "System Backend" → "System Overview" to match its title, so no
+/// override is needed); the indirection stays so a future friendlier label can
+/// be added in one place. Keep in sync with the matching `WindowView::title()`.
 pub fn window_display_name(name: &'static str) -> &'static str {
+    name
+}
+
+/// Resolve a possibly-legacy window-type key to its current canonical key. A
+/// renamed type keeps its old key working here so stale **persisted references**
+/// (a boot-surface `window_type` saved before the rename, a build-time
+/// deployment config) still spawn. Add each rename as an arm; new callers use the
+/// canonical key directly.
+pub fn canonical_window_type(name: &str) -> &str {
     match name {
-        // The durable key is still "System Backend", but the window now IS the
-        // merged System Overview (system peers + posture on top, native detail
-        // below) — S2, one System window. Key unchanged (no boot-surface strand);
-        // only the label moved.
+        // Renamed 2026-07-13: the System governance window (see
+        // TERMINOLOGY-AND-WINDOWS.md).
         "System Backend" => "System Overview",
-        // Default: the key already reads well as a label.
         other => other,
     }
 }
@@ -224,6 +229,8 @@ impl WindowManager {
 
     /// Spawn a new window instance of the given type bound to a peer. Returns its ID.
     pub fn spawn(&mut self, type_name: &str, peer_id: &str, peers: &Peers) -> Option<WindowId> {
+        // Resolve legacy keys (e.g. a boot-surface saved before a type rename).
+        let type_name = canonical_window_type(type_name);
         let factory = self.types.iter().find(|t| t.name == type_name)?;
         let id = self.next_id;
         self.next_id += 1;
@@ -242,6 +249,7 @@ impl WindowManager {
     /// `(type_name, peer_id)` pair — a window type opened for two
     /// different peers is two distinct windows.
     pub fn find_open(&self, type_name: &str, peer_id: &str) -> Option<WindowId> {
+        let type_name = canonical_window_type(type_name);
         self.windows
             .iter()
             .find(|w| w.open && w.view.type_name() == type_name && w.view.peer_id() == peer_id)

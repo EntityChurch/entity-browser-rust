@@ -7,6 +7,7 @@
     allow(dead_code, unused_imports)
 )]
 
+mod access_log_store;
 mod action;
 mod action_event;
 mod app;
@@ -94,7 +95,7 @@ fn main() -> std::process::ExitCode {
     eprintln!();
     eprintln!("Active build targets:");
     eprintln!("  make wasm       — browser build (DOM)");
-    eprintln!("  make tauri-run  — desktop build (DOM in WebView + native backend peer)");
+    eprintln!("  make tauri-run  — desktop build (DOM in WebView + System backend peer)");
     std::process::ExitCode::FAILURE
 }
 

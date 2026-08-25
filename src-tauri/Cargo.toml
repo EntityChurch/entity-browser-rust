@@ -51,3 +51,5 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 tempfile = "3"
 # manager_grant tests decode the authored policy body the way the kernel does.
 ciborium = "0.2"
+# access_log tests construct DispatchEvent fixtures (params_hash: Hash).
+entity-hash = { path = "../../entity-core-rust/core/hash" }
