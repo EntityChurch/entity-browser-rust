@@ -28,7 +28,8 @@ path = "src/bin/entity-worker.rs"
 serde_json = "1"
 
 [dependencies]
-# Entity core crates (WASM-safe leaf crates — no tokio in dep chain).
+# Entity core crates (WASM-safe leaf crates). Note: the `network` feature below
+# pulls `entity-network` → `tokio` (sync+rt only, wasm-safe — no net/mio).
 # Listed direct because view/app code imports them; the consumers are:
 #   entity-ecf      → `cbor_map!` macro + value helpers (5 sites)
 #   entity-hash     → `Hash` type for tree-paths (2 sites)
@@ -58,6 +59,13 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
     # `WireIceServer`), the carrier the main-thread establisher authenticates to
     # the signaling node with. Pulls `entity-signaling` (native-buildable).
     "signaling",
+    # EXTENSION-NETWORK reconnect driver (`system/network` handler:
+    # maintain-peer/release-peer/reconnect/restore-subscriptions). The app
+    # EXECUTEs `maintain-peer` for kept targets so the extension owns the
+    # reconnect lifecycle + `system/peer/status` writes (retiring the hand-rolled
+    # `drain_system_backend_connect`). Pulls `entity-network` (tokio sync+rt,
+    # wasm-safe) + inbox/continuation/subscription (already enabled).
+    "network",
 ] }
 
 entity-crypto = { path = "../entity-core-rust/core/crypto" }   # PEM keypair load (`persistence.rs`)

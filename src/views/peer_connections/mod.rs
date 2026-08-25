@@ -69,13 +69,6 @@ impl PeerConnectionsWindow {
                 );
                 // (Device authorizations moved to the System Backend window,
                 // Direction A — the backend-auth mirror is watched there now.)
-                // Connection-health mirror: known-device rows show live
-                // Connected/Unreachable, so watch it to repaint on a health change.
-                pm.watch_prefix(
-                    &mut window.watch,
-                    &sys_pid,
-                    crate::app_paths::connection_health_prefix(crate::app_paths::APP_ID, &sys_pid),
-                );
                 // Wake on roster changes via the tree-backed registry
                 // instead of the content-free signal.
                 pm.watch_prefix(
@@ -83,11 +76,10 @@ impl PeerConnectionsWindow {
                     &sys_pid,
                     crate::app_paths::peers_registry_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
-                // Piece A (P2.0): subscribe the KERNEL liveness surface
-                // (`system/peer/status`) for every local vantage, so we can
-                // shadow it against the `connection_health` mirror before
-                // migrating consumers off the mirror (Piece B). Watching seeds
-                // the Worker-arm cache and wakes the window on a kernel
+                // Subscribe the KERNEL liveness surface (`system/peer/status`)
+                // for every local vantage — the authoritative read-model the
+                // known-device rows render from. Watching seeds the Worker-arm
+                // cache and wakes the window on a kernel
                 // connect/keepalive-miss/disconnect transition.
                 for vantage in pm.peer_ids() {
                     pm.watch_prefix(
@@ -152,12 +144,7 @@ impl WindowView for PeerConnectionsWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        // Piece A (P2.0) shadow-parity: log the kernel liveness surface vs the
-        // connection_health mirror on each rebuild, so convergence is
-        // observable in the live build / e2e before Piece B migrates the render
-        // off the mirror. Read-only, no behaviour.
-        crate::peer_liveness::log_shadow_parity(peers);
-        let output = self.model.render_output(peers);
+        let output = self.model.render_output(peers, &ctx.dial_markers);
         crate::dom::peer_connections::render(container, &output, ctx);
     }
 }

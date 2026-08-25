@@ -88,15 +88,20 @@ impl SystemOverviewModel {
     /// Build the render output. B's **identity and connection state come from
     /// the entity registries**, not the Tauri IPC poll: the peer registry
     /// (frame-loop populated at boot, window-independent) gives B's id + listen
-    /// address, and the connections registry + `connection_health` give the live
-    /// S↔B link. So the window shows the real state the instant B registers at
+    /// address, and the kernel liveness read-model (`system/peer/status`) gives
+    /// the live S↔B link. So the window shows the real state the instant B
+    /// registers at
     /// boot — no waiting for this window's own poll to warm up — and the same
     /// reads work unchanged the day B is a remote peer over a connection instead
     /// of a local native process. The IPC poll now only *supplements*:
     /// native-process-local facts not in the tree (lifecycle status string,
     /// logs, share path, log level).
     #[allow(dead_code)] // called from the WASM render path
-    pub fn render_output(&self, peers: &Peers) -> SystemOverviewOutput {
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        dials: &crate::dial_markers::DialMarkers,
+    ) -> SystemOverviewOutput {
         let inner = self.inner.lock().unwrap();
 
         // B = the peer-registry record classified System + Native (same
@@ -109,26 +114,21 @@ impl SystemOverviewModel {
                 && d.runtime == crate::peer_display::PeerRuntime::Native
         });
 
-        // Live S↔B link, read from the subscribable conn-health mirror (the
-        // window watches its prefix). `connected` = registered in the
-        // connections registry AND not a definitive Unreachable — the same "up"
-        // test the auto-connect drain uses (app.rs `drain_system_backend_connect`),
-        // so the two agree. `dialing` = the auto-connect is armed and actively
-        // dialing (Connecting), so the link chip reads "Connecting…" instead of a
-        // broken-looking "Offline" during the boot provision→dial→handshake gap.
-        let liveness = native
-            .as_ref()
-            .map(|r| crate::connection_health::read(peers, &r.peer_id));
-        let connected = native
-            .as_ref()
-            .map(|r| {
-                let registered = crate::connections::read_connections(peers)
-                    .iter()
-                    .any(|p| p.remote_pid == r.peer_id);
-                registered && liveness != Some(crate::connection_health::Liveness::Unreachable)
-            })
-            .unwrap_or(false);
-        let dialing = liveness == Some(crate::connection_health::Liveness::Connecting);
+        // Live S↔B link, in the one §4c vocabulary — the KERNEL liveness
+        // read-model (`system/peer/status`, subscribed below) resolved against
+        // the app-owned `Dialing` transient (the in-memory dial marker).
+        // `connected` is now the kernel's real `connected` (not the old lenient
+        // "registered AND not Unreachable", which lied through a mid-session drop
+        // the mirror missed); `dialing` still reads "Connecting…" during the boot
+        // dial gap, before the kernel writes any status.
+        let display = native.as_ref().map(|r| {
+            crate::peer_liveness::conn_display(
+                crate::peer_liveness::liveness_of(peers, &r.peer_id),
+                dials.hint(&r.peer_id),
+            )
+        });
+        let connected = display == Some(crate::peer_liveness::ConnDisplay::Connected);
+        let dialing = display == Some(crate::peer_liveness::ConnDisplay::Dialing);
 
         // The backend reports inbound devices by identity-hash HEX (its session
         // key space), not the app's base58 PeerID — which is why the rows read as
@@ -434,7 +434,7 @@ mod tests {
     fn empty_model_reports_not_fetched_and_disconnected() {
         let peers = Peers::new_direct();
         let model = SystemOverviewModel::new();
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
         assert!(out.backend.is_none());
         assert!(!out.fetched);
         assert!(!out.connected);
@@ -445,32 +445,33 @@ mod tests {
 
     #[test]
     fn armed_dialing_surfaces_dialing_not_connected() {
-        // The auto-connect drain records Connecting on the conn-health mirror
-        // while it dials, before the transport is up. render_output must surface
-        // that as `dialing` (→ the link chip reads "Connecting…") without
-        // claiming `connected` — the honest boot-window state.
-        use crate::connection_health::{ConnectionHealthWriter, Liveness};
+        // The auto-connect drain sets the in-memory `Dialing` marker while it
+        // dials, before the transport is up (the kernel writes no status yet).
+        // render_output must surface that as `dialing` (→ the link chip reads
+        // "Connecting…") without claiming `connected` — the honest boot state.
         let mut peers = Peers::new_direct();
         register_native_backend(&mut peers, "REMOTE_B");
-        ConnectionHealthWriter::new(&peers).record("REMOTE_B", Liveness::Connecting, None);
+        let dials = crate::dial_markers::DialMarkers::new();
+        dials.set_dialing("REMOTE_B");
 
-        let out = SystemOverviewModel::new().render_output(&peers);
-        assert!(out.dialing, "Connecting liveness → dialing");
+        let out = SystemOverviewModel::new().render_output(&peers, &dials);
+        assert!(out.dialing, "Dialing marker → dialing");
         assert!(!out.connected, "dialing is not yet connected");
     }
 
     #[test]
     fn exhausted_burst_is_offline_not_dialing() {
-        // Once the dial burst gives up it records Unreachable → neither dialing
-        // nor connected, so the chip drops to a genuine Offline (not a perpetual
-        // "Connecting…").
-        use crate::connection_health::{ConnectionHealthWriter, Liveness};
+        // Once the dial burst gives up it sets the `Failed` marker → neither
+        // dialing nor connected, so the chip drops to a genuine Offline (not a
+        // perpetual "Connecting…"). The kernel is silent (we never handshook),
+        // so this app-owned "gave up" fact comes from the in-memory marker.
         let mut peers = Peers::new_direct();
         register_native_backend(&mut peers, "REMOTE_B");
-        ConnectionHealthWriter::new(&peers).record("REMOTE_B", Liveness::Unreachable, None);
+        let dials = crate::dial_markers::DialMarkers::new();
+        dials.set_failed("REMOTE_B");
 
-        let out = SystemOverviewModel::new().render_output(&peers);
-        assert!(!out.dialing, "Unreachable is not dialing");
+        let out = SystemOverviewModel::new().render_output(&peers, &dials);
+        assert!(!out.dialing, "Failed is not dialing");
         assert!(!out.connected);
     }
 
@@ -482,7 +483,7 @@ mod tests {
         register_native_backend(&mut peers, "REMOTE_B");
         let model = SystemOverviewModel::new();
 
-        let auth = model.render_output(&peers).authorizations.expect("backend → auth surface");
+        let auth = model.render_output(&peers, &crate::dial_markers::DialMarkers::new()).authorizations.expect("backend → auth surface");
         assert_eq!(auth.backend_pid, "REMOTE_B");
         assert_eq!(auth.manager_pid, peers.system_peer_id());
         assert!(!auth.checked, "no observation yet → prompts a Check access");
@@ -506,7 +507,7 @@ mod tests {
         ));
 
         let model = SystemOverviewModel::new();
-        let auth = model.render_output(&peers).authorizations.unwrap();
+        let auth = model.render_output(&peers, &crate::dial_markers::DialMarkers::new()).authorizations.unwrap();
 
         assert!(auth.checked, "mirror present → checked");
         assert_eq!(auth.error, None);
@@ -556,7 +557,7 @@ mod tests {
         ConnectionsWriter::new(&peers).set_authorized("device777", "file-transfer-rw");
 
         let auth = SystemOverviewModel::new()
-            .render_output(&peers)
+            .render_output(&peers, &crate::dial_markers::DialMarkers::new())
             .authorizations
             .expect("backend → auth surface");
         assert_eq!(auth.authorized.len(), 1);
@@ -577,7 +578,7 @@ mod tests {
             .record(&BackendAuthObservation::failed("REMOTE_B", "no manager capability"));
 
         let model = SystemOverviewModel::new();
-        let auth = model.render_output(&peers).authorizations.unwrap();
+        let auth = model.render_output(&peers, &crate::dial_markers::DialMarkers::new()).authorizations.unwrap();
 
         assert!(auth.checked);
         assert_eq!(auth.error.as_deref(), Some("no manager capability"));

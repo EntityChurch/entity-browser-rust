@@ -63,8 +63,10 @@ pub struct KnownPeer {
     /// Epoch-ms of the last successful connect (carried for a later
     /// "last seen" label; not rendered yet).
     pub last_seen: u64,
-    /// Last-observed reachability, from the subscribable connection-health
-    /// mirror — so the row shows live Connected/Unreachable instead of always
-    /// offering "Reconnect".
-    pub liveness: crate::connection_health::Liveness,
+    /// Display status in the one §4c vocabulary — the KERNEL liveness read-model
+    /// ([`crate::peer_liveness`], the reactive `system/peer/status` surface)
+    /// resolved against the app-owned dialing transient. This is what fixes the
+    /// stale-"Connected" lie: a real mid-session drop the old mirror missed now
+    /// surfaces as Offline/Reconnecting.
+    pub status: crate::peer_liveness::ConnDisplay,
 }

@@ -9,7 +9,6 @@
 use wasm_bindgen::JsCast;
 
 use crate::action::Action;
-use crate::connection_health::Liveness;
 use crate::dom::components::{self, ConnState};
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
@@ -100,13 +99,12 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
     ]);
 
     for kp in &output.known_peers {
-        // Live status chip (S4). Unknown → a quiet dash (we've paired but have
-        // no current signal), not a misleading "connecting".
-        let status_cell = match kp.liveness {
-            Liveness::Connected => components::td(&components::conn_chip(ConnState::Connected)),
-            Liveness::Connecting => components::td(&components::conn_chip(ConnState::Connecting)),
-            Liveness::Unreachable => components::td(&components::conn_chip(ConnState::Offline)),
-            Liveness::Unknown => components::td_text("—"),
+        // Live status chip (S4), from the one §4c vocabulary. Unknown → a quiet
+        // dash (we've paired but have no current signal), not a misleading
+        // "connecting".
+        let status_cell = match ConnState::from_display(kp.status) {
+            Some(state) => components::td(&components::conn_chip(state)),
+            None => components::td_text("—"),
         };
 
         let addr_cell = if kp.addr.is_empty() {
@@ -121,7 +119,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
         let action_cell = {
             let wrap = util::create_element("div");
             wrap.set_attribute("style", "display:flex;gap:6px").ok();
-            if !kp.addr.is_empty() && kp.liveness != Liveness::Connected {
+            if !kp.addr.is_empty() && kp.status != crate::peer_liveness::ConnDisplay::Connected {
                 let btn = components::button_action(
                     ctx,
                     &crate::i18n::t("peers.reconnect", &[]),

@@ -110,8 +110,9 @@ struct SystemBackendConnect {
     /// The ensured backend (id + ws addr). `None` until the boot IPC returns;
     /// then it stays armed for the session so `drain_system_backend_connect`
     /// can **re-dial on a dropped link** (self-healing) — the drain idles while
-    /// the connection is live (per real health) and re-dials when it goes
-    /// Unreachable.
+    /// the kernel read-model reports the peer `connected` and re-dials the
+    /// moment it drops off (a transport error → `suspect`, a keepalive miss →
+    /// `disconnected`).
     target: Option<crate::tauri_ipc::BackendPeerInfo>,
     /// Connect attempts issued so far — the cap guards against a backend that
     /// never accepts (D13: give up loudly, don't spin forever).
@@ -138,10 +139,13 @@ pub struct EntityApp {
     /// (`Action::RefreshBackendAuth`) so the Peer Connections window can render
     /// them synchronously (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`).
     backend_auth_writer: crate::backend_auth::BackendAuthWriter,
-    /// Local, subscribable connection-health mirror — written from connect
-    /// success + the backend-auth probe, read by windows for reactive
-    /// connected/stale state (`crate::connection_health`).
-    connection_health_writer: crate::connection_health::ConnectionHealthWriter,
+    /// App-owned in-memory dial transients (a dial in flight / a dial that gave
+    /// up before ever connecting) — the kernel liveness surface deliberately
+    /// does not model these (Amendment 12 ruling D: no `connecting` status), so
+    /// they live in memory beside the `SystemBackendConnect` control state, not
+    /// the tree. Cloned into the render context so the display models project
+    /// them (`crate::dial_markers`). The kernel read-model stays authoritative.
+    dial_markers: crate::dial_markers::DialMarkers,
     /// Tree-backed publisher for the WS listener's bound address.
     /// Cloned into the listener-bind spawned task; only used on native.
     #[cfg(feature = "native-ws")]
@@ -1249,8 +1253,7 @@ impl EntityApp {
         crate::diagnostics::install_main_thread(event_log_writer.clone());
         let connections_writer = ConnectionsWriter::new(&peer_manager);
         let backend_auth_writer = crate::backend_auth::BackendAuthWriter::new(&peer_manager);
-        let connection_health_writer =
-            crate::connection_health::ConnectionHealthWriter::new(&peer_manager);
+        let dial_markers = crate::dial_markers::DialMarkers::new();
         let mut peer_registry = PeerRegistry::new(&peer_manager);
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
@@ -1443,7 +1446,7 @@ impl EntityApp {
             event_log_writer,
             connections_writer,
             backend_auth_writer,
-            connection_health_writer,
+            dial_markers,
             peer_registry,
             user_themes,
             access_log_sink,
@@ -2250,7 +2253,7 @@ impl EntityApp {
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
-            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window);
+            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers);
         }
         if !actions.is_empty() {
             self.process_actions(actions);
@@ -2555,14 +2558,13 @@ impl EntityApp {
                 }
                 Action::ForgetConnection { remote_pid } => {
                     tracing::info!(remote_pid = %remote_pid, "Action::ForgetConnection");
-                    // Drop the remembered row + its health mirror so a dead
-                    // backend stops cluttering the known-devices list.
+                    // Drop the remembered row so a dead backend stops cluttering
+                    // the known-devices list; the kernel liveness surface deletes
+                    // on its own convergence (the read-model needs no app write).
                     self.connections_writer.remove(remote_pid);
-                    self.connection_health_writer.record(
-                        remote_pid,
-                        crate::connection_health::Liveness::Unreachable,
-                        None,
-                    );
+                    // Drop any in-memory dial transient — a forgotten peer must
+                    // not linger as "Connecting…"/Offline in the link chip.
+                    self.dial_markers.clear(remote_pid);
                 }
                 Action::StartListener(addr) => {
                     tracing::info!(addr = %addr, "Action::StartListener received");
@@ -2885,7 +2887,6 @@ impl EntityApp {
         let pid = peer_id;
         let log = self.event_log_writer.clone();
         let connections = self.connections_writer.clone();
-        let health = self.connection_health_writer.clone();
 
         log.log(format!("Connecting to {}...", addr));
 
@@ -2945,17 +2946,18 @@ impl EntityApp {
             connections.add(&remote_pid, &addr);
             // Prune stale identities that were remembered at this same address
             // (a re-provisioned / wiped backend). The address just answered as
-            // `remote_pid`, so any other id here is dead — drop it + its health
-            // mirror so the known-devices list collapses to the one live row.
+            // `remote_pid`, so any other id here is dead — drop it so the
+            // known-devices list collapses to the one live row. (The pre-connect
+            // eviction already tore down its pooled connection, so the kernel
+            // read-model shows it disconnected; no app liveness write needed.)
             for old in &same_addr_pids {
                 if old != &remote_pid {
                     connections.remove(old);
-                    health.record(old, crate::connection_health::Liveness::Unreachable, None);
                 }
             }
-            // Reactive liveness: a fresh handshake ⇒ Connected. Windows watching
-            // the conn-health mirror repaint without a manual refresh.
-            health.record(&remote_pid, crate::connection_health::Liveness::Connected, None);
+            // Reactive liveness is the kernel's now: `connect_and_pool` wrote
+            // `system/peer/status = connected` for this handshake, which the
+            // subscribed read-model surfaces — no app-side mirror write.
             log.log(format!("Connected to {}", remote_pid));
 
             let uri = format!("entity://{}/system/tree", remote_pid);
@@ -3188,10 +3190,9 @@ impl EntityApp {
         let log = self.event_log_writer.clone();
         log.log(format!("↓ pulling {}...", path));
 
-        // Feed the dispatch outcome into the connection-health mirror: an answer
-        // (any status) ⇒ reachable; a transport error ⇒ Unreachable.
-        let health = self.connection_health_writer.clone();
-        let target = entity_uri_authority(&handler_uri).map(str::to_string);
+        // Dispatch liveness is the kernel's: a transport error on this execute
+        // demotes the peer to `suspect` in the read-model (the app no longer
+        // guesses reachability from the outcome).
         let fut = crate::ops::execute(&self.peer_manager, crate::ops::ExecuteRequest {
             peer_id: pid,
             handler_uri,
@@ -3202,7 +3203,6 @@ impl EntityApp {
         wasm_bindgen_futures::spawn_local(async move {
             match fut.await {
                 Ok(resp) => {
-                    mark_health(&health, &target, Ok(()));
                     // A handler-level error (e.g. 404) comes back as Ok with a
                     // non-OK status; surface it loudly rather than trying to
                     // reassemble an error entity.
@@ -3216,7 +3216,6 @@ impl EntityApp {
                     }
                 }
                 Err(e) => {
-                    mark_health(&health, &target, Err(e.clone()));
                     log.log(format!("✗ pull {} → {}", path, e));
                 }
             }
@@ -3241,10 +3240,6 @@ impl EntityApp {
             .dom
             .as_ref()
             .map(|d| (d.action_sink(), d.repaint_handle()));
-        // Dispatch outcome → connection-health (same as pull).
-        let health = self.connection_health_writer.clone();
-        let target = entity_uri_authority(&handler_uri).map(str::to_string);
-
         // Write params: a single `bytes` field the handler decodes via
         // WriteRequestData::from_params. The params entity type is not
         // inspected by the handler; only the fields are read.
@@ -3287,11 +3282,6 @@ impl EntityApp {
         );
         wasm_bindgen_futures::spawn_local(async move {
             let write_result = write_fut.await;
-            mark_health(
-                &health,
-                &target,
-                write_result.as_ref().map(|_| ()).map_err(|e| e.clone()),
-            );
             match write_result {
                 Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
                     let msg = format!("✓ FILE-XFER uploaded {} ({} bytes) — backend confirmed", path, len);
@@ -3360,7 +3350,6 @@ impl EntityApp {
             self.peer_manager.system_peer_id().to_string(),
             backend_pid,
             prev,
-            self.connection_health_writer.clone(),
         ));
     }
 
@@ -3471,7 +3460,6 @@ impl EntityApp {
         let (session_fut, policy_fut) = self.backend_auth_read_futures(&local_pid, &backend_pid);
         let refresh_log = log.clone();
         let prev = self.backend_auth_prev(&backend_pid);
-        let health = self.connection_health_writer.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
             match configure_fut.await {
@@ -3490,7 +3478,6 @@ impl EntityApp {
                         system_pid,
                         backend_pid,
                         prev,
-                        health,
                     )
                     .await;
                 }
@@ -3972,12 +3959,10 @@ impl EntityApp {
                 // Burst exhausted without a handshake — genuinely unreachable
                 // for now, so the link chip drops from Connecting to Offline
                 // (honest: we're backing off, not actively dialing). A new burst
-                // after the cooldown re-arms Connecting.
-                self.connection_health_writer.record(
-                    &info.peer_id,
-                    crate::connection_health::Liveness::Unreachable,
-                    Some("backend unreachable — backing off, will retry".into()), // i18n-ignore — connection-health diagnostic detail (dev log surface)
-                );
+                // after the cooldown re-arms Connecting. The kernel wrote no
+                // status (we never handshook), so this app-owned "gave up" fact
+                // lives in the in-memory dial marker, not the tree.
+                self.dial_markers.set_failed(&info.peer_id);
                 tracing::warn!("system backend unreachable after {MAX_ATTEMPTS} tries — backing off, will retry");
                 return;
             }
@@ -3992,36 +3977,34 @@ impl EntityApp {
             return;
         };
 
-        // Live connection? Trust the real connection-health signal, not the
-        // remembered registry — the registry stays "connected" forever after
-        // the first dial, so guarding on it means we never re-dial a *dropped*
-        // link (the stale-connection bug). Registered + not-Unreachable ⇒
-        // treat as up (idle, keep the target armed + reset the budget so a
-        // later drop gets a fresh set of attempts). A definitive Unreachable ⇒
-        // re-dial even though it's remembered — self-healing.
-        let registered = crate::connections::read_connections(&self.peer_manager)
-            .iter()
-            .any(|p| p.remote_pid == target.peer_id);
-        let unreachable = crate::connection_health::read(&self.peer_manager, &target.peer_id)
-            == crate::connection_health::Liveness::Unreachable;
-        if registered && !unreachable {
+        // Live connection? Trust the KERNEL liveness read-model
+        // (`system/peer/status`), not the remembered registry — the registry
+        // stays "connected" forever after the first dial, so guarding on it
+        // would never re-dial a *dropped* link (the stale-connection bug). The
+        // read-model flips off `connected` on the kernel's own signal: a
+        // dispatch transport error → `suspect` (independent of keepalive), a
+        // keepalive miss → `disconnected`. Anything but a live `connected` ⇒
+        // re-dial (self-healing); a fresh handshake resets the budget and clears
+        // the in-memory dial marker so the chip stops saying "Connecting…".
+        let live = crate::peer_liveness::liveness_of(&self.peer_manager, &target.peer_id)
+            .is_connected();
+        if live {
             if let Ok(mut c) = self.system_backend_connect.lock() {
                 c.attempts = 0;
             }
+            self.dial_markers.clear(&target.peer_id);
             return;
         }
 
         // Armed and actively dialing — surface Connecting (not Offline) while
         // the boot provision→dial→handshake latency plays out, so the operator
         // sees progress rather than a broken-looking Offline chip that snaps to
-        // Connected. Honest per D13/S6: the async connect success records
-        // Connected; an exhausted burst records Unreachable. Deduped by the
-        // health writer, so re-recording each dial frame is a no-op.
-        self.connection_health_writer.record(
-            &target.peer_id,
-            crate::connection_health::Liveness::Connecting,
-            None,
-        );
+        // Connected. Honest per D13/S6: the kernel writes `connected` on the
+        // handshake (which clears this marker via the idle-gate above); an
+        // exhausted burst sets Failed. The kernel models no dialing state, so
+        // this transient is the in-memory marker, re-set each dial frame (a
+        // cheap idempotent map insert).
+        self.dial_markers.set_dialing(&target.peer_id);
 
         // Dial from S (the frontend system peer) — the same "from" peer as the
         // manual backend-connect affordance.
@@ -4085,9 +4068,6 @@ async fn derive_and_record_backend_auth(
     // re-logged nor re-written — so the reactive periodic refresh is silent when
     // nothing changed, and a persistently-dead link logs its error once.
     prev: Option<crate::backend_auth::BackendAuthObservation>,
-    // The auth read doubles as B's liveness probe — feed its outcome into the
-    // subscribable connection-health mirror (the writer dedupes internally).
-    health: crate::connection_health::ConnectionHealthWriter,
 ) {
     let session_keys = match session_fut.await {
         Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
@@ -4100,7 +4080,6 @@ async fn derive_and_record_backend_auth(
                 &backend_pid,
                 format!("session read returned status {}", resp.result.status), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
-                &health,
             )
         }
         Err(e) => {
@@ -4110,7 +4089,6 @@ async fn derive_and_record_backend_auth(
                 &backend_pid,
                 format!("the backend link isn't ready ({})", e), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
-                &health,
             )
         }
     };
@@ -4125,7 +4103,6 @@ async fn derive_and_record_backend_auth(
                 &backend_pid,
                 format!("policy read returned status {}", resp.result.status), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
-                &health,
             )
         }
         Err(e) => {
@@ -4135,7 +4112,6 @@ async fn derive_and_record_backend_auth(
                 &backend_pid,
                 format!("policy read failed ({})", e), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
-                &health,
             )
         }
     };
@@ -4155,9 +4131,9 @@ async fn derive_and_record_backend_auth(
         .iter()
         .filter(|r| r.state == crate::peer_auth::AuthState::Pending)
         .count();
-    // The read reached B and came back — B is live. Feed the health mirror
-    // (deduped) regardless of whether the auth rows themselves changed.
-    health.record(&backend_pid, crate::connection_health::Liveness::Connected, None);
+    // The read reached B and came back — B is live. Liveness is the kernel's:
+    // the dispatch that just succeeded keeps `system/peer/status = connected`,
+    // and a failed one would have demoted it to `suspect` — no app write here.
     let obs = crate::backend_auth::BackendAuthObservation::ok(&backend_pid, rows);
     // Dedupe: unchanged since the last read → stay silent (no event-log line, no
     // mirror rewrite → no needless repaint). Keeps the reactive periodic refresh
@@ -4175,32 +4151,6 @@ async fn derive_and_record_backend_auth(
     writer.record(&obs);
 }
 
-/// The remote-peer authority from an `entity://{pid}/...` handler URI (the
-/// dispatch target), or `None` for a non-`entity` / local URI.
-#[cfg(target_arch = "wasm32")]
-fn entity_uri_authority(uri: &str) -> Option<&str> {
-    let rest = uri.strip_prefix("entity://")?;
-    let authority = rest.split('/').next()?;
-    (!authority.is_empty()).then_some(authority)
-}
-
-/// Fold a dispatch outcome into the connection-health mirror for a target: any
-/// answer (`Ok`) ⇒ the peer is reachable (`Connected`); a transport `Err` ⇒
-/// `Unreachable`. No-op when the target isn't a resolvable remote. The writer
-/// dedupes, so repeated same-state calls are free.
-#[cfg(target_arch = "wasm32")]
-fn mark_health(
-    health: &crate::connection_health::ConnectionHealthWriter,
-    target: &Option<String>,
-    outcome: Result<(), String>,
-) {
-    let Some(pid) = target else { return };
-    match outcome {
-        Ok(()) => health.record(pid, crate::connection_health::Liveness::Connected, None),
-        Err(e) => health.record(pid, crate::connection_health::Liveness::Unreachable, Some(e)),
-    }
-}
-
 /// Record a loud backend-auth read failure (§5): the observation mirror gets a
 /// `failed` entry (so the window renders an error banner, not "no peers") and
 /// the event log gets a line.
@@ -4211,14 +4161,10 @@ fn record_auth_failure(
     backend_pid: &str,
     detail: String,
     prev: &Option<crate::backend_auth::BackendAuthObservation>,
-    health: &crate::connection_health::ConnectionHealthWriter,
 ) {
-    // The probe couldn't reach/read B — mark the link Unreachable (deduped).
-    health.record(
-        backend_pid,
-        crate::connection_health::Liveness::Unreachable,
-        Some(detail.clone()),
-    );
+    // The probe couldn't reach/read B; the failed dispatch demoted the peer to
+    // `suspect` in the kernel read-model (`demote_peer_on_transport_error`) — no
+    // app-side liveness write needed.
     let msg = format!("cannot read backend authorizations — {}", detail); // i18n-ignore — auth-failure diagnostic detail (dev log surface)
     let obs = crate::backend_auth::BackendAuthObservation::failed(backend_pid, msg);
     // Dedupe: the same failure is already recorded → don't re-log or re-write

@@ -279,6 +279,7 @@ impl DomRenderer {
         window_manager: &WindowManager,
         actions: &mut Vec<Action>,
         maximized: Option<WindowId>,
+        dial_markers: &crate::dial_markers::DialMarkers,
     ) {
         // Always drain pending actions.
         let mut pending = self.pending_actions.borrow_mut();
@@ -303,7 +304,7 @@ impl DomRenderer {
         // when the slow-rebuild warning fires.
         let mut section_timings: Vec<(String, WindowId, f64)> = Vec::new();
         let any_section_changed =
-            self.update_window_sections(peers, window_manager, &mut section_timings, maximized);
+            self.update_window_sections(peers, window_manager, &mut section_timings, maximized, dial_markers);
 
         // Show the first-run hint whenever the window area is empty (boot with
         // nothing open, or the user closed every window); remove it as soon as
@@ -802,6 +803,7 @@ impl DomRenderer {
         window_manager: &WindowManager,
         timings_out: &mut Vec<(String, WindowId, f64)>,
         maximized: Option<WindowId>,
+        dial_markers: &crate::dial_markers::DialMarkers,
     ) -> bool {
         use std::collections::HashSet;
 
@@ -1028,6 +1030,7 @@ impl DomRenderer {
                 repaint,
                 closures: state.closures.clone(),
                 drafts: state.drafts.clone(),
+                dial_markers: dial_markers.clone(),
             };
 
             #[cfg(feature = "measurement")]

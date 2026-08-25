@@ -144,7 +144,11 @@ impl PeerConnectionsModel {
     // -- Pure read API --
 
     #[allow(dead_code)] // called from WASM render path
-    pub fn render_output(&self, peers: &Peers) -> PeerConnectionsOutput {
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        dials: &crate::dial_markers::DialMarkers,
+    ) -> PeerConnectionsOutput {
         let kind = PeerDisplay::classify(peers, &self.peer_id);
         let ws_addr = crate::listener_state::read_address(peers);
         let bound_peer = BoundPeerInfo {
@@ -168,7 +172,14 @@ impl PeerConnectionsModel {
             })
             .map(|r| KnownPeer {
                 display: crate::views::display_name(peers, &r.remote_pid),
-                liveness: crate::connection_health::read(peers, &r.remote_pid),
+                // Kernel read-model is authoritative for real liveness; the
+                // in-memory dial marker contributes only the app-owned dial
+                // transient (a dial in flight / gave-up-before-connecting) the
+                // kernel does not model — and only while the kernel is silent.
+                status: crate::peer_liveness::conn_display(
+                    crate::peer_liveness::liveness_of(peers, &r.remote_pid),
+                    dials.hint(&r.remote_pid),
+                ),
                 remote_pid: r.remote_pid,
                 addr: r.addr,
                 last_seen: r.last_seen,
@@ -296,7 +307,7 @@ mod tests {
         ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
 
         let model = PeerConnectionsModel::new(7, pid);
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
 
         assert_eq!(out.known_peers.len(), 1, "the remembered peer surfaces");
         assert_eq!(out.known_peers[0].remote_pid, "REMOTE_B");

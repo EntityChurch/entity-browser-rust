@@ -23,7 +23,7 @@ mod capabilities;
 mod inspect_router;
 mod ansi;
 mod connections;
-mod connection_health;
+mod dial_markers;
 // Piece A (DESIGN-CONNECTIVITY-UX): the subscribed connection-liveness facet of
 // the unified Peer read-model. `allow(dead_code)` while it's staged — the
 // consumers (window renders) wire up across Pieces B/C; today only the WASM

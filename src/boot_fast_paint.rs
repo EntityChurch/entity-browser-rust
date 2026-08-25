@@ -218,6 +218,9 @@ async fn paint(loc: Location, origin: String) {
         repaint: noop_repaint,
         closures: closures.clone(),
         drafts: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        // Pre-peer boot paint renders only the site surface, never a
+        // peer/system window — no dial transients to project.
+        dial_markers: crate::dial_markers::DialMarkers::default(),
     };
     // `render` clears the container first; show the site surface now that we
     // have content (only on success — a failed fetch leaves chrome as-is).
