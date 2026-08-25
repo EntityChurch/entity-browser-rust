@@ -97,7 +97,7 @@ PODMAN_BUILD_CAPS := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) $(_cap_cgp)
 PODMAN_RUN_CAPS   := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) \
                      --pids-limit=$(CAP_PIDS) --cpus=$(CAP_CPUS) $(_cap_cgp)
 
-.PHONY: image build help fmt check clean
+.PHONY: image build help fmt fmt-check check clean test-tauri
 
 .DEFAULT_GOAL := help
 
@@ -107,14 +107,20 @@ PODMAN_RUN_CAPS   := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) \
 help:
 	@echo "entity-browser-rust — make + podman (host needs only make + podman)"
 	@echo
-	@echo "  build    WASM debug build → dist/ (alias of wasm; conventional entry)"
-	@echo "  test     native unit + peer-integration suite, in-container"
-	@echo "  lint     cargo clippy, in-container (read-only)"
-	@echo "  fmt      cargo fmt, in-container (writes)"
-	@echo "  check    lint + test (the green gate)"
-	@echo "  clean    remove dist/ and the toolchain image"
+	@echo "  build      WASM debug build → dist/ (alias of wasm; conventional entry)"
+	@echo "  test       main-crate unit + peer-integration suite, in-container"
+	@echo "  test-tauri src-tauri backend unit tests (workspace-excluded from test)"
+	@echo "  lint       cargo clippy, in-container (read-only)"
+	@echo "  fmt        cargo fmt, in-container (writes) · fmt-check verifies only"
+	@echo "  check      lint + test + test-tauri (the green gate)"
+	@echo "  clean      remove build outputs + run artifacts + the toolchain image"
 	@echo
-	@echo "  wasm / wasm-release / serve / build-serve / tauri-run / e2e-worker"
+	@echo "  wasm / wasm-release / serve / build-serve / e2e-worker"
+	@echo "  desktop (containerized display passthrough — Wayland/X11):"
+	@echo "    tauri-run            run the app; HOST_HOME=1 uses your real \$$HOME,"
+	@echo "                         SHARE_DIR=<dir> shares a host folder over local/files"
+	@echo "    host-run             run the container-built binary NATIVE (mutable hosts only)"
+	@echo "    appimage             portable self-contained AppImage (release artifact)"
 	@echo "  release: wasm-release · publish · tauri-bundle (see docs/RELEASE-READINESS.md)"
 	@echo "  — see the Makefile header for the full target catalogue."
 
@@ -139,17 +145,89 @@ define RUN
 		sh -c '$(1)'
 endef
 
-# Serve a static directory ($(1), relative to this repo) from inside the image,
-# on $(PORT). Keeps the "podman + make only" contract — no host python3.
+# Serve a static directory ($(1)) from inside the image, on $(PORT). Keeps the
+# "podman + make only" contract — no host python3. $(1) is resolved relative to
+# the workdir (this repo) OR may be an absolute in-container path (e.g. a mount
+# supplied via the $(2) extra-flags param — see publish-serve's SERVE_DIR).
 # `--network host`: the container binds the host port directly (rootless `-p`
 # port-forwarding resets connections under pasta/slirp; host-net is reliable and
 # is what a local dev server wants). Foreground; Ctrl-C stops it.
 define RUN_SERVE
-	podman run --rm $(PODMAN_RUN_CAPS) --network host \
+	podman run --rm $(PODMAN_RUN_CAPS) --network host $(2) \
 		-v $(PARENT):/src/entity-systems:z \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		python3 -m http.server $(PORT) --bind 0.0.0.0 --directory $(1)
+endef
+
+# Repo-local, gitignored HOME for the containerized desktop app so its durable
+# config (`~/.local/share/<app-id>`) persists across runs. `rm -rf` it for a
+# fresh cold-boot profile (the returning-app durable-config-wins gotcha).
+# Because HOME is a host bind-mount, the backend's file-share root
+# (`$HOME/.entity/tori-share`, src-tauri/src/lib.rs `ensure_share_root`) is
+# ALREADY host-visible+persistent at `$(TAURI_HOME)/.entity/tori-share` — files
+# pulled/pushed over `local/files` land on the host, not in a container layer.
+TAURI_HOME ?= .tauri-home
+
+# Optional: expose an ARBITRARY host directory as the file-transfer share root.
+# `make tauri-run SHARE_DIR=~/Downloads` bind-mounts that host dir onto the
+# backend's `local/files/shared` root, so the desktop app transfers files
+# straight to/from a real host folder (a USB mount, a project dir, …). Empty =
+# the default repo-local `$(TAURI_HOME)/.entity/tori-share`. (label=disable +
+# keep-id give the container access; no SELinux relabel of your dir.)
+SHARE_DIR ?=
+
+# Optional: run against your REAL home directory instead of the isolated
+# `$(TAURI_HOME)` profile. `make tauri-run HOST_HOME=1` mounts your actual
+# `$(HOME)` as the app's home (uid already matches via keep-id), so it uses your
+# real config and the file-transfer share is your real `~/.entity/tori-share` —
+# filesystem-identical to a bare-native run. This is the answer on an IMMUTABLE
+# distro (Silverblue/Kinoite), where you can't install the webkit lib to run the
+# binary natively: the container just supplies that one lib (exactly like a
+# Flatpak does) while HOST_HOME=1 gives it your real filesystem — same binary,
+# same kernel, same home. Broader FS access than the isolated default, so it is
+# opt-in. (Takes precedence over SHARE_DIR — the share is already your real home.)
+HOST_HOME ?=
+
+# Launch a WebKitGTK/GTK binary ($(1)) from INSIDE the image onto the host's
+# display — so `make tauri-run` needs only make + podman, NOT a host webkit or
+# a host toolchain (webkit2gtk lives in the image; the build already links it).
+#
+# Display passthrough is Wayland-primary (the proven path on a Wayland session)
+# and falls back to X11/XWayland. Load-bearing flags:
+# - `--security-opt label=disable` — Fedora SELinux otherwise blocks the
+#   container from opening the host compositor socket (it shows up `-?????`).
+# - `--userns=keep-id` — map the invoking user 1:1 so the socket's uid matches.
+# - `WEBKIT_DISABLE_DMABUF_RENDERER=1` (+ compositing off) — WebKitGTK's GPU
+#   dmabuf path is unreliable inside a container; force the software compositor.
+# - `--device /dev/dri` when present (harmless extra; software GL needs no GPU).
+# Foreground; close the window or Ctrl-C to stop. Needs a display — headless
+# hosts can't present a window (there is nothing to containerize about that).
+define RUN_GUI
+	@mkdir -p $(TAURI_HOME) $(SHARE_DIR)
+	@set -e; disp=""; dri=""; \
+	if [ -n "$$WAYLAND_DISPLAY" ] && [ -S "$$XDG_RUNTIME_DIR/$$WAYLAND_DISPLAY" ]; then \
+	  disp="-e XDG_RUNTIME_DIR=/tmp/xdg -e WAYLAND_DISPLAY=$$WAYLAND_DISPLAY -e GDK_BACKEND=wayland -v $$XDG_RUNTIME_DIR/$$WAYLAND_DISPLAY:/tmp/xdg/$$WAYLAND_DISPLAY"; \
+	  echo "==> launching on Wayland ($$WAYLAND_DISPLAY) inside $(IMAGE)"; \
+	elif [ -n "$$DISPLAY" ]; then \
+	  xhost +local: >/dev/null 2>&1 || true; \
+	  disp="-e DISPLAY=$$DISPLAY -e GDK_BACKEND=x11 -v /tmp/.X11-unix:/tmp/.X11-unix"; \
+	  [ -n "$$XAUTHORITY" ] && disp="$$disp -e XAUTHORITY=/tmp/.Xauth -v $$XAUTHORITY:/tmp/.Xauth:ro"; \
+	  echo "==> launching on X11 ($$DISPLAY) inside $(IMAGE)"; \
+	else \
+	  echo "no WAYLAND_DISPLAY or DISPLAY set — no display to present a window on"; exit 1; \
+	fi; \
+	[ -d /dev/dri ] && dri="--device /dev/dri"; \
+	podman run --rm $(PODMAN_RUN_CAPS) --userns=keep-id --security-opt label=disable \
+	  $$disp $$dri --net=host \
+	  -e WEBKIT_DISABLE_DMABUF_RENDERER=1 -e WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+	  $(if $(HOST_HOME),\
+	    -e HOME=$(HOME) -e XDG_CACHE_HOME=$(HOME)/.cache -v $(HOME):$(HOME),\
+	    -e HOME=/tmp/tauri-home -e XDG_CACHE_HOME=/tmp/tauri-home/.cache -v $(CURDIR)/$(TAURI_HOME):/tmp/tauri-home $(if $(SHARE_DIR),-v $(abspath $(SHARE_DIR)):/tmp/tauri-home/.entity/tori-share,)) \
+	  -v $(PARENT):/src/entity-systems:z \
+	  -w /src/entity-systems/$(notdir $(CURDIR)) \
+	  $(IMAGE) \
+	  $(1)
 endef
 
 # There is no native UI build. The native binary is a deprecation stub
@@ -170,6 +248,13 @@ native:
 test: image
 	$(call RUN,cargo test)
 
+# The desktop backend (src-tauri) is workspace-EXCLUDED (Cargo.toml `exclude`),
+# so `make test` does NOT run its unit tests — including the authorize-gate
+# manager-grant seeding (manager_grant.rs) and persistence.rs. Run them here,
+# in-container (compiles src-tauri, which links webkit2gtk from the image).
+test-tauri: image
+	$(call RUN,cd src-tauri && cargo test)
+
 # Lint, in-container.
 lint: image
 	$(call RUN,cargo clippy)
@@ -178,14 +263,24 @@ lint: image
 fmt: image
 	$(call RUN,cargo fmt)
 
-# Tier-1 check = the green gate (lint + test).
-check: lint test
+# Format verification (read-only) — the gate variant of `fmt`. Fails if any
+# file isn't formatted, without writing. Not in `check` by default (kept fast
+# + non-surprising); run in CI / before a release.
+fmt-check: image
+	$(call RUN,cargo fmt --check)
 
-# Tier-1 clean = remove the host-visible build output (dist/) and the toolchain
-# image. The cargo registry/target cache lives in a persistent named volume and
-# is left intact (delete $(CARGO_CACHE) by hand for a full cold reset).
+# Tier-1 check = the green gate: lint + BOTH test suites (main crate + the
+# workspace-excluded src-tauri backend).
+check: lint test test-tauri
+
+# Tier-1 clean = remove the host-visible build OUTPUTS + run artifacts and the
+# toolchain image. Leaves the expensive COMPILE CACHES intact (target/,
+# target-publish/, src-tauri/target/ objects, and the cargo registry named
+# volume $(CARGO_CACHE)) — `rm -rf` those by hand for a full cold reset.
+# Cleaned: SPA bundles (dist*), the desktop app's isolated profile+cache
+# (.tauri-home, .cache), and the AppImage/bundle output.
 clean:
-	rm -rf dist/ dist-publish/
+	rm -rf dist/ dist-publish/ .tauri-home/ .cache/ src-tauri/target/release/bundle/
 	-podman rmi $(IMAGE)
 
 # WASM debug build → dist/. Single bundle for both Direct (default)
@@ -265,12 +360,62 @@ tauri: wasm-release
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
 	@echo "Built: ./src-tauri/target/debug/entity-browser-tauri"
-	@echo "Launch on a desktop session (needs webkit2gtk + a display): make tauri-run"
+	@echo "Launch (containerized, needs a display on the host): make tauri-run"
 	@echo "Inspector: right-click → Inspect Element in the WebView"
 
-# Tauri — build and run in one step
+# Tauri — build and run in one step, CONTAINERIZED with display passthrough.
+# Host needs only make + podman (webkit2gtk lives in the image); it does need a
+# display to present the window (Wayland or X11). rm -rf .tauri-home for a fresh
+# cold-boot profile. See the RUN_GUI macro for the passthrough mechanics.
 tauri-run: tauri
+	$(call RUN_GUI,./src-tauri/target/debug/entity-browser-tauri)
+
+# Build in the container, RUN NATIVELY on the host — the conventional desktop
+# model, and the SIMPLE one: the container-built binary is a normal host process,
+# so NONE of the containerization-at-runtime plumbing applies. Your REAL $HOME,
+# your real filesystem (the file-transfer share is just `~/.entity/tori-share`
+# in your actual home — no SHARE_DIR mount), the native display (no passthrough,
+# no SELinux flag, no keep-id). The build stays fully containerized (no host
+# cargo/rust); the ONLY host runtime dep is the WebKitGTK library the binary
+# dynamically links — a GUI runtime lib, not a build toolchain. Missing it? this
+# prints how to get it and stops. NOTE: on an IMMUTABLE distro (Silverblue/
+# Kinoite) you can't layer a lib onto the host cheaply — there, don't use this;
+# use `make tauri-run HOST_HOME=1` (the container supplies webkit like a Flatpak,
+# HOST_HOME gives it your real filesystem). This target is for mutable hosts.
+host-run: tauri
+	@if ! ldconfig -p 2>/dev/null | grep -q libwebkit2gtk-4.1.so.0; then \
+	  echo "native run needs the WebKitGTK 4.1 runtime the binary links against."; \
+	  if [ -f /run/ostree-booted ]; then \
+	    echo "  This is an IMMUTABLE (ostree) host — don't layer libs onto it. Instead:"; \
+	    echo "      make tauri-run HOST_HOME=1   # container carries webkit; runs on your real \$$HOME"; \
+	  else \
+	    echo "    sudo dnf install webkit2gtk4.1            # Fedora"; \
+	    echo "    sudo apt install libwebkit2gtk-4.1-0      # Debian / Ubuntu"; \
+	    echo "  (everything else it needs — gtk3, libsoup3 — is already present here.)"; \
+	    echo "  Or run fully containerized instead: make tauri-run"; \
+	  fi; \
+	  exit 1; \
+	fi
+	@echo "==> running the container-built binary NATIVELY on the host"
 	./src-tauri/target/debug/entity-browser-tauri
+
+# Build a portable **AppImage** — a single self-contained file bundling the
+# binary + webkit2gtk + every runtime lib (Tauri's bundler). This is the
+# RELEASE-distribution artifact: it runs on other Linux hosts with NO dev
+# toolchain (no podman, no make, no host webkit). Built fully in-container
+# (`APPIMAGE_EXTRACT_AND_RUN=1` because the container has no FUSE; the bundler
+# downloads linuxdeploy/appimagetool). `touch lib.rs` forces a fresh dist/
+# re-embed (same reason as `make tauri`). First cut for release builds — see
+# docs/RELEASE-READINESS.md when we harden it (icon set, signing, deb/rpm).
+# NOTE: to *run* an AppImage the target host needs FUSE; on a FUSE-less host
+# (this immutable box included) launch it with `--appimage-extract-and-run`.
+appimage: wasm-release
+	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 cargo tauri build --bundles appimage)
+	@echo ""
+	@echo "=== portable AppImage(s) built ==="
+	@find src-tauri/target -name '*.AppImage' -exec ls -lh {} \; 2>/dev/null | awk '{print "  " $$NF "  (" $$5 ")"}'
+	@echo "  run on a FUSE host:      ./<name>.AppImage"
+	@echo "  run on a FUSE-less host: ./<name>.AppImage --appimage-extract-and-run"
 
 # Content-baked desktop bundle: embed the SPA **plus published sites/apps** into
 # the Tauri binary, served same-origin from the WebView's asset protocol (no
@@ -306,7 +451,7 @@ tauri-bundle: wasm-release
 	@echo "Launch: make tauri-bundle-run  (or run the binary directly on a desktop session)"
 
 tauri-bundle-run: tauri-bundle
-	./src-tauri/target/debug/entity-browser-tauri
+	$(call RUN_GUI,./src-tauri/target/debug/entity-browser-tauri)
 
 # Serve whatever is currently in dist/ (no rebuild). Fast, but does NOT
 # guarantee the bundle is current — use `make build-serve` when you need
@@ -470,6 +615,10 @@ endef
 # DIST=/TARGET_DIR= to relocate. See the DIST/TARGET_DIR header note.
 publish-serve: DIST       := dist-publish
 publish-serve: TARGET_DIR := target-publish
+# Durable publisher identity, translated to its in-container path (SERVE_DIR is
+# mounted below; PUBLISH_DATA_DIR rides the existing parent mount). Mirrors the
+# `publish` / `tauri-bundle` targets so all three publish under ONE identity.
+publish-serve: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 # publish-serve emits the deployment-config by DEFAULT, so the served SPA
 # cold-boots into the published content (registers the publish peer's origin +
 # lands on its home site) — otherwise the SPA shows only its own boot seed and
@@ -478,13 +627,13 @@ publish-serve: DEPLOY_CONFIG := 1
 publish-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
-	ENTITY_DATA_DIR=$(CURDIR)/$(PUBLISH_DATA_DIR) CARGO_TARGET_DIR=$(TARGET_DIR) cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="
 	@echo "  ▶ live entity browser (SPA):  http://localhost:$(PORT)/"
 	@echo "  ▶ static published sites:     http://localhost:$(PORT)/sites/   (banner → live)"
 	@echo "  (hard-refresh once if an older build is cached)"
 	@echo ""
-	python3 -m http.server $(PORT) --directory $(SERVE_DIR)
+	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

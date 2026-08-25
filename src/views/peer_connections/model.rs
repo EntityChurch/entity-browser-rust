@@ -14,7 +14,9 @@ use crate::peers::Peers;
 use crate::peer_display::PeerDisplay;
 use crate::window::WindowId;
 
-use super::output::{BackendPeer, BoundPeerInfo, KnownPeer, PeerConnectionsOutput};
+use super::output::{
+    AuthRowView, BackendAuthView, BackendPeer, BoundPeerInfo, KnownPeer, PeerConnectionsOutput,
+};
 
 /// Persisted per-window state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +167,43 @@ impl PeerConnectionsModel {
             })
             .collect();
 
+        // Authorize-gate observability (§3 Step 3-4): for each known backend,
+        // project its locally-mirrored observation (written by the async remote
+        // read) into a render-ready view. Absent mirror ⇒ `checked: false` (a
+        // "Refresh to check" prompt), never a misleading empty list.
+        let sys_pid = peers.system_peer_id().to_string();
+        let backend_auth: Vec<BackendAuthView> = known_peers
+            .iter()
+            .map(|kp| {
+                let path = crate::app_paths::backend_auth_entry_path(
+                    crate::app_paths::APP_ID,
+                    &sys_pid,
+                    &kp.remote_pid,
+                );
+                let obs = peers
+                    .get_entity(&sys_pid, &path)
+                    .map(|e| crate::backend_auth::BackendAuthObservation::from_entity(&e));
+                match obs {
+                    Some(o) => BackendAuthView {
+                        backend_pid: kp.remote_pid.clone(),
+                        backend_display: kp.display.clone(),
+                        checked: true,
+                        error: o.error.clone(),
+                        pending: o.pending().map(auth_row_view).collect(),
+                        authorized: o.authorized().map(auth_row_view).collect(),
+                    },
+                    None => BackendAuthView {
+                        backend_pid: kp.remote_pid.clone(),
+                        backend_display: kp.display.clone(),
+                        checked: false,
+                        error: None,
+                        pending: Vec::new(),
+                        authorized: Vec::new(),
+                    },
+                }
+            })
+            .collect();
+
         let all_pids = peers.peer_ids();
         let mut backend_peers = Vec::new();
         for p in &all_pids {
@@ -218,12 +257,28 @@ impl PeerConnectionsModel {
             backend_peers,
             address_input_initial: self.inner.lock().unwrap().address.clone(),
             qr_payload,
+            backend_auth,
         }
     }
 
     #[cfg(test)]
     pub fn state_snapshot(&self) -> PeerConnectionsState {
         self.inner.lock().unwrap().clone()
+    }
+}
+
+/// Project a derived auth row into its render view. The peer key is an
+/// identity-hash hex string (how the backend reports sessions); we keep the
+/// full id for the authorize target and show a truncated form.
+fn auth_row_view(row: &crate::peer_auth::PeerAuthRow) -> AuthRowView {
+    let display = if row.peer_id.len() > 14 {
+        format!("{}…", &row.peer_id[..14])
+    } else {
+        row.peer_id.clone()
+    };
+    AuthRowView {
+        peer_id: row.peer_id.clone(),
+        display,
     }
 }
 
@@ -291,6 +346,68 @@ mod tests {
             out.known_peers[0].addr, "ws://10.0.0.9:4041",
             "reconnect address carried through for one-tap reconnect"
         );
+    }
+
+    #[test]
+    fn known_backend_without_observation_reads_unchecked() {
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
+
+        let model = PeerConnectionsModel::new(7, pid);
+        let out = model.render_output(&peers);
+
+        assert_eq!(out.backend_auth.len(), 1, "one view per known backend");
+        let view = &out.backend_auth[0];
+        assert_eq!(view.backend_pid, "REMOTE_B");
+        assert!(!view.checked, "no observation yet → prompts a Check access");
+        assert!(view.pending.is_empty() && view.authorized.is_empty());
+    }
+
+    #[test]
+    fn observation_mirror_projects_into_pending_and_authorized_rows() {
+        use crate::backend_auth::{BackendAuthObservation, BackendAuthWriter};
+        use crate::peer_auth::{AuthState, PeerAuthRow};
+
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
+        // The async remote read would write this mirror; do it directly here.
+        BackendAuthWriter::new(&peers).record(&BackendAuthObservation::ok(
+            "REMOTE_B",
+            vec![
+                PeerAuthRow { peer_id: "aaaa1111".into(), state: AuthState::Pending },
+                PeerAuthRow { peer_id: "bbbb2222".into(), state: AuthState::Authorized },
+            ],
+        ));
+
+        let model = PeerConnectionsModel::new(7, pid);
+        let view = &model.render_output(&peers).backend_auth[0];
+
+        assert!(view.checked, "mirror present → checked");
+        assert_eq!(view.error, None);
+        assert_eq!(view.pending.len(), 1);
+        assert_eq!(view.pending[0].peer_id, "aaaa1111", "authorize target keeps the full id");
+        assert_eq!(view.authorized.len(), 1);
+        assert_eq!(view.authorized[0].peer_id, "bbbb2222");
+    }
+
+    #[test]
+    fn observation_read_failure_surfaces_error() {
+        use crate::backend_auth::{BackendAuthObservation, BackendAuthWriter};
+
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
+        BackendAuthWriter::new(&peers)
+            .record(&BackendAuthObservation::failed("REMOTE_B", "no manager capability"));
+
+        let model = PeerConnectionsModel::new(7, pid);
+        let view = &model.render_output(&peers).backend_auth[0];
+
+        assert!(view.checked);
+        assert_eq!(view.error.as_deref(), Some("no manager capability"));
+        assert!(view.pending.is_empty(), "an error must not read as pending rows");
     }
 }
 

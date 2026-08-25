@@ -202,6 +202,25 @@ pub fn authz_entry_path(app_id: &str, peer_id: &str, remote_pid: &str) -> String
     format!("/{}/app/{}/authz/{}", peer_id, app_id, remote_pid)
 }
 
+/// Prefix for the **backend-auth observation mirror** — the local, watchable
+/// cache of a remote backend's authorization state
+/// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §2, §3 Step 3`). The observability read
+/// is an async one-shot `execute` against a remote backend B (its
+/// `system/peer/session/*` + `system/capability/policy/*`); the derived rows
+/// are written here on the local system peer so the synchronous window render
+/// can read them and a `WindowWatch` on this prefix wakes the re-render. One
+/// entity per observed backend, keyed by backend peer id. Distinct from
+/// [`authz_prefix`] (which mirrors *our* grant decisions) — this mirrors what
+/// B's own tree reports.
+pub fn backend_auth_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/backend-auth/", peer_id, app_id)
+}
+
+/// Path for one backend's observation entity, keyed by backend peer id.
+pub fn backend_auth_entry_path(app_id: &str, peer_id: &str, backend_pid: &str) -> String {
+    format!("/{}/app/{}/backend-auth/{}", peer_id, app_id, backend_pid)
+}
+
 /// Path for the WebSocket listener's published state (current listen
 /// address, when bound).
 pub fn listener_state_path(app_id: &str, peer_id: &str) -> String {
@@ -295,6 +314,18 @@ mod tests {
         assert_eq!(
             peer_registry_entry_path(APP_ID, "SYS1", "PEER2"),
             "/SYS1/app/entity-browser/system/peers/PEER2"
+        );
+    }
+
+    #[test]
+    fn backend_auth_paths_build_correctly() {
+        assert_eq!(
+            backend_auth_prefix(APP_ID, "SYS1"),
+            "/SYS1/app/entity-browser/backend-auth/"
+        );
+        assert_eq!(
+            backend_auth_entry_path(APP_ID, "SYS1", "BPID"),
+            "/SYS1/app/entity-browser/backend-auth/BPID"
         );
     }
 
