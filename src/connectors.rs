@@ -449,20 +449,54 @@ pub fn read_selection_mirror() -> Option<WebRtcProvisioning> {
 /// we are dialing the node we are dialing.
 #[cfg(target_arch = "wasm32")]
 pub fn resolve_provisioning(url_query: &str) -> Option<WebRtcProvisioning> {
+    let (p, source) = resolve_provisioning_quietly(url_query)?;
+    tracing::info!(node_peer_id = %p.node_peer_id, "webrtc: provisioning from {source}");
+    Some(p)
+}
+
+/// The precedence itself, with **no logging** — so a surface may ask "what would
+/// a reload resolve right now?" every frame without flooding the log.
+///
+/// Split out rather than duplicated deliberately: two expressions of this
+/// precedence is the exact bug class [`resolve_provisioning`]'s doc warns about,
+/// so there is still only one, and the logging wrapper is the only difference.
+#[cfg(target_arch = "wasm32")]
+pub fn resolve_provisioning_quietly(
+    url_query: &str,
+) -> Option<(WebRtcProvisioning, &'static str)> {
     if let Some(p) = crate::session_config::webrtc_provisioning_from_query(url_query) {
-        tracing::info!(node_peer_id = %p.node_peer_id, "webrtc: provisioning from URL query");
-        return Some(p);
+        return Some((p, "URL query"));
     }
     if let Some(p) = read_selection_mirror() {
-        tracing::info!(
-            node_peer_id = %p.node_peer_id,
-            "webrtc: provisioning from the selected connector (durable registry)"
-        );
-        return Some(p);
+        return Some((p, "the selected connector (durable registry)"));
     }
     let p = crate::session_config::webrtc_provisioning_default()?;
-    tracing::info!(node_peer_id = %p.node_peer_id, "webrtc: provisioning from the build knob");
-    Some(p)
+    Some((p, "the build knob"))
+}
+
+/// Has the provisioning a reload would use drifted from what this session
+/// actually booted with?
+///
+/// **Why compare resolved values rather than watching the selection.** The
+/// registry is only *one* of three sources, and the URL outranks it
+/// ([`resolve_provisioning`]). A notice wired to "the selection changed" would
+/// tell a user booted with `?webrtc_node=…` to reload to apply a choice that a
+/// reload will keep ignoring — worse than silence, because it is a promise the
+/// app cannot keep. Running both sides through the same resolver makes URL
+/// precedence self-handling: when the URL wins, `now` never differs from
+/// `booted`, and no notice appears without a line of code saying so.
+///
+/// It also generalizes past the node. The comparison is over the whole
+/// [`WebRtcProvisioning`], so anything later added to it — ICE servers from a
+/// node's §4.5.1 advertisement being the live case — inherits the notice
+/// without touching this function.
+///
+/// Pure and native-testable; the wasm callers supply the two sides.
+pub fn provisioning_drifted(
+    booted: Option<&WebRtcProvisioning>,
+    reload_would_use: Option<&WebRtcProvisioning>,
+) -> bool {
+    booted != reload_would_use
 }
 
 /// Keeps the localStorage mirror in step with the durable registry.
@@ -805,6 +839,66 @@ pub(crate) mod tests {
         let me = peers.primary_peer_id().to_string();
         let err = advertise(&peers, &me, "2KNobodyHome").await;
         assert!(err.is_err(), "got {err:?}");
+    }
+
+    /// The reload notice fires when — and only when — a reload would actually
+    /// change something.
+    ///
+    /// Each case below is a state a user can reach in about two clicks, and
+    /// three of them are ways a naive "did the selection change?" check gets it
+    /// wrong: nagging a session that never had a connector, staying silent when
+    /// the *first* connector is chosen, and staying silent when the selected one
+    /// is removed out from under a running establisher.
+    #[test]
+    fn the_reload_notice_fires_only_when_a_reload_would_change_something() {
+        let node = |id: &str| WebRtcProvisioning {
+            node_peer_id: id.to_string(),
+            node_addr: "ws://n:9".to_string(),
+            ice_servers: Vec::new(),
+            poll_interval_ms: None,
+            max_deadline_ms: None,
+        };
+
+        // Steady state, and the one that must stay quiet: nothing provisioned,
+        // nothing selected. A notice here would be permanent furniture on every
+        // default build — which is exactly what a static hint would have been.
+        assert!(!provisioning_drifted(None, None), "no connector, no nag");
+
+        // Running on the node we booted with.
+        let a = node("2KNodeA");
+        assert!(!provisioning_drifted(Some(&a), Some(&a)), "unchanged is quiet");
+
+        // The main case: the user just picked their FIRST connector. Booted with
+        // nothing, a reload would now resolve one. This is the state the whole
+        // notice exists for, and a check that only watched for a *changed*
+        // selection would miss it.
+        assert!(provisioning_drifted(None, Some(&a)), "first selection is pending");
+
+        // Switched nodes.
+        let b = node("2KNodeB");
+        assert!(provisioning_drifted(Some(&a), Some(&b)), "a different node is pending");
+
+        // Removed the selected connector. The session keeps rendezvousing
+        // through a node the registry no longer names — still a divergence
+        // between what is running and what a reload would do, and still worth
+        // saying.
+        assert!(provisioning_drifted(Some(&a), None), "a removed selection is pending");
+
+        // The generalization, asserted rather than asserted-in-prose: the
+        // comparison is over the WHOLE provisioning, not the node id. When
+        // EXTENSION-SIGNALING §4.5.1 reflection endpoints start landing in the
+        // mirror, the same node with new ICE servers is a real change that a
+        // reload applies — and this notice already covers it with no new code.
+        let mut a_with_ice = a.clone();
+        a_with_ice.ice_servers = vec![crate::session_config::IceServer {
+            urls: vec!["stun:example:3478".to_string()],
+            username: None,
+            credential: None,
+        }];
+        assert!(
+            provisioning_drifted(Some(&a), Some(&a_with_ice)),
+            "same node, new ICE servers — a reload changes the session, so say so"
+        );
     }
 
     #[test]

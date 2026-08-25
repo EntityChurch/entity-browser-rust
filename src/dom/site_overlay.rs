@@ -216,6 +216,8 @@ impl SiteOverlay {
             dial_markers: crate::dial_markers::DialMarkers::default(),
             // No connect surface on this path — a default (empty) slot.
             connect_attempt: crate::connect_attempt::ConnectAttempt::default(),
+            // Site surface only — no connector card, so nothing reads this.
+            provisioning_drifted: false,
         };
         let resolve_asset =
             crate::dom::content_site::make_asset_resolver(peers, &self.peer_id, &output);

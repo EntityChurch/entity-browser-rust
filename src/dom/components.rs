@@ -587,6 +587,28 @@ pub fn success(msg: &str) -> Element {
 }
 
 /// Error state — loud, specific, actionable. Renders in the error color.
+/// An **advisory** line — something the user should know and can act on, which
+/// is neither a completed action ([`success`]) nor a failure ([`error`]).
+///
+/// The third tone exists because both of its first consumers had invented it
+/// privately: Chat's "this peer can't be reached back" note and the connector
+/// reload notice are the same thing — true, unalarming, and actionable — and
+/// were on their way to two different colors. S4 is one vocabulary per status;
+/// that has to include the tones, or every window drifts its own amber.
+pub fn notice(msg: &str) -> Element {
+    let p = util::create_element("p");
+    p.set_attribute(
+        "style",
+        &format!(
+            "color:var(--status-warn,#fc9);font-size:12px;margin:{} 0",
+            theme::SP_1
+        ),
+    )
+    .ok();
+    util::set_text(&p, &format!("\u{26a0} {msg}")); // ⚠
+    p
+}
+
 pub fn error(msg: &str) -> Element {
     let p = util::create_element("p");
     p.set_attribute(

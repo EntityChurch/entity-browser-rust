@@ -184,7 +184,11 @@ impl FileTransferModel {
     // -- Pure read API --
 
     #[allow(dead_code)] // called from the WASM render path
-    pub fn render_output(&self, peers: &Peers) -> FileTransferOutput {
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        dials: &crate::dial_markers::DialMarkers,
+    ) -> FileTransferOutput {
         let state = self.inner.lock().unwrap().clone();
 
         // Read the enriched records (not just ids) so each target carries its
@@ -235,6 +239,16 @@ impl FileTransferModel {
             },
         };
 
+        // Reachability of the effective target — read, never inferred. The
+        // kernel read-model is authoritative; the in-memory dial marker speaks
+        // only where the kernel is silent. Deliberately NOT folded into
+        // `access`: a target can be authorized and offline, or reachable and
+        // refused, and collapsing the two loses whichever one the user needs.
+        let target_reach = crate::peer_liveness::conn_display(
+            crate::peer_liveness::liveness_of(peers, &effective_target),
+            dials.hint(&effective_target),
+        );
+
         let events: Vec<EventEntry> = raw_messages
             .into_iter()
             .map(|m| EventEntry {
@@ -257,6 +271,7 @@ impl FileTransferModel {
             share_prefix: SHARE_PREFIX.to_string(),
             filename_initial: state.filename.clone(),
             access,
+            target_reach,
             tree_rows,
             root_listed: self.browse.root_listed(),
             root_loading: self.browse.root_loading(),

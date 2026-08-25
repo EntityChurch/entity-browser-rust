@@ -761,8 +761,12 @@ impl ChatModel {
     /// Build the render output — the message list (with a `mine` flag per
     /// message) + the live draft. Pure data (no `web_sys`), so it is
     /// native-testable and the DOM layer stays a thin projector.
-    pub fn render_output(&self, peers: &Peers) -> super::output::ChatOutput {
-        use super::output::{ChatMessageView, ChatOutput, StartablePeer};
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        dials: &crate::dial_markers::DialMarkers,
+    ) -> super::output::ChatOutput {
+        use super::output::{ChatMessageView, ChatOutput, ParticipantReach, StartablePeer};
         let me = self.peer_id.as_str();
         let messages = self
             .load_messages(peers)
@@ -789,11 +793,50 @@ impl ChatModel {
                 })
                 .collect()
         };
+        // Reachability of everyone *else* in the conversation. Unbound means the
+        // self-conversation, whose only participant is us — so this stays empty
+        // and the header paints no chip.
+        //
+        // The kernel read-model is the authority; the in-memory dial marker
+        // contributes only the transient the kernel deliberately does not model
+        // (a dial in flight, or one that gave up before ever connecting), and
+        // only while the kernel is silent. Identical resolution to Peer
+        // Connections — deliberately, so the two windows can never disagree
+        // about the same link.
+        let reachability: Vec<ParticipantReach> = if bound {
+            self.participants
+                .iter()
+                .filter(|p| p.as_str() != me)
+                .map(|p| ParticipantReach {
+                    label: crate::views::display_name(peers, p),
+                    status: crate::peer_liveness::conn_display(
+                        crate::peer_liveness::liveness_of(peers, p),
+                        dials.hint(p),
+                    ),
+                    peer_id: p.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // The reason line, and only when it is the *live* reason: we install no
+        // establisher AND nothing here is currently reachable. `peer_has_webrtc`
+        // answers for the window's own bound peer on both arms — which is the
+        // peer that matters, because `ChatDelivery` dispatches as `self.peer_id`
+        // and that is the id a counterpart came away with from a `meet`.
+        let nothing_reachable = !reachability
+            .iter()
+            .any(|r| r.status == crate::peer_liveness::ConnDisplay::Connected);
+        let no_establisher = bound && nothing_reachable && !peers.peer_has_webrtc(me);
+
         ChatOutput {
             conversation_id: self.conversation_id.clone(),
             messages,
             bound,
             startable,
+            reachability,
+            no_establisher,
         }
     }
 }
@@ -1050,7 +1093,7 @@ mod tests {
         model.send(&peers, "hi");
         flush_writes().await;
 
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.conversation_id, DEFAULT_CONVERSATION);
         assert_eq!(out.messages.len(), 1);
         assert!(out.messages[0].mine, "our own message is flagged mine");
@@ -1094,7 +1137,7 @@ mod tests {
 
         flush_writes().await;
 
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.messages.len(), 2, "both participants' messages appear");
         let mine: Vec<&str> = out
             .messages
@@ -1134,7 +1177,7 @@ mod tests {
         assert!(model.send(&peers, "just me"));
         flush_writes().await;
 
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
         assert_eq!(
             out.messages.len(),
             1,
@@ -1165,7 +1208,7 @@ mod tests {
         peers.dispatch_write(&me, path, entity);
         flush_writes().await;
 
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.messages.len(), 1);
         assert_eq!(
             out.messages[0].author, other,
@@ -1202,7 +1245,7 @@ mod tests {
         }
         flush_writes().await;
 
-        let out = model.render_output(&peers);
+        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.messages.len(), 3, "all three authors' messages appear");
         let mine: Vec<&str> = out
             .messages

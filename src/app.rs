@@ -207,6 +207,24 @@ pub struct EntityApp {
     /// boot provisions from). The watch is also what feeds the Worker-arm cache
     /// mirror for this prefix — without it `read_connectors` is silently empty.
     connectors: crate::connectors::ConnectorRegistry,
+    /// The §6.5 provisioning **this session actually booted with** — captured
+    /// once at construction and never written again.
+    ///
+    /// It is the fixed half of the reload notice: `InitParams.webrtc` is
+    /// Init-only upstream, so a selection made mid-session cannot reach the
+    /// running establisher, and the only way to tell the user their choice is
+    /// pending is to remember what we started with. Read at render against a
+    /// fresh resolve (`provisioning_drifted`).
+    ///
+    /// **Safe as a render input precisely because it never changes** — the trap
+    /// AGENTS records (a render reading in-memory state that mutates without
+    /// dirtying anything) needs a *moving* value. The moving side here is the
+    /// localStorage mirror, and its writers — the connectors prefix and the
+    /// selection path — are both watched by `ConnectorRegistry` and by the Peer
+    /// Connections window itself, so the dirty signal lives on the side that
+    /// actually moves.
+    #[cfg(target_arch = "wasm32")]
+    webrtc_booted: Option<crate::session_config::WebRtcProvisioning>,
     /// Session-lived inspect sink on the system peer feeding the app-tier
     /// access log (`crate::access_log_store`) with local dispatches. Installed
     /// once at boot — app-global, not per-window — so the Access Log window is a
@@ -480,8 +498,9 @@ fn webrtc_enable_guarded(
     if requested && capability.is_none() {
         tracing::warn!(
             context,
-            "webrtc: enable requested but no establisher capability is provisioned \
-             (no ENTITY_WEBRTC_NODE_* on this build) — disabling, fail closed"
+            "webrtc: enable requested but no signaling node is provisioned \
+             (no connector selected, no ?webrtc_node, no ENTITY_WEBRTC_NODE_*) \
+             — disabling, fail closed"
         );
         return false;
     }
@@ -506,11 +525,13 @@ const DEFAULT_WEBRTC_MAX_DEADLINE_MS: u64 = 15_000;
 /// needs no control port. Installed on the shipped Direct/IDB arm — the whole
 /// point of the A-series — where WebRTC was previously unreachable.
 ///
-/// **Fails closed** exactly like [`webrtc_enable_guarded`]: the primary opts in
-/// via [`webrtc_enable_primary_default`], but a request with no provisioned
-/// signaling node disables rather than half-installing. `seed` re-derives the
-/// carrier identity (the peer's own keypair was moved into the builder), the
-/// same "rebuilt from the same seed" the worker host documents.
+/// **Fails closed**: no provisioned signaling node, no establisher. The install
+/// decision itself is [`crate::session_config::webrtc_install_primary`] — a
+/// resolved node *is* the decision, so this installs on any build that knows a
+/// connector (the user's durable selection included), not only on one compiled
+/// with an enable knob. `seed` re-derives the carrier identity (the peer's own
+/// keypair was moved into the builder), the same "rebuilt from the same seed"
+/// the worker host documents.
 #[cfg(target_arch = "wasm32")]
 fn build_direct_webrtc_establisher(
     seed: [u8; 32],
@@ -518,21 +539,28 @@ fn build_direct_webrtc_establisher(
 ) -> Option<std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>> {
     use entity_wasm_worker_proxy::{MainThreadWebRtcEstablisher, VerificationPolicy};
 
-    // Same precedence axis as the Worker path's `primary_enable_requested`: the
-    // URL `?webrtc_enable` decision wins over the build knob. Reading only the
-    // build knob here is the bug the default-mode e2e caught — the harness
-    // enables via URL, so a build-knob-only check never installs the seam.
-    let requested = crate::session_config::webrtc_enable_from_query(&webrtc_url_query())
-        .unwrap_or_else(crate::session_config::webrtc_enable_primary_default);
-    if !requested {
-        return None;
-    }
-    let p = match crate::connectors::resolve_provisioning(&webrtc_url_query()) {
-        Some(p) => p,
-        None => {
-            tracing::warn!(
-                "webrtc: primary enable requested but no establisher capability is \
-                 provisioned — disabling Direct-arm WebRTC, fail closed"
+    // Resolve FIRST, then decide — the decision is a function of what resolved.
+    // (The old order asked a separate enable knob before looking, which is how a
+    // build with a perfectly good connector selected installed nothing.)
+    let resolved = crate::connectors::resolve_provisioning(&webrtc_url_query());
+    let url_override = crate::session_config::webrtc_enable_from_query(&webrtc_url_query());
+    let install = crate::session_config::webrtc_install_primary(resolved.is_some(), url_override);
+    // The two ways not to install, told apart, because they are different
+    // situations for whoever reads the log (D13): nothing to rendezvous through,
+    // versus a node we were explicitly told to ignore.
+    let p = match (install, resolved) {
+        (true, Some(p)) => p,
+        (false, Some(_)) => {
+            tracing::info!(
+                "webrtc: ?webrtc_enable=0 refused the provisioned node — no Direct-arm \
+                 establisher"
+            );
+            return None;
+        }
+        (_, None) => {
+            tracing::info!(
+                "webrtc: no signaling node provisioned (no connector selected, no \
+                 ?webrtc_node, no build knob) — no Direct-arm establisher"
             );
             return None;
         }
@@ -1127,19 +1155,20 @@ impl EntityApp {
             // v11: the explicit per-peer §6.5 opt-in (the *decision*).
             webrtc_enabled,
         };
-        // The WebRTC establisher *capability* — deployment-wide, from the build
-        // knob; shared by every peer this worker hosts.
+        // The WebRTC establisher *capability* — the resolved signaling node
+        // (URL > the user's durable connector selection > build knob), shared by
+        // every peer this worker hosts.
         let webrtc = webrtc_init_config();
-        // Only the PRIMARY peer honors the enable decision — a returning backend
-        // peer must not silently acquire an establisher it never asked for (the
-        // v6 lesson). URL `?webrtc_enable` (dev/showcase) over the build knob,
-        // same precedence as the capability; then guarded against the capability
-        // so a lone enable fails closed loudly rather than failing Init.
-        let primary_enable_requested = crate::session_config::webrtc_enable_from_query(
-            &webrtc_url_query(),
-        )
-        .unwrap_or_else(crate::session_config::webrtc_enable_primary_default);
-        let primary_webrtc_enabled = webrtc_enable_guarded(primary_enable_requested, &webrtc, "primary");
+        // Only the PRIMARY peer installs it. That restraint is the part of the v6
+        // lesson that still holds — a returning backend peer must not silently
+        // acquire an establisher it never asked for — but *whether* the primary
+        // installs is no longer a second knob: a provisioned node is the decision
+        // (`webrtc_install_primary`). Same expression as the Direct arm, so the
+        // two arms cannot disagree about whether this session speaks WebRTC.
+        let primary_webrtc_enabled = crate::session_config::webrtc_install_primary(
+            webrtc.is_some(),
+            crate::session_config::webrtc_enable_from_query(&webrtc_url_query()),
+        );
 
         // PROTOCOL_VERSION=7: `opfs_root: Option<String>`
         // replaced `enable_opfs: bool`. The boot worker hosts the
@@ -1331,6 +1360,14 @@ impl EntityApp {
         // dirty, so the first frame's sync performs the boot load.
         let user_themes = crate::user_themes::UserThemes::new(&peer_manager);
         let connectors = crate::connectors::ConnectorRegistry::new(&peer_manager);
+        // Capture what this session booted with, BEFORE any frame can run —
+        // `ConnectorRegistry::sync` rewrites the mirror from the tree on its
+        // first dirty frame, so asking later would read the live selection and
+        // the two sides of the comparison would be the same value by
+        // construction (a notice that can never fire).
+        #[cfg(target_arch = "wasm32")]
+        let webrtc_booted = crate::connectors::resolve_provisioning_quietly(&webrtc_url_query())
+            .map(|(p, _)| p);
 
         // If running in Tauri, fetch persisted backend peers so they
         // appear in the Peers window on startup (as stopped).
@@ -1524,6 +1561,8 @@ impl EntityApp {
             peer_registry,
             user_themes,
             connectors,
+            #[cfg(target_arch = "wasm32")]
+            webrtc_booted,
             access_log_sink,
             dom,
             pending_backend_peers,
@@ -2358,15 +2397,31 @@ impl EntityApp {
         // With this call below the render it fails deterministically.
         // AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13 §8 F1.
         self.user_themes.sync(&self.peer_manager);
-        // Order-independent, unlike `user_themes.sync` above: nothing in a
-        // render reads this. It refreshes the localStorage mirror that only the
-        // PRE-peer boot path reads, so its consumer is the next reload, not this
-        // frame.
+        // **This order IS load-bearing now** — it was not when this call landed,
+        // and the note that said so was true at the time: the mirror's only
+        // consumer was the next reload's PRE-peer boot path, so nothing in a
+        // render read it. The reload notice changed that. `render` below now
+        // asks the mirror what a reload WOULD resolve, so a sync after it would
+        // compare against a mirror one frame stale and the notice would lag the
+        // click that caused it. Same class as `user_themes.sync` above; keep
+        // both above the render, and check the mechanism before moving either.
         self.connectors.sync(&self.peer_manager);
+
+        // Would a reload change what this session is rendezvousing through?
+        // Computed here, where the app owns the boot-time value, and handed to
+        // the render as a plain fact. Both sides go through the same resolver,
+        // so URL precedence is self-handling (see `provisioning_drifted`).
+        #[cfg(target_arch = "wasm32")]
+        let provisioning_drifted = crate::connectors::provisioning_drifted(
+            self.webrtc_booted.as_ref(),
+            crate::connectors::resolve_provisioning_quietly(&webrtc_url_query())
+                .map(|(p, _)| p)
+                .as_ref(),
+        );
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
-            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt);
+            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt, provisioning_drifted);
         }
         if !actions.is_empty() {
             self.process_actions(actions);
@@ -2600,8 +2655,23 @@ impl EntityApp {
                 | Action::ShellTail { window_id, .. }
                 | Action::ChatSend { window_id, .. }
                 | Action::ChatStartWith { window_id, .. } => {
-                    if let Some(win) = self.window_manager.get_mut(*window_id) {
-                        win.view.handle_action(action, &self.peer_manager);
+                    match self.window_manager.get_mut(*window_id) {
+                        Some(win) => win.view.handle_action(action, &self.peer_manager),
+                        // A dropped action here is a **submitted command that
+                        // vanished** — the user pressed Enter, the DOM closure
+                        // fired, and nothing happened. Silently, because the
+                        // window this action names is gone or was never in the
+                        // manager (a closure captures `ctx.window_id` at render
+                        // time). That is indistinguishable by eye from a frozen
+                        // app, and it cost most of a session's debugging with no
+                        // log line to point at it. D13: say it.
+                        None => tracing::warn!(
+                            window_id = *window_id,
+                            action = ?std::mem::discriminant(action),
+                            open_windows = self.window_manager.open_count(),
+                            "action DROPPED — no such window; a submitted command \
+                             was silently discarded"
+                        ),
                     }
                 }
                 Action::WindowEvent { window_id, .. }

@@ -119,6 +119,7 @@ help:
 	@echo "    e2e-worker  T=<test> UNTIL=<phase> SKIP_BUILD=1 narrow the run"
 	@echo "    e2e-phases  list what T= and UNTIL= accept"
 	@echo "    e2e-webrtc  two-browser §6.5 WebRTC S5 gate (host podman; BUILD=1 rebuilds dist/)"
+	@echo "    e2e-webrtc-nat  NEGATIVE control: isolated networks, media must NOT cross (the ICE gap)"
 	@echo "  desktop (containerized display passthrough — Wayland/X11):"
 	@echo "    tauri-run            run the app; HOST_HOME=1 uses your real \$$HOME,"
 	@echo "                         SHARE_DIR=<dir> shares a host folder over local/files"
@@ -487,6 +488,64 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-chat: PASS"; else echo ">>> e2e-webrtc-chat: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
+# MEET THEN CHAT — the whole product claim: name -> id -> connection -> message.
+# Same infra again, but nothing is handed to the browsers in the URL: they add the
+# signaling node to their own connector registry through the Shell, reload (so
+# provisioning resolves from that choice — InitParams.webrtc is Init-only), both
+# `meet tag <label>`, and chat over the id each one LEARNED. This is the gate that
+# covers the shipped path; e2e-webrtc-chat covers the mechanism with the node, the
+# peer id and `?webrtc_enable=1` all supplied by the harness.
+#
+# GREEN. It was not, for most of a session, and the cause was entirely in the
+# harness: it submitted each Shell command once, immediately after clicking
+# "+ Shell". That click only QUEUES an action — the window is created on the next
+# frame — so the first attempt found no input element and typed nothing, then
+# reported the command as ignored. It read as a post-reload app freeze because the
+# pre-reload Shell had already been opened and typed into. Every interaction now
+# retries until the app visibly responds, waits for the window before typing, and
+# reads the app's own output for confirmation; the spike's docstring has the
+# measured trace and what was ruled out on the way.
+e2e-webrtc-meet:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-meet SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-meet BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-meet: two browsers meet at a name, then chat (host podman)"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet: PASS"; else echo ">>> e2e-webrtc-meet: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+# The NEGATIVE control: the same two browsers, but on ISOLATED networks with no
+# route between them — what "two peers behind different NATs" looks like to the
+# app. Rendezvous still works (both reach the node through the host); the data
+# channel must NOT open, because `resolve_webrtc_provisioning` hardcodes
+# `ice_servers: Vec::new()` and host candidates cannot cross.
+#
+# PASSING MEANS THE CONNECTION FAILED, on purpose. This is the instrument that
+# measures the ICE gap rather than reasoning about it, and it is the standing
+# answer to "e2e-webrtc-meet is green, so we work on the internet" — that gate
+# runs on ONE subnet, where host candidates always work.
+#
+# When ICE servers land (EXTENSION-SIGNALING §4.5.1 reflection endpoints), flip
+# EXPECT_NO_MEDIA off and this same rig becomes the positive NAT-traversal gate.
+e2e-webrtc-nat:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-nat SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-nat BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-nat: NEGATIVE control — two isolated networks, media must NOT cross"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; TOPOLOGY=split EXPECT_NO_MEDIA=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-nat: PASS (discovery works, media does not — the ICE gap, measured)"; \
+	 else echo ">>> e2e-webrtc-nat: FAIL (rc=$$rc) — read the RESULT line above; media crossing is the interesting case"; fi; \
+	 exit $$rc
+
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
 # Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:
 # the `[profile.dev.package.*]` overrides in Cargo.toml (curve25519-dalek,
@@ -825,4 +884,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

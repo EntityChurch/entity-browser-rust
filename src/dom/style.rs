@@ -35,6 +35,35 @@ select optgroup {
     margin-inline-start: 6px;
 }
 
+/* Conversation reachability row — who is here, and can we reach them. The
+   chips themselves come from `components::conn_chip`; these rules only lay
+   the row out, so the status vocabulary stays defined in exactly one place. */
+.chat-reach {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+}
+
+.chat-reach-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.chat-reach-name {
+    font-size: 11px;
+    color: var(--text-dim, #888);
+}
+
+.chat-reach-unknown {
+    font-size: 11px;
+    color: var(--text-faint, #666);
+}
+
+
 .window-manager {
     display: flex;
     width: 100%;

@@ -180,11 +180,13 @@ impl SiteModePosture {
 /// this to the wire type at the `InitParams` boundary (the same "decoupled
 /// serializable shadow, convert at the boundary" split the wire type itself
 /// documents). This is the *capability* — which signaling node the §6.5
-/// establisher rendezvouses through — and is deployment-wide; whether a given
-/// peer actually installs the establisher is a **separate, explicit** per-peer
-/// decision ([`webrtc_enable_primary_default`]), never inferred from this being
-/// present (the v6 Subscribe lesson: a worker-wide "config present" must not
-/// silently enable every peer).
+/// establisher rendezvouses through — and is deployment-wide. **Which peers
+/// install an establisher is still narrower than "everyone":** only the primary
+/// does ([`webrtc_install_primary`]), and an additional peer must ask
+/// explicitly. That is the part of the v6 Subscribe lesson that survives — a
+/// worker-wide "config present" must not silently enable *every* peer. Whether
+/// the primary installs, on the other hand, follows directly from this being
+/// present; see [`webrtc_install_primary`] for why that axis collapsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebRtcProvisioning {
     /// The signaling node's peer-id. Required alongside `node_addr` — the
@@ -508,16 +510,32 @@ pub fn webrtc_provisioning_default() -> Option<WebRtcProvisioning> {
     )
 }
 
-/// Whether the **primary** peer installs the establisher — the explicit
-/// per-peer *decision*, distinct from the capability above and defaulting to
-/// **false**. Set by `ENTITY_WEBRTC_ENABLE_PRIMARY=1`. Never inferred from
-/// [`webrtc_provisioning_default`] being `Some` (the v6 lesson: capability
-/// present must not silently enable a peer). Inert if no capability is
-/// provisioned — the worker-host rejects an enable with no config.
-pub fn webrtc_enable_primary_default() -> bool {
-    option_env!("ENTITY_WEBRTC_ENABLE_PRIMARY")
-        .map(str::trim)
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+/// Whether the **primary** peer installs the §6.5 establisher.
+///
+/// **A provisioned signaling node *is* the decision.** `provisioned` is whether
+/// [`crate::connectors::resolve_provisioning`] yielded a node at all —
+/// URL param, the user's durable connector selection, or the build knob.
+///
+/// This used to be a second, independent axis (`ENTITY_WEBRTC_ENABLE_PRIMARY`
+/// / `?webrtc_enable=1`) that had to be set *as well*, on the v6 reasoning that
+/// "a worker-wide config present must not silently enable every peer". That
+/// reasoning was about a **deployment-wide build knob**, and it stopped
+/// describing reality when the connector registry landed: choosing a connector
+/// in the UI is a user *act*, and there was never a surface to perform the
+/// second half. The result was that every build a user actually runs resolved a
+/// node and then installed nothing — the registry and the naming modes both
+/// reached a connect that could not happen.
+///
+/// So the axes collapse. What survives from v6 is the part that was really
+/// load-bearing: **fail closed** — no node, no establisher, in every branch,
+/// because the worker-host *rejects* an Init that enables with no config.
+///
+/// `url_override` is [`webrtc_enable_from_query`]: `Some(false)` is an explicit
+/// kill switch (a debugging affordance, and the one way to boot a provisioned
+/// deployment with the seam off); `Some(true)` cannot conjure a node it does not
+/// have; `None` — the normal case — follows the provisioning.
+pub fn webrtc_install_primary(provisioned: bool, url_override: Option<bool>) -> bool {
+    provisioned && url_override.unwrap_or(true)
 }
 
 /// Extract a URL query-param value from a raw `location.search` string
@@ -545,10 +563,15 @@ pub fn webrtc_provisioning_from_query(query: &str) -> Option<WebRtcProvisioning>
     )
 }
 
-/// The primary-enable *decision* from a URL query (`?webrtc_enable=1`|`true`,
-/// or bare `?webrtc_enable`). `None` = not named (defer to the build knob).
-/// Kept a separate axis from the node config above even in the URL — the v6
-/// capability-vs-decision split does not relax just because it's a query param.
+/// The primary-install *override* from a URL query (`?webrtc_enable=1`|`true`,
+/// or bare `?webrtc_enable`; `=0`/`=no`/`=false` to refuse). `None` = not named,
+/// which is the normal case and means "follow the provisioning"
+/// ([`webrtc_install_primary`]).
+///
+/// It is no longer a required second half — see [`webrtc_install_primary`] for
+/// why that axis collapsed. It remains as an explicit **off** switch, which is
+/// worth keeping: it is how you boot a provisioned deployment with the seam
+/// disabled to isolate whether a failure is WebRTC's.
 pub fn webrtc_enable_from_query(query: &str) -> Option<bool> {
     query_param(query, "webrtc_enable").map(|v| {
         let v = v.trim();
@@ -1187,16 +1210,40 @@ mod tests {
     #[test]
     fn webrtc_defaults_are_inert_on_a_plain_build() {
         // This suite builds with none of the ENTITY_WEBRTC_* knobs set, so the
-        // default provisioning is absent and the primary does not opt in —
-        // exactly v10. (A knobbed build is exercised by resolve_* above; the
-        // env path is a thin `option_env!` feed with no branching to test.)
+        // default provisioning is absent — exactly v10. (A knobbed build is
+        // exercised by resolve_* above; the env path is a thin `option_env!`
+        // feed with no branching to test.)
         assert!(
             webrtc_provisioning_default().is_none(),
             "no ENTITY_WEBRTC_NODE_* baked → no capability (v10)"
         );
+        // …and with no capability there is nothing to install, whatever the URL
+        // says. This is the whole of what survived the enable axis: fail closed.
+        assert!(!webrtc_install_primary(false, None), "no node → no establisher");
         assert!(
-            !webrtc_enable_primary_default(),
-            "enable is an explicit decision, never on by default"
+            !webrtc_install_primary(false, Some(true)),
+            "?webrtc_enable=1 cannot conjure a node — the worker-host would reject the Init"
+        );
+    }
+
+    #[test]
+    fn a_provisioned_node_is_the_install_decision() {
+        // The bug this encodes: for as long as the install needed a *second*,
+        // build-time-only knob, every build a user actually runs resolved a node
+        // (from their selected connector) and then installed nothing — so the
+        // connector registry and the naming modes both led to a connect that
+        // could not happen. Provisioned now means installed.
+        assert!(
+            webrtc_install_primary(true, None),
+            "a resolved node, nothing said in the URL → install"
+        );
+        assert!(webrtc_install_primary(true, Some(true)), "explicitly on → install");
+        // The one override that survives, and the reason it does: booting a
+        // provisioned deployment with the seam off is how you isolate whether a
+        // failure is WebRTC's.
+        assert!(
+            !webrtc_install_primary(true, Some(false)),
+            "?webrtc_enable=0 refuses a node we do have"
         );
     }
 }

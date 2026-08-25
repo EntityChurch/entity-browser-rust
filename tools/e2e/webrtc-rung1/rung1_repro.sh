@@ -10,6 +10,22 @@ set -euo pipefail
 
 IMG=docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404
 NET=entity-rtc-spike
+# TOPOLOGY=shared (default) — both browsers on ONE bridge, so their host
+#   candidates are mutually routable. This is the positive rig: it proves the
+#   §6.5 mechanism and the shipped meet-then-chat path.
+# TOPOLOGY=split — one ISOLATED network per browser, no route between them, and
+#   the signaling node reachable only through the host. This is the negative
+#   control: it is what "two peers behind different NATs" looks like from the
+#   app's point of view, and it is the instrument that MEASURES the ICE gap
+#   instead of reasoning about it. `resolve_webrtc_provisioning` hardcodes
+#   `ice_servers: Vec::new()`, so there are host candidates and nothing else.
+#
+# The shared rig going green is NOT evidence of internet reachability — the two
+# containers are on one subnet, where host candidates always work. That is the
+# claim this split mode exists to bound.
+TOPOLOGY="${TOPOLOGY:-shared}"
+NET_A=entity-rtc-nat-a
+NET_B=entity-rtc-nat-b
 CORE=../entity-core-rust
 SIG="$CORE/target/debug/entity-signaling-node"
 DISTPORT=8092
@@ -20,6 +36,7 @@ teardown() {
   echo ">> teardown"
   podman rm -f rtc-a rtc-b >/dev/null 2>&1 || true
   podman network rm "$NET" >/dev/null 2>&1 || true
+  podman network rm "$NET_A" "$NET_B" >/dev/null 2>&1 || true
   pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
   pkill -f "http.server $DISTPORT" 2>/dev/null || true
   echo ">> done"
@@ -57,17 +74,56 @@ echo "   this same core-rust checkout. To debug rung-1 under the tolerant"
 echo "   posture, revert Require upstream (one line) and rebuild both."
 echo "──────────────────────────────────────────────────────────────"
 
-echo ">> shared bridge network"
-podman network exists "$NET" || podman network create "$NET" >/dev/null
-
-echo ">> two firefox containers on the bridge (distinct routable IPs)"
-podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET" -p 4446:4444 "$IMG" >/dev/null
-podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET" -p 4447:4444 "$IMG" >/dev/null
+if [ "$TOPOLOGY" = "split" ]; then
+  echo ">> TOPOLOGY=split — one ISOLATED network per browser (the NAT negative control)"
+  podman network exists "$NET_A" || podman network create --opt isolate=true "$NET_A" >/dev/null
+  podman network exists "$NET_B" || podman network create --opt isolate=true "$NET_B" >/dev/null
+  podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET_A" -p 4446:4444 "$IMG" >/dev/null
+  podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET_B" -p 4447:4444 "$IMG" >/dev/null
+else
+  echo ">> shared bridge network"
+  podman network exists "$NET" || podman network create "$NET" >/dev/null
+  echo ">> two firefox containers on the bridge (distinct routable IPs)"
+  podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET" -p 4446:4444 "$IMG" >/dev/null
+  podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET" -p 4447:4444 "$IMG" >/dev/null
+fi
 for p in 4446 4447; do
   for i in $(seq 1 30); do curl -s -m2 localhost:$p/status 2>/dev/null | grep -q '"ready": *true' && break; sleep 1; done
 done
-echo "   rtc-a=$(podman inspect rtc-a --format '{{json .NetworkSettings.Networks}}' | grep -oE '"IPAddress":"[^"]+"' | head -1)"
-echo "   rtc-b=$(podman inspect rtc-b --format '{{json .NetworkSettings.Networks}}' | grep -oE '"IPAddress":"[^"]+"' | head -1)"
+A_IP=$(podman inspect rtc-a --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+B_IP=$(podman inspect rtc-b --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+echo "   rtc-a=$A_IP   rtc-b=$B_IP"
+
+# --- The control has to be controlled ----------------------------------------
+# Assert the topology we THINK we built. A split rig whose isolation silently
+# failed is worse than no rig: it would "prove" host candidates traverse NATs.
+# So probe the actual path A->B and fail loudly if it disagrees with TOPOLOGY.
+# (Shared is probed too — if the bridge ever stopped being mutually routable,
+# every green run of the positive gate would have been measuring nothing.)
+probe_a_to_b() {
+  podman exec rtc-a timeout 8 curl -s -m 5 -o /dev/null -w '%{http_code}' \
+    "http://$B_IP:4444/status" 2>/dev/null || true
+}
+echo ">> probing the A->B path (the rig's own control)"
+PROBE=$(probe_a_to_b)
+if [ "$TOPOLOGY" = "split" ]; then
+  if [ "$PROBE" = "200" ]; then
+    echo "!! ISOLATION LEAKED: rtc-a reached rtc-b at $B_IP (HTTP 200)."
+    echo "   The split rig would measure nothing — a media path exists that a"
+    echo "   NAT'd pair would not have. Check 'podman network inspect $NET_A'"
+    echo "   for isolate=true, and that no other network joins both containers."
+    exit 1
+  fi
+  echo "   A->B blocked (curl said '${PROBE:-timeout}') — no direct path, as required"
+else
+  if [ "$PROBE" != "200" ]; then
+    echo "!! rtc-a could NOT reach rtc-b at $B_IP on the shared bridge (got '${PROBE:-timeout}')."
+    echo "   The positive rig assumes mutually routable host candidates; without"
+    echo "   that this run proves nothing about the §6.5 mechanism."
+    exit 1
+  fi
+  echo "   A->B reachable (200) — host candidates are mutually routable, as required"
+fi
 
 echo ">> signaling node (debug) on :$WSPORT"
 pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
@@ -139,7 +195,26 @@ MAX_DEPOSITS=$(echo "$NODELOG" | grep "signaling offer: deposit" \
   | sort | uniq -c | awk '{print $1}' | sort -rn | head -1)
 MAX_DEPOSITS="${MAX_DEPOSITS:-0}"
 echo "   -- §11.5 deposit bound: max ${MAX_DEPOSITS}/side (O(1) bound ${SIG_DEPOSIT_BOUND}) --"
-if [ "$MAX_DEPOSITS" -gt "$SIG_DEPOSIT_BOUND" ]; then
+if [ "$TOPOLOGY" = "split" ]; then
+  # NOT APPLIED HERE, and not because it is inconvenient. §11.5's bound is a
+  # property of a **completing** establishment: "one negotiation, not many."
+  # In the split rig establishment can never complete by construction, so the
+  # establisher keeps re-offering for the whole run and the per-(caller,key)
+  # counter accumulates retries across every attempt. Applying a
+  # single-establishment ceiling to an unbounded-retry scenario measures the
+  # length of the run, not single-flight conformance.
+  #
+  # Reported loudly rather than dropped, because the NUMBER is itself a
+  # finding worth routing: a pair that can never connect deposits at this rate
+  # into a shared rendezvous bucket, indefinitely. §11.2 SHOULDs "retry with a
+  # fresh nonce, up to a small bounded count, before abandoning to a fallback";
+  # whether this path honors that — and what a node operator sees when many
+  # such pairs exist — is a real question this rig can now ask.
+  echo "   ⓘ  §11.5 bound NOT applied in split topology (see the note in this"
+  echo "      script): establishment cannot complete, so this counts retries"
+  echo "      over the run, not one establishment. Measured rate is the finding:"
+  echo "      ${MAX_DEPOSITS} deposits/side against a permanently unreachable peer."
+elif [ "$MAX_DEPOSITS" -gt "$SIG_DEPOSIT_BOUND" ]; then
   echo "   ❌ §11.5 FAIL: ${MAX_DEPOSITS} OFFER deposits/side exceeds the O(1) bound"
   echo "      ${SIG_DEPOSIT_BOUND} — establishment is brute-force (obligation-5 single-flight"
   echo "      regression) even though a channel may have opened. See ROUTING-2026-08-06."

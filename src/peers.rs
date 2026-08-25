@@ -1055,6 +1055,20 @@ pub struct Peers {
     /// present in `peer_routes` after construction (invariant relied
     /// on by `primary_sdk`/`primary_sdk_mut`).
     primary_peer_id: String,
+    /// Local peers carrying a §6.5 WebRTC establisher.
+    ///
+    /// Populated from the **install**, not from what was requested — the Worker
+    /// arm reads `WireCaps.webrtc_peers` (v12: derived from the install sites so
+    /// it cannot agree with the request by construction), the Direct arm records
+    /// the peer it actually handed a seam to.
+    ///
+    /// Why the app needs this at all: the establisher is **primary-only**, but
+    /// several surfaces act as the *bound* peer — `meet` announces the bound
+    /// peer's id, `ChatDelivery` binds `self.peer_id`. On a single-peer boot they
+    /// coincide and the distinction is invisible; with a second local peer, a
+    /// meet run from it hands strangers an id that has no way to be connected
+    /// back to, and nothing anywhere says so. [AP22]
+    webrtc_peers: std::collections::HashSet<String>,
 }
 
 impl Peers {
@@ -1096,6 +1110,9 @@ impl Peers {
             sdks: vec![sdk],
             peer_routes: HashMap::new(),
             primary_peer_id,
+            // No seam was passed, so no peer here has one. The one constructor
+            // that installs (`new_direct_idb_with_establish`) records it.
+            webrtc_peers: std::collections::HashSet::new(),
         };
         peers.refresh_routes_for_sdk(0);
         peers
@@ -1141,13 +1158,19 @@ impl Peers {
             std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>,
         >,
     ) -> Result<Self, entity_sdk::SdkError> {
+        let installed = live_establish.is_some();
         let pm = entity_sdk::PeerManager::with_keypair_idb_and_establish(
             keypair,
             db_name,
             live_establish,
         )
         .await?;
-        Ok(Self::new_direct_with_sdk(Sdk::Direct(pm)))
+        let mut peers = Self::new_direct_with_sdk(Sdk::Direct(pm));
+        if installed {
+            let primary = peers.primary_peer_id.clone();
+            peers.webrtc_peers.insert(primary);
+        }
+        Ok(peers)
     }
 
     /// Worker-mode constructor. Wraps an already-spawned WorkerPeerStore
@@ -1155,10 +1178,19 @@ impl Peers {
     #[cfg(target_arch = "wasm32")]
     pub fn new_worker(store: WorkerPeerStore) -> Self {
         let primary_peer_id = store.primary_peer_id().to_string();
+        // v12's install report, read once at construction: the worker tells us
+        // which peers actually got an establisher, derived from the install
+        // sites rather than recomputed from the request.
+        let webrtc_peers = store
+            .proxy_handle()
+            .capabilities()
+            .map(|c| c.webrtc_peers.into_iter().collect())
+            .unwrap_or_default();
         let mut peers = Self {
             sdks: vec![Sdk::Worker(store)],
             peer_routes: HashMap::new(),
             primary_peer_id,
+            webrtc_peers,
         };
         peers.refresh_routes_for_sdk(0);
         peers
@@ -1287,6 +1319,38 @@ impl Peers {
 
     pub fn primary_peer_id(&self) -> &str {
         &self.primary_peer_id
+    }
+
+    /// Does `peer_id` carry a §6.5 WebRTC establisher?
+    ///
+    /// **What this answers is "can a stranger connect *back* to this peer".** A
+    /// browser peer has no dialable address — its route is WebRTC established at
+    /// dispatch time — so without an establisher it can be *introduced* (a meet
+    /// works; it is an ordinary WebSocket call to the node) and then never
+    /// reached. That asymmetry is the trap: the discovery half succeeds
+    /// completely and the connect half cannot even be attempted.
+    ///
+    /// The establisher is **primary-only** by deliberate policy (an additional
+    /// peer must ask explicitly — the v6 lesson), while `meet` announces the
+    /// *bound* peer. Any surface that hands this peer's id to a counterpart, or
+    /// depends on a counterpart reaching it, should check this and say so rather
+    /// than let the failure land on the stranger's side, invisibly, later.
+    ///
+    /// Native builds have no WebRTC at all, so this is always `false` there —
+    /// which is correct, not a gap: a native peer is reached by its address.
+    pub fn peer_has_webrtc(&self, peer_id: &str) -> bool {
+        self.webrtc_peers.contains(peer_id)
+    }
+
+    /// Pretend `peer_id` got an establisher — tests only.
+    ///
+    /// Native has no WebRTC, so without this a test can only ever observe the
+    /// "no establisher" branch, and a guard that fires unconditionally would
+    /// look identical to a correct one. This is what lets the proof assert
+    /// *both* directions.
+    #[cfg(test)]
+    pub(crate) fn mark_webrtc_peer_for_test(&mut self, peer_id: &str) {
+        self.webrtc_peers.insert(peer_id.to_string());
     }
 
     /// The **system peer** — the single peer that owns all global, app-wide
@@ -3650,7 +3714,7 @@ mod memory_transport_tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // (5) B's union view now contains A's message, flagged not-mine.
-        let out = model_b.render_output(&peers_b);
+        let out = model_b.render_output(&peers_b, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.messages.len(), 1, "exactly A's one message crossed");
         assert_eq!(out.messages[0].body, "hello from A");
         assert!(
@@ -3714,7 +3778,7 @@ mod memory_transport_tests {
         }
         assert!(crossed, "ChatDelivery must deliver A's message into B's store");
 
-        let out = model_b.render_output(&peers_b);
+        let out = model_b.render_output(&peers_b, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.messages.len(), 1);
         assert_eq!(out.messages[0].body, "delivered by the service");
         assert!(!out.messages[0].mine, "authored by A → not-mine in B's view");
@@ -3764,7 +3828,7 @@ mod memory_transport_tests {
             }
         }
         assert!(crossed, "poll-only delivery must land A's message in B's store");
-        let out = model_b.render_output(&peers_b);
+        let out = model_b.render_output(&peers_b, &crate::dial_markers::DialMarkers::new());
         assert_eq!(out.messages[0].body, "polled across the wire");
         assert!(!out.messages[0].mine);
 
@@ -3823,7 +3887,7 @@ mod memory_transport_tests {
             win_a.tick(&peers_a);
             win_b.tick(&peers_b);
             if win_b
-                .render_output(&peers_b)
+                .render_output(&peers_b, &crate::dial_markers::DialMarkers::new())
                 .messages
                 .iter()
                 .any(|m| m.body == "hi B, it's A")
@@ -3833,7 +3897,7 @@ mod memory_transport_tests {
             }
         }
         assert!(saw_on_b, "A's message must reach B's window");
-        let out_b = win_b.render_output(&peers_b);
+        let out_b = win_b.render_output(&peers_b, &crate::dial_markers::DialMarkers::new());
         let a_msg = out_b
             .messages
             .iter()
@@ -3857,7 +3921,7 @@ mod memory_transport_tests {
             win_a.tick(&peers_a);
             win_b.tick(&peers_b);
             if win_a
-                .render_output(&peers_a)
+                .render_output(&peers_a, &crate::dial_markers::DialMarkers::new())
                 .messages
                 .iter()
                 .any(|m| m.body == "got it, A — B here")
@@ -3867,7 +3931,7 @@ mod memory_transport_tests {
             }
         }
         assert!(saw_on_a, "B's reply must reach A's window");
-        let out_a = win_a.render_output(&peers_a);
+        let out_a = win_a.render_output(&peers_a, &crate::dial_markers::DialMarkers::new());
         assert!(
             out_a.messages.iter().any(|m| m.body == "hi B, it's A" && m.mine),
             "A's own message stays mine in A's window"
@@ -3878,6 +3942,217 @@ mod memory_transport_tests {
             .find(|m| m.body == "got it, A — B here")
             .expect("B's reply in A's window");
         assert!(!b_reply.mine, "B's reply is not-mine in A's window");
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// File Transfer can tell "offline" from "not tried yet".
+    ///
+    /// The defect: `classify_target_access` deliberately skips transport errors
+    /// (never manufacture a denial from silence — a correct rule, and itself a
+    /// past bug fix), so an unreachable target fell through to
+    /// `TargetAccess::Unknown`, whose whole meaning is *"nothing tried yet — do
+    /// not alarm"*. A device that could not be reached at all was therefore
+    /// pixel-identical to one you had simply never used.
+    ///
+    /// Both peers below are **remembered** — the registry means "connected at
+    /// least once", never "up now" — so the target list cannot tell them apart
+    /// either. The reachability axis is the only thing that can, which is the
+    /// whole point of adding it rather than folding it into `access`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn file_transfer_distinguishes_an_unreachable_target_from_an_untried_one() {
+        use crate::views::file_transfer::model::FileTransferModel;
+        use crate::views::file_transfer::output::TargetAccess;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (_peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        peers_a
+            .connect_peer(&pid_a, format!("memory://{pid_b}"))
+            .await
+            .expect("A connects to B");
+
+        // Remember BOTH: B, which is genuinely up, and a peer that has never
+        // existed. Identical registry rows — that is the premise.
+        let ghost = "2KghostPeerRememberedButNeverReachabezzzzzzzzz";
+        let writer = crate::connections::ConnectionsWriter::new(&peers_a);
+        writer.add(&pid_b);
+        writer.add(ghost);
+        for _ in 0..40 {
+            if crate::connections::read_connections(&peers_a).len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let dials = crate::dial_markers::DialMarkers::new();
+        let model = FileTransferModel::new(1, pid_a.clone());
+
+        // Select the live peer: reachable, and the kernel says so.
+        model.select_target(&pid_b);
+        let mut live_ok = false;
+        for _ in 0..40 {
+            let out = model.render_output(&peers_a, &dials);
+            if out.target_reach == crate::peer_liveness::ConnDisplay::Connected {
+                live_ok = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let out = model.render_output(&peers_a, &dials);
+        assert!(
+            live_ok,
+            "a genuinely connected target must read Connected, got {:?}",
+            out.target_reach
+        );
+
+        // Select the ghost: same kind of registry row, but nothing can reach it.
+        model.select_target(ghost);
+        let out = model.render_output(&peers_a, &dials);
+        assert!(out.has_target, "the ghost is still a remembered, selectable target");
+        assert_ne!(
+            out.target_reach,
+            crate::peer_liveness::ConnDisplay::Connected,
+            "nothing has ever reached this peer — it must not read Connected"
+        );
+        // The axis that was already there stays put and stays honest: no
+        // operation was refused, so authorization is genuinely unknown. If the
+        // fix had been "infer a denial from the transport error" this would be
+        // Denied, and the app would be accusing a peer of refusing us when it
+        // simply is not there.
+        assert_eq!(
+            out.access,
+            TargetAccess::Unknown,
+            "reachability must not contaminate the authorization axis"
+        );
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// The Chat header tells the truth about reachability — the regression gate
+    /// for "a failed delivery was a `tracing::warn!` and nothing else".
+    ///
+    /// Three branches, because the surface has two independent decisions and a
+    /// one-sided test would pass over either being stuck on:
+    ///
+    /// 1. **Bound + genuinely connected** — one row, for the *other* peer only,
+    ///    reading `Connected` from the kernel read-model. Never a row for
+    ///    ourselves: "am I reachable from here" is not a thing to paint.
+    /// 2. **Bound + unreachable + no establisher** — the reason line fires. This
+    ///    is the state the whole feature exists for.
+    /// 3. **Bound + unreachable + we DO have an establisher** — no reason line,
+    ///    because it would be a wrong diagnosis. Native has no WebRTC at all, so
+    ///    without this branch a guard stuck permanently on would still pass.
+    ///
+    /// Branch 1 doubles as the relevance check on the reason line: `peers` has
+    /// no establisher there either (native never does), so a `no_establisher`
+    /// that ignored "is anything actually reachable" would fire next to a
+    /// working conversation — the standing-warning shape users learn to ignore.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_chat_header_says_whether_the_other_participant_is_reachable() {
+        use crate::views::chat::ChatWindow;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        peers_a
+            .connect_peer(&pid_a, format!("memory://{pid_b}"))
+            .await
+            .expect("A connects to B");
+        peers_b
+            .connect_peer(&pid_b, format!("memory://{pid_a}"))
+            .await
+            .expect("B connects to A");
+
+        let dials = crate::dial_markers::DialMarkers::new();
+
+        // An UNBOUND window is about nobody — no rows, and no reason line, or
+        // the default self-conversation would paint a status for a relationship
+        // the user never created.
+        let unbound = ChatWindow::new(1, pid_a.clone());
+        let out = unbound.render_output(&peers_a, &dials);
+        assert!(!out.bound);
+        assert!(out.reachability.is_empty(), "unbound chat has nobody to reach");
+        assert!(!out.no_establisher, "no reason line without a conversation");
+
+        // (1) Bound to a peer we really are connected to. The kernel writes
+        // `system/peer/status` on handshake, so this is the read-model's own
+        // answer, not something the window inferred from its own dial.
+        let mut win_a = ChatWindow::new(1, pid_a.clone());
+        win_a.bind_and_subscribe(&peers_a, &pid_b).await;
+        let mut connected = false;
+        for _ in 0..40 {
+            let out = win_a.render_output(&peers_a, &dials);
+            if out.reachability.iter().any(|r| {
+                r.status == crate::peer_liveness::ConnDisplay::Connected
+            }) {
+                connected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let out = win_a.render_output(&peers_a, &dials);
+        assert!(
+            connected,
+            "a live 1:1 must read Connected from the kernel read-model, got {:?}",
+            out.reachability.iter().map(|r| r.status).collect::<Vec<_>>()
+        );
+        assert_eq!(out.reachability.len(), 1, "exactly the other participant");
+        assert_eq!(out.reachability[0].peer_id, pid_b);
+        assert!(
+            !out.reachability.iter().any(|r| r.peer_id == pid_a),
+            "never a row for ourselves"
+        );
+        assert!(
+            !out.no_establisher,
+            "no reason line next to a working conversation — this peer has no \
+             establisher either (native never does), so firing here would make \
+             the warning permanent noise"
+        );
+
+        // (2) Bound to a peer nothing can reach, with no establisher: the reason
+        // line is the only thing that explains the silence.
+        let unreachable = "2KnobodyHomeAtThisPeerdForTheReachabiityGatezz";
+        let mut win_dark = ChatWindow::new(2, pid_a.clone());
+        win_dark.bind_and_subscribe(&peers_a, unreachable).await;
+        let out = win_dark.render_output(&peers_a, &dials);
+        assert_eq!(out.reachability.len(), 1);
+        assert_ne!(
+            out.reachability[0].status,
+            crate::peer_liveness::ConnDisplay::Connected,
+            "nothing was ever connected to this id"
+        );
+        assert!(
+            out.no_establisher,
+            "unreachable + no establisher is exactly the state that needs saying"
+        );
+
+        // (3) Same unreachable conversation, but this peer DOES install an
+        // establisher — so a counterpart could reach back and the missing
+        // establisher is not the diagnosis. Kill this branch and a guard wired
+        // permanently on still passes (2), which is how a useless warning ships.
+        let mut peers_webrtc = Peers::new_direct();
+        let webrtc_pid = peers_webrtc.primary_peer_id().to_string();
+        peers_webrtc.mark_webrtc_peer_for_test(&webrtc_pid);
+        let mut win_ok = ChatWindow::new(3, webrtc_pid.clone());
+        win_ok.bind_and_subscribe(&peers_webrtc, unreachable).await;
+        let out = win_ok.render_output(&peers_webrtc, &dials);
+        assert_eq!(out.reachability.len(), 1);
+        assert_ne!(
+            out.reachability[0].status,
+            crate::peer_liveness::ConnDisplay::Connected,
+            "still nothing connected — only the establisher differs"
+        );
+        assert!(
+            !out.no_establisher,
+            "we CAN be reached back, so the missing establisher is not the reason"
+        );
 
         handle_a.abort();
         handle_b.abort();

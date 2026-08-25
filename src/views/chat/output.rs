@@ -15,6 +15,41 @@ pub struct ChatOutput {
     /// Connected peers you can start a 1:1 chat with — populated only while
     /// unbound. Empty + unbound ⇒ show the "connect a peer first" hint.
     pub startable: Vec<StartablePeer>,
+    /// Can we actually reach the people in this conversation? One row per
+    /// **other** participant (never ourselves), in the model's participant
+    /// order. **Empty while unbound** — the default self-conversation has no
+    /// remote, so there is nothing for a connection status to be *about*, and a
+    /// chip there would invent a relationship the user never created.
+    ///
+    /// The status is the kernel read-model resolved through
+    /// [`conn_display`](crate::peer_liveness::conn_display) — the same
+    /// vocabulary and the same authority Peer Connections renders (S4: one
+    /// status, one home). Chat does **not** derive liveness of its own; a
+    /// second opinion here would be the `connection_health` mirror disease in a
+    /// new window.
+    pub reachability: Vec<ParticipantReach>,
+    /// The likely *reason* nothing here is reachable: this window's own peer
+    /// installs no §6.5 WebRTC establisher, so a counterpart met through
+    /// rendezvous can find us but has no way to reach back (AP22 — discovery
+    /// and reachability are independent, and only one of them fails loudly).
+    ///
+    /// Set only when it is both **true and relevant**: the conversation is
+    /// bound, we have no establisher, and no participant is currently
+    /// reachable. An establisher is irrelevant to a peer we already reach over
+    /// a WebSocket, and a standing warning next to a working conversation is
+    /// the kind users learn to ignore.
+    pub no_establisher: bool,
+}
+
+/// One other participant's reachability, as the header paints it.
+pub struct ParticipantReach {
+    #[allow(dead_code)] // the renderer paints `label`; the id is for tests/logs
+    pub peer_id: String,
+    /// Display label (`views::display_name`) — never the raw id.
+    pub label: String,
+    /// Kernel-authoritative status, dial-hint layered in only where the kernel
+    /// is silent. `Unknown` renders as a quiet dash, never a guess.
+    pub status: crate::peer_liveness::ConnDisplay,
 }
 
 /// A connected peer offered in the start-a-chat picker.

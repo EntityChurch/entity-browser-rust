@@ -56,6 +56,15 @@ pub struct DomCtx {
     /// render. Distinct from it because a manual connect is keyed by the
     /// *address* typed, which has no peer id until the handshake lands.
     pub connect_attempt: crate::connect_attempt::ConnectAttempt,
+    /// Would a reload change the §6.5 signaling node this session rendezvous
+    /// through? A plain fact rather than a handle, because unlike the two above
+    /// it is *derived* per frame (boot-time provisioning vs what a fresh resolve
+    /// would return) and there is no state for a view to poke.
+    ///
+    /// It exists because `InitParams.webrtc` is Init-only upstream: choosing a
+    /// connector mid-session cannot reach the running establisher, so the choice
+    /// is pending until reload and the UI has to say so.
+    pub provisioning_drifted: bool,
 }
 
 impl DomCtx {

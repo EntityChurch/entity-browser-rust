@@ -158,6 +158,58 @@ fn render_header(parent: &Element, output: &ChatOutput) {
         &crate::i18n::t("chat.conversation", &[("id", &output.conversation_id)]),
     );
     util::append(parent, &header);
+
+    render_reachability(parent, output);
+}
+
+/// Who is in this conversation and whether we can actually reach them — one
+/// chip per other participant, in the app's single connection vocabulary (S4).
+///
+/// Nothing is painted for an unbound window: the self-conversation has no
+/// remote, so a chip there would be a status about nobody.
+fn render_reachability(parent: &Element, output: &ChatOutput) {
+    if output.reachability.is_empty() && !output.no_establisher {
+        return;
+    }
+
+    let row = util::create_element_with_class("div", "chat-reach");
+    row.set_attribute("data-field", "chat-reachability").ok();
+
+    for who in &output.reachability {
+        let cell = util::create_element_with_class("span", "chat-reach-cell");
+
+        let name = util::create_element_with_class("span", "chat-reach-name");
+        util::set_text(&name, &who.label);
+        util::append(&cell, &name);
+
+        // `Unknown` has no chip by design — paired, but no current signal. A
+        // quiet dash is the honest paint; "Connecting" would be a guess and
+        // "Offline" would be a claim the kernel never made.
+        match crate::dom::components::ConnState::from_display(who.status) {
+            Some(state) => {
+                util::append(&cell, &crate::dom::components::conn_chip(state));
+            }
+            None => {
+                let dash = util::create_element_with_class("span", "chat-reach-unknown");
+                util::set_text(&dash, "\u{2014}"); // — i18n-ignore — punctuation, not prose
+                util::append(&cell, &dash);
+            }
+        }
+
+        util::append(&row, &cell);
+    }
+
+    // The reason, when we have one. Deliberately a note and not a refusal: the
+    // conversation is legitimate and messages still queue — it is the silence
+    // about *why* nothing arrives that was the defect.
+    if output.no_establisher {
+        util::append(
+            &row,
+            &crate::dom::components::notice(&crate::i18n::t("chat.no_establisher", &[])),
+        );
+    }
+
+    util::append(parent, &row);
 }
 
 fn render_messages(parent: &Element, output: &ChatOutput) {

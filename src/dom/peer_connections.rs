@@ -700,6 +700,17 @@ fn render_connectors(parent: &Element, output: &PeerConnectionsOutput, ctx: &Dom
     // The outcome of the last Check (or a refused Add/Use). Without it, asking a
     // node what it serves and showing nothing is the dead-button disease Phase
     // 14.5 exists to catch.
+    // The selection is durable the moment it is clicked, but the establisher
+    // reads it only at Init (`InitParams.webrtc` is Init-only upstream), so the
+    // choice is real and not yet in effect. Saying nothing here is what made
+    // "I selected it and meet still fails" the expected first experience.
+    if output.connector_reload_pending {
+        util::append(
+            &card,
+            &components::notice(&crate::i18n::t("peerconn.connector_reload_pending", &[])),
+        );
+    }
+
     if let Some(notice) = &output.connector_notice {
         let el = if notice.is_error {
             components::error(&notice.text)
