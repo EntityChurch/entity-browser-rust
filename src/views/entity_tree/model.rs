@@ -288,9 +288,12 @@ impl EntityTreeModel {
             &self.peer_id,
             self.window_id,
         );
-        if peers.get_entity(&self.peer_id, &path).is_none() {
-            peers.dispatch_write(&self.peer_id, path, EntityTreeState::default().to_entity());
-        }
+        peers.seed_state_if_absent(
+            &self.peer_id,
+            path,
+            EntityTreeState::default().to_entity(),
+            "entity_tree",
+        );
     }
 
     fn read_window_state(&self, peers: &Peers) -> EntityTreeState {

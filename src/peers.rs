@@ -1424,6 +1424,54 @@ impl Peers {
         }
     }
 
+    /// Clobber-safe "seed the default if nothing is durably present" — the
+    /// app-tier convenience over [`Self::put_if_absent`] that hides the
+    /// arm/cfg split every window model's `ensure_state_in_tree` needs.
+    ///
+    /// Native (Direct-only): the in-process store is authoritative and the
+    /// sync `initialize` → `read_state` sequence (and the tests) expect the
+    /// seed dispatched synchronously, so a `get_entity` miss dispatches the
+    /// default in-line.
+    ///
+    /// Wasm: BOTH arms route through the durable `put_if_absent` future. The
+    /// Worker cache mirror can be **cold at window create**, so a `get_entity`
+    /// miss is NOT absence — the old sync get-then-`dispatch_write` re-seeded
+    /// the default over persisted state (the Settings clobber caught by e2e
+    /// Phase 26.8; `SettingsModel::ensure_state` is the twin of this). The
+    /// seed is fire-and-forget; a following `read_state` legitimately reads
+    /// the default until the durable value round-trips through the
+    /// subscription. `label` names the surface in the D13 log line — a
+    /// `seeded=true` on a profile that should already have state is the
+    /// clobber signature.
+    pub fn seed_state_if_absent(
+        &self,
+        peer_id: &str,
+        path: impl Into<String>,
+        default: Entity,
+        label: &'static str,
+    ) {
+        let path = path.into();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = label;
+            if self.get_entity(peer_id, &path).is_none() {
+                self.dispatch_write(peer_id, path, default);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let fut = self.put_if_absent(peer_id, path, default, 5_000);
+            wasm_bindgen_futures::spawn_local(async move {
+                match fut.await {
+                    Ok(seeded) => tracing::info!(seeded, surface = label, "seed_state_if_absent"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, surface = label, "seed_state_if_absent failed")
+                    }
+                }
+            });
+        }
+    }
+
     // ---- Subscriptions ----------------------------------------------
 
     pub fn watch_prefix(
