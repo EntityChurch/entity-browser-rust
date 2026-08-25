@@ -41,9 +41,29 @@ bash tools/e2e/webrtc-rung1/rung1_repro.sh            # set up everything + driv
 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown   # remove containers + network + host procs
 ```
 
-It creates the bridge network, two firefox containers (`:4446`/`:4447`), a host-run
-`entity-signaling-node`, a host dist server on `:8092`, then runs the drive and prints the per-`collect`
-`included_count` from the node log.
+It runs a **build-skew preflight** (asserts `dist/`, rebuilds `entity-signaling-node` from the current
+`entity-core-rust` HEAD, prints that SHA), then creates the bridge network, two firefox containers
+(`:4446`/`:4447`), a host dist server on `:8092`, launches the node, runs the drive, and prints the
+per-`collect` `included_count` from the node log. `SKIP_NODE_BUILD=1` reuses an existing node binary.
+
+### Build skew is now load-bearing (§6.5 is Require)
+
+core-rust raised §6.5 to **Require** (`007e078`): the browser leg **refuses** SDP that has not passed
+§6.3 signature verification. So a `VerificationUnavailable` on our leg means **mixed builds, not a NAT
+problem**. The two browser peers can't skew — both load one host-served `dist/`, identical by
+construction — but the **signaling node is a separately-built binary**: a stale
+`target/debug/entity-signaling-node` against a fresh `dist/` (or vice versa) is exactly that §6.3/§6.5
+mismatch, and it reads as "ICE failed." The preflight pins both to the same core-rust HEAD; keep them
+there. To debug rung-1 under the tolerant posture, revert Require upstream (one line) and rebuild both.
+
+### Seeing worker-side WebRTC logs
+
+The §6.5 establisher runs in the **worker**, whose console is a separate realm the main-thread capture
+(`window.__entity_browser_log`) never saw — so a worker-only failure read as a silent stall. Worker
+lines (incl. the seam-guard `warn!` and any `VerificationUnavailable`) are now **forwarded** to that
+buffer over a same-origin `BroadcastChannel` (`assets/entity-worker-loader.js` posts, `index.html`
+drains), tagged `source:"worker"`. `spike_rung1_integration.py`'s `grep_log` and `diag_webrtc_log.py`
+pick them up unchanged — the eventual loud-red is a readable line, not a worker-side black box.
 
 ## Files
 

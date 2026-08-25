@@ -144,7 +144,7 @@ def grep_log(base, sid, needles):
     for l in lines:
         for n in needles:
             if n.lower() in l.lower():
-                hits[n].append(l[:300])
+                hits[n].append(l[:1300])
     return hits, len(lines)
 
 def main():
@@ -198,6 +198,47 @@ def main():
                 print(f"  both settled at t={(i+1)*0.5:.0f}s"); break
         print("\n===== A scrollback tail =====\n", a_tail[:1500])
         print("\n===== B scrollback tail =====\n", b_tail[:1500])
+
+        # --- PEER VANTAGE: the §6.5 lines the establisher now emits (485e269),
+        #     forwarded worker→main by the BroadcastChannel. The derived pair
+        #     rendezvous key (debug!, on because we boot with log=trace) matches
+        #     byte-for-byte against the node's line; the failure warn! names
+        #     WHICH failure (VerificationUnavailable=mixed build, IdentitySkew,
+        #     Timeout=unshared-bucket-or-absent-peer). Grep AFTER the drive —
+        #     establish_live() runs during the exec, not at boot. ---
+        # The §6.5 negotiation band (worker-realm, forwarded). Since core-rust's
+        # 40294ed the Timeout warn carries the TERMINAL STATE (role / sdp_exchange
+        # / channel wait) instead of a guess, and a per-tick `trace!` fires every
+        # poll — so the LAST "negotiation tick" a peer logs, with offered/answered/
+        # counterpart_msgs, says where it stalled. (Note: "data channel did not
+        # open within Nms" is NOT a log line — it is a value returned across the
+        # worker boundary and dropped by `if let Ok(channel) = io.wait_open(..)`;
+        # our earlier grep for it was futile, per core-rust. Read the tick trace +
+        # the Timeout Display instead.)
+        needles = ["§6.5", "rendezvous_key", "derived pair", "VerificationUnavailable",
+                   "IdentitySkew", "MIXED BUILD", "no live path",
+                   "negotiation window closed", "negotiation tick",
+                   "sdp_exchange", "channel wait", "role=",
+                   # 3dcd484 instruments — the branch pickers:
+                   #   fed=0            → core-rust's candidates_for (trickle drop)
+                   #   fed>0, ice=New   → candidates never reached the agent
+                   #   fed>0, ice=Failed→ pairs tried, none worked (connectivity/timing)
+                   #   ice=Connected    → trickle fine; DTLS/SCTP (and the control's
+                   #                      non-trickle/one-shot gap was what mattered)
+                   "candidates posted", "posted=", "fed=", "ice=", "conn="]
+        for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+            hits, n = grep_log(base, sid, needles)
+            printed = [(k, v) for k, v in hits.items() if v]
+            print(f"\n[{lbl}] §6.5 establisher lines ({n} log lines total):")
+            if not printed:
+                print("     (none — establish_live never derived a key on this peer;"
+                      " check boot/provisioning above)")
+            for k, v in printed:
+                # For the per-tick trace the LAST ticks show where it stalled;
+                # for one-shot warns the first hit is the whole story.
+                show = v[-4:] if k == "negotiation tick" else v[:3]
+                for line in show:
+                    print(f"   {k}:", line)
         ok = ("no transport profile" not in a_tail and "no transport profile" not in b_tail
               and (settle(a_tail) or settle(b_tail)))
         print("\nRESULT:", "PASS ✅ real cross-peer round-trip" if ok else "FAIL ❌ (see tails + signaling log)")

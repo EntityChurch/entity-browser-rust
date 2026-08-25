@@ -19,6 +19,45 @@
 // fn worker_main` ran and `install_onmessage` set `self.onmessage`),
 // drain the buffer through that handler.
 
+// Worker→main log forwarding. The worker runs in its OWN JS realm with its own
+// console; `tracing_wasm` (entity-worker.rs) writes every worker-side
+// `tracing::*` line through `web_sys::console::*`, and this loader emits its
+// own `[entity-worker]` diagnostics — all to the WORKER console. The
+// main-thread capture in index.html only wraps the MAIN realm's console, so
+// none of it reaches `window.__entity_browser_log`. That buffer is what the
+// e2e (`tests/e2e_worker.rs`) and the rung-1 spike grep, which is why a
+// worker-only failure — the §6.5 WebRTC establisher, the seam-guard `warn!`,
+// a VerificationUnavailable under a mixed build — reads as a silent stall.
+//
+// Mirror the main-thread capture here: wrap the worker console and post each
+// line over a same-origin `BroadcastChannel`; index.html drains it into the
+// shared buffer (entries carry `source:'worker'` to stay distinguishable and
+// greppable). Installed FIRST so this loader's own diagnostics forward too.
+// Best-effort — if `BroadcastChannel` is unavailable the worker still logs to
+// its own console. (Caveat: BroadcastChannel is origin-wide, so with multiple
+// same-origin tabs open a worker's lines fan out to every tab's buffer — a
+// diagnostics-only quirk, irrelevant to the one-tab-per-container rung-1 rig.)
+(function () {
+    let chan;
+    try { chan = new BroadcastChannel('entity-browser-log'); } catch (_) { return; }
+    const levels = ['log', 'info', 'warn', 'error', 'debug'];
+    for (const lvl of levels) {
+        const orig = console[lvl].bind(console);
+        console[lvl] = function (...args) {
+            try {
+                const safe = args.map((a) => {
+                    if (a === undefined) return 'undefined';
+                    if (a === null) return 'null';
+                    if (typeof a === 'string') return a;
+                    try { return JSON.stringify(a); } catch { return String(a); }
+                });
+                chan.postMessage({ level: lvl, args: safe, source: 'worker' });
+            } catch (_) { /* never let logging break the worker */ }
+            orig(...args);
+        };
+    }
+})();
+
 // `performance.now()` is the wall-clock time since navigation start
 // (worker contexts have their own clock origin per spec, but the delta
 // across `t0` is what we care about). Use to attribute the boot delay:
