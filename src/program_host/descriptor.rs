@@ -11,11 +11,20 @@ use ciborium::Value;
 /// Descriptor entity type.
 pub const INTERFACE_TYPE: &str = "app/program/interface";
 /// Pinned well-known descriptor leaf under a program root.
+#[allow(dead_code)] // descriptor-ABI constant; bundles carry an explicit descriptor_path, so the leaf is spec surface, uncalled here
 pub const DESCRIPTOR_LEAF: &str = "/interface";
 
 /// Port roles (hints; `shape` is the driver selector).
 pub const ROLE_DISPLAY: &str = "display";
+#[allow(dead_code)] // role-ABI constant (the input-port hint); the driver selects on shape, so this is spec surface
 pub const ROLE_INPUT: &str = "input";
+
+/// Well-known name of a program's one-line **status** readout port (shape
+/// `text`, role `display`) — the program-owned score/state line the host relays
+/// blind (RESPONSE-PROGRAM-CHROME-STATUS-AND-RESET). It shares the `display`
+/// role with the main display port, so the two are told apart by NAME, not role:
+/// the host never learns what a "score" is, only which port to caption.
+pub const STATUS_PORT_NAME: &str = "status";
 
 /// Shapes (driver-binding discriminants).
 pub const SHAPE_TEXT: &str = "text";
@@ -200,9 +209,24 @@ impl ProgramDescriptor {
         Ok(())
     }
 
-    /// The output port a display driver binds (role `display`), if any.
+    /// The output port the main display driver binds (role `display`, and NOT
+    /// the status readout), if any. Excluding [`STATUS_PORT_NAME`] by name — not
+    /// by relying on port order — keeps the board and the status line
+    /// distinguishable no matter how the descriptor lists them.
     pub fn display_port(&self) -> Option<&ProgramPort> {
-        self.output_ports.iter().find(|p| p.role == ROLE_DISPLAY)
+        self.output_ports
+            .iter()
+            .find(|p| p.role == ROLE_DISPLAY && p.name != STATUS_PORT_NAME)
+    }
+
+    /// The program-owned one-line status readout port ([`STATUS_PORT_NAME`], shape
+    /// `text`), if the program declares one. A simulation with nothing to report
+    /// simply omits it; the host renders no caption then. The host relays this
+    /// port blind, exactly as it relays the display — it never formats a score.
+    pub fn status_port(&self) -> Option<&ProgramPort> {
+        self.output_ports
+            .iter()
+            .find(|p| p.name == STATUS_PORT_NAME)
     }
 }
 
@@ -306,6 +330,7 @@ pub fn scene_text<'a>(scene: Option<&'a Value>, field: &str) -> Option<&'a str> 
 }
 
 /// A `scene` field as bool.
+#[allow(dead_code)] // scene accessor completing the u64/text/bool set; used by descriptor tests, no bool scene field on the render path yet
 pub fn scene_bool(scene: Option<&Value>, field: &str) -> Option<bool> {
     scene?.as_map()?.iter().find_map(|(k, v)| {
         if k.as_text() == Some(field) {
@@ -354,21 +379,33 @@ mod tests {
     }
 
     #[test]
-    fn life_descriptor_decodes_and_admits_on_text() {
+    fn life_descriptor_decodes_and_admits_on_display_list() {
+        // Life was rebound text → display-list (a filled grid of cell quads) —
+        // RESPONSE-DISPLAY-RENDERING-AND-TEXT-REBIND. In a GUI host `text` is a
+        // `<pre>` terminal; a grid is display-list `render:fill`.
         let d = descriptor_of("life");
         assert_eq!(d.state_path, "app/life/state");
         assert_eq!(d.tick.mode, TICK_CLOCK_DRIVEN);
         assert_eq!(d.tick.rate_hint, 6);
         assert!(d.input_ports.is_empty());
         let disp = d.display_port().expect("display port");
-        assert_eq!(disp.shape, SHAPE_TEXT);
-        assert_eq!(disp.type_ref, "app/shape/text-frame");
+        assert_eq!(disp.shape, SHAPE_DISPLAY_LIST);
         assert!(disp.source.is_some(), "display is a projection");
+        // The filled-grid presentation contract: fill intent + a world bound.
         assert_eq!(
-            crate::program_host::descriptor::scene_u64(disp.scene.as_ref(), "cols"),
+            crate::program_host::descriptor::scene_text(disp.scene.as_ref(), "render"),
+            Some("fill")
+        );
+        assert_eq!(
+            crate::program_host::descriptor::scene_u64(disp.scene.as_ref(), "bounds"),
             Some(16)
         );
-        d.admit(&[SHAPE_TEXT]).expect("admits on text");
+        // Life now binds TWO display shapes: the display-list board AND the
+        // `text` status readout. A host with only one is refused — text-only
+        // can't draw the board, display-list-only can't caption the status.
+        assert!(d.admit(&[SHAPE_TEXT]).is_err());
+        assert!(d.admit(&[SHAPE_DISPLAY_LIST]).is_err());
+        d.admit(&[SHAPE_DISPLAY_LIST, SHAPE_TEXT]).expect("admits with board + status");
     }
 
     #[test]
@@ -377,10 +414,12 @@ mod tests {
         assert_eq!(d.input_ports.len(), 1);
         assert_eq!(d.input_ports[0].shape, SHAPE_DIRECTION);
         assert!(d.input_ports[0].initial.is_some(), "F-E1 seed");
-        // A text-only host refuses Snake, with the shape named.
-        let err = d.admit(&[SHAPE_TEXT]).unwrap_err();
+        // Snake's display is now display-list (rebound from text) plus a `text`
+        // status readout; its input is still direction. A host missing the
+        // direction driver refuses it, with the shape named.
+        let err = d.admit(&[SHAPE_DISPLAY_LIST, SHAPE_TEXT]).unwrap_err();
         assert!(err.contains("direction"), "{err}");
-        d.admit(&[SHAPE_TEXT, SHAPE_DIRECTION]).expect("admits");
+        d.admit(&[SHAPE_DISPLAY_LIST, SHAPE_TEXT, SHAPE_DIRECTION]).expect("admits");
     }
 
     #[test]
@@ -403,5 +442,30 @@ mod tests {
         let d = descriptor_of("asteroids");
         let err = d.admit(&[SHAPE_TEXT, SHAPE_DIRECTION]).unwrap_err();
         assert!(err.contains("key-set") || err.contains("display-list"), "{err}");
+    }
+
+    /// Every POC program declares a program-owned `status` readout (shape
+    /// `text`, RESPONSE-PROGRAM-CHROME-STATUS-AND-RESET) that the host captions
+    /// blind. It shares the `display` role with the board, so `display_port`
+    /// must still return the BOARD and `status_port` the readout — the by-name,
+    /// not by-order, split.
+    #[test]
+    fn programs_declare_a_text_status_port_distinct_from_display() {
+        for key in ["life", "snake", "asteroids"] {
+            let d = descriptor_of(key);
+            let status = d.status_port().unwrap_or_else(|| panic!("{key}: status port"));
+            assert_eq!(status.name, STATUS_PORT_NAME);
+            assert_eq!(status.shape, SHAPE_TEXT, "{key}: status is a text line");
+            assert_eq!(status.type_ref, "app/shape/text-frame", "{key}");
+            assert!(status.source.is_some(), "{key}: status is a projection");
+            // The board is still found, and it is NOT the status port.
+            let disp = d.display_port().unwrap_or_else(|| panic!("{key}: display port"));
+            assert_ne!(disp.name, STATUS_PORT_NAME, "{key}: board != status");
+            assert_eq!(disp.shape, SHAPE_DISPLAY_LIST, "{key}: board is display-list");
+            // The status shape is in the L5 host's supported set, so admission
+            // still passes (text is a driven display shape).
+            d.admit(&[SHAPE_DISPLAY_LIST, SHAPE_TEXT, SHAPE_DIRECTION, SHAPE_KEY_SET])
+                .unwrap_or_else(|e| panic!("{key}: admits with status port: {e}"));
+        }
     }
 }

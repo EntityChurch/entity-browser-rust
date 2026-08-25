@@ -426,6 +426,7 @@
   "btn.collapse": "Comprimi",
   "games.empty": "Nessun gioco ancora disponibile.",
   "apps.empty": "Nessuna app ancora disponibile.",
+  "programs.empty": "Nessun programma ancora disponibile.",
   "sitedir.filter_mine": "Miei",
   "sitedir.filter_all": "Tutti",
   "sitedir.filter_external": "Esterni",
@@ -594,7 +595,7 @@
     "other": "{n} peer"
   },
 
-  "window.programs": "Programmi",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Programmi di calcolo trasferibili — scritti una sola volta (workbench-go), montati dai loro descrittori, valutati dal motore di calcolo di questo peer.",
   "programs.install": "Installa",
   "programs.restart": "Riavvia",

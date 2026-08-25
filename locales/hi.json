@@ -426,6 +426,7 @@
   "btn.collapse": "संक्षिप्त करें",
   "games.empty": "अभी कोई गेम उपलब्ध नहीं है।",
   "apps.empty": "अभी कोई ऐप उपलब्ध नहीं है।",
+  "programs.empty": "अभी कोई प्रोग्राम उपलब्ध नहीं है।",
   "sitedir.filter_mine": "मेरी",
   "sitedir.filter_all": "सभी",
   "sitedir.filter_external": "बाहरी",
@@ -594,7 +595,7 @@
     "other": "{n} पीयर"
   },
 
-  "window.programs": "प्रोग्राम",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "स्थानांतरणीय कंप्यूट प्रोग्राम — एक बार लिखे जाते हैं (workbench-go), अपने डिस्क्रिप्टर से माउंट होते हैं, और इस पीयर का कंप्यूट इंजन इन्हें चलाता है।",
   "programs.install": "इंस्टॉल करें",
   "programs.restart": "फिर से शुरू करें",

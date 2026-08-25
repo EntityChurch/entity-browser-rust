@@ -423,6 +423,7 @@
   "btn.collapse": "ย่อ",
   "games.empty": "ยังไม่มีเกมที่ใช้งานได้",
   "apps.empty": "ยังไม่มีแอปที่ใช้งานได้",
+  "programs.empty": "ยังไม่มีโปรแกรมที่ใช้งานได้",
   "sitedir.filter_mine": "ของฉัน",
   "sitedir.filter_all": "ทั้งหมด",
   "sitedir.filter_external": "ภายนอก",
@@ -587,7 +588,7 @@
     "other": "{n} เพียร์"
   },
 
-  "window.programs": "โปรแกรม",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "โปรแกรมประมวลผลแบบพกพา — เขียนครั้งเดียว (workbench-go) เมานต์จากตัวบรรยาย และประเมินโดยเอนจินประมวลผลของเพียร์นี้",
   "programs.install": "ติดตั้ง",
   "programs.restart": "เริ่มใหม่",

@@ -19,8 +19,10 @@
 //! peer fetch.
 
 pub mod bundle;
+pub mod controls;
 pub mod descriptor;
 pub mod host;
+pub mod input;
 pub mod shapes;
 
 #[cfg(test)]

@@ -270,7 +270,7 @@ impl SiteEditorModel {
         inner.cursor = target;
         inner.cursor_is_page = false;
         inner.notice = Some(Notice {
-            text: crate::i18n::t("siteeditor.folder_note", &[("name", &name)]),
+            text: crate::i18n::t("siteeditor.folder_note", &[("name", name)]),
             is_error: false,
         });
     }
@@ -403,7 +403,7 @@ impl SiteEditorModel {
                 inner.cursor_is_page = root.is_some();
                 inner.selected_page = root;
             }
-            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_deleted", &[("slug", &slug)]), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_deleted", &[("slug", slug)]), is_error: false });
         }
     }
 
@@ -424,7 +424,7 @@ impl SiteEditorModel {
                 inner.selected_site = None;
                 inner.selected_page = None;
             }
-            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.site_deleted", &[("site_id", &site_id)]), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.site_deleted", &[("site_id", site_id)]), is_error: false });
         }
     }
 
@@ -477,7 +477,7 @@ impl SiteEditorModel {
         let from_path = paths::page_path(peer_id, &site, from);
         let entity = match peers.get_entity(peer_id, &from_path) {
             Some(e) => e,
-            None => return self.set_notice(crate::i18n::t("siteeditor.no_page_to_move", &[("from", &from)]), true),
+            None => return self.set_notice(crate::i18n::t("siteeditor.no_page_to_move", &[("from", from)]), true),
         };
         let to_path = paths::page_path(peer_id, &site, &to);
         if peers.get_entity(peer_id, &to_path).is_some() {
@@ -522,7 +522,7 @@ impl SiteEditorModel {
                 inner.cursor = to.clone();
                 inner.cursor_is_page = true;
             }
-            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_moved", &[("from", &from), ("to", &to)]), is_error: false });
+            inner.notice = Some(Notice { text: crate::i18n::t("siteeditor.page_moved", &[("from", from), ("to", &to)]), is_error: false });
         }
     }
 

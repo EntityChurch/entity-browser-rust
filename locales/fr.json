@@ -426,6 +426,7 @@
   "btn.collapse": "Réduire",
   "games.empty": "Aucun jeu disponible pour l'instant.",
   "apps.empty": "Aucune application disponible pour l'instant.",
+  "programs.empty": "Aucun programme disponible pour l'instant.",
   "sitedir.filter_mine": "Miens",
   "sitedir.filter_all": "Tous",
   "sitedir.filter_external": "Externes",
@@ -594,7 +595,7 @@
     "other": "{n} pairs"
   },
 
-  "window.programs": "Programmes",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Programmes de calcul transférables — écrits une seule fois (workbench-go), montés depuis leurs descripteurs, évalués par le moteur de calcul de ce pair.",
   "programs.install": "Installer",
   "programs.restart": "Redémarrer",

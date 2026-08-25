@@ -429,6 +429,7 @@
   "btn.collapse": "Свернуть",
   "games.empty": "Пока нет доступных игр.",
   "apps.empty": "Пока нет доступных приложений.",
+  "programs.empty": "Пока нет доступных программ.",
   "sitedir.filter_mine": "Мои",
   "sitedir.filter_all": "Все",
   "sitedir.filter_external": "Внешние",
@@ -601,7 +602,7 @@
     "many": "{n} пиров"
   },
 
-  "window.programs": "Программы",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Переносимые вычислительные программы — написаны один раз (workbench-go), монтируются из своих дескрипторов, выполняются вычислительным движком этого пира.",
   "programs.install": "Установить",
   "programs.restart": "Перезапустить",

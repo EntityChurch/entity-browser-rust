@@ -136,6 +136,7 @@ pub const TREE_NODE_SELECTED: &str = "flex:1 1 auto;text-align:start;background:
     overflow:hidden;text-overflow:ellipsis";
 
 /// Section grouping.
+#[allow(dead_code)] // layout token kept for the shared set's completeness (siblings BTN_ROW/HEADER_ROW are used)
 pub const SECTION_GROUP: &str = "margin-bottom:12px";
 
 // NOTE: every shared flex row carries `flex-wrap:wrap`. These are
@@ -151,4 +152,5 @@ pub const BTN_ROW: &str = "margin:8px 0;display:flex;flex-wrap:wrap;gap:4px";
 pub const HEADER_ROW: &str = "display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px";
 
 /// Checkbox row.
+#[allow(dead_code)] // layout token kept for the shared set's completeness (siblings BTN_ROW/HEADER_ROW are used)
 pub const CHECKBOX_ROW: &str = "margin:6px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px";

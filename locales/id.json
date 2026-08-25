@@ -423,6 +423,7 @@
   "btn.collapse": "Ciutkan",
   "games.empty": "Belum ada game yang tersedia.",
   "apps.empty": "Belum ada aplikasi yang tersedia.",
+  "programs.empty": "Belum ada program yang tersedia.",
   "sitedir.filter_mine": "Milik saya",
   "sitedir.filter_all": "Semua",
   "sitedir.filter_external": "Eksternal",
@@ -587,7 +588,7 @@
     "other": "{n} peer"
   },
 
-  "window.programs": "Program",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Program komputasi yang dapat dipindahkan — ditulis sekali (workbench-go), dipasang dari deskriptornya, dievaluasi oleh mesin komputasi peer ini.",
   "programs.install": "Pasang",
   "programs.restart": "Mulai ulang",

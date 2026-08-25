@@ -423,6 +423,7 @@
   "btn.collapse": "축소",
   "games.empty": "아직 사용할 수 있는 게임이 없습니다.",
   "apps.empty": "아직 사용할 수 있는 앱이 없습니다.",
+  "programs.empty": "아직 사용할 수 있는 프로그램이 없습니다.",
   "sitedir.filter_mine": "내 사이트",
   "sitedir.filter_all": "전체",
   "sitedir.filter_external": "외부",
@@ -587,7 +588,7 @@
     "other": "피어 {n}개"
   },
 
-  "window.programs": "프로그램",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "전송 가능한 컴퓨트 프로그램 — 한 번 작성되어(workbench-go) 디스크립터에서 마운트되고 이 피어의 컴퓨트 엔진이 평가합니다.",
   "programs.install": "설치",
   "programs.restart": "재시작",

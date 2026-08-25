@@ -426,6 +426,7 @@
   "btn.collapse": "ছোট করুন",
   "games.empty": "এখনও কোনো গেম উপলব্ধ নেই।",
   "apps.empty": "এখনও কোনো অ্যাপ উপলব্ধ নেই।",
+  "programs.empty": "এখনও কোনো প্রোগ্রাম উপলব্ধ নেই।",
   "sitedir.filter_mine": "আমার",
   "sitedir.filter_all": "সব",
   "sitedir.filter_external": "বাহ্যিক",
@@ -594,7 +595,7 @@
     "other": "{n} পিয়ার"
   },
 
-  "window.programs": "প্রোগ্রাম",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "স্থানান্তরযোগ্য কম্পিউট প্রোগ্রাম — একবার লেখা হয় (workbench-go), তাদের ডেসক্রিপ্টর থেকে মাউন্ট হয়, এবং এই পিয়ারের কম্পিউট ইঞ্জিন এগুলি মূল্যায়ন করে।",
   "programs.install": "ইনস্টল",
   "programs.restart": "পুনরায় শুরু",

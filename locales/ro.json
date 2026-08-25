@@ -429,6 +429,7 @@
   "btn.collapse": "Restrânge",
   "games.empty": "Încă nu există jocuri disponibile.",
   "apps.empty": "Încă nu există aplicații disponibile.",
+  "programs.empty": "Încă nu există programe disponibile.",
   "sitedir.filter_mine": "Ale mele",
   "sitedir.filter_all": "Toate",
   "sitedir.filter_external": "Externe",
@@ -601,7 +602,7 @@
     "other": "{n} de peeri"
   },
 
-  "window.programs": "Programe",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Programe de calcul transferabile — scrise o singură dată (workbench-go), montate din descriptorii lor, evaluate de motorul de calcul al acestui peer.",
   "programs.install": "Instalează",
   "programs.restart": "Repornește",

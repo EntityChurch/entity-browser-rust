@@ -438,6 +438,7 @@
   "btn.collapse": "طي",
   "games.empty": "لا توجد ألعاب متاحة بعد.",
   "apps.empty": "لا توجد تطبيقات متاحة بعد.",
+  "programs.empty": "لا توجد برامج متاحة بعد.",
   "sitedir.filter_mine": "لي",
   "sitedir.filter_all": "الكل",
   "sitedir.filter_external": "خارجية",
@@ -622,7 +623,7 @@
     "other": "{n} نظير"
   },
 
-  "window.programs": "البرامج",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "برامج حوسبة قابلة للنقل — تُكتب مرة واحدة (workbench-go)، وتُركَّب من واصفاتها، ويقيّمها محرّك الحوسبة لدى هذا النظير.",
   "programs.install": "تثبيت",
   "programs.restart": "إعادة تشغيل",

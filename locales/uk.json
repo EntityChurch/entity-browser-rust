@@ -429,6 +429,7 @@
   "btn.collapse": "Згорнути",
   "games.empty": "Поки немає доступних ігор.",
   "apps.empty": "Поки немає доступних застосунків.",
+  "programs.empty": "Поки немає доступних програм.",
   "sitedir.filter_mine": "Мої",
   "sitedir.filter_all": "Усі",
   "sitedir.filter_external": "Зовнішні",
@@ -601,7 +602,7 @@
     "many": "{n} пірів"
   },
 
-  "window.programs": "Програми",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Переносні обчислювальні програми — написані один раз (workbench-go), монтуються зі своїх дескрипторів, виконуються обчислювальним рушієм цього піра.",
   "programs.install": "Встановити",
   "programs.restart": "Перезапустити",

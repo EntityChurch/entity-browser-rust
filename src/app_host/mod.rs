@@ -35,8 +35,9 @@
 #![cfg(target_arch = "wasm32")]
 
 mod input;
+mod onscreen;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
@@ -47,7 +48,9 @@ use web_sys::MessageEvent;
 use crate::dom::programs::{display_list_driver, now_ms, sleep_ms, text_driver, with_timeout};
 use crate::peers::Peers;
 use crate::program_host::bundle::{digest_hex, Bundle, EMBEDDED_PROGRAMS};
-use crate::program_host::descriptor::{scene_u64, ProgramDescriptor, SHAPE_DISPLAY_LIST, SHAPE_TEXT};
+use crate::program_host::descriptor::{
+    scene_text, scene_u64, ProgramDescriptor, SHAPE_DISPLAY_LIST, SHAPE_TEXT,
+};
 use crate::program_host::host;
 use crate::program_host::shapes;
 
@@ -161,28 +164,93 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         .chain(input::SUPPORTED_INPUT_SHAPES)
         .copied()
         .collect();
-    desc.admit(&supported)
-        .map_err(|e| JsValue::from_str(&format!("app-host: admit: {e}")))?;
+    // Fail-closed with a VISIBLE surface: a program binding a shape this host
+    // doesn't drive (or declaring capability imports) renders its refusal into
+    // the payload rather than bubbling to a blank iframe (D13 — every state has
+    // a surface). The Programs launcher shows all built-in programs; the honest
+    // "cannot run here" lives here, at the boundary, where admission is enforced.
+    if let Err(e) = desc.admit(&supported) {
+        let reason = format!("app-host: {program_key} cannot run here — {e}");
+        root.set_text_content(Some(&reason));
+        tracing::warn!(program = program_key, "app-host: admission refused: {e}");
+        return Err(JsValue::from_str(&reason));
+    }
     host::seed_future(&peers, &peer_id, &ns, &desc)
         .await
         .map_err(|e| JsValue::from_str(&format!("app-host: seed: {e}")))?;
 
-    // The display surface the tick loop re-renders into (the program's text shape).
+    // Rebuild the payload as one centred column: [meta-chrome bar] → [board] →
+    // [status caption], with the thumb pad (input only) overlaid on top. The
+    // settings-y chrome (reset/pause + 🎮/⇄) no longer floats over the play area.
     root.set_inner_html("");
     let document = web_sys::window()
         .and_then(|w| w.document())
         .ok_or_else(|| JsValue::from_str("app-host: no document"))?;
+
+    // Inject the shared control stylesheet ONCE. It styles the chrome bar, the
+    // board centring, the status caption, AND (when a program has input) the
+    // on-screen pad — the chrome exists for EVERY program (even input-less Life),
+    // so the injection is unconditional, not gated on an input port.
+    let style = document.create_element("style")?;
+    style.set_text_content(Some(onscreen::CONTROLS_CSS));
+    root.append_child(&style)?;
+
+    // The meta-chrome bar (`.ah-chrome`) — the slim normal-flow row ABOVE the
+    // board that holds the settings-y controls so they no longer overlap it:
+    // host run-state controls (reset/pause) at one end, the input chips (🎮/⇄)
+    // at the other (`space-between`). Built first so both clusters can mount into
+    // it; the input loop below appends its chips here.
+    let chrome = document.create_element("div")?;
+    chrome.set_attribute("class", "ah-chrome")?;
+
+    // The generic host run-state controls (reset ↻ / pause ⏸) — program-blind
+    // affordances (reseed-to-state₀ + clock-gating need no program knowledge),
+    // so every program gets them. The tick loop reads the shared flags. They sit
+    // at the leading end of the chrome bar.
+    let host_controls = build_host_controls();
+    chrome.append_child(&host_controls.bar)?;
+    let paused = host_controls.paused.clone();
+    let reset_req = host_controls.reset.clone();
+    LIVE.with(|v| v.borrow_mut().extend(host_controls.closures));
+    root.append_child(&chrome)?;
+
+    // The display surface the tick loop re-renders into (the program's display
+    // shape). Centred under the chrome bar, sharing its `max-width` so the two
+    // line up as one column.
     let display = document.create_element("div")?;
     display.set_attribute("data-app-host-display", program_key)?;
     root.append_child(&display)?;
 
-    // Install the keyboard input drivers — one per declared input port, bound by
+    // The program-owned status caption (a one-line score/state readout below the
+    // board), if the program declares a `status` port. The host relays it blind
+    // via the same `text_driver`; it never formats a score
+    // (RESPONSE-PROGRAM-CHROME-STATUS-AND-RESET). A program with nothing to
+    // report omits the port and gets no caption.
+    let status_el = if desc.status_port().is_some() {
+        let el = document.create_element("div")?;
+        el.set_attribute("class", "ah-status")?;
+        el.set_attribute("data-app-host-status", program_key)?;
+        root.append_child(&el)?;
+        Some(el)
+    } else {
+        None
+    };
+
+    // Clock-driven rate → ms per tick (guarded against a 0 hint). Computed here
+    // (not just inside the tick loop below) because the input install below
+    // needs it too: a `key-set` momentary release is delayed by this same
+    // period (`input::install`'s `min_hold_ms`) so a tap shorter than one tick
+    // still holds long enough for the program's `step` to observe it.
+    let tick_interval_ms = (1000 / desc.tick.rate_hint.max(1)).clamp(16, 1000) as i32;
+
+    // Install the input sources — one target per declared input port, bound by
     // shape (program-blind; the field name comes from the port's SEED, not
-    // assumed). The closures are held in `LIVE` for the document's lifetime
-    // (D12: no `Closure::forget`). Input is captured here and written to the
-    // inner peer — it never crosses ③α (the host stays blind, P1). A port with
-    // no readable seed is skipped loudly (seed already validated F-E1, so this
-    // is defence in depth).
+    // assumed). Each port gets BOTH a keyboard source and an on-screen pointer
+    // source (a D-pad / action buttons) driving ONE shared target. The closures
+    // are held in `LIVE` for the document's lifetime (D12: no `Closure::forget`).
+    // Input is captured here and written to the inner peer — it never crosses ③α
+    // (the host stays blind, P1). A port with no readable seed is skipped loudly
+    // (seed already validated F-E1, so this is defence in depth).
     for port in &desc.input_ports {
         let seed_path = host::qualify(&ns, &port.path);
         let Some(seed) = peers.get_entity(&peer_id, &seed_path) else {
@@ -193,7 +261,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
             tracing::warn!(port = %port.name, "app-host input: seed is not a single-field numeric entity, skipping driver");
             continue;
         };
-        let closures = input::install(
+        let installed = input::install(
             peers.clone(),
             peer_id.clone(),
             ns.clone(),
@@ -203,8 +271,19 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
             // `data-app-host` element) — `display`'s children are replaced every
             // tick, the root persists.
             root.clone(),
+            tick_interval_ms,
         );
-        LIVE.with(|v| v.borrow_mut().extend(closures));
+        // The thumb pad overlays the board (mounted at the root so its pointer
+        // listeners survive every tick's display churn); the chips join the
+        // meta-chrome bar (they drive the pad by a held reference, so their DOM
+        // home is independent of the pad's).
+        if let Some(pad) = installed.pad {
+            root.append_child(&pad)?;
+        }
+        if let Some(chips) = installed.chips {
+            chrome.append_child(&chips)?;
+        }
+        LIVE.with(|v| v.borrow_mut().extend(installed.closures));
     }
 
     // Announce readiness (host replies `init`, stamping data-host-locale). We
@@ -225,10 +304,16 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
                 p.shape.clone(),
                 p.path.clone(),
                 scene_u64(p.scene.as_ref(), "bounds").unwrap_or(0),
+                // Declared render intent: `fill` (grids) vs the default `stroke`
+                // (vector games). The manifest declares it; the host never guesses.
+                scene_text(p.scene.as_ref(), "render") == Some("fill"),
             )
         });
-        // Clock-driven rate → ms per tick (guarded against a 0 hint).
-        let interval_ms = (1000 / desc.tick.rate_hint.max(1)).clamp(16, 1000) as i32;
+        // The program-owned status readout's path (the caption re-renders from it
+        // each frame via `text_driver`, exactly like the display board).
+        let status_path = desc.status_port().map(|p| p.path.clone());
+        // Computed above (input install needs it too): ms per tick.
+        let interval_ms = tick_interval_ms;
         let mut last_hash = String::new();
         let mut ticks: u64 = 0;
         // D13: the clock loop's health has a surface. Rolling mean of the whole
@@ -236,7 +321,59 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         // ever approaches `interval_ms` the sim is falling behind its rate, and
         // this is where you'd see it (and the e2e/operator can read it).
         let mut work_ms_accum = 0.0f64;
+        // Split accumulators for the compute-vs-render breakdown (stamped with
+        // the total every 16 ticks).
+        let mut compute_ms_accum = 0.0f64;
+        let mut render_ms_accum = 0.0f64;
+        // Emit the current state to the host when it differs from the last
+        // emission (dedup by content hash — a climbing host-side seq proves
+        // distinct evolution). Shared by the tick path AND the reset path: a
+        // reseed is a state change too (back to state₀), and the host should
+        // learn of it, so the persisted state stays honest and a reset is
+        // observable across ③α.
+        let emit_state = |last_hash: &mut String, ticks: u64| {
+            if let Some(state) = peers.get_entity(&peer_id, &state_path) {
+                let hash = digest_hex(&state);
+                if *last_hash != hash {
+                    *last_hash = hash.clone();
+                    let obj = js_sys::Object::new();
+                    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("program"), &JsValue::from_str(&program_key));
+                    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("ticks"), &JsValue::from_f64(ticks as f64));
+                    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("hash"), &JsValue::from_str(&hash));
+                    post_to_host("state", Some(&obj));
+                }
+            }
+        };
         loop {
+            // Generic RESET (↻): reseed to state₀ — the `Host.Restart` semantics
+            // (stop → reseed → resume), performed here because the loop owns the
+            // peer; the button only requests it. Re-render AND re-emit immediately
+            // so the reset is visible in the caption and observable to the host
+            // (`data-app-state-seq` bumps) even while paused. Program-blind:
+            // reseed knows nothing about the program.
+            if reset_req.get() {
+                reset_req.set(false);
+                match host::seed_future(&peers, &peer_id, &ns, &desc).await {
+                    Ok(()) => {
+                        last_hash.clear(); // state is back to initial → force the reseed emit
+                        render_frame(
+                            &peers, &peer_id, &ns, &display, &display_port,
+                            status_el.as_ref(), status_path.as_deref(),
+                        );
+                        emit_state(&mut last_hash, ticks);
+                    }
+                    Err(e) => tracing::error!(program = %program_key, "app-host: reset reseed: {e}"),
+                }
+            }
+
+            // PAUSE (⏸): gate the clock without tearing anything down — hand the
+            // shared main thread back and re-check next round (reset still works
+            // while paused). A stopped clock, not a busy spin.
+            if paused.get() {
+                sleep_ms(interval_ms).await;
+                continue;
+            }
+
             // Fixed-RATE scheduling: measure the tick's own work and sleep only
             // the REMAINDER of the interval, not a full interval on top of it.
             // Otherwise the real period is (compute + render + interval), so a
@@ -255,52 +392,38 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
                 display.set_text_content(Some(&format!("app-host: {program_key} faulted — {e}")));
                 break;
             }
+            // Split the per-tick budget: COMPUTE (the synchronous evaluator — the
+            // step + every projection port's source) vs RENDER (the DOM rebuild).
+            // On a slow device this says where the frame went (and which lever to
+            // pull — a faster evaluator vs cheaper rendering). D13, readable live.
+            let compute_done = now_ms();
             ticks += 1;
 
-            // Re-render the program's display shape (program-blind, shape-bound —
-            // the identical drivers the Programs window uses). Admission already
-            // gated the shape to the supported set, so the fallthrough is
-            // defence in depth (a loud marker, never a silent blank).
-            if let Some((shape, port_path, bounds)) = &display_port {
-                let el = match shape.as_str() {
-                    SHAPE_TEXT => text_driver(&peers, &peer_id, &ns, port_path),
-                    SHAPE_DISPLAY_LIST => {
-                        display_list_driver(&peers, &peer_id, &ns, port_path, *bounds)
-                    }
-                    other => {
-                        let el = crate::dom::util::create_element("div");
-                        crate::dom::util::set_text(
-                            &el,
-                            &format!("app-host: no driver for display shape {other:?}"),
-                        );
-                        el
-                    }
-                };
-                display.set_inner_html("");
-                let _ = display.append_child(&el);
-            }
+            // Re-render the board AND the program-owned status caption
+            // (program-blind, shape-bound — the identical drivers the Programs
+            // window uses). Same helper the reset path calls, so a reseeded frame
+            // and a ticked frame render identically.
+            render_frame(
+                &peers, &peer_id, &ns, &display, &display_port,
+                status_el.as_ref(), status_path.as_deref(),
+            );
+            let render_done = now_ms();
 
-            // Emit the state to the host only when it evolved — so a growing
-            // host-side `data-app-state-seq` proves Life actually advanced
-            // (dedup by content hash; identical ticks don't spam a write).
-            if let Some(state) = peers.get_entity(&peer_id, &state_path) {
-                let hash = digest_hex(&state);
-                if hash != last_hash {
-                    last_hash = hash.clone();
-                    let obj = js_sys::Object::new();
-                    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("program"), &JsValue::from_str(&program_key));
-                    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("ticks"), &JsValue::from_f64(ticks as f64));
-                    let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("hash"), &JsValue::from_str(&hash));
-                    post_to_host("state", Some(&obj));
-                }
-            }
+            // Emit the evolved state to the host (dedup by content hash — a
+            // growing host-side `data-app-state-seq` proves distinct evolution).
+            emit_state(&mut last_hash, ticks);
 
-            let elapsed = now_ms() - tick_start;
+            let elapsed = render_done - tick_start;
             work_ms_accum += elapsed;
+            compute_ms_accum += compute_done - tick_start;
+            render_ms_accum += render_done - compute_done;
             if ticks.is_multiple_of(16) {
-                let avg = work_ms_accum / 16.0;
+                let _ = display.set_attribute("data-app-host-tick-ms", &format!("{:.1}", work_ms_accum / 16.0));
+                let _ = display.set_attribute("data-app-host-compute-ms", &format!("{:.1}", compute_ms_accum / 16.0));
+                let _ = display.set_attribute("data-app-host-render-ms", &format!("{:.1}", render_ms_accum / 16.0));
                 work_ms_accum = 0.0;
-                let _ = display.set_attribute("data-app-host-tick-ms", &format!("{avg:.1}"));
+                compute_ms_accum = 0.0;
+                render_ms_accum = 0.0;
             }
             // Fairness floor for the shared main thread (see the loop-head note).
             const MIN_YIELD_MS: f64 = 8.0;
@@ -309,6 +432,126 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         }
     });
     Ok(())
+}
+
+/// Render one frame: the display board AND (if present) the program-owned status
+/// caption, each via its shape-bound, program-blind driver. Called every tick and
+/// after a reset, so a reseeded and a ticked frame are byte-identical. Admission
+/// already gated the display shape to the supported set, so the fallthrough is
+/// defence in depth (a loud marker, never a silent blank). The status port is
+/// always `text` — the same `<pre>` driver Life/Snake used before the display-list
+/// rebind, now a one-line readout.
+fn render_frame(
+    peers: &Peers,
+    peer_id: &str,
+    ns: &str,
+    display: &web_sys::Element,
+    display_port: &Option<(String, String, u64, bool)>,
+    status_el: Option<&web_sys::Element>,
+    status_path: Option<&str>,
+) {
+    if let Some((shape, port_path, bounds, fill)) = display_port {
+        let el = match shape.as_str() {
+            SHAPE_TEXT => text_driver(peers, peer_id, ns, port_path),
+            SHAPE_DISPLAY_LIST => display_list_driver(peers, peer_id, ns, port_path, *bounds, *fill),
+            other => {
+                let el = crate::dom::util::create_element("div");
+                crate::dom::util::set_text(
+                    &el,
+                    &format!("app-host: no driver for display shape {other:?}"),
+                );
+                el
+            }
+        };
+        display.set_inner_html("");
+        let _ = display.append_child(&el);
+    }
+    if let (Some(status_el), Some(status_path)) = (status_el, status_path) {
+        let line = text_driver(peers, peer_id, ns, status_path);
+        status_el.set_inner_html("");
+        let _ = status_el.append_child(&line);
+    }
+}
+
+/// What [`build_host_controls`] hands back: the control-bar element to mount, the
+/// two flags the tick loop polls (`paused`, `reset`), and the pointer `Closure`s
+/// to hold for the document's lifetime (D12 — never `Closure::forget`).
+struct HostControls {
+    bar: web_sys::Element,
+    paused: Rc<Cell<bool>>,
+    reset: Rc<Cell<bool>>,
+    closures: Vec<Closure<dyn FnMut(JsValue)>>,
+}
+
+/// Build the generic host run-state control bar: **reset** (↻ — request a reseed
+/// to state₀, the `Host.Restart` semantics) and **pause/resume** (⏸ ⇄ ▶ — gate
+/// the tick clock). These are HOST affordances, not program inputs: reseed and
+/// clock-gating need zero program knowledge, so every program gets the same two,
+/// keeping the chrome internally consistent across programs and (via the bridge)
+/// across frontends. The buttons only set shared flags; the tick loop, which owns
+/// the peer, does the work.
+fn build_host_controls() -> HostControls {
+    use crate::dom::util;
+    let paused = Rc::new(Cell::new(false));
+    let reset = Rc::new(Cell::new(false));
+
+    let bar = util::create_element("div");
+    util::set_attr(&bar, "class", "ah-hostbar");
+
+    // Reset (↻ — controls::standard_action_glyph("restart")).
+    let reset_btn = chip("\u{21BB}", "reset", "data-host-reset");
+    let reset_cb = {
+        let reset = reset.clone();
+        Closure::wrap(Box::new(move |e: JsValue| {
+            if let Ok(ev) = e.dyn_into::<web_sys::Event>() {
+                ev.prevent_default();
+            }
+            reset.set(true);
+        }) as Box<dyn FnMut(JsValue)>)
+    };
+    let _ = reset_btn.add_event_listener_with_callback("click", reset_cb.as_ref().unchecked_ref());
+    util::append(&bar, &reset_btn);
+
+    // Pause/resume (⏸ running → ▶ paused). The button shows the state it will
+    // enter, and carries `data-host-paused` for observability.
+    let pause_btn = chip("\u{23F8}", "pause", "data-host-pause");
+    util::set_attr(&pause_btn, "data-host-paused", "0");
+    let pause_cb = {
+        let paused = paused.clone();
+        let btn = pause_btn.clone();
+        Closure::wrap(Box::new(move |e: JsValue| {
+            if let Ok(ev) = e.dyn_into::<web_sys::Event>() {
+                ev.prevent_default();
+            }
+            let now = !paused.get();
+            paused.set(now);
+            util::set_text(&btn, if now { "\u{25B6}" } else { "\u{23F8}" }); // ▶ / ⏸
+            let _ = btn.set_attribute("data-host-paused", if now { "1" } else { "0" });
+        }) as Box<dyn FnMut(JsValue)>)
+    };
+    let _ = pause_btn.add_event_listener_with_callback("click", pause_cb.as_ref().unchecked_ref());
+    util::append(&bar, &pause_btn);
+
+    HostControls {
+        bar,
+        paused,
+        reset,
+        closures: vec![reset_cb, pause_cb],
+    }
+}
+
+/// A host-control chip button (the small pill in the top-corner clusters). Shares
+/// the `.ah-chip` styling with the input-source chips so the whole chrome reads as
+/// one control language.
+fn chip(glyph: &str, aria: &str, data_attr: &str) -> web_sys::Element {
+    use crate::dom::util;
+    let b = util::create_element("button");
+    util::set_attr(&b, "type", "button");
+    util::set_attr(&b, "class", "ah-chip");
+    util::set_attr(&b, data_attr, "");
+    util::set_attr(&b, "aria-label", aria);
+    util::set_text(&b, glyph);
+    b
 }
 
 /// The `?app-host=ping` smoke payload: render a marker, arm the ③α client, and on

@@ -426,6 +426,7 @@
   "btn.collapse": "Komprimera",
   "games.empty": "Inga spel tillgängliga ännu.",
   "apps.empty": "Inga appar tillgängliga ännu.",
+  "programs.empty": "Inga program tillgängliga ännu.",
   "sitedir.filter_mine": "Mina",
   "sitedir.filter_all": "Alla",
   "sitedir.filter_external": "Externa",
@@ -594,7 +595,7 @@
     "other": "{n} peers"
   },
 
-  "window.programs": "Program",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Överförbara beräkningsprogram — skrivna en gång (workbench-go), monterade från sina deskriptorer, utvärderade av denna peers beräkningsmotor.",
   "programs.install": "Installera",
   "programs.restart": "Starta om",

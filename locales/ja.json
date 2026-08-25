@@ -423,6 +423,7 @@
   "btn.collapse": "縮小",
   "games.empty": "利用できるゲームはまだありません。",
   "apps.empty": "利用できるアプリはまだありません。",
+  "programs.empty": "利用できるプログラムはまだありません。",
   "sitedir.filter_mine": "自分",
   "sitedir.filter_all": "すべて",
   "sitedir.filter_external": "外部",
@@ -587,7 +588,7 @@
     "other": "{n} 個のピア"
   },
 
-  "window.programs": "プログラム",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "転送可能なコンピュートプログラム — 一度だけ記述され（workbench-go）、ディスクリプタからマウントされ、このピアの計算エンジンで評価されます。",
   "programs.install": "インストール",
   "programs.restart": "再起動",

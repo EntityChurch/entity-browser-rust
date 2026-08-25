@@ -426,6 +426,7 @@
   "btn.collapse": "Samenvouwen",
   "games.empty": "Nog geen games beschikbaar.",
   "apps.empty": "Nog geen apps beschikbaar.",
+  "programs.empty": "Nog geen programma's beschikbaar.",
   "sitedir.filter_mine": "Mijn",
   "sitedir.filter_all": "Alle",
   "sitedir.filter_external": "Extern",
@@ -594,7 +595,7 @@
     "other": "{n} peers"
   },
 
-  "window.programs": "Programma's",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Overdraagbare compute-programma's — eenmaal geschreven (workbench-go), gemount vanuit hun descriptors, geëvalueerd door de compute-engine van deze peer.",
   "programs.install": "Installeren",
   "programs.restart": "Herstarten",

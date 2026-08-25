@@ -423,6 +423,7 @@
   "btn.collapse": "收起",
   "games.empty": "暂无可用游戏。",
   "apps.empty": "暂无可用应用。",
+  "programs.empty": "暂无可用程序。",
   "sitedir.filter_mine": "我的",
   "sitedir.filter_all": "全部",
   "sitedir.filter_external": "外部",
@@ -587,7 +588,7 @@
     "other": "{n} 个对等节点"
   },
 
-  "window.programs": "程序",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "可迁移的计算程序 —— 一次编写（workbench-go），从描述符挂载，由本对等节点的计算引擎求值。",
   "programs.install": "安装",
   "programs.restart": "重启",

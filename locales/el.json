@@ -426,6 +426,7 @@
   "btn.collapse": "Σύμπτυξη",
   "games.empty": "Δεν υπάρχουν ακόμη διαθέσιμα παιχνίδια.",
   "apps.empty": "Δεν υπάρχουν ακόμη διαθέσιμες εφαρμογές.",
+  "programs.empty": "Δεν υπάρχουν ακόμη διαθέσιμα προγράμματα.",
   "sitedir.filter_mine": "Δικοί μου",
   "sitedir.filter_all": "Όλοι",
   "sitedir.filter_external": "Εξωτερικοί",
@@ -594,7 +595,7 @@
     "other": "{n} ομότιμοι"
   },
 
-  "window.programs": "Προγράμματα",
+  "window.programs": "Entity Native Apps",
   "programs.subtitle": "Μεταφερόμενα υπολογιστικά προγράμματα — γραμμένα μία φορά (workbench-go), προσαρτημένα από τους περιγραφείς τους, αποτιμώνται από τη μηχανή υπολογισμού αυτού του ομότιμου.",
   "programs.install": "Εγκατάσταση",
   "programs.restart": "Επανεκκίνηση",
