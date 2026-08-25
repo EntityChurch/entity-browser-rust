@@ -114,6 +114,7 @@
   "contentsite.more": "더보기 ▾ ({n})",
   "contentsite.offline_page_missing": "_이 페이지는 오프라인 보기용으로 보관되지 않습니다 — 불러오려면 다시 연결하세요._",
   "contentsite.offline_source_unreachable": "_이 사이트의 소스에 연결할 수 없습니다. 캐시된 개요를 표시합니다._",
+  "contentsite.document_empty": "이 문서는 비어 있습니다 — 이 페이지에는 콘텐츠가 없습니다.",
   "contentsite.share_link": "링크 공유 🔗",
   "contentsite.share_link_hint": "이 페이지를 라이브 엔티티 브라우저에서 다시 여는 링크를 복사합니다",
   "contentstream.empty": "(바인딩 이벤트 없음 — 이 피어에서 put / remove / snapshot을 실행하세요)",

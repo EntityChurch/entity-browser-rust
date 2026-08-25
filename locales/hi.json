@@ -115,6 +115,7 @@
   "contentsite.more": "और ▾ ({n})",
   "contentsite.offline_page_missing": "_यह पेज ऑफ़लाइन देखने के लिए नहीं रखा गया — लोड करने के लिए फिर से कनेक्ट करें।_",
   "contentsite.offline_source_unreachable": "_इस साइट का स्रोत अनुपलब्ध है। इसकी कैश की गई रूपरेखा दिखाई जा रही है।_",
+  "contentsite.document_empty": "यह दस्तावेज़ खाली है — इस पृष्ठ में कोई सामग्री नहीं है।",
   "contentsite.share_link": "लिंक साझा करें 🔗",
   "contentsite.share_link_hint": "एक लिंक कॉपी करें जो इस पेज को लाइव एंटिटी ब्राउज़र में फिर से खोलता है",
   "contentstream.empty": "(अभी तक कोई बाइंडिंग इवेंट नहीं — इस पीयर पर put / remove / snapshot चलाएँ)",

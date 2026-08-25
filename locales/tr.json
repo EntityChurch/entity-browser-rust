@@ -115,6 +115,7 @@
   "contentsite.more": "Daha fazla ▾ ({n})",
   "contentsite.offline_page_missing": "_Bu sayfa çevrimdışı görüntüleme için saklanmıyor — yüklemek için yeniden bağlanın._",
   "contentsite.offline_source_unreachable": "_Bu sitenin kaynağına ulaşılamıyor. Önbellekteki taslağı gösteriliyor._",
+  "contentsite.document_empty": "Bu belge boş — sayfa hiçbir içerik taşımıyor.",
   "contentsite.share_link": "Bağlantıyı paylaş 🔗",
   "contentsite.share_link_hint": "Bu sayfayı canlı varlık tarayıcısında yeniden açan bir bağlantı kopyalayın",
   "contentstream.empty": "(henüz bağlama olayı yok — bu peer üzerinde put / remove / snapshot tetikleyin)",

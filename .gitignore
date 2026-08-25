@@ -6,6 +6,9 @@
 /dist-publish
 /dist-federation
 /dist-registry
+# The uploadable production web tree (`make site-dist` / SITE_DIST_OUT). Built,
+# never committed — and deliberately NOT under dist/, which trunk wipes.
+/dist-site
 /target-publish
 # Transient staging dirs for `make tauri-bundle` — the recipe copies an external
 # APPS_DIST / INGEST here so the publish container (which mounts only this repo)

@@ -116,6 +116,7 @@
   "contentsite.more": "Więcej ▾ ({n})",
   "contentsite.offline_page_missing": "_Ta strona nie jest zachowywana do przeglądania offline — połącz się ponownie, aby ją wczytać._",
   "contentsite.offline_source_unreachable": "_Źródło tej witryny jest nieosiągalne. Wyświetlany jest jej zapisany zarys._",
+  "contentsite.document_empty": "Ten dokument jest pusty — strona nie zawiera treści.",
   "contentsite.share_link": "Udostępnij link 🔗",
   "contentsite.share_link_hint": "Skopiuj link, który ponownie otworzy tę stronę w działającej przeglądarce encji",
   "contentstream.empty": "(brak zdarzeń powiązań — wykonaj put / remove / snapshot na tym peerze)",

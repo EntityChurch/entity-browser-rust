@@ -29,7 +29,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BASELINE=tools/ui-lint-baseline.txt
-ALLOW='^src/dom/(components|theme|style|util|content_site)\.rs$'
+# Files exempt from the raw-UI counts. The `src/dom/*` entries are the atom /
+# token / util definitions themselves — the place raw elements and literal
+# colours are SUPPOSED to live. `demo_content.rs` is a different reason and the
+# distinction matters: it holds bundled demo **content** (a document that
+# renders in an opaque-origin frame, an SVG stored as asset bytes), which our
+# `--site-*` tokens cannot reach by construction. Its colours are data, not
+# theming — exempting it by name keeps them out of the raw-hex baseline instead
+# of normalizing content palettes as tolerated UI drift. Anything that renders
+# through our own DOM does not belong in an exempt file.
+ALLOW='^src/dom/(components|theme|style|util|content_site)\.rs$|^src/views/content_site/demo_content\.rs$'
 
 # Occurrences of $1 (basic regex) in $2 — grep exits 1 on zero matches, which
 # `set -e -o pipefail` would turn into a hard abort, so swallow that case.

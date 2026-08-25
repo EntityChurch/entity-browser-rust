@@ -19,7 +19,7 @@ use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 use crate::action::Action;
-use crate::content_site::{classify_link, paths, LinkTarget, Location};
+use crate::content_site::{classify_link, paths, LinkTarget, Location, PageRender};
 use crate::dom::{util, DomCtx};
 use crate::views::content_site::output::{NavLink, SectionLink, SiteRenderOutput};
 use crate::window::WindowId;
@@ -122,6 +122,9 @@ const RESPONSIVE_CSS: &str = "\
 .cs-body{display:flex;flex:1;min-height:0;overflow:hidden;}\
 .cs-main{flex:1;min-width:0;overflow:auto;}\
 .cs-main,.cs-main *{box-sizing:border-box;}\
+.cs-main-doc{display:flex;flex-direction:column;}\
+.cs-pane-doc{flex:1;min-height:0;display:flex;padding:0;}\
+.cs-docframe{flex:1;width:100%;display:block;border:0;min-height:70vh;}\
 .cs-sidebar{flex-shrink:0;width:210px;overflow:auto;padding:18px 12px;\
 border-inline-end:1px solid var(--site-border, #20202e);\
 background:var(--site-sidebar-bg, #13131c);display:flex;\
@@ -733,13 +736,28 @@ fn render_content(
     host: SiteNavHost,
     resolve_asset: &AssetResolver,
 ) {
-    let pane = util::create_element("div");
-    util::set_attr(
-        &pane,
-        "style",
-        "max-width:720px;width:100%;margin:0 auto;padding:28px 22px;\
-         line-height:1.6;color:var(--site-text, #e2e2ea);",
-    );
+    // A document is laid out differently from markup, and the difference is
+    // not cosmetic. Our reading column caps content at 720px — right for
+    // markdown we styled ourselves, and wrong for a document that **already
+    // carries its own column width** (a Pandoc artifact centers `main` at
+    // 42rem). Nesting the two squeezes a 672px column into what is left of
+    // 720px after 22px of padding each side, and the document reads cramped.
+    // So a document pane is full-bleed and unpadded, and the frame *fills* the
+    // remaining height rather than guessing a `vh` that is wrong in a window.
+    let is_document = output.error.is_none() && !output.loading && output.body.is_document();
+    let pane = if is_document {
+        let _ = wrapper.class_list().add_1("cs-main-doc");
+        util::create_element_with_class("div", "cs-pane-doc")
+    } else {
+        let p = util::create_element("div");
+        util::set_attr(
+            &p,
+            "style",
+            "max-width:720px;width:100%;margin:0 auto;padding:28px 22px;\
+             line-height:1.6;color:var(--site-text, #e2e2ea);",
+        );
+        p
+    };
 
     if let Some(err) = &output.error {
         let e = util::create_element("div");
@@ -758,14 +776,197 @@ fn render_content(
         util::set_attr(&l, "style", "color:var(--site-text-muted, #9aa3b2);");
         util::append(&pane, &l);
     } else {
-        let body = util::create_element_with_class("div", "cs-doc");
-        body.set_inner_html(&output.body_html);
-        rewrite_links(&body, output, ctx, host);
-        rewrite_images(&body, resolve_asset);
-        util::append(&pane, &body);
+        match &output.body {
+            PageRender::Markup(html) => {
+                let body = util::create_element_with_class("div", "cs-doc");
+                body.set_inner_html(html);
+                rewrite_links(&body, output, ctx, host);
+                rewrite_images(&body, resolve_asset);
+                util::append(&pane, &body);
+            }
+            // An untrusted `format:html` document. It never touches our
+            // document — neither rewriter runs, by construction: they operate
+            // on elements, and there are no elements of ours to operate on.
+            PageRender::Document(doc) => {
+                render_document_frame(ctx, &pane, doc, &output.page_title)
+            }
+        }
     }
 
     util::append(wrapper, &pane);
+}
+
+/// The sandbox tier for an untrusted content document.
+///
+/// **`allow-same-origin` AND NOTHING ELSE. The token that must never join it is
+/// `allow-scripts`** — the two together are strictly worse than either alone,
+/// because a scripted same-origin frame can reach `parent.document`, i.e. every
+/// publisher on the network gets our origin. Alone, `allow-same-origin` grants
+/// an origin to a document that has **no way to use it**: scripts do not run,
+/// so nothing in the frame can read a cookie, touch storage, or see our DOM.
+/// Verified, not assumed — a `<script>` in the demo document stays inert at
+/// this tier and Phase 19-doc reads the rendered text to prove it.
+///
+/// **Why the empty string is not what ships, having been what shipped.** It
+/// was, for exactly one commit, and it was the right tier delivered the wrong
+/// way — see [`mount_document_frame`]. `data:` at `sandbox=""` is the strictest
+/// combination that navigates, and Chrome caps a `data:` URL at **2 MiB**,
+/// silently: past that the frame renders *nothing* and raises *nothing*. The
+/// published corpus book is 7.9 MB (10.9 MB base64), so the exact artifact this
+/// tier exists to carry came up blank in one of our two browser engines. A
+/// sandbox token that is unusable without a second token is a smaller price
+/// than a feature that does not work.
+///
+/// The tiers we run, so the difference is visible in one place:
+/// - `"allow-same-origin"` — **here**. Passive document, no execution.
+/// - `"allow-scripts"` — `dom::games` app bundle. Opaque origin, JS runs,
+///   `postMessage` is the only channel.
+/// - `"allow-scripts allow-same-origin"` — an L5 app, *our own* payload.
+///
+/// Note what that list makes obvious: **this tier and the app tier are now one
+/// token apart in each direction**, which is why Phase 19-doc asserts this
+/// string exactly and why the assertion is worth keeping expensive company.
+///
+/// **The end state that removes the trade-off entirely** is a document served
+/// from a real same-origin URL (a service-worker route or Tauri's asset
+/// protocol): measured, an `http` URL at `sandbox=""` renders the 7.9 MB book
+/// in both engines *and* keeps its anchors, so it is the only delivery with no
+/// ceiling and no token. It is a bigger change than this file — a route, a
+/// cache lifetime, and a second answer for the Tauri WebView — and it is the
+/// right thing to build if this tier ever needs to be tightened again.
+///
+/// **KNOWN LIMITATION, measured rather than assumed: an external link inside a
+/// document REPLACES the document with that site.** The earlier note here said
+/// such a click was "a silent dead click" — that was wrong in the direction
+/// that matters. A sandbox blocks *top-level* navigation; navigating the frame
+/// **itself** is never sandboxed, so `<a href="https://example.com/">` with no
+/// `target` loads example.com in place of the paper (measured in Firefox 149
+/// and Chrome, every delivery tier). Only `target="_blank"` is blocked, and
+/// that is what `allow-popups allow-popups-to-escape-sandbox` would enable.
+/// It matters for papers, whose citations are external URLs; recovering is
+/// re-navigating to the page from our own chrome.
+///
+/// Widening to `allow-popups` is defensible — a scriptless document can only
+/// open one on a real user gesture — but it is a **security-tier decision**,
+/// and making it inside a commit whose job was "render the document" is how
+/// tiers drift. It also only helps if the publisher emits `target="_blank"`,
+/// which is a papers-side pandoc filter: neither half works alone.
+///
+/// (The publisher half **has landed** — papers emit `target="_blank"
+/// rel="noopener"` on all external links as of 2026-08-20 — so this is now a
+/// one-sided decision on our side alone.)
+const DOCUMENT_SANDBOX: &str = "allow-same-origin";
+
+/// Mount the document from a `blob:` URL of its own, and revoke that URL as
+/// soon as the frame has loaded it.
+///
+/// **The document needs a base URL of its own, and that is the whole point of
+/// not using `srcdoc`.** A `srcdoc` document inherits the *parent's* base URL,
+/// so `href="#section"` does not resolve to a fragment of the paper — it
+/// resolves to `…/index.html#section`, a **different document**, and the frame
+/// navigates there. A Pandoc paper's entire navigation is anchors (the
+/// "Contents" list; every chapter jump in a one-file book), so before this the
+/// document rendered beautifully and could not be read past the first screen.
+///
+/// **Measured across Firefox 149 and Chrome, on the REAL 7.9 MB corpus book**
+/// (1408 fragment anchors, 475 MathML nodes, 9 inlined figures):
+///
+/// | delivery | sandbox | anchors | 7.9 MB book |
+/// |---|---|---|---|
+/// | `srcdoc` | `""` | **destroys the document** | renders |
+/// | `blob:` | `""` | **inert — nothing happens** | renders |
+/// | `data:` | `""` | works | **BLANK in Chrome** |
+/// | **`blob:`** | **`"allow-same-origin"`** | **works** | **renders in both** |
+/// | `http` URL | `""` | works | renders in both |
+///
+/// **`data:` shipped first and was wrong, for a reason no small fixture could
+/// show: Chrome caps a `data:` URL at 2 MiB.** Bisected — 1,398,856 bytes
+/// renders, 2,098,624 does not — and past the cap the frame is simply *empty*:
+/// no error, no event, nothing to log. The corpus book is 10.9 MB base64, and
+/// the figure-heavy single papers (06, 11, 12) are over the cap too, so the
+/// artifacts this tier exists for were the ones that failed. A ceiling that
+/// only the real payload crosses is exactly the shape a 500-byte demo document
+/// cannot catch.
+///
+/// **The revoke is what makes `blob:` affordable** (D9 accounting). This
+/// surface rebuilds on a subscription tick, so an unrevoked URL would pin a
+/// whole book in memory *per rebuild*. Revoking on the frame's `load` event
+/// bounds the lifetime to the load itself, and — measured in both engines,
+/// because "should" is not evidence — **fragment navigation still works after
+/// the URL is revoked**: a jump is a same-document navigation and refetches
+/// nothing. A frame that never loads leaks one URL; that is the bounded case,
+/// and it is the one we can live with.
+///
+/// **The blob MUST carry `type: "text/html"`.** Without it the frame renders
+/// the book as plain text — a failure that looks like a rendering bug in the
+/// document rather than a missing property bag here.
+fn mount_document_blob(ctx: &DomCtx, frame: &Element, doc: &str) {
+    let parts = js_sys::Array::new();
+    parts.push(&wasm_bindgen::JsValue::from_str(doc));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("text/html");
+    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts) else {
+        tracing::error!("content-site: could not build the document blob");
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        tracing::error!("content-site: could not create the document object URL");
+        return;
+    };
+
+    // The revoke rides `DomCtx.listen`, so the closure lives in `ctx.closures`
+    // and is freed on the next rebuild like every other handler here — never
+    // `Closure::forget`, which would trade a bounded blob leak for an unbounded
+    // closure one.
+    let revoke_url = url.clone();
+    ctx.listen(frame, "load", move |_| {
+        let _ = web_sys::Url::revoke_object_url(&revoke_url);
+    });
+
+    util::set_attr(frame, "src", &url);
+}
+
+/// Mount an untrusted HTML document in a fully-restricted frame.
+///
+/// **D13 — the failure this exists to make visible.** A frame that renders
+/// nothing looks exactly like a frame that rendered a blank page, and neither
+/// raises an error. So the two states are separated *before* the mount, on the
+/// one signal we do have — whether there are bytes at all — and an empty
+/// document gets a message rather than an empty rectangle.
+///
+/// **That D13 note was written about the wrong failure, and the right one then
+/// happened.** "A frame that renders nothing raises nothing" was true of an
+/// *empty* document, which this guard covers; it was equally true of a document
+/// past Chrome's 2 MiB `data:` cap, which this guard does not see, because the
+/// bytes were all there. The guard tests the input; the ceiling was a property
+/// of the delivery. **When a note says a failure is invisible, the useful
+/// question is which *other* causes produce the same invisible outcome** — here
+/// it was the one that mattered for every real book.
+fn render_document_frame(ctx: &DomCtx, pane: &Element, doc: &str, title: &str) {
+    if doc.trim().is_empty() {
+        let empty = util::create_element("div");
+        util::set_attr(&empty, "style", "color:var(--site-text-muted, #9aa3b2);");
+        util::set_text(&empty, &crate::i18n::t("contentsite.document_empty", &[]));
+        util::append(pane, &empty);
+        return;
+    }
+
+    tracing::info!(bytes = doc.len(), "content-site: mounting sandboxed document frame");
+
+    // The frame is a plain viewport (`.cs-docframe`) — no border, no radius, no
+    // background, and deliberately **no `--site-*` token anywhere on it**. The
+    // document supplies all its own furniture, and our theme does not reach into
+    // it: a themed frame around unthemed content advertises a relationship that
+    // does not exist. The document's own `background` paints the surface, so
+    // setting one here would only decide the pre-paint flash.
+    let frame = util::create_element_with_class("iframe", "cs-docframe");
+    util::set_attr(&frame, "sandbox", DOCUMENT_SANDBOX);
+    util::set_attr(&frame, "title", title);
+    // A `blob:` URL on `src`, NOT `srcdoc` — see [`mount_document_blob`]. The
+    // document needs a base URL of its own or its own table of contents
+    // navigates the frame away from it.
+    mount_document_blob(ctx, &frame, doc);
+    util::append(pane, &frame);
 }
 
 /// Rewrite the mounted markdown's `<a href>` links: in-system links

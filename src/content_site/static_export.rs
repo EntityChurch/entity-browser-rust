@@ -15,7 +15,7 @@
 //! sites exports as one navigable static tree, not isolated islands.
 //!
 //! Native-only (writes files); never compiled into the wasm bundle. Reuses
-//! the live render path ([`render::render_page_body`]) and the link
+//! the live render path ([`render::render_page`]) and the link
 //! classifier ([`location::classify_link`]) — it does **not** fork a second
 //! renderer (the "shared render-lib" item, O2/A6).
 
@@ -29,7 +29,6 @@ use super::format::{NavItem, SiteAsset, SiteManifest, SitePage};
 use super::location::{self, LinkTarget};
 use super::paths::SITE_URL_PREFIX;
 use super::read::OwnedSite;
-use super::render::render_page_body;
 
 /// One site to export: its identity, manifest, and `(slug, page)` bodies.
 pub struct ExportSite<'a> {
@@ -251,6 +250,15 @@ fn page_file_path(
 /// Render one page to a complete standalone HTML document under `layout`.
 /// When `live_base` is `Some`, a dismissable "open in live peer" banner is
 /// injected at the top of the body, deep-linking to this page in the live SPA.
+///
+/// A **`format:html` page is emitted verbatim** and skips this template
+/// entirely — see [`render::PageRender::Document`]. It is *already* a complete
+/// standalone document (its own `<head>`, `<title>`, `<style>`), so wrapping it
+/// would nest `<html>` inside `<body>` and leak its stylesheet onto our chrome;
+/// and its hrefs/`<img src>` are its own, so the two rewriters below would
+/// rewrite links that were never site-relative. The cost is honest and stated:
+/// such a page carries no site nav in the static projection. The live surface
+/// keeps its chrome, because there the document sits in a frame beside it.
 fn render_page(
     site: &ExportSite,
     slug: &str,
@@ -264,7 +272,12 @@ fn render_page(
         site_id: site.site_id.to_string(),
         page: slug.to_string(),
     };
-    let body = rewrite_hrefs(&render_page_body(&page.format, &page.body), &current, layout, prefix);
+    let rendered = super::render::render_page(&page.format, &page.body);
+    let body = match rendered {
+        super::render::PageRender::Document(doc) => return doc,
+        super::render::PageRender::Markup(markup) => markup,
+    };
+    let body = rewrite_hrefs(&body, &current, layout, prefix);
     // Images need their own pass — rewrite_hrefs only touches href=". Site-relative
     // `src="assets/…"` becomes a root-absolute static URL (depth-safe).
     let body = rewrite_img_srcs(&body, site.peer_id, site.site_id, layout, prefix);
@@ -1037,6 +1050,45 @@ mod tests {
         let html = fs::read_to_string(dir.join("sites/P/s/index.html")).unwrap();
         assert!(!html.contains("<script>alert"), "raw script leaked into export: {html}");
         assert!(html.contains("&lt;script&gt;"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_html_page_exports_verbatim_and_skips_the_template() {
+        // A `format:html` page is ALREADY a standalone document. Wrapping it in
+        // the export template would nest <html> inside <body> and leak its
+        // stylesheet onto our chrome, and the href/img rewriters would rewrite
+        // links that were never site-relative. So it is written out byte-for-
+        // byte — file-on-disk == body-in-tree, which is also what a consumer
+        // fetching the permalink gets.
+        let doc = "<!DOCTYPE html>\n<html lang=\"en\">\n<head><title>Paper 0</title>\n\
+                   <style>body{font-family:serif}</style></head>\n\
+                   <body><h1>Paper 0</h1><p>See <a href=\"./other.html\">other</a> \
+                   and <img src=\"figures/x.png\" alt=\"f\"></p></body>\n</html>\n";
+        let m = SiteManifest::new("s", "S", "index", vec![]);
+        let pages = vec![
+            ("index", SitePage::markdown("H", "# Home\n\nsee [paper](./paper)")),
+            ("paper", SitePage::html("Paper", doc)),
+        ];
+        let sites = [ExportSite { peer_id: "P", site_id: "s", manifest: &m, pages: &pages, assets: &[] }];
+        let dir = std::env::temp_dir().join("entity-browser-static-export-doc-test");
+        let _ = fs::remove_dir_all(&dir);
+        export_site_set(&dir, &sites, "", None).unwrap();
+
+        let out = fs::read_to_string(dir.join("sites/P/s/paper.html")).unwrap();
+        assert_eq!(out, doc, "a document page must export byte-for-byte");
+        // The template's furniture must be absent — its presence would mean the
+        // document got wrapped (two <html> elements in one file).
+        assert!(!out.contains("site-header"), "export template wrapped a document: {out}");
+        assert!(!out.contains("site-footer"), "export template wrapped a document: {out}");
+        // And its own links/images are untouched by the rewriters.
+        assert!(out.contains(r#"href="./other.html""#), "an href was rewritten: {out}");
+        assert!(out.contains(r#"src="figures/x.png""#), "an img src was rewritten: {out}");
+
+        // The markdown page beside it still gets the full treatment — the
+        // change is per-page, not a mode switch for the whole site.
+        let idx = fs::read_to_string(dir.join("sites/P/s/index.html")).unwrap();
+        assert!(idx.contains("site-header"), "the markdown page lost its chrome: {idx}");
         let _ = fs::remove_dir_all(&dir);
     }
 

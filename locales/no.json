@@ -115,6 +115,7 @@
   "contentsite.more": "Mer ▾ ({n})",
   "contentsite.offline_page_missing": "_Denne siden lagres ikke for frakoblet visning — koble til på nytt for å laste den._",
   "contentsite.offline_source_unreachable": "_Kilden til dette nettstedet er utilgjengelig. Viser den bufrede oversikten._",
+  "contentsite.document_empty": "Dette dokumentet er tomt — siden har ikke noe innhold.",
   "contentsite.share_link": "Del lenke 🔗",
   "contentsite.share_link_hint": "Kopier en lenke som åpner denne siden på nytt i den aktive entitetsleseren",
   "contentstream.empty": "(ingen bindingshendelser ennå — utløs en put / remove / snapshot på denne peeren)",

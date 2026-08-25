@@ -116,6 +116,7 @@
   "contentsite.more": "Ещё ▾ ({n})",
   "contentsite.offline_page_missing": "_Эта страница не сохраняется для офлайн-просмотра — переподключитесь, чтобы загрузить её._",
   "contentsite.offline_source_unreachable": "_Источник этого сайта недоступен. Показан его кэшированный план._",
+  "contentsite.document_empty": "Этот документ пуст — на странице нет содержимого.",
   "contentsite.share_link": "Поделиться ссылкой 🔗",
   "contentsite.share_link_hint": "Скопировать ссылку, которая снова откроет эту страницу в живом браузере сущностей",
   "contentstream.empty": "(событий привязки пока нет — выполните put / remove / snapshot на этом пире)",

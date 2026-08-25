@@ -114,6 +114,7 @@
   "contentsite.more": "更多 ▾ ({n})",
   "contentsite.offline_page_missing": "_此页面未保留用于离线查看 — 请重新连接以加载。_",
   "contentsite.offline_source_unreachable": "_此站点的来源不可达。正在显示其缓存的大纲。_",
+  "contentsite.document_empty": "此文档为空 — 该页面没有任何内容。",
   "contentsite.share_link": "分享链接 🔗",
   "contentsite.share_link_hint": "复制一个可在实时实体浏览器中重新打开此页面的链接",
   "contentstream.empty": "（暂无绑定事件 — 请在此对等节点上执行 put／remove／snapshot）",

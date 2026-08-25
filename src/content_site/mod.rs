@@ -57,6 +57,10 @@ pub mod publish_layout;
 /// publish and consume with the same arm.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod crossimpl_go;
+/// **The same check against a LIVE `entity-core-go` origin on another host** —
+/// C-7 / `COHORT-OPEN-ITEMS` §1b. Skips loudly without the rig; `make crossimpl-go`.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod crossimpl_go_live;
 /// B15 — consume a signed published root over an async transport (both arches).
 pub mod session_cache;
 pub mod signed_fetch;
@@ -68,7 +72,7 @@ pub mod static_export;
 
 pub use format::{NavItem, SiteManifest, SitePage};
 pub use location::{classify_link, humanize, resolve_target, LinkTarget, Location};
-pub use render::render_page_body;
+pub use render::{markdown_to_html, render_page, PageRender};
 pub use resolver::{ContentResolver, MultiResolver, RepaintCell, ResolveError, ResolveOutcome};
 // `http_poll::{content_url, crack_pointer, verify_and_decode, PollError}` and
 // `resolver::{LocalTreeResolver, ResolvedPage}` are reachable by full path;

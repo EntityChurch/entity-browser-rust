@@ -115,6 +115,7 @@
   "contentsite.more": "مزید ▾ ({n})",
   "contentsite.offline_page_missing": "_یہ صفحہ آف لائن دیکھنے کے لیے محفوظ نہیں — لوڈ کرنے کے لیے دوبارہ منسلک ہوں۔_",
   "contentsite.offline_source_unreachable": "_اس سائٹ کا ماخذ ناقابلِ رسائی ہے۔ اس کا کیش شدہ خاکہ دکھایا جا رہا ہے۔_",
+  "contentsite.document_empty": "یہ دستاویز خالی ہے — اس صفحے میں کوئی مواد نہیں ہے۔",
   "contentsite.share_link": "لنک شیئر کریں 🔗",
   "contentsite.share_link_hint": "ایک لنک کاپی کریں جو اس صفحے کو لائیو اینٹیٹی براؤزر میں دوبارہ کھولے",
   "contentstream.empty": "(ابھی تک کوئی بائنڈنگ ایونٹ نہیں — اس پیئر پر put / remove / snapshot چلائیں)",

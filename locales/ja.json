@@ -114,6 +114,7 @@
   "contentsite.more": "その他 ▾ ({n})",
   "contentsite.offline_page_missing": "_このページはオフライン表示用に保存されていません。読み込むには再接続してください。_",
   "contentsite.offline_source_unreachable": "_このサイトのソースに到達できません。キャッシュされた目次を表示しています。_",
+  "contentsite.document_empty": "このドキュメントは空です — このページにはコンテンツがありません。",
   "contentsite.share_link": "リンクを共有 🔗",
   "contentsite.share_link_hint": "このページをライブのエンティティブラウザーで開き直すリンクをコピーします",
   "contentstream.empty": "(バインディングイベントはまだありません — このピアで put / remove / snapshot を実行してください)",

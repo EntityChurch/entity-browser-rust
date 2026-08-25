@@ -115,6 +115,7 @@
   "contentsite.more": "Altro ▾ ({n})",
   "contentsite.offline_page_missing": "_Questa pagina non è conservata per la consultazione offline: riconnettiti per caricarla._",
   "contentsite.offline_source_unreachable": "_La sorgente di questo sito non è raggiungibile. Viene mostrata la sua struttura in cache._",
+  "contentsite.document_empty": "Questo documento è vuoto — la pagina non contiene contenuti.",
   "contentsite.share_link": "Condividi link 🔗",
   "contentsite.share_link_hint": "Copia un link che riapre questa pagina nel browser di entità dal vivo",
   "contentstream.empty": "(ancora nessun evento di binding — attiva un put / remove / snapshot su questo peer)",

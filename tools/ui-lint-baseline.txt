@@ -19,5 +19,5 @@ src/dom/site_editor.rs atoms=0 styles=14 hex=0
 src/dom/storage.rs atoms=0 styles=10 hex=0
 src/dom/system_overview.rs atoms=0 styles=10 hex=0
 src/dom/system_peers.rs atoms=0 styles=1 hex=0
-src/views/content_site/mod.rs atoms=0 styles=1 hex=7
+src/views/content_site/mod.rs atoms=0 styles=1 hex=0
 src/views/peer_connections/model.rs atoms=0 styles=0 hex=2

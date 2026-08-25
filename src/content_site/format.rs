@@ -47,6 +47,13 @@ pub const DEFAULT_ROOT_PAGE: &str = "index";
 /// Default base format for a page body.
 pub const DEFAULT_PAGE_FORMAT: &str = "markdown";
 
+/// The web-tier base format (convention §3.1): a complete, pre-rendered HTML
+/// document carried verbatim. **The exact string is load-bearing** — the
+/// renderer fails closed on anything else (`render::render_page`), so a
+/// near-miss like `"HTML"` or `"text/html"` silently becomes escaped markdown
+/// rather than a document. Every producer and consumer names this constant.
+pub const HTML_PAGE_FORMAT: &str = "html";
+
 /// One navigation/menu entry — "this is the menu, this is where the
 /// links go." `target` is an entity-native link (see
 /// [`super::location::classify_link`]); it is **optional** — an empty
@@ -242,6 +249,20 @@ impl SitePage {
         let mut frontmatter = BTreeMap::new();
         frontmatter.insert("title".to_string(), title.into());
         Self { format: DEFAULT_PAGE_FORMAT.to_string(), body: body.into(), frontmatter }
+    }
+
+    /// A pre-rendered **HTML document** page (§3.1's web-tier escape hatch) —
+    /// a complete standalone file (a Pandoc paper/book, an exported report)
+    /// stored verbatim.
+    ///
+    /// The renderer hands this to a fully-restricted sandbox rather than to our
+    /// own document; see `super::render::PageRender::Document`. The `title` is
+    /// the *site's* name for the page (nav, breadcrumbs) and is independent of
+    /// whatever `<title>` the document carries internally.
+    pub fn html(title: impl Into<String>, body: impl Into<String>) -> Self {
+        let mut frontmatter = BTreeMap::new();
+        frontmatter.insert("title".to_string(), title.into());
+        Self { format: HTML_PAGE_FORMAT.to_string(), body: body.into(), frontmatter }
     }
 
     /// The page title — `frontmatter.title`, or empty if unset.

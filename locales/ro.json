@@ -116,6 +116,7 @@
   "contentsite.more": "Mai multe ▾ ({n})",
   "contentsite.offline_page_missing": "_Această pagină nu este păstrată pentru vizualizare offline — reconectează-te pentru a o încărca._",
   "contentsite.offline_source_unreachable": "_Sursa acestui site este inaccesibilă. Se afișează schița din cache._",
+  "contentsite.document_empty": "Acest document este gol — pagina nu are conținut.",
   "contentsite.share_link": "Partajează linkul 🔗",
   "contentsite.share_link_hint": "Copiază un link care redeschide această pagină în navigatorul de entități live",
   "contentstream.empty": "(încă niciun eveniment de legare — declanșează un put / remove / snapshot pe acest peer)",

@@ -9,36 +9,90 @@
 //! through, so a page body can't inject `<script>` or arbitrary markup.
 //! A constrained allowlist for intentional embedded HTML (menus, etc.)
 //! is a later refinement (design doc §3.4).
+//!
+//! **A `format:html` page is a different KIND of output, so it has a different
+//! TYPE** — see [`PageRender`]. The two are not interchangeable strings, and
+//! that is the whole safety design: a caller physically cannot hand a raw
+//! document to `set_inner_html` by forgetting a branch.
 
 #![allow(dead_code)] // renderer/model consumers land alongside this in P1
 
 use pulldown_cmark::{html, Event, Options, Parser};
 
-/// Render a page body to sanitized HTML, honoring the page `format`.
+/// What a page body rendered *into*, and therefore how it must be mounted.
 ///
-/// **Security boundary (F-CONTENT-1, drift audit).** The page
-/// `format` field carries an `html` "web escape hatch" (`content_site/format.rs`
-/// §3.1), but **there is no HTML sanitizer in the tree** and content-site bodies
-/// are *untrusted cross-peer data* (a hash-valid page can still be malicious).
-/// Honoring `format: html` as **raw passthrough** into `set_inner_html` would be
-/// instant stored-XSS. Until an allowlist sanitizer lands, raw HTML is
-/// **forbidden**: every format renders through [`markdown_to_html`], which
-/// escapes embedded HTML to inert text. An `html`-format page is rendered as
-/// escaped text (and logged once) rather than silently honored — so wiring raw
-/// HTML here becomes a *deliberate* act, not a default. Decision recorded in the
-/// audit's §2c security cluster ("cheap hardening now").
-pub fn render_page_body(format: &str, body: &str) -> String {
-    if format == "html" {
-        // The escape hatch is declared in the page model but NOT honored as raw
-        // HTML — no sanitizer exists. Render as escaped text via the markdown
-        // path. Do NOT change this to pass `body` raw without an allowlist
-        // sanitizer (F-CONTENT-1).
-        tracing::warn!(
-            "content-site page declares format:html — rendered as escaped text \
-             (no HTML sanitizer; raw passthrough forbidden, F-CONTENT-1)"
-        );
+/// The two variants are deliberately **not** both `String`. `format:html`
+/// (`APP-CONVENTION-SEMANTIC-CONTENT-SITE` §3.1) carries a complete, untrusted
+/// HTML document; sanitized markdown output carries markup we generated. Both
+/// are "HTML" and mounting one the way you mount the other is stored-XSS, so
+/// the distinction lives in the type rather than in a comment a call site can
+/// skip. (This is the "give the two outcomes different types" move, applied
+/// before the bug rather than after it.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageRender {
+    /// Markup **we** generated from markdown — every embedded HTML span was
+    /// escaped to inert text ([`markdown_to_html`]). Safe to `set_inner_html`
+    /// into our own document; that is what the link/image rewriters expect.
+    Markup(String),
+    /// A complete, **untrusted** HTML document (`format:html`), verbatim.
+    ///
+    /// **MUST be mounted in a restricted sandbox, never in our document.**
+    /// The host is `dom::content_site`'s document frame: an `<iframe sandbox="">`
+    /// with *every* restriction on — no scripts, opaque origin, no forms, no
+    /// navigation. That is a strictly stronger answer than the allowlist
+    /// sanitizer gate G2 anticipates (§8 flags allowlist completeness as the
+    /// fragile part, and "text-escaping ≠ sanitization"): nothing in the
+    /// document executes, so completeness is not a property we have to get
+    /// right. F-CONTENT-1's rule — raw HTML never reaches *our* origin — is
+    /// preserved, not relaxed.
+    Document(String),
+}
+
+/// An empty render is the **inert** one. Hand-written rather than derived so
+/// the choice is explicit: defaulting to `Document` would make a value nobody
+/// filled in eligible for the raw-mount path.
+impl Default for PageRender {
+    fn default() -> Self {
+        PageRender::Markup(String::new())
     }
-    markdown_to_html(body)
+}
+
+impl PageRender {
+    /// The rendered markup, whatever the variant — for callers that only need
+    /// the bytes (the static exporter writes both to a file). A DOM caller must
+    /// match on the variant instead; mounting is variant-specific.
+    pub fn as_str(&self) -> &str {
+        match self {
+            PageRender::Markup(s) | PageRender::Document(s) => s,
+        }
+    }
+
+    /// True when this is an untrusted document needing the sandboxed host.
+    pub fn is_document(&self) -> bool {
+        matches!(self, PageRender::Document(_))
+    }
+}
+
+/// Render a page body according to its `format`, returning *how it must be
+/// mounted* along with the markup.
+///
+/// **Security boundary (F-CONTENT-1, drift audit).** Content-site bodies are
+/// *untrusted cross-peer data* — a hash-valid page can still be malicious, and
+/// the hash proves only that the publisher signed exactly these bytes. So raw
+/// HTML must never reach our origin. It previously could not reach *anywhere*:
+/// `format:html` was downgraded to escaped text, because the only mount we had
+/// was `set_inner_html` and there is still no sanitizer in the tree.
+///
+/// It now reaches a sandbox instead of a sanitizer. [`PageRender::Document`]
+/// documents the tier and why it is stronger than the sanitizer G2 assumes.
+/// **Do not "simplify" this to return a bare `String`** — the type is the
+/// enforcement point.
+pub fn render_page(format: &str, body: &str) -> PageRender {
+    if format == super::format::HTML_PAGE_FORMAT {
+        PageRender::Document(body.to_string())
+    } else {
+        PageRender::Markup(markdown_to_html(body))
+    }
 }
 
 /// Render a markdown body to an HTML string, neutralizing raw HTML.
@@ -132,19 +186,63 @@ mod tests {
     }
 
     #[test]
-    fn html_format_is_not_honored_as_raw_passthrough() {
-        // F-CONTENT-1: a page declaring format:html must NOT inject raw HTML.
-        // It is rendered as escaped text, identically to the markdown path.
+    fn a_markdown_page_never_yields_a_document() {
+        // F-CONTENT-1, the half that has NOT changed: raw HTML written into a
+        // *markdown* body is still escaped to inert text, and the result is
+        // `Markup` — the variant the DOM layer is allowed to `set_inner_html`.
         let malicious = "<script>alert(document.cookie)</script><img src=x onerror=alert(1)>";
-        let via_html = render_page_body("html", malicious);
-        let via_md = render_page_body("markdown", malicious);
-        assert_eq!(via_html, via_md, "html format must route through the same escaping path");
-        // The security property is that the markup is ESCAPED — no live tags.
-        // (The literal text "onerror=" survives inside escaped text, but inert:
-        // `&lt;img ... onerror=...&gt;` is displayed text, not an attribute.)
-        assert!(!via_html.contains("<script>"), "raw <script> must not pass through: {via_html}");
-        assert!(!via_html.contains("<img"), "raw <img> tag must not pass through: {via_html}");
-        assert!(via_html.contains("&lt;script&gt;"), "script must be escaped to text: {via_html}");
-        assert!(via_html.contains("&lt;img"), "img must be escaped to text: {via_html}");
+        let rendered = render_page("markdown", malicious);
+        let PageRender::Markup(html) = &rendered else {
+            panic!("a markdown page must render as Markup, got {rendered:?}");
+        };
+        assert!(!html.contains("<script>"), "raw <script> must not pass through: {html}");
+        assert!(!html.contains("<img"), "raw <img> tag must not pass through: {html}");
+        assert!(html.contains("&lt;script&gt;"), "script must be escaped to text: {html}");
+        assert!(html.contains("&lt;img"), "img must be escaped to text: {html}");
+    }
+
+    #[test]
+    fn an_unknown_format_falls_closed_to_the_escaping_path() {
+        // A format we don't know (a future base, a typo, a hostile publisher's
+        // invention) must NOT be treated as a document. Fail closed: anything
+        // that isn't exactly `html` goes through the escaping markdown path.
+        for format in ["", "HTML", "html5", "text/html", "xhtml", "markdown", "weird"] {
+            let rendered = render_page(format, "<script>alert(1)</script>");
+            assert!(
+                !rendered.is_document(),
+                "format {format:?} must not be honored as a raw document"
+            );
+            assert!(
+                !rendered.as_str().contains("<script>"),
+                "format {format:?} must escape raw HTML: {}",
+                rendered.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn an_html_page_is_carried_verbatim_as_a_document() {
+        // The escape hatch is honored now — but as a *typed* document, whose
+        // only mount is the restricted sandbox. The bytes are untouched: a book
+        // is a complete standalone file and rewriting any of it would corrupt
+        // it. The safety lives in WHERE this goes, not in what it contains.
+        let doc = "<!DOCTYPE html><html><head><style>body{color:red}</style></head>\
+                   <body><h1>Paper 0</h1><script>alert(1)</script></body></html>";
+        let rendered = render_page("html", doc);
+        let PageRender::Document(out) = &rendered else {
+            panic!("an html page must render as Document, got {rendered:?}");
+        };
+        assert_eq!(out, doc, "a document is carried byte-for-byte");
+        assert!(rendered.is_document());
+    }
+
+    #[test]
+    fn the_two_variants_are_not_interchangeable_for_the_same_bytes() {
+        // The property that makes the type the enforcement point: identical
+        // input bytes produce two values that are NOT equal, so a call site
+        // cannot accidentally treat one as the other. If someone "simplifies"
+        // this back to a bare String return, this test is what goes red.
+        let body = "<b>hi</b>";
+        assert_ne!(render_page("html", body), render_page("markdown", body));
     }
 }

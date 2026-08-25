@@ -115,6 +115,7 @@
   "contentsite.more": "আরও ▾ ({n})",
   "contentsite.offline_page_missing": "_এই পৃষ্ঠাটি অফলাইন দেখার জন্য রাখা হয়নি — লোড করতে আবার সংযুক্ত হোন।_",
   "contentsite.offline_source_unreachable": "_এই সাইটের উৎসে পৌঁছানো যাচ্ছে না। এর ক্যাশে করা রূপরেখা দেখানো হচ্ছে।_",
+  "contentsite.document_empty": "এই নথিটি খালি — পৃষ্ঠাটিতে কোনও বিষয়বস্তু নেই।",
   "contentsite.share_link": "লিঙ্ক শেয়ার করুন 🔗",
   "contentsite.share_link_hint": "এমন একটি লিঙ্ক কপি করুন যা এই পৃষ্ঠাটি লাইভ এন্টিটি ব্রাউজারে আবার খোলে",
   "contentstream.empty": "(এখনও কোনো বাইন্ডিং ইভেন্ট নেই — এই পিয়ারে put / remove / snapshot চালান)",

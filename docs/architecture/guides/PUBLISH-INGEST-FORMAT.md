@@ -79,12 +79,19 @@ The **landing page** is not set in the manifest: the ingester picks `index` if a
 
 ---
 
-## 3. Pages — `pages/**/*.md`
+## 3. Pages — `pages/**/*.{md,html}`
 
-Every `*.md` file under `pages/` is one page.
+Every `*.md` **or `*.html`** file under `pages/` is one page. The two may sit
+side by side in one site; `.md` is the universal base, `.html` the web tier for
+**pre-rendered documents** (§3a).
 
-- **Slug** = the path under `pages/`, with `.md` stripped, slash-separated.
-  `pages/guide/intro.md` → slug `guide/intro`. Nesting is preserved.
+- **Slug** = the path under `pages/`, with the extension stripped,
+  slash-separated. `pages/guide/intro.md` → slug `guide/intro`. Nesting is
+  preserved.
+- **One source per slug.** `about.md` beside `about.html` is **refused**, naming
+  both files — there is no correct pick between them, and silently choosing one
+  would publish the file the author did not mean while leaving no trace of the
+  other. Rename one.
 - **Frontmatter** (optional): a leading `+++ … +++` block of **TOML**. `title` is
   lifted to the page title; every other key is carried as page frontmatter (so
   producer metadata like `content_class`, `source`, `recipe`, `status` survives).
@@ -103,6 +110,45 @@ content_class = "authored"
 
 A paragraph. ![a dot](assets/figures/dot.svg)
 ```
+
+---
+
+## 3a. Document pages — `pages/**/*.html`
+
+A `.html` page is a **complete, pre-rendered HTML document** — a Pandoc paper or
+book, an exported report — carried into the tree **byte-for-byte**. This is the
+base format the content-site convention §3.1 permits at the web tier.
+
+- **Nothing is transformed.** No frontmatter stripping, no `::embed`
+  normalization, no sanitizing pass. Every one of those would corrupt a
+  standalone document, and the safety boundary is not here (below).
+- **Title** comes from the document's first `<title>` element, entity-decoded.
+  No `<title>` → the key is left unset and the slug-humanizing fallback names
+  the page, exactly as for a markdown file with no frontmatter title.
+- **It renders in `<iframe sandbox="">`** — every restriction on: no scripts,
+  opaque origin, no forms, no navigation. That is where the safety lives, which
+  is why ingest does not rewrite anything. Consequences to design for:
+  - **Scripts do not run.** A document depending on a CDN (MathJax, a
+    highlighter) shows its un-processed source instead. Emit self-contained
+    output — for math, pandoc `--mathml`.
+  - **External resources do not load.** Use `--embed-resources --standalone` so
+    figures ride as `data:` URLs; a relative path out of the artifact
+    (`../../output/figures/x.png`) is broken here for the same reason it is
+    broken on a static host.
+  - **The document's own CSS applies** and our theme does not reach it. It
+    supplies all its own typography and page furniture.
+- **Static export** emits a document page verbatim, skipping the export
+  template — so it carries no site nav in the static projection.
+
+```text
+pages/papers/paper-00.html    <!DOCTYPE html><html><head><title>Paper 0 …
+site.manifest.json            { "nav": [ { "title": "Paper 0",
+                                           "path": "pages/papers/paper-00.html" } ] }
+```
+
+A `nav[].path` naming a `.html` page projects to the same slug the page is
+stored under (`/papers/paper-00`) — the extension is stripped exactly as `.md`
+is.
 
 ---
 

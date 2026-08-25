@@ -115,6 +115,7 @@
   "contentsite.more": "Több ▾ ({n})",
   "contentsite.offline_page_missing": "_Ez az oldal nincs offline megtekintésre megőrizve — a betöltéshez csatlakozzon újra._",
   "contentsite.offline_source_unreachable": "_A webhely forrása nem érhető el. A gyorsítótárazott vázlata látható._",
+  "contentsite.document_empty": "Ez a dokumentum üres — az oldalon nincs tartalom.",
   "contentsite.share_link": "Hivatkozás megosztása 🔗",
   "contentsite.share_link_hint": "Olyan hivatkozás másolása, amely újranyitja ezt az oldalt az élő entitásböngészőben",
   "contentstream.empty": "(még nincsenek kötési események — indíts egy put / remove / snapshot műveletet ezen a peeren)",

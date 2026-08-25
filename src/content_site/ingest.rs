@@ -205,36 +205,118 @@ fn walk_assets(
     Ok(())
 }
 
-/// Recursively read every `*.md` under `pages_dir` into `(slug, SitePage)`.
-/// Slug = path relative to `pages_dir`, `.md` stripped, slash-separated —
+/// The page source extensions we ingest, and the `SitePage.format` each
+/// becomes. `.md` is the universal base (convention §3.1's default); `.html` is
+/// the **web-tier escape hatch** the same section permits — a pre-rendered
+/// document (a Pandoc paper/book) that we store verbatim and the app mounts in
+/// a restricted sandbox. Order is the tie-break order for a slug collision
+/// report, nothing more; a collision is refused, never resolved.
+const PAGE_SOURCES: &[(&str, &str)] = &[("md", "markdown"), ("html", "html")];
+
+/// Recursively read every page source under `pages_dir` into `(slug, SitePage)`.
+/// Slug = path relative to `pages_dir`, extension stripped, slash-separated —
 /// the exact form [`super::read`] recovers from the tree, so the round-trip
 /// is identity.
+///
+/// **Two files that would claim one slug are refused, not ranked.** `foo.md`
+/// beside `foo.html` is an authoring mistake with no correct answer: whichever
+/// we picked, half the time we would publish the file the author did not mean,
+/// and the tree records no trace of the one we dropped. So it fails here, where
+/// the person who can fix it is standing — the same posture as the registry
+/// emitter refusing a malformed bind target rather than signing it.
 fn collect_pages(pages_dir: &Path) -> Result<Vec<(String, SitePage)>, String> {
     let mut out = Vec::new();
-    walk_md(pages_dir, pages_dir, &mut out)?;
+    let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
+    walk_pages(pages_dir, pages_dir, &mut out, &mut seen)?;
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
 
-fn walk_md(root: &Path, dir: &Path, out: &mut Vec<(String, SitePage)>) -> Result<(), String> {
+fn walk_pages(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, SitePage)>,
+    seen: &mut BTreeMap<String, PathBuf>,
+) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("read dir {}: {e}", dir.display()))?;
     for entry in entries.filter_map(Result::ok) {
         let p = entry.path();
         if p.is_dir() {
-            walk_md(root, &p, out)?;
+            walk_pages(root, &p, out, seen)?;
             continue;
         }
-        if p.extension().and_then(|e| e.to_str()) != Some("md") {
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let Some((_, format)) = PAGE_SOURCES.iter().find(|(e, _)| *e == ext) else {
             continue;
-        }
+        };
         let rel = p.strip_prefix(root).map_err(|e| format!("strip prefix: {e}"))?;
         let slug = rel.to_string_lossy().replace('\\', "/");
-        let slug = slug.strip_suffix(".md").unwrap_or(&slug).to_string();
+        let slug = slug.strip_suffix(&format!(".{ext}")).unwrap_or(&slug).to_string();
+        if let Some(first) = seen.get(&slug) {
+            return Err(format!(
+                "two page sources claim the slug '{slug}': {} and {} — \
+                 rename one; a site page has exactly one source",
+                first.display(),
+                p.display()
+            ));
+        }
+        seen.insert(slug.clone(), p.clone());
         let content =
             std::fs::read_to_string(&p).map_err(|e| format!("read {}: {e}", p.display()))?;
-        out.push((slug, page_from_markdown(&content)));
+        let page = match *format {
+            "html" => page_from_html(&content),
+            _ => page_from_markdown(&content),
+        };
+        out.push((slug, page));
     }
     Ok(())
+}
+
+/// Build a `SitePage` from a pre-rendered HTML document.
+///
+/// The body is stored **byte-for-byte**. A Pandoc artifact is a complete
+/// standalone file — its own `<head>`, `<title>`, inline stylesheet, internal
+/// anchors — and every transform we apply to markdown here (frontmatter
+/// stripping, `::embed` normalization) would corrupt it. There is deliberately
+/// no sanitizing pass either: the safety boundary is the sandbox the app mounts
+/// it in, not a rewrite at ingest, and doing both would mean *neither* is the
+/// one place the property lives.
+///
+/// The only thing lifted out is the title, so the page has a name in the nav
+/// and the breadcrumbs without the reader opening it.
+fn page_from_html(content: &str) -> SitePage {
+    let title = html_title(content);
+    let mut page = SitePage::html(title.clone(), content);
+    if title.is_empty() {
+        // No `<title>`: leave the key absent rather than storing an empty
+        // string, so the slug-humanizing fallback names the page (an empty
+        // title would render as a blank breadcrumb, which reads as broken).
+        page.frontmatter.remove("title");
+    }
+    page
+}
+
+/// The text of the document's first `<title>` element, trimmed and
+/// entity-decoded for the handful of escapes a title realistically carries.
+/// Empty when there is none — the caller then leaves `title` unset and the
+/// existing humanize-the-slug fallback names the page, exactly as it does for a
+/// markdown file with no frontmatter title.
+fn html_title(content: &str) -> String {
+    // Case-insensitive search without pulling in a regex: lowercase a copy for
+    // locating, then slice the ORIGINAL so the title keeps its own casing.
+    let lower = content.to_ascii_lowercase();
+    let Some(open) = lower.find("<title") else { return String::new() };
+    let Some(gt) = lower[open..].find('>').map(|i| open + i + 1) else { return String::new() };
+    let Some(close) = lower[gt..].find("</title>").map(|i| gt + i) else { return String::new() };
+    let raw = content[gt..close].trim();
+    raw.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .trim()
+        .to_string()
 }
 
 /// Build a `SitePage` from one emitted markdown file: strip the `+++` TOML
@@ -311,12 +393,21 @@ fn parse_nav(v: &serde_json::Value) -> Vec<NavItem> {
 
 /// `pages/research/index.md` → `/research/index` (in-site, root-absolute).
 /// Empty in → empty out (a group header has no page; see [`parse_nav`]).
+///
+/// Every extension in [`PAGE_SOURCES`] is stripped, not just `.md` — a nav
+/// entry naming a `.html` page must project to the same slug
+/// [`collect_pages`] stored it under, or the menu links to a page that isn't
+/// there. (Stripping only `.md` would leave `/papers/paper-00.html`, which
+/// resolves to nothing and reads as a missing page rather than a bad link.)
 fn path_to_target(page_path: &str) -> String {
     if page_path.is_empty() {
         return String::new();
     }
     let s = page_path.strip_prefix("pages/").unwrap_or(page_path);
-    let s = s.strip_suffix(".md").unwrap_or(s);
+    let s = PAGE_SOURCES
+        .iter()
+        .find_map(|(ext, _)| s.strip_suffix(&format!(".{ext}")))
+        .unwrap_or(s);
     format!("/{s}")
 }
 
@@ -369,6 +460,110 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, content).unwrap();
+    }
+
+    /// A stand-in for a Pandoc artifact: standalone, own `<head>`/`<style>`,
+    /// and the two things the real books carry that a naive ingest would
+    /// mangle — a `+++` sequence in the prose and markdown-image syntax.
+    const PANDOC_LIKE: &str = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\
+        <meta charset=\"utf-8\">\n<title>Paper 0 &amp; the Entity System</title>\n\
+        <style>body { font-family: serif; }</style>\n</head>\n<body>\n\
+        <h1>Paper 0</h1>\n<p>A +++ sequence and ![not an image](x.png) in prose.</p>\n\
+        </body>\n</html>\n";
+
+    #[test]
+    fn an_html_page_is_stored_verbatim_as_a_document() {
+        // The whole contract of the html tier: the bytes that arrive are the
+        // bytes that are stored. Every markdown transform in this module would
+        // corrupt a standalone document, so none of them may run on it.
+        let page = page_from_html(PANDOC_LIKE);
+        assert_eq!(page.format, "html");
+        assert_eq!(page.body, PANDOC_LIKE, "a document is stored byte-for-byte");
+        // Specifically: frontmatter splitting did not eat anything, and the
+        // `::embed` normalization did not rewrite the markdown-looking image.
+        assert!(page.body.contains("+++"), "a +++ in prose survives");
+        assert!(page.body.contains("![not an image](x.png)"), "no embed normalization ran");
+        assert!(!page.body.contains("::embed"), "no embed directive was synthesized");
+    }
+
+    #[test]
+    fn an_html_pages_title_comes_from_its_title_element() {
+        // So the page has a name in the nav and breadcrumbs without opening it.
+        // Entity-decoded, because a real title carries them (paper 0's does).
+        let page = page_from_html(PANDOC_LIKE);
+        assert_eq!(page.title(), "Paper 0 & the Entity System");
+    }
+
+    #[test]
+    fn a_titleless_or_odd_document_still_ingests() {
+        // Title extraction is best-effort — it must never be the thing that
+        // fails an ingest, because the slug-humanizing fallback already names
+        // a page fine. Each of these is a document we'd still want stored.
+        for doc in [
+            "<html><body><p>no title element at all</p></body></html>",
+            "<html><head><TITLE>Shouty</TITLE></head><body>x</body></html>",
+            "<html><head><title></title></head><body>x</body></html>",
+            "<html><head><title>unclosed<body>x</body></html>",
+            "",
+        ] {
+            let page = page_from_html(doc);
+            assert_eq!(page.format, "html");
+            assert_eq!(page.body, doc, "body is verbatim regardless of the title");
+        }
+        // Casing of the tag is ignored; casing of the TEXT is preserved.
+        assert_eq!(
+            page_from_html("<html><head><TITLE>Shouty</TITLE></head><body>x</body></html>")
+                .title(),
+            "Shouty"
+        );
+    }
+
+    #[test]
+    fn markdown_and_html_pages_coexist_in_one_site() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(
+            dir,
+            "site.manifest.json",
+            r#"{ "site_id": "corpus", "title": "Corpus",
+                 "nav": [ { "title": "Home", "path": "pages/index.md" },
+                          { "title": "Paper 0", "path": "pages/papers/paper-00.html" } ] }"#,
+        );
+        write(dir, "pages/index.md", "+++\ntitle = \"Home\"\n+++\n\n# Welcome\n");
+        write(dir, "pages/papers/paper-00.html", PANDOC_LIKE);
+
+        let pages = collect_pages(&dir.join("pages")).expect("ingest");
+        let by_slug: BTreeMap<_, _> = pages.into_iter().collect();
+        assert_eq!(by_slug["index"].format, "markdown");
+        assert_eq!(by_slug["papers/paper-00"].format, "html");
+        assert_eq!(
+            by_slug["papers/paper-00"].body, PANDOC_LIKE,
+            "the html page is untouched by the markdown path"
+        );
+
+        // The nav must project the .html entry to the SAME slug the page was
+        // stored under, or the menu links at a page that does not exist.
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("site.manifest.json")).unwrap())
+                .unwrap();
+        let nav = parse_nav(&manifest["nav"]);
+        assert_eq!(nav[1].target, "/papers/paper-00", "nav strips .html, not just .md");
+    }
+
+    #[test]
+    fn two_sources_claiming_one_slug_are_refused_by_name() {
+        // There is no correct pick between `about.md` and `about.html`, so the
+        // ingest refuses in front of the person who can rename one — rather
+        // than publishing a coin-flip and recording nothing about the loser.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "pages/about.md", "+++\ntitle = \"About\"\n+++\n\nbody\n");
+        write(dir, "pages/about.html", PANDOC_LIKE);
+
+        let err = collect_pages(&dir.join("pages")).expect_err("a slug collision must refuse");
+        assert!(err.contains("about"), "the message names the slug: {err}");
+        assert!(err.contains("about.md"), "the message names the first file: {err}");
+        assert!(err.contains("about.html"), "the message names the second file: {err}");
     }
 
     #[test]
