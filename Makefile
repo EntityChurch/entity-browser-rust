@@ -255,9 +255,11 @@ test: image
 test-tauri: image
 	$(call RUN,cd src-tauri && cargo test)
 
-# Lint, in-container.
+# Lint, in-container: clippy + the UI ratchet gate (raw atoms / inline style
+# literals / untokenized hex must match tools/ui-lint-baseline.txt — see
+# tools/ui-lint.sh; migrations ratchet the baseline down in the same commit).
 lint: image
-	$(call RUN,cargo clippy)
+	$(call RUN,cargo clippy && ./tools/ui-lint.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image
@@ -311,6 +313,24 @@ check-dist:
 wasm-measurement: image
 	$(call RUN,trunk build --features measurement --dist $(DIST))
 
+# Display passthrough for the e2e's Tauri phases (14 / 15.6): the desktop
+# binary needs a window server or GTK dies at init, so hand the container
+# the host's display socket when one exists — same plumbing as RUN_GUI,
+# minus --userns=keep-id (the cargo caches in the image are root-owned, and
+# rootless podman already maps container-root to the invoking user, so the
+# socket is accessible without it — verified on this Wayland host). With no
+# display this expands empty and the Tauri phases self-skip LOUDLY
+# (display-gated in tests/e2e_worker.rs) instead of failing the suite red;
+# the port is never an issue either way (the listener falls back to a
+# dynamic port when 4041 is taken, and the test reads ws_addr from the
+# READY line).
+E2E_DISPLAY_ARGS = $(shell \
+  if [ -n "$$WAYLAND_DISPLAY" ] && [ -S "$$XDG_RUNTIME_DIR/$$WAYLAND_DISPLAY" ]; then \
+    echo "--security-opt label=disable -e XDG_RUNTIME_DIR=/tmp/xdg -e WAYLAND_DISPLAY=$$WAYLAND_DISPLAY -e GDK_BACKEND=wayland -v $$XDG_RUNTIME_DIR/$$WAYLAND_DISPLAY:/tmp/xdg/$$WAYLAND_DISPLAY $(if $(wildcard /dev/dri),--device /dev/dri,) -e WEBKIT_DISABLE_DMABUF_RENDERER=1 -e WEBKIT_DISABLE_COMPOSITING_MODE=1"; \
+  elif [ -n "$$DISPLAY" ]; then \
+    echo "--security-opt label=disable -e DISPLAY=$$DISPLAY -e GDK_BACKEND=x11 -v /tmp/.X11-unix:/tmp/.X11-unix $(if $(wildcard /dev/dri),--device /dev/dri,) -e WEBKIT_DISABLE_DMABUF_RENDERER=1 -e WEBKIT_DISABLE_COMPOSITING_MODE=1"; \
+  fi)
+
 # E2E browser test (exercises Worker mode via `?worker=1`). Requires
 # the Selenium-firefox container running on :4444 — see
 # tools/e2e/README.md. The test prints the full captured browser
@@ -330,7 +350,7 @@ e2e-worker: image
 	# so they must run serially (the main boot test + the multi-tab guard test).
 	# In-container (podman+make only); --network host so the test reaches the
 	# Selenium container on :4444 and Selenium reaches the test's :8092 server.
-	$(call RUN,cargo test --features e2e --test e2e_worker -- --nocapture --test-threads=1,--network host)
+	$(call RUN,cargo test --features e2e --test e2e_worker -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS))
 
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
 # Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:

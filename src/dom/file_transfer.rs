@@ -30,7 +30,7 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     let header = util::create_element("div");
     header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
-    h2.set_attribute("style", "margin:0;font-size:16px").ok();
+    h2.set_attribute("style", theme::TITLE_INLINE).ok();
     util::set_text(&h2, &title_for(output));
     util::append(&header, &h2);
     if output.has_target {
@@ -102,7 +102,7 @@ fn auth_state(access: &TargetAccess) -> AuthState {
 
 fn render_no_target_hint(parent: &Element) {
     let hint = util::create_element("p");
-    hint.set_attribute("style", "color:var(--text-dim, #888);font-size:13px").ok();
+    hint.set_attribute("style", &format!("color:var(--text-dim, #888);{}", theme::NOTE)).ok();
     hint.set_inner_html(
         "No peer connected. Open <strong>Peer Connections</strong> and pair a \
          Tori-native backend (scan its QR or connect its <code>ws://</code> \
@@ -112,24 +112,19 @@ fn render_no_target_hint(parent: &Element) {
 }
 
 fn render_target_selector(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let label = util::create_element("label");
-    label.set_attribute("style", theme::LABEL).ok();
-    util::set_text(&label, "From peer:");
-    util::append(parent, &label);
-
-    let select = util::create_element("select");
-    select.set_attribute("style", theme::SELECT).ok();
-    for option in &output.target_options {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", &option.value).ok();
-        if option.selected {
-            opt.set_attribute("selected", "").ok();
-        }
-        util::set_text(&opt, &option.label);
-        util::append(&select, &opt);
-    }
-    ctx.on_select_change(&select, "select_target");
-    util::append(parent, &select);
+    let options: Vec<(&str, &str)> = output
+        .target_options
+        .iter()
+        .map(|o| (o.value.as_str(), o.label.as_str()))
+        .collect();
+    let selected = output
+        .target_options
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.value.as_str())
+        .unwrap_or("");
+    let select = components::select(ctx, &options, selected, "select_target");
+    util::append(parent, &components::field("From peer", "", &select));
 }
 
 /// Access affordance for the effective target (`§2.1`) — honest and
@@ -144,7 +139,7 @@ fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     // we add only the actionable *path* when access is refused — no restatement.
     if matches!(output.access, TargetAccess::Denied) {
         let msg = util::create_element("p");
-        msg.set_attribute("style", &format!("margin:{} 0;font-size:13px", theme::SP_2)).ok();
+        msg.set_attribute("style", theme::NOTE).ok();
         util::set_text(
             &msg,
             "The exposing device must authorize this one before transfers succeed.",
@@ -153,34 +148,15 @@ fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
 
         // Deep-link to the authority surface — focuses the singleton Peer
         // Connections window (or spawns it) where the grant is made.
-        let btn = util::create_element("button");
-        util::set_text(&btn, "Authorize this device");
-        btn.set_attribute("style", theme::BTN_PRIMARY).ok();
-        let actions = ctx.actions.clone();
-        let rp = ctx.repaint.clone();
-        ctx.listen(&btn, "click", move |_| {
-            actions.borrow_mut().push(Action::SpawnWindow {
-                type_name: "Peer Connections",
-                peer_id: None,
-            });
-            rp();
-        });
+        let btn = components::button_action(
+            ctx,
+            "Authorize this device",
+            components::ButtonKind::Primary,
+            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None },
+        );
         util::append(parent, &btn);
     }
 }
-
-// Tree-row styles — the same shared-tree look Site Creator / Entity Tree use,
-// kept local so File Transfer doesn't depend on another window's private consts.
-const TREE_ROW: &str = "display:flex;align-items:center;gap:4px;margin:1px 0";
-const CARET: &str = "background:transparent;border:none;color:var(--text,#e0e0e0);\
-    cursor:pointer;font-size:14px;width:20px;padding:0;line-height:1;flex:0 0 20px";
-const NODE_BTN: &str = "flex:1 1 auto;text-align:left;background:transparent;\
-    color:var(--text,#e0e0e0);border:1px solid transparent;border-radius:4px;\
-    cursor:pointer;padding:2px 6px;font-size:13px";
-const NODE_BTN_SELECTED: &str = "flex:1 1 auto;text-align:left;\
-    background:var(--surface,#2a2a4e);color:var(--accent,#7aa2d0);\
-    border:1px solid var(--accent,#3a6ea5);border-radius:4px;cursor:pointer;\
-    padding:2px 6px;font-size:13px";
 
 /// The share browsed as a **tree** — a Refresh control, the flattened rows
 /// (built from the shared `TreeNode` machinery in the model), and a Pull button
@@ -192,13 +168,8 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     // our own writes re-list themselves per S5).
     if output.root_listed {
         let header = util::create_element("div");
-        header
-            .set_attribute("style", "display:flex;justify-content:flex-end;margin-bottom:8px")
-            .ok();
-        let refresh = util::create_element("button");
-        util::set_text(&refresh, "Refresh");
-        refresh.set_attribute("style", theme::BTN_SMALL).ok();
-        ctx.on_window_event(&refresh, "click", "ft_refresh", "");
+        header.set_attribute("style", theme::ROW_END).ok();
+        let refresh = components::button(ctx, "Refresh", components::ButtonKind::Small, "ft_refresh");
         util::append(&header, &refresh);
         util::append(parent, &header);
     }
@@ -212,17 +183,19 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
         if output.root_loading {
             util::append(parent, &components::loading("")); // "Loading…"
         } else {
-            let el = util::create_element("button");
-            el.set_attribute("style", theme::BTN_SECONDARY).ok();
-            util::set_text(&el, "Browse shared files");
-            ctx.on_window_event(&el, "click", "ft_refresh", "");
-            util::append(parent, &el);
+            let browse = components::button(
+                ctx,
+                "Browse shared files",
+                components::ButtonKind::Secondary,
+                "ft_refresh",
+            );
+            util::append(parent, &browse);
         }
         return;
     }
 
     let list = util::create_element("div");
-    list.set_attribute("style", "margin:4px 0;max-height:260px;overflow:auto").ok();
+    list.set_attribute("style", theme::SCROLL_LIST).ok();
     list.set_attribute("data-scroll-key", "file-transfer-tree").ok();
     if output.tree_rows.is_empty() {
         // Empty state (S5) — a helpful line, not a void.
@@ -238,24 +211,6 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
 }
 
 fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
-    let el = util::create_element("div");
-    el.set_attribute("style", &format!("{TREE_ROW};padding-left:{}px", row.depth * 16)).ok();
-
-    // Caret for directories; an aligning spacer for files.
-    if row.is_dir {
-        let caret = util::create_element("button");
-        caret.set_attribute("style", CARET).ok();
-        util::set_text(&caret, if row.expanded { "\u{25be}" } else { "\u{25b8}" }); // ▾ / ▸
-        ctx.on_window_event(&caret, "click", "ft_toggle", &row.path);
-        util::append(&el, &caret);
-    } else {
-        let spacer = util::create_element("span");
-        spacer.set_attribute("style", "flex:0 0 20px").ok();
-        util::append(&el, &spacer);
-    }
-
-    let btn = util::create_element("button");
-    btn.set_attribute("style", if row.selected { NODE_BTN_SELECTED } else { NODE_BTN }).ok();
     let icon = if row.is_dir { "\u{1f4c1}" } else { "\u{1f4c4}" }; // 📁 / 📄
     let mut label = format!("{icon} {}", row.name);
     if row.loading {
@@ -263,11 +218,15 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
     } else if let Some(sz) = row.size {
         label.push_str(&format!("  ({})", human_size(sz)));
     }
-    util::set_text(&btn, &label);
+
+    let (el, caret, node) =
+        components::tree_row(row.depth, row.is_dir, row.expanded, row.selected, &label);
+    if let Some(caret) = caret {
+        ctx.on_window_event(&caret, "click", "ft_toggle", &row.path);
+    }
     // Directory rows toggle; file rows select (highlight → Pull).
     let event = if row.is_dir { "ft_toggle" } else { "ft_select" };
-    ctx.on_window_event(&btn, "click", event, &row.path);
-    util::append(&el, &btn);
+    ctx.on_window_event(&node, "click", event, &row.path);
 
     util::append(list, &el);
 }
@@ -275,11 +234,9 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
 /// Pull the currently-selected file. Inert (dimmed, no handler) when nothing is
 /// selected — reuses the proven `Action::DownloadFile` path.
 fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let btn = util::create_element("button");
-    util::set_text(&btn, "\u{2b07} Pull selected file");
+    let btn = components::button_el("\u{2b07} Pull selected file", components::ButtonKind::Primary);
     match &output.selected_full_path {
         Some(path) => {
-            btn.set_attribute("style", theme::BTN_PRIMARY).ok();
             let actions = ctx.actions.clone();
             let rp = ctx.repaint.clone();
             let peer_id = output.peer_id.clone();
@@ -300,8 +257,7 @@ fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &Dom
             });
         }
         None => {
-            btn.set_attribute("style", &format!("{};opacity:0.5;cursor:default", theme::BTN_PRIMARY))
-                .ok();
+            components::disable(&btn);
         }
     }
     util::append(parent, &btn);
@@ -324,9 +280,7 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
     input.set_attribute("style", "display:none").ok();
     util::append(parent, &input);
 
-    let btn = util::create_element("button");
-    util::set_text(&btn, "Upload a file");
-    btn.set_attribute("style", theme::BTN_SECONDARY).ok();
+    let btn = components::button_el("Upload a file", components::ButtonKind::Secondary);
     {
         let input_for_click = input.clone();
         ctx.listen(&btn, "click", move |_| {
@@ -391,10 +345,9 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
 }
 
 fn render_results(parent: &Element, output: &FileTransferOutput) {
-    let header = util::create_element("h3");
-    header.set_attribute("style", "margin:12px 0 4px;font-size:14px").ok();
-    util::set_text(&header, "Results");
-    util::append(parent, &header);
+    // A bounded group like its siblings (S2) — the results pane is the
+    // window's feedback surface, not a floating tail.
+    let card = components::card("Results");
 
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();
@@ -412,6 +365,7 @@ fn render_results(parent: &Element, output: &FileTransferOutput) {
         }
         pre.set_inner_html(&html);
     }
-    util::append(parent, &pre);
+    util::append(&card, &pre);
+    util::append(parent, &card);
     util::schedule_scroll_to_bottom(&pre);
 }

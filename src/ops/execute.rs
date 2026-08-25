@@ -45,10 +45,47 @@ pub struct ExecuteResponse {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn execute(
-    peers: &Peers,
-    req: ExecuteRequest,
-) -> Pin<Box<dyn Future<Output = Result<ExecuteResponse, String>> + Send>> {
+type OpFuture = Pin<Box<dyn Future<Output = Result<ExecuteResponse, String>> + Send>>;
+#[cfg(target_arch = "wasm32")]
+type OpFuture = Pin<Box<dyn Future<Output = Result<ExecuteResponse, String>>>>;
+
+/// One L1 execute with self-healing for a **remote** target: on a remote `403`
+/// (stale capability — the granter re-mints at a fresh handshake) or a
+/// transport `Err` (stale pooled connection — a dead conn only surfaces here,
+/// there is no liveness signal), evict + reconnect through the peer's
+/// remembered listen address and re-dispatch ONCE (`BUGLOG-2026-07-14` B1;
+/// AP14 — recovery must key on the failure class that actually occurs, which
+/// for a stale pool is the transport `Err`, not the 403).
+///
+/// This is the app's one dispatch chokepoint, so every caller heals — no
+/// hand-picked coverage. A local or address-less target builds no heal future
+/// and passes straight through. The single retry re-sends the op: fine for
+/// this tier's ops (list/read are pure; write is a full-content overwrite).
+///
+/// All futures are pre-built: the sync frame-loop caller can't re-borrow
+/// `peers` across the reconnect await.
+pub fn execute(peers: &Peers, req: ExecuteRequest) -> OpFuture {
+    let heal = heal_future(peers, &req);
+    let retry = heal.as_ref().map(|_| execute_once(peers, req.clone()));
+    let first = execute_once(peers, req);
+    Box::pin(async move {
+        let resp = first.await;
+        let must_heal =
+            matches!(&resp, Ok(r) if r.result.status == 403) || resp.is_err();
+        if must_heal {
+            if let (Some(heal), Some(retry)) = (heal, retry) {
+                tracing::info!(
+                    "remote dispatch failed (403/transport) → evict + reconnect + retry once"
+                );
+                let _ = heal.await;
+                return retry.await;
+            }
+        }
+        resp
+    })
+}
+
+fn execute_once(peers: &Peers, req: ExecuteRequest) -> OpFuture {
     let (params, opts) = build_params_and_opts(&req);
     let seed = AccessSeed::from(&req);
     let fut = peers.execute(&req.peer_id, req.handler_uri, req.operation, params, opts);
@@ -61,21 +98,21 @@ pub fn execute(
     })
 }
 
-#[cfg(target_arch = "wasm32")]
-pub fn execute(
+/// Evict-and-reconnect future for `req`'s target, if it is a remote peer we
+/// hold a listen address for. `None` for a local target or a peer with no
+/// remembered address — nothing to reconnect through.
+fn heal_future(
     peers: &Peers,
-    req: ExecuteRequest,
-) -> Pin<Box<dyn Future<Output = Result<ExecuteResponse, String>>>> {
-    let (params, opts) = build_params_and_opts(&req);
-    let seed = AccessSeed::from(&req);
-    let fut = peers.execute(&req.peer_id, req.handler_uri, req.operation, params, opts);
-    Box::pin(async move {
-        let outcome = fut.await;
-        seed.record(&outcome);
-        let result = outcome?;
-        let summary = crate::format::format_handler_result(&result);
-        Ok(ExecuteResponse { result, summary })
-    })
+    req: &ExecuteRequest,
+) -> Option<crate::peers::ConnectPeerFuture<'static>> {
+    let (remote, _) = crate::access_log_store::parse_target(&req.handler_uri);
+    let remote = remote?;
+    let addr = peers
+        .peer_metadata(&remote)?
+        .listen_addresses
+        .first()
+        .map(|a| crate::views::peer_connections::model::rewrite_for_browser(a))?;
+    Some(peers.reconnect_peer(&req.peer_id, &remote, addr))
 }
 
 /// The (actor, target, operation, resource) tuple captured *before* the request

@@ -61,6 +61,14 @@ pub const BTN_SMALL: &str = "background:var(--surface,#2a2a4e);color:var(--text-
     border:1px solid var(--border-strong,#444);\
     padding:4px 12px;border-radius:3px;cursor:pointer";
 
+/// Destructive action button (Delete/Forget) — outlined in the error color,
+/// never solid: a destructive action is never styled as the group's primary
+/// (S3). Promoted from Site Editor's local `BTN_DANGER`, metrics harmonized
+/// with the `BTN_*` family.
+pub const BTN_DESTRUCTIVE: &str = "background:transparent;color:var(--status-err,#f66);\
+    border:1px solid var(--status-err,#f66);\
+    padding:6px 16px;border-radius:3px;cursor:pointer;font-size:13px;margin:2px";
+
 /// Toggle button (active state).
 pub const TOGGLE_ACTIVE: &str = "background:var(--surface,#2a2a4e);color:var(--text-muted,#c0c0c0);\
     border:1px solid var(--btn-secondary-border,#66f);\
@@ -83,6 +91,35 @@ pub const COLLAPSIBLE_HEADER: &str = "display:flex;align-items:center;gap:8px;wi
 /// Pre-formatted output area (event log, results).
 pub const PRE_OUTPUT: &str = "background:var(--surface-sunken,#0a0a1a);padding:8px;border-radius:4px;\
     font-size:11px;max-height:400px;overflow:auto;white-space:pre-wrap;margin:0";
+
+/// Window title inside a HEADER_ROW (an h2 sharing the row with controls).
+pub const TITLE_INLINE: &str = "margin:0;font-size:16px";
+
+/// Body note inside a card — plain explanatory text (larger than HINT).
+pub const NOTE: &str = "font-size:13px;margin:8px 0";
+
+/// Right-aligned control row (e.g. a Refresh button above a listing).
+pub const ROW_END: &str = "display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;margin-bottom:8px";
+
+/// Bounded scrolling list region (tree browsers, long listings). Pair with a
+/// `data-scroll-key` attribute so scroll position survives rebuilds.
+pub const SCROLL_LIST: &str = "margin:4px 0;max-height:260px;overflow:auto";
+
+// Tree-browser rows (`components::tree_row`) — ONE look for every lazy tree
+// (Site Editor navigator, File Transfer share browser). Promoted from Site
+// Editor's local consts when File Transfer shipped a second bespoke copy (S8).
+pub const TREE_ROW: &str = "display:flex;align-items:center;gap:4px;margin:2px 0";
+pub const TREE_CARET: &str = "background:transparent;border:none;color:var(--text,#e0e0e0);\
+    cursor:pointer;font-size:15px;width:22px;padding:0;line-height:1;flex:0 0 22px";
+pub const TREE_NODE: &str = "flex:1 1 auto;text-align:left;background:transparent;\
+    color:var(--text,#e0e0e0);border:1px solid transparent;border-radius:4px;\
+    padding:3px 8px;font-size:14px;cursor:pointer;overflow:hidden;text-overflow:ellipsis";
+/// One shared "selected" highlight (accent border + accent text) so the open
+/// page and the selected file read the same across windows.
+pub const TREE_NODE_SELECTED: &str = "flex:1 1 auto;text-align:left;background:transparent;\
+    color:var(--accent,#3a6ea5);border:2px solid var(--accent,#3a6ea5);\
+    border-radius:4px;padding:2px 7px;font-size:14px;font-weight:600;cursor:pointer;\
+    overflow:hidden;text-overflow:ellipsis";
 
 /// Section grouping.
 pub const SECTION_GROUP: &str = "margin-bottom:12px";

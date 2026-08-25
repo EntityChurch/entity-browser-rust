@@ -109,11 +109,15 @@ impl WindowView for PeerConnectionsWindow {
     fn handle_action(&mut self, action: &Action, peers: &Peers) {
         let state_changed = match action {
             Action::WindowEvent { window_id, event, value } if *window_id == self.window_id => {
+                let _ = value;
                 match event.as_str() {
-                    "set_address" => {
-                        self.model.set_address(value);
-                        true
-                    }
+                    // The in-progress address is a renderer-side DRAFT
+                    // (`ctx.drafts` via `components::text_input`), not model
+                    // state — typing survives unrelated repaints without any
+                    // per-keystroke event (`BUGLOG-2026-07-14` B3/B4). The model
+                    // only hears about the one-shot transitions: a successful
+                    // Connect clears the persisted suggestion so the field
+                    // doesn't re-offer the just-dialed address.
                     "clear_address" => {
                         self.model.clear_address();
                         true

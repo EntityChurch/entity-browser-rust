@@ -100,6 +100,19 @@ pub type ConnectPeerFuture<'a> = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<String, String>> + 'a>,
 >;
 
+/// Future for `Peers::disconnect_peer` / `reconnect_peer` — resolves to `()`
+/// on success (or the reconnected remote's id, for `reconnect_peer`, reusing
+/// `ConnectPeerFuture`).
+#[cfg(not(target_arch = "wasm32"))]
+pub type DisconnectPeerFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>,
+>;
+
+#[cfg(target_arch = "wasm32")]
+pub type DisconnectPeerFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), String>> + 'a>,
+>;
+
 /// Why a Direct-arm L0 escape hatch (`direct_peer_context`) yielded no
 /// context. The hatches expose main-thread `PeerContext` for L0 access
 /// and exist **only** on the Direct arm — reaching for one on a
@@ -2101,6 +2114,81 @@ impl Peers {
         direct_connect_future(pm.peer_shared(peer_id), peer_id, address)
     }
 
+    /// Evict the pooled connection `peer_id → remote_peer_id` — **uniform
+    /// across arms**. The next `connect_peer` re-handshakes fresh, which is
+    /// how `peer_id` adopts a capability grant authored on the remote *after*
+    /// it connected (the granter re-mints at authenticate; a pooled reuse
+    /// keeps the stale cap — see `DESIGN-ENFORCEMENT-CUTOVER.md`). Direct:
+    /// `RemoteState::remove` (sync, wrapped). Worker: routes through the
+    /// proxy. Idempotent (absent connection = success). Unrouted → `Err`.
+    #[cfg(target_arch = "wasm32")]
+    pub fn disconnect_peer(&self, peer_id: &str, remote_peer_id: &str) -> DisconnectPeerFuture<'static> {
+        let sdk = match self.sdk_for(peer_id) {
+            Ok(s) => s,
+            Err(e) => {
+                let m = e.to_string();
+                return Box::pin(async move { Err(m) });
+            }
+        };
+        match sdk {
+            Sdk::Direct(pm) => {
+                let shared = pm.peer_shared(peer_id);
+                let remote = remote_peer_id.to_string();
+                Box::pin(async move {
+                    match shared {
+                        Some(s) => { s.remote.remove(&remote); Ok(()) }
+                        None => Err("disconnect_peer: no shared state".to_string()),
+                    }
+                })
+            }
+            Sdk::Worker(w) => Box::pin(w.disconnect_peer(peer_id.to_string(), remote_peer_id.to_string())),
+        }
+    }
+
+    /// Native variant — Direct arm only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn disconnect_peer(&self, peer_id: &str, remote_peer_id: &str) -> DisconnectPeerFuture<'static> {
+        let sdk = match self.sdk_for(peer_id) {
+            Ok(s) => s,
+            Err(e) => {
+                let m = e.to_string();
+                return Box::pin(async move { Err(m) });
+            }
+        };
+        let Sdk::Direct(pm) = sdk;
+        let shared = pm.peer_shared(peer_id);
+        let remote = remote_peer_id.to_string();
+        Box::pin(async move {
+            match shared {
+                Some(s) => { s.remote.remove(&remote); Ok(()) }
+                None => Err("disconnect_peer: no shared state".to_string()),
+            }
+        })
+    }
+
+    /// Drop the pooled connection `peer_id → remote_peer_id` and re-dial it at
+    /// `address` — the reconnect that lets a just-authorized peer adopt its new
+    /// grant without user re-pairing. `disconnect` then `connect`; a plain
+    /// re-connect alone is insufficient because the pool `insert` is
+    /// insert-if-absent, so the stale connection must be evicted first.
+    pub fn reconnect_peer(
+        &self,
+        peer_id: &str,
+        remote_peer_id: &str,
+        address: String,
+    ) -> ConnectPeerFuture<'static> {
+        let disconnect = self.disconnect_peer(peer_id, remote_peer_id);
+        // `connect_peer` borrows `self`; build its future eagerly (it's already
+        // detached to 'static) so the returned future owns everything.
+        let connect = self.connect_peer(peer_id, address);
+        Box::pin(async move {
+            // A disconnect failure is non-fatal for reconnect intent — if there
+            // was nothing to evict, the connect still runs and re-handshakes.
+            let _ = disconnect.await;
+            connect.await
+        })
+    }
+
     /// Register a Tauri-backend peer's metadata on the **primary**
     /// Direct SDK. Panics on Worker primary (use the worker's
     /// `Request::RegisterBackendPeer` instead).
@@ -2338,6 +2426,53 @@ mod memory_transport_tests {
             "unexpected error message: {err}"
         );
     }
+
+    /// REPRO of the connect-refresh bug behind `BUGLOG-2026-07-14` B3/B4/B5.
+    /// The app's `connect_peer` ends in `remote.insert`, which is
+    /// **insert-if-absent** (`remote.rs` `insert_endpoint` returns the existing
+    /// entry on a key hit). So a second Connect to an already-pooled peer does
+    /// NOT establish a fresh connection — it silently keeps the existing
+    /// (possibly dead) one while the UI reports success. Tori's backend has a
+    /// **durable identity**, so after a backend restart the pool holds a stale
+    /// connection under that same id that Connect can never replace — hence
+    /// "shows connected, but I must reconnect, and even that's inconsistent."
+    /// `reconnect_peer` (evict + re-dial) is the fix; wiring the Connect button
+    /// to it closes B3/B4/B5.
+    #[tokio::test]
+    async fn connect_peer_cannot_refresh_pooled_connection_reconnect_can() {
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, _ha) = spawn_peer_on_registry(registry.clone());
+        let (_peers_b, pid_b, _hb) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+        let addr = format!("memory://{pid_b}");
+
+        // First Connect — establishes conn1, pooled under pid_b.
+        peers_a.connect_peer(&pid_a, addr.clone()).await.expect("connect 1");
+        let shared_a = peers_a.direct_peer_shared(&pid_a).unwrap();
+        let e1 = shared_a.remote.get(&pid_b).expect("pooled after connect 1");
+
+        // Second Connect to the SAME peer — THE BUG: insert-if-absent, so the
+        // pooled connection is the SAME object. A stale conn1 is unreplaceable.
+        peers_a.connect_peer(&pid_a, addr.clone()).await.expect("connect 2");
+        let e2 = shared_a.remote.get(&pid_b).expect("pooled after connect 2");
+        assert!(
+            std::sync::Arc::ptr_eq(&e1, &e2),
+            "connect_peer is insert-if-absent — a repeat Connect does NOT refresh \
+             the pooled connection (B3/B4/B5 root cause)"
+        );
+
+        // reconnect_peer — THE FIX: evict then re-dial → a genuinely NEW conn.
+        peers_a
+            .reconnect_peer(&pid_a, &pid_b, addr.clone())
+            .await
+            .expect("reconnect");
+        let e3 = shared_a.remote.get(&pid_b).expect("pooled after reconnect");
+        assert!(
+            !std::sync::Arc::ptr_eq(&e1, &e3),
+            "reconnect_peer MUST replace the pooled connection — wiring Connect to \
+             this is the B3/B4/B5 fix"
+        );
+    }
 }
 
 // =====================================================================
@@ -2402,5 +2537,283 @@ mod put_if_absent_tests {
             .await
             .expect_err("an unrouted peer must error, never silently misroute");
         assert!(!err.is_empty(), "error must carry a message");
+    }
+}
+
+// =====================================================================
+// AUDIT REPRO (A1, `AUDIT-CONNECT-PEER-FILETRANSFER-2026-07-14.md`) —
+// symptom 2: "Connected, but Browse shared files → handler error."
+//
+// Drives the REAL app router (`Peers::connect_peer` / `execute` /
+// `reconnect_peer`) over a real WebSocket against a backend B with a real
+// `local/files` share, and PRINTS the actual browse error at each stage.
+// It answers the audit's single most important untraced value (§1 CANNOT-
+// say): is the browse failure a capability 403 (`Ok(status=403)`) or a
+// transport error over a dead pooled connection (`Err`)?
+//
+// Lives in-crate (not tests/) because the app crate is bin-only, so the
+// `Peers` router can't be imported from an external integration test —
+// same reason the memory-transport router test is here.
+// =====================================================================
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod connect_browse_stale_repro {
+    use super::*;
+    use entity_capability::ResourceTarget;
+    use entity_crypto::Keypair;
+    use entity_handler::ExecuteOptions;
+    use entity_peer::local_files::RootConfigData;
+    use entity_peer::transport::{Connector, WebSocketConnector, WebSocketListener};
+    use entity_peer::{PeerBuilder, PeerConfig, PeerShared};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const SEED_NAME: &str = "welcome.txt";
+    const SEED_BODY: &[u8] = b"hello from the backend share";
+    /// B's stable seed — a fresh listener with the SAME seed re-mints the SAME
+    /// peer-id (models a Tori backend restart: durable identity, new socket).
+    const B_SEED: [u8; 32] = [9u8; 32];
+
+    fn empty_params() -> Entity {
+        Entity::new("system/empty", entity_ecf::to_ecf(&entity_ecf::Value::Null)).unwrap()
+    }
+
+    /// Stand up backend B on a real WS listener with a writable
+    /// `local/files/shared` root seeded with `welcome.txt`.
+    /// `debug_open_grants = true` — the shipped desktop backend's posture
+    /// (open by default unless `ENTITY_BROWSER_ENFORCE`), so a browse failure
+    /// here is NOT a capability gate. Returns `(shared_b, pid_b, ws_addr, task)`.
+    async fn start_backend(
+        tmp: &tempfile::TempDir,
+    ) -> (Arc<PeerShared>, String, String, tokio::task::JoinHandle<()>) {
+        let kp_b = Keypair::from_seed(B_SEED);
+        let pid_b = kp_b.peer_id().to_string();
+        let peer_b = PeerBuilder::new()
+            .keypair(kp_b)
+            .config(PeerConfig { debug_open_grants: true, ..PeerConfig::default() })
+            .build()
+            .expect("peer B builds");
+        let shared_b = peer_b.shared();
+        peer_b.start_engines(&shared_b);
+        peer_b
+            .local_files_handler()
+            .add_root(
+                "shared",
+                RootConfigData {
+                    prefix: "local/files/shared/".to_string(),
+                    filesystem_root: tmp.path().to_string_lossy().into_owned(),
+                    read_only: false,
+                    ..Default::default()
+                },
+            )
+            .expect("add root");
+
+        let shared_b_run = shared_b.clone();
+        let listener = WebSocketListener::bind("127.0.0.1:0").await.expect("ws bind");
+        let addr = format!("ws://{}", listener.socket_addr());
+        let task = tokio::spawn(async move {
+            let _ = entity_peer::server::run(listener, shared_b_run).await;
+        });
+        (shared_b, pid_b, addr, task)
+    }
+
+    /// The EXACT browse the File Transfer window drives (`file_transfer/mod.rs`
+    /// `load_dir` → `ops::execute` → `Peers::execute`): a `local/files:list` on
+    /// B's share root, `entity://{pid_b}/…`, from the LOCAL frontend through its
+    /// pooled connection. Returns the router's raw `Result` (Err=transport,
+    /// Ok(status)=capability), wrapped in a timeout so a dead conn can't hang.
+    #[allow(clippy::type_complexity)]
+    async fn browse(
+        frontend: &Peers,
+        frontend_pid: &str,
+        pid_b: &str,
+    ) -> Result<Result<entity_handler::HandlerResult, String>, tokio::time::error::Elapsed> {
+        let opts = ExecuteOptions {
+            resource: Some(ResourceTarget {
+                targets: vec![format!("/{}/local/files/shared/", pid_b)],
+                exclude: vec![],
+            }),
+            ..Default::default()
+        };
+        let fut = frontend.execute(
+            frontend_pid,
+            format!("entity://{}/local/files", pid_b),
+            "list".to_string(),
+            empty_params(),
+            opts,
+        );
+        tokio::time::timeout(Duration::from_secs(5), fut).await
+    }
+
+    /// Print the browse outcome as one ground-truth line; return whether it
+    /// showed the seed (a genuine success).
+    fn describe(
+        label: &str,
+        outcome: &Result<
+            Result<entity_handler::HandlerResult, String>,
+            tokio::time::error::Elapsed,
+        >,
+    ) -> bool {
+        match outcome {
+            Err(_) => {
+                eprintln!("[{label}] browse => TIMEOUT (no response within 5s)");
+                false
+            }
+            Ok(Err(e)) => {
+                eprintln!("[{label}] browse => Err (transport/dispatch): {e:?}");
+                false
+            }
+            Ok(Ok(r)) => {
+                let body = String::from_utf8_lossy(&r.result.data);
+                let shows_seed = body.contains(SEED_NAME);
+                eprintln!(
+                    "[{label}] browse => Ok(status={}), shows {SEED_NAME}={shows_seed}",
+                    r.status
+                );
+                r.status == 200 && shows_seed
+            }
+        }
+    }
+
+    /// Symptom 2, end to end, through the real router — actual error printed at
+    /// each stage. Run with `cargo test connected_then_browse -- --nocapture`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn connected_then_browse_breaks_when_pool_goes_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(SEED_NAME), SEED_BODY).unwrap();
+
+        // Frontend A: the real app router with a WS connector (exactly the
+        // browser/Tori frontend's outbound transport).
+        let frontend =
+            Peers::new_direct_with_connector(Arc::new(WebSocketConnector) as Arc<dyn Connector>);
+        let a_pid = frontend.primary_peer_id().to_string();
+
+        // --- Backend B up, A connects. ---
+        let (_shared_b1, pid_b, addr1, task1) = start_backend(&tmp).await;
+        let connected = frontend.connect_peer(&a_pid, addr1.clone()).await;
+        eprintln!("[connect#1] => {connected:?}");
+        assert_eq!(connected.as_deref(), Ok(pid_b.as_str()), "first connect pools B");
+
+        // --- Baseline: browse works (symptom 2: "earlier showed welcome.txt"). ---
+        let base = browse(&frontend, &a_pid, &pid_b).await;
+        assert!(describe("baseline", &base), "baseline browse must show the seed");
+
+        // --- The break: B's connection goes stale (Tori backend restart / dropped WS). ---
+        task1.abort();
+        let _ = task1.await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // THE UNTRACED VALUE: what does browse over the now-dead pooled conn do?
+        let after_drop = browse(&frontend, &a_pid, &pid_b).await;
+        let after_drop_ok = describe("after-drop", &after_drop);
+        assert!(!after_drop_ok, "browse over the dead pooled connection must fail (symptom 2)");
+
+        // --- B back, same identity, new socket (durable Tori backend restart). ---
+        let (_shared_b2, pid_b2, addr2, _task2) = start_backend(&tmp).await;
+        assert_eq!(pid_b2, pid_b, "restarted backend keeps its durable identity");
+
+        // --- Plain re-Connect (the Connect button): does it recover? ---
+        // Hypothesis: NO — `remote.insert` is insert-if-absent, dead conn survives.
+        let reconnected = frontend.connect_peer(&a_pid, addr2.clone()).await;
+        eprintln!("[connect#2] => {reconnected:?}");
+        let after_plain = browse(&frontend, &a_pid, &pid_b).await;
+        let plain_connect_recovers = describe("after-plain-connect", &after_plain);
+
+        // --- reconnect_peer (evict + re-dial): does IT recover? ---
+        let re = frontend.reconnect_peer(&a_pid, &pid_b, addr2.clone()).await;
+        eprintln!("[reconnect_peer] => {re:?}");
+        let after_recon = browse(&frontend, &a_pid, &pid_b).await;
+        let reconnect_peer_recovers = describe("after-reconnect_peer", &after_recon);
+
+        eprintln!(
+            "\n==== SYMPTOM-2 GROUND TRUTH ====\n\
+             plain connect_peer recovers browse: {plain_connect_recovers}\n\
+             reconnect_peer recovers browse:      {reconnect_peer_recovers}\n\
+             ================================\n"
+        );
+
+        // The permanent gate: reconnect_peer is the recovery path the app's
+        // Connect (and boot auto-connect) MUST route through.
+        assert!(
+            reconnect_peer_recovers,
+            "reconnect_peer (evict + re-dial) MUST recover browse after the pool goes stale"
+        );
+    }
+
+    /// The same browse driven through the `ops::execute` chokepoint — the
+    /// EXACT path the File Transfer window's `load_dir` takes.
+    async fn ops_browse(
+        frontend: &Peers,
+        frontend_pid: &str,
+        pid_b: &str,
+    ) -> Result<crate::ops::ExecuteResponse, String> {
+        let fut = crate::ops::execute(
+            frontend,
+            crate::ops::ExecuteRequest {
+                peer_id: frontend_pid.to_string(),
+                handler_uri: format!("entity://{}/local/files", pid_b),
+                operation: "list".to_string(),
+                params: None,
+                resource: Some(format!("/{}/local/files/shared/", pid_b)),
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(5), fut)
+            .await
+            .map_err(|_| "timeout: no response within 5s".to_string())?
+    }
+
+    /// B1, the fix: `ops::execute` (the one dispatch chokepoint — File
+    /// Transfer browse, uploads, every remote execute) must SELF-heal a stale
+    /// pooled connection: evict + reconnect through the peer's remembered
+    /// listen address + retry once, keyed on the transport `Err` class that a
+    /// dead pool actually produces (AP14) — no manual reconnect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ops_execute_self_heals_browse_over_stale_pool() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(SEED_NAME), SEED_BODY).unwrap();
+
+        let mut frontend =
+            Peers::new_direct_with_connector(Arc::new(WebSocketConnector) as Arc<dyn Connector>);
+        let a_pid = frontend.primary_peer_id().to_string();
+
+        // --- Backend B up, A connects; baseline browse through the chokepoint. ---
+        let (_shared_b1, pid_b, addr1, task1) = start_backend(&tmp).await;
+        let connected = frontend.connect_peer(&a_pid, addr1.clone()).await;
+        assert_eq!(connected.as_deref(), Ok(pid_b.as_str()), "first connect pools B");
+        let baseline = ops_browse(&frontend, &a_pid, &pid_b).await.expect("baseline browse");
+        assert!(
+            String::from_utf8_lossy(&baseline.result.result.data).contains(SEED_NAME),
+            "baseline browse must show the seed"
+        );
+
+        // --- B's connection goes stale; B restarts (durable identity, new socket). ---
+        task1.abort();
+        let _ = task1.await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let (_shared_b2, pid_b2, addr2, _task2) = start_backend(&tmp).await;
+        assert_eq!(pid_b2, pid_b, "restarted backend keeps its durable identity");
+
+        // Remember B's current listen address, as the app does on connect /
+        // backend registration. (A real Tori backend restarts on its configured
+        // address; the test re-points the metadata because an OS-assigned
+        // ephemeral port can't be re-bound deterministically.)
+        assert!(frontend.register_backend_peer_primary(
+            pid_b.clone(),
+            None,
+            vec![addr2.clone()]
+        ));
+
+        // Below the chokepoint the pool is genuinely stale: a raw
+        // `Peers::execute` browse must still fail — no magic at this layer.
+        let raw = browse(&frontend, &a_pid, &pid_b).await;
+        assert!(!describe("raw-after-restart", &raw), "raw browse over the dead pool must fail");
+
+        // --- THE GATE: the chokepoint heals it, no manual reconnect. ---
+        let healed = ops_browse(&frontend, &a_pid, &pid_b)
+            .await
+            .expect("ops::execute must self-heal the stale pool (evict + reconnect + retry)");
+        assert!(
+            String::from_utf8_lossy(&healed.result.result.data).contains(SEED_NAME),
+            "healed browse must show the seed"
+        );
     }
 }

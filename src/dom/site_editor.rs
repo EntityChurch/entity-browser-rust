@@ -38,21 +38,9 @@ const TEXTAREA: &str = "display:block;width:100%;min-height:420px;box-sizing:bor
     line-height:1.5";
 const PREVIEW: &str = "min-height:420px;background:var(--surface-sunken,#0a0a1a);\
     border:1px solid var(--border,#2a2a4e);border-radius:4px;padding:10px;overflow:auto";
-const BTN_DANGER: &str = "background:transparent;color:var(--status-err,#f66);\
-    border:1px solid var(--status-err,#f66);border-radius:4px;padding:5px 12px;\
-    font-size:13px;cursor:pointer";
-// Tree navigator rows — scaled up so the carets/labels read as real menu rows.
-const TREE_ROW: &str = "display:flex;align-items:center;gap:4px;margin:2px 0";
-const CARET: &str = "background:transparent;border:none;color:var(--text,#e0e0e0);\
-    cursor:pointer;font-size:15px;width:22px;padding:0;line-height:1;flex:0 0 22px";
-const NODE_BTN: &str = "flex:1 1 auto;text-align:left;background:transparent;\
-    color:var(--text,#e0e0e0);border:1px solid transparent;border-radius:4px;\
-    padding:5px 8px;font-size:14px;cursor:pointer;overflow:hidden;text-overflow:ellipsis";
-// One shared "selected" highlight for BOTH the open page and the add-target
-// folder — a clear blue (accent border + accent text), so they read the same.
-const NODE_BTN_SELECTED: &str = "flex:1 1 auto;text-align:left;background:transparent;\
-    color:var(--accent,#3a6ea5);border:2px solid var(--accent,#3a6ea5);\
-    border-radius:4px;padding:4px 7px;font-size:14px;font-weight:600;cursor:pointer";
+// (Destructive buttons use theme::BTN_DESTRUCTIVE — promoted from the local
+// BTN_DANGER. Tree rows use components::tree_row / theme::TREE_* — promoted
+// when File Transfer shipped a second copy of the consts that lived here.)
 
 /// Native confirm dialog — guards the destructive deletes. Returns `false` when
 /// unavailable (an automation context that suppresses prompts), so a missing
@@ -92,7 +80,7 @@ pub fn render(container: &Element, output: &SiteEditorOutput, ctx: &DomCtx) {
     wrapper.set_attribute("style", theme::SECTION).ok();
 
     let h2 = util::create_element("h2");
-    h2.set_attribute("style", "margin:0").ok();
+    h2.set_attribute("style", theme::TITLE_INLINE).ok();
     util::set_text(&h2, "Site Creator");
     util::append(&wrapper, &h2);
 
@@ -163,7 +151,7 @@ fn sites_block(output: &SiteEditorOutput, ctx: &DomCtx) -> Element {
 
 fn site_row(site: &SiteListItem, selected: bool, ctx: &DomCtx) -> Element {
     let row = util::create_element("div");
-    row.set_attribute("style", "display:flex;align-items:center;gap:6px;margin:2px 0").ok();
+    row.set_attribute("style", theme::TREE_ROW).ok();
 
     // Health glyph: ✓ renders / ⚠ won't (tooltip carries the reason).
     let health = util::create_element("span");
@@ -177,9 +165,10 @@ fn site_row(site: &SiteListItem, selected: bool, ctx: &DomCtx) -> Element {
     util::set_text(&health, glyph);
     util::append(&row, &health);
 
-    let btn = util::create_element("button");
-    btn.set_attribute("style", if selected { CHIP_ON } else { theme::BTN_SMALL }).ok();
-    util::set_text(&btn, &site.id);
+    let btn = components::button_el(&site.id, components::ButtonKind::Small);
+    if selected {
+        btn.set_attribute("style", CHIP_ON).ok();
+    }
     ctx.on_window_event(&btn, "click", EV_SELECT_SITE, &site.id);
     util::append(&row, &btn);
     row
@@ -188,18 +177,16 @@ fn site_row(site: &SiteListItem, selected: bool, ctx: &DomCtx) -> Element {
 /// The "New site" card (shown when the create expander is open): an id field, a
 /// title field, and a Create button that fires `EV_CREATE` and clears the drafts.
 fn create_block(ctx: &DomCtx) -> Element {
-    let block = util::create_element("div");
-    block.set_attribute("style", "margin:6px 0 4px;padding:12px;border:1px solid \
-        var(--border,#2a2a4e);border-radius:6px;background:var(--surface-sunken,#15152a)").ok();
+    // The create-form card (S8 convention: collapsed disclosure → a card with
+    // exactly one primary that collapses on success).
+    let block = components::card("");
 
     let id_input = util::tracked_input(&block, ctx, "new_site_id", "", theme::INPUT);
     id_input.set_attribute("placeholder", "new site-id (letters, digits, - _)").ok();
     let title_input = util::tracked_input(&block, ctx, "new_site_title", "", theme::INPUT);
     title_input.set_attribute("placeholder", "Title (optional)").ok();
 
-    let create = util::create_element("button");
-    create.set_attribute("style", theme::BTN_PRIMARY).ok();
-    util::set_text(&create, "Create site");
+    let create = components::button_el("Create site", components::ButtonKind::Primary);
     {
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
@@ -229,14 +216,12 @@ fn editor_block(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     // (destructive → confirmed). Render health lives next to the site in the
     // list above, not here.
     let head = util::create_element("div");
-    head.set_attribute("style", "display:flex;justify-content:space-between;align-items:center;gap:8px;margin:12px 0 4px").ok();
+    head.set_attribute("style", theme::HEADER_ROW).ok();
     let title = util::create_element("div");
     title.set_attribute("style", "font-weight:bold;font-size:14px").ok();
     util::set_text(&title, &format!("Editing: {}", sel.site_id));
     util::append(&head, &title);
-    let del_site = util::create_element("button");
-    del_site.set_attribute("style", BTN_DANGER).ok();
-    util::set_text(&del_site, "Delete site");
+    let del_site = components::button_el("Delete site", components::ButtonKind::Destructive);
     on_confirmed_event(
         ctx,
         &del_site,
@@ -269,17 +254,9 @@ fn navigator(sel: &SelectedSite, ctx: &DomCtx) -> Element {
 
     // Site-root row — click to make the site root the add-target. Highlighted
     // (same blue as a selected page) when it's the current target.
-    let root_row = util::create_element("div");
-    root_row.set_attribute("style", TREE_ROW).ok();
-    let spacer = util::create_element("span");
-    spacer.set_attribute("style", "flex:0 0 22px").ok();
-    util::append(&root_row, &spacer);
-    let root_btn = util::create_element("button");
-    let root_style = if sel.cursor.is_empty() { NODE_BTN_SELECTED } else { NODE_BTN };
-    root_btn.set_attribute("style", root_style).ok();
-    util::set_text(&root_btn, "\u{1f3e0} / (site root)"); // 🏠
+    let (root_row, _, root_btn) =
+        components::tree_row(0, false, false, sel.cursor.is_empty(), "\u{1f3e0} / (site root)"); // 🏠
     ctx.on_window_event(&root_btn, "click", EV_CD, "");
-    util::append(&root_row, &root_btn);
     util::append(&nav, &root_row);
 
     // The page tree, flattened to visible rows (the same shape the Entity Tree
@@ -325,9 +302,7 @@ fn add_controls(ctx: &DomCtx) -> Element {
     input.set_attribute("placeholder", "page or folder name").ok();
 
     for (label, event) in [("+ Add page", EV_ADD_PAGE), ("+ Add folder", EV_ADD_DIR)] {
-        let btn = util::create_element("button");
-        btn.set_attribute("style", theme::BTN_SMALL).ok();
-        util::set_text(&btn, label);
+        let btn = components::button_el(label, components::ButtonKind::Small);
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
@@ -349,32 +324,14 @@ fn add_controls(ctx: &DomCtx) -> Element {
 /// folder — sets it as the add-target. The selected page is highlighted; the
 /// add-target folder gets a dashed outline.
 fn render_node(list: &Element, node: &VisibleRow, sel: &SelectedSite, ctx: &DomCtx) {
-    let row = util::create_element("div");
-    row.set_attribute("style", &format!("{TREE_ROW};padding-left:{}px", node.depth * 16)).ok();
-
     // A page is a row that binds an entity; everything else is a folder.
     let is_page = node.has_entry;
 
-    // Caret (folders with children) or an aligning spacer.
-    if node.has_children {
-        let caret = util::create_element("button");
-        caret.set_attribute("style", CARET).ok();
-        util::set_text(&caret, if node.expanded { "\u{25be}" } else { "\u{25b8}" }); // ▾ / ▸
-        ctx.on_window_event(&caret, "click", EV_TOGGLE_NODE, &node.path);
-        util::append(&row, &caret);
-    } else {
-        let spacer = util::create_element("span");
-        spacer.set_attribute("style", "flex:0 0 22px").ok();
-        util::append(&row, &spacer);
-    }
-
-    // Name button. EXACTLY ONE highlight in the tree: the cursor (the last node
+    // Label. EXACTLY ONE highlight in the tree: the cursor (the last node
     // clicked, page or folder). Which page is loaded in the editor and whether
     // it has unsaved edits are shown as label markers (✎ / ●), never as a second
     // highlight — so clicking a folder doesn't leave a page looking "selected."
-    let btn = util::create_element("button");
     let is_cursor = node.path == sel.cursor;
-    btn.set_attribute("style", if is_cursor { NODE_BTN_SELECTED } else { NODE_BTN }).ok();
     let icon = if is_page { "\u{1f4c4}" } else { "\u{1f4c1}" }; // 📄 page / 📁 folder
     let is_editing = is_page && sel.selected_page.as_deref() == Some(node.path.as_str());
     let mut label = match node.leaf_count {
@@ -384,7 +341,12 @@ fn render_node(list: &Element, node: &VisibleRow, sel: &SelectedSite, ctx: &DomC
     if is_editing {
         label.push_str(" \u{270e}"); // ✎ loaded in the editor
     }
-    util::set_text(&btn, &label);
+
+    let (row, caret, btn) =
+        components::tree_row(node.depth, node.has_children, node.expanded, is_cursor, &label);
+    if let Some(caret) = caret {
+        ctx.on_window_event(&caret, "click", EV_TOGGLE_NODE, &node.path);
+    }
     // ● = unsaved changes, in red so it's unmistakable (don't lose work). The
     // open page is compared precisely (buffer vs saved); any OTHER page with an
     // outstanding draft (edited then navigated away without saving) is flagged
@@ -411,7 +373,6 @@ fn render_node(list: &Element, node: &VisibleRow, sel: &SelectedSite, ctx: &DomC
     } else {
         ctx.on_window_event(&btn, "click", EV_CD, &node.path);
     }
-    util::append(&row, &btn);
     util::append(list, &row);
 }
 
@@ -472,7 +433,7 @@ fn page_editor(
 
     // Toolbar: which page + an unsaved marker + a preview toggle.
     let bar = util::create_element("div");
-    bar.set_attribute("style", "display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px").ok();
+    bar.set_attribute("style", theme::HEADER_ROW).ok();
     let label = util::create_element("div");
     label.set_attribute("style", "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim,#888)").ok();
     let name = util::create_element("span");
@@ -491,10 +452,12 @@ fn page_editor(
     util::set_text(&dirty_marker, "\u{25cf} Unsaved changes");
     util::append(&label, &dirty_marker);
     util::append(&bar, &label);
-    let prev_toggle = util::create_element("button");
-    prev_toggle.set_attribute("style", theme::BTN_SMALL).ok();
-    util::set_text(&prev_toggle, if show_preview { "Hide preview" } else { "Show preview" });
-    ctx.on_window_event(&prev_toggle, "click", EV_TOGGLE_PREVIEW, "");
+    let prev_toggle = components::button(
+        ctx,
+        if show_preview { "Hide preview" } else { "Show preview" },
+        components::ButtonKind::Small,
+        EV_TOGGLE_PREVIEW,
+    );
     util::append(&bar, &prev_toggle);
     util::append(&block, &bar);
 
@@ -550,9 +513,7 @@ fn page_editor(
     // Save + Delete page.
     let actions_row = util::create_element("div");
     actions_row.set_attribute("style", ROW).ok();
-    let save = util::create_element("button");
-    save.set_attribute("style", theme::BTN_PRIMARY).ok();
-    util::set_text(&save, "Save page");
+    let save = components::button_el("Save page", components::ButtonKind::Primary);
     {
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
@@ -583,9 +544,7 @@ fn page_editor(
         });
     }
     util::append(&actions_row, &save);
-    let del_page = util::create_element("button");
-    del_page.set_attribute("style", BTN_DANGER).ok();
-    util::set_text(&del_page, "Delete page");
+    let del_page = components::button_el("Delete page", components::ButtonKind::Destructive);
     on_confirmed_event(
         ctx,
         &del_page,
@@ -609,9 +568,7 @@ fn page_editor(
     let move_input =
         util::tracked_input(&move_row, ctx, &move_field, page, &format!("{};max-width:240px", theme::INPUT));
     move_input.set_attribute("placeholder", "new/path/slug").ok();
-    let move_btn = util::create_element("button");
-    move_btn.set_attribute("style", theme::BTN_SMALL).ok();
-    util::set_text(&move_btn, "Move");
+    let move_btn = components::button_el("Move", components::ButtonKind::Small);
     {
         let drafts = ctx.drafts.clone();
         let actions = ctx.actions.clone();
