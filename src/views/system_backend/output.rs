@@ -26,6 +26,12 @@ pub struct SystemBackendOutput {
     pub fetched: bool,
     /// Whether S is connected to B (from the connections registry).
     pub connected: bool,
+    /// Whether the S→B auto-connect is armed and actively dialing (transport not
+    /// up yet). When `true` and `!connected`, the link chip reads "Connecting…"
+    /// rather than "Offline" — the boot provision→dial→handshake window reads as
+    /// progress, not breakage. `false` once connected or after the dial burst is
+    /// exhausted (genuine Offline).
+    pub dialing: bool,
     /// Tree prefix B shares its files at.
     pub share_prefix: String,
     /// The backend's shared-files directory on disk (behind `share_prefix`);
@@ -69,11 +75,17 @@ pub struct AuthorizationsView {
 }
 
 /// One inbound device in an [`AuthorizationsView`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AuthRow {
     /// Device id as the backend reports it (identity-hash hex) — the authorize
     /// target key.
     pub peer_id: String,
     /// Short display form (truncated id).
     pub display: String,
+    /// The granted profile token (`file-transfer` / `file-transfer-rw` /
+    /// `trusted`) for an **authorized** row, read back from the local `authz`
+    /// mirror so the operator can see *what* a device was granted — not just
+    /// that it was. `None` for a pending row (nothing granted yet) or when the
+    /// mirror has no record.
+    pub profile: Option<String>,
 }

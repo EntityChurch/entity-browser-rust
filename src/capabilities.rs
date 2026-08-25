@@ -23,6 +23,15 @@ pub struct Capabilities {
     /// runtime even when this is true (origin/COEP/network issues);
     /// the boot path catches that and falls back.
     pub worker_constructor: bool,
+    /// Main-thread OPFS API surface present (`navigator.storage.getDirectory`).
+    /// A **best-effort** signal for "can a peer persist to OPFS": it probes the
+    /// main-thread `StorageManager`, which normal browsers share with workers,
+    /// but does NOT prove *worker-side* OPFS (the WebKitGTK gap where a worker
+    /// lacks `WorkerNavigator.storage`). The definitive worker probe is async
+    /// (RUNTIME-CONFIG-ARCHITECTURE §12 U1); this is the cheap sync gate we can
+    /// offer today, and in the one environment where it's wrong (Tauri/WebKitGTK)
+    /// worker mode is force-disabled anyway.
+    pub opfs: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31,6 +40,7 @@ impl Capabilities {
     pub fn detect() -> Self {
         Self {
             worker_constructor: worker_constructor_exists(),
+            opfs: opfs_api_exists(),
         }
     }
 
@@ -48,4 +58,18 @@ fn worker_constructor_exists() -> bool {
     let Some(window) = web_sys::window() else { return false };
     js_sys::Reflect::has(window.as_ref(), &wasm_bindgen::JsValue::from_str("Worker"))
         .unwrap_or(false)
+}
+
+/// `navigator.storage.getDirectory` present — the OPFS entry point. See the
+/// `opfs` field doc for why this is a main-thread, best-effort signal.
+#[cfg(target_arch = "wasm32")]
+fn opfs_api_exists() -> bool {
+    use wasm_bindgen::JsValue;
+    let Some(window) = web_sys::window() else { return false };
+    let nav = window.navigator();
+    let storage = match js_sys::Reflect::get(nav.as_ref(), &JsValue::from_str("storage")) {
+        Ok(s) if !s.is_undefined() && !s.is_null() => s,
+        _ => return false,
+    };
+    js_sys::Reflect::has(&storage, &JsValue::from_str("getDirectory")).unwrap_or(false)
 }

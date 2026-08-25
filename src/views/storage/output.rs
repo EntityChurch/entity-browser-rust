@@ -56,4 +56,24 @@ pub struct StorageOutput {
     pub peers: Vec<PeerStorage>,
     /// Origin disk estimate, once the async probe has resolved.
     pub estimate: Option<OriginEstimate>,
+    /// The native system backend's store, once its IPC probe resolves (desktop
+    /// only; `None` in a browser or before the first probe).
+    pub backend: Option<BackendStoreView>,
+}
+
+/// The canonical **native** system backend's store, surfaced over IPC — it is a
+/// remote peer over the connection pool, so it never appears in the per-peer
+/// (local-arm) list above. On-disk size is available even when B is stopped;
+/// the live counts are `None` then (no running store to read).
+#[derive(Clone, Default)]
+pub struct BackendStoreView {
+    /// First 12 chars of B's peer id, for a compact heading.
+    pub short_id: String,
+    pub running: bool,
+    /// SQLite file size on disk, in bytes.
+    pub sqlite_bytes: Option<u64>,
+    /// Live content-store blob count (running only).
+    pub entity_count: Option<u64>,
+    /// Live tree path count (running only).
+    pub path_count: Option<u64>,
 }

@@ -161,12 +161,22 @@ pub struct PeerDescriptor {
 
 impl PeerDescriptor {
     /// Terse scan glyph: `★` in-app system · `⚙` native process ·
-    /// `●` main-thread user peer · `◆` worker · `◆⛁` worker (OPFS).
+    /// `●` main-thread user peer · `●⛁` main-thread durable (IndexedDB) ·
+    /// `◆` worker · `◆⛁` worker (OPFS).
     pub fn glyph(self) -> &'static str {
         match (self.role, self.runtime) {
             (_, PeerRuntime::Native) => "⚙",
             (PeerRole::System, _) => "★",
-            (PeerRole::User, PeerRuntime::MainThread) => "●",
+            (PeerRole::User, PeerRuntime::MainThread) => {
+                // Mirror the worker OPFS distinction: a durable main-thread
+                // (frontend-idb) peer must be visually distinct from an
+                // ephemeral in-memory one.
+                if self.storage == PeerStorage::IndexedDb {
+                    "●⛁"
+                } else {
+                    "●"
+                }
+            }
             (PeerRole::User, PeerRuntime::Worker) => {
                 if self.storage == PeerStorage::Opfs {
                     "◆⛁"
@@ -184,7 +194,13 @@ impl PeerDescriptor {
             (PeerRole::System, PeerRuntime::Native) => "system (native)",
             (PeerRole::System, _) => "system",
             (PeerRole::User, PeerRuntime::Native) => "native",
-            (PeerRole::User, PeerRuntime::MainThread) => "main thread",
+            (PeerRole::User, PeerRuntime::MainThread) => {
+                if self.storage == PeerStorage::IndexedDb {
+                    "main thread (IndexedDB)"
+                } else {
+                    "main thread"
+                }
+            }
             (PeerRole::User, PeerRuntime::Worker) => {
                 if self.storage == PeerStorage::Opfs {
                     "worker (OPFS)"
@@ -251,6 +267,7 @@ impl PeerDescriptor {
         } else {
             match modes.get(peer_id) {
                 Some(PeerMode::Frontend) => PeerStorage::InMemory,
+                Some(PeerMode::FrontendIdb) => PeerStorage::IndexedDb,
                 Some(PeerMode::BackendMemory) => PeerStorage::InMemory,
                 Some(PeerMode::BackendOpfs) => PeerStorage::Opfs,
                 // Unpersisted/ephemeral user peer (backends are normally
@@ -391,5 +408,29 @@ mod tests {
         assert_eq!(d.runtime, PeerRuntime::Native);
         assert_eq!(d.storage, PeerStorage::NativeStore);
         assert_eq!(d.role_name(), "native");
+    }
+
+    /// A durable this-tab (frontend-idb) peer must be visually distinct from an
+    /// ephemeral in-memory one — same as the worker OPFS/memory distinction.
+    /// Both are (User, MainThread); only the storage axis differs.
+    #[test]
+    fn durable_main_thread_peer_is_distinct_from_ephemeral() {
+        let ephemeral = PeerDescriptor {
+            role: PeerRole::User,
+            runtime: PeerRuntime::MainThread,
+            storage: PeerStorage::InMemory,
+        };
+        let durable = PeerDescriptor {
+            role: PeerRole::User,
+            runtime: PeerRuntime::MainThread,
+            storage: PeerStorage::IndexedDb,
+        };
+        assert_eq!(ephemeral.glyph(), "●");
+        assert_eq!(ephemeral.role_name(), "main thread");
+        assert!(!ephemeral.storage.is_durable());
+
+        assert_eq!(durable.glyph(), "●⛁");
+        assert_eq!(durable.role_name(), "main thread (IndexedDB)");
+        assert!(durable.storage.is_durable());
     }
 }

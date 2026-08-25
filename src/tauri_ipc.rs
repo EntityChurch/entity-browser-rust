@@ -149,6 +149,42 @@ pub async fn system_backend_share_path() -> Result<Option<String>, String> {
     Ok(result.as_string())
 }
 
+/// Native-store stats for the system backend, so the Storage window can surface
+/// B's on-disk store (it otherwise sees only the frontend arms — B is a remote
+/// peer over the pool). `entity_count`/`path_count` are `None` when B is stopped;
+/// `sqlite_bytes` is the on-disk file size regardless. `None` if no backend.
+#[derive(Debug, Clone, Default)]
+pub struct BackendStoreStats {
+    pub peer_id: String,
+    pub running: bool,
+    pub sqlite_bytes: Option<u64>,
+    pub entity_count: Option<u64>,
+    pub path_count: Option<u64>,
+}
+
+pub async fn system_backend_store_stats() -> Result<Option<BackendStoreStats>, String> {
+    let result = invoke("system_backend_store_stats", &JsValue::undefined()).await?;
+    if result.is_null() || result.is_undefined() {
+        return Ok(None);
+    }
+    let num = |key: &str| {
+        js_sys::Reflect::get(&result, &JsValue::from_str(key))
+            .ok()
+            .and_then(|v| v.as_f64())
+            .map(|f| f as u64)
+    };
+    Ok(Some(BackendStoreStats {
+        peer_id: get_string(&result, "peer_id").unwrap_or_default(),
+        running: js_sys::Reflect::get(&result, &JsValue::from_str("running"))
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        sqlite_bytes: num("sqlite_bytes"),
+        entity_count: num("entity_count"),
+        path_count: num("path_count"),
+    }))
+}
+
 /// Set the backend's `tracing` level at runtime (`off`/`error`/…/`trace`) from
 /// the System Backend window's level control.
 pub async fn set_backend_log_level(level: &str) -> Result<(), String> {

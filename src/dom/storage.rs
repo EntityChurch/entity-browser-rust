@@ -8,7 +8,7 @@
 
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
-use crate::views::storage::output::{OriginEstimate, PeerStorage, StorageOutput};
+use crate::views::storage::output::{BackendStoreView, OriginEstimate, PeerStorage, StorageOutput};
 
 use web_sys::Element;
 
@@ -59,6 +59,12 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
         util::append(&wrapper, &origin_block(est));
     }
 
+    // The native system backend's store — a remote peer over the pool, so it
+    // isn't in the per-peer list below; surfaced over IPC (desktop only).
+    if let Some(backend) = &output.backend {
+        util::append(&wrapper, &backend_card(backend));
+    }
+
     // Per-peer cards.
     if output.peers.is_empty() {
         let empty = util::create_element("p");
@@ -106,6 +112,58 @@ fn origin_block(est: &OriginEstimate) -> Element {
     };
     util::append(&block, &stat_row("Persisted", persisted));
     block
+}
+
+/// The native system-backend store card. Distinct from the per-peer arms: B is
+/// a separate desktop process with its own on-disk SQLite store, reached over
+/// IPC. On-disk size shows even when B is stopped; the live counts don't.
+fn backend_card(b: &BackendStoreView) -> Element {
+    let card = util::create_element("div");
+    card.set_attribute("style", CARD).ok();
+
+    let title = util::create_element("div");
+    title.set_attribute("style", "margin-bottom:6px;display:flex;align-items:center").ok();
+    let name = util::create_element("span");
+    name.set_attribute("style", "font-weight:bold;font-size:13px").ok();
+    util::set_text(&name, "System backend — native store");
+    util::append(&title, &name);
+    let badge = util::create_element("span");
+    badge.set_attribute("style", BADGE).ok();
+    util::set_text(&badge, "Native / SQLite");
+    util::append(&title, &badge);
+    util::append(&card, &title);
+
+    let id = util::create_element("code");
+    id.set_attribute("style", "font-size:12px;color:var(--text-muted,#c0c0c0)").ok();
+    util::set_text(&id, &b.short_id);
+    util::append(&card, &id);
+
+    util::append(
+        &card,
+        &stat_row(
+            "On-disk (SQLite)",
+            &b.sqlite_bytes
+                .map(|n| format_bytes(n as f64))
+                .unwrap_or_else(|| "—".to_string()),
+        ),
+    );
+
+    // Live counts only exist while B is running; a stopped peer shows just the
+    // on-disk size (honest — no live store to read).
+    match (b.running, b.entity_count, b.path_count) {
+        (true, Some(e), Some(p)) => {
+            util::append(&card, &stat_row("Content-store blobs", &e.to_string()));
+            util::append(&card, &stat_row("Live tree paths", &p.to_string()));
+        }
+        _ => {
+            let note = util::create_element("div");
+            note.set_attribute("style", theme::HINT).ok();
+            util::set_text(&note, "(backend stopped — live counts unavailable)");
+            util::append(&card, &note);
+        }
+    }
+
+    card
 }
 
 fn peer_card(peer: &PeerStorage) -> Element {

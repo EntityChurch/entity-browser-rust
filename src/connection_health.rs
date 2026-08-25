@@ -33,6 +33,12 @@ pub enum Liveness {
     Unknown,
     /// A recent successful connect / dispatch / probe.
     Connected,
+    /// An auto-connect is armed and actively dialing — the transport isn't up
+    /// yet, but this is progress, not breakage (the boot provision→dial→
+    /// handshake window). Distinct from `Unreachable` so the window shows
+    /// "Connecting…", not "Offline". Cleared to `Connected` on success or
+    /// `Unreachable` when the dial burst is exhausted.
+    Connecting,
     /// A recent failed connect / dispatch (transport error).
     Unreachable,
 }
@@ -42,6 +48,7 @@ impl Liveness {
         match self {
             Liveness::Unknown => "unknown",
             Liveness::Connected => "connected",
+            Liveness::Connecting => "connecting",
             Liveness::Unreachable => "unreachable",
         }
     }
@@ -49,6 +56,7 @@ impl Liveness {
     fn from_token(s: &str) -> Self {
         match s {
             "connected" => Liveness::Connected,
+            "connecting" => Liveness::Connecting,
             "unreachable" => Liveness::Unreachable,
             _ => Liveness::Unknown,
         }

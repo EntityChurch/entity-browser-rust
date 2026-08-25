@@ -218,7 +218,14 @@ fn add_chip_row(parent: &Element, label: &str, value: Element) {
 /// stale link (connected proxy true, read failing/unconfirmed) is Connecting.
 fn link_state(output: &SystemBackendOutput) -> ConnState {
     if !output.connected {
-        return ConnState::Offline;
+        // Distinguish an armed, actively-dialing auto-connect (progress) from a
+        // genuine down link. The boot provision→dial→handshake gap now reads as
+        // "Connecting…" instead of a broken-looking "Offline" that snaps green.
+        return if output.dialing {
+            ConnState::Connecting
+        } else {
+            ConnState::Offline
+        };
     }
     match &output.authorizations {
         Some(a) if a.checked && a.error.is_none() => ConnState::Connected,
@@ -271,7 +278,7 @@ fn render_authorizations(parent: &Element, output: &SystemBackendOutput, ctx: &D
                 &components::tr(vec![
                     components::td_text(&row.display),
                     components::td(&components::auth_chip(AuthState::Authorized)),
-                    components::td_text("—"),
+                    components::td(&grant_cell(row.profile.as_deref())),
                     components::td_text(""),
                 ]),
             );
@@ -328,6 +335,31 @@ fn append_pending_row(body: &Element, auth: &AuthorizationsView, row: &AuthRow, 
             components::td(&authorize),
         ]),
     );
+}
+
+/// The "Grant" cell for an authorized device — the legibility surface: *what*
+/// this device can do, not just that it's authorized. Shows the granted
+/// profile's human label with its plain-English scope as a hover tooltip. An
+/// unrecognized / unrecorded profile falls back to an honest "granted" with a
+/// note, rather than a misleading blank.
+fn grant_cell(profile: Option<&str>) -> Element {
+    let span = util::create_element("span");
+    span.set_attribute("style", "font-size:12px").ok();
+    match profile.and_then(crate::backend_auth::GrantProfile::from_token) {
+        Some(p) => {
+            util::set_text(&span, p.label());
+            span.set_attribute("title", p.scope_summary()).ok();
+        }
+        None => {
+            util::set_text(&span, "granted");
+            span.set_attribute(
+                "title",
+                "Authorized on the backend; the specific scope isn't recorded locally.",
+            )
+            .ok();
+        }
+    }
+    span
 }
 
 /// Color for the Status row, by scanning the lifecycle string.

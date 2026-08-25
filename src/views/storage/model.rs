@@ -7,7 +7,7 @@
 
 use crate::peers::Peers;
 
-use super::output::{OriginEstimate, PeerStorage, PrefixCount, StorageOutput};
+use super::output::{BackendStoreView, OriginEstimate, PeerStorage, PrefixCount, StorageOutput};
 
 pub struct StorageModel;
 
@@ -17,8 +17,15 @@ impl StorageModel {
     }
 
     /// Build the render output for every hosted peer. `estimate` is the
-    /// origin-level disk probe (None until it resolves).
-    pub fn render_output(&self, peers: &Peers, estimate: Option<OriginEstimate>) -> StorageOutput {
+    /// origin-level disk probe and `backend` the native system-backend store
+    /// probe (both `None` until their async IPC/JS probes resolve; both are
+    /// threaded in by the window rather than read here, since they're off-tree).
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        estimate: Option<OriginEstimate>,
+        backend: Option<BackendStoreView>,
+    ) -> StorageOutput {
         let peer_rows = peers
             .peer_ids()
             .iter()
@@ -27,6 +34,7 @@ impl StorageModel {
         StorageOutput {
             peers: peer_rows,
             estimate,
+            backend,
         }
     }
 }
@@ -104,7 +112,7 @@ mod tests {
             entity_entity::Entity::new("app/state/app_save", vec![1, 2, 3]).unwrap(),
         );
 
-        let out = StorageModel::new().render_output(&peers, None);
+        let out = StorageModel::new().render_output(&peers, None, None);
         let me = out
             .peers
             .iter()

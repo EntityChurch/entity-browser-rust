@@ -11,7 +11,7 @@ use crate::peer_display::{PeerDescriptor, PeerDisplay, PeerRole, PeerRuntime};
 use crate::peer_registry::read_registry;
 use crate::peers::Peers;
 
-use super::output::{AddressDisplay, BackendButton, PeerManagementOutput, PeerRow};
+use super::output::{AddressDisplay, BackendButton, CreateOption, PeerManagementOutput, PeerRow};
 
 #[derive(Debug)]
 pub struct PeerManagementModel {
@@ -121,10 +121,75 @@ impl PeerManagementModel {
             sdk_count: peers.sdk_count(),
             rows,
             show_peer_create,
-            show_backend_create: tauri_available(),
+            create_options: build_create_options(peers.primary_as_direct().is_some()),
             create_open: self.create_open,
         }
     }
+}
+
+/// The system-aware create-peer option list: the wired modes, each gated by what
+/// THIS runtime can actually create. Unsupported ones stay in the list (rendered
+/// disabled + reason) so the operator sees *why* — no silent gap. The values are
+/// the durable `PeerMode::persist_key`s + `"native"` (the e2e drives by these;
+/// never localize them). `direct` is whether the primary booted the Direct/IDB
+/// posture (a main-thread IndexedDB store is only reachable there — the
+/// `frontend-idb` gate).
+fn build_create_options(direct: bool) -> Vec<CreateOption> {
+    let (worker, opfs) = probe_caps();
+    let native = tauri_available();
+    vec![
+        CreateOption {
+            value: "frontend",
+            label: "This tab · temporary",
+            available: true,
+            reason: None,
+        },
+        CreateOption {
+            // The durable sibling of `frontend`: main thread + a per-peer
+            // IndexedDB store (survives reload). Direct posture only — under a
+            // Worker primary there is no main-thread SDK to host it.
+            value: "frontend-idb",
+            label: "This tab · saved",
+            available: direct,
+            reason: (!direct).then_some("not available in worker mode"),
+        },
+        CreateOption {
+            value: "backend-memory",
+            label: "Background · temporary",
+            available: worker,
+            reason: (!worker).then_some("needs Web Worker support"),
+        },
+        CreateOption {
+            value: "backend-opfs",
+            label: "Background · saved",
+            available: worker && opfs,
+            reason: if !worker {
+                Some("needs Web Worker support")
+            } else if !opfs {
+                Some("needs OPFS storage")
+            } else {
+                None
+            },
+        },
+        CreateOption {
+            value: "native",
+            label: "Native app · saved",
+            available: native,
+            reason: (!native).then_some("desktop app only"),
+        },
+    ]
+}
+
+/// `(worker, opfs)` capability probe. Cheap sync JS reflection on wasm; on native
+/// (unit tests) both false, so only the always-available main-thread mode shows.
+#[cfg(target_arch = "wasm32")]
+fn probe_caps() -> (bool, bool) {
+    let c = crate::capabilities::Capabilities::detect();
+    (c.worker_constructor, c.opfs)
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_caps() -> (bool, bool) {
+    (false, false)
 }
 
 #[cfg(target_arch = "wasm32")]

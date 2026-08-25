@@ -46,7 +46,8 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
 
     // Which device (only surfaced when there's a choice) + the actionable
     // "not authorized" path. The status itself is the header chip.
-    if output.target_options.len() > 1 || matches!(output.access, TargetAccess::Denied) {
+    let denied = matches!(output.access, TargetAccess::Denied);
+    if output.target_options.len() > 1 || denied {
         let peer_group = components::card("Device");
         if output.target_options.len() > 1 {
             render_target_selector(&peer_group, output, ctx);
@@ -55,15 +56,22 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
         util::append(&wrapper, &peer_group);
     }
 
-    // Get: browse the share as a tree, then pull a file.
-    let get_group = components::card("Shared files");
-    render_file_browser(&get_group, output, ctx);
-    util::append(&wrapper, &get_group);
+    // Gate the transfer surfaces behind authorization (progressive disclosure,
+    // S5). A denied target can neither browse nor send — showing those cards
+    // would only surface the raw 403 as browse_error + a dead upload button.
+    // The Device card above already carries the actionable "authorize" path;
+    // here we simply withhold the surfaces until access is granted.
+    if !denied {
+        // Get: browse the share as a tree, then pull a file.
+        let get_group = components::card("Shared files");
+        render_file_browser(&get_group, output, ctx);
+        util::append(&wrapper, &get_group);
 
-    // Send: push a file up.
-    let send_group = components::card("Send a file");
-    render_upload_controls(&send_group, output, ctx);
-    util::append(&wrapper, &send_group);
+        // Send: push a file up.
+        let send_group = components::card("Send a file");
+        render_upload_controls(&send_group, output, ctx);
+        util::append(&wrapper, &send_group);
+    }
 
     render_results(&wrapper, output);
 

@@ -12,6 +12,7 @@
 //! drift-guard test runs in `cargo test` without WASM.
 
 use crate::views::{
+    access_log::AccessLogWindow,
     chain_trace::ChainTraceWindow,
     content_stream::ContentStreamWindow,
     entity_tree::EntityTreeWindow,
@@ -34,7 +35,7 @@ use crate::views::{
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
 
-/// The 21 standard window types, in registration order. The single source —
+/// The 22 standard window types, in registration order. The single source —
 /// `build_wasm_app` registers exactly these, and the settings UI reads their
 /// metadata from the same list. Add a window here and it shows up in both.
 /// (Was 22 until the standalone "System Overview" window was merged into
@@ -62,6 +63,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         StorageWindow::window_type(),
         SiteEditorWindow::window_type(),
         SystemBackendWindow::window_type(),
+        AccessLogWindow::window_type(),
     ]
 }
 
@@ -101,6 +103,7 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
                 "File Transfer",
                 "Key Manager",
                 "Storage",
+                "Access Log",
             ],
         ),
         (
@@ -137,9 +140,9 @@ mod tests {
     }
 
     #[test]
-    fn roster_is_twentyone_and_settings_is_system_scoped() {
+    fn roster_is_twentytwo_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
-        assert_eq!(meta.len(), 21, "the standard roster is 21 windows");
+        assert_eq!(meta.len(), 22, "the standard roster is 22 windows");
         // Spot-check the scope partition the settings filter relies on.
         let settings = meta.iter().find(|(n, _)| *n == "Settings").expect("Settings present");
         assert_eq!(settings.1, WindowScope::System);

@@ -61,25 +61,27 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     // Kind selector — S6 (speak the user's terms): the label names the two facts
     // a person actually chooses between, **where it runs** and **whether it's
     // saved**, not the runtime/storage machinery (that stays as the honest chips
-    // on the management table below). Option value = `PeerMode::persist_key`
-    // (round-trips via `from_persist_key`); the one special value `native` →
-    // CreateBackendPeer. The native option only appears where a native process is
-    // available (Tauri). These are the modes we currently wire — not the full
-    // (runtime × storage) matrix; the missing combos (this-tab saved / native
-    // temporary) are an unexposed `PeerMode` gap, not a substrate limit.
+    // on the management table below). Availability + labels come from the model
+    // (`output.create_options`, system-aware); values are `PeerMode::persist_key`
+    // + the special `native` → CreateBackendPeer. These are the modes we currently
+    // wire — not the full (runtime × storage) matrix; the missing combos (this-tab
+    // saved / native temporary) are an unexposed `PeerMode` gap, not a limit.
     let kind_select = util::create_element_with_class("select", "peer-create-kind");
-    let mut kinds: Vec<(&str, &str)> = vec![
-        ("frontend", "This tab · temporary"),
-        ("backend-memory", "Background · temporary"),
-        ("backend-opfs", "Background · saved"),
-    ];
-    if output.show_backend_create {
-        kinds.push(("native", "Native app · saved"));
-    }
-    for (value, label) in kinds {
+    // System-aware options: the model gates each mode by what THIS runtime can
+    // create. Unsupported ones render **disabled with the reason appended** (e.g.
+    // "Native app · saved — desktop app only"), so a config we can't build is
+    // understood, not silently missing. Values stay the durable persist-keys.
+    for spec in &output.create_options {
         let opt = util::create_element("option");
-        util::set_attr(&opt, "value", value);
-        util::set_text(&opt, label);
+        util::set_attr(&opt, "value", spec.value);
+        let text = match spec.reason {
+            Some(r) if !spec.available => format!("{} — {r}", spec.label),
+            _ => spec.label.to_string(),
+        };
+        util::set_text(&opt, &text);
+        if !spec.available {
+            util::set_attr(&opt, "disabled", "");
+        }
         util::append(&kind_select, &opt);
     }
     util::append(&create_panel, &kind_select);
@@ -176,6 +178,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
 fn kind_description(value: &str) -> &'static str {
     match value {
         "frontend" => "Main thread of this tab, in-memory. Temporary — cleared when you reload.",
+        "frontend-idb" => "Main thread of this tab, saved to IndexedDB. Survives reload.",
         "backend-memory" => "A background Web Worker, in-memory. Temporary — cleared when you reload.",
         "backend-opfs" => "A background Web Worker, saved to OPFS. Survives reload.",
         "native" => "A separate native desktop process with its own on-disk store. Saved.",

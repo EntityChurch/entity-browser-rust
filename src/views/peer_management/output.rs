@@ -4,6 +4,22 @@
 
 use crate::peer_display::{PeerDescriptor, PeerDisplay};
 
+/// One selectable create-peer mode + whether it's creatable in this runtime.
+/// Unsupported modes are rendered disabled with `reason` appended, so a config
+/// we can't build "understands that" (the operator's ask) rather than vanishing.
+#[derive(Debug, Clone)]
+pub struct CreateOption {
+    /// Option value = `PeerMode::persist_key`, or `"native"` — durable contract,
+    /// what the e2e drives by; never localize this.
+    pub value: &'static str,
+    /// Human "where · persistence" label (S6).
+    pub label: &'static str,
+    /// Creatable in this runtime?
+    pub available: bool,
+    /// Why not (appended to the label) when `!available`; `None` when available.
+    pub reason: Option<&'static str>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PeerManagementOutput {
     pub rows: Vec<PeerRow>,
@@ -12,8 +28,10 @@ pub struct PeerManagementOutput {
     /// (`session_config.peer_creation_enabled` — 1b / MAP §10): a kiosk hides
     /// the affordance entirely, defense-in-depth with the action guard.
     pub show_peer_create: bool,
-    /// Show the "New Backend Peer" button (only when running in Tauri).
-    pub show_backend_create: bool,
+    /// The create-peer mode options, each with its availability in THIS runtime
+    /// (system-aware): unsupported modes are shown **disabled with a reason**,
+    /// not hidden, so the operator sees *why* a config isn't offered.
+    pub create_options: Vec<CreateOption>,
     /// Whether the collapsible create-peer card is expanded (S8 create
     /// affordance). Model-held so it survives a snapshot rebuild; toggled by the
     /// `collapsible_header`, reset to `false` after a successful Add.

@@ -18,6 +18,11 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerMode {
     Frontend,
+    /// `{ MainThread, IndexedDB }` — main-thread, tree backed by a per-peer
+    /// IndexedDB store (persistent across reloads). The durable analog of
+    /// `Frontend`; the same substrate the primary system peer uses. Direct
+    /// posture only (see `DESIGN-PERSISTENT-THIS-TAB-PEER.md`).
+    FrontendIdb,
     BackendMemory,
     BackendOpfs,
 }
@@ -28,6 +33,14 @@ impl PeerMode {
         matches!(self, PeerMode::BackendMemory | PeerMode::BackendOpfs)
     }
 
+    /// True for modes whose tree survives reload (data durability — axis B).
+    /// `FrontendIdb` (IndexedDB) and `BackendOpfs` (OPFS); NOT the two
+    /// in-memory modes.
+    #[allow(dead_code)] // consumed by the multi-tab gate (step 4) + storage banner
+    pub fn is_durable(self) -> bool {
+        matches!(self, PeerMode::FrontendIdb | PeerMode::BackendOpfs)
+    }
+
     pub fn wants_opfs(self) -> bool {
         matches!(self, PeerMode::BackendOpfs)
     }
@@ -35,6 +48,7 @@ impl PeerMode {
     pub fn label(self) -> &'static str {
         match self {
             PeerMode::Frontend => "frontend",
+            PeerMode::FrontendIdb => "frontend (idb)",
             PeerMode::BackendMemory => "backend (memory)",
             PeerMode::BackendOpfs => "backend (opfs)",
         }
@@ -52,6 +66,7 @@ impl PeerMode {
     pub fn persist_key(self) -> &'static str {
         match self {
             PeerMode::Frontend => "frontend",
+            PeerMode::FrontendIdb => "frontend-idb",
             PeerMode::BackendMemory => "backend-memory",
             PeerMode::BackendOpfs => "backend-opfs",
         }
@@ -63,6 +78,7 @@ impl PeerMode {
     pub fn from_persist_key(s: &str) -> Option<Self> {
         match s {
             "frontend" => Some(PeerMode::Frontend),
+            "frontend-idb" => Some(PeerMode::FrontendIdb),
             "backend-memory" => Some(PeerMode::BackendMemory),
             "backend-opfs" => Some(PeerMode::BackendOpfs),
             _ => None,

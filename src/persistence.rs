@@ -438,6 +438,11 @@ mod wasm {
     /// so we can't remove the dir immediately); drained at next boot
     /// before any worker grabs OPFS handles. See `opfs_cleanup::run_at_boot`.
     const OPFS_TOMBSTONE_KEY: &str = "entity_opfs_tombstones";
+    /// Peer-ids whose durable **IndexedDB** database (`entity-peer-{id}`, a
+    /// deleted `frontend-idb` peer's store) is pending destruction; drained at
+    /// next boot before the peer would be reopened (it won't — it's off the
+    /// roster), so `deleteDatabase` is never blocked. See `idb_cleanup::run_at_boot`.
+    const IDB_TOMBSTONE_KEY: &str = "entity_idb_tombstones";
     /// Hex-encoded 32-byte seed of the durable **main-thread system peer**
     /// (the IDB-backed Direct/Tauri primary). Distinct from the
     /// `entity_peers` spawn-list: this is the stable identity of the
@@ -724,6 +729,55 @@ mod wasm {
             storage.set_item(OPFS_TOMBSTONE_KEY, &remaining.join("\n")).ok();
         }
     }
+
+    /// Mark a deleted `frontend-idb` peer's IndexedDB database
+    /// (`entity-peer-{peer_id}`) for destruction at the next boot. We defer
+    /// (like OPFS) so the deletion runs at the one point no connection is held:
+    /// the peer is removed from the roster/vault synchronously here, so on the
+    /// next boot it is never rehydrated, its db never reopened, and
+    /// `deleteDatabase` cannot be blocked by an open connection.
+    pub fn mark_idb_for_cleanup(peer_id: &str) {
+        let Some(storage) = get_storage() else { return };
+        let existing = storage
+            .get_item(IDB_TOMBSTONE_KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if existing.lines().any(|l| l == peer_id) {
+            return;
+        }
+        let next = if existing.is_empty() {
+            peer_id.to_string()
+        } else {
+            format!("{existing}\n{peer_id}")
+        };
+        storage.set_item(IDB_TOMBSTONE_KEY, &next).ok();
+        tracing::info!(peer_id = %peer_id, "IDB database marked for boot-time cleanup");
+    }
+
+    pub fn load_idb_tombstones() -> Vec<String> {
+        let Some(storage) = get_storage() else { return Vec::new() };
+        let data = storage
+            .get_item(IDB_TOMBSTONE_KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        data.lines()
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect()
+    }
+
+    /// Replace the IDB tombstone set (empty slice clears it after a fully
+    /// successful pass; a smaller slice keeps failed ids for the next boot).
+    pub fn set_idb_tombstones(remaining: &[String]) {
+        let Some(storage) = get_storage() else { return };
+        if remaining.is_empty() {
+            storage.remove_item(IDB_TOMBSTONE_KEY).ok();
+        } else {
+            storage.set_item(IDB_TOMBSTONE_KEY, &remaining.join("\n")).ok();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +791,7 @@ pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_e
 pub use wasm::{
     save_peer, save_peer_with_mode, load_all_peer_entries, delete_peer,
     mark_opfs_for_cleanup, load_opfs_tombstones, set_opfs_tombstones,
+    mark_idb_for_cleanup, load_idb_tombstones, set_idb_tombstones,
     system_seed, system_seed_id,
     roster_migration_done, mark_roster_migration_done,
 };

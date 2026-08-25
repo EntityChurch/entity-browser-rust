@@ -221,8 +221,13 @@ pub fn read_connected(peers: &Peers) -> Vec<String> {
 /// reports the connected peer — `DESIGN-AUTHORIZE-GATE-INCREMENT-3 §2`). So we
 /// normalize Base58 → hex ([`peer_auth::identity_hash_hex`]) and look up under
 /// hex first; falling back to the raw Base58 key covers legacy / test entries
-/// written self-consistently under the same string.
-fn read_authz(peers: &Peers, sys_pid: &str, remote: &str) -> Option<String> {
+/// written self-consistently under the same string. Also resolves a row keyed
+/// directly by hex (the authorizations table): `identity_hash_hex` no-ops on a
+/// non-Base58 string, so the raw-key fallback finds it.
+///
+/// Callers must watch **both** the connections and authz prefixes (Worker-arm
+/// cache seeding) — the System Overview + Peer Connections windows do.
+pub fn read_authz(peers: &Peers, sys_pid: &str, remote: &str) -> Option<String> {
     if let Some(hex) = crate::peer_auth::identity_hash_hex(remote) {
         let hex_path = app_paths::authz_entry_path(app_paths::APP_ID, sys_pid, &hex);
         if let Some(e) = peers.get_entity(sys_pid, &hex_path) {

@@ -52,6 +52,8 @@ mod theme_tokens;
 #[cfg(target_arch = "wasm32")]
 mod opfs_cleanup;
 #[cfg(target_arch = "wasm32")]
+mod idb_cleanup;
+#[cfg(target_arch = "wasm32")]
 mod storage_durability;
 #[cfg(target_arch = "wasm32")]
 mod multitab;

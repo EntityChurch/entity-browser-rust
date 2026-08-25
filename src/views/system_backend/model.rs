@@ -32,6 +32,16 @@ pub const LEVELS: &[&str] = &["off", "error", "warn", "info", "debug", "trace"];
 /// ring; keeps the DOM `<pre>` bounded on a long session.
 const MAX_LINES: usize = 2000;
 
+/// Backend-auth re-read cadence while a device is pending (operator actively
+/// working the authorize flow — stay responsive).
+#[cfg(target_arch = "wasm32")]
+const REFRESH_MS_ACTIVE: f64 = 4000.0;
+/// Backend-auth re-read cadence in the steady state (nothing pending). Backed
+/// off so we're not issuing a remote read over the link every few seconds
+/// indefinitely; a new device still appears within this window.
+#[cfg(target_arch = "wasm32")]
+const REFRESH_MS_IDLE: f64 = 15000.0;
+
 /// Backend identity + lifecycle, as last polled. Plain owned strings so the
 /// model compiles + unit-tests natively (the IPC types are wasm-only).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -99,20 +109,26 @@ impl SystemBackendModel {
                 && d.runtime == crate::peer_display::PeerRuntime::Native
         });
 
-        // Live S↔B link: registered in the connections registry AND not a
-        // definitive Unreachable — the same "up" test the auto-connect drain
-        // uses (app.rs `drain_system_backend_connect`), so the two agree.
+        // Live S↔B link, read from the subscribable conn-health mirror (the
+        // window watches its prefix). `connected` = registered in the
+        // connections registry AND not a definitive Unreachable — the same "up"
+        // test the auto-connect drain uses (app.rs `drain_system_backend_connect`),
+        // so the two agree. `dialing` = the auto-connect is armed and actively
+        // dialing (Connecting), so the link chip reads "Connecting…" instead of a
+        // broken-looking "Offline" during the boot provision→dial→handshake gap.
+        let liveness = native
+            .as_ref()
+            .map(|r| crate::connection_health::read(peers, &r.peer_id));
         let connected = native
             .as_ref()
             .map(|r| {
                 let registered = crate::connections::read_connections(peers)
                     .iter()
                     .any(|p| p.remote_pid == r.peer_id);
-                let unreachable = crate::connection_health::read(peers, &r.peer_id)
-                    == crate::connection_health::Liveness::Unreachable;
-                registered && !unreachable
+                registered && liveness != Some(crate::connection_health::Liveness::Unreachable)
             })
             .unwrap_or(false);
+        let dialing = liveness == Some(crate::connection_health::Liveness::Connecting);
 
         // Inbound-device authorizations for the canonical backend: read the
         // local mirror (written by the async RefreshBackendAuth read over the
@@ -135,7 +151,17 @@ impl SystemBackendModel {
                     checked: true,
                     error: o.error.clone(),
                     pending: o.pending().map(to_auth_row).collect(),
-                    authorized: o.authorized().map(to_auth_row).collect(),
+                    // Authorized rows carry the granted profile (from the local
+                    // authz mirror) so the operator sees *what* each device can
+                    // do, not just that it's authorized.
+                    authorized: o
+                        .authorized()
+                        .map(|row| {
+                            let mut view = to_auth_row(row);
+                            view.profile = crate::connections::read_authz(peers, sys_pid, &row.peer_id);
+                            view
+                        })
+                        .collect(),
                 },
                 None => AuthorizationsView {
                     backend_pid: r.peer_id.clone(),
@@ -176,6 +202,7 @@ impl SystemBackendModel {
             backend: backend_view,
             fetched: inner.fetched,
             connected,
+            dialing,
             share_prefix: SHARE_PREFIX.to_string(),
             share_path: inner.share_path.clone(),
             log_level: inner.level.clone(),
@@ -201,12 +228,19 @@ impl SystemBackendModel {
     /// button). Throttled so a render every few hundred ms doesn't spam remote
     /// reads; the read itself dedupes so an unchanged result is silent. The
     /// caller only invokes this when connected + a backend is present.
+    ///
+    /// Adaptive cadence: while a device is **pending** the operator is working
+    /// the authorize flow, so stay responsive ([`REFRESH_MS_ACTIVE`]); in the
+    /// steady state (nothing pending) back off ([`REFRESH_MS_IDLE`]) so we're not
+    /// issuing a remote read over the link every few seconds forever. A newly
+    /// connecting device appears within the idle interval, then the fast cadence
+    /// takes over.
     #[cfg(target_arch = "wasm32")]
-    pub fn due_for_auth_refresh(&self) -> bool {
-        const INTERVAL_MS: f64 = 4000.0;
+    pub fn due_for_auth_refresh(&self, has_pending: bool) -> bool {
+        let interval = if has_pending { REFRESH_MS_ACTIVE } else { REFRESH_MS_IDLE };
         let now = js_sys::Date::now();
         let mut inner = self.inner.lock().unwrap();
-        if now - inner.last_auth_refresh_ms >= INTERVAL_MS {
+        if now - inner.last_auth_refresh_ms >= interval {
             inner.last_auth_refresh_ms = now;
             true
         } else {
@@ -322,6 +356,7 @@ fn to_auth_row(row: &crate::peer_auth::PeerAuthRow) -> AuthRow {
     AuthRow {
         peer_id: row.peer_id.clone(),
         display,
+        profile: None,
     }
 }
 
@@ -384,6 +419,37 @@ mod tests {
         assert!(out.authorizations.is_none(), "no backend → no auth surface");
     }
 
+    #[test]
+    fn armed_dialing_surfaces_dialing_not_connected() {
+        // The auto-connect drain records Connecting on the conn-health mirror
+        // while it dials, before the transport is up. render_output must surface
+        // that as `dialing` (→ the link chip reads "Connecting…") without
+        // claiming `connected` — the honest boot-window state.
+        use crate::connection_health::{ConnectionHealthWriter, Liveness};
+        let mut peers = Peers::new_direct();
+        register_native_backend(&mut peers, "REMOTE_B");
+        ConnectionHealthWriter::new(&peers).record("REMOTE_B", Liveness::Connecting, None);
+
+        let out = SystemBackendModel::new().render_output(&peers);
+        assert!(out.dialing, "Connecting liveness → dialing");
+        assert!(!out.connected, "dialing is not yet connected");
+    }
+
+    #[test]
+    fn exhausted_burst_is_offline_not_dialing() {
+        // Once the dial burst gives up it records Unreachable → neither dialing
+        // nor connected, so the chip drops to a genuine Offline (not a perpetual
+        // "Connecting…").
+        use crate::connection_health::{ConnectionHealthWriter, Liveness};
+        let mut peers = Peers::new_direct();
+        register_native_backend(&mut peers, "REMOTE_B");
+        ConnectionHealthWriter::new(&peers).record("REMOTE_B", Liveness::Unreachable, None);
+
+        let out = SystemBackendModel::new().render_output(&peers);
+        assert!(!out.dialing, "Unreachable is not dialing");
+        assert!(!out.connected);
+    }
+
     // --- Device-authorization projection (moved here from peer_connections) ---
 
     #[test]
@@ -424,6 +490,34 @@ mod tests {
         assert_eq!(auth.pending[0].peer_id, "aaaa1111", "authorize target keeps the full id");
         assert_eq!(auth.authorized.len(), 1);
         assert_eq!(auth.authorized[0].peer_id, "bbbb2222");
+    }
+
+    #[test]
+    fn authorized_row_carries_its_granted_profile() {
+        use crate::backend_auth::{BackendAuthObservation, BackendAuthWriter};
+        use crate::connections::ConnectionsWriter;
+        use crate::peer_auth::{AuthState, PeerAuthRow};
+
+        let mut peers = Peers::new_direct();
+        register_native_backend(&mut peers, "REMOTE_B");
+        // B reports one authorized device...
+        BackendAuthWriter::new(&peers).record(&BackendAuthObservation::ok(
+            "REMOTE_B",
+            vec![PeerAuthRow { peer_id: "device777".into(), state: AuthState::Authorized }],
+        ));
+        // ...and we recorded locally what profile it was granted.
+        ConnectionsWriter::new(&peers).set_authorized("device777", "file-transfer-rw");
+
+        let auth = SystemBackendModel::new()
+            .render_output(&peers)
+            .authorizations
+            .expect("backend → auth surface");
+        assert_eq!(auth.authorized.len(), 1);
+        assert_eq!(
+            auth.authorized[0].profile.as_deref(),
+            Some("file-transfer-rw"),
+            "the authorized row surfaces the granted profile (legibility)"
+        );
     }
 
     #[test]

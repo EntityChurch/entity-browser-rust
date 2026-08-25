@@ -61,7 +61,7 @@ frees, when, which heap, what's the failure mode?*
 | `MessagePort` / Worker | browser-process resource | port `close()` / Worker `terminate()` | not unregistered on peer delete → leaked port + routing entry (D14, AP9) |
 | Subscription handle (`WindowWatch`) | Rust-owned, wraps L0 `subscribe` | dropped on window close → callback cancelled | not dropped → callback fires into a dead window (AP5) |
 | Tree entity (persisted) | OPFS / IndexedDB / in-memory per arm | **only when we delete it** — store does not auto-GC | orphaned entity accumulates (D9-persistence); offline-wipe loses it (AP8) |
-| Keypair | localStorage | explicit clear only | survives reload (the one durable thing in browser Direct mode) |
+| Keypair / seed | localStorage | explicit clear only | survives reload — **identity durability** (axis A); distinct from tree-**data** durability (axis B, the store row above) |
 
 **Our own allocations, bucketed:** every object this app creates falls into one
 of these rows. ⏳ **EMPIRICAL PASS PENDING (B1):** an exhaustive per-`new`/`put`
@@ -222,6 +222,14 @@ every other section justifies one line.
     `storage_durability::request_persistent_storage`), but the grant can be
     *denied*, so a durable tree stays best-effort until then (the C5d evictable
     banner is the honesty). Tombstone + durability discipline. [D16, AP8]
+    - **Two durability axes** (don't conflate — the live source of "is this peer
+      persistent?" confusion): **A. identity durability** (the seed is recorded →
+      the peer *reappears* on reload; `PeerMetadata.persisted`) vs **B. data
+      durability** (the store backend keeps the *tree*: in-memory / OPFS / IDB).
+      A created peer is A-durable but B-ephemeral **unless** it is `backend-opfs`
+      or the new main-thread `frontend-idb` mode (own `entity-peer-{id}` IDB db).
+      Any "persistent" claim must say *which axis*. Canonical:
+      `docs/architecture/reviews/DESIGN-PERSISTENT-THIS-TAB-PEER.md`.
 11. **The arm is per-peer, decided by the target peer's `peer_context`, never
     the primary.** [D15, AP4]
 12. **No cross-origin isolation → cross-Worker transfer is copy-cost structured
