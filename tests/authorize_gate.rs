@@ -173,6 +173,7 @@ async fn probe_list(shared_a: &Arc<PeerShared>, pid_b: &str) -> Option<u32> {
         HashMap::new(),
         None,
         None,
+    entity_peer::connection::DispatchCeiling::PeerRoot,
     );
     let opts = ExecuteOptions {
         resource: Some(ResourceTarget {
@@ -452,6 +453,7 @@ async fn exec(
         HashMap::new(),
         None,
         None,
+    entity_peer::connection::DispatchCeiling::PeerRoot,
     );
     let opts = ExecuteOptions {
         resource: resource_path.map(|p| ResourceTarget {

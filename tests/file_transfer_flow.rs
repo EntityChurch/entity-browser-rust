@@ -171,6 +171,7 @@ fn execute_fn_for(
         HashMap::new(),
         None,
         None,
+    entity_peer::connection::DispatchCeiling::PeerRoot,
     )
 }
 

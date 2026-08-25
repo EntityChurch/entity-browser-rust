@@ -44,6 +44,32 @@
 
 #![allow(dead_code)] // some helpers (assets, projection parse) are P1 consumers
 
+/// The signed root manifest, relative to `{base}/{peer_id}/`.
+///
+/// **The one file in the projection that is not a `system/hash` pointer.** It
+/// is the 3-key *wire* entity, because `verify_signed_root` reads its
+/// `content_hash` — the 2-key bare hashable form our `content/` blobs carry
+/// does not have one.
+///
+/// **The absent `.bin` is load-bearing, and it was wrong for three commits.**
+/// `EXTENSION-NETWORK` §6.5.3's `MANIFEST_GET` is *"singular/terminal: no
+/// suffix, no trailing slash"*, while §6.5.3.1's tree route serves a **hash
+/// pointer** at `{path}{tree_leaf_suffix}`. Emitting the manifest as
+/// `published-root.bin` put a 3-key wire entity at a URL where a conformant
+/// consumer expects a 2-key pointer — an interop trap that reads as a corrupt
+/// tree. We met it as our own `--verify` reporting *"BROKEN — not a hash
+/// pointer"* and first papered over it by excluding the path from the sweep;
+/// the sweep was right and the layout was wrong.
+pub const PUBLISHED_ROOT_REL: &str = "system/peer/published-root";
+
+/// Tree path (peer-relative, no suffix) of a registry's name enumeration —
+/// `{peer}/system/registry/binding/by-name` + `.list` (Amendment 5's
+/// `tree_listing_suffix`, no trailing slash so a static CDN serves it).
+///
+/// Shared by the native emitter and the browser reader, which is why it lives
+/// here rather than beside either one.
+pub const NAMES_LIST_PATH: &str = "system/registry/binding/by-name";
+
 /// Subpath under a peer where this publisher places its sites. A bare
 /// `sites` — NOT `content/sites` (that squats the CONTENT-extension
 /// namespace, v0.5 §2) and NOT `app/entity-browser/…` (sites are

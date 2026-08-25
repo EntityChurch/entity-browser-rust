@@ -98,7 +98,26 @@ mod native {
     /// testable core of [`publisher_keypair`] (avoids racing the process-global
     /// `ENTITY_DATA_DIR` across parallel tests).
     pub(super) fn publisher_keypair_in(root: &Path) -> Keypair {
-        let dir = root.join("publish");
+        durable_keypair_in(root, "publish")
+    }
+
+    /// The **registry** publisher identity — the key that signs `name → peer-id`
+    /// bindings (B16). Same load-or-generate contract, a DIFFERENT subdirectory,
+    /// and that separation is deliberate: a consumer pins a registry and a
+    /// content publisher independently, so one key doing both jobs means
+    /// trusting a name-issuer to also be the thing it names. Sharing them takes
+    /// an explicit `--identity-seed`.
+    pub fn registry_keypair() -> Keypair {
+        registry_keypair_in(&data_root())
+    }
+
+    pub(super) fn registry_keypair_in(root: &Path) -> Keypair {
+        durable_keypair_in(root, "registry")
+    }
+
+    /// Load-or-generate a durable keypair under `{root}/{subdir}/keypair`.
+    fn durable_keypair_in(root: &Path, subdir: &str) -> Keypair {
+        let dir = root.join(subdir);
         let kp_path = dir.join("keypair");
         if kp_path.exists() {
             return match Keypair::load_from_file(&kp_path) {
@@ -795,7 +814,7 @@ mod wasm {
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_entries, delete_peer, publisher_keypair};
+pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_entries, delete_peer, publisher_keypair, registry_keypair};
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{

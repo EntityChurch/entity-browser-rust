@@ -502,6 +502,11 @@ pub struct ShellModel {
     /// records each entry here; verbs read it (`tails`) and flip
     /// the flag on cancel (`untail`).
     pub(super) tails: Arc<Mutex<Vec<TailEntry>>>,
+    /// The registry this shell resolves names through, if pinned
+    /// (`(peer_id, origin)`). In memory: a pin is a trust decision the operator
+    /// makes for this session, and the durable form is B16b's resolver-chain
+    /// config, which is held on arch's `name_format_dispatch` ruling.
+    pub(super) name_pin: Arc<Mutex<Option<(String, String)>>>,
     /// The `meet` in progress, if any (`crate::rendezvous`).
     ///
     /// **In memory, never in the tree** — a meet is an action in progress, like
@@ -527,6 +532,7 @@ impl ShellModel {
             peer_id,
             inner: Arc::new(Mutex::new(state)),
             pending_out: Arc::new(Mutex::new(Vec::new())),
+            name_pin: Arc::new(Mutex::new(None)),
             tails: Arc::new(Mutex::new(Vec::new())),
             meet: Arc::new(Mutex::new(None)),
         }
@@ -646,6 +652,10 @@ impl ShellModel {
             // the peer. App-local for the same reason as the two above: the
             // offer manifest lives in this app's namespace.
             "offer" | "offers" | "pull" => self.transfer_verb(verb, trimmed, peers, &dirty),
+            // The consumer half of the naming chain — pin a registry, resolve a
+            // name through its signed root, open what it names. App-local for the
+            // same reason as the three above.
+            "name" => self.name_verb(trimmed, peers, &dirty),
             other => {
                 self.inner
                     .lock()
@@ -653,6 +663,216 @@ impl ShellModel {
                     .push(ScrollbackEntry::ErrorText(format!("unknown verb: {}", other)));
             }
         }
+    }
+
+
+    /// `name` — resolve a name through a pinned registry and open what it names.
+    ///
+    /// **This is the consumer half of the naming chain, driven from a real
+    /// surface.** Everything under it (`content_site::named_site`,
+    /// `signed_fetch`, `session_cache`) was built, wasm-capable and reachable by
+    /// nothing — `resolve_name` had zero callers outside its own tests. This verb
+    /// is the wire.
+    ///
+    /// ```text
+    /// name pin <registry-peer-id> <origin>   pin a registry (the ONE a priori string)
+    /// name resolve <name>                     hop 1 — name → peer-id + where
+    /// name open <name> [site] [page]          hop 1 + hop 2 — → verified page bytes
+    /// name pins                               what this tab holds a seq floor for
+    /// ```
+    ///
+    /// **Browser-only**, and not by omission: the fetch is `FetchBinSource`
+    /// (`window.fetch`), and the futures a `BinSource` hands back are `!Send`
+    /// while native `spawn_task` requires `Send`. The logic itself is covered
+    /// natively by `named_site`'s `LocalWeb` tests; what only the browser can
+    /// prove is CORS, the real `fetch`, and a cross-origin walk.
+    fn name_verb(&self, line: &str, _peers: &Peers, dirty: &crate::window_watch::DirtyFlag) {
+        let args: Vec<String> =
+            line.split_whitespace().skip(1).map(|s| s.to_string()).collect();
+        let push = |e: ScrollbackEntry| self.inner.lock().unwrap().push(e);
+
+        let scrollback = self.inner.clone();
+        let dirty = dirty.clone();
+        let report = move |entry: ScrollbackEntry| {
+            scrollback.lock().unwrap().push(entry);
+            dirty.mark();
+        };
+
+        match args.first().map(|s| s.as_str()) {
+            Some("pin") => {
+                let (Some(pid), Some(origin)) = (args.get(1), args.get(2)) else {
+                    push(ScrollbackEntry::ErrorText(
+                        "usage: name pin <registry-peer-id> <origin>".into(), // i18n-ignore — dev-facing CLI
+                    ));
+                    return;
+                };
+                // Pinning IS the trust decision, and it is the only one: the
+                // peer-id carries the public key (Ed25519 canonical form), so
+                // there is no separate key to fetch and nothing the origin can
+                // say about who it is.
+                match crate::content_site::session_cache::session_for(pid, origin) {
+                    Some(_) => {
+                        if let Ok(mut slot) = self.name_pin.lock() {
+                            *slot = Some((pid.clone(), origin.clone()));
+                        }
+                        push(ScrollbackEntry::Info(format!(
+                            "pinned registry {} at {} — nothing else is trusted", // i18n-ignore — dev-facing CLI
+                            crate::views::short_pid(pid),
+                            origin
+                        )))
+                    }
+                    None => push(ScrollbackEntry::ErrorText(format!(
+                        "{} is not a canonical-form peer-id — it carries no public key, so it \
+                         cannot be pinned (the SHA-256 legacy form needs an out-of-band key)", // i18n-ignore — dev-facing CLI
+                        pid
+                    ))),
+                }
+            }
+            Some("pins") => {
+                push(ScrollbackEntry::Info(format!(
+                    "{} publisher(s) pinned in this tab (each holds its own seq floor)", // i18n-ignore — dev-facing CLI
+                    crate::content_site::session_cache::len()
+                )));
+            }
+            Some("resolve") | Some("open") => {
+                let sub = args[0].clone();
+                let Some(name) = args.get(1).cloned() else {
+                    push(ScrollbackEntry::ErrorText(format!(
+                        "usage: name {sub} <name>" // i18n-ignore — dev-facing CLI
+                    )));
+                    return;
+                };
+                let Some((reg_pid, reg_origin)) = self.pinned_registry() else {
+                    push(ScrollbackEntry::ErrorText(
+                        "no registry pinned — `name pin <registry-peer-id> <origin>` first".into(), // i18n-ignore — dev-facing CLI
+                    ));
+                    return;
+                };
+                let site = args.get(2).cloned();
+                let page = args.get(3).cloned();
+                self.spawn_name_lookup(sub, name, reg_pid, reg_origin, site, page, report);
+            }
+            _ => {
+                push(ScrollbackEntry::ErrorText(
+                    "usage: name pin <registry-peer-id> <origin> | name resolve <name> | \
+                     name open <name> [site] [page] | name pins" // i18n-ignore — dev-facing CLI
+                        .into(),
+                ));
+            }
+        }
+    }
+
+    /// The registry this shell resolves through. One for now — the resolver
+    /// *chain* is B16b, and shipping a default entry ahead of arch's
+    /// `name_format_dispatch` ruling is the thing we are deliberately not doing
+    /// (`PROPOSAL-NAME-FORMAT-DISPATCH-DEFAULTS-AND-THE-NAME-BLIND-BACKEND`).
+    /// So: explicitly pinned, fail-closed, no default.
+    fn pinned_registry(&self) -> Option<(String, String)> {
+        self.name_pin.lock().ok().and_then(|p| p.clone())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_name_lookup(
+        &self,
+        _sub: String,
+        _name: String,
+        _reg_pid: String,
+        _reg_origin: String,
+        _site: Option<String>,
+        _page: Option<String>,
+        report: impl Fn(ScrollbackEntry) + 'static,
+    ) {
+        report(ScrollbackEntry::ErrorText(
+            "`name` needs the browser: the fetch is window.fetch and its futures are !Send. \
+             Native coverage is named_site's LocalWeb tests." // i18n-ignore — dev-facing CLI
+                .into(),
+        ));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_name_lookup(
+        &self,
+        sub: String,
+        name: String,
+        reg_pid: String,
+        reg_origin: String,
+        site: Option<String>,
+        page: Option<String>,
+        report: impl Fn(ScrollbackEntry) + 'static,
+    ) {
+        use crate::content_site::http_poll::FetchBinSource;
+        use crate::content_site::named_site::resolve_name;
+        use crate::content_site::session_cache;
+
+        spawn_task(async move {
+            let Some(registry) = session_cache::session_for(&reg_pid, &reg_origin) else {
+                report(ScrollbackEntry::ErrorText("the pinned registry is unusable".into())); // i18n-ignore — dev-facing CLI
+                return;
+            };
+            let now_ms = js_sys::Date::now() as u64;
+            let src = FetchBinSource;
+
+            // Hop 1 — the name, through the registry's SIGNED root.
+            let target = match resolve_name(&src, &registry, &name, now_ms).await {
+                Ok(t) => t,
+                Err(e) => {
+                    report(ScrollbackEntry::ErrorText(format!("{name}: {e}"))); // i18n-ignore — dev-facing CLI
+                    return;
+                }
+            };
+            let ev = &target.evidence;
+            report(ScrollbackEntry::Info(format!(
+                "{} → {}  [{}]  checked: association={} name={} revocation={}  expires {}", // i18n-ignore — dev-facing CLI
+                target.name,
+                crate::views::short_pid(&target.peer_id),
+                target.origin.clone().unwrap_or_else(|| "no origin published".into()), // i18n-ignore — dev-facing CLI
+                ev.association_committed,
+                ev.name_checked,
+                ev.revocation_checked,
+                ev.expires_at_ms
+            )));
+            if sub == "resolve" {
+                return;
+            }
+
+            // Hop 2 — pin the DOMAIN by the peer-id the registry just named, at
+            // the origin the binding carried, and walk ITS signed root. Two
+            // hops, one a-priori string, and the origin is trusted for nothing.
+            let Some(origin) = target.origin.clone() else {
+                report(ScrollbackEntry::ErrorText(
+                    "that binding publishes no origin — resolved WHO but not WHERE, so there \
+                     is nothing to fetch (arch D10 forbids issuing these now)" // i18n-ignore — dev-facing CLI
+                        .into(),
+                ));
+                return;
+            };
+            let Some(domain) = session_cache::session_for(&target.peer_id, &origin) else {
+                report(ScrollbackEntry::ErrorText(
+                    "the named peer-id carries no public key — cannot pin it".into(), // i18n-ignore — dev-facing CLI
+                ));
+                return;
+            };
+            let site = site.unwrap_or_else(|| "home".into());
+            let page = page.unwrap_or_else(|| "index".into());
+            let key = format!("sites/{site}/pages/{page}");
+            match domain.resolve(&src, &key).await {
+                Ok(entity) => {
+                    let preview: String = String::from_utf8_lossy(&entity.data)
+                        .chars()
+                        .filter(|c| *c != '\u{0}')
+                        .take(160)
+                        .collect();
+                    report(ScrollbackEntry::Info(format!(
+                        "{key} verified — {} bytes, hash {}\n{preview}", // i18n-ignore — dev-facing CLI
+                        entity.data.len(),
+                        &entity.content_hash.to_hex()[..16]
+                    )));
+                }
+                Err(e) => report(ScrollbackEntry::ErrorText(format!("{key}: {e:?}"))), // i18n-ignore — dev-facing CLI
+            }
+        });
     }
 
     /// `connector` — manage the signaling-node registry (`crate::connectors`).

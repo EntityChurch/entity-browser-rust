@@ -1,27 +1,55 @@
 # entity-browser-rust — status
 
-_Updated: 2026-08-17 · public: v0.8.0 (master) · working branch `dev` @ `2449067`, **version 0.8.2**_
+_Updated: 2026-08-18 · public: v0.8.0 (master) · working branch `dev`, **version 0.8.2**_
 
-> **Gates at the v0.8.2 runway, all unfiltered and green:** `make test` **1045/0/4** ·
-> `make lint` clean (30 locales × 571 keys) · `make wasm` check-dist consistent ·
-> `make e2e-worker` **17/17 in 306.57s** · `make e2e-webrtc-meet` **PASS** ·
-> `make e2e-webrtc-file` **PASS**. The last three were the debt the type-tag change created and
-> are **no longer owed**.
-
-> **Bearings first:** `HANDOFF-2026-08-17-b-bearings-three-threads-and-what-is-ours.md` — the three
-> threads (connectivity → file transfer → sharing), where each actually stands, what is blocked on
-> other seats, and what is ours and ready. Written because the arc had become hard to see from this
-> document alone. **Gate figures below marked `1035/0` are stale; the measured total at `eac2ad3` is
-> `1045/0`.** And **release packaging is on `dev`, not only in the release worktree** — buildout
-> item 18 is closed (see `AGENTS.md`).
+> **Bearings first:** `HANDOFF-2026-08-18-the-naming-chain-is-built-and-what-it-waits-on.md` —
+> the publishing/naming trust chain is **built end to end** (publish signs → the browser verifies
+> → a registry names → a name resolves to a verified page, four domains, nothing live), what is
+> blocked on arch, and what is next-ready. Routed in `ROUTING-2026-08-18-b` (+ `-a`).
+>
+> **Latest:** `STATUS-2026-08-18-c-validated-in-a-browser-and-F1-is-closed.md` — **everything is
+> measured**: `make e2e-worker` **18/18 unfiltered (319.69s)** including a new gate that resolves a
+> name **cross-origin in a real browser** and verifies the page it names (RUNBOOK §4, the vector
+> assigned to this repo). **F1 is CLOSED** — core-rust `a23bb27` landed arch's D1/D3/§6a.6 and three
+> of our tests flipped from demonstrating the defect to guarding the fix. Two corrections in there
+> too: earlier gate numbers this session were a **cached** build, and one cross-origin failure was a
+> **port squatter**, not the app.
+>
+> **Also:** `STATUS-2026-08-18-b-the-naming-flow-end-to-end-and-a-browser-can-now-drive-it.md`
+> — the whole naming flow written out (three peer-ids, two of which matter; publish-time files;
+> two-hop resolve), plus two firsts: a **`name` shell verb** so a browser surface can actually drive
+> `resolve_name` (it had **zero callers**), and the chain running **over a real socket with CORS** —
+> 4 domains, 35 requests, all 200. Still never run in an actual browser; that is the next gap.
+>
+> **Also:** `ROUTING-2026-08-18-c-we-wrote-the-globs-proposal-and-a-resolve-never-sends-the-name.md`
+> — B16b's blocker was arch's `name_format_dispatch` globs; **we wrote the proposal** rather than
+> keep waiting (ours to draft, arch's to ratify). It turns on a measurement: resolving through a
+> signed root **never puts the name on the wire**, so the catch-all's safety is a property of the
+> *backend*, not the glob. Mechanism shipped + mutation-checked; the default globs are installed
+> nowhere pending sign-off.
+>
+> **Also:** `STATUS-2026-08-18-a-a-signed-root-enumerates-but-a-withheld-node-is-silent.md` —
+> arch closed our three §9 items and disposed all four findings (`ROUTING-2026-08-18-b`). Their F4
+> ruling is confirmed by measurement (a signed root **is** enumerable) and **its detection half is
+> refuted**: a withheld interior node shortens the walk with no error. arch D10 closed on our side —
+> a transportless `peer-issued` binding is now refused at the emitter.
+>
+> **Gates at this commit:** `make test` **1113/0/4-ignored across all 15 test binaries**
+> · `make e2e-worker` **18/18 unfiltered, 319.69s** · (the main binary alone is 1016/0/3 — the older `995` and `1059` figures here were the main
+> binary and a 14-binary run respectively; say which you mean) · `make lint` clean (30 locales ×
+> 571 keys) ·
+> `make wasm` check-dist consistent · `make federation` stands up and `--verify`s a four-domain
+> deployment. **e2e re-run and green: 18/18 unfiltered, 319.69s** (2026-08-18).
+> `e2e-webrtc-meet` / `-file` last measured PASS.
+>
+> **Older bearings, still useful for the connectivity/sharing threads:**
+> `HANDOFF-2026-08-17-b-bearings-three-threads-and-what-is-ours.md`. Gate figures marked
+> `1035/0` or `1045/0` anywhere below are **stale** — re-measure before quoting.
 >
 > **Track B — the re-release arc** (publishing pipeline, app catalog, save slots, the release
 > itself, the user flow): `reviews/BUILDOUT-THE-RE-RELEASE-ARC-PUBLISHING-PRODUCT-AND-RELEASE.md`.
-> It runs in parallel with the connectivity/sharing thread and is entirely ours. Three measured
-> corrections live there: **the publish pipeline cannot read a live peer's tree** (so Site Editor
-> content has no publish path), **app save-state keeps one slot and no history** (`DEFAULT_RETAIN
-> = 5` is a GC window, not versions), and **`dev` is 524 commits ahead of `master`** with a
-> changelog that was never rolled over.
+> It runs in parallel with the connectivity/sharing thread and is entirely ours. Its §8a–§8c now
+> carry the signed-root, registry-emitter and full-path work.
 
 ## Where it is
 
