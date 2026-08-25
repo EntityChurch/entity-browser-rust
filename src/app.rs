@@ -3292,6 +3292,7 @@ impl EntityApp {
                     std::collections::HashMap::new(),
                     None,
                     None,
+                entity_peer::connection::DispatchCeiling::PeerRoot,
                 );
                 match execute_fn(uri, "get".into(), params, opts).await {
                     Ok(result) => log.log(format!(

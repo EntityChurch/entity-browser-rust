@@ -112,12 +112,23 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("publish") {
         return content_site::publish::run(&args);
     }
+    // B16 — the naming half. A registry is a static publisher like any other
+    // (EXTENSION-REGISTRY §7.4), so it gets its own verb rather than a flag on
+    // `publish`: it emits a different subgraph under a DIFFERENT identity, and
+    // conflating the two would let one invocation sign both a content tree and
+    // the names that point at it.
+    if args.first().map(String::as_str) == Some("registry") {
+        return content_site::registry_publish::run(&args);
+    }
 
     eprintln!("entity-browser: there is no native UI build.");
     eprintln!();
     eprintln!("Native commands:");
     eprintln!("  entity-browser publish [OUT_DIR]  — render the site set to static HTML (make site)");
     eprintln!("      [--ingest=<dir>]              — source sites from a content-team render/ emit (disk→tree)");
+    eprintln!("  entity-browser registry OUT_DIR --bind NAME=PEER_ID [--bind ...]");
+    eprintln!("                                    — emit a static name registry (signed bindings + signed root)");
+    eprintln!("      [--ttl-days=N]                — binding lifetime (default 30; a null ttl is not expressible)");
     eprintln!();
     eprintln!("Active build targets:");
     eprintln!("  make wasm       — browser build (DOM)");

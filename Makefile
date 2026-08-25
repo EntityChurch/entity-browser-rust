@@ -305,6 +305,20 @@ test-one: image
 test-tauri: image
 	$(call RUN,cd src-tauri && cargo test)
 
+# Stand up the whole naming chain locally — N published domains plus one
+# registry that names them, as static files, no live peer. Prints the
+# name → peer-id mapping and the ONE pin a consumer needs. Edit the DOMAINS
+# table at the top of the script to change what gets seeded.
+#
+# `FED_OUT`, NOT `OUT`: this file already defines `OUT ?= dist/static-demo` for
+# the site-bare targets, and reusing it made `make federation` silently write —
+# and `rm -rf` — a different target's directory. Per-target output vars get
+# per-target names. The path must be INSIDE the repo, since the build runs in a
+# container whose only bind mount is the repo.
+FED_OUT ?= dist/federation
+federation: image
+	$(call RUN,./tools/local-federation.sh $(FED_OUT))
+
 # Lint, in-container: clippy + the UI ratchet gate (raw atoms / inline style
 # literals / untokenized hex must match tools/ui-lint-baseline.txt — see
 # tools/ui-lint.sh; migrations ratchet the baseline down in the same commit) +

@@ -33,15 +33,27 @@ pub mod http_poll;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ingest;
 pub mod location;
+/// The full path — a name resolved through a pinned registry to a verified page.
+pub mod name_dispatch;
+pub mod named_site;
 pub mod origins;
 pub mod paths;
 pub mod prefs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod publish;
 pub mod publish_fixture;
+/// B16 — the static registry emitter (native publisher only).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod registry_publish;
 pub mod read;
 pub mod render;
 pub mod resolver;
+/// B15 — consume a signed published root over an async transport (both arches).
+pub mod session_cache;
+pub mod signed_fetch;
+/// B14 — the signed root over a static publish (native publisher only).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod signed_root;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod static_export;
 

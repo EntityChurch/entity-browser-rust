@@ -74,14 +74,31 @@ fn domain(seed: u8, page_key: &str, text: &str) -> (Publisher, common::Published
 /// Author a registry binding for `name → target`, sign it with the registry's
 /// key, and bind body + by-name pointer + signature into the registry's tree.
 /// Same shapes the extension's own fixtures use.
+/// Milliseconds, not seconds — `resolve_one` checks `issued_at + ttl <= now_ms()`.
+const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn issue_binding(registry: &Publisher, name: &str, target_peer_id: &str) -> Hash {
     let binding = BindingData {
         name: name.into(),
         kind: KIND_PEER_ISSUED.into(),
         target_peer_id: target_peer_id.into(),
         transports: vec![],
-        issued_at: 1000,
-        ttl: None,
+        // **arch D3, landed upstream (core-rust `a23bb27`).** A `peer-issued`
+        // binding MUST carry a non-null TTL, and `resolve_one` now refuses one
+        // that does not — so this fixture, which predates the ruling, was
+        // returning "backend refused (verify/revocation/expiry)" for every name.
+        // A live clock is required with it: the check is
+        // `issued_at + ttl <= now_ms()`, in MILLISECONDS, so the old fixed
+        // `issued_at: 1000` is permanently expired the moment a TTL exists.
+        issued_at: now_ms(),
+        ttl: Some(THIRTY_DAYS_MS),
         supersedes: None,
         issuer_attestation: None,
         metadata: None,
@@ -299,11 +316,15 @@ fn a_binding_survives_republication_because_the_pin_is_the_key_not_the_root() {
     assert_eq!(root.seq, v2.seq);
 }
 
-/// **THE FINDING — routed to arch.** `peer_issued::resolve_one` takes the
-/// name→binding association from the **host-served** `by-name` pointer and
-/// never compares `binding.name` against the name it was asked for. `name` is
-/// a field of the signed body, and `ResolutionResult` carries no name either,
-/// so no caller can re-check it.
+/// **F1 — ROUTED, RULED (arch D1), AND NOW CLOSED UPSTREAM (core-rust `a23bb27`).**
+/// This test used to demonstrate the defect; it now guards the fix, and the two
+/// halves are the same fixture with one assertion inverted.
+///
+/// **The finding, as filed:** `peer_issued::resolve_one` took the name→binding
+/// association from the **host-served** `by-name` pointer and never compared
+/// `binding.name` against the name it was asked for. `name` is a field of the
+/// signed body, and `ResolutionResult` carries no name either, so no caller
+/// could re-check it.
 ///
 /// Upstream's stated soundness argument (`RegistryTreeReader` docs) is that
 /// host-trusted `read_path` is fine *"only because step 3 then verifies the
@@ -315,10 +336,15 @@ fn a_binding_survives_republication_because_the_pin_is_the_key_not_the_root() {
 /// anchor and the wrong peer-id.
 ///
 /// The second half shows the same swap failing when the association comes from
-/// the registry's **signed root** instead of its pointer index — which is the
-/// mechanism we are already building for B14/B15, applied one layer up.
+/// the registry's **signed root** instead of its pointer index — the B14/B15
+/// mechanism applied one layer up. It was the *proposed* fix and is now the
+/// belt to D1's braces: independent of whether a resolver makes the comparison.
+///
+/// **Do not delete either half.** The name check and the signed-root walk close
+/// this from different directions, and a future resolver that regresses one
+/// should still be caught by the other.
 #[test]
-fn a_static_registry_host_can_swap_which_binding_a_name_resolves_to() {
+fn a_static_registry_host_can_no_longer_swap_which_binding_a_name_resolves_to() {
     let (_a, dom_a) = domain(27, PAGE_A, "the real foundation");
     let (_b, dom_b) = domain(28, PAGE_B, "somewhere else entirely");
 
@@ -335,24 +361,23 @@ fn a_static_registry_host_can_swap_which_binding_a_name_resolves_to() {
         .pointers
         .insert(by_name_pointer_path(&rid, NAME_A), binding_b);
 
-    // --- host-trusted association: the swap succeeds ---
+    // --- host-trusted association: the swap is now CAUGHT (arch D1, landed) ---
+    // This arm asserted the opposite until core-rust `a23bb27`: the swap
+    // succeeded, `status: resolved`, wrong peer-id, registry's own trust anchor.
+    // That was our F1. `resolve_one` now compares `binding.name` to the name it
+    // was asked for, so the genuinely-signed-but-wrong binding is refused.
     let (cs, li) = warm_from(&hostile);
-    let swapped = peer_issued::resolve_one(&cs, &li, &pi_entry(&rid), NAME_A)
-        .expect("the backend returns a result");
     assert!(
-        swapped.is_resolved(),
-        "the swap is not caught: every signature check passes"
+        peer_issued::resolve_one(&cs, &li, &pi_entry(&rid), NAME_A).is_none(),
+        "the swap must be refused: the binding is genuinely registry-signed, but \
+         its own body names {NAME_B}, and D1 makes that comparison"
     );
-    assert_eq!(
-        swapped.peer_id.as_deref(),
-        Some(dom_b.peer_id.as_str()),
-        "{NAME_A} resolved to the WRONG domain, carrying the registry's own \
-         trust anchor — this is the finding"
-    );
-    assert_eq!(
-        swapped.trust_anchor.as_deref(),
-        Some(format!("peer_issued:{rid}").as_str())
-    );
+    // The control: the UNSWAPPED name still resolves, so the refusal above is
+    // the name check and not a fixture that stopped resolving anything.
+    let (cs_ok, li_ok) = warm_from(&reg.full);
+    let good = peer_issued::resolve_one(&cs_ok, &li_ok, &pi_entry(&rid), NAME_A)
+        .expect("an unswapped name still resolves");
+    assert_eq!(good.peer_id.as_deref(), Some(dom_a.peer_id.as_str()));
 
     // --- signed-root association: the swap is refused ---
     // Walking the registry's own signed root to the by-name key binds the name
@@ -371,10 +396,10 @@ fn a_static_registry_host_can_swap_which_binding_a_name_resolves_to() {
     assert_eq!(honest.name, NAME_A, "and the signed body names it");
 
     eprintln!(
-        "FINDING: host-trusted by-name → {} (wrong); signed-root walk → {} (right)",
-        &dom_b.peer_id[..8],
+        "F1 CLOSED: the swap is refused at resolve_one (D1); signed-root walk → {} (right)",
         &dom_a.peer_id[..8]
     );
+    let _ = &dom_b;
 }
 
 /// **The contrast that makes the finding precise.** The cohort already has a
@@ -498,6 +523,15 @@ fn a_static_host_that_withholds_a_revocation_serves_the_revoked_name() {
         &rel(&rid, &signature_pointer_path(&rid, &rev_hash)),
         rev_sig.to_entity().expect("encodes"),
     );
+    // **§6a.6's by-target index, landed upstream (core-rust `a23bb27`).**
+    // `is_revoked` no longer enumerates the revocation prefix — it does an O(1)
+    // `location_index.get(revocation/by-target/{binding_hash})`. A fixture that
+    // publishes only the revocation BODY is now invisible to it, so the honest
+    // arm below stopped refusing and this test failed on its own precondition.
+    registry.bind_hash(
+        &rel(&rid, &entity_registry::revocation_by_target_path(&rid, &binding_hash)),
+        rev_hash,
+    );
     let reg = registry.publish();
 
     // Honest host: the revocation is served, and the name is refused.
@@ -512,6 +546,8 @@ fn a_static_host_that_withholds_a_revocation_serves_the_revoked_name() {
     // Hostile host: same bytes, minus the revocation's pointer. Nothing is
     // forged; a file simply is not served.
     let mut withholding = reg.full.clone();
+    // Withholding now means dropping the by-target pointer as well — it is the
+    // only thing `is_revoked` consults, so it IS the file a hostile host omits.
     withholding
         .pointers
         .retain(|p, _| !p.starts_with(&format!("/{rid}/system/registry/revocation/")));
@@ -552,16 +588,24 @@ fn the_signed_binding_body_already_carries_the_name_that_would_catch_the_swap() 
         .insert(by_name_pointer_path(&rid, NAME_A), binding_b);
     let (cs, li) = warm_from(&hostile);
 
-    let swapped = peer_issued::resolve_one(&cs, &li, &pi_entry(&rid), NAME_A)
-        .expect("resolves (wrongly)");
-    let body = cs
-        .get(&swapped.binding.expect("a resolved result names its binding"))
-        .expect("the binding body is cached");
-    let decoded = BindingData::from_entity(&body).expect("decodes");
+    // The cheap fix landed (arch D1, core-rust `a23bb27`): `resolve_one` makes
+    // the one comparison this test was written to argue for, so the swapped name
+    // no longer resolves at all.
+    assert!(
+        peer_issued::resolve_one(&cs, &li, &pi_entry(&rid), NAME_A).is_none(),
+        "the one comparison this test asked for is now made"
+    );
 
+    // The property it rested on is unchanged and still worth pinning: the
+    // signed body carries the name, which is WHY the comparison is possible
+    // without a signed root. Read it straight out of the swapped binding.
+    let decoded = BindingData::from_entity(
+        &cs.get(&binding_b).expect("the swapped binding body is cached"),
+    )
+    .expect("decodes");
     assert_eq!(
         decoded.name, NAME_B,
-        "the binding returned for {NAME_A} says, in its own signed body, that \
-         it is for {NAME_B} — one comparison in resolve_one closes this"
+        "the binding a hostile host served for {NAME_A} names {NAME_B} in its \
+         own signed body — the fact that made the cheap fix possible"
     );
 }

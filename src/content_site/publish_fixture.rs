@@ -29,6 +29,7 @@ use entity_entity::Entity;
 
 use super::format::{SiteAsset, SiteManifest, SitePage};
 use super::read::OwnedSite;
+use super::signed_root::RootProjector;
 
 /// Emit a set of sites read off the **live tree** ([`OwnedSite`]) as the
 /// entity-native content-data publish — the [A]→[B2] path. Writes the
@@ -48,14 +49,27 @@ use super::read::OwnedSite;
 /// to the un-prefixed layout). Everything — `content/` blobs and the `{peer}/`
 /// pointer mirror — nests under `{dir}/{prefix}/…`; the registered HTTP origin
 /// carries the same prefix, so the two-hop consumer resolves with no change.
-pub fn emit_owned_sites(dir: &Path, sites: &[OwnedSite], prefix: &str) -> std::io::Result<usize> {
+pub fn emit_owned_sites(
+    dir: &Path,
+    sites: &[OwnedSite],
+    prefix: &str,
+    mut root: Option<&mut RootProjector>,
+) -> std::io::Result<usize> {
     let base = super::paths::prefixed_root(dir, prefix);
     for site in sites {
         let pages: Vec<(&str, SitePage)> =
             site.pages.iter().map(|(slug, page)| (slug.as_str(), page.clone())).collect();
         let assets: Vec<(&str, SiteAsset)> =
             site.assets.iter().map(|(name, a)| (name.as_str(), a.clone())).collect();
-        emit_site(&base, &site.peer_id, &site.site_id, &site.manifest, &pages, &assets)?;
+        emit_site(
+            &base,
+            &site.peer_id,
+            &site.site_id,
+            &site.manifest,
+            &pages,
+            &assets,
+            root.as_deref_mut(),
+        )?;
     }
     // The per-peer `sites.list` enumeration artifact — the PEER-level sibling of
     // each site's `pages.list`. Every site_id a peer hosts, one per line. The
@@ -103,12 +117,14 @@ pub fn emit_site(
     manifest: &SiteManifest,
     pages: &[(&str, SitePage)],
     assets: &[(&str, SiteAsset)],
+    mut root: Option<&mut RootProjector>,
 ) -> std::io::Result<()> {
     write_entity(
         dir,
         peer_id,
         &format!("sites/{site_id}/manifest"),
         &manifest.to_entity(),
+        root.as_deref_mut(),
     )?;
     for (slug, page) in pages {
         write_entity(
@@ -116,6 +132,7 @@ pub fn emit_site(
             peer_id,
             &format!("sites/{site_id}/pages/{slug}"),
             &page.to_entity(),
+            root.as_deref_mut(),
         )?;
     }
     // Asset blobs (content-addressed) + their `system/hash` pointers, at the
@@ -128,6 +145,7 @@ pub fn emit_site(
             peer_id,
             &format!("sites/{site_id}/assets/{name}"),
             &asset.to_entity(),
+            root.as_deref_mut(),
         )?;
     }
     // The static `pages.list` listing artifact (the "static-origin floor" the
@@ -174,15 +192,23 @@ pub fn emit_app_set(
     catalog: &crate::apps::format::AppCatalog,
     bundles: &[(String, crate::apps::format::AppBundle)],
     prefix: &str,
+    mut root: Option<&mut RootProjector>,
 ) -> std::io::Result<usize> {
     let base = super::paths::prefixed_root(dir, prefix);
-    write_entity(&base, peer_id, &format!("apps/{set}/catalog"), &catalog.to_entity())?;
+    write_entity(
+        &base,
+        peer_id,
+        &format!("apps/{set}/catalog"),
+        &catalog.to_entity(),
+        root.as_deref_mut(),
+    )?;
     for (id, bundle) in bundles {
         write_entity(
             &base,
             peer_id,
             &format!("apps/{set}/bundles/{id}"),
             &bundle.to_entity(),
+            root.as_deref_mut(),
         )?;
     }
     Ok(bundles.len())
@@ -190,7 +216,23 @@ pub fn emit_app_set(
 
 /// Write one entity as a content blob (at its sharded content address)
 /// plus a `system/hash` `.bin` pointer at its tree path.
-fn write_entity(dir: &Path, peer_id: &str, tree_subpath: &str, ent: &Entity) -> std::io::Result<()> {
+///
+/// **The single choke point the signed root is built from** (B14). Every entity
+/// the projection emits passes through here, so recording it into `root` is what
+/// makes the trie commit to *what was projected* rather than to what the source
+/// tree happened to hold. `write_pages_list` / `write_sites_lists` deliberately
+/// do NOT record: a `.list` is a derived index, not a tree entity, and is
+/// covered by transport-trust like any served path.
+pub(crate) fn write_entity(
+    dir: &Path,
+    peer_id: &str,
+    tree_subpath: &str,
+    ent: &Entity,
+    root: Option<&mut RootProjector>,
+) -> std::io::Result<()> {
+    if let Some(r) = root {
+        r.record(peer_id, tree_subpath, ent);
+    }
     let hex = ent.content_hash.to_hex();
     // content/{aa}/{bb}/{hex66} = the bare hashable body.
     let blob_dir = dir.join("content").join(&hex[0..2]).join(&hex[2..4]);
@@ -208,6 +250,30 @@ fn write_entity(dir: &Path, peer_id: &str, tree_subpath: &str, ent: &Entity) -> 
     );
     fs::write(bin_path, pointer)?;
     Ok(())
+}
+
+/// Write a `system/hash` pointer at a tree path naming an **already-written**
+/// body — the second key of a one-entity/two-key shape (the registry's by-name
+/// index, B16). Deliberately separate from [`write_entity`]: emitting the body
+/// again under a second key would publish the same bytes twice and make the
+/// content address stop being the dedup.
+pub(crate) fn write_hash_pointer(
+    dir: &Path,
+    peer_id: &str,
+    tree_subpath: &str,
+    hash: &entity_hash::Hash,
+) -> std::io::Result<()> {
+    let bin_path = dir.join(peer_id).join(format!("{tree_subpath}.bin"));
+    if let Some(parent) = bin_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        bin_path,
+        entity_ecf::ecf_for_hash_value(
+            "system/hash",
+            &entity_ecf::Value::Bytes(hash.to_bytes()),
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -298,7 +364,7 @@ mod tests {
                 SitePage::markdown("Guide: Intro", "# Guide\n\nA nested remote page."),
             ),
         ];
-        emit_site(dir, crate::app::REMOTE_FIXTURE_PEER, "labs", &manifest, &pages, &[]).unwrap();
+        emit_site(dir, crate::app::REMOTE_FIXTURE_PEER, "labs", &manifest, &pages, &[], None).unwrap();
         eprintln!("emitted e2e fixture → {}", dir.display());
     }
 
@@ -320,7 +386,7 @@ mod tests {
             ],
             assets: Vec::new(),
         };
-        let n = emit_owned_sites(&dir, std::slice::from_ref(&site), "").unwrap();
+        let n = emit_owned_sites(&dir, std::slice::from_ref(&site), "", None).unwrap();
         assert_eq!(n, 1);
 
         // Both the content blob store and the peer-first pointer mirror exist.
@@ -359,7 +425,7 @@ mod tests {
         };
         let bundles = vec![("calc".to_string(), AppBundle::new("<html>calc</html>"))];
         // Emit under the non-games "apps" set — proves the set is parameterized.
-        let n = emit_app_set(&dir, "PEERG", "apps", &catalog, &bundles, "").unwrap();
+        let n = emit_app_set(&dir, "PEERG", "apps", &catalog, &bundles, "", None).unwrap();
         assert_eq!(n, 1);
         assert!(dir.join("PEERG/apps/apps/catalog.bin").exists(), "catalog pointer missing");
         assert!(dir.join("PEERG/apps/apps/bundles/calc.bin").exists(), "bundle pointer missing");
@@ -397,7 +463,7 @@ mod tests {
                 SiteAsset::new("image/svg+xml", b"<svg/>".to_vec()),
             )],
         };
-        emit_owned_sites(&dir, std::slice::from_ref(&site), "").unwrap();
+        emit_owned_sites(&dir, std::slice::from_ref(&site), "", None).unwrap();
 
         // The asset pointer + content blob landed at the assets/ leaf.
         assert!(
@@ -431,7 +497,7 @@ mod tests {
             ("guide/intro", SitePage::markdown("Intro", "# Intro")),
             ("guide/advanced/internals", SitePage::markdown("Internals", "# Deep")),
         ];
-        emit_site(&dir, "PEERB", "labs", &manifest, &pages, &[]).unwrap();
+        emit_site(&dir, "PEERB", "labs", &manifest, &pages, &[], None).unwrap();
 
         // The static listing exists alongside the manifest, sorted, one per line.
         let listing = fs::read_to_string(dir.join("PEERB/sites/labs/pages.list")).unwrap();
@@ -471,7 +537,7 @@ mod tests {
                 assets: Vec::new(),
             },
         ];
-        emit_owned_sites(&dir, &sites, "").unwrap();
+        emit_owned_sites(&dir, &sites, "", None).unwrap();
 
         // The per-peer enumeration artifact: sorted site ids, one per line.
         let listing = fs::read_to_string(dir.join("PEERC/sites.list")).unwrap();
@@ -506,7 +572,7 @@ mod tests {
             pages: vec![("index".into(), SitePage::markdown("Home", "# Owned\n\nFrom the tree."))],
             assets: Vec::new(),
         };
-        emit_owned_sites(&dir, std::slice::from_ref(&site), "hosted-peers/PEERX").unwrap();
+        emit_owned_sites(&dir, std::slice::from_ref(&site), "hosted-peers/PEERX", None).unwrap();
 
         // Nothing at the un-prefixed root; everything under the prefix.
         assert!(!dir.join("content").exists(), "content leaked to root");
@@ -545,7 +611,7 @@ mod tests {
             ("index", SitePage::markdown("Home", "# Bill's Labs\n\nA **remote** site over HTTP-poll.")),
             ("guide/intro", SitePage::markdown("Guide", "# Guide\n\nA nested page.")),
         ];
-        emit_site(&dir, peer, site, &manifest, &pages, &[]).unwrap();
+        emit_site(&dir, peer, site, &manifest, &pages, &[], None).unwrap();
 
         let origin = "http://localhost:8092/remote-fixture";
         let src = FsBinSource { root: dir.clone(), origin: origin.to_string() };

@@ -343,6 +343,7 @@ async fn run_cross_peer_write(backend_sqlite: bool, real_ws: bool) {
         HashMap::new(),
         None,
         None,
+    entity_peer::connection::DispatchCeiling::PeerRoot,
     );
     let target = format!("/{}/local/files/shared/hello.txt", pid_b);
     let opts = ExecuteOptions {
@@ -442,6 +443,7 @@ async fn live_upload_against_running_backend() {
         HashMap::new(),
         None,
         None,
+    entity_peer::connection::DispatchCeiling::PeerRoot,
     );
     let path = format!("/{}/local/files/shared/{}", pid_b, fname);
     let mk_opts = || ExecuteOptions {

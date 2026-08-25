@@ -112,6 +112,14 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
 # re-export it, hence the direct edge.
 entity-signaling = { path = "../entity-core-rust/extensions/signaling" }
 
+# EXTENSION-REGISTRY types + path helpers, BOTH arches. Native issues bindings
+# (`content_site/registry_publish.rs`, B16a); wasm resolves them
+# (`content_site/named_site.rs`) — the emitter and the consumer share one
+# `BindingData` and one `normalize_name`, which is the only thing that keeps the
+# key an emitter writes and the key a resolver builds from agreeing.
+# `entity-peer/registry` already compiles this crate and re-exports none of it.
+entity-registry = { path = "../entity-core-rust/extensions/registry" }
+
 entity-crypto = { path = "../entity-core-rust/core/crypto" }   # PEM keypair load (`persistence.rs`)
 entity-handler = { path = "../entity-core-rust/core/handler" } # `system/tree` handler resolution (`ops/`)
 entity-capability = { path = "../entity-core-rust/core/capability" } # `ResourceTarget` for `execute` (2 sites)
@@ -232,6 +240,15 @@ serde_json = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+# B14 — the signed root over a static publish (`content_site/signed_root.rs`).
+# `entity-tree` is the HAMT builder, `entity-wire` the 3-key codec the manifest
+# must be encoded in (`verify_signed_root` reads its `content_hash`, which the
+# bare hashable form does not carry). NATIVE ONLY: the publisher is the CLI, and
+# the browser consumes a signed root rather than emitting one — so neither crate
+# reaches `make wasm`. Both were already compiled transitively by `entity-peer`,
+# which uses them and re-exports neither.
+entity-tree = { path = "../entity-core-rust/core/tree" }
+entity-wire = { path = "../entity-core-rust/core/wire" }
 local-ip-address = "0.6"
 dirs = "6"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
