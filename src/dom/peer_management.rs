@@ -4,6 +4,7 @@
 use wasm_bindgen::JsCast;
 
 use crate::action::Action;
+use crate::dom::components;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::peer_display::PeerRole;
@@ -39,13 +40,14 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     let h2 = util::create_element("h2");
     util::set_text(&h2, "Peers");
     util::append(&header, &h2);
+    // The title row stands alone; the create form is a collapsible block below
+    // it, so a peer list isn't permanently topped by a form you rarely use.
+    util::append(container, &header);
 
     // 1b capability gate (MAP §10): a deployment that disables peer creation
-    // hides the whole create panel — alias input, the three `+ …` buttons, and
-    // the Tauri backend button. The `CreatePeerWithMode` action guard is the
-    // hard backstop; this is the defense-in-depth UI half (CR-5).
+    // hides the whole create affordance. The `CreatePeerWithMode` action guard
+    // is the hard backstop; this is the defense-in-depth UI half (CR-5).
     if !output.show_peer_create {
-        util::append(container, &header);
         return;
     }
 
@@ -56,17 +58,23 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     // per-change `tree.put` would rebuild the panel and drop focus/selection).
     let create_panel = util::create_element_with_class("div", "peer-create-panel");
 
-    // Kind selector. Option value = `PeerMode::persist_key` (round-trips via
-    // `from_persist_key`); the one special value `native` → CreateBackendPeer.
-    // The native option only appears where a native process is available (Tauri).
+    // Kind selector — S6 (speak the user's terms): the label names the two facts
+    // a person actually chooses between, **where it runs** and **whether it's
+    // saved**, not the runtime/storage machinery (that stays as the honest chips
+    // on the management table below). Option value = `PeerMode::persist_key`
+    // (round-trips via `from_persist_key`); the one special value `native` →
+    // CreateBackendPeer. The native option only appears where a native process is
+    // available (Tauri). These are the modes we currently wire — not the full
+    // (runtime × storage) matrix; the missing combos (this-tab saved / native
+    // temporary) are an unexposed `PeerMode` gap, not a substrate limit.
     let kind_select = util::create_element_with_class("select", "peer-create-kind");
     let mut kinds: Vec<(&str, &str)> = vec![
-        ("frontend", "Main thread · in-memory"),
-        ("backend-memory", "Worker · in-memory"),
-        ("backend-opfs", "Worker · OPFS"),
+        ("frontend", "This tab · temporary"),
+        ("backend-memory", "Background · temporary"),
+        ("backend-opfs", "Background · saved"),
     ];
     if output.show_backend_create {
-        kinds.push(("native", "Native process · native store"));
+        kinds.push(("native", "Native app · saved"));
     }
     for (value, label) in kinds {
         let opt = util::create_element("option");
@@ -95,6 +103,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
         let rp = ctx.repaint.clone();
         let alias_ref = alias_input.clone();
         let select_ref = kind_select.clone();
+        let wid = ctx.window_id;
         ctx.listen(&add_btn, "click", move |_| {
             let label = read_alias(&alias_ref);
             let kind = read_select_value(&select_ref);
@@ -108,13 +117,70 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
                 return;
             };
             actions.borrow_mut().push(action);
+            // Collapse the create card now that the peer is queued (S8) — you're
+            // back to the list. Model-held close, routed via handle_action.
+            actions.borrow_mut().push(Action::WindowEvent {
+                window_id: wid,
+                event: crate::views::peer_management::EV_CLOSE_CREATE.to_string(),
+                value: String::new(),
+            });
             rp();
         });
     }
     util::append(&create_panel, &add_btn);
 
-    util::append(&header, &create_panel);
-    util::append(container, &header);
+    // S6: a full-sentence, plain-language description of the selected kind,
+    // updated live on `change`. Pure DOM text — no tree write, so it never
+    // triggers a snapshot rebuild that would drop the select/alias focus.
+    let hint = util::create_element_with_class("span", "peer-create-hint");
+    util::set_text(&hint, kind_description("frontend"));
+    {
+        let hint_ref = hint.clone();
+        let select_ref = kind_select.clone();
+        ctx.listen(&kind_select, "change", move |_| {
+            let v = read_select_value(&select_ref);
+            util::set_text(&hint_ref, kind_description(&v));
+        });
+    }
+    util::append(&create_panel, &hint);
+
+    // Collapsible card (S8 create affordance): the SHARED `collapsible_header`
+    // primitive + the form, hidden when collapsed. Progressive disclosure — you
+    // look at your peers, not a form. Open state is model-held (`output.create_open`)
+    // so it survives a snapshot rebuild; the header dispatches EV_TOGGLE_CREATE,
+    // and the Add closure dispatches EV_CLOSE_CREATE so it tidies away on success.
+    // NOT a native `<details>` (which snaps shut on any repaint) — the exact
+    // aligned pattern Site Creator uses (REFERENCE-UI-DESIGN S8).
+    util::append(
+        container,
+        &components::collapsible_header(
+            ctx,
+            "Add a peer",
+            output.create_open,
+            crate::views::peer_management::EV_TOGGLE_CREATE,
+        ),
+    );
+    if !output.create_open {
+        // Hidden (not un-rendered): the form stays in the DOM so its fields are
+        // read at submit time and driving is stable; the class provides flex when
+        // shown, this inline display:none overrides it when collapsed.
+        util::set_attr(&create_panel, "style", "display:none");
+    }
+    util::append(container, &create_panel);
+}
+
+/// One-line, human description of a create-peer kind (S6). Keyed by the option
+/// value (`PeerMode::persist_key`, or `"native"`). Describes the modes we
+/// currently wire; it does not claim other `(runtime × storage)` combos are
+/// impossible — those are an unexposed enum gap, not a substrate limit.
+fn kind_description(value: &str) -> &'static str {
+    match value {
+        "frontend" => "Main thread of this tab, in-memory. Temporary — cleared when you reload.",
+        "backend-memory" => "A background Web Worker, in-memory. Temporary — cleared when you reload.",
+        "backend-opfs" => "A background Web Worker, saved to OPFS. Survives reload.",
+        "native" => "A separate native desktop process with its own on-disk store. Saved.",
+        _ => "",
+    }
 }
 
 fn render_table(container: &Element, output: &PeerManagementOutput, ctx: &DomCtx) {

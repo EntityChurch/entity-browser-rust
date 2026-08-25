@@ -141,6 +141,27 @@ pub fn card(title: &str) -> Element {
     g
 }
 
+// --- Collapsible disclosure (S8) -------------------------------------------
+// The ONE way to reveal an on-demand section (a "New/Add {noun}" create form, a
+// foldable list). One look, one behaviour, so no window hand-rolls its own
+// reveal (Site Creator's expander, a bespoke `<details>`, …) ever again.
+
+/// A collapsible section header: a full-width toggle button, "▾/▸ {label}",
+/// that dispatches `event` (a window event) so the window flips the section's
+/// **model-held** `open` bool. The caller owns that bool and renders the body
+/// only when `open`.
+///
+/// Model-held open state is the point (S8): it survives a snapshot rebuild, so a
+/// subscription firing mid-entry can't collapse the form under you — the failure
+/// mode of a native `<details>`, which re-renders closed on every repaint.
+pub fn collapsible_header(ctx: &util::DomCtx, label: &str, open: bool, event: &str) -> Element {
+    let h = util::create_element("button");
+    h.set_attribute("style", theme::COLLAPSIBLE_HEADER).ok();
+    util::set_text(&h, &format!("{} {label}", if open { "\u{25be}" } else { "\u{25b8}" }));
+    ctx.on_window_event(&h, "click", event, "");
+    h
+}
+
 // --- Tables (S7) ------------------------------------------------------------
 // Repeated records render as an aligned, header-labelled table so a list is
 // scannable (read down a column) instead of a wall of free-form rows. Build

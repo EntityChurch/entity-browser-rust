@@ -75,21 +75,42 @@ impl SystemBackendModel {
         Self::default()
     }
 
-    /// Build the render output: fold the polled backend status + log lines with
-    /// the live S↔B connection state (read from the connections registry, so it
-    /// updates the instant S connects, without waiting for the next poll).
+    /// Build the render output. B's **identity and connection state come from
+    /// the entity registries**, not the Tauri IPC poll: the peer registry
+    /// (frame-loop populated at boot, window-independent) gives B's id + listen
+    /// address, and the connections registry + `connection_health` give the live
+    /// S↔B link. So the window shows the real state the instant B registers at
+    /// boot — no waiting for this window's own poll to warm up — and the same
+    /// reads work unchanged the day B is a remote peer over a connection instead
+    /// of a local native process. The IPC poll now only *supplements*:
+    /// native-process-local facts not in the tree (lifecycle status string,
+    /// logs, share path, log level).
     #[allow(dead_code)] // called from the WASM render path
     pub fn render_output(&self, peers: &Peers) -> SystemBackendOutput {
         let inner = self.inner.lock().unwrap();
-        let backend = inner.backend.clone();
 
-        // S↔B connected? Match B's id against the connections registry.
-        let connected = backend
+        // B = the peer-registry record classified System + Native (same
+        // structural test the Peers roster / System Overview cards use — no
+        // magic label string, no IPC).
+        let modes = crate::persistence::peer_modes();
+        let native = crate::peer_registry::read_registry(peers).into_iter().find(|r| {
+            let d = crate::peer_display::PeerDescriptor::describe(peers, &r.peer_id, &modes);
+            d.role == crate::peer_display::PeerRole::System
+                && d.runtime == crate::peer_display::PeerRuntime::Native
+        });
+
+        // Live S↔B link: registered in the connections registry AND not a
+        // definitive Unreachable — the same "up" test the auto-connect drain
+        // uses (app.rs `drain_system_backend_connect`), so the two agree.
+        let connected = native
             .as_ref()
-            .map(|b| {
-                crate::connections::read_connections(peers)
+            .map(|r| {
+                let registered = crate::connections::read_connections(peers)
                     .iter()
-                    .any(|p| p.remote_pid == b.peer_id)
+                    .any(|p| p.remote_pid == r.peer_id);
+                let unreachable = crate::connection_health::read(peers, &r.peer_id)
+                    == crate::connection_health::Liveness::Unreachable;
+                registered && !unreachable
             })
             .unwrap_or(false);
 
@@ -97,19 +118,19 @@ impl SystemBackendModel {
         // local mirror (written by the async RefreshBackendAuth read over the
         // system peer's manager grant). The System Backend window binds to the
         // system peer — the manager — so it is the right home for this surface.
-        let authorizations = backend.as_ref().map(|b| {
+        let authorizations = native.as_ref().map(|r| {
             let sys_pid = peers.system_peer_id();
             let path = crate::app_paths::backend_auth_entry_path(
                 crate::app_paths::APP_ID,
                 sys_pid,
-                &b.peer_id,
+                &r.peer_id,
             );
             match peers
                 .get_entity(sys_pid, &path)
                 .map(|e| crate::backend_auth::BackendAuthObservation::from_entity(&e))
             {
                 Some(o) => AuthorizationsView {
-                    backend_pid: b.peer_id.clone(),
+                    backend_pid: r.peer_id.clone(),
                     manager_pid: sys_pid.to_string(),
                     checked: true,
                     error: o.error.clone(),
@@ -117,7 +138,7 @@ impl SystemBackendModel {
                     authorized: o.authorized().map(to_auth_row).collect(),
                 },
                 None => AuthorizationsView {
-                    backend_pid: b.peer_id.clone(),
+                    backend_pid: r.peer_id.clone(),
                     manager_pid: sys_pid.to_string(),
                     checked: false,
                     error: None,
@@ -127,13 +148,27 @@ impl SystemBackendModel {
             }
         });
 
-        let backend_view = backend.map(|b| {
-            let short = b.peer_id.chars().take(12).collect::<String>();
+        let backend_view = native.as_ref().map(|r| {
+            let short = r.peer_id.chars().take(12).collect::<String>();
+            // Listen address from the registry; the IPC-polled one is a fallback.
+            let ws_addr = r
+                .listen_addresses
+                .first()
+                .cloned()
+                .or_else(|| inner.backend.as_ref().and_then(|b| b.ws_addr.clone()));
+            // Lifecycle string ("running"/"stopped") is genuine native-process
+            // state not in the tree — take it from the IPC poll when present;
+            // else derive from the link so the row is never blank.
+            let status = inner
+                .backend
+                .as_ref()
+                .map(|b| b.status.clone())
+                .unwrap_or_else(|| if connected { "running".into() } else { "starting…".into() });
             BackendStatusView {
                 short_id: short,
-                peer_id: b.peer_id,
-                status: b.status,
-                ws_addr: b.ws_addr,
+                peer_id: r.peer_id.clone(),
+                status,
+                ws_addr,
             }
         });
 
@@ -177,19 +212,6 @@ impl SystemBackendModel {
         } else {
             false
         }
-    }
-
-    /// Test-only: inject a known backend so `render_output` builds the
-    /// authorizations surface (the WASM poll loop sets this in production).
-    #[cfg(test)]
-    pub fn set_backend_for_test(&self, peer_id: &str) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.backend = Some(BackendStatus {
-            peer_id: peer_id.to_string(),
-            status: "running".into(),
-            ws_addr: None,
-        });
-        inner.fetched = true;
     }
 
     /// Clear the displayed log lines (a user "Clear" action). The server ring is
@@ -334,6 +356,21 @@ async fn sleep_ms(ms: i32) {
 mod tests {
     use super::*;
 
+    /// Register B as the canonical native system backend in the entity peer
+    /// registry (the real path — the frame loop does this at boot), then sync it
+    /// to the tree so `read_registry` reflects it. Replaces the old
+    /// `set_backend_for_test` inner-injection: identity now comes from the
+    /// registry, so the test drives the same source production does.
+    fn register_native_backend(peers: &mut Peers, pid: &str) {
+        peers.register_backend_peer_primary(
+            pid.to_string(),
+            Some(SYSTEM_BACKEND_LABEL.to_string()),
+            vec!["ws://127.0.0.1:4042".to_string()],
+        );
+        let mut reg = crate::peer_registry::PeerRegistry::new(peers);
+        reg.sync(peers);
+    }
+
     #[test]
     fn empty_model_reports_not_fetched_and_disconnected() {
         let peers = Peers::new_direct();
@@ -351,9 +388,9 @@ mod tests {
 
     #[test]
     fn backend_without_observation_reads_unchecked() {
-        let peers = Peers::new_direct();
+        let mut peers = Peers::new_direct();
+        register_native_backend(&mut peers, "REMOTE_B");
         let model = SystemBackendModel::new();
-        model.set_backend_for_test("REMOTE_B");
 
         let auth = model.render_output(&peers).authorizations.expect("backend → auth surface");
         assert_eq!(auth.backend_pid, "REMOTE_B");
@@ -367,7 +404,8 @@ mod tests {
         use crate::backend_auth::{BackendAuthObservation, BackendAuthWriter};
         use crate::peer_auth::{AuthState, PeerAuthRow};
 
-        let peers = Peers::new_direct();
+        let mut peers = Peers::new_direct();
+        register_native_backend(&mut peers, "REMOTE_B");
         // The async remote read would write this mirror; do it directly here.
         BackendAuthWriter::new(&peers).record(&BackendAuthObservation::ok(
             "REMOTE_B",
@@ -378,7 +416,6 @@ mod tests {
         ));
 
         let model = SystemBackendModel::new();
-        model.set_backend_for_test("REMOTE_B");
         let auth = model.render_output(&peers).authorizations.unwrap();
 
         assert!(auth.checked, "mirror present → checked");
@@ -393,12 +430,12 @@ mod tests {
     fn observation_read_failure_surfaces_error() {
         use crate::backend_auth::{BackendAuthObservation, BackendAuthWriter};
 
-        let peers = Peers::new_direct();
+        let mut peers = Peers::new_direct();
+        register_native_backend(&mut peers, "REMOTE_B");
         BackendAuthWriter::new(&peers)
             .record(&BackendAuthObservation::failed("REMOTE_B", "no manager capability"));
 
         let model = SystemBackendModel::new();
-        model.set_backend_for_test("REMOTE_B");
         let auth = model.render_output(&peers).authorizations.unwrap();
 
         assert!(auth.checked);

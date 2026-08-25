@@ -28,6 +28,7 @@ pub mod shell;
 pub mod storage;
 pub mod style;
 pub mod system_backend;
+pub mod system_overview;
 pub mod theme;
 pub mod util;
 pub mod wire_recorder;
@@ -588,7 +589,7 @@ impl DomRenderer {
     /// system peer when there's no selector).
     fn append_spawn_button(&self, parent: &Element, wtype: &WindowType, system_pid: &str) {
         let btn = util::create_element_with_class("button", "spawn-btn");
-        util::set_text(&btn, &format!("+ {}", wtype.name));
+        util::set_text(&btn, &format!("+ {}", wtype.display_name()));
         let actions_rc = self.pending_actions.clone();
         let rp = self.repaint.clone();
         let name: &'static str = wtype.name;

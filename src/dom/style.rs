@@ -529,11 +529,15 @@ select optgroup {
     margin: 0;
 }
 
+/* The create-peer form (shown when the S8 "Add a peer" collapsible is open;
+   the shared collapsible_header renders the trigger). Hidden via inline
+   display:none when collapsed — see dom/peer_management.rs. */
 .peer-create-panel {
     display: flex;
     gap: 8px;
     align-items: center;
     flex-wrap: wrap;
+    margin-top: 8px;
 }
 
 /* Deliberately NOT theme::INPUT (block/width:100%): inside the button
@@ -563,6 +567,16 @@ select optgroup {
     font-size: 12px;
     border-radius: 3px;
     box-sizing: border-box;
+}
+
+/* S6 hint: the plain-language description of the selected create-peer kind.
+   Full-width (flex-basis 100%) so it wraps to its own line below the
+   select/alias/Add row; dim so it reads as helper text, not a control. */
+.peer-create-hint {
+    flex: 1 1 100%;
+    margin-top: 4px;
+    color: var(--text-dim, #888);
+    font-size: 12px;
 }
 
 .peer-table-wrap {
@@ -612,6 +626,19 @@ select optgroup {
 
 .peer-table td.addr-list {
     color: #aaa;
+}
+
+/* System Overview — the peer identity line inside each card. */
+.sysov-peer-line {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.sysov-peer-id {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.9em;
+    white-space: nowrap;
 }
 
 /* Group-label row — sets System peers apart from user-created peers. */

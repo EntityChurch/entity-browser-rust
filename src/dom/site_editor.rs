@@ -15,6 +15,7 @@ use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 use crate::action::Action;
+use crate::dom::components;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::views::entity_tree::tree::VisibleRow;
@@ -28,11 +29,6 @@ use crate::views::site_editor::{
 const ROW: &str = "display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0";
 const CHIP_ON: &str = "background:var(--accent,#3a6ea5);color:var(--accent-text,#fff);border:none;\
     border-radius:4px;padding:4px 12px;font-size:14px;cursor:pointer";
-// Collapsible section header — styled as a clear bar so it reads as "expandable".
-const HEADER_BTN: &str = "display:flex;align-items:center;gap:8px;width:100%;text-align:left;\
-    background:var(--surface-sunken,#15152a);color:var(--text,#e0e0e0);border:1px solid \
-    var(--border,#2a2a4e);border-radius:6px;padding:9px 12px;margin-top:12px;font-size:15px;\
-    font-weight:bold;cursor:pointer";
 const EDITOR_COLS: &str =
     "display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin-top:6px";
 const PANE: &str = "flex:1 1 280px;min-width:240px";
@@ -88,13 +84,6 @@ fn on_confirmed_event(ctx: &DomCtx, el: &Element, confirm_msg: Option<String>, e
 }
 
 /// A full-width clickable section header with a ▾/▸ caret that toggles `event`.
-fn collapsible_header(ctx: &DomCtx, label: &str, open: bool, event: &str) -> Element {
-    let h = util::create_element("button");
-    h.set_attribute("style", HEADER_BTN).ok();
-    util::set_text(&h, &format!("{} {label}", if open { "\u{25be}" } else { "\u{25b8}" }));
-    ctx.on_window_event(&h, "click", event, "");
-    h
-}
 
 pub fn render(container: &Element, output: &SiteEditorOutput, ctx: &DomCtx) {
     util::clear_children(container);
@@ -122,12 +111,12 @@ pub fn render(container: &Element, output: &SiteEditorOutput, ctx: &DomCtx) {
 
     // "Your sites" (collapsible) — a clean list of sites, each with its render
     // health as a small ✓/⚠ next to the name.
-    util::append(&wrapper, &collapsible_header(ctx, "Your sites", output.sites_open, EV_TOGGLE_SITES));
+    util::append(&wrapper, &components::collapsible_header(ctx, "Your sites", output.sites_open, EV_TOGGLE_SITES));
     if output.sites_open {
         util::append(&wrapper, &sites_block(output, ctx));
         // "New site" is its own expander → a tidy card on demand, not a row of
         // input boxes always sitting under the list.
-        util::append(&wrapper, &collapsible_header(ctx, "New site", output.create_open, EV_TOGGLE_CREATE));
+        util::append(&wrapper, &components::collapsible_header(ctx, "New site", output.create_open, EV_TOGGLE_CREATE));
         if output.create_open {
             util::append(&wrapper, &create_block(ctx));
         }
@@ -259,7 +248,7 @@ fn editor_block(sel: &SelectedSite, ctx: &DomCtx) -> Element {
     util::append(&block, &head);
 
     // Tree navigator (collapsible).
-    util::append(&block, &collapsible_header(ctx, "Pages", sel.pages_open, EV_TOGGLE_PAGES));
+    util::append(&block, &components::collapsible_header(ctx, "Pages", sel.pages_open, EV_TOGGLE_PAGES));
     if sel.pages_open {
         util::append(&block, &navigator(sel, ctx));
     }

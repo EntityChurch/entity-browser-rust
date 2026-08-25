@@ -16,11 +16,27 @@ use super::output::{AddressDisplay, BackendButton, PeerManagementOutput, PeerRow
 #[derive(Debug)]
 pub struct PeerManagementModel {
     peer_id: String,
+    /// Ephemeral UI state (S8 create affordance): is the "Add a peer" card open?
+    /// In-model (not tree-backed) — a pure UI toggle, like Site Creator's
+    /// `create_open`. Lives here so it survives snapshot rebuilds; the window
+    /// flips it via `toggle_create`/`close_create` on the toggle/Add events.
+    create_open: bool,
 }
 
 impl PeerManagementModel {
     pub fn new(peer_id: String) -> Self {
-        Self { peer_id }
+        Self { peer_id, create_open: false }
+    }
+
+    /// Flip the create-card open/closed (the collapsible header was clicked).
+    pub fn toggle_create(&mut self) {
+        self.create_open = !self.create_open;
+    }
+
+    /// Collapse the create card — called after a successful Add so it tidies
+    /// away and you're back to just the peer list.
+    pub fn close_create(&mut self) {
+        self.create_open = false;
     }
 
     #[allow(dead_code)] // accessed for symmetry; not currently used
@@ -106,6 +122,7 @@ impl PeerManagementModel {
             rows,
             show_peer_create,
             show_backend_create: tauri_available(),
+            create_open: self.create_open,
         }
     }
 }

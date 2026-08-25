@@ -14,6 +14,10 @@ pub struct PeerManagementOutput {
     pub show_peer_create: bool,
     /// Show the "New Backend Peer" button (only when running in Tauri).
     pub show_backend_create: bool,
+    /// Whether the collapsible create-peer card is expanded (S8 create
+    /// affordance). Model-held so it survives a snapshot rebuild; toggled by the
+    /// `collapsible_header`, reset to `false` after a successful Add.
+    pub create_open: bool,
     /// Total peer count, surfaced in the footer.
     pub total_count: usize,
     /// Number of hosted SDKs (1 in pure Direct or Worker boot;
