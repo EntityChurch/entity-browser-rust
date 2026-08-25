@@ -7,6 +7,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 
 use crate::action::Action;
+use crate::dom::components;
 use crate::dom::event_log;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
@@ -113,38 +114,29 @@ fn text_field(
 }
 
 fn render_include_entities(parent: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
-    let row = util::create_element("div");
-    row.set_attribute("style", theme::CHECKBOX_ROW).ok();
-
-    let cb = util::create_element("input");
-    cb.set_attribute("type", "checkbox").ok();
-    cb.set_attribute("data-field", "include_entities").ok();
-    if output.fields.include_entities {
-        cb.set_attribute("checked", "").ok();
-    }
-    ctx.on_window_event(&cb, "change", "toggle_include_entities", "");
-    util::append(&row, &cb);
-
-    let label = util::create_element("label");
-    label.set_attribute("style", "font-size:12px").ok();
-    util::set_text(&label, "Include full entities in results");
-    util::append(&row, &label);
-    util::append(parent, &row);
+    // The atom sets data-field=include_entities — `read_fields_from_dom`
+    // reads it at submit time.
+    util::append(
+        parent,
+        &components::checkbox(
+            ctx,
+            "include_entities",
+            output.fields.include_entities,
+            "toggle_include_entities",
+            " Include full entities in results",
+        ),
+    );
 }
 
 fn render_action_buttons(parent: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
     let row = util::create_element("div");
     row.set_attribute("style", theme::BTN_ROW).ok();
 
-    let find_btn = util::create_element("button");
-    util::set_text(&find_btn, "Find");
-    find_btn.set_attribute("style", theme::BTN_PRIMARY).ok();
+    let find_btn = components::button_el("Find", components::ButtonKind::Primary);
     bind_query_click(&find_btn, parent, "find", output.window_id, output.peer_id.clone(), ctx);
     util::append(&row, &find_btn);
 
-    let count_btn = util::create_element("button");
-    util::set_text(&count_btn, "Count");
-    count_btn.set_attribute("style", theme::BTN_SECONDARY).ok();
+    let count_btn = components::button_el("Count", components::ButtonKind::Secondary);
     bind_query_click(&count_btn, parent, "count", output.window_id, output.peer_id.clone(), ctx);
     util::append(&row, &count_btn);
 

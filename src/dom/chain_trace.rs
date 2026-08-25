@@ -48,9 +48,8 @@ fn render_input_row(parent: &Element, output: &ChainTraceOutput, ctx: &DomCtx) {
     let input =
         util::tracked_input(parent, ctx, &field_id, &output.chain_id, theme::INPUT);
 
-    let button = util::create_element("button");
-    util::set_text(&button, "Trace");
-    button.set_attribute("style", theme::BTN_SMALL).ok();
+    let button =
+        crate::dom::components::button_el("Trace", crate::dom::components::ButtonKind::Small);
 
     let window_id = output.window_id;
     let drafts = ctx.drafts.clone();
@@ -186,12 +185,12 @@ fn render_entries(parent: &Element, entries: &[TraceEntry], is_marker: bool) {
         if let Some(body) = &entry.body_display {
             let body_escaped = util::escape_html(body);
             html.push_str(&format!(
-                "<pre style='margin:0 0 10px 12px;color:#ccc'>{}</pre>\n",
+                "<pre style='margin:0 0 10px 12px;color:var(--text-muted, #ccc)'>{}</pre>\n",
                 body_escaped,
             ));
         } else if entry.body_available {
             html.push_str(
-                "<div style='margin:0 0 10px 12px;color:#aaa;font-style:italic'>(body redacted per renderer policy)</div>\n",
+                "<div style='margin:0 0 10px 12px;color:var(--text-dim, #aaa);font-style:italic'>(body redacted per renderer policy)</div>\n",
             );
         } else {
             html.push_str(

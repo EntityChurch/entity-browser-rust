@@ -85,10 +85,23 @@ pub fn text_input(ctx: &util::DomCtx, field_id: &str, initial: &str, placeholder
     input
 }
 
-/// THE select: standard look, `(value, label)` options, dispatches `event`
-/// with the selected value on change.
-#[allow(dead_code)] // consumed as windows migrate (WASM render path)
-pub fn select(ctx: &util::DomCtx, options: &[(&str, &str)], selected: &str, event: &str) -> Element {
+/// An unwired native color swatch (`<input type=color>`, standard look) —
+/// for token-editor rows beside a text input. Wire behavior (sync-to-text,
+/// live preview) with `ctx.listen`; the value must be a 6-digit `#rrggbb`
+/// (the platform control accepts nothing else — normalize `#rgb` first).
+pub fn color_swatch_el(value: &str) -> Element {
+    let input = util::create_element("input");
+    input.set_attribute("type", "color").ok();
+    input.set_attribute("value", value).ok();
+    input.set_attribute("style", theme::COLOR_SWATCH).ok();
+    input
+}
+
+/// An unwired select in the standard look — for call sites whose value is
+/// read at submit time (no per-change dispatch, so a change can't trigger a
+/// rebuild that resets the pick). Prefer [`select`] when a change event is
+/// the behavior.
+pub fn select_el(options: &[(&str, &str)], selected: &str) -> Element {
     let sel = util::create_element("select");
     sel.set_attribute("style", theme::SELECT).ok();
     for (value, label) in options {
@@ -100,13 +113,20 @@ pub fn select(ctx: &util::DomCtx, options: &[(&str, &str)], selected: &str, even
         util::set_text(&opt, label);
         util::append(&sel, &opt);
     }
+    sel
+}
+
+/// THE select: standard look, `(value, label)` options, dispatches `event`
+/// with the selected value on change.
+pub fn select(ctx: &util::DomCtx, options: &[(&str, &str)], selected: &str, event: &str) -> Element {
+    let sel = select_el(options, selected);
     ctx.on_select_change(&sel, event);
     sel
 }
 
 /// THE checkbox row: a `LABEL_CHOICE` label wrapping the box + text, firing
-/// `event` on change. `name` is a stable DOM hook (e2e / external drivers)
-/// — always pass one.
+/// `event` on change. `name` doubles as the `data-field` hook (the repo's
+/// submit-time-read + e2e convention) — always pass one.
 pub fn checkbox(
     ctx: &util::DomCtx,
     name: &str,
@@ -119,6 +139,7 @@ pub fn checkbox(
     let cb = util::create_element("input");
     cb.set_attribute("type", "checkbox").ok();
     cb.set_attribute("name", name).ok();
+    cb.set_attribute("data-field", name).ok();
     if checked {
         cb.set_attribute("checked", "").ok();
     }

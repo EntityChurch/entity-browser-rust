@@ -31,6 +31,7 @@ pub mod style;
 pub mod system_overview;
 pub mod system_peers;
 pub mod theme;
+pub mod theme_editor;
 pub mod util;
 pub mod wire_recorder;
 
@@ -891,9 +892,9 @@ impl DomRenderer {
                 let (kind, glyph, role) =
                     crate::peer_display::resolve_role(peers, pid, &modes);
                 let color = match kind {
-                    crate::peer_display::PeerDisplay::Primary => "#6b8",
-                    crate::peer_display::PeerDisplay::Local => "#8ab",
-                    crate::peer_display::PeerDisplay::Remote => "#b8a",
+                    crate::peer_display::PeerDisplay::Primary => "var(--peer-primary, #6b8)",
+                    crate::peer_display::PeerDisplay::Local => "var(--peer-local, #8ab)",
+                    crate::peer_display::PeerDisplay::Remote => "var(--peer-remote, #b8a)",
                 };
                 // Glyph (role/type) + alias-or-pid, e.g. "◆⛁ notes-store".
                 let name = crate::views::display_name(peers, pid);

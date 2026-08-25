@@ -203,6 +203,24 @@ ctx.listen(&btn, "click", move |_| { /* custom */ });      // complex
 Closures are stored in `DomCtx` and freed on each rebuild. Style via
 `crate::dom::theme` constants.
 
+### Styling & theming the window
+
+The boundary rule is `REFERENCE-THEMING.md` §11 — read it before adding
+any style. The short form for a new window:
+
+- **Build controls from the atoms** (`dom/components.rs`: `button`,
+  `text_input`, `select`, `checkbox`, `radio`, `field`, `card`, `table`,
+  chips, states) — never `create_element("button"|"input"|…)` in a view;
+  `tools/ui-lint.sh` (in `make lint`) fails the diff.
+- **Every color is `var(--token, #literal)`** — tokens live in
+  `src/theme_tokens.rs`; semantic status colors via
+  `theme_tokens::STATUS_OK/ERR/INFO/WARN`; spacing from `theme::SP_*`.
+  Raw hex in a view is a lint failure.
+- **Shared widget looks** come from `dom/theme.rs` consts; window-specific
+  styles stay inline in the view, fully tokenized.
+- Close the window against **S1–S8** (`REFERENCE-UI-DESIGN.md` §2) before
+  calling it done (Doctrine F5.5).
+
 ## Access levels (SDK-OPERATIONS §2.7)
 
 - **L1 (dispatched)**: `ctx.get/.put(...).await` — async,

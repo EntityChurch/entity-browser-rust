@@ -65,7 +65,7 @@ Plain JSON. Only `site_id` is strictly required.
 | `site_id` | **yes** | Stable site identity (also the URL segment). **Must be globally unique** across everything published into one peer — use a domain prefix (`billslab-research`) when publishing many sites together. Empty/missing → hard error. |
 | `title` | no | Display title. Defaults to `site_id`. |
 | `tagline` | no | Cover subtitle. Stored in the manifest params bag. |
-| `theme` | no | Theme name. Stored in the manifest params bag. |
+| `theme` | no | The site's own theme — a **registered app theme name** (`"dark"`, `"light"`; every future registered theme works automatically). Applied when the reader's Site-appearance mode is *Site's theme* (the default), frozen into static exports, and always overridden by the reader's explicit appearance choice. An unknown name is ignored with a loud warning and the site renders with the default palette — the app owns every CSS byte; site-supplied CSS is not accepted. |
 | `nav` | no | Site menu tree. Each node: `title`, `path`, optional `children[]`. |
 
 **`nav[].path`** is an emitted page path (`pages/research/index.md`); it is

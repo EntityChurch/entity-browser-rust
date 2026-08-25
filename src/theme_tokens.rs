@@ -76,6 +76,7 @@ pub const DARK: Theme = Theme {
         ("--border-bold", "#555"),
         // -- accents --
         ("--accent", "#90d0ff"),       // links, selected, mode label
+        ("--accent-text", "#1a1a2e"),  // text ON an accent-filled surface (chips)
         ("--accent-green", "#c0e0c0"), // primary-button text
         ("--accent-2", "#c0c0e0"),     // secondary-button text
         ("--btn-primary-bg", "#2a4a2e"),
@@ -137,6 +138,7 @@ pub const LIGHT: Theme = Theme {
         ("--border-bold", "#a4a4b4"),
         // -- accents --
         ("--accent", "#1366c0"),
+        ("--accent-text", "#ffffff"),
         ("--accent-green", "#1f7a3a"),
         ("--accent-2", "#3a3a7a"),
         ("--btn-primary-bg", "#d8efdb"),
@@ -166,9 +168,252 @@ pub const LIGHT: Theme = Theme {
     ],
 };
 
-/// All registered themes. Settings renders a radio per entry; adding a
-/// theme is one entry here. `DARK` stays first (the default).
-pub const THEMES: &[Theme] = &[DARK, LIGHT];
+/// Sepia — warm paper-and-ink light theme (an example of a retuned
+/// built-in; same token keys as [`DARK`], values shifted warm).
+pub const SEPIA: Theme = Theme {
+    name: "sepia",
+    label: "Sepia",
+    scheme: "light",
+    vars: &[
+        // -- surfaces (warm paper) --
+        ("--bg", "#f0e7d6"),
+        ("--bg-body", "#e6dac2"),
+        ("--surface", "#e6d9c0"),
+        ("--surface-header", "#dccdb0"),
+        ("--surface-hover", "#d4c2a2"),
+        ("--surface-sunken", "#ece0ca"),
+        ("--surface-max", "#faf4e6"),
+        ("--input-bg", "#faf4e6"),
+        ("--overlay-bg", "#f5edda"),
+        ("--selected-bg", "#e2cea4"),
+        // -- text (ink) --
+        ("--text", "#3a2f20"),
+        ("--text-muted", "#544636"),
+        ("--text-dim", "#7a6a54"),
+        ("--text-faint", "#a3907a"),
+        ("--title-muted", "#6a5638"),
+        // -- borders --
+        ("--border", "#d6c5a8"),
+        ("--border-strong", "#c2af8e"),
+        ("--border-bold", "#a8926c"),
+        // -- accents (aged brown link; contrast-tuned on paper) --
+        ("--accent", "#8a5a20"),
+        ("--accent-text", "#faf4e6"),
+        ("--accent-green", "#4a6a28"),
+        ("--accent-2", "#5a4a7a"),
+        ("--btn-primary-bg", "#e2e2c4"),
+        ("--btn-primary-border", "#8a9a4a"),
+        ("--btn-secondary-border", "#9a86c0"),
+        // -- categorical peer badges (darkened for the light ground) --
+        ("--peer-primary", "#4a7a3a"),
+        ("--peer-local", "#3a688f"),
+        ("--peer-remote", "#8a4070"),
+        // -- semantic status --
+        ("--status-ok", "#3a7a30"),
+        ("--status-err", "#b03430"),
+        ("--status-info", "#2a68a8"),
+        ("--status-warn", "#9a6414"),
+        // -- app/game launcher card accents (light-ground tuning) --
+        ("--app-card-s", "50%"),
+        ("--app-card-l", "40%"),
+        ("--app-card-tint-s", "45%"),
+        ("--app-card-tint-l", "56%"),
+        ("--app-card-tint-a", "0.15"),
+        // -- fonts (shared) --
+        ("--font-ui", "system-ui, -apple-system, sans-serif"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// Neon — green-phosphor-on-black terminal theme (the "hacker" example;
+/// mono UI font on purpose — it's a token like any other, retune it in a
+/// duplicate if you want the palette without the typeface).
+pub const NEON: Theme = Theme {
+    name: "neon",
+    label: "Neon",
+    scheme: "dark",
+    vars: &[
+        // -- surfaces (near-black, green-cast) --
+        ("--bg", "#0a120a"),
+        ("--bg-body", "#050905"),
+        ("--surface", "#122412"),
+        ("--surface-header", "#0e1c0e"),
+        ("--surface-hover", "#1b331b"),
+        ("--surface-sunken", "#040a04"),
+        ("--surface-max", "#0c160c"),
+        ("--input-bg", "#061006"),
+        ("--overlay-bg", "#071107"),
+        ("--selected-bg", "#1a3d1a"),
+        // -- text (phosphor) --
+        ("--text", "#8dfc8d"),
+        ("--text-muted", "#6fd66f"),
+        ("--text-dim", "#4a9a4a"),
+        ("--text-faint", "#2f6b2f"),
+        ("--title-muted", "#66cc66"),
+        // -- borders --
+        ("--border", "#1e421e"),
+        ("--border-strong", "#2a582a"),
+        ("--border-bold", "#367036"),
+        // -- accents (classic terminal green) --
+        ("--accent", "#39ff14"),
+        ("--accent-text", "#041004"),
+        ("--accent-green", "#aaffaa"),
+        ("--accent-2", "#7dff7d"),
+        ("--btn-primary-bg", "#103310"),
+        ("--btn-primary-border", "#2fbf2f"),
+        ("--btn-secondary-border", "#2a8a2a"),
+        // -- categorical peer badges (kept distinguishable within the cast) --
+        ("--peer-primary", "#4ae04a"),
+        ("--peer-local", "#3ac0a0"),
+        ("--peer-remote", "#a0d040"),
+        // -- semantic status (err/warn stay off-green so they still read) --
+        ("--status-ok", "#39ff14"),
+        ("--status-err", "#ff5f56"),
+        ("--status-info", "#56d8ff"),
+        ("--status-warn", "#ffc856"),
+        // -- app/game launcher card accents --
+        ("--app-card-s", "80%"),
+        ("--app-card-l", "62%"),
+        ("--app-card-tint-s", "70%"),
+        ("--app-card-tint-l", "45%"),
+        ("--app-card-tint-a", "0.18"),
+        // -- fonts (mono UI is the aesthetic) --
+        ("--font-ui", "monospace"),
+        ("--font-mono", "monospace"),
+        ("--fs-base", "14px"),
+    ],
+};
+
+/// All **built-in** themes — compiled into the app, never stored in the
+/// tree (updating the app updates them; they can't be deleted, only
+/// duplicated in the Theme Editor). Settings renders an option per
+/// registered theme; adding a built-in is one entry here. `DARK` stays
+/// first (the default). User-defined themes live in the runtime registry
+/// beside this slice — resolution goes through [`all_themes`] /
+/// [`lookup`] / [`registered`], never by iterating `THEMES` directly
+/// (that would skip user themes).
+pub const THEMES: &[Theme] = &[DARK, LIGHT, SEPIA, NEON];
+
+// ---------------------------------------------------------------------------
+// User-defined themes — the runtime registry
+// ---------------------------------------------------------------------------
+//
+// `Theme` threads `&'static str` through the whole resolution layer
+// (`site_token_value`, `doc_css::PaletteMode::Frozen`, the exporter). Rather
+// than rewrite that verified layer to owned strings, a user theme is LEAKED
+// on registration (`Box::leak`) into a true `&'static Theme` — a deliberate,
+// bounded leak: one per explicit Save (never per preview keystroke; the
+// editor previews from owned strings without touching the registry), ~1–2 KB
+// each, freed on reload. Replacing or deleting a theme drops it from the
+// registry; the old allocation stays (same bound). DESIGN-USER-THEMES §1.
+//
+// The registry is a rebuildable PROJECTION of the tree entities under
+// `app/entity-browser/themes/` (`crate::user_themes` owns persistence + the
+// boot subscription) — never a second source of truth.
+
+/// An owned theme definition, as edited/persisted. Registration leaks it
+/// into a [`Theme`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserThemeSpec {
+    pub name: String,
+    pub label: String,
+    /// CSS `color-scheme` keyword (`"dark"` / `"light"`) — see [`Theme::scheme`].
+    pub scheme: String,
+    pub vars: Vec<(String, String)>,
+}
+
+use std::cell::RefCell;
+thread_local! {
+    /// User themes, kept sorted by name (deterministic dropdown order).
+    /// Main-thread only on wasm (all theme code is); per-thread isolation
+    /// for native tests.
+    static USER_THEMES: RefCell<Vec<&'static Theme>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Validate a prospective user-theme name: it is a persisted id AND a tree
+/// path segment AND a site-appearance dropdown value, so it must be short
+/// `[a-z0-9-]` and must not shadow a built-in theme nor the site-appearance
+/// mode values `"site"` / `"system"` (a user theme named "system" would
+/// corrupt that value space).
+pub fn validate_theme_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("theme name is empty".into());
+    }
+    if name.len() > 40 {
+        return Err("theme name too long (max 40)".into());
+    }
+    if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err("theme name must be lowercase letters, digits, and dashes".into());
+    }
+    if name == "site" || name == "system" {
+        return Err(format!("\"{name}\" is a reserved appearance mode"));
+    }
+    if THEMES.iter().any(|t| t.name == name) {
+        return Err(format!("\"{name}\" is a built-in theme"));
+    }
+    Ok(())
+}
+
+/// Register (or replace, keyed by name) a user theme. Validates the name and
+/// scheme, then leaks the spec into a `&'static Theme` (module docs above).
+pub fn register_user_theme(spec: UserThemeSpec) -> Result<(), String> {
+    validate_theme_name(&spec.name)?;
+    if spec.scheme != "dark" && spec.scheme != "light" {
+        return Err(format!("scheme must be \"dark\" or \"light\", got \"{}\"", spec.scheme));
+    }
+    if spec.vars.is_empty() {
+        return Err("theme has no token values".into());
+    }
+    for (k, v) in &spec.vars {
+        if !k.starts_with("--") || v.is_empty() {
+            return Err(format!("bad token entry {k:?}"));
+        }
+    }
+    let vars: Vec<(&'static str, &'static str)> = spec
+        .vars
+        .into_iter()
+        .map(|(k, v)| (&*k.leak(), &*v.leak()))
+        .collect();
+    let theme: &'static Theme = Box::leak(Box::new(Theme {
+        name: spec.name.leak(),
+        label: spec.label.leak(),
+        scheme: spec.scheme.leak(),
+        vars: vars.leak(),
+    }));
+    USER_THEMES.with(|u| {
+        let mut u = u.borrow_mut();
+        u.retain(|t| t.name != theme.name);
+        let pos = u.partition_point(|t| t.name < theme.name);
+        u.insert(pos, theme);
+    });
+    Ok(())
+}
+
+/// Remove a user theme from the registry (the tree entity is the caller's
+/// job — `crate::user_themes`). Returns whether it was present. Built-ins
+/// are not removable.
+pub fn unregister_user_theme(name: &str) -> bool {
+    USER_THEMES.with(|u| {
+        let mut u = u.borrow_mut();
+        let before = u.len();
+        u.retain(|t| t.name != name);
+        u.len() != before
+    })
+}
+
+/// Names of the currently registered user themes (sorted).
+pub fn user_theme_names() -> Vec<&'static str> {
+    USER_THEMES.with(|u| u.borrow().iter().map(|t| t.name).collect())
+}
+
+/// Every registered theme: built-ins first (DARK the default), then user
+/// themes sorted by name. The ONE iteration surface for dropdowns/catalogs.
+pub fn all_themes() -> Vec<&'static Theme> {
+    let mut v: Vec<&'static Theme> = THEMES.iter().collect();
+    USER_THEMES.with(|u| v.extend(u.borrow().iter().copied()));
+    v
+}
 
 /// localStorage key mirroring the chosen theme name. The tree
 /// (`SettingsState.theme`) is the durable record, but it isn't readable
@@ -177,13 +422,45 @@ pub const THEMES: &[Theme] = &[DARK, LIGHT];
 /// Mirrors the `boot_fast_paint` localStorage-mirror pattern.
 pub const THEME_LS_KEY: &str = "entity_theme";
 
-/// The theme to install at boot: the localStorage mirror, else [`DARK`].
+/// localStorage key carrying the current theme's **computed `:root` CSS**
+/// when (and only when) the current theme is user-defined. A user theme
+/// lives in the tree and isn't in the runtime registry until the boot
+/// subscription syncs — this mirror is the paint hint that lets it render
+/// on frame one anyway (no dark flash). It is never the record: the
+/// registry sync re-installs (and rewrites this mirror) after every sync,
+/// so a stale mirror self-heals. DESIGN-USER-THEMES §2.
+pub const THEME_CSS_LS_KEY: &str = "entity_theme_css";
+
 #[cfg(target_arch = "wasm32")]
-pub fn boot_choice() -> String {
+fn ls_get(key: &str) -> Option<String> {
     web_sys::window()
         .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|ls| ls.get_item(THEME_LS_KEY).ok().flatten())
-        .filter(|name| THEMES.iter().any(|t| t.name == *name))
+        .and_then(|ls| ls.get_item(key).ok().flatten())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_set(key: &str, value: Option<&str>) {
+    if let Some(ls) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        match value {
+            Some(v) => {
+                let _ = ls.set_item(key, v);
+            }
+            None => {
+                let _ = ls.remove_item(key);
+            }
+        }
+    }
+}
+
+/// The theme to install at boot: the localStorage mirror, else [`DARK`].
+/// A name is accepted when it's registered (built-in, or a user theme in a
+/// same-session re-entry) **or** when the CSS paint-hint mirror is present
+/// (a user theme before the boot subscription syncs); anything else —
+/// corrupt value, deleted user theme with no mirror — falls back to dark.
+#[cfg(target_arch = "wasm32")]
+pub fn boot_choice() -> String {
+    ls_get(THEME_LS_KEY)
+        .filter(|name| registered(name).is_some() || ls_get(THEME_CSS_LS_KEY).is_some())
         .unwrap_or_else(|| DARK.name.to_string())
 }
 
@@ -195,12 +472,16 @@ pub fn boot_choice() -> String {
 
 /// Persist the chosen theme to the localStorage boot mirror AND recolor the
 /// live page (rewrite `#theme-vars`). The durable tree write is the caller's
-/// job (`SettingsState`); this is the appearance side.
+/// job (`SettingsState`); this is the appearance side. A user theme also
+/// mirrors its computed CSS ([`THEME_CSS_LS_KEY`]) so the next boot paints
+/// it before the registry loads; a built-in clears that mirror.
 #[cfg(target_arch = "wasm32")]
 pub fn apply_and_persist(theme_name: &str) {
-    if let Some(ls) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = ls.set_item(THEME_LS_KEY, theme_name);
-    }
+    ls_set(THEME_LS_KEY, Some(theme_name));
+    let user_css = registered(theme_name)
+        .filter(|_| !THEMES.iter().any(|t| t.name == theme_name))
+        .map(|t| root_block(t));
+    ls_set(THEME_CSS_LS_KEY, user_css.as_deref());
     install_root(theme_name);
 }
 
@@ -208,21 +489,50 @@ pub fn apply_and_persist(theme_name: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn apply_and_persist(_theme_name: &str) {}
 
-/// Look up a theme by `name`, falling back to [`DARK`] for an unknown id
-/// (e.g. a persisted `"light"` from before that theme existed).
+/// Look up a theme by `name` — built-in or user — falling back to [`DARK`]
+/// for an unknown id (e.g. a persisted `"light"` from before that theme
+/// existed, or a deleted user theme).
 pub fn lookup(name: &str) -> &'static Theme {
-    THEMES.iter().find(|t| t.name == name).unwrap_or(&DARK)
+    registered(name).unwrap_or(&DARK)
+}
+
+/// Look up a **registered** theme (built-in or user) by exact name — `None`
+/// for an unknown id. Unlike [`lookup`] this does NOT fall back to [`DARK`]:
+/// callers that take a name from outside the app (a site manifest's `theme`
+/// param) must treat an unknown name as "no theme", loudly, not silently
+/// restyle to dark.
+pub fn registered(name: &str) -> Option<&'static Theme> {
+    THEMES
+        .iter()
+        .find(|t| t.name == name)
+        .or_else(|| USER_THEMES.with(|u| u.borrow().iter().copied().find(|t| t.name == name)))
 }
 
 /// Build the `:root { … }` CSS block for a theme.
 pub fn root_block(theme: &Theme) -> String {
+    root_block_write(theme.scheme, theme.vars.iter().map(|(k, v)| (*k, *v)))
+}
+
+/// [`root_block`] over owned pairs — the theme editor's live-preview form
+/// (a draft being edited exists only as owned strings; previewing must not
+/// leak a registration). Identical output for identical inputs (tested).
+pub fn root_block_from_pairs(scheme: &str, vars: &[(String, String)]) -> String {
+    root_block_write(scheme, vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+}
+
+fn root_block_write<'a>(scheme: &str, vars: impl Iterator<Item = (&'a str, &'a str)>) -> String {
     let mut s = String::from(":root{");
     // Native-control rendering scheme — see `Theme::scheme`. Must lead the
     // block so it's set before any control paints.
     s.push_str("color-scheme:");
-    s.push_str(theme.scheme);
+    s.push_str(scheme);
     s.push(';');
-    for (k, v) in theme.vars {
+    // Native checkbox/radio/progress glyphs follow the theme accent instead of
+    // the UA default (blue on Chromium/Firefox, GTK-theme-dependent on
+    // WebKitGTK) — without this the check glyph is the one control fragment
+    // that ignores a theme flip. Inherited, so :root covers the shadow root too.
+    s.push_str("accent-color:var(--accent);");
+    for (k, v) in vars {
         s.push_str(k);
         s.push(':');
         s.push_str(v);
@@ -230,6 +540,15 @@ pub fn root_block(theme: &Theme) -> String {
     }
     s.push('}');
     s
+}
+
+/// Live-preview install for the theme editor: rewrite `#theme-vars` from a
+/// DRAFT (owned pairs) without registering or persisting anything. The next
+/// [`install_root`] / [`reinstall_current`] (save, revert, registry sync)
+/// replaces it with the real block.
+#[cfg(target_arch = "wasm32")]
+pub fn install_preview(scheme: &str, vars: &[(String, String)]) {
+    install_style_block("theme-vars", Some(&root_block_from_pairs(scheme, vars)));
 }
 
 /// Inject (or rewrite) the `<style id>` element in `<head>` with `css`.
@@ -267,9 +586,18 @@ fn install_style_block(id: &str, css: Option<&str>) {
 }
 
 /// Inject (or rewrite) the `<style id="theme-vars">` chrome `:root` block.
-/// Call at boot (before first paint) and on theme change.
+/// Call at boot (before first paint) and on theme change. An unregistered
+/// name with a CSS paint-hint mirror (a user theme before the boot
+/// subscription syncs — [`THEME_CSS_LS_KEY`]) installs the mirrored CSS
+/// verbatim; otherwise unknown falls back to dark via [`lookup`].
 #[cfg(target_arch = "wasm32")]
 pub fn install_root(theme_name: &str) {
+    if registered(theme_name).is_none() {
+        if let Some(css) = ls_get(THEME_CSS_LS_KEY) {
+            install_style_block("theme-vars", Some(&css));
+            return;
+        }
+    }
     install_style_block("theme-vars", Some(&root_block(lookup(theme_name))));
 }
 
@@ -341,6 +669,11 @@ pub const SITE_TOKENS: &[(&str, &str, &str)] = &[
 /// site overlay). Mirrors [`THEME_LS_KEY`].
 pub const SITE_APPEARANCE_LS_KEY: &str = "entity_site_appearance";
 
+/// localStorage key carrying the computed `--site-*` `:root` CSS when the
+/// site-appearance mode is a strict override to a **user** theme — the site
+/// counterpart of [`THEME_CSS_LS_KEY`] (same paint-hint/self-heal contract).
+pub const SITE_CSS_LS_KEY: &str = "entity_site_theme_css";
+
 /// The "Site appearance" dropdown catalog: `(value, label)` in display order.
 /// Two fixed modes (the site's own theme; follow the system theme) followed by
 /// a strict override per registered theme. Adding a theme adds an "Always X"
@@ -350,7 +683,7 @@ pub fn site_appearance_catalog() -> Vec<(&'static str, String)> {
         ("site", "Site's theme".to_string()),
         ("system", "Match system theme".to_string()),
     ];
-    for t in THEMES {
+    for t in all_themes() {
         v.push((t.name, format!("Always {}", t.label)));
     }
     v
@@ -361,12 +694,26 @@ pub fn site_appearance_catalog() -> Vec<(&'static str, String)> {
 /// the boot path falls back to the `"site"` default instead of silently
 /// freezing the overlay to a strict override (mirrors [`boot_choice`]'s filter).
 pub fn is_valid_site_appearance(mode: &str) -> bool {
-    mode == "site" || mode == "system" || THEMES.iter().any(|t| t.name == mode)
+    mode == "site" || mode == "system" || registered(mode).is_some()
 }
 
 /// Look up an app token's value within a theme (e.g. `--text` in [`LIGHT`]).
 fn theme_value<'a>(theme: &'a Theme, app_token: &str) -> Option<&'a str> {
     theme.vars.iter().find(|(k, _)| *k == app_token).map(|(_, v)| *v)
+}
+
+/// The effective value of a `--site-*` token under a theme: the theme's
+/// value for the aliased app token, else the site default (a theme missing
+/// the app token). The ONE resolution rule shared by the strict-override
+/// `:root` block, the manifest-theme container block, and the static
+/// exporter's frozen palette — so "Always Light", a `"theme": "light"`
+/// manifest, and a light published page can never disagree on a color.
+pub fn site_token_value(theme: &'static Theme, site_token: &str) -> &'static str {
+    SITE_TOKENS
+        .iter()
+        .find(|(t, _, _)| *t == site_token)
+        .map(|(_, default, app)| theme_value(theme, app).unwrap_or(default))
+        .unwrap_or_else(|| panic!("unknown site token {site_token}"))
 }
 
 /// Build the `:root { --site-*: … }` block for a site-appearance `mode`, or
@@ -391,11 +738,10 @@ pub fn site_root_block(mode: &str) -> Option<String> {
         name => {
             let theme = lookup(name);
             let mut s = String::from(":root{");
-            for (site, default, app) in SITE_TOKENS {
-                let val = theme_value(theme, app).unwrap_or(default);
+            for (site, _default, _app) in SITE_TOKENS {
                 s.push_str(site);
                 s.push(':');
-                s.push_str(val);
+                s.push_str(site_token_value(theme, site));
                 s.push(';');
             }
             s.push('}');
@@ -404,14 +750,57 @@ pub fn site_root_block(mode: &str) -> Option<String> {
     }
 }
 
+/// The manifest site-theme **container block**: inline-style custom-property
+/// declarations (`--site-X:val;…`) freezing the whole `--site-*` family to a
+/// registered theme. `None` for an unknown name — with a **once-per-session
+/// warn** (D13: a publisher debugging "why doesn't my theme apply" gets a
+/// loud line, not silence; once, not per frame). Applied by the site
+/// renderer to the site's own wrapper element, ONLY when the effective
+/// "Site appearance" mode is `"site"` — container properties override
+/// inherited `:root` values, so an unconditional install would defeat a
+/// strict user override (DESIGN-MANIFEST-SITE-THEME §3).
+pub fn site_container_block(name: &str) -> Option<String> {
+    let Some(theme) = registered(name) else {
+        warn_unknown_site_theme(name);
+        return None;
+    };
+    let mut s = String::new();
+    for (site, _default, _app) in SITE_TOKENS {
+        s.push_str(site);
+        s.push(':');
+        s.push_str(site_token_value(theme, site));
+        s.push(';');
+    }
+    Some(s)
+}
+
+/// Warn once per session per unknown manifest theme name. The site render
+/// output is rebuilt every frame while a site surface is live — an unguarded
+/// warn would flood the console/log at 60Hz.
+fn warn_unknown_site_theme(name: &str) {
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    thread_local! {
+        static WARNED: RefCell<BTreeSet<String>> = const { RefCell::new(BTreeSet::new()) };
+    }
+    let first = WARNED.with(|w| w.borrow_mut().insert(name.to_string()));
+    if first {
+        tracing::warn!(
+            theme = %name,
+            "site manifest declares unknown theme — not a registered theme name; \
+             rendering with the default site palette"
+        );
+    }
+}
+
 /// The site-appearance mode to install at boot: the localStorage mirror, else
-/// `"site"` (the overlay's own theme).
+/// `"site"` (the overlay's own theme). A strict override naming a user theme
+/// is accepted before the registry syncs when its CSS paint-hint mirror is
+/// present (mirrors [`boot_choice`]'s rule).
 #[cfg(target_arch = "wasm32")]
 pub fn site_appearance_boot_choice() -> String {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|ls| ls.get_item(SITE_APPEARANCE_LS_KEY).ok().flatten())
-        .filter(|mode| is_valid_site_appearance(mode))
+    ls_get(SITE_APPEARANCE_LS_KEY)
+        .filter(|mode| is_valid_site_appearance(mode) || ls_get(SITE_CSS_LS_KEY).is_some())
         .unwrap_or_else(|| "site".to_string())
 }
 
@@ -421,6 +810,15 @@ pub fn site_appearance_boot_choice() -> String {
     "site".to_string()
 }
 
+/// The **current** effective site-appearance mode. The localStorage mirror
+/// is authoritative at any instant, not just boot: `apply_site_appearance`
+/// rewrites it on every Settings change, so the boot read doubles as the
+/// live read. Consumed by the site render-output builder to gate the
+/// manifest theme (a per-frame call; one synchronous `getItem`).
+pub fn site_appearance_current() -> String {
+    site_appearance_boot_choice()
+}
+
 /// Inject / rewrite the `<style id="site-theme-vars">` element with the
 /// `--site-*` block for `mode`. For `"site"` the block is `None`: any existing
 /// element is emptied (CSS fallbacks resume), never injected. Call at boot and
@@ -428,6 +826,15 @@ pub fn site_appearance_boot_choice() -> String {
 /// chrome flip — its `var()` aliases re-resolve.
 #[cfg(target_arch = "wasm32")]
 pub fn install_site_root(mode: &str) {
+    // A strict override to a not-yet-registered user theme installs the CSS
+    // paint-hint mirror verbatim (see `install_root`); the registry sync
+    // re-installs the real block once the theme loads.
+    if mode != "site" && mode != "system" && registered(mode).is_none() {
+        if let Some(css) = ls_get(SITE_CSS_LS_KEY) {
+            install_style_block("site-theme-vars", Some(&css));
+            return;
+        }
+    }
     // `"site"` → `None` → the element is emptied (or never created), so the
     // overlay's `var(--site-X, #literal)` fallbacks render its own palette.
     install_style_block("site-theme-vars", site_root_block(mode).as_deref());
@@ -443,15 +850,41 @@ pub fn install_site_root(_mode: &str) {}
 /// appearance side. Mirrors [`apply_and_persist`].
 #[cfg(target_arch = "wasm32")]
 pub fn apply_site_appearance(mode: &str) {
-    if let Some(ls) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = ls.set_item(SITE_APPEARANCE_LS_KEY, mode);
-    }
+    ls_set(SITE_APPEARANCE_LS_KEY, Some(mode));
+    // A strict override to a USER theme mirrors its computed block as the
+    // boot paint hint; every other mode clears it (built-ins resolve from
+    // the static registry at boot; site/system need no palette).
+    let user_css = (mode != "site" && mode != "system")
+        .then(|| registered(mode))
+        .flatten()
+        .filter(|_| !THEMES.iter().any(|t| t.name == mode))
+        .and_then(|_| site_root_block(mode));
+    ls_set(SITE_CSS_LS_KEY, user_css.as_deref());
     install_site_root(mode);
 }
 
 /// Native stub — no DOM / localStorage.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn apply_site_appearance(_mode: &str) {}
+
+/// Re-derive and re-install BOTH appearance surfaces from the persisted
+/// choices against the now-current registry, rewriting the CSS paint-hint
+/// mirrors. Called by the user-theme registry sync (`crate::user_themes`)
+/// after every membership/value change: an edited theme recolors live
+/// surfaces, a stale boot mirror self-heals, and a theme deleted elsewhere
+/// falls back to dark instead of a ghost palette. Idempotent and cheap
+/// (runs only on actual theme-prefix changes, not per frame).
+#[cfg(target_arch = "wasm32")]
+pub fn reinstall_current() {
+    let name = ls_get(THEME_LS_KEY).unwrap_or_else(|| DARK.name.to_string());
+    apply_and_persist(&name);
+    let mode = ls_get(SITE_APPEARANCE_LS_KEY).unwrap_or_else(|| "site".to_string());
+    apply_site_appearance(&mode);
+}
+
+/// Native stub — no DOM / localStorage.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reinstall_current() {}
 
 #[cfg(test)]
 mod tests {
@@ -473,6 +906,10 @@ mod tests {
         // popup) render in the theme's scheme on WebKitGTK/Tauri.
         assert!(block.contains("color-scheme:dark;"));
         assert!(root_block(&LIGHT).contains("color-scheme:light;"));
+        // Native control glyphs (checkbox/radio check) must ride the theme
+        // accent — the UA default ignores a theme flip.
+        assert!(block.contains("accent-color:var(--accent);"));
+        assert!(root_block(&LIGHT).contains("accent-color:var(--accent);"));
         assert!(block.contains("--bg:#1a1a2e;"));
         assert!(block.contains("--status-ok:#6c6;"));
         assert!(block.contains("--font-ui:system-ui, -apple-system, sans-serif;"));
@@ -480,9 +917,24 @@ mod tests {
 
     #[test]
     fn every_token_has_a_value() {
-        for (k, v) in DARK.vars {
-            assert!(k.starts_with("--"), "token {k} must start with --");
-            assert!(!v.is_empty(), "token {k} has empty value");
+        for theme in THEMES {
+            for (k, v) in theme.vars {
+                assert!(k.starts_with("--"), "{}: token {k} must start with --", theme.name);
+                assert!(!v.is_empty(), "{}: token {k} has empty value", theme.name);
+            }
+        }
+    }
+
+    #[test]
+    fn every_builtin_carries_exactly_darks_token_keys() {
+        // §7's rule, mechanized: a `:root` block fully overrides only the
+        // keys it lists — a builtin missing a key would silently fall back
+        // to the (dark) var() literal on that surface. Same keys, same
+        // ORDER (the editor's group tables ride the source order).
+        let dark_keys: Vec<&str> = DARK.vars.iter().map(|(k, _)| *k).collect();
+        for theme in THEMES {
+            let keys: Vec<&str> = theme.vars.iter().map(|(k, _)| *k).collect();
+            assert_eq!(keys, dark_keys, "{} must carry DARK's exact token key set", theme.name);
         }
     }
 
@@ -491,10 +943,16 @@ mod tests {
         for (site, default, app) in SITE_TOKENS {
             assert!(site.starts_with("--site-"), "{site} must be a --site-* token");
             assert!(default.starts_with('#'), "{site} default must be a hex literal");
-            // Every app token a site token aliases must exist in both themes
-            // (so "system" / strict modes always resolve, never fall through).
-            assert!(theme_value(&DARK, app).is_some(), "DARK missing {app} (aliased by {site})");
-            assert!(theme_value(&LIGHT, app).is_some(), "LIGHT missing {app} (aliased by {site})");
+            // Every app token a site token aliases must exist in every
+            // builtin (so "system" / strict modes always resolve, never
+            // fall through).
+            for theme in THEMES {
+                assert!(
+                    theme_value(theme, app).is_some(),
+                    "{} missing {app} (aliased by {site})",
+                    theme.name
+                );
+            }
         }
     }
 
@@ -536,6 +994,33 @@ mod tests {
     }
 
     #[test]
+    fn site_container_block_matches_the_strict_override_values() {
+        // The manifest theme (container block) and the user's strict "Always
+        // Light" (`:root` block) resolve through the SAME rule
+        // (site_token_value) — assert value-identity so they can never
+        // disagree on a color. The container form is bare declarations (an
+        // inline style), the root form wraps them in `:root{…}`.
+        let container = site_container_block("light").expect("light is registered");
+        assert!(!container.contains("var("), "frozen literals only: {container}");
+        let root = site_root_block("light").expect("strict light block");
+        assert_eq!(format!(":root{{{container}}}"), root);
+        // Spot values (LIGHT --overlay-bg / --text).
+        assert!(container.contains("--site-bg:#f6f6fa;"), "container: {container}");
+        assert!(container.contains("--site-text:#1a1a22;"));
+    }
+
+    #[test]
+    fn site_container_block_rejects_unknown_names() {
+        // Unlike the strict-override path (user input, falls back to DARK),
+        // a manifest name is OUTSIDE input: unknown must be None (the caller
+        // renders today's look), never a silent restyle to dark.
+        assert_eq!(site_container_block("lab"), None);
+        assert_eq!(site_container_block(""), None);
+        assert_eq!(registered("dark").map(|t| t.name), Some("dark"));
+        assert_eq!(registered("nonexistent").map(|t| t.name), None);
+    }
+
+    #[test]
     fn overlay_var_fallbacks_match_site_token_defaults() {
         // The whole "site" (default) mode rests on this invariant: it injects NO
         // `:root` block, so the CSS `var(--site-X, #literal)` FALLBACKS in the
@@ -547,7 +1032,11 @@ mod tests {
         const SOURCES: &[&str] = &[
             include_str!("dom/content_site.rs"),
             include_str!("dom/site_directory.rs"),
+            include_str!("dom/site_editor.rs"),
         ];
+        // (The `.cs-doc` document rules moved to `content_site/doc_css.rs`,
+        // which BUILDS its fallbacks from SITE_TOKENS — correct by
+        // construction, nothing to scan.)
         let default_for =
             |tok: &str| SITE_TOKENS.iter().find(|(t, _, _)| *t == tok).map(|(_, d, _)| *d);
         let mut checked = 0;
@@ -587,6 +1076,102 @@ mod tests {
         assert!(is_valid_site_appearance("light"));
         assert!(!is_valid_site_appearance("bogus"));
         assert!(!is_valid_site_appearance(""));
+    }
+
+    // -- user-theme registry (thread_local → each #[test] thread is isolated) --
+
+    fn spec(name: &str) -> UserThemeSpec {
+        UserThemeSpec {
+            name: name.into(),
+            label: format!("My {name}"),
+            scheme: "dark".into(),
+            // Derived from DARK with one visible difference, the way the
+            // editor's duplicate-and-edit flow builds one.
+            vars: DARK
+                .vars
+                .iter()
+                .map(|(k, v)| {
+                    let v = if *k == "--bg" { "#101010" } else { *v };
+                    (k.to_string(), v.to_string())
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn user_theme_registers_resolves_and_unregisters() {
+        register_user_theme(spec("mytheme")).expect("registers");
+        assert_eq!(registered("mytheme").map(|t| t.name), Some("mytheme"));
+        assert_eq!(lookup("mytheme").label, "My mytheme");
+        assert!(is_valid_site_appearance("mytheme"));
+        // The whole resolution layer sees it: strict site override freezes
+        // the USER theme's values (--site-bg aliases --overlay-bg = DARK's,
+        // --bg itself isn't aliased — spot the edited surface via root_block).
+        assert!(root_block(lookup("mytheme")).contains("--bg:#101010;"));
+        let block = site_root_block("mytheme").expect("user theme emits a block");
+        assert!(block.contains("--site-bg:#101018;"), "block: {block}");
+        // Dropdown catalogs pick it up.
+        assert!(all_themes().iter().any(|t| t.name == "mytheme"));
+        let cat = site_appearance_catalog();
+        assert!(cat.iter().any(|(v, l)| *v == "mytheme" && l == "Always My mytheme"));
+
+        assert!(unregister_user_theme("mytheme"));
+        assert!(registered("mytheme").is_none());
+        assert_eq!(lookup("mytheme").name, "dark", "deleted user theme → dark");
+        assert!(!is_valid_site_appearance("mytheme"));
+        assert!(!unregister_user_theme("mytheme"), "second remove is a no-op");
+    }
+
+    #[test]
+    fn user_theme_replace_updates_values_without_duplicating() {
+        register_user_theme(spec("mine")).unwrap();
+        let mut edited = spec("mine");
+        for (k, v) in &mut edited.vars {
+            if k == "--bg" {
+                *v = "#202020".into();
+            }
+        }
+        register_user_theme(edited).unwrap();
+        assert_eq!(all_themes().iter().filter(|t| t.name == "mine").count(), 1);
+        assert!(root_block(lookup("mine")).contains("--bg:#202020;"));
+    }
+
+    #[test]
+    fn user_theme_missing_app_token_falls_back_to_site_default() {
+        // A user theme lacking an aliased app token must resolve the site
+        // token to its SITE_TOKENS default — the site_token_value rule.
+        let mut s = spec("sparse");
+        s.vars.retain(|(k, _)| k != "--overlay-bg");
+        register_user_theme(s).unwrap();
+        assert_eq!(site_token_value(lookup("sparse"), "--site-bg"), "#101018");
+        unregister_user_theme("sparse");
+    }
+
+    #[test]
+    fn theme_name_validation_rejects_reserved_and_malformed() {
+        for bad in ["", "dark", "light", "site", "system", "Has Caps", "sp ace", "usr/../x"] {
+            assert!(validate_theme_name(bad).is_err(), "{bad:?} must be rejected");
+        }
+        assert!(validate_theme_name(&"x".repeat(41)).is_err(), "over-long rejected");
+        for good in ["mytheme", "solarized-2", "x"] {
+            assert!(validate_theme_name(good).is_ok(), "{good:?} must be accepted");
+        }
+        // register enforces the same gate + scheme/vars sanity.
+        assert!(register_user_theme(spec("dark")).is_err());
+        let mut bad_scheme = spec("ok-name");
+        bad_scheme.scheme = "mauve".into();
+        assert!(register_user_theme(bad_scheme).is_err());
+        let mut no_vars = spec("ok-name");
+        no_vars.vars.clear();
+        assert!(register_user_theme(no_vars).is_err());
+    }
+
+    #[test]
+    fn all_themes_lists_builtins_first_then_users_sorted() {
+        register_user_theme(spec("zeta")).unwrap();
+        register_user_theme(spec("alpha")).unwrap();
+        let names: Vec<&str> = all_themes().iter().map(|t| t.name).collect();
+        assert_eq!(names, vec!["dark", "light", "sepia", "neon", "alpha", "zeta"]);
     }
 
     #[test]

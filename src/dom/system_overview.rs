@@ -34,7 +34,7 @@ pub fn render(
     let header = util::create_element("div");
     header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
-    h2.set_attribute("style", "margin:0").ok();
+    h2.set_attribute("style", theme::TITLE_INLINE).ok();
     util::set_text(&h2, "System Overview");
     util::append(&header, &h2);
     if output.tauri {
@@ -51,24 +51,15 @@ pub fn render(
         util::set_text(&lvl_label, "Level");
         util::append(&controls, &lvl_label);
 
-        let select = util::create_element("select");
-        select.set_attribute("style", theme::SELECT).ok();
-        for level in crate::views::system_overview::model::LEVELS {
-            let opt = util::create_element("option");
-            opt.set_attribute("value", level).ok();
-            if *level == output.log_level {
-                opt.set_attribute("selected", "").ok();
-            }
-            util::set_text(&opt, level);
-            util::append(&select, &opt);
-        }
-        ctx.on_select_change(&select, "sb_set_level");
+        let levels: Vec<(&str, &str)> = crate::views::system_overview::model::LEVELS
+            .iter()
+            .map(|l| (*l, *l))
+            .collect();
+        let select = components::select(ctx, &levels, &output.log_level, "sb_set_level");
         util::append(&controls, &select);
 
-        let clear_btn = util::create_element("button");
-        util::set_text(&clear_btn, "Clear logs");
-        clear_btn.set_attribute("style", theme::BTN_SMALL).ok();
-        ctx.on_window_event(&clear_btn, "click", "sb_clear_logs", "");
+        let clear_btn =
+            components::button(ctx, "Clear logs", components::ButtonKind::Small, "sb_clear_logs");
         util::append(&controls, &clear_btn);
 
         util::append(&header, &controls);
@@ -299,18 +290,15 @@ fn render_authorizations(parent: &Element, output: &SystemOverviewOutput, ctx: &
 
 /// One pending-device row: status chip, a grant-profile picker, and Authorize.
 fn append_pending_row(body: &Element, auth: &AuthorizationsView, row: &AuthRow, ctx: &DomCtx) {
-    let select = util::create_element("select");
-    select.set_attribute("style", "font-size:12px;padding:2px 4px").ok();
-    for (token, label) in [("file-transfer", "Pull only"), ("file-transfer-rw", "Two-way")] {
-        let opt = util::create_element("option");
-        opt.set_attribute("value", token).ok();
-        util::set_text(&opt, label);
-        util::append(&select, &opt);
-    }
+    // Unwired select — the grant profile is read at Authorize-click time, so a
+    // change must NOT dispatch (a dispatch would rebuild the row and reset the
+    // pick).
+    let select = components::select_el(
+        &[("file-transfer", "Pull only"), ("file-transfer-rw", "Two-way")],
+        "file-transfer",
+    );
 
-    let authorize = util::create_element("button");
-    util::set_text(&authorize, "Authorize");
-    authorize.set_attribute("style", theme::BTN_PRIMARY).ok();
+    let authorize = components::button_el("Authorize", components::ButtonKind::Primary);
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();

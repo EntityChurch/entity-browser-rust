@@ -171,4 +171,18 @@ pub struct SiteRenderOutput {
     /// rebuild-guard concern — it's constant for the overlay's lifetime, but
     /// carried on the output so the host-agnostic renderer can reach it.
     pub home_target: String,
+
+    /// The site's **manifest-declared theme**, resolved to container-scoped
+    /// `--site-*` declarations (S-T2, DESIGN-MANIFEST-SITE-THEME). `Some`
+    /// only when the manifest names a *registered* theme AND the effective
+    /// "Site appearance" mode is `"site"` — the mode gate lives here, not in
+    /// the renderer, ON PURPOSE: this field is part of the overlay's
+    /// rebuild-guard equality, so a Settings mode flip while a themed site
+    /// is open changes the output and forces the rebuild that removes the
+    /// container vars. (Container properties override inherited `:root`
+    /// values — gated renderer-side only, a strict "Always X" override would
+    /// be silently defeated by stale vars.) The renderer appends it to the
+    /// site wrapper's inline style verbatim; values come exclusively from
+    /// the app's own theme table, never from site-supplied bytes.
+    pub site_theme_css: Option<String>,
 }

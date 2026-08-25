@@ -81,7 +81,7 @@ fn render_rows(parent: &Element, rows: &[WireRow]) {
         let remote = r.peer_remote.as_deref().unwrap_or("?");
         html.push_str(&format!(
             "<div><span style='color:{}'>{}</span> <span style='color:var(--status-ok, #9c9)'>{}</span> \
-             <span style='color:var(--text-dim, #888)'>{} B</span> · <span style='color:#aaa'>{}</span></div>\n",
+             <span style='color:var(--text-dim, #888)'>{} B</span> · <span style='color:var(--text-muted, #aaa)'>{}</span></div>\n",
             dir_color,
             dir_glyph,
             util::escape_html(&r.frame_kind),

@@ -23,10 +23,12 @@ pub fn render(container: &Element, output: &EventLogOutput, ctx: &DomCtx) {
     util::set_text(&h2, "Event Log");
     util::append(&header, &h2);
 
-    let clear_btn = util::create_element("button");
-    util::set_text(&clear_btn, "Clear");
-    clear_btn.set_attribute("style", theme::BTN_SMALL).ok();
-    ctx.on_action(&clear_btn, "click", Action::ClearEventLog);
+    let clear_btn = crate::dom::components::button_action(
+        ctx,
+        "Clear",
+        crate::dom::components::ButtonKind::Small,
+        Action::ClearEventLog,
+    );
     util::append(&header, &clear_btn);
     util::append(&wrapper, &header);
 
@@ -57,6 +59,6 @@ pub(crate) fn color_for(category: EventCategory) -> &'static str {
         EventCategory::Success => crate::theme_tokens::STATUS_OK,
         EventCategory::Failure => crate::theme_tokens::STATUS_ERR,
         EventCategory::Info => crate::theme_tokens::STATUS_INFO,
-        EventCategory::Neutral => "#ccc",
+        EventCategory::Neutral => "var(--text-muted, #ccc)",
     }
 }

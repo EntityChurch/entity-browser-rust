@@ -122,34 +122,6 @@ const RESPONSIVE_CSS: &str = "\
 .cs-body{display:flex;flex:1;min-height:0;overflow:hidden;}\
 .cs-main{flex:1;min-width:0;overflow:auto;}\
 .cs-main,.cs-main *{box-sizing:border-box;}\
-.cs-doc a{color:var(--site-link, #a6c0de);}\
-.cs-doc a:hover{text-decoration:underline;}\
-/* Markdown body — GitHub-like fidelity (tables, code, blockquotes, headings). */\
-.cs-doc{line-height:1.6;font-size:16px;color:var(--site-text, #e2e2ea);word-wrap:break-word;}\
-.cs-doc>*:first-child{margin-top:0;}\
-.cs-doc>*:last-child{margin-bottom:0;}\
-.cs-doc h1,.cs-doc h2,.cs-doc h3,.cs-doc h4,.cs-doc h5,.cs-doc h6{\
-margin:24px 0 16px;font-weight:600;line-height:1.25;color:var(--site-text-strong, #c3c9d6);}\
-.cs-doc h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid var(--site-border, #20202e);}\
-.cs-doc h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid var(--site-border, #20202e);}\
-.cs-doc h3{font-size:1.25em;}\
-.cs-doc h4{font-size:1em;}\
-.cs-doc p,.cs-doc ul,.cs-doc ol,.cs-doc blockquote,.cs-doc table,.cs-doc pre{margin:0 0 16px;}\
-.cs-doc ul,.cs-doc ol{padding-left:2em;}\
-.cs-doc li+li{margin-top:.25em;}\
-.cs-doc code{font-family:var(--font-mono, monospace);\
-font-size:85%;padding:.2em .4em;border-radius:6px;background:var(--site-code-bg, #0a0a1a);}\
-.cs-doc pre{padding:14px 16px;border-radius:6px;overflow:auto;line-height:1.45;\
-background:var(--site-code-bg, #0a0a1a);border:1px solid var(--site-border-2, #2a2a3e);}\
-.cs-doc pre code{background:none;padding:0;font-size:100%;border-radius:0;}\
-.cs-doc blockquote{padding:0 1em;color:var(--site-text-muted, #9aa3b2);\
-border-left:.25em solid var(--site-border-2, #2a2a3e);}\
-.cs-doc table{border-collapse:collapse;display:block;width:max-content;max-width:100%;overflow:auto;}\
-.cs-doc th,.cs-doc td{padding:6px 13px;border:1px solid var(--site-border-2, #2a2a3e);}\
-.cs-doc th{font-weight:600;background:var(--site-panel-bg, #1b1b28);text-align:left;}\
-.cs-doc tr:nth-child(2n) td{background:var(--site-nav-bg, #15151f);}\
-.cs-doc img{max-width:100%;height:auto;}\
-.cs-doc hr{height:.25em;border:0;margin:24px 0;background:var(--site-border, #20202e);}\
 .cs-sidebar{flex-shrink:0;width:210px;overflow:auto;padding:18px 12px;\
 border-right:1px solid var(--site-border, #20202e);\
 background:var(--site-sidebar-bg, #13131c);display:flex;\
@@ -213,19 +185,43 @@ pub fn render(
 ) {
     util::clear_children(container);
 
-    // Responsive layout rules (root-scoped; see `RESPONSIVE_CSS`).
+    // Responsive layout rules (root-scoped; see `RESPONSIVE_CSS`) + the ONE
+    // content-document stylesheet (`content_site::doc_css`, S-T1) in its
+    // live token-with-fallback form — the same rule table the static
+    // exporter freezes, so the overlay and a published page can't drift.
+    // Built once (render runs on every snapshot rebuild; the sheet is static).
+    static OVERLAY_CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let css = OVERLAY_CSS.get_or_init(|| {
+        format!(
+            "{}{}",
+            RESPONSIVE_CSS,
+            crate::content_site::doc_css::doc_css(
+                ".cs-doc",
+                crate::content_site::doc_css::PaletteMode::Live
+            )
+        )
+    });
     let style = util::create_element("style");
-    util::set_text(&style, RESPONSIVE_CSS);
+    util::set_text(&style, css);
     util::append(container, &style);
 
     let wrapper = util::create_element("div");
-    util::set_attr(
-        &wrapper,
-        "style",
+    // The manifest-declared site theme (S-T2) rides in as container-scoped
+    // custom properties on the site's OWN wrapper — the whole subtree
+    // (nav/sidebar/doc rules resolve `var(--site-*)` per element) takes the
+    // palette, while any second site surface and the `:root` layer stay
+    // untouched. The output field is already mode-gated and registry-
+    // validated (see `SiteRenderOutput::site_theme_css`); dropped with the
+    // wrapper on every rebuild, so site-switch/exit cleanup is structural.
+    let mut wrapper_style = String::from(
         "display:flex;flex-direction:column;height:100%;overflow:hidden;\
          background:var(--site-bg, #101018);\
          font-family:system-ui,-apple-system,sans-serif;",
     );
+    if let Some(vars) = &output.site_theme_css {
+        wrapper_style.push_str(vars);
+    }
+    util::set_attr(&wrapper, "style", &wrapper_style);
 
     render_nav_bar(&wrapper, output, ctx, host);
 

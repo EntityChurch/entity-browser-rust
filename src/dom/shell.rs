@@ -43,7 +43,7 @@ fn render_status(parent: &Element, output: &ShellOutput) {
     status
         .set_attribute(
             "style",
-            "font-family:monospace;font-size:11px;color:#8a8;\
+            "font-family:monospace;font-size:11px;color:var(--status-ok, #8a8);\
              margin-bottom:6px;flex-shrink:0",
         )
         .ok();
@@ -151,11 +151,11 @@ fn push_row(html: &mut String, color: &str, text: &str) {
 }
 
 const COLOR_PROMPT: &str = "var(--text-dim, #888)";
-const COLOR_INFO: &str = "#bbb";
+const COLOR_INFO: &str = "var(--text-muted, #bbb)";
 const COLOR_SUCCESS: &str = crate::theme_tokens::STATUS_OK;
 const COLOR_ERROR: &str = crate::theme_tokens::STATUS_ERR;
-const COLOR_LISTING: &str = "#9ac";
-const COLOR_ENTITY: &str = "#cb8";
+const COLOR_LISTING: &str = "var(--accent, #9ac)";
+const COLOR_ENTITY: &str = "var(--status-warn, #cb8)";
 
 fn render_prompt(parent: &Element, output: &ShellOutput, ctx: &DomCtx) {
     let row = util::create_element("div");
@@ -170,7 +170,7 @@ fn render_prompt(parent: &Element, output: &ShellOutput, ctx: &DomCtx) {
     label
         .set_attribute(
             "style",
-            "font-family:monospace;font-size:12px;color:#6c6;flex-shrink:0",
+            "font-family:monospace;font-size:12px;color:var(--status-ok, #6c6);flex-shrink:0",
         )
         .ok();
     util::set_text(&label, ">");

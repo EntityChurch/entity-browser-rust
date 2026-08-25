@@ -387,7 +387,7 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
     // shared `rewrite_links` path the Site Browser window and the overlay both
     // use — so the bundled demo proves the feature billslab ships on. The return
     // trip is a `site:demo/index` link back.
-    let notes_manifest = SiteManifest::new(
+    let mut notes_manifest = SiteManifest::new(
         DEMO_NOTES_SITE_ID,
         "Entity Demo — Field Notes",
         "index",
@@ -396,12 +396,16 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
             NavItem::new("First Entry", "/entries/first"),
         ],
     );
+    // The companion declares a manifest theme (S-T2) — the bundled demo
+    // showcases per-site theming live: following the cross-site link flips
+    // the palette to light (in "Site's theme" mode), returning flips back.
+    notes_manifest.params.insert("theme".into(), "light".into());
     let notes_pages = [
         (
             "index",
             SitePage::markdown(
                 "Field Notes",
-                "# Field Notes\n\nYou followed a **cross-site link** to get here — a `site:demo-notes/index` target that stayed inside the entity system, hopping from one owned site to another on the same peer.\n\nRead the [First Entry](entries/first), or head [back to the Demo](site:demo/index).\n",
+                "# Field Notes\n\nYou followed a **cross-site link** to get here — a `site:demo-notes/index` target that stayed inside the entity system, hopping from one owned site to another on the same peer.\n\nNotice the light palette: this site's manifest declares `\"theme\": \"light\"`, so in **Site's theme** mode it renders with its own registered theme while the Demo next door stays dark. (Your Settings → Site appearance override always wins.)\n\nRead the [First Entry](entries/first), or head [back to the Demo](site:demo/index).\n",
             ),
         ),
         (

@@ -79,7 +79,7 @@ is the operator escape hatch (§11).
 
 | Type tag | Struct | Fields |
 |---|---|---|
-| `app/site-manifest` | `SiteManifest` | `site_id`, `title`, `nav: Vec<NavItem>`, `params: BTreeMap<String,String>` (sorted, byte-stable). Landing page = `params.root` (default `"index"`). **No page-collection field** — see §2.3. |
+| `app/site-manifest` | `SiteManifest` | `site_id`, `title`, `nav: Vec<NavItem>`, `params: BTreeMap<String,String>` (sorted, byte-stable). Landing page = `params.root` (default `"index"`). `params.theme` = the site's own theme, a registered app theme name applied in "Site's theme" mode (`REFERENCE-THEMING.md` §3.1). **No page-collection field** — see §2.3. |
 | `app/site-page` | `SitePage` | `format` (`"markdown"` default \| `"html"` escape hatch), `body`, `frontmatter: BTreeMap` (`"title"` is the well-known key). |
 | `app/site-asset` | `SiteAsset` | `media_type` (IANA, e.g. `image/png`), `bytes: Vec<u8>`. Content-addressed → identical `(media_type,bytes)` dedups in the store. |
 

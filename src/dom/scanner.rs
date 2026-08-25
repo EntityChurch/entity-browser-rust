@@ -7,6 +7,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
+use crate::dom::theme;
 use crate::dom::util;
 use crate::window::ClosureVec;
 
@@ -206,10 +207,9 @@ pub fn create_scanner(
 
         let stop_btn = util::create_element_with_class("button", "spawn-btn");
         util::set_text(&stop_btn, "Stop");
-        stop_btn.set_attribute("style",
-            "display:none;margin-left:4px;padding:4px 10px;background:#4a2a2a;color:var(--text-muted, #c0c0c0);\
-             border:1px solid #644;border-radius:3px;cursor:pointer;font-size:12px"
-        ).ok();
+        stop_btn
+            .set_attribute("style", &format!("{};display:none;margin-left:4px", theme::BTN_DESTRUCTIVE))
+            .ok();
 
         // Stop handler.
         {
@@ -241,10 +241,12 @@ pub fn create_scanner(
             util::listen(&start_btn, "click", move |_| {
                 *active_ref.borrow_mut() = true;
                 util::clear_children(&preview_ref);
-                stop_ref.set_attribute("style",
-                    "display:inline-block;margin-left:4px;padding:4px 10px;background:#4a2a2a;\
-                     color:var(--text-muted, #c0c0c0);border:1px solid #644;border-radius:3px;cursor:pointer;font-size:12px"
-                ).ok();
+                stop_ref
+                    .set_attribute(
+                        "style",
+                        &format!("{};display:inline-block;margin-left:4px", theme::BTN_DESTRUCTIVE),
+                    )
+                    .ok();
                 start_ref.set_attribute("style", "display:none").ok();
 
                 start_live(
@@ -291,7 +293,7 @@ fn add_to_log(log_list: &web_sys::Element, found: &Rc<RefCell<Vec<String>>>, cod
         let entry = util::create_element("div");
         entry.set_attribute("data-code", code).ok();
         entry.set_attribute("style",
-            "padding:3px 6px;margin:2px 0;background:#0a2a0a;border-radius:3px;color:var(--status-ok, #0f0);word-break:break-all"
+            "padding:3px 6px;margin:2px 0;background:var(--btn-primary-bg, #0a2a0a);border-radius:3px;color:var(--status-ok, #0f0);word-break:break-all"
         ).ok();
         util::set_text(&entry, code);
         log_list.append_child(&entry).ok();

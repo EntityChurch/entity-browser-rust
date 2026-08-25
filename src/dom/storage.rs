@@ -32,15 +32,12 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     h2.set_attribute("style", "margin:0").ok();
     util::set_text(&h2, "Storage");
     util::append(&header, &h2);
-    let refresh = util::create_element("button");
     // Counts update live via subscription; this re-probes the disk estimate.
-    util::set_text(&refresh, "Refresh disk usage");
-    refresh.set_attribute("style", theme::BTN_SMALL).ok();
-    ctx.on_window_event(
-        &refresh,
-        "click",
+    let refresh = crate::dom::components::button(
+        ctx,
+        "Refresh disk usage",
+        crate::dom::components::ButtonKind::Small,
         crate::views::storage::REFRESH_EVENT,
-        "",
     );
     util::append(&header, &refresh);
     util::append(&wrapper, &header);
