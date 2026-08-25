@@ -9,12 +9,25 @@ and we assert it lands in B's Chat window (and B->A). No transport-specific code
 in chat: delivery rides the connection pool, so this is the same flow the memory
 transport proves, now over a real RTCDataChannel.
 
-Preconditions (chat_over_webrtc.sh sets these up):
+Preconditions (rung1_repro.sh sets these up):
   - rtc-a on :4446, rtc-b on :4447, on shared bridge `entity-rtc-spike`
   - dist on host :8092, signaling node on host :4071
 Pass the node peer id as argv[1].
+
+MODE (env, default `direct`): which arm hosts the WebRTC establisher.
+  - `direct`  — the shipped Direct/IDB arm (main-thread peer, no worker). NO
+    `?worker=1`, and NO `dom.securecontext.*` prefs: the Direct arm reaches
+    `RTCPeerConnection` in-thread and needs no OPFS/worker secure context, so a
+    green run here proves WebRTC on the DEFAULT deployment (the A-series goal).
+  - `worker`  — the opt-in Worker/OPFS arm: `?worker=1` + the secure-context
+    allowlist OPFS requires over the non-localhost `host.containers.internal`
+    origin. The original rung-1 proof; kept so both arms stay provable.
 """
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
+
+MODE = os.environ.get("MODE", "direct").strip().lower()
+if MODE not in ("direct", "worker"):
+    print(f"!! MODE must be 'direct' or 'worker', got {MODE!r}"); sys.exit(2)
 
 A_BASE, B_BASE = "http://localhost:4446", "http://localhost:4447"
 APP = "http://host.containers.internal:8092"
@@ -27,13 +40,16 @@ def rq(base, method, path, body=None, timeout=60):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
+# Raw host ICE candidates cross-container are needed on BOTH arms (mDNS `.local`
+# won't resolve between containers). The secure-context allowlist is a WORKER-arm
+# need only (OPFS is secure-context-gated); the Direct arm deliberately omits it.
+_PREFS = {"media.peerconnection.ice.obfuscate_host_addresses": False}
+if MODE == "worker":
+    _PREFS["dom.securecontext.allowlist"] = "host.containers.internal"
+    _PREFS["dom.securecontext.whitelist"] = "host.containers.internal"
 CAPS = {"capabilities": {"alwaysMatch": {
     "browserName": "firefox",
-    "moz:firefoxOptions": {"args": ["-headless"], "prefs": {
-        "media.peerconnection.ice.obfuscate_host_addresses": False,
-        "dom.securecontext.allowlist": "host.containers.internal",
-        "dom.securecontext.whitelist": "host.containers.internal",
-    }},
+    "moz:firefoxOptions": {"args": ["-headless"], "prefs": _PREFS},
 }}}
 
 BOOT = "const l=document.getElementById('dom-layer');const r=l&&(l.shadowRoot||l);return r&&r.querySelector('button.spawn-btn')?'booted':'no';"
@@ -116,7 +132,10 @@ return '(no-chat-window)';
 def new_session(base, node_peer):
     sid = rq(base, "POST", "/session", CAPS)["value"]["sessionId"]
     rq(base, "POST", f"/session/{sid}/timeouts", {"script": 30000})
-    url = (f"{APP}/?worker=1&webrtc_node={NODE_WS}&webrtc_node_peer={node_peer}"
+    # `?worker=1` selects the Worker/OPFS arm; its absence is the default
+    # Direct/IDB arm — the whole point of MODE=direct.
+    worker = "worker=1&" if MODE == "worker" else ""
+    url = (f"{APP}/?{worker}webrtc_node={NODE_WS}&webrtc_node_peer={node_peer}"
            f"&webrtc_enable=1&log=trace")
     rq(base, "POST", f"/session/{sid}/url", {"url": url})
     return sid
@@ -149,6 +168,7 @@ def grep(base, sid, needles):
 
 def main():
     node_peer = sys.argv[1]
+    print(f"MODE={MODE} ({'Direct/IDB — default arm' if MODE=='direct' else 'Worker/OPFS — opt-in arm'})")
     print(f"signaling node: {node_peer}\napp: {APP}  node_ws: {NODE_WS}")
     sa = new_session(A_BASE, node_peer); sb = new_session(B_BASE, node_peer)
     print(f"A={sa}\nB={sb}")

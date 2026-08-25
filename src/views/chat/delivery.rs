@@ -7,21 +7,51 @@
 //! read (`ChatModel::load_messages`) sees them. That pull has two discovery
 //! mechanisms feeding one fetch→cache pipeline:
 //!
-//! - **subscribe (reactive, Direct arm):** `subscribe_at` each remote
-//!   participant → a notification (path+hash) streams back on every write.
-//!   Needs a main-thread `PeerContext`, so Direct arm only.
+//! - **follow (reactive, Direct arm):** `PeerContext::follow` each remote
+//!   participant in `FollowMode::Payload` — a cross-peer
+//!   subscribe-with-payload whose notification carries the changed entity
+//!   in-band, and the SDK mirrors it straight into our store. **No fetch
+//!   round-trip** on this path (the old subscribe delivered hashes-only, so
+//!   it needed a follow-up `tree:get`; `follow` bundles the payload). Needs
+//!   a main-thread `PeerContext`, so Direct arm only. This replaces the
+//!   hand-rolled subscribe→fetch→cache reactive pipeline with the SDK
+//!   `follow` primitive (the poll pipeline below is unchanged).
 //! - **poll (arm- and transport-agnostic):** every so often, `execute
 //!   tree:get` the remote's messages prefix (a directory listing) and enqueue
 //!   the message paths. `execute` routes over the connection pool on **either**
 //!   arm and **any** transport, so this is what makes delivery work in Worker
-//!   mode (`?worker=1`) — and thus over the **worker-only WebRTC** channel,
-//!   where the reactive `subscribe_at` is unavailable. Its `execute` to the
-//!   remote also *triggers* lazy WebRTC establishment.
+//!   mode (`?worker=1`) — and, since the A-series, over the **Direct-arm** §6.5
+//!   WebRTC channel too. Its `execute` to the remote also *triggers* lazy WebRTC
+//!   establishment, and its repetition *retries* it until it lands.
 //!
-//! Both feed `notified_tx`; `pump` fetches each new path (`tree:get`) and caches
-//! it under `/{author}/…` in our own store (`dispatch_write` — the L1 path the
-//! union read reflects). A `seen` set makes it fetch-once, so the redundant
-//! poll/subscribe overlap on the Direct arm costs nothing.
+//! **Warm-up:** a one-shot `execute` per remote at first pump kicks off lazy
+//! WebRTC establishment immediately at bind, so the channel starts warming
+//! without waiting a poll cycle. This is the A-series improvement that stuck.
+//!
+//! **Why the poll is still fast (the A3 finding).** The plan was to make
+//! `subscribe_at` the delivery mechanism on the Direct arm and demote the poll
+//! to a slow reconcile — the Direct arm now has both subscribe and WebRTC, so
+//! the poll looked like a pure worker-era crutch. The default-mode
+//! `make e2e-webrtc-chat` refuted that: with the poll demoted to a ~5 s
+//! reconcile, delivery went **asymmetric** — B→A landed (reactively) but A→B
+//! did not within the window. Two things the fast poll was silently doing came
+//! to light: (1) it *retries* establishment (the passing run shows hundreds of
+//! offer deposits, not one), so a single warm-up under-drives the §6.5
+//! rendezvous; (2) it catches writes that the reactive path misses on one
+//! direction. So the poll is **not** a mere hack — it is load-bearing for
+//! establishment-retry and for symmetric delivery over WebRTC. Retiring it needs
+//! subscribe-over-WebRTC to deliver both directions AND establishment to be
+//! robust with few triggers; that is a separate investigation (see
+//! `DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md` / the A-series handoff), not a
+//! cadence tweak. Until then the fast poll stays, now *supplemented* by the
+//! warm-up and the reactive subscribe rather than being the sole trigger.
+//!
+//! The **poll** feeds `notified_tx`; `pump` fetches each new path
+//! (`tree:get`) and caches it under `/{author}/…` in our own store
+//! (`dispatch_write` — the L1 path the union read reflects). A `seen` set makes
+//! it fetch-once. The **follow** path materializes reactively inside the SDK
+//! (its own mirror write), so it does not go through this queue; the two
+//! overlap idempotently (content-addressed writes) on the Direct arm.
 //!
 //! **No transport-specific code lives here** — delivery rides the connection
 //! pool, so WebSocket, WebRTC, and the in-process memory transport are identical.
@@ -33,7 +63,7 @@ use std::rc::Rc;
 use entity_capability::ResourceTarget;
 use entity_entity::Entity;
 use entity_handler::ExecuteOptions;
-use entity_sdk::subscription::L1SubscriptionHandle;
+use entity_sdk::follow::{FollowHandle, FollowOptions};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use super::model::conversation_messages_prefix;
@@ -41,7 +71,10 @@ use crate::peers::Peers;
 
 /// Pumps between poll-list passes. `pump` runs once per frame (~60/s); polling
 /// every frame would hammer, so throttle to a fresh listing a few times a
-/// second. The reactive subscribe path (Direct arm) is instant regardless.
+/// second. Fast on **both** arms: on the Worker arm it is the delivery
+/// mechanism; on the Direct arm it still retries §6.5 establishment and covers
+/// the direction the reactive path misses over WebRTC (the A3 finding — see the
+/// module doc). The reactive follow path (Direct arm) rides alongside it.
 const POLL_EVERY: u32 = 12;
 
 /// Drives delivery for one bound conversation on one local peer.
@@ -59,11 +92,10 @@ pub struct ChatDelivery {
     /// must be released so a later poll can retry it.
     fetched_tx: UnboundedSender<(String, Option<Entity>)>,
     fetched_rx: UnboundedReceiver<(String, Option<Entity>)>,
-    /// Live subscription handles — dropping the delivery unsubscribes. Shared so
-    /// the wasm [`start`](ChatDelivery::start) path can land a handle from the
-    /// spawned subscribe task; the callback captures only `Send + Sync` senders,
-    /// never this `Rc`.
-    subs: Rc<RefCell<Vec<L1SubscriptionHandle>>>,
+    /// Live follow handles — dropping the delivery tears down each follow
+    /// (unsubscribe). Shared so the wasm [`start`](ChatDelivery::start) path can
+    /// land a handle from the spawned follow-install task.
+    follows: Rc<RefCell<Vec<FollowHandle>>>,
     /// Paths successfully cached — never re-fetched. Marked only on a *completed*
     /// cache write, so a failed fetch (e.g. the first one, which is what triggers
     /// lazy WebRTC establishment and often is not yet 200) does NOT poison the
@@ -75,6 +107,10 @@ pub struct ChatDelivery {
     in_flight: HashSet<String>,
     /// Frame counter for the poll throttle.
     poll_tick: u32,
+    /// Whether the one-shot establishment warm-up (a single listing per remote)
+    /// has fired. Done once, at the first `pump`, to trigger lazy WebRTC
+    /// establishment at bind rather than waiting for the first poll cycle.
+    warmed: bool,
 }
 
 #[allow(dead_code)] // some methods are arm- or test-specific
@@ -94,24 +130,15 @@ impl ChatDelivery {
             notified_rx,
             fetched_tx,
             fetched_rx,
-            subs: Rc::new(RefCell::new(Vec::new())),
+            follows: Rc::new(RefCell::new(Vec::new())),
             seen: HashSet::new(),
             in_flight: HashSet::new(),
             poll_tick: 0,
+            warmed: false,
         }
     }
 
-    /// Build the subscribe callback for one participant — captures only the
-    /// `Send + Sync` notify sender (never the `Rc` subs), so it satisfies
-    /// `subscribe_at`'s `Fn + Send + Sync` bound.
-    fn notify_cb(&self) -> impl Fn(entity_sdk::subscription::L1SubscriptionEvent) + Send + Sync + 'static {
-        let tx = self.notified_tx.clone();
-        move |ev| {
-            let _ = tx.send(ev.path);
-        }
-    }
-
-    /// Subscribe to every remote participant's messages prefix, awaiting each.
+    /// Follow every remote participant's messages prefix, awaiting each.
     /// For test / awaitable contexts; the live window uses [`start`](Self::start).
     /// Direct arm only: on the Worker arm `direct_peer_context` yields
     /// `WorkerArm` and we skip (poll covers delivery there).
@@ -123,20 +150,21 @@ impl ChatDelivery {
             };
             let prefix = conversation_messages_prefix(participant, &self.conversation_id);
             match ctx
-                .subscribe_at(participant.clone(), format!("{prefix}*"), self.notify_cb())
+                .follow(participant.clone(), prefix, FollowOptions::payload())
                 .await
             {
-                Ok(handle) => self.subs.borrow_mut().push(handle),
+                Ok(handle) => self.follows.borrow_mut().push(handle),
                 Err(e) => {
-                    tracing::warn!(peer = %participant, error = %e, "chat delivery: subscribe_at failed")
+                    tracing::warn!(peer = %participant, error = %e, "chat delivery: follow failed")
                 }
             }
         }
     }
 
     /// Start reactive delivery from the frame loop (wasm, Direct arm): spawn each
-    /// participant's subscribe off the loop and land the handle in the shared
-    /// `subs`. No-op on the Worker arm — [`pump`](Self::pump)'s poll covers it.
+    /// participant's follow-install off the loop and land the handle in the
+    /// shared `follows`. No-op on the Worker arm — [`pump`](Self::pump)'s poll
+    /// covers it.
     #[cfg(target_arch = "wasm32")]
     pub fn start(&self, peers: &Peers) {
         for participant in &self.remote {
@@ -145,14 +173,14 @@ impl ChatDelivery {
                 Err(_) => return,
             };
             let prefix = conversation_messages_prefix(participant, &self.conversation_id);
-            let fut = ctx.subscribe_at(participant.clone(), format!("{prefix}*"), self.notify_cb());
-            let subs = self.subs.clone();
+            let fut = ctx.follow(participant.clone(), prefix, FollowOptions::payload());
+            let follows = self.follows.clone();
             let participant = participant.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match fut.await {
-                    Ok(handle) => subs.borrow_mut().push(handle),
+                    Ok(handle) => follows.borrow_mut().push(handle),
                     Err(e) => {
-                        tracing::warn!(peer = %participant, error = %e, "chat delivery: subscribe_at failed")
+                        tracing::warn!(peer = %participant, error = %e, "chat delivery: follow failed")
                     }
                 }
             });
@@ -164,31 +192,28 @@ impl ChatDelivery {
     /// completed fetches into our own store. Cheap when idle. Idempotent: a path
     /// is fetched at most once (`seen`), and the cache write is content-addressed.
     pub fn pump(&mut self, peers: &Peers) {
+        // (0) one-shot establishment warm-up: a single listing per remote at the
+        // first pump. Its `execute` reaches the remote → the §10.3 seam → lazy
+        // WebRTC establishment starts at bind, not one poll cycle later. Also
+        // seeds the first message paths. Fires once, on either arm.
+        if !self.warmed {
+            self.warmed = true;
+            for participant in &self.remote {
+                self.list_remote(peers, participant);
+            }
+        }
+
         // (a) throttled poll: list each remote's prefix over the connection
-        // (works on both arms / any transport). Discovered paths join the same
-        // queue the subscribe notifications use.
+        // (works on both arms / any transport). Fast on both arms — besides
+        // being the Worker-arm delivery path, it retries §6.5 establishment and
+        // covers the direction the reactive follow misses over WebRTC (the A3
+        // finding). Discovered paths join the notify queue the fetch pipeline
+        // drains (the follow path mirrors reactively inside the SDK instead).
         self.poll_tick = self.poll_tick.wrapping_add(1);
         if self.poll_tick >= POLL_EVERY {
             self.poll_tick = 0;
             for participant in &self.remote {
-                let prefix = conversation_messages_prefix(participant, &self.conversation_id);
-                let list = peers.execute(
-                    &self.local_pid,
-                    format!("entity://{participant}/system/tree"),
-                    "get".to_string(),
-                    empty_params(),
-                    resource_opts(&prefix),
-                );
-                let sink = self.notified_tx.clone();
-                spawn(async move {
-                    if let Ok(hr) = list.await {
-                        if hr.status == 200 {
-                            for name in listing_child_names(&hr.result) {
-                                let _ = sink.send(format!("{prefix}{name}"));
-                            }
-                        }
-                    }
-                });
+                self.list_remote(peers, participant);
             }
         }
 
@@ -237,6 +262,32 @@ impl ChatDelivery {
                 }
             }
         }
+    }
+
+    /// Fire one `system/tree:get` listing of a remote participant's messages
+    /// prefix; the discovered child paths join the `notified_tx` queue that the
+    /// subscribe notifications also feed. The shared unit of the warm-up and the
+    /// poll/reconcile — and, because its `execute` reaches the remote, the call
+    /// that warms the §6.5 WebRTC channel on the Direct arm.
+    fn list_remote(&self, peers: &Peers, participant: &str) {
+        let prefix = conversation_messages_prefix(participant, &self.conversation_id);
+        let list = peers.execute(
+            &self.local_pid,
+            format!("entity://{participant}/system/tree"),
+            "get".to_string(),
+            empty_params(),
+            resource_opts(&prefix),
+        );
+        let sink = self.notified_tx.clone();
+        spawn(async move {
+            if let Ok(hr) = list.await {
+                if hr.status == 200 {
+                    for name in listing_child_names(&hr.result) {
+                        let _ = sink.send(format!("{prefix}{name}"));
+                    }
+                }
+            }
+        });
     }
 }
 

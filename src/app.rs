@@ -415,6 +415,97 @@ fn webrtc_enable_guarded(
     requested
 }
 
+/// §6.5 negotiation tunables when provisioning leaves them unset — the same
+/// defaults the Worker arm's `wasm-worker-host` uses, so the two arms negotiate
+/// on identical timing.
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_WEBRTC_POLL_INTERVAL_MS: u64 = 250;
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_WEBRTC_MAX_DEADLINE_MS: u64 = 15_000;
+
+/// Build the **Direct-arm** §6.5 WebRTC establisher for the primary peer, or
+/// `None` when it should not be installed.
+///
+/// This is the main-thread analog of `wasm-worker-host::build_webrtc_establisher`
+/// (`bindings/wasm-worker-host/src/lib.rs`): same carrier, same choreography,
+/// but it drives `RTCPeerConnection` in-thread via
+/// [`MainThreadWebRtcEstablisher`] instead of through the worker broker, so it
+/// needs no control port. Installed on the shipped Direct/IDB arm — the whole
+/// point of the A-series — where WebRTC was previously unreachable.
+///
+/// **Fails closed** exactly like [`webrtc_enable_guarded`]: the primary opts in
+/// via [`webrtc_enable_primary_default`], but a request with no provisioned
+/// signaling node disables rather than half-installing. `seed` re-derives the
+/// carrier identity (the peer's own keypair was moved into the builder), the
+/// same "rebuilt from the same seed" the worker host documents.
+#[cfg(target_arch = "wasm32")]
+fn build_direct_webrtc_establisher(
+    seed: [u8; 32],
+    self_peer_id: &str,
+) -> Option<std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>> {
+    use entity_wasm_worker_proxy::{MainThreadWebRtcEstablisher, VerificationPolicy};
+
+    // Same precedence axis as the Worker path's `primary_enable_requested`: the
+    // URL `?webrtc_enable` decision wins over the build knob. Reading only the
+    // build knob here is the bug the default-mode e2e caught — the harness
+    // enables via URL, so a build-knob-only check never installs the seam.
+    let requested = crate::session_config::webrtc_enable_from_query(&webrtc_url_query())
+        .unwrap_or_else(crate::session_config::webrtc_enable_primary_default);
+    if !requested {
+        return None;
+    }
+    let p = match crate::session_config::webrtc_provisioning_from_query(&webrtc_url_query())
+        .or_else(crate::session_config::webrtc_provisioning_default)
+    {
+        Some(p) => p,
+        None => {
+            tracing::warn!(
+                "webrtc: primary enable requested but no establisher capability is \
+                 provisioned — disabling Direct-arm WebRTC, fail closed"
+            );
+            return None;
+        }
+    };
+    tracing::info!(
+        node_peer_id = %p.node_peer_id,
+        node_addr = %p.node_addr,
+        ice_servers = p.ice_servers.len(),
+        "webrtc: installing the Direct-arm §6.5 establisher on the primary"
+    );
+
+    let carrier = entity_peer::carrier::PeerCarrier::new(
+        p.node_peer_id.clone(),
+        p.node_addr.clone(),
+        // Rebuilt from the seed — the original keypair is moved into the peer
+        // builder. Identical to the worker host's `Keypair::from_seed(..).into()`.
+        entity_crypto::Keypair::from_seed(seed).into(),
+        std::sync::Arc::new(entity_peer::transport::BrowserWebSocketConnector),
+        entity_peer::PeerConfig::default().home_hash_format,
+    );
+    let ice_servers = p
+        .ice_servers
+        .iter()
+        .map(|s| entity_peer::transport::WireIceServer {
+            urls: s.urls.clone(),
+            username: s.username.clone(),
+            credential: s.credential.clone(),
+        })
+        .collect();
+
+    Some(std::sync::Arc::new(MainThreadWebRtcEstablisher::new(
+        carrier,
+        self_peer_id.to_string(),
+        p.poll_interval_ms.unwrap_or(DEFAULT_WEBRTC_POLL_INTERVAL_MS),
+        p.max_deadline_ms.unwrap_or(DEFAULT_WEBRTC_MAX_DEADLINE_MS),
+        // `Require`: a §6.5 counterpart is always another peer running this
+        // crate, so the only thing this refuses is a build older than the
+        // sealed-deposit flip — the mixed-build case worth refusing loudly.
+        // Same posture as the worker host.
+        VerificationPolicy::Require,
+        ice_servers,
+    )) as std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>)
+}
+
 /// Free-function spawn dispatcher used by both fresh-create and reload
 /// flows, in either the pre-`EntityApp`-construction context (boot path)
 /// or the post-construction context (user clicks `+ Backend ...`).
@@ -699,7 +790,13 @@ impl EntityApp {
             // (the BUG-A class). Never change identity derivation without a
             // data migration that re-keys the old database.
             let db_name = format!("entity-peer-{}", keypair.peer_id());
-            match Peers::new_direct_idb(keypair, &db_name).await {
+            // v11 Direct-arm §6.5: install the main-thread WebRTC establisher on
+            // the primary before build (the seam must be captured before the
+            // peer's `PeerShared` clones). `None` (unprovisioned / opted-out) is
+            // byte-identical to the pre-A-series boot.
+            let self_peer_id = keypair.peer_id().to_string();
+            let webrtc_seam = build_direct_webrtc_establisher(seed, &self_peer_id);
+            match Peers::new_direct_idb_with_establish(keypair, &db_name, webrtc_seam).await {
                 Ok(pm) => (pm, true, was_persisted),
                 Err(e) => {
                     tracing::warn!(

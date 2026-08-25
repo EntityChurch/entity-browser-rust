@@ -114,6 +114,38 @@ NODELOG=$(tail -n +$((BEFORE+1)) /tmp/sig_repro.out | sed $'s/\x1b\\[[0-9;]*m//g
 echo "   -- OFFER deposits by (caller, key) --"
 echo "$NODELOG" | grep "signaling offer: deposit" \
   | grep -oE 'caller="[^"]+" rendezvous_key=RendezvousKey\([0-9a-f]+\)' | sort | uniq -c
+
+# SIGNALING §11.5 teeth (NETWORK §10.3 obligation 5) — the single-flight
+# assertion. A channel opening is NOT sufficient: the gate MUST also fail if it
+# opened only by BRUTE FORCE — many independent negotiations deposited until two
+# happened to overlap. Pre-single-flight core-rust deposited ~470 OFFERs/side;
+# per-peer single-flight coalescing collapses that to a handful (one sustained
+# negotiation's dedup-by-hash retrickle).
+#
+# COUNTING SEMANTICS (arch-pinned, §11.5 @ 78fdd13): offer deposits / node
+# vantage / per side / per establishment. The conformant figure is ~4/side, NOT
+# §7.2's exchange budget of 3 — §7.2 bounds exchange *attempts*, and each of the
+# ≤3 exchanges deposits an offer PLUS a bounded glare-rollback / ICE-restart
+# re-offer (§6.5), so a clean establishment lands a handful of deposits, not 3.
+# The property that fails brute force is that the ceiling is a FIXED O(1), not
+# its exact value. We set it to 8 = §7.2's 3 + re-offer headroom (above the
+# theoretical conformant max ~6, well below ~470), tight enough to also catch a
+# subtler 2x over-deposit regression that a looser 16 would wave through.
+# Retune via SIG_DEPOSIT_BOUND if a real-node S5 run shows higher conformant
+# glare. A volume-blind gate would pass a brute-force regression green — forbidden.
+SIG_DEPOSIT_BOUND="${SIG_DEPOSIT_BOUND:-8}"
+MAX_DEPOSITS=$(echo "$NODELOG" | grep "signaling offer: deposit" \
+  | grep -oE 'caller="[^"]+" rendezvous_key=RendezvousKey\([0-9a-f]+\)' \
+  | sort | uniq -c | awk '{print $1}' | sort -rn | head -1)
+MAX_DEPOSITS="${MAX_DEPOSITS:-0}"
+echo "   -- §11.5 deposit bound: max ${MAX_DEPOSITS}/side (O(1) bound ${SIG_DEPOSIT_BOUND}) --"
+if [ "$MAX_DEPOSITS" -gt "$SIG_DEPOSIT_BOUND" ]; then
+  echo "   ❌ §11.5 FAIL: ${MAX_DEPOSITS} OFFER deposits/side exceeds the O(1) bound"
+  echo "      ${SIG_DEPOSIT_BOUND} — establishment is brute-force (obligation-5 single-flight"
+  echo "      regression) even though a channel may have opened. See ROUTING-2026-08-06."
+  DRIVE_RC=1
+fi
+
 echo "   -- COLLECT reads by (caller, key, included_count) --"
 echo "$NODELOG" | grep "signaling collect" \
   | grep -oE 'caller="[^"]+" rendezvous_key=RendezvousKey\([0-9a-f]+\) included_count=[0-9]+' | sort | uniq -c
