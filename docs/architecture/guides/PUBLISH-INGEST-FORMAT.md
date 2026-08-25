@@ -181,33 +181,30 @@ Status of the fragility classes in the publish targets, prompted by the
 
 ---
 
-## 7. Release generalization plan (cutover)
+## 7. Release generalization (cutover — DONE)
 
-The papers repo is **not shipped** in this release. The pipeline is already split
-into a generic core and a papers-specific convenience wrapper; at cutover, remove
-the latter.
+The papers repo is **not shipped**. The pipeline was split into a generic core and
+a papers-specific convenience wrapper; the wrapper has now been **removed** and the
+generic core is the only path. What the cutover did:
 
-**KEEP — generic, ships, tool-agnostic:**
+**KEPT — generic, ships, tool-agnostic:**
 - `entity-browser publish` + `--ingest=<dir>` and all the projection flags.
 - `src/content_site/ingest.rs` and this format. Producer-agnostic by construction.
 - `make publish INGEST=<dir>` / `make publish-bare` — the generic entry points.
-- This document + TOOLS.md §4.
+- This document + TOOLS.md §4 + the worked example `examples/demo-site/`.
 
-**RIP OUT / GENERALIZE — papers-specific, do at cutover:**
-- The `publish-papers` Makefile target, the `publish-papers-preflight` target, and
-  every `PAPERS_*` variable (`PAPERS_REPO` incl. its meta-tree candidate path,
-  `PAPERS_SITE`, `PAPERS_HOME`, `PAPERS_RENDER_OUT`, `PAPERS_INGEST_DIR`).
-- The `go build … render` + `./render/render …` steps (the content team's engine
-  is theirs, not ours).
-- Replace with a short "publish your own content" pointer to §5 here. A generic
-  `make publish INGEST=<dir>` + `make serve` covers the demo flow with no external
-  repo. The render→ingest→publish→serve convenience can become an example script
-  shipped in `tools/`, parameterized on `INGEST`, not on a papers checkout.
-- Re-check the `APPS_REPO`/`--ingest-apps` games/apps default: if `entity-apps` is
-  also out of release scope, make the embedded-apps ingest opt-in rather than the
-  silent default, so a clean checkout publishes content-only.
+**REMOVED — papers-specific:**
+- The `publish-papers` + `publish-papers-preflight` Makefile targets and every
+  `PAPERS_*` / `PRERENDERED` / `SKIP_STAGE0` / `NO_SERVE` variable, plus the
+  `go build … render` + `./render/render …` steps (the content team's engine is
+  theirs). To publish your own content, use `make publish INGEST=<dir>` (or
+  `make publish-serve INGEST=<dir>`) per §5 — no external repo.
 
-**Note for the leak scrub:** the `[internal]` candidate path in
-`PAPERS_REPO` exists only to make the dogfood flow work from the release-prep
-checkout. It disappears entirely with the `publish-papers` removal above, so the
-scrub and the generalization are the same cutover action — do them together.
+**Apps — standardized, kept in scope:** the embedded-apps ingest is now driven by
+a single `APPS_DIST=<dir>` parameter pointing at a **pre-built** entity-apps `dist/`
+(the pipeline consumes it; building it is the app repo's concern — no `build.py`
+step, no `APPS_REPO` checkout assumption). Empty = the bundled demo app seed.
+
+**Leak scrub:** the `[internal]` candidate path formerly in `PAPERS_REPO` is gone
+with the `publish-papers` removal — the scrub and the generalization were the same
+cutover action, done together.

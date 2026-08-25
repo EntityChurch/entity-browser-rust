@@ -1,10 +1,19 @@
 # Reference — The Publishing Pipeline (source → tree → CDN → live site)
 
-**Status:** authoritative reference. Describes the *working, live-proven*
-pipeline that turns papers' rendered content into a browsable content-site
-deployment — including images (the embed/asset arc). **Read this when** you
-touch publish/ingest/serve, onboard the DevOps R2 step, or come back to extend
-the flow (cross-site links, static-export images).
+> **⚠ Partially superseded (pipeline cutover).** The `render → tree → CDN → live`
+> *arc* below is still accurate, but the **papers-specific Makefile wrapper it
+> uses as its running example is gone** — `make publish-papers`, `publish-papers-preflight`,
+> and every `PAPERS_*` / `PRERENDERED` / `SKIP_STAGE0` variable were removed, and
+> apps ingest is now the single `APPS_DIST=<dir>` parameter. The generic pipeline is
+> unchanged: use `make publish INGEST=<dir>` / `make publish-serve INGEST=<dir>`.
+> For the current, tool-agnostic contract see
+> **`docs/architecture/guides/PUBLISH-INGEST-FORMAT.md`** (§7 records the cutover).
+> Treat the `publish-papers` command examples here as historical.
+
+**Status:** reference for the publish/ingest/serve *arc* (source → tree → CDN →
+live site), including images (the embed/asset arc). **Read this when** you touch
+publish/ingest/serve, onboard the DevOps R2 step, or extend the flow (cross-site
+links, static-export images) — alongside the note above.
 
 Companion doc: `REFERENCE-CONTENT-SITE-APP.md` (the app-level picture of the
 Content Site surface this pipeline feeds).

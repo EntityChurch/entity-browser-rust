@@ -21,8 +21,7 @@
 #
 # Host-only targets (NOT part of the bare-box gate, and depend on host services
 # or an attached display): the `python3 -m http.server` serve steps (serve /
-# build-serve / publish-serve / publish-papers), `e2e-worker` (external Selenium
-# on :4444), the `go`/`python3` render+apps build inside publish-papers, and
+# build-serve / publish-serve), `e2e-worker` (external Selenium on :4444), and
 # `tauri-run` (needs a desktop session). `make native` is a deprecation stub.
 IMAGE       := entity-browser-rust-build
 PARENT      := $(shell dirname $(CURDIR))
@@ -273,9 +272,11 @@ build-serve: wasm-release
 # Emits BOTH forms into one dir: legacy-web `.html` (sites/{peer}/…, no-JS)
 # AND entity-native `.bin` content data (content/… + {peer}/sites/…, what a
 # live peer ingests). Sites-scoped — never the whole peer tree.
-#   INGEST=<dir>    source sites from a content-team render/ emit (disk→tree)
-#                   instead of the bundled demo seed — one site dir, or a
-#                   parent of site dirs (the render/output/sites/ layout).
+#   INGEST=<dir>    source sites from an on-disk ingest directory (disk→tree) —
+#                   any generator's output OR a hand-authored folder — instead of
+#                   the bundled demo seed. One site dir, or a parent of many.
+#                   Format: docs/architecture/guides/PUBLISH-INGEST-FORMAT.md;
+#                   worked example: examples/demo-site/ (make publish INGEST=…).
 #   PREFIX=<path>   the per-peer HOSTING SCOPE: nest everything (.html, .bin,
 #                   deployment-config origin) under {OUT}/{PREFIX}/… so a domain
 #                   can host many isolated peers side by side. Empty (default) =
@@ -295,16 +296,23 @@ build-serve: wasm-release
 #                   `entity_system_seed`-form hex seed) so each site/deployment
 #                   gets its own stable peer-id. Empty (default) = the fixed demo
 #                   publisher identity (the first-push default). Bad seed fails.
-# === Embedded apps (games + tools) ride EVERY full publish ===
-# The JS-apps platform reads its catalog + bundles off the published tree exactly
-# like sites. APPS_REPO = the entity-apps checkout; its build.py (re)bundles
-# dist/<id>.html + index.json so newly-added apps flow through on each publish.
-# The full-publish targets (publish-serve, publish-papers) REBUILD it fresh then
-# ingest the WHOLE set via --ingest-apps. This low-level `publish` target ingests
-# the dist if it already exists ($(wildcard) → empty = the bundled 2-app demo
-# seed). Override APPS_REPO=<path>, or set APPS_DIST= (empty) to force the seed.
-APPS_REPO ?= ../entity-apps
-APPS_DIST  ?= $(wildcard $(APPS_REPO)/dist)
+# === Apps — the second publish mode: point at a pre-built dist directory ===
+# Apps are opaque, self-contained HTML iframe bundles + an `index.json` catalog
+# (the entity-apps `dist/` shape). The tool knows nothing app-specific — it just
+# ingests a directory via `--ingest-apps=<dir>`. BUILDING that dist is the app
+# repo's own concern (exactly as rendering content is the author's), so the
+# release pipeline only ever CONSUMES a finished directory — no build step here.
+#   APPS_DIST=<dir>   a pre-built apps dist directory to ingest alongside content.
+#                     Empty (default) = the bundled demo app seed baked into the
+#                     publish binary. Like INGEST/OUT: for the containerized
+#                     `publish` target the dir must live UNDER the repo tree (only
+#                     the meta dir is bind-mounted); `publish-serve` runs host
+#                     cargo and accepts any path. e.g.
+#   make publish-serve INGEST=examples/demo-site APPS_DIST=~/path/to/entity-apps/dist
+APPS_DIST ?=
+# Deployment-config boot posture (used by publish / publish-serve when
+# DEPLOY_CONFIG is set): full | tutorial | strict-site. Ignored without a config.
+CONFIG_PROFILE ?= tutorial
 OUT ?= dist/static-demo
 publish: image
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(CONFIG_PROFILE),--config-profile=$(CONFIG_PROFILE),) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),))
@@ -346,7 +354,7 @@ publish-bare: image
 #                  (it serves a content-less shell off your machine — guarded).
 PORT ?= 8081
 LIVE ?=
-# The serving targets (publish-serve / publish-papers) publish into an ISOLATED
+# The serving target (publish-serve) publishes into an ISOLATED
 # copy of the SPA bundle here — NOT the shared, git-ignored `dist/`. `make wasm`
 # and `make e2e-worker` rebuild/republish `dist/` as a side effect, which would
 # otherwise wipe a running deployment out from under you. SERVE_DIR lives under
@@ -356,7 +364,7 @@ SERVE_DIR ?= /tmp/entity-serve
 # Snapshot the freshly-built `dist/` (the SPA bundle: index.html + wasm + js)
 # into SERVE_DIR. SAFETY: the rm is constrained to a path UNDER /tmp via a
 # shell case-guard — it can never touch the repo, '/', '$$HOME', or an empty
-# value (same guard convention as PAPERS_RENDER_OUT below).
+# value (only a path under /tmp is ever auto-cleaned).
 define snapshot_serve_dir
 	@dir='$(SERVE_DIR)'; case "$$dir" in \
 	  /tmp/?*) ;; \
@@ -372,17 +380,14 @@ endef
 # DIST=/TARGET_DIR= to relocate. See the DIST/TARGET_DIR header note.
 publish-serve: DIST       := dist-publish
 publish-serve: TARGET_DIR := target-publish
+# publish-serve emits the deployment-config by DEFAULT, so the served SPA
+# cold-boots into the published content (registers the publish peer's origin +
+# lands on its home site) — otherwise the SPA shows only its own boot seed and
+# your published sites appear missing. Turn it off with DEPLOY_CONFIG=0.
+publish-serve: DEPLOY_CONFIG := 1
 publish-serve: wasm
 	$(snapshot_serve_dir)
-	@APPS_FLAG=""; \
-	if [ -d "$(APPS_REPO)" ]; then \
-	  echo "==> rebuild embedded apps (games + tools) — $(APPS_REPO)"; \
-	  python3 "$(APPS_REPO)/build.py"; \
-	  APPS_FLAG="--ingest-apps=$(APPS_REPO)/dist"; \
-	else \
-	  echo "==> APPS_REPO '$(APPS_REPO)' absent — publishing the bundled demo app seed"; \
-	fi; \
-	CARGO_TARGET_DIR=$(TARGET_DIR) cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) --live=$(LIVE) $$APPS_FLAG
+	CARGO_TARGET_DIR=$(TARGET_DIR) cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(CONFIG_PROFILE),--config-profile=$(CONFIG_PROFILE),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="
 	@echo "  ▶ live entity browser (SPA):  http://localhost:$(PORT)/"
@@ -391,168 +396,4 @@ publish-serve: wasm
 	@echo ""
 	python3 -m http.server $(PORT) --directory $(SERVE_DIR)
 
-# === Cross-team demo: papers render/ → our tree → live overlay + serve ===
-# The whole loop in one command, in the STANDARD deployment shape (same origin
-# as `publish-serve`): the live peer (WASM SPA) owns `/`, the static published
-# site lives under `/sites/`, the entity-native tree data under `/content/` +
-# `/<peer>/`. It builds the content team's `render/` engine, renders a site to a
-# deterministic markdown emit, INGESTS that emit disk→tree
-# (src/content_site/ingest.rs), then builds the SPA + publishes both forms INTO
-# dist/ AND emits a per-domain `entity-deployment.json` pointing the generic SPA
-# at the ingested site, then serves it on ONE origin.
-#
-# PORTABILITY (the key contract): the emitted config + banner are SAME-ORIGIN
-# (relative), so the SAME `dist/` runs unchanged at localhost here AND dropped on
-# any CDN/R2 served at the domain ROOT — DevOps just `aws s3 sync dist/ → bucket`,
-# no rebuild, no domain to specify. CAVEAT: portable at the domain ROOT only; a
-# SUBDIRECTORY deploy (`host/sub/`) is known, deliberate debt — see the
-# publish-portability and origin-model analysis.
-#   LIVE=<origin>  (advanced; default empty=same-origin) see publish-serve above.
-#
-#   ▶ live entity browser (SPA)   → http://localhost:PORT/            (raw domain)
-#   ▶ static published site       → http://localhost:PORT/sites/      (same origin)
-#
-# The SPA at `/` now BOOTS INTO the ingested site as a **cache-backed foreign-
-# site overlay**: on boot it fetches `/entity-deployment.json`, registers the
-# published peer's same-origin origin, and the overlay resolves the site lazily
-# over HTTP-poll from the served `.bin` content data (`src/content_site/
-# http_poll.rs` → in-memory cache). The published peer-id ≠ the SPA's fresh boot
-# peer, so this exercises the genuine remote/foreign-peer path, not a local seed.
-# (This is the deployment-config / HTTP-poll mechanism — distinct from the
-# ingest-INTO-the-live-root-peer move, which would make the site the SPA's OWN
-# local content and is still a separate future step.)
-#
-#   CONFIG_PROFILE=<full|tutorial|strict-site>  the SPA's boot posture (default
-#                        tutorial = boot INTO the site overlay but keep the
-#                        chrome toggle, so the author can always pop out to
-#                        inspect the peer/tree — never a one-way door). `full`
-#                        boots to chrome with the overlay one toggle away;
-#                        `strict-site` is the locked KIOSK posture (no toggle) —
-#                        opt in explicitly, and use `?chrome=1` to escape it.
-#   PAPERS_REPO=<path>   the entity-core-papers checkout (default: the sibling
-#                        meta tree). PAPERS_SITE=<domain> picks the DOMAIN to
-#                        publish — its WHOLE site set is rendered + ingested +
-#                        browsable (the render tool moved to a domain/site model,
-#                        per RENDER-TOOL-HANDOFF). Default billslab (11
-#                        sites); other domains: entity-church-foundation,
-#                        entity-core-protocol, entity-church-registry. Use
-#                        PAPERS_SITE=all to publish every domain at once.
-#   PAPERS_HOME=<id>     which site the SPA boots into (default {domain}-main,
-#                        the domain's landing site; site ids are domain-prefixed).
-#   PAPERS_RENDER_OUT    where their engine emits (default /tmp/papers-render).
-#   PORT=<n>             the one serve port (default 8081).
-# PAPERS_REPO points at a local entity-core-papers checkout that contains the
-# content team's render/ engine; that repo is NOT part of this release (separate
-# publishing concern). It is AUTO-DETECTED from generic relative candidates — the
-# first one whose render/ engine actually exists wins — so publish-papers works
-# whether this egui checkout sits beside papers (release/sibling layout) or two
-# levels down in the meta tree (dev layout). Override explicitly via env or the
-# gitignored caps.local.mk:  make publish-papers PAPERS_REPO=/path/to/checkout
-_papers_candidates := ../entity-core-papers ../../[internal]/[internal]/entity-core-papers
-PAPERS_REPO       ?= $(firstword $(foreach d,$(_papers_candidates),$(if $(wildcard $(d)/render),$(d))) ../entity-core-papers)
-PAPERS_SITE       ?= billslab
-# Which site the SPA boots into. Per-scope default is `<scope>-main`; but the
-# whole-constellation `all` build has no single "all-main" site, so it defaults
-# to the billslab landing (override PAPERS_HOME=<id> for another domain's home).
-PAPERS_HOME       ?= $(if $(filter all,$(PAPERS_SITE)),billslab-main,$(PAPERS_SITE)-main)
-PAPERS_RENDER_OUT ?= /tmp/papers-render
-# --- Canonical-publish / ingest controls (entity-core-papers
-#     docs/CONTENT-SOURCE-RENDER-RUNBOOK.md Step 6) ---
-# PRERENDERED=<dir>: deploy a pre-rendered, scrubbed output dir produced by
-#   the CONTENT TEAM (the validated "we render, they ingest" model). When set,
-#   the render engine build + render step are SKIPPED and <dir> is ingested
-#   directly — no Go toolchain, render engine, or pull-source repos needed here.
-#   Default empty = render locally (demo/dev path).
-PRERENDERED ?=
-# SKIP_STAGE0=1: when rendering LOCALLY, bypass the release-builder Stage-0 scrub
-#   (non-canonical — reads the working tree, no leak/date scrub). Default OFF
-#   so a local render is canonical. (This was hardcoded ON; now opt-in — the
-#   wrong default for a public publish. See CANONICAL-PUBLISH-STAGE0-HANDOFF.md.)
-STAGE0_FLAG := $(if $(SKIP_STAGE0),--skip-stage0,)
-# NO_SERVE=1: build the deploy bundle into SERVE_DIR and STOP — don't block on the
-#   local http server. The bundle is then ready for `content-publish` → R2.
-NO_SERVE ?=
-# Dir to ingest. PRERENDERED wins outright. Otherwise the render tool nests a
-# site/domain scope under $(PAPERS_RENDER_OUT)/<scope>, but `all` emits per-DOMAIN
-# dirs directly under the output root — so for `all` ingest the root itself (the
-# ingester recurses for every site.manifest.json at any depth, so the extra domain
-# level is fine).
-PAPERS_INGEST_DIR := $(if $(PRERENDERED),$(PRERENDERED),$(if $(filter all,$(PAPERS_SITE)),$(PAPERS_RENDER_OUT),$(PAPERS_RENDER_OUT)/$(PAPERS_SITE)))
-CONFIG_PROFILE    ?= tutorial
-# PREFLIGHT — publish-papers is the CROSS-TEAM papers->web demo flow and is NOT
-# part of the release gate (see TOOLS.md §6). It needs host `go` + `python3` and
-# the content team's render engine (PAPERS_REPO/render/), which is NOT committed
-# to entity-core-papers master — it's out of release scope. This runs BEFORE the
-# `wasm` prerequisite so a missing tool fails fast (no wasted SPA build), with one
-# clear, actionable message naming exactly what's missing instead of a raw
-# `go: chdir … no such file` / missing-tool crash.
-publish-papers-preflight:
-	@miss=""; \
-	command -v python3 >/dev/null 2>&1 || miss="$$miss\n  - 'python3' — embedded-apps build + static serve"; \
-	if [ -n '$(PRERENDERED)' ]; then \
-	  [ -d "$(PRERENDERED)" ] || miss="$$miss\n  - PRERENDERED dir '$(PRERENDERED)' — the content team's pre-rendered, scrubbed output (ingest-only mode)"; \
-	else \
-	  command -v go >/dev/null 2>&1 || miss="$$miss\n  - 'go' toolchain — builds the papers render engine (or pass PRERENDERED=<dir> to ingest a pre-rendered output instead)"; \
-	  [ -d "$(PAPERS_REPO)" ]        || miss="$$miss\n  - papers checkout at PAPERS_REPO='$(PAPERS_REPO)' — override PAPERS_REPO=<path>"; \
-	  [ -d "$(PAPERS_REPO)/render" ] || miss="$$miss\n  - render engine dir '$(PAPERS_REPO)/render' — the content team's Go tool (NOT in entity-core-papers master; out of release scope)"; \
-	fi; \
-	if [ -n "$$miss" ]; then \
-	  printf '\n>>> make publish-papers cannot run — missing:%b\n\n' "$$miss"; \
-	  echo 'publish-papers is the cross-team papers->web flow.'; \
-	  echo 'Canonical (the validated runbook): the content team renders the scrubbed'; \
-	  echo 'export, then you ingest + deploy their output here — no Go/render engine needed:'; \
-	  echo '    make publish-papers PRERENDERED=/path/to/cs-render NO_SERVE=1'; \
-	  echo 'Local demo (renders here): needs host go + python3 + the render engine.'; \
-	  echo 'See entity-core-papers/docs/CONTENT-SOURCE-RENDER-RUNBOOK.md + TOOLS.md §6.'; \
-	  exit 1; \
-	fi
-
-# `publish-papers-preflight` is listed FIRST so (in serial make) it aborts before
-# the wasm build when host tools / the render engine are absent.
-publish-papers: DIST       := dist-publish
-publish-papers: TARGET_DIR := target-publish
-publish-papers: publish-papers-preflight wasm
-	@# RENDER PHASE — skipped entirely in PRERENDERED ingest-only mode (the
-	@# content team already rendered the scrubbed output). One shell so the
-	@# build+clean+render either all run or all skip. SAFETY: the rm is constrained
-	@# to a path UNDER /tmp via a case-guard — never '/', '$$HOME', empty, or
-	@# anything outside /tmp; override PAPERS_RENDER_OUT elsewhere → you clean it.
-	@if [ -n '$(PRERENDERED)' ]; then \
-	  echo "==> ingest-only: deploying the content team's pre-rendered output '$(PRERENDERED)' (no render engine / Go / pull-sources)"; \
-	  test -d '$(PRERENDERED)' || { echo "PRERENDERED dir '$(PRERENDERED)' not found"; exit 1; }; \
-	else \
-	  echo "==> build the papers render/ engine — $(PAPERS_REPO)/render"; \
-	  go build -C $(PAPERS_REPO)/render -o render ./... || exit 1; \
-	  echo "==> render scope '$(PAPERS_SITE)' → $(PAPERS_RENDER_OUT)/  (Stage-0 $(if $(SKIP_STAGE0),SKIPPED — non-canonical,ON — canonical))"; \
-	  dir='$(PAPERS_RENDER_OUT)'; case "$$dir" in \
-	    /tmp/?*) echo "    cleaning $$dir"; rm -rf -- "$$dir" ;; \
-	    *) echo "refusing to auto-clean PAPERS_RENDER_OUT='$$dir' (only /tmp/* is auto-cleaned; remove it manually if intended)"; exit 1 ;; \
-	  esac; \
-	  ( cd $(PAPERS_REPO) && ./render/render --site $(PAPERS_SITE) --repo . $(STAGE0_FLAG) --output $(PAPERS_RENDER_OUT) ) || exit 1; \
-	fi
-	$(snapshot_serve_dir)
-	@echo "==> ingest from $(PAPERS_INGEST_DIR)/ (disk→tree, recursive) + ALL embedded apps + publish both forms + deployment-config INTO $(SERVE_DIR)/ (SPA home='$(PAPERS_HOME)')$(if $(PREFIX), under prefix '$(PREFIX)',)"
-	@APPS_FLAG=""; \
-	if [ -d "$(APPS_REPO)" ]; then \
-	  echo "==> rebuild embedded apps (games + tools) — $(APPS_REPO)"; \
-	  python3 "$(APPS_REPO)/build.py"; \
-	  APPS_FLAG="--ingest-apps=$(APPS_REPO)/dist"; \
-	else \
-	  echo "==> APPS_REPO '$(APPS_REPO)' absent — publishing the bundled demo app seed"; \
-	fi; \
-	CARGO_TARGET_DIR=$(TARGET_DIR) cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) --ingest=$(PAPERS_INGEST_DIR) $$APPS_FLAG --deployment-config --config-site=$(PAPERS_HOME) --config-profile=$(CONFIG_PROFILE) --live=$(LIVE) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),)
-	@echo ""
-	@if [ -n '$(NO_SERVE)' ]; then \
-	  echo "=== NO_SERVE=1 → deploy bundle BUILT (not serving) ==="; \
-	  echo "  bundle: $(SERVE_DIR)"; \
-	  echo "  deploy: content-publish <bucket> $(SERVE_DIR) '' --key-var R2_CONTENT_<DOMAIN>_PROD"; \
-	else \
-	  echo "=== serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="; \
-	  echo "  ▶ live entity browser (SPA):       http://localhost:$(PORT)/   (boots into '$(PAPERS_HOME)' overlay, posture=$(CONFIG_PROFILE); the Content Site window lists every site in the domain)"; \
-	  echo "  ▶ static published '$(PAPERS_SITE)':  http://localhost:$(PORT)$(if $(PREFIX),/$(PREFIX),)/sites/"; \
-	  echo "  (hard-refresh once if an older build is cached)"; \
-	  echo ""; \
-	  python3 -m http.server $(PORT) --directory $(SERVE_DIR); \
-	fi
-
-.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run serve build-serve check-dist publish publish-bare publish-serve publish-papers publish-papers-preflight
+.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run serve build-serve check-dist publish publish-bare publish-serve

@@ -314,14 +314,12 @@ ingests its sites + apps, reads them back off the tree, and projects them to
 
 Higher-level convenience targets:
 
-- **`make publish-serve`** — rebuild the SPA, publish ALL sites + apps into an
-  isolated `/tmp` copy, and serve on one origin (`:8081`). The one-command
-  end-to-end round-trip on your machine. Serves the SPA at `/` and the static
-  sites at `/sites/`.
-- **`make publish-papers`** — the cross-team loop: render the content team's
-  `render/` engine → ingest disk→tree → publish both forms + emit
-  `entity-deployment.json` → serve. The SPA boots into the ingested site as a
-  cache-backed foreign-site overlay (exercises the real remote-peer path).
+- **`make publish-serve`** — rebuild the SPA, publish sites (the bundled demo, or
+  `INGEST=<dir>`) + optional apps (`APPS_DIST=<dir>`) into an isolated `/tmp` copy,
+  and serve on one origin (`:8081`). The one-command end-to-end round-trip on your
+  machine. Serves the SPA at `/` and the static sites at `/sites/`. Add
+  `DEPLOY_CONFIG=1 CONFIG_SITE=<id>` to boot the SPA into a published site as a
+  cache-backed foreign-site overlay (the real remote-peer path).
 - **`make publish-bare`** — bare static site ([§5.4](#54-bare-static-site-no-spa-no-entity-chrome-at-all)).
 
 ---
@@ -334,8 +332,8 @@ set** — no flag required for them to ship. They live under
 `{peer}/apps/{set}/…` (`games` / `apps`, split by the entry `type` in
 entity-apps' `index.json`).
 
-- Provide real apps with `--ingest-apps=<entity-apps/dist>` (or `APPS_REPO=<path>`
-  for the convenience targets, which run entity-apps' `build.py` first).
+- Provide real apps with `APPS_DIST=<entity-apps/dist>` (a **pre-built** dist dir;
+  the pipeline consumes it via `--ingest-apps` — it never builds it).
 - Without a real apps dir, a minimal demo seed is published.
 - The live Games/Apps window fetches a bundle on click-through, like a site
   asset, over the same origin as the sites.

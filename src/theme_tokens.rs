@@ -313,6 +313,7 @@ pub const SITE_TOKENS: &[(&str, &str, &str)] = &[
     ("--site-exit-bg", "#2a2a4e", "--surface"),
     ("--site-error-bg", "#1c1418", "--input-bg"),
     ("--site-selected-bg", "#1b1b2c", "--selected-bg"), // directory rail current row
+    ("--site-code-bg", "#0a0a1a", "--surface-sunken"),  // markdown code / pre background
     // -- text --
     ("--site-text", "#e2e2ea", "--text"),
     ("--site-text-strong", "#c3c9d6", "--text-muted"),

@@ -1,0 +1,9 @@
+{
+  "site_id": "entity-info",
+  "title": "Entity Info",
+  "tagline": "A second site in the same domain — proves multi-site ingest",
+  "nav": [
+    { "title": "Overview", "path": "pages/index.md" },
+    { "title": "Why", "path": "pages/why.md" }
+  ]
+}

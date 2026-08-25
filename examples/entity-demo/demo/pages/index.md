@@ -1,0 +1,15 @@
++++
+title = "Welcome"
++++
+
+# Welcome to the Entity Demo Site
+
+This page is a **content-addressed entity** rendered as HTML — you're browsing it inside a full entity peer, but it looks like any other site.
+
+::embed[Entity Demo Figure — a content-addressed SVG asset, embedded via the ::embed directive]{ref=assets/figures/demo.svg}
+
+- It's just markdown stored in the tree.
+- Links navigate within the entity system.
+- The overlay toggle reveals the peer underneath.
+
+Start with the [Guide](./guide/intro), read [About](./about) or the [Theory](./theory), or visit [the web](https://example.com).

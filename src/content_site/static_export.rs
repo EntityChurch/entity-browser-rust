@@ -25,7 +25,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::format::{NavItem, SiteManifest, SitePage};
+use super::format::{NavItem, SiteAsset, SiteManifest, SitePage};
 use super::location::{self, LinkTarget};
 use super::paths::SITE_URL_PREFIX;
 use super::read::OwnedSite;
@@ -37,6 +37,9 @@ pub struct ExportSite<'a> {
     pub site_id: &'a str,
     pub manifest: &'a SiteManifest,
     pub pages: &'a [(&'a str, SitePage)],
+    /// `(name, asset)` — the site's embedded assets, written next to the pages
+    /// so a dumb static server resolves `<img src="assets/…">` with no JS.
+    pub assets: &'a [(String, SiteAsset)],
 }
 
 /// How a site projects onto the output tree + link space.
@@ -108,6 +111,17 @@ pub fn export_site_set(
             fs::write(&path, html)?;
             written += 1;
         }
+        // Write the site's raw asset bytes next to its pages, at
+        // `sites/{peer}/{site}/assets/{name}`, so `<img src="assets/…">`
+        // resolves on a dumb static server (the live app resolves the `.bin`
+        // asset instead; this is the no-JS surface's copy).
+        for (name, asset) in site.assets {
+            let apath = asset_file_path(out_dir, site.peer_id, site.site_id, name, prefix);
+            if let Some(parent) = apath.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&apath, &asset.bytes)?;
+        }
         // A peer-level index that lists this peer's exported sites — the
         // static surface's answer to multi-site discovery.
         write_peer_index(out_dir, site.peer_id, sites, prefix)?;
@@ -152,6 +166,7 @@ pub fn export_owned_sites(
             site_id: &s.site_id,
             manifest: &s.manifest,
             pages: pv,
+            assets: &s.assets,
         })
         .collect();
     export_site_set(out_dir, &borrowed, prefix, live_base)
@@ -174,6 +189,7 @@ pub fn export_bare_root(
         site_id: &site.site_id,
         manifest: &site.manifest,
         pages: &pages,
+        assets: &site.assets,
     };
     let mut written = 0;
     for (slug, page) in es.pages {
@@ -185,6 +201,14 @@ pub fn export_bare_root(
         }
         fs::write(&path, html)?;
         written += 1;
+    }
+    // Bare-root assets sit at the domain root: `{out}/assets/{name}`.
+    for (name, asset) in es.assets {
+        let apath = out_dir.join("assets").join(name);
+        if let Some(parent) = apath.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&apath, &asset.bytes)?;
     }
     Ok(written)
 }
@@ -241,6 +265,9 @@ fn render_page(
         page: slug.to_string(),
     };
     let body = rewrite_hrefs(&render_page_body(&page.format, &page.body), &current, layout, prefix);
+    // Images need their own pass — rewrite_hrefs only touches href=". Site-relative
+    // `src="assets/…"` becomes a root-absolute static URL (depth-safe).
+    let body = rewrite_img_srcs(&body, site.peer_id, site.site_id, layout, prefix);
     let nav = render_nav(&site.manifest.nav, &current, slug, layout, prefix);
     let banner = live_base.map(|base| render_live_banner(base, site.peer_id, site.site_id, slug)).unwrap_or_default();
     let page_title = page.title();
@@ -381,6 +408,67 @@ fn rewrite_hrefs(html: &str, current: &location::Location, layout: Layout, prefi
     }
     out.push_str(rest);
     out
+}
+
+/// Rewrite site-relative image `src="assets/…"` refs to a root-absolute static
+/// URL (depth-safe), leaving external / `data:` / already-absolute srcs alone.
+/// A parallel of [`rewrite_hrefs`] for `src=` — needed because a nested page's
+/// relative `assets/…` would otherwise resolve against the wrong directory.
+fn rewrite_img_srcs(html: &str, peer_id: &str, site_id: &str, layout: Layout, prefix: &str) -> String {
+    const NEEDLE: &str = "src=\"";
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(idx) = rest.find(NEEDLE) {
+        let (before, after) = rest.split_at(idx + NEEDLE.len());
+        out.push_str(before);
+        match after.find('"') {
+            Some(end) => {
+                let raw = &after[..end];
+                match raw.strip_prefix("assets/") {
+                    Some(name) => {
+                        out.push_str(&esc(&static_asset_href(name, peer_id, site_id, layout, prefix)))
+                    }
+                    None => out.push_str(raw), // external / data: — leave verbatim
+                }
+                rest = &after[end..];
+            }
+            None => {
+                out.push_str(after);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Root-absolute URL for a site asset, resolvable from any page depth:
+/// `/{prefix}/sites/{peer}/{site}/assets/{name}` (projection) or `/assets/{name}`
+/// (bare-root). Mirrors [`projection_href`]/[`bare_href`] for assets.
+fn static_asset_href(name: &str, peer_id: &str, site_id: &str, layout: Layout, prefix: &str) -> String {
+    match layout {
+        Layout::Projection => {
+            let hp = super::paths::href_prefix(prefix);
+            format!("{hp}/{SITE_URL_PREFIX}/{peer_id}/{site_id}/assets/{name}")
+        }
+        Layout::BareRoot => format!("/assets/{name}"),
+    }
+}
+
+/// Filesystem path for a projection asset: `{out}/{prefix}/sites/{peer}/{site}/assets/{name}`.
+fn asset_file_path(
+    out_dir: &Path,
+    peer_id: &str,
+    site_id: &str,
+    name: &str,
+    prefix: &str,
+) -> std::path::PathBuf {
+    super::paths::prefixed_root(out_dir, prefix)
+        .join(SITE_URL_PREFIX)
+        .join(peer_id)
+        .join(site_id)
+        .join("assets")
+        .join(name)
 }
 
 /// Map a classified link target to a static href under `layout`. Cross-site
@@ -577,13 +665,25 @@ padding:14px 20px;background:#0a0a1a;border-bottom:1px solid #333}\
 .site-nav li{display:flex;gap:12px;align-items:baseline}\
 .site-nav a.active{color:#c0e0c0;font-weight:600}\
 .nav-section{color:#888;font-size:12px;text-transform:uppercase;letter-spacing:.05em}\
-main.page{max-width:760px;margin:0 auto;padding:28px 20px}\
-main.page h1,main.page h2,main.page h3{line-height:1.25}\
-main.page code{background:#0a0a1a;padding:1px 5px;border-radius:3px;font-size:90%}\
-main.page pre{background:#0a0a1a;padding:12px;border-radius:6px;overflow:auto}\
-main.page pre code{background:none;padding:0}\
-main.page table{border-collapse:collapse}\
-main.page td,main.page th{border:1px solid #333;padding:4px 8px}\
+main.page{max-width:760px;margin:0 auto;padding:28px 20px;font-size:16px}\
+main.page>*:first-child{margin-top:0}main.page>*:last-child{margin-bottom:0}\
+main.page h1,main.page h2,main.page h3,main.page h4{margin:24px 0 16px;font-weight:600;line-height:1.25}\
+main.page h1{font-size:1.9em;padding-bottom:.3em;border-bottom:1px solid #333}\
+main.page h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid #333}\
+main.page h3{font-size:1.25em}main.page h4{font-size:1em}\
+main.page p,main.page ul,main.page ol,main.page blockquote,main.page table,main.page pre{margin:0 0 16px}\
+main.page ul,main.page ol{padding-left:2em}main.page li+li{margin-top:.25em}\
+main.page code{background:#0a0a1a;padding:.2em .4em;border-radius:6px;font-size:85%}\
+main.page pre{background:#0a0a1a;padding:14px 16px;border-radius:6px;overflow:auto;\
+line-height:1.45;border:1px solid #333}\
+main.page pre code{background:none;padding:0;font-size:100%}\
+main.page blockquote{padding:0 1em;color:#9aa2b1;border-left:.25em solid #3a3a52;margin-left:0}\
+main.page table{border-collapse:collapse;display:block;width:max-content;max-width:100%;overflow:auto}\
+main.page td,main.page th{border:1px solid #3a3a52;padding:6px 13px}\
+main.page th{font-weight:600;background:#1b1b28;text-align:left}\
+main.page tr:nth-child(2n) td{background:rgba(140,150,180,0.06)}\
+main.page img{max-width:100%;height:auto}\
+main.page hr{height:.25em;border:0;margin:24px 0;background:#333}\
 .site-list{list-style:none;padding:0}.site-list li{margin:8px 0;font-size:17px}\
 .muted{color:#777;font-size:13px}\
 .site-footer{max-width:760px;margin:0 auto;padding:20px;color:#666;font-size:12px;\
@@ -690,8 +790,8 @@ mod tests {
     fn exports_two_sites_with_cross_links_rewritten() {
         let (dm, dp, im, ip) = two_demo_sites();
         let sites = [
-            ExportSite { peer_id: "PEER1", site_id: "demo", manifest: &dm, pages: &dp },
-            ExportSite { peer_id: "PEER1", site_id: "entity-info", manifest: &im, pages: &ip },
+            ExportSite { peer_id: "PEER1", site_id: "demo", manifest: &dm, pages: &dp, assets: &[] },
+            ExportSite { peer_id: "PEER1", site_id: "entity-info", manifest: &im, pages: &ip, assets: &[] },
         ];
 
         let dir = std::env::temp_dir().join("entity-browser-static-export-test");
@@ -804,7 +904,7 @@ mod tests {
     fn live_banner_injected_only_when_live_base_given() {
         let m = SiteManifest::new("demo", "Demo", "index", vec![]);
         let pages = vec![("about", SitePage::markdown("About", "# About"))];
-        let sites = [ExportSite { peer_id: "PEER1", site_id: "demo", manifest: &m, pages: &pages }];
+        let sites = [ExportSite { peer_id: "PEER1", site_id: "demo", manifest: &m, pages: &pages, assets: &[] }];
         let dir = std::env::temp_dir().join("entity-browser-banner-test");
 
         // With a live base → banner + deep link to this exact page.
@@ -839,7 +939,7 @@ mod tests {
         let m = SiteManifest::new("s", "S", "index", vec![]);
         let pages =
             vec![("index", SitePage::markdown("H", "[ext](https://example.com) and [m](mailto:a@b.c)"))];
-        let sites = [ExportSite { peer_id: "P", site_id: "s", manifest: &m, pages: &pages }];
+        let sites = [ExportSite { peer_id: "P", site_id: "s", manifest: &m, pages: &pages, assets: &[] }];
         let dir = std::env::temp_dir().join("entity-browser-static-export-ext-test");
         let _ = fs::remove_dir_all(&dir);
         export_site_set(&dir, &sites, "", None).unwrap();
@@ -854,7 +954,7 @@ mod tests {
         // The render path escapes raw HTML; export must not re-introduce it.
         let m = SiteManifest::new("s", "S", "index", vec![]);
         let pages = vec![("index", SitePage::markdown("H", "<script>alert(1)</script>\n\nsafe"))];
-        let sites = [ExportSite { peer_id: "P", site_id: "s", manifest: &m, pages: &pages }];
+        let sites = [ExportSite { peer_id: "P", site_id: "s", manifest: &m, pages: &pages, assets: &[] }];
         let dir = std::env::temp_dir().join("entity-browser-static-export-xss-test");
         let _ = fs::remove_dir_all(&dir);
         export_site_set(&dir, &sites, "", None).unwrap();
@@ -875,7 +975,7 @@ mod tests {
             ("guide/intro", SitePage::markdown("Intro", "# Intro\n\nSee [deep](advanced/deep).")),
             ("guide/advanced/deep", SitePage::markdown("Deep", "# Deep")),
         ];
-        let sites = [ExportSite { peer_id: "P", site_id: "docs", manifest: &m, pages: &pages }];
+        let sites = [ExportSite { peer_id: "P", site_id: "docs", manifest: &m, pages: &pages, assets: &[] }];
         let dir = std::env::temp_dir().join("entity-browser-static-export-section-test");
         let _ = fs::remove_dir_all(&dir);
         export_site_set(&dir, &sites, "", None).unwrap();
@@ -921,8 +1021,8 @@ mod tests {
             vec![("index", SitePage::markdown("A", "See [Beta home](site:beta/index)."))];
         let b_pages = vec![("index", SitePage::markdown("B", "# Beta"))];
         let sites = [
-            ExportSite { peer_id: "PEER", site_id: "alpha", manifest: &a, pages: &a_pages },
-            ExportSite { peer_id: "PEER", site_id: "beta", manifest: &b, pages: &b_pages },
+            ExportSite { peer_id: "PEER", site_id: "alpha", manifest: &a, pages: &a_pages, assets: &[] },
+            ExportSite { peer_id: "PEER", site_id: "beta", manifest: &b, pages: &b_pages, assets: &[] },
         ];
         let dir = std::env::temp_dir().join("entity-browser-static-export-xsite-test");
         let _ = fs::remove_dir_all(&dir);

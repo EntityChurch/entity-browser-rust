@@ -605,9 +605,19 @@
                 }
             });
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('/sw.js').then(
+                // updateViaCache:'none' — never satisfy the sw.js update check from
+                // the HTTP cache. Without it the browser can revalidate the SW
+                // script conditionally and accept a 304 (e.g. when publish-serve's
+                // `cp -a` preserves an old mtime), so a genuinely-new worker is
+                // never adopted and the fix-in-the-SW never lands without a hard
+                // refresh. 'none' forces a fresh fetch so updates are detected.
+                navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(
                     function(reg) {
                         console.info('[Entity Browser] Service Worker registered, scope:', reg.scope);
+                        // Proactively check for a new worker on every load (the
+                        // browser's own check can lag); cheap, and makes a fresh
+                        // deploy visible on this load rather than the next.
+                        reg.update().catch(function() {});
                         // A newly-installed worker while one already controls
                         // the page = an update became available.
                         reg.addEventListener('updatefound', function() {
