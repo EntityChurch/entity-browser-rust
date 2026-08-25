@@ -3588,8 +3588,8 @@ mod memory_transport_tests {
              fetch must still reach B after the release"
         );
         assert_eq!(
-            liveness_of(&peers_a, &pid_b),
-            LiveStatus::Connected,
+            crate::peer_liveness::liveness_of(&peers_a, &pid_b),
+            crate::peer_liveness::LiveStatus::Connected,
             "release-peer(idle) writes no terminal status and evicts nothing, \
              so the read-model must still (truthfully) say connected"
         );
@@ -3627,6 +3627,66 @@ mod memory_transport_tests {
              {dials_before} → {dials_after}. The extension is still \
              reconnecting a conversation no window binds any more."
         );
+    }
+
+    /// **A peer we actually reached becomes a peer the UI can see.**
+    ///
+    /// The registry (`connections.rs`) means "we have connected at least once",
+    /// and until the reach keeper landed, only the manual **Connect** button
+    /// ever wrote it. So a peer met by NAME and reached over WebRTC existed
+    /// nowhere any window looks — the File Transfer target list reads exactly
+    /// this registry, and it was empty for the one peer the entire rendezvous
+    /// path produces. The bytes could cross while the UI insisted there was
+    /// nobody to send them to.
+    ///
+    /// Asserted against a REAL kernel status rather than a stubbed one: A dials
+    /// B over the memory transport, so `liveness_of` reads `Connected` because
+    /// the kernel wrote it, which is the same signal the keeper reads in the
+    /// browser.
+    ///
+    /// **Mutation check:** drop the `remember` branch in `ReachKeeper::due` and
+    /// the row never appears (verified). Note what this does NOT cover: that
+    /// the row is written only ONCE per connect — that guard is a `bool` on the
+    /// intent, and a test that pumps twice would pass either way, since the
+    /// write is idempotent on the path.
+    #[tokio::test]
+    async fn a_peer_the_keeper_reached_lands_in_the_ever_connected_registry() {
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (_peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        let keeper = crate::reach_keeper::ReachKeeper::new();
+        keeper.want(&pid_a, &pid_b);
+        assert!(
+            !crate::connections::read_connections(&peers_a)
+                .iter()
+                .any(|c| c.remote_pid == pid_b),
+            "the premise: an unreached peer is in no registry"
+        );
+
+        let connect = peers_a.connect_peer(&pid_a, format!("memory://{pid_b}"));
+        tokio::time::timeout(Duration::from_secs(2), connect)
+            .await
+            .expect("connect timed out")
+            .expect("A connects to B");
+        assert_eq!(
+            crate::peer_liveness::liveness_of(&peers_a, &pid_b),
+            crate::peer_liveness::LiveStatus::Connected,
+            "the kernel must have written the status this turns on"
+        );
+
+        keeper.pump(&peers_a);
+        assert!(
+            eventually(Duration::from_secs(2), || crate::connections::read_connections(&peers_a)
+                .iter()
+                .any(|c| c.remote_pid == pid_b))
+            .await,
+            "a peer we reached must become a peer the UI can offer as a target"
+        );
+
+        handle_a.abort();
+        handle_b.abort();
     }
 
     /// **THE TRANSFER PROOF** — one peer offers a file, another pulls it back
@@ -3707,10 +3767,25 @@ mod memory_transport_tests {
         assert_eq!(listed[0].size, raw.len() as u64);
         assert_eq!(listed[0].from, pid_a, "the manifest remembers its source");
 
-        let pulled = file_offer::pull_offer(&dispatch_b, &pid_a, &listed[0].blob)
-            .await
-            .expect("B pulls the closure");
+        // Progress is reported per batch, and the first report lands as soon as
+        // the blob names its chunks — that is what lets a caller state the size
+        // of the job before waiting for it. Recorded rather than asserted
+        // step-by-step (a batch size is upstream's to change); what must hold is
+        // that it starts at "none of them" and finishes at "all of them".
+        let seen = std::sync::Mutex::new(Vec::new());
+        let pulled = file_offer::pull_offer_with(&dispatch_b, &pid_a, &listed[0].blob, |h, t| {
+            seen.lock().unwrap().push((h, t))
+        })
+        .await
+        .expect("B pulls the closure");
         assert_eq!(pulled, raw, "the file must arrive byte for byte");
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.first(), Some(&(0, 3)), "the job's size is known up front");
+        assert_eq!(
+            seen.last(),
+            Some(&(3, 3)),
+            "progress must finish at every chunk held, got {seen:?}"
+        );
 
         // A blob nobody offered must fail loudly rather than returning short
         // bytes — the receiver's only defence against a stale listing.
@@ -3722,8 +3797,126 @@ mod memory_transport_tests {
             "pulling content the peer does not hold must error, not truncate"
         );
 
+        // 5. **A can see what it is serving.** The window renders this list, and
+        //    it is the only place a person learns what strangers may read from
+        //    them — a local read of our own tree, not the remote `list_offers`
+        //    shape pointed at ourselves.
+        let own = file_offer::read_own_offers(&peers_a, &pid_a);
+        assert_eq!(own, vec![offer.clone()], "A lists exactly what it offered");
+        assert!(
+            file_offer::read_own_offers(&peers_b, &pid_b).is_empty(),
+            "B offered nothing and must say so"
+        );
+
+        // 6. **A stated ceiling is refused at the door**, before anything is
+        //    allocated or dispatched — the alternative is a tab that dies
+        //    partway through an ingest nobody can see.
+        let too_big = vec![7u8; file_offer::MAX_OFFER_BYTES as usize + 1];
+        let refusal = file_offer::offer_file(&dispatch_a, "huge.bin", &too_big)
+            .await
+            .expect_err("a file over the ceiling must be refused, not attempted");
+        assert!(refusal.contains("huge.bin"), "the refusal names the file: {refusal}");
+        assert_eq!(
+            file_offer::read_own_offers(&peers_a, &pid_a).len(),
+            1,
+            "a refused offer must leave nothing behind"
+        );
+
+        // 7. **Withdrawal takes the NAME down, not the bytes** — and the button
+        //    says exactly that. B can no longer discover the file; B (or anyone)
+        //    who already holds the content id still can. Asserting both halves
+        //    is what keeps "stop offering" from drifting into "delete".
+        let writer_a = peers_a.writer_handle_for(&pid_a).expect("A writer");
+        file_offer::withdraw_offer(&writer_a, &pid_a, &offer.id());
+        assert!(
+            file_offer::read_own_offers(&peers_a, &pid_a).is_empty(),
+            "A's own list drops the withdrawn offer"
+        );
+        assert!(
+            file_offer::list_offers(&dispatch_b, &pid_a)
+                .await
+                .expect("B can still ask")
+                .is_empty(),
+            "B must no longer be able to discover it"
+        );
+        assert_eq!(
+            file_offer::pull_offer(&dispatch_b, &pid_a, &offer.blob)
+                .await
+                .expect("content stays addressable by hash"),
+            raw,
+            "withdrawing a listing does not unpublish the content — if this ever \
+             starts failing, the surface may finally say 'delete'"
+        );
+
         handle_a.abort();
         handle_b.abort();
+    }
+
+    /// **THE ACCOUNTING PROOF — what an offer costs, permanently.** This test
+    /// exists to *measure* a gap, not to assert a behaviour we like: it is the
+    /// D-accounting discipline applied to the transfer arc before the arc is
+    /// called stable.
+    ///
+    /// Offering ingests a blob and its chunks into `system/content`, and the
+    /// handler writes a §6.4.2 presence binding **per ingested entity** (the
+    /// root *and* each `included`). Withdrawing an offer removes the manifest —
+    /// the name — and nothing else. So each offer permanently costs its bytes in
+    /// the content store plus one tree entity per chunk, and re-offering an
+    /// edited file hashes differently and costs a fresh set.
+    ///
+    /// **Nothing can reclaim it today, and that is a fact about the surface
+    /// rather than a thing we forgot to call:** `system/content` exposes exactly
+    /// `get` and `ingest` (`extensions/content/src/handler.rs`) — there is no
+    /// forget/unbind op — and `handle_get` serves straight from the content
+    /// store by hash without consulting the binding, so removing the binding
+    /// would not even stop us serving. `WriterHandle::content_remove` is
+    /// Direct-arm only and refuses while a live path binds the blob, which the
+    /// presence binding is.
+    ///
+    /// If this test starts failing because the numbers went *down*, something
+    /// grew a reclaim path and the honest surface can finally say "delete".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_offer_costs_content_and_presence_bindings_that_nothing_reclaims() {
+        use crate::file_offer;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers, pid, handle) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+        let dispatch = peers.dispatch_handle(&pid).expect("dispatch handle");
+
+        // Three full chunks and a tail — four chunks, so "one per chunk" is a
+        // count and not a coincidence of a single-chunk file.
+        let raw: Vec<u8> = (0..(file_offer::CHUNK_SIZE * 3 + 11))
+            .map(|i| (i.wrapping_mul(17) % 251) as u8)
+            .collect();
+        let offer = file_offer::offer_file(&dispatch, "big.bin", &raw)
+            .await
+            .expect("offer");
+
+        let bindings_prefix = format!("{}/", file_offer::namespace_resource(&pid));
+        let bound = |peers: &Peers| peers.tree_listing(&pid, &bindings_prefix).len();
+        let after_offer = bound(&peers);
+        assert_eq!(
+            after_offer, 5,
+            "a 4-chunk offer binds the blob plus every chunk (§6.4.2, written per \
+             ingested entity) — got {after_offer}"
+        );
+
+        let writer = peers.writer_handle_for(&pid).expect("writer");
+        file_offer::withdraw_offer(&writer, &pid, &offer.id());
+        assert!(
+            file_offer::read_own_offers(&peers, &pid).is_empty(),
+            "the manifest is gone"
+        );
+        assert_eq!(
+            bound(&peers),
+            after_offer,
+            "withdrawal reclaims NOTHING — the bindings and the bytes outlive the \
+             name. This is the measurement, not a regression: `system/content` has \
+             no forget op, so a peer cannot unpublish what it ingested."
+        );
+
+        handle.abort();
     }
 
     /// THE DELIVERY PROOF: a signed chat message authored by peer A crosses a

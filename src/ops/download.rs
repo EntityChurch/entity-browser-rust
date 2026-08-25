@@ -56,6 +56,14 @@ pub fn materialize_and_download(result: &HandlerResult, filename: &str) -> Resul
     Ok(len)
 }
 
+/// Hand already-reassembled `bytes` to the browser as a download. The public
+/// entry point for a pull that did its own reassembly — a `system/content`
+/// closure walk (`file_offer::pull_offer`) returns bytes, not a `HandlerResult`,
+/// so it needs the save half without the `local/files` half.
+pub fn save_bytes(filename: &str, bytes: &[u8]) -> Result<(), String> {
+    trigger_browser_download(filename, bytes)
+}
+
 /// Hand `bytes` to the browser as a download named `filename`, using an
 /// object-URL + a synthetic anchor click. Revokes the URL after.
 fn trigger_browser_download(filename: &str, bytes: &[u8]) -> Result<(), String> {

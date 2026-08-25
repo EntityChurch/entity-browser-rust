@@ -515,6 +515,22 @@ pub const EN: &[(&str, Message)] = &[
     ("filetransfer.authorize_device", Message::Simple("Authorize this device")),
     ("filetransfer.browse_shared", Message::Simple("Browse shared files")),
     ("filetransfer.share_empty", Message::Simple("This share is empty.")),
+    ("filetransfer.offering", Message::Simple("Files you are offering")),
+    (
+        "filetransfer.offer_hint",
+        Message::Simple(
+            "Anyone you have met can pull these from this device — you do not \
+             need to be connected when you put one up. Up to {limit} per file.",
+        ),
+    ),
+    ("filetransfer.offer_file", Message::Simple("\u{2b06} Offer a file")),
+    (
+        "filetransfer.offer_none",
+        Message::Simple("You are not offering anything."),
+    ),
+    ("filetransfer.stop_offering", Message::Simple("Stop offering")),
+    ("filetransfer.col_file", Message::Simple("File")),
+    ("filetransfer.col_size", Message::Simple("Size")),
     // -- site editor surface --
     (
         "siteeditor.hint",

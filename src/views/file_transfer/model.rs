@@ -13,7 +13,7 @@ use crate::views::{EventCategory, EventEntry};
 use crate::window::WindowId;
 
 use super::browse::{FsBrowseCache, FsChild};
-use super::output::{FileTransferOutput, TargetAccess, TargetOption};
+use super::output::{FileTransferOutput, OwnOffer, TargetAccess, TargetOption};
 
 /// Tree prefix the backend peer exposes its share at. Mirrors the backend's
 /// `SHARE_PREFIX` (`src-tauri/src/lib.rs`); kept in one const here on the
@@ -106,6 +106,9 @@ pub(crate) fn decode_listing(data: &[u8]) -> Vec<FsChild> {
                 full_path: entity_path,
                 is_dir: entry_type == "directory",
                 size,
+                // A share listing is never an offer — the two sources meet in
+                // the cache, not here.
+                offer_blob: None,
             });
         }
     }
@@ -276,8 +279,18 @@ impl FileTransferModel {
             root_listed: self.browse.root_listed(),
             root_loading: self.browse.root_loading(),
             selected_full_path: self.browse.selected_full_path(),
+            selected_pull: self.browse.selected_pull(),
             browse_error: self.browse.error(),
             events,
+            // What we serve, read from our OWN tree (not `list_offers`, which is
+            // the remote shape and would retry against ourselves). The window
+            // subscribes the prefix, which is what makes this readable on the
+            // Worker arm at all.
+            own_offers: crate::file_offer::read_own_offers(peers, &self.peer_id)
+                .into_iter()
+                .map(|o| OwnOffer { id: o.id(), name: o.name, size: o.size })
+                .collect(),
+            offer_limit: crate::file_offer::MAX_OFFER_BYTES,
         }
     }
 }

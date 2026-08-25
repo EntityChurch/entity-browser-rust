@@ -76,6 +76,22 @@ pub enum Action {
         path: String,
         filename: String,
     },
+    /// Pull the file a File Transfer row points at, whatever kind of peer is
+    /// serving it, and materialize it onto this device.
+    ///
+    /// The [`PullPlan`] is decided in `views::file_transfer::model` — the DOM
+    /// carries it verbatim and knows nothing about how the far side stores
+    /// files. That split is the whole point: a native peer serves a real
+    /// directory through `local/files`, a browser serves what its user offered
+    /// through `system/content` + a manifest, and the *window* must not grow a
+    /// "which kind of peer is this?" branch.
+    PullFile {
+        /// Dispatch origin (the bound local peer).
+        peer_id: String,
+        /// The peer serving the file.
+        target: String,
+        plan: PullPlan,
+    },
     /// Push a file from *this* device up to a (typically remote) peer's
     /// writable share via `local/files:write`. The browser file picker
     /// supplies `bytes` + `filename`; the handler chunks the bytes and
@@ -92,6 +108,33 @@ pub enum Action {
         /// `ft_refresh` WindowEvent for this window once the write lands. The
         /// user never manually refreshes a change the app just caused.
         window_id: crate::window::WindowId,
+    },
+    /// Offer a file **from** this device: chunk it, ingest it into this peer's
+    /// own `system/content`, and publish a manifest so any peer that lists our
+    /// offers can pull it (`crate::file_offer`).
+    ///
+    /// Deliberately **untargeted**, and that is the difference from
+    /// [`UploadFile`](Action::UploadFile). An upload pushes bytes into one
+    /// peer's writable share and needs a write grant there; an offer publishes
+    /// on *our* side and needs nothing from anyone — whoever we are willing to
+    /// be read by can fetch it. It is also the only "send" a browser↔browser
+    /// pair has, since neither end mounts a `local/files` share.
+    OfferFile {
+        /// The local peer that will serve it — the id a counterpart pulls from.
+        peer_id: String,
+        filename: String,
+        bytes: Vec<u8>,
+    },
+    /// Stop listing one of our own offers (remove its manifest). The bytes stay
+    /// fetchable by content id to anyone who already has it — see
+    /// [`crate::file_offer::withdraw_offer`], which is why this is worded as
+    /// "stop offering" everywhere and never as "delete".
+    WithdrawOffer {
+        peer_id: String,
+        /// Hex of the blob hash — the manifest's path segment.
+        offer_id: String,
+        /// Only so the result line can name the file rather than a hash.
+        filename: String,
     },
     /// Refresh the **backend-auth observability** surface for one backend
     /// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`). Reads B's
@@ -245,6 +288,32 @@ pub enum Action {
     /// the subscription on `self.watch` with a callback that writes
     /// scrollback rows on each change event.
     ShellTail { window_id: WindowId, prefix: String },
+}
+
+/// How to fetch one file from a transfer target — the **only** place the two
+/// kinds of serving peer differ, decided once in the File Transfer model.
+///
+/// A native peer mounts a real directory and serves it through `local/files`;
+/// a browser peer has no filesystem to mount and serves what its user *offered*
+/// through `system/content` (hash-addressed, chunked) plus a manifest that gives
+/// the hash a filename. Same list, same rows, same Pull button — different
+/// answer from the peer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullPlan {
+    /// A file in the target's `local/files` share: `read` at this tree path.
+    Share { path: String, filename: String },
+    /// A file the target **offered**: walk the blob's closure over
+    /// `system/content:get` (`crate::file_offer::pull_offer`).
+    Offer { blob_hex: String, filename: String },
+}
+
+impl PullPlan {
+    /// The name to save the pulled bytes under.
+    pub fn filename(&self) -> &str {
+        match self {
+            PullPlan::Share { filename, .. } | PullPlan::Offer { filename, .. } => filename,
+        }
+    }
 }
 
 #[cfg(test)]

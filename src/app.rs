@@ -2373,6 +2373,14 @@ impl EntityApp {
         // the peer drains (its local peer must exist) and after
         // `sync_peer_engines` (that peer's network handler must be bound).
         self.sync_maintained_peers();
+        // Keep a path warm toward peers we intend to talk to — the OTHER half of
+        // §6.5 establishment. `establish_live` runs only when this peer consults
+        // the ladder itself, so a peer that merely *serves* (a standing file
+        // offer) never negotiates and is unreachable no matter how hard the
+        // counterpart tries: measured at 52 offers deposited against 0 collects.
+        // Chat hides this because both sides poll each other; nothing else does.
+        // Costs one enum comparison per intent once the peer is connected.
+        crate::reach_keeper::global().pump(&self.peer_manager);
 
         // Per-frame window tick — lets a window make progress every frame,
         // independent of the dirty-gated render (e.g. Chat draining its delivery
@@ -3047,9 +3055,21 @@ impl EntityApp {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, "Action::DownloadFile");
                     self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone());
                 }
+                Action::PullFile { peer_id, target, plan } => {
+                    tracing::info!(peer = %peer_id, target = %target, plan = ?plan, "Action::PullFile");
+                    self.handle_pull_file(peer_id.clone(), target.clone(), plan.clone());
+                }
                 Action::UploadFile { peer_id, handler_uri, path, bytes, window_id } => {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, len = bytes.len(), "Action::UploadFile");
                     self.handle_upload_file(peer_id.clone(), handler_uri.clone(), path.clone(), bytes.clone(), *window_id);
+                }
+                Action::OfferFile { peer_id, filename, bytes } => {
+                    tracing::info!(peer = %peer_id, file = %filename, len = bytes.len(), "Action::OfferFile");
+                    self.handle_offer_file(peer_id.clone(), filename.clone(), bytes.clone());
+                }
+                Action::WithdrawOffer { peer_id, offer_id, filename } => {
+                    tracing::info!(peer = %peer_id, offer = %offer_id, "Action::WithdrawOffer");
+                    self.handle_withdraw_offer(peer_id.clone(), offer_id.clone(), filename.clone());
                 }
                 Action::Query { peer_id, expression } => {
                     tracing::info!(peer = %peer_id, expr_type = %expression.entity_type, "Action::Query");
@@ -3428,6 +3448,127 @@ impl EntityApp {
                 }
             }
         });
+    }
+
+    /// Pull the selected file, whichever way its peer serves it, and save it.
+    ///
+    /// The `match` is the *only* place the two kinds of serving peer diverge
+    /// after the model decided — a share `read` (native peer, real directory)
+    /// or the content-closure walk (browser peer, hash-addressed offer). The
+    /// window, the row and the button are identical for both.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_pull_file(&self, pid: String, target: String, plan: crate::action::PullPlan) {
+        use crate::action::PullPlan;
+        match plan {
+            PullPlan::Share { path, filename } => {
+                self.handle_download_file(pid, format!("entity://{target}/local/files"), path, filename)
+            }
+            PullPlan::Offer { blob_hex, filename } => {
+                let log = self.event_log_writer.clone();
+                log.log(format!("↓ pulling {} from {}...", filename, crate::views::short_pid(&target)));
+                let Some(dispatch) = self.peer_manager.dispatch_handle(&pid) else {
+                    log.log(format!("✗ pull {filename} → local peer {pid} is not routed"));
+                    return;
+                };
+                let blob = match crate::file_offer::hash_from_id(&blob_hex) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        log.log(format!("✗ pull {filename} → unreadable content id: {e}"));
+                        return;
+                    }
+                };
+                // Progress, because a closure walk is N round trips and the
+                // whole of it happens between "↓ pulling" and "✓ saved". One
+                // line per batch (16 chunks ≈ 4 MiB), and the first fires as
+                // soon as the blob names its chunks — so the user learns the
+                // size of the job before waiting for it. `last` suppresses the
+                // repeat when a batch adds nothing (the stall path reports
+                // itself, loudly, a moment later).
+                let progress_log = log.clone();
+                let progress_name = filename.clone();
+                let mut last = 0usize;
+                let progress = move |held: usize, total: usize| {
+                    if held == last && held != 0 {
+                        return;
+                    }
+                    last = held;
+                    progress_log.log(format!("↓ {progress_name} — {held}/{total} chunks"));
+                };
+                let progress = std::cell::RefCell::new(progress);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let report = |held, total| (progress.borrow_mut())(held, total);
+                    match crate::file_offer::pull_offer_with(&dispatch, &target, &blob, report)
+                        .await
+                    {
+                        Ok(bytes) => {
+                            let n = bytes.len();
+                            match crate::ops::download::save_bytes(&filename, &bytes) {
+                                Ok(()) => log.log(format!("✓ saved {filename} ({n} bytes)")),
+                                Err(e) => log.log(format!("✗ save {filename} → {e}")),
+                            }
+                        }
+                        Err(e) => log.log(format!("✗ pull {filename} → {e}")),
+                    }
+                });
+            }
+        }
+    }
+
+    /// Publish a file this device is willing to serve (`crate::file_offer`).
+    ///
+    /// No target: an offer is made to *whoever may read us*, not pushed at one
+    /// peer — which is why this handler names no `entity://` URI and does not
+    /// care whether anybody is connected right now. The manifest write dirties
+    /// the offers prefix, so the window's own "you are offering" list repaints
+    /// through its subscription; nothing here pokes the view.
+    ///
+    /// The size ceiling lives in the model (`file_offer::MAX_OFFER_BYTES`), not
+    /// here — the Shell verb must be refused on the same terms as the window.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_offer_file(&self, pid: String, filename: String, bytes: Vec<u8>) {
+        let log = self.event_log_writer.clone();
+        let len = bytes.len() as u64;
+        let Some(dispatch) = self.peer_manager.dispatch_handle(&pid) else {
+            log.log(format!("✗ offer {filename} → local peer {pid} is not routed"));
+            return;
+        };
+        // State the shape of the work before starting it: chunking and ingest
+        // are one synchronous pass with nothing to report from inside, so the
+        // count is the only honest progress an offer has.
+        log.log(format!(
+            "↑ offering {} ({}, {} chunks)…",
+            filename,
+            crate::file_offer::human_bytes(len),
+            crate::file_offer::chunk_count(len)
+        ));
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::file_offer::offer_file(&dispatch, &filename, &bytes).await {
+                Ok(offer) => log.log(format!(
+                    "✓ offering {} ({}) — id {}",
+                    offer.name,
+                    crate::file_offer::human_bytes(offer.size),
+                    offer.id()
+                )),
+                Err(e) => log.log(format!("✗ offer {filename} → {e}")),
+            }
+        });
+    }
+
+    /// Stop listing one of our own offers. Fire-and-forget through the writer
+    /// (the removal dirties the same prefix the window watches), and worded as
+    /// what it is: the listing goes, the bytes stay reachable by content id for
+    /// anyone who already has one (`file_offer::withdraw_offer`).
+    #[cfg(target_arch = "wasm32")]
+    fn handle_withdraw_offer(&self, pid: String, offer_id: String, filename: String) {
+        let log = self.event_log_writer.clone();
+        let Some(writer) = self.peer_manager.writer_handle_for(&pid) else {
+            log.log(format!("✗ stop offering {filename} → local peer {pid} is not routed"));
+            return;
+        };
+        crate::file_offer::withdraw_offer(&writer, &pid, &offer_id);
+        log.log(format!(
+            "✓ stopped offering {filename} (already-shared content ids still resolve)"
+        ));
     }
 
     /// Pull a file from `handler_uri` (`local/files:read` on `path`) and

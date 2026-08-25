@@ -85,9 +85,55 @@ impl FileTransferWindow {
         });
     }
 
+    /// Fetch what `target` is **offering** and fold it into the same root
+    /// listing the share fills — the other half of "one window, two kinds of
+    /// serving peer".
+    ///
+    /// Runs beside `load_dir`, never instead of it: a peer may have a mounted
+    /// share *and* offered files, and neither answer is authoritative about the
+    /// other. A failure is deliberately quiet — a native peer that offers
+    /// nothing simply returns an empty list, and a peer that cannot answer at
+    /// all already has its error from the share half. Loudness here would put a
+    /// permanent red banner on the ordinary desktop case.
+    #[cfg(target_arch = "wasm32")]
+    fn load_offers(&self, peers: &Peers, target: &str) {
+        if target.is_empty() {
+            return;
+        }
+        let Some(dispatch) = peers.dispatch_handle(&self.peer_id) else {
+            return;
+        };
+        // Being shown a peer's files is intent to reach that peer — and the
+        // serving side has to be attempting too, or nothing establishes
+        // (`reach_keeper`). Registering here covers the case the Shell verbs
+        // do not: a window opened on a peer we merely remember.
+        crate::reach_keeper::global().want(&self.peer_id, target);
+        let cache = self.model.browse().clone();
+        let dirty = self.watch.flag();
+        let target = target.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::file_offer::list_offers(&dispatch, &target).await {
+                // An EMPTY answer is applied too, and that is the point: a peer
+                // that withdrew an offer answers with a shorter list, and a
+                // cache that only merges would keep showing the file it just
+                // took down. Repaint only on an actual change — this runs on
+                // every Refresh and every target switch.
+                Ok(offers) => {
+                    if cache.apply_offers(offers) {
+                        dirty.mark();
+                    }
+                }
+                Err(e) => tracing::debug!("file transfer: no offers from {target}: {e}"),
+            }
+        });
+    }
+
     /// Native builds have no async runtime for this WASM-only UI path.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_dir(&self, _peers: &Peers, _target: &str, _relpath: &str, _force: bool) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_offers(&self, _peers: &Peers, _target: &str) {}
 
     pub fn window_type() -> WindowType {
         WindowType {
@@ -132,6 +178,28 @@ impl FileTransferWindow {
                     &sys_pid,
                     crate::app_paths::authz_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // What WE are offering, on the peer that would serve it. Read
+                // and watch must name the same peer — the offer is published by
+                // the window's bound peer (`Action::OfferFile`), so a watch on
+                // the system peer would be right only by coincidence. Without
+                // this the Worker arm's read hits an unseeded cache mirror and
+                // the list stays empty forever, with the offer perfectly
+                // pullable by anyone else: the write works, only *our* view of
+                // it is missing.
+                //
+                // Proven by `a_lone_file_transfer_window_lists_what_it_offers`,
+                // which boots with ONLY this window open — and needs to. The
+                // e2e monolith opens every window, two of which subscribe the
+                // whole peer tree, and the Worker proxy's cache is a union over
+                // every subscription's mirror; with those open, dropping this
+                // line changes nothing observable. Reading through another
+                // subscriber's mirror is exactly the theme-dropdown bug (AP20).
+                let own_pid = window.peer_id.clone();
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &own_pid,
+                    crate::app_paths::offers_prefix(crate::app_paths::APP_ID, &own_pid),
+                );
                 // Reachability of the target — the axis this window lacked. The
                 // registry above answers "do we know this peer"; only the kernel
                 // liveness surface answers "can we reach it right now", and the
@@ -172,6 +240,7 @@ impl WindowView for FileTransferWindow {
                 let target = self.model.effective_target(peers);
                 self.model.browse().set_expanded("");
                 self.load_dir(peers, &target, "", false);
+                self.load_offers(peers, &target);
             }
             "set_filename" => self.model.set_filename(value),
             // Re-list the share root (Browse / Refresh button).
@@ -179,6 +248,7 @@ impl WindowView for FileTransferWindow {
                 let target = self.model.effective_target(peers);
                 self.model.browse().set_expanded("");
                 self.load_dir(peers, &target, "", true);
+                self.load_offers(peers, &target);
             }
             // Expand/collapse a directory; fetch its listing on first open.
             "ft_toggle" => {
@@ -213,6 +283,7 @@ impl WindowView for FileTransferWindow {
             self.model.browse().sync_target(&target);
             if self.model.browse().claim_auto_load() {
                 self.load_dir(peers, &target, "", false);
+                self.load_offers(peers, &target);
             }
         }
         let output = self.model.render_output(peers, &ctx.dial_markers);
