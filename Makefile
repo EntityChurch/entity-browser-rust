@@ -288,6 +288,16 @@ native:
 test: image
 	$(call RUN,cargo test)
 
+# One test binary / one test name, in-container — the narrow loop for iterating
+# on a single gate without paying for all 14 binaries. Mirrors `make e2e-worker`'s
+# `T=` convention. `BIN=` selects a tests/*.rs target, `T=` filters by name;
+# both optional. Output is NOT piped, so `$?` is cargo's (see the buildout doc's
+# measurement note — a pipeline swallows every stage's status but the last).
+#   make test-one BIN=published_root_walk
+#   make test-one BIN=published_root_walk T=unwalkable
+test-one: image
+	$(call RUN,cargo test $(if $(BIN),--test $(BIN),) -- --nocapture --test-threads=1 $(T))
+
 # The desktop backend (src-tauri) is workspace-EXCLUDED (Cargo.toml `exclude`),
 # so `make test` does NOT run its unit tests — including the authorize-gate
 # manager-grant seeding (manager_grant.rs) and persistence.rs. Run them here,
@@ -965,12 +975,29 @@ SURFACE ?=
 WINDOW_TYPE ?=
 LOCKED ?=
 OUT ?= dist/static-demo
+# PLAN=1 — resolve the sources and report what the publish WOULD add/keep/remove,
+# writing nothing. A publish replaces the whole projection under its prefix, so a
+# subset of the source set DELETES the rest; this is how you find that out first.
+#   exit 0 = nothing removed · exit 2 = the plan REMOVES sites · exit 1 = error
+# So `make site PLAN=1 … && make site …` is a gate that refuses to run a
+# destructive publish, with no extra flags. Same knobs as a real publish — plan
+# what you are about to run, not an approximation of it.
+PLAN ?=
+# VERIFY=1 — walk an ALREADY-published OUT dir and prove the two-hop chain
+# resolves: every .bin pointer cracks, names a blob that exists, and whose bytes
+# hash to the address it claims. Runs the SAME check the browser runs per fetch,
+# so a clean result means a visitor's client will not reject anything either.
+# Needs no sources (it reads the output dir), so it works on a tree you kept.
+#   exit 0 = clean · exit 2 = BROKEN pointers · exit 1 = error
+# Orphan blobs are reported, not failed — nothing links to them, and a tree
+# mid-cutover legitimately holds blobs its pointers have not adopted yet.
+VERIFY ?=
 # Persist the publisher identity across `--rm` runs: point ENTITY_DATA_DIR at the
 # repo-local dir, which is visible in-container via the existing parent mount.
 site: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 site: image
 	@mkdir -p $(PUBLISH_DATA_DIR)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 
 # Bare-root SSG: render ONE site at the domain root (no sites/{peer}/{site}/
 # prefix, no entity branding) — the "just a site generator" output. Pick the

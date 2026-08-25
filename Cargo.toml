@@ -217,6 +217,17 @@ entity-peer = { path = "../entity-core-rust/core/peer", default-features = false
 # E2E browser tests — drives a Selenium-standalone-firefox container via
 # WebDriver. See tests/e2e_worker.rs and tools/e2e/README.md.
 fantoccini = "0.22"
+# Test-only: the HAMT builder + the 3-key wire codec, for the published-root
+# walk spike (`tests/published_root_walk.rs`). Neither is a direct dep of the
+# app — `entity-peer` uses both but re-exports neither — and both are already
+# compiled transitively, so this adds an edge for the test build only and does
+# NOT affect `make wasm`.
+entity-tree = { path = "../entity-core-rust/core/tree" }
+entity-wire = { path = "../entity-core-rust/core/wire" }
+# Test-only: the registry backend's own types + `peer_issued::resolve_one`, for
+# the static registry ↔ static domain chain (`tests/registry_static_resolve.rs`).
+# `entity-peer/registry` already compiles this crate but does not re-export it.
+entity-registry = { path = "../entity-core-rust/extensions/registry" }
 serde_json = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
