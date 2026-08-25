@@ -455,6 +455,24 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc: PASS"; else echo ">>> e2e-webrtc: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
+# Two-browser CHAT over WebRTC — the app/chat full-flow live gate. Reuses the
+# same infra as e2e-webrtc (bridge + 2 firefox + signaling node + dist), but
+# drives the chat spike: both peers open Chat, bind the 1:1 (peer-id input), and
+# a message must cross the data channel BOTH ways. Proves delivery is transport-
+# agnostic (worker-mode WebRTC via ChatDelivery's poll path).
+e2e-webrtc-chat:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-chat SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-chat BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-chat: two-browser chat over §6.5 WebRTC (host podman)"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; SPIKE=spike_chat_over_webrtc.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-chat: PASS"; else echo ">>> e2e-webrtc-chat: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
 # Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:
 # the `[profile.dev.package.*]` overrides in Cargo.toml (curve25519-dalek,

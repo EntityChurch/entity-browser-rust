@@ -10,6 +10,7 @@
 //! §6.5 WebRTC floor. Until then the shipped surface binds only the single-peer
 //! default self-conversation.
 
+pub mod delivery;
 pub mod model;
 pub mod output;
 
@@ -21,6 +22,7 @@ use crate::peers::Peers;
 use crate::window::{WindowId, WindowType, WindowView};
 
 use crate::window_watch::WindowWatch;
+use delivery::ChatDelivery;
 use model::ChatModel;
 
 pub struct ChatWindow {
@@ -29,6 +31,10 @@ pub struct ChatWindow {
     // Used only on the WASM render path; native sees it via handle_action/tests.
     model: ChatModel,
     watch: WindowWatch,
+    /// Cross-peer delivery for a bound conversation. `None` while the window
+    /// shows the default single-peer `self` conversation; `Some` once bound to a
+    /// 1:1 with another peer (drives subscribe/fetch/cache; `tick` pumps it).
+    delivery: Option<ChatDelivery>,
 }
 
 impl ChatWindow {
@@ -38,7 +44,53 @@ impl ChatWindow {
             peer_id: peer_id.clone(),
             model: ChatModel::new(peer_id),
             watch: WindowWatch::new(),
+            delivery: None,
         }
+    }
+
+    /// Rebind the window to the well-known 1:1 conversation with `other`: swap
+    /// the model to the two-participant union, subscribe the window's watch to
+    /// both participants' prefixes (so render reads them and wakes on a delivered
+    /// write), and install a fresh [`ChatDelivery`]. Returns the participant list
+    /// so the caller can kick off delivery. Shared by the wasm action path and
+    /// the awaitable test path.
+    fn bind_one_to_one(&mut self, peers: &Peers, other: &str) -> Vec<String> {
+        let conversation_id = model::wellknown_one_to_one_id(&self.peer_id, other);
+        let participants = vec![self.peer_id.clone(), other.to_string()];
+        self.model = ChatModel::with_conversation(
+            self.peer_id.clone(),
+            conversation_id.clone(),
+            participants.clone(),
+        );
+        for prefix in self.model.subscription_prefixes() {
+            peers.watch_prefix(&mut self.watch, &self.peer_id, prefix);
+        }
+        self.delivery = Some(ChatDelivery::new(
+            self.peer_id.clone(),
+            conversation_id,
+            participants.clone(),
+        ));
+        self.watch.mark_dirty();
+        participants
+    }
+
+    /// Bind + await delivery subscription — the awaitable form used by tests and
+    /// any non-frame-loop caller. (The live window binds via `ChatStartWith`,
+    /// which spawns the subscribe off the frame loop.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub async fn bind_and_subscribe(&mut self, peers: &Peers, other: &str) {
+        self.bind_one_to_one(peers, other);
+        if let Some(delivery) = &self.delivery {
+            delivery.subscribe(peers).await;
+        }
+    }
+
+    /// The current render projection (message list + `mine` flags + conversation
+    /// id) — what the window paints. Pure data, so it is what the native
+    /// full-flow test asserts on; `render_dom` projects the same thing to DOM.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn render_output(&self, peers: &Peers) -> output::ChatOutput {
+        self.model.render_output(peers)
     }
 
     pub fn window_type() -> WindowType {
@@ -80,13 +132,34 @@ impl WindowView for ChatWindow {
     }
 
     fn handle_action(&mut self, action: &Action, peers: &Peers) {
-        // The compose draft is tracked in the DOM atom (`ctx.drafts`), so the
-        // only action the window handles is the send itself. The messages
-        // subscription re-renders when the write lands — no manual dirty flag.
-        if let Action::ChatSend { window_id, body } = action {
-            if *window_id == self.window_id {
+        match action {
+            // The compose draft is tracked in the DOM atom (`ctx.drafts`), so the
+            // send just authors into the tree; the messages subscription
+            // re-renders when the write lands — no manual dirty flag.
+            Action::ChatSend { window_id, body } if *window_id == self.window_id => {
                 self.model.send(peers, body);
             }
+            // Bind a 1:1 with the picked peer and start pulling their messages.
+            Action::ChatStartWith { window_id, peer_id } if *window_id == self.window_id => {
+                self.bind_one_to_one(peers, peer_id);
+                // Start reactive delivery off the frame loop (Direct arm; can't
+                // await here). `tick` pumps the pipeline each frame — and its
+                // poll is what carries delivery on the Worker arm, where
+                // subscribe is unavailable.
+                #[cfg(target_arch = "wasm32")]
+                if let Some(delivery) = &self.delivery {
+                    delivery.start(peers);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn tick(&mut self, peers: &Peers) {
+        // Drain the delivery pipeline: spawn fetches for newly-notified messages,
+        // cache completed ones into our store (which wakes render via the watch).
+        if let Some(delivery) = &mut self.delivery {
+            delivery.pump(peers);
         }
     }
 
@@ -97,7 +170,7 @@ impl WindowView for ChatWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.model.render_output(peers);
+        let output = self.render_output(peers);
         crate::dom::chat::render(container, &output, ctx);
     }
 }

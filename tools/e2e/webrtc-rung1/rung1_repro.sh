@@ -94,8 +94,15 @@ BEFORE=$(wc -l < /tmp/sig_repro.out)
 # do NOT `|| true` it away, or the rig always exits 0 and can never fail a gate.
 # `set +e` around it so a FAIL still prints the node-vantage diagnostics below
 # (the whole debugging value) instead of `set -e` aborting before them.
+# Spike is configurable so this same infra (bridge + 2 firefox + node + dist)
+# drives either the rung-1 exec gate (default) or the chat-over-webrtc flow
+# (SPIKE=spike_chat_over_webrtc.py SPIKE_ARGS=""). arg1 is always the node peer.
+SPIKE="${SPIKE:-spike_rung1_integration.py}"
+SPIKE_ARGS="${SPIKE_ARGS-get 30}"
 set +e
-python3 "$SCRATCH/spike_rung1_integration.py" "$NODE" get 30
+echo ">> spike: $SPIKE $NODE $SPIKE_ARGS"
+# shellcheck disable=SC2086
+python3 "$SCRATCH/$SPIKE" "$NODE" $SPIKE_ARGS
 DRIVE_RC=$?
 set -e
 echo ""

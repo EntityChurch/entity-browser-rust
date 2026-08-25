@@ -18,12 +18,19 @@
 //! follows the convention interoperates. That is why they live here, with the
 //! convention, rather than in `app_paths.rs` (browser-specific namespaces).
 
+use std::collections::HashSet;
+
 use entity_entity::Entity;
 
 use crate::peers::Peers;
 
 /// The chat message entity type, per the convention (`app/chat/message`).
 pub const MESSAGE_TYPE: &str = "app/chat/message";
+
+/// Upper bound on one message body (chars). A chat line is short; this only
+/// exists so a pathological multi-megabyte paste can't be hashed, stored,
+/// delivered and rendered at full size. Generous enough never to clip real use.
+const MAX_BODY_CHARS: usize = 8192;
 
 /// The conversation genesis entity type (`app/chat/conversation`, §2).
 // The genesis identity layer lands ahead of the delivery slice that binds a
@@ -246,6 +253,26 @@ impl Conversation {
     }
 }
 
+/// The **well-known** `conversation_id` for a 1:1 between two peers — a stable,
+/// content-addressed id BOTH peers derive independently, with no genesis
+/// exchange. The pair is sorted (so order doesn't matter) and `creator`/
+/// `created_at` are canonicalized (first-sorted peer / 0), so "chat with peer X"
+/// needs no round-trip to agree on the id. A *group* still uses a real shared
+/// genesis (`Conversation::room`, real creator + time); this convenience is for
+/// the 1:1 case only.
+#[allow(dead_code)]
+pub fn wellknown_one_to_one_id(a: &str, b: &str) -> String {
+    let (x, y) = if a <= b { (a, b) } else { (b, a) };
+    Conversation {
+        creator: x.to_string(),
+        created_at: 0,
+        policy: POLICY_CLOSED.to_string(),
+        initial_participants: vec![x.to_string(), y.to_string()],
+        title: None,
+    }
+    .conversation_id()
+}
+
 /// The membership-op entity type (`app/chat/membership-op`, §3 LOCKED shape).
 #[allow(dead_code)]
 pub const MEMBERSHIP_OP_TYPE: &str = "app/chat/membership-op";
@@ -416,22 +443,19 @@ impl MembershipOp {
 #[allow(dead_code)]
 pub fn fold_roster(genesis: &Conversation, ops: &[MembershipOp]) -> Vec<String> {
     // Deterministic, observation-independent order: (at, then op content-hash).
-    let mut ordered: Vec<&MembershipOp> = ops
+    // Precompute each op's content hash ONCE (B8) — recomputing it inside the
+    // comparator re-encoded + hashed both operands on every comparison (O(n log n)
+    // CBOR+hash).
+    let mut ordered: Vec<(String, &MembershipOp)> = ops
         .iter()
         .filter(|o| o.conversation_id == genesis.conversation_id())
+        .map(|o| (o.to_entity().content_hash.to_string(), o))
         .collect();
-    ordered.sort_by(|a, b| {
-        a.at.cmp(&b.at).then_with(|| {
-            a.to_entity()
-                .content_hash
-                .to_string()
-                .cmp(&b.to_entity().content_hash.to_string())
-        })
-    });
+    ordered.sort_by(|a, b| a.1.at.cmp(&b.1.at).then_with(|| a.0.cmp(&b.0)));
 
     let mut roster: Vec<String> = genesis.initial_participants.clone();
     let closed = genesis.policy == POLICY_CLOSED;
-    for op in ordered {
+    for (_, op) in ordered {
         if closed {
             continue; // no post-genesis authority
         }
@@ -606,15 +630,25 @@ impl ChatModel {
     pub fn with_conversation(
         peer_id: String,
         conversation_id: String,
-        mut participants: Vec<String>,
+        participants: Vec<String>,
     ) -> Self {
-        if !participants.iter().any(|p| p == &peer_id) {
-            participants.push(peer_id.clone());
+        // Dedup the roster (order-preserving) and fold in the bound peer. A
+        // self-bind (`other == peer_id`) would otherwise yield `[me, me]`, whose
+        // duplicate prefix makes the §1.4 union list every message twice; the
+        // dedup collapses it to a single-participant self-view.
+        let mut deduped: Vec<String> = Vec::with_capacity(participants.len() + 1);
+        for p in participants {
+            if !deduped.contains(&p) {
+                deduped.push(p);
+            }
+        }
+        if !deduped.iter().any(|p| p == &peer_id) {
+            deduped.push(peer_id.clone());
         }
         Self {
             peer_id,
             conversation_id,
-            participants,
+            participants: deduped,
         }
     }
 
@@ -646,18 +680,47 @@ impl ChatModel {
     /// complete; others as delivered under their prefix). Foreign/garbage
     /// entities under any prefix are skipped by `from_entity`.
     pub fn load_messages(&self, peers: &Peers) -> Vec<ChatMessage> {
-        let mut msgs: Vec<ChatMessage> = Vec::new();
-        for prefix in self.subscription_prefixes() {
+        // Collect (content-hash, message). The content hash is the message
+        // identity AND the stable, non-forgeable tiebreak for the display sort.
+        let mut collected: Vec<(String, ChatMessage)> = Vec::new();
+        // Content-addressed paths are the message identity — dedup across
+        // prefixes so a roster that (defensively) still overlaps never yields the
+        // same message twice.
+        let mut seen_paths: HashSet<String> = HashSet::new();
+        for participant in &self.participants {
+            let prefix = conversation_messages_prefix(participant, &self.conversation_id);
             for entry in peers.tree_listing(&self.peer_id, &prefix) {
+                if !seen_paths.insert(entry.path.clone()) {
+                    continue;
+                }
                 if let Some(ent) = peers.get_entity(&self.peer_id, &entry.path) {
-                    if let Some(m) = ChatMessage::from_entity(&ent) {
-                        msgs.push(m);
+                    if let Some(mut m) = ChatMessage::from_entity(&ent) {
+                        // Defence (B7): a message whose body-declared
+                        // conversation_id disagrees with the prefix it was found
+                        // under is cache-poison / malformed — drop it. The path
+                        // already scopes the conversation; the body must agree.
+                        if m.conversation_id != self.conversation_id {
+                            continue;
+                        }
+                        // Authorship authority is the PATH — the participant
+                        // namespace the message was authored into / delivered
+                        // under — NOT the self-declared body `author` field, which
+                        // a peer could forge to impersonate another participant
+                        // (and flip the `mine` flag). Stamp the trusted author; a
+                        // body that disagreed was a spoof attempt and is
+                        // overridden, never trusted.
+                        m.author = participant.clone();
+                        collected.push((ent.content_hash.to_string(), m));
                     }
                 }
             }
         }
-        msgs.sort_by(|a, b| a.sent_at.cmp(&b.sent_at).then(a.body.cmp(&b.body)));
-        msgs
+        // Oldest-first by author send time (a display heuristic, §4.3), tiebroken
+        // by content hash — stable and observation-independent, unlike the body
+        // text this used to tiebreak on (B4: two equal-`sent_at` messages ordered
+        // by their text is meaningless and lets a crafted body pin position).
+        collected.sort_by(|a, b| a.1.sent_at.cmp(&b.1.sent_at).then_with(|| a.0.cmp(&b.0)));
+        collected.into_iter().map(|(_, m)| m).collect()
     }
 
     /// Author + write a message into the bound peer's namespace, keyed by its
@@ -666,10 +729,19 @@ impl ChatModel {
     /// when it lands, so the caller need not force a repaint. (Compose-draft
     /// clearing is the DOM atom's job via `ctx.drafts`, not the model's.)
     pub fn send(&self, peers: &Peers, body: &str) -> bool {
-        let body = body.trim();
-        if body.is_empty() {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
             return false;
         }
+        // Defensive clamp (B5): a chat line is short; this only stops a
+        // pathological multi-megabyte paste from being hashed, stored, delivered
+        // and rendered. Truncated on a char boundary (never mid-codepoint), so
+        // the message still sends rather than silently vanishing.
+        let body: String = if trimmed.chars().count() > MAX_BODY_CHARS {
+            trimmed.chars().take(MAX_BODY_CHARS).collect()
+        } else {
+            trimmed.to_string()
+        };
         let msg = ChatMessage::new(
             self.peer_id.clone(),
             self.conversation_id.clone(),
@@ -690,21 +762,38 @@ impl ChatModel {
     /// message) + the live draft. Pure data (no `web_sys`), so it is
     /// native-testable and the DOM layer stays a thin projector.
     pub fn render_output(&self, peers: &Peers) -> super::output::ChatOutput {
-        use super::output::{ChatMessageView, ChatOutput};
+        use super::output::{ChatMessageView, ChatOutput, StartablePeer};
         let me = self.peer_id.as_str();
         let messages = self
             .load_messages(peers)
             .into_iter()
             .map(|m| ChatMessageView {
                 mine: m.author == me,
+                author_label: crate::views::display_name(peers, &m.author),
                 author: m.author,
                 body: m.body,
                 sent_at: m.sent_at,
             })
             .collect();
+        // "Bound" = a real conversation (a content-hash id), not the default
+        // single-peer scratch. Only then do we hide the start-a-chat picker.
+        let bound = self.conversation_id != DEFAULT_CONVERSATION;
+        let startable = if bound {
+            Vec::new()
+        } else {
+            crate::connections::read_connections(peers)
+                .into_iter()
+                .map(|c| StartablePeer {
+                    name: crate::views::display_name(peers, &c.remote_pid),
+                    peer_id: c.remote_pid,
+                })
+                .collect()
+        };
         ChatOutput {
             conversation_id: self.conversation_id.clone(),
             messages,
+            bound,
+            startable,
         }
     }
 }
@@ -1021,6 +1110,71 @@ mod tests {
             .collect();
         assert_eq!(mine, vec!["hi from me"], "our own flagged mine");
         assert_eq!(theirs, vec!["hi from bob"], "the peer's flagged not-mine");
+    }
+
+    #[tokio::test]
+    async fn self_bind_does_not_duplicate_messages() {
+        // Binding a 1:1 with your OWN id yields participants `[me, me]` before
+        // dedup; the §1.4 union would then list every message twice.
+        // `with_conversation` must collapse the roster, and `load_messages` must
+        // dedup by content-addressed path — so a self-conversation shows each
+        // message exactly once. (Audit finding B3.)
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let conv = "self-conv-hash".to_string();
+
+        let model =
+            ChatModel::with_conversation(me.clone(), conv.clone(), vec![me.clone(), me.clone()]);
+        assert_eq!(
+            model.subscription_prefixes().len(),
+            1,
+            "self-bind collapses to a single participant/prefix"
+        );
+
+        assert!(model.send(&peers, "just me"));
+        flush_writes().await;
+
+        let out = model.render_output(&peers);
+        assert_eq!(
+            out.messages.len(),
+            1,
+            "the message appears exactly once, not duplicated"
+        );
+        assert_eq!(out.messages[0].body, "just me");
+        assert!(out.messages[0].mine);
+    }
+
+    #[tokio::test]
+    async fn authorship_is_the_path_authority_not_the_forged_body_field() {
+        // A malicious participant authors a message under their OWN prefix but
+        // sets the body `author` field to US, to spoof it as our own message.
+        // The union read must attribute by the PATH authority (the prefix owner),
+        // never the body field — so it renders as theirs, not `mine`. (Audit B2.)
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let other = Peers::new_direct().primary_peer_id().to_string();
+        let conv = "conv-spoof-hash".to_string();
+        let model =
+            ChatModel::with_conversation(me.clone(), conv.clone(), vec![me.clone(), other.clone()]);
+
+        // Forge: body author = `me`, but the entity is cached under `other`'s
+        // prefix (the shape a hostile peer's delivered log would take).
+        let forged = ChatMessage::new(me.clone(), conv.clone(), "you said this", 7);
+        let entity = forged.to_entity();
+        let path = message_path(&other, &conv, &entity.content_hash.to_string());
+        peers.dispatch_write(&me, path, entity);
+        flush_writes().await;
+
+        let out = model.render_output(&peers);
+        assert_eq!(out.messages.len(), 1);
+        assert_eq!(
+            out.messages[0].author, other,
+            "attributed to the path owner, not the forged body `author`"
+        );
+        assert!(
+            !out.messages[0].mine,
+            "a forged `author=me` under another peer's prefix is NOT mine"
+        );
     }
 
     #[tokio::test]

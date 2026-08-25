@@ -2141,6 +2141,16 @@ impl EntityApp {
         // finished since last frame.
         self.drain_pending_idb_peers();
 
+        // Per-frame window tick — lets a window make progress every frame,
+        // independent of the dirty-gated render (e.g. Chat draining its delivery
+        // pipeline). Disjoint field borrows: windows mutable, peer_manager
+        // shared. Cheap no-op for every window that doesn't override it.
+        for win in &mut self.window_manager.windows {
+            if win.open {
+                win.view.tick(&self.peer_manager);
+            }
+        }
+
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
             dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window);
@@ -2366,7 +2376,8 @@ impl EntityApp {
                 | Action::ShellHistoryPrev { window_id, .. }
                 | Action::ShellHistoryNext { window_id, .. }
                 | Action::ShellTail { window_id, .. }
-                | Action::ChatSend { window_id, .. } => {
+                | Action::ChatSend { window_id, .. }
+                | Action::ChatStartWith { window_id, .. } => {
                     if let Some(win) = self.window_manager.get_mut(*window_id) {
                         win.view.handle_action(action, &self.peer_manager);
                     }

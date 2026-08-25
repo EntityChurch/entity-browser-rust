@@ -1,6 +1,6 @@
 src/dom/access_log.rs atoms=0 styles=9 hex=0
 src/dom/chain_trace.rs atoms=0 styles=2 hex=0
-src/dom/chat.rs atoms=0 styles=4 hex=0
+src/dom/chat.rs atoms=0 styles=7 hex=0
 src/dom/entity_tree.rs atoms=0 styles=1 hex=0
 src/dom/event_log.rs atoms=0 styles=1 hex=0
 src/dom/execute_console.rs atoms=0 styles=2 hex=0
