@@ -36,7 +36,7 @@ compiled-in data with **no runtime JSON parser**.
 - An unknown category name, a non-string form, or a key not present in `en`
   fails the build / the validity test loudly (orphan/typo guard).
 
-## ⚠️ Translation status — INITIAL, PENDING NATIVE REVIEW
+## Translation status — machine-first, shipped deliberately
 
 **Coverage: complete — all 31 non-pseudo locales.** Every catalog here is 1:1
 with the full `EN` base (**512 keys** as of 2026-07-22 — window titles, menu
@@ -49,9 +49,26 @@ is pickable, flips `dir` (**4 RTL**: `ar he fa ur`, plus the `en-XA` pseudo),
 and carries its CLDR-correct `peer.count` plural forms. No pending catalogs
 remain.
 
-Every catalog is a **machine-assisted first pass, not yet reviewed by native
-speakers.** Before this ships as a user-facing localization, each must be
-reviewed by a fluent speaker. Known judgment calls a reviewer should weigh:
+Every catalog is a **machine-assisted first pass that has not been reviewed by
+native speakers, and ships that way on purpose** (operator's decision,
+2026-07-22). Offering 31 languages at all is beyond what this project's
+resources can review per-language; the alternative was not "reviewed
+translations" but "English only." That trade is worth stating plainly rather
+than carrying an indefinite ⚠️ that never clears.
+
+So be precise about what is and is not verified:
+
+- **Verified mechanically** — key parity against the `EN` base, slot
+  preservation, plural categories against the CLDR selector, whitespace,
+  cross-key consistency, homoglyphs, `dir`, and that every `t()` call site
+  resolves. Structurally, these catalogs are sound.
+- **Not verified** — that the wording is idiomatic, correctly registered, or
+  natural to a native reader. No gate can check meaning. `pt` mixed Brazilian
+  and European Portuguese for weeks with every check green.
+
+Contributions from fluent speakers are welcome and are the cheapest way to
+improve this; the judgment calls below are where they would pay off most. They
+are **not** a precondition for shipping.
 
 - **`peer.count` plural forms** — Arabic's six CLDR forms and Hebrew's
   one/two/other, where counted-noun grammar is subtle (Arabic's dual `نظيران`

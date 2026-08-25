@@ -116,6 +116,8 @@ help:
 	@echo "  clean      remove build outputs + run artifacts + the toolchain image"
 	@echo
 	@echo "  wasm / wasm-release / serve / build-serve / e2e-worker"
+	@echo "    e2e-worker  T=<test> UNTIL=<phase> SKIP_BUILD=1 narrow the run"
+	@echo "    e2e-phases  list what T= and UNTIL= accept"
 	@echo "  desktop (containerized display passthrough — Wayland/X11):"
 	@echo "    tauri-run            run the app; HOST_HOME=1 uses your real \$$HOME,"
 	@echo "                         SHARE_DIR=<dir> shares a host folder over local/files"
@@ -343,13 +345,37 @@ E2E_DISPLAY_ARGS = $(shell \
 # tools/e2e/README.md. The test prints the full captured browser
 # console under --nocapture, so this is the primary diagnostic path
 # without manual browser refresh.
+#
+# Narrowing the run (full suite is ~4.5 min; see tools/e2e/README.md §Filtering):
+#   make e2e-worker T=frontend_idb        # only tests whose name contains this
+#   make e2e-worker UNTIL=20              # monolith stops after Phase 20
+#   make e2e-worker SKIP_BUILD=1          # reuse dist/ — skip the trunk rebuild
+# `make e2e-phases` lists the phase labels UNTIL accepts.
+E2E_UNTIL_ENV = $(if $(strip $(UNTIL)),-e E2E_UNTIL=$(strip $(UNTIL)),)
+# Preflight: the suite's own connect error is good, but it only surfaces on the
+# far side of the trunk build — a minute burnt on the commonest mistake. Probe
+# :4444 first (in-container python3, so the host still needs only make+podman).
+E2E_PREFLIGHT = python3 -c "import urllib.request as u; u.urlopen(\"http://localhost:4444/status\", timeout=3)" 2>/dev/null \
+	|| { echo; echo "e2e preflight: nothing answering on :4444 — start Selenium first:"; \
+	     echo "  podman run -d --rm --name e2e-firefox --network=host docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404"; \
+	     echo "  (details: tools/e2e/README.md)"; echo; exit 1; }
 e2e-worker: image
+	@$(call RUN,$(E2E_PREFLIGHT),--network host)
 	# The e2e dist is built WITH `--features demo-apps`: the launcher→player
 	# e2e (Phase 2h.2) needs a deterministic baked app (war/calculator) to
 	# render + launch without a live origin. demo-apps is OFF in every
 	# release/serve/tauri build — no fake apps are shipped (see Cargo.toml
 	# [features]) — so this is the ONE build that bakes them.
+	#
+	# SKIP_BUILD=1 reuses whatever is in dist/. It is a DEV shortcut only: if
+	# dist/ was last built by `make wasm` it has NO demo-apps, and Phase 2h.2
+	# fails for that reason and not a real one. Never use it for a gate run.
+ifeq ($(strip $(SKIP_BUILD)),)
 	$(call RUN,trunk build --features demo-apps --dist $(DIST) && ./tools/check-dist.sh $(DIST))
+else
+	@echo ">>> SKIP_BUILD=1 — reusing the existing $(DIST)/ (NOT a gate-grade run)"
+	@./tools/check-dist.sh $(DIST)
+endif
 	# --features e2e: the e2e_worker suite is `#![cfg(feature = "e2e")]`, so it
 	# compiles to nothing (and `make test` stays bare-box green) UNLESS the
 	# feature is on. This target turns it on; it needs Selenium on :4444.
@@ -357,7 +383,18 @@ e2e-worker: image
 	# so they must run serially (the main boot test + the multi-tab guard test).
 	# In-container (podman+make only); --network host so the test reaches the
 	# Selenium container on :4444 and Selenium reaches the test's :8092 server.
-	$(call RUN,cargo test --features e2e --test e2e_worker -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS))
+	# $(T) is cargo's own substring filter over test names; UNTIL rides in as
+	# E2E_UNTIL and cuts the monolith short (see tests/e2e_worker.rs PHASE_ORDER).
+	$(call RUN,cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
+
+# List what `T=` and `UNTIL=` accept. Reads the test source, so it can never
+# drift from what actually runs — and needs neither the image nor Selenium.
+e2e-phases:
+	@echo "T=<substring of a test name> — the independent tests:"
+	@awk '/^#\[tokio::test/{f=1;next} f&&/^async fn/{sub(/\(.*/,"");print "  " $$3;f=0}' tests/e2e_worker.rs
+	@echo
+	@echo "UNTIL=<phase> — phases of worker_boots_and_opens_all_windows, in run order:"
+	@sed -n '/^const PHASE_ORDER/,/^];/p' tests/e2e_worker.rs | sed -e '1d' -e '$$d' -e 's/^/ /'
 
 # Tauri desktop (DEBUG WASM by default + debug backend, logs to stdout).
 # Use this for development — the fast dev loop. Debug WASM is STABLE in Tauri:
@@ -670,4 +707,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker e2e-phases tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
