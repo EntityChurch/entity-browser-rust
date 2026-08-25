@@ -42,6 +42,7 @@ build invokes. If you can type it or set it, it should be here.
 |---|---|
 | `make tauri` | Build release WASM, then `cargo build` the Tauri backend (`src-tauri/`). The cargo build runs in-container; **launching** needs a desktop session. |
 | `make tauri-run` | `make tauri` then launch `./src-tauri/target/debug/entity-browser-tauri` with stdout logs. |
+| `make tauri-bundle` / `tauri-bundle-run` | **Content-baked** desktop build: wasm-release → publish sites/apps INTO `dist/` → embed, so the binary ships the content offline (served same-origin by the WebView). Same knobs as `publish` (`CONFIG_SITE` / `INGEST` / `APPS_DIST` — any path, auto-staged). Do **not** use plain `make tauri` for baked content (its wasm-release wipes `dist/`). See [Deployment Guide §8.1](./GUIDE-DEPLOYMENT-AND-CONFIGURATION.md#81-bundling-content-into-the-tauri-desktop-app). |
 
 ### Serve (host — needs `python3`)
 

@@ -14,12 +14,42 @@ been removed; HTML DOM is the only render path (`make native` prints a deprecati
 redirect). Building green (`make wasm` produces both `entity-browser-*_bg.wasm` and
 `entity-worker_bg.wasm`; `check-dist` consistent).
 
-## Current session (2026-07-02) — post-release: surfaces, republish, live-bug hunt
+## Current session (2026-07-02) — post-release: surfaces, republish, desktop content-baking
 
-Working the post-release list toward a **billslab.com re-release**. On `dev`
-(not pushed); each step gated green.
+Working the post-release list toward a **billslab.com re-release**. On `dev`,
+**pushed to origin**; each step gated green.
 
-**Landed:**
+**Desktop content-baking — sites + apps in Tauri (latest, all verified live):**
+Proved and cleaned up the offline desktop path end-to-end. Tauri embeds `../dist`
+and serves it same-origin (no server), so a static publish into `dist/` ships in
+the binary. Landed: (1) `3ccea8c0`/`67421984` **`make tauri-bundle`** —
+wasm-release → publish sites/apps INTO dist/ → embed (plain `make tauri` can't:
+its wasm-release wipes dist/); `INGEST`/`APPS_DIST` take **any path**, auto-staged
+into the repo for the publish container. (2) `be5573bf` **apps now run in Tauri** —
+the strict CSP blocked the sandboxed `srcdoc` app iframes' inline scripts (`+
+'unsafe-inline' 'unsafe-eval'` to `script-src` **and** `"script-src"` in
+`dangerousDisableAssetCspModification`, else a Tauri nonce nullifies it — the
+grayscale-bug trap). (3) `c9e1c586` **WebKitGTK IDB durability VERIFIED** (create
+→ restart → survives) + Deployment Guide **§8.1** documents the whole flow.
+Verified live on WebKitGTK: cold boot fetches the baked deployment config + 3 site
+manifests same-origin; games list, launch, and play. **Gotcha:** a returning app's
+durable config wins over the baked `entity-deployment.json` — re-test a bundle
+from a fresh profile (`rm -rf ~/.local/share/systems.entity.browser`).
+
+**Footgun cleanup (see
+[`HANDOFF-2026-07-02-FOOTGUN-CLEANUP.md`](./HANDOFF-2026-07-02-FOOTGUN-CLEANUP.md)):**
+worked through the open bug list. (1) `de6bddec` demo now self-demonstrates
+**cross-site nav** — a companion `demo-notes` site + reciprocal `site:` links,
+proven by an e2e phase. (2) `cbf338a9` **surface hardening** — the status-bar
+site toggle is suppressed on a Window boot even if a deployment mis-emits
+`show_toggle=true`. (3) `2a63435f` publish **warns on dangling nav links** (the
+delete-a-page 404 footgun). (4) `e6f39e92` doc: the static SSG `.html` path is
+**content-store-free** (only the `.bin` form uses the two-hop store; the default
+publish writes both). Note: **blue-green A needs no papers team** — it's provable
+on the demo set; only the billslab dry-run needs papers' canonical markdown. This
+first release is a **full wipe**, so republish/blue-green is off its critical path.
+
+**Landed (earlier same day):**
 - **Surface-axis refactor** — killed the `full`/`site`/`strict-site` **profile
   presets**; startup posture is now the two real axes set directly: `surface`
   (chrome / site / window + `window_type`) + granular `site_mode` /
@@ -78,22 +108,29 @@ The last arc before release was a **mobile / menu hardening pass** driven out of
 | New windows open at TOP of stack (`util::prepend`) | Appended-at-bottom windows scrolled off-screen on autofocus. |
 | Games/Apps height floors (`min-height`, not `height:100%`/`vh`) | Percentage/zeroed heights collapse in auto-height tiled `.window` sections — the recurring substrate footgun. |
 
-Stable at the v0.8.0 research-preview line; no code changes are in flight. The next
-substantive work is closing the release-blockers below — rebuilding the optimized bundle
-(`make wasm-release`) and verifying it on a real iPhone + desktop Safari, plus confirming
-IndexedDB across-restart durability under WebKitGTK.
+Stable at the v0.8.0 research-preview line. The two items below are **manual
+device-QA sign-offs, not open engineering work** — the code is landed; what
+remains is a human observing runtime behavior on a real device (nothing an agent
+can execute headless). They were being mis-carried as "release-blockers"; they're
+a pre-ship QA checklist.
 
-## Release-blockers (STILL OPEN — confirm before any wide ship)
+## Pre-ship QA checklist (human device verification — not agent-doable)
 
-1. **Optimized bundle Safari/iOS verification.** The binaryen fix is in source, but the
-   *deployed* optimized bundle predates it. Rebuild via `make wasm-release` (new image),
-   deploy, and open on a **real iPhone + desktop Safari**. The local debug-wasm path skips
-   wasm-opt, so only the release path was ever broken — this needs a real-device check.
-2. **Frontend IndexedDB across-restart durability on WebKitGTK/Safari is UNPROVEN.** IDB
-   opens (`DurableDirectIdb`) but tree survival across a restart isn't confirmed (the
-   roster can rebuild from the localStorage vault, so a clean boot isn't proof). Until
-   proven, the README durability caveat stands and the Tauri durability banner stays
-   suppressed.
+1. **Optimized bundle on Safari/iOS — engineering DONE, device check remains.**
+   The fix (binaryen **119** pin, `Dockerfile` — the distro's 108 mis-optimized the
+   reference-types funcref table → `Table.grow` RangeError on JavaScriptCore) is in
+   source, and `make wasm-release` now rebuilds the optimized bundle **clean** through
+   it (verified 2026-07-02). The debug-wasm path skips wasm-opt, so only the release
+   path was ever affected — and it now builds green. **Remaining:** deploy the rebuilt
+   bundle and open it on a **real iPhone + desktop Safari** (JavaScriptCore runtime
+   confirm). No hardware ⇒ agent can't do this; it's a human sign-off.
+2. **IndexedDB across-restart durability on WebKitGTK — ✅ VERIFIED (2026-07-02).**
+   Confirmed by hand on WebKitGTK/Tauri: `make tauri-run` → created a site → saved →
+   relaunched → the site was still there. So the tree persists to IDB across a process
+   restart on the Safari-family engine. (Safari/iOS itself still wants the same check on
+   a real device, but the WebKitGTK/JavaScriptCore durability question is answered.) The
+   persistence path was already sound in source (persist request + honest durability
+   banner + OPFS-gap detection); this closes the runtime question.
 
 ## Backlog
 
@@ -193,8 +230,10 @@ Pull into roadmap when scoped.
    confirm + temporary password on entering a locked mode, a "lock the settings surface"
    option, and a documented recovery path (`?chrome=1` / `?systemrecovery=1`). Design
    end-to-end before shipping locked Window/kiosk modes.
-4. **Close the remaining verification** — `make wasm-release` on a real iPhone + desktop
-   Safari; IndexedDB across-restart durability under WebKitGTK/Tauri (runnable locally
-   via `make tauri-run`).
+4. **Pre-ship QA sign-offs** (human device checks — see the checklist above, NOT
+   engineering-open): the rebuilt `make wasm-release` bundle on a real iPhone + desktop
+   Safari; IndexedDB across-restart durability under WebKitGTK/Tauri (`make tauri-run`,
+   runnable locally). The Safari fix (binaryen 119) is landed + the release bundle
+   rebuilds clean; only the on-device observation remains.
 5. **Entity Tree perf refactor** — self-contained, over budget today; establishes the
    per-window local-state pattern the other views reuse.

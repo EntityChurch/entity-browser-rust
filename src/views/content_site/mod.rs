@@ -30,6 +30,12 @@ use model::ContentSiteModel;
 /// pointer; the app reaches its home site through config (`home_site`).
 pub use crate::session_config::DEMO_SITE_ID;
 
+/// The companion demo site — a second owned site on the SAME peer that the
+/// primary demo cross-site-links to, so the bundled demo exercises `site:`
+/// cross-site navigation (location.rs) end to end and the directory rail has
+/// more than one owned entry.
+pub const DEMO_NOTES_SITE_ID: &str = "demo-notes";
+
 /// Content Site window — peer-bound, thin controller.
 pub struct ContentSiteWindow {
     window_id: WindowId,
@@ -263,11 +269,16 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
     // path. Gating on path-presence alone (the original guard) would
     // serve a stale-typed ghost forever; gate on the CURRENT type so the
     // rename actually takes (D16 — the durable-Worker orphan trap).
-    let up_to_date = peers
-        .get_entity(peer_id, &paths::manifest_path(peer_id, DEMO_SITE_ID))
-        .map(|e| e.entity_type == SITE_MANIFEST_TYPE)
-        .unwrap_or(false);
-    if up_to_date {
+    let manifest_current = |site: &str| {
+        peers
+            .get_entity(peer_id, &paths::manifest_path(peer_id, site))
+            .map(|e| e.entity_type == SITE_MANIFEST_TYPE)
+            .unwrap_or(false)
+    };
+    // Re-seed unless BOTH the primary demo AND its cross-site companion are
+    // present at the current type — adding the companion to an existing install
+    // (durable Worker) must trigger a re-seed, not serve a half-seeded demo.
+    if manifest_current(DEMO_SITE_ID) && manifest_current(DEMO_NOTES_SITE_ID) {
         return;
     }
 
@@ -301,7 +312,7 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
             "index",
             SitePage::markdown(
                 "Welcome",
-                "# Welcome to the Entity Demo Site\n\nThis page is a **content-addressed entity** rendered as HTML — you're browsing it inside a full entity peer, but it looks like any other site.\n\n::embed[Entity Demo Figure — a content-addressed SVG asset, embedded via the ::embed directive]{ref=assets/figures/demo.svg}\n\n- It's just markdown stored in the tree.\n- Links navigate within the entity system.\n- The overlay toggle reveals the peer underneath.\n\nStart with the [Guide](./guide/intro), read [About](./about) or the [Theory](./theory), or visit [the web](https://example.com).\n",
+                "# Welcome to the Entity Demo Site\n\nThis page is a **content-addressed entity** rendered as HTML — you're browsing it inside a full entity peer, but it looks like any other site.\n\n::embed[Entity Demo Figure — a content-addressed SVG asset, embedded via the ::embed directive]{ref=assets/figures/demo.svg}\n\n- It's just markdown stored in the tree.\n- Links navigate within the entity system.\n- The overlay toggle reveals the peer underneath.\n\nStart with the [Guide](./guide/intro), read [About](./about) or the [Theory](./theory), hop to the companion [Field Notes](site:demo-notes/index) site, or visit [the web](https://example.com).\n",
             ),
         ),
         (
@@ -367,6 +378,47 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
     );
     for (slug, page) in pages {
         peers.seed_write(peer_id, paths::page_path(peer_id, DEMO_SITE_ID, slug), page.to_entity());
+    }
+
+    // --- Companion site (cross-site nav) -------------------------------------
+    // A SECOND owned site on this same peer, reached from the primary demo via
+    // the `site:demo-notes/index` link above. Opening it exercises `site:`
+    // cross-site navigation (location.rs → CrossSite → go_to) through the exact
+    // shared `rewrite_links` path the Site Browser window and the overlay both
+    // use — so the bundled demo proves the feature billslab ships on. The return
+    // trip is a `site:demo/index` link back.
+    let notes_manifest = SiteManifest::new(
+        DEMO_NOTES_SITE_ID,
+        "Entity Demo — Field Notes",
+        "index",
+        vec![
+            NavItem::new("Notes", "/index"),
+            NavItem::new("First Entry", "/entries/first"),
+        ],
+    );
+    let notes_pages = [
+        (
+            "index",
+            SitePage::markdown(
+                "Field Notes",
+                "# Field Notes\n\nYou followed a **cross-site link** to get here — a `site:demo-notes/index` target that stayed inside the entity system, hopping from one owned site to another on the same peer.\n\nRead the [First Entry](entries/first), or head [back to the Demo](site:demo/index).\n",
+            ),
+        ),
+        (
+            "entries/first",
+            SitePage::markdown(
+                "Field Notes — First Entry",
+                "# First Entry\n\nA nested page (`entries/first`) in the companion site. Cross-site links land on a site's pages the same way in-site links resolve within one.\n\nBack to the [Notes index](index), or [back to the Demo](site:demo/index).\n",
+            ),
+        ),
+    ];
+    peers.seed_write(
+        peer_id,
+        paths::manifest_path(peer_id, DEMO_NOTES_SITE_ID),
+        notes_manifest.to_entity(),
+    );
+    for (slug, page) in notes_pages {
+        peers.seed_write(peer_id, paths::page_path(peer_id, DEMO_NOTES_SITE_ID, slug), page.to_entity());
     }
 }
 

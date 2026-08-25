@@ -160,4 +160,15 @@ pub struct SiteRenderOutput {
     /// True while an async transport is fetching (P4 HTTP-poll); local
     /// resolution never sets this.
     pub loading: bool,
+
+    /// A link string that navigates to the deployment's **configured home
+    /// site** (`home_site`), independent of the *current* location — a
+    /// `site:{id}/` (local home) or `entity://{peer}/sites/{id}/` (foreign
+    /// home). The overlay's Home button wires to this so it always resets to
+    /// the real site even when the current location is unresolvable (the
+    /// "stranded on `No site manifest` with no way home" bug). Empty ⇒ the
+    /// renderer falls back to `/` (the current site's root). Not part of the
+    /// rebuild-guard concern — it's constant for the overlay's lifetime, but
+    /// carried on the output so the host-agnostic renderer can reach it.
+    pub home_target: String,
 }

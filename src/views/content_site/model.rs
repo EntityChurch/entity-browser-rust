@@ -95,6 +95,9 @@ pub fn output_from_resolved(
         current_page: rp.location.page.clone(),
         error: None,
         loading: false,
+        // Populated by `render_output` (which knows the configured home); the
+        // fast-paint boot path that calls this directly falls back to `/`.
+        home_target: String::new(),
     }
 }
 
@@ -574,11 +577,40 @@ impl ContentSiteModel {
 
     // -- Pure read --
 
+    /// A link string that navigates to the deployment's configured home site
+    /// (`home_site`), independent of the current location. A local home is a
+    /// same-peer `site:{id}/` cross-site link; a foreign home (a real content
+    /// deployment, e.g. billslab) is a cross-peer `entity://{peer}/sites/{id}/`.
+    /// Both classify through [`classify_link`] into a root-page [`Location`], so
+    /// the overlay Home button can reset to the real site from anywhere —
+    /// including an unresolvable location where `/` would just reload the error.
+    fn home_nav_target(&self) -> String {
+        match self.default_site_peer.as_deref().filter(|p| !p.is_empty()) {
+            Some(peer) => format!("entity://{peer}/sites/{}/", self.default_site_id),
+            None => format!("site:{}/", self.default_site_id),
+        }
+    }
+
     pub fn render_output(&self, peers: &Peers) -> SiteRenderOutput {
         let (loc, can_go_back) = {
             let inner = self.inner.lock().unwrap();
             (inner.state.location(), !inner.history.is_empty())
         };
+        let mut out = self.render_output_inner(peers, &loc, can_go_back);
+        // The configured-home link is constant for the surface's lifetime but
+        // carried on every output so the host-agnostic renderer can reach it
+        // (the overlay Home button resets to the real site from anywhere).
+        out.home_target = self.home_nav_target();
+        out
+    }
+
+    fn render_output_inner(
+        &self,
+        peers: &Peers,
+        loc: &Location,
+        can_go_back: bool,
+    ) -> SiteRenderOutput {
+        let loc = loc.clone();
         match self.resolver.resolve_page(peers, &loc) {
             ResolveOutcome::Ready(Ok(rp)) => {
                 // The section sidebar is the one peer-dependent enrichment
@@ -728,7 +760,7 @@ impl ContentSiteModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::content_site::DEMO_SITE_ID;
+    use crate::views::content_site::{DEMO_NOTES_SITE_ID, DEMO_SITE_ID};
 
     fn pm() -> Peers {
         Peers::new_direct()
@@ -1196,6 +1228,42 @@ mod tests {
         );
     }
 
+    /// The Home target is the CONFIGURED home site, not the current location:
+    /// a same-peer `site:{id}/` for a local home, a cross-peer
+    /// `entity://{peer}/sites/{id}/` for a foreign home (a real deployment like
+    /// billslab). This is what lets the overlay Home button reset to the real
+    /// site from anywhere.
+    #[test]
+    fn home_nav_target_is_cross_site_local_and_cross_peer_foreign() {
+        let peers = pm();
+        let mut m = model(&peers); // local demo home
+        assert_eq!(m.home_nav_target(), "site:demo/");
+        // A foreign-home deployment: home lives on a publisher peer.
+        m.default_site_peer = Some("PEERX".to_string());
+        assert_eq!(m.home_nav_target(), "entity://PEERX/sites/demo/");
+    }
+
+    /// The reported overlay bug: navigate to a missing site → the location is
+    /// unresolvable ("No site manifest…") — but the output STILL carries the
+    /// real home link, so the Home button rescues you instead of reloading the
+    /// error (which `/`, the current site root, would do).
+    #[test]
+    fn stranded_output_still_carries_the_home_target() {
+        let peers = pm();
+        let m = model(&peers); // local demo home
+        m.navigate("site:ghost-site/", &peers);
+        let out = m.render_output(&peers);
+        assert!(
+            out.error.as_deref().unwrap_or("").contains("No site manifest"),
+            "expected the strand error, got: {:?}",
+            out.error
+        );
+        assert_eq!(
+            out.home_target, "site:demo/",
+            "the Home button must still target the real home while stranded"
+        );
+    }
+
     #[test]
     fn site_directory_assembles_owned_and_cached_rows() {
         use crate::content_site::discovery::SiteRef;
@@ -1215,7 +1283,10 @@ mod tests {
         );
 
         let dir = m.site_directory(&peers);
-        assert_eq!(dir.entries.len(), 2);
+        // Three rows: the cached `labs`, plus the demo's TWO owned sites (the
+        // primary `demo` + its cross-site companion `demo-notes`, both surfaced
+        // by the local scan even though only `demo` is in the seeded index).
+        assert_eq!(dir.entries.len(), 3);
         // Bookmarked cached site first.
         assert_eq!(dir.entries[0].site, "labs");
         assert!(dir.entries[0].bookmarked && !dir.entries[0].owned);
@@ -1226,6 +1297,9 @@ mod tests {
         let demo = dir.entries.iter().find(|e| e.site == DEMO_SITE_ID).unwrap();
         assert!(demo.owned && demo.is_current);
         assert_eq!(demo.last_reconciled, 0, "owned sites carry no provenance");
+        // The companion is owned, present via the local scan, and not current.
+        let notes = dir.entries.iter().find(|e| e.site == DEMO_NOTES_SITE_ID).unwrap();
+        assert!(notes.owned && !notes.is_current);
     }
 
     #[test]
@@ -1245,16 +1319,19 @@ mod tests {
         );
 
         // Default (All): owned + cached together — the historical behaviour.
+        // Three rows: cached `labs` + the demo's two owned sites (`demo`,
+        // `demo-notes`).
         let all = m.site_directory(&peers);
         assert_eq!(all.filter, RailFilter::All);
-        assert_eq!(all.entries.len(), 2);
+        assert_eq!(all.entries.len(), 3);
 
-        // Mine: only the owned site.
+        // Mine: only the owned sites (both demo sites, never the cached one).
         m.set_rail_filter(RailFilter::Mine);
         let mine = m.site_directory(&peers);
         assert_eq!(mine.filter, RailFilter::Mine, "the active filter is surfaced");
         assert!(mine.entries.iter().all(|e| e.owned), "only owned rows: {:?}", mine.entries);
         assert!(mine.entries.iter().any(|e| e.site == DEMO_SITE_ID));
+        assert!(mine.entries.iter().any(|e| e.site == DEMO_NOTES_SITE_ID));
 
         // External: only the cached foreign site.
         m.set_rail_filter(RailFilter::External);

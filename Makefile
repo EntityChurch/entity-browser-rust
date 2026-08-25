@@ -248,6 +248,42 @@ tauri: wasm-release
 tauri-run: tauri
 	./src-tauri/target/debug/entity-browser-tauri
 
+# Content-baked desktop bundle: embed the SPA **plus published sites/apps** into
+# the Tauri binary, served same-origin from the WebView's asset protocol (no
+# server, fully offline). The ordering is load-bearing and is exactly why plain
+# `make tauri` can't do it: wasm-release FIRST (trunk WIPES dist/), THEN publish
+# INTO dist/ (cleans only its own roots — sites/content/{peer} — leaving the SPA),
+# THEN embed. Same publish knobs as `make publish`
+# (INGEST / APPS_DIST / CONFIG_SITE / SURFACE / WINDOW_TYPE / LOCKED / IDENTITY_SEED);
+# --deployment-config is implied (a baked bundle must boot into its content).
+#
+# INGEST / APPS_DIST may point ANYWHERE (absolute or relative) — the recipe stages
+# them into repo-local dirs first, because the publish runs in a container that
+# only bind-mounts this repo (so an external path isn't visible inside). You do
+# NOT copy anything by hand:
+#   make tauri-bundle-run APPS_DIST=../../entity-systems/entity-apps/dist CONFIG_SITE=demo
+#
+# NOTE: a returning desktop app keeps its DURABLE config, which wins over the
+# baked deployment config (persisted > fetched > build-time). A fresh install
+# boots into the baked content; to re-test, clear ~/.local/share/<app-identifier>.
+APPS_STAGE   := .apps-stage
+INGEST_STAGE := .ingest-stage
+tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
+tauri-bundle: wasm-release
+	@mkdir -p $(PUBLISH_DATA_DIR)
+	@rm -rf $(APPS_STAGE) $(INGEST_STAGE)
+	$(if $(APPS_DIST),cp -r $(APPS_DIST) $(APPS_STAGE))
+	$(if $(INGEST),cp -r $(INGEST) $(INGEST_STAGE))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(if $(INGEST),--ingest=$(INGEST_STAGE),) $(if $(APPS_DIST),--ingest-apps=$(APPS_STAGE),) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	@rm -rf $(APPS_STAGE) $(INGEST_STAGE)
+	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
+	@echo ""
+	@echo "Built content-baked desktop app: ./src-tauri/target/debug/entity-browser-tauri"
+	@echo "Launch: make tauri-bundle-run  (or run the binary directly on a desktop session)"
+
+tauri-bundle-run: tauri-bundle
+	./src-tauri/target/debug/entity-browser-tauri
+
 # Serve whatever is currently in dist/ (no rebuild). Fast, but does NOT
 # guarantee the bundle is current — use `make build-serve` when you need
 # certainty you're serving the latest optimized build.
