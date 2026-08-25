@@ -84,6 +84,15 @@ pub fn parse_listing_keys(listing: &Entity) -> Vec<String> {
 /// A named authorization scope conferred by one **Authorize** click (§2.2).
 /// Adding exchange functionality never means hand-authoring `GrantEntry`
 /// scopes at a call site — pick a profile.
+/// Render-ready expansion of a [`GrantProfile`]'s 4D grant — the flattened
+/// handler / resource / operation lists, for the capability view.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrantView {
+    pub handlers: Vec<String>,
+    pub resources: Vec<String>,
+    pub operations: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantProfile {
     /// Pull-only: `local/files` `list`+`read` on B's `shared` subtree. This is
@@ -137,6 +146,25 @@ impl GrantProfile {
             "trusted" => Some(GrantProfile::Trusted),
             _ => None,
         }
+    }
+
+    /// Render-friendly expansion of this profile's grant — the flattened,
+    /// de-duplicated handler / resource / operation lists. For the capability
+    /// view's "what is this peer *authorized* for", shown beside what it's
+    /// *observed* doing. (`peers` dim omitted — profiles don't scope by peer
+    /// except Trusted's `*`.)
+    pub fn grant_view(&self, backend_pid: &str) -> GrantView {
+        let mut v = GrantView::default();
+        for g in self.grants(backend_pid) {
+            v.handlers.extend(g.handlers.include.iter().cloned());
+            v.resources.extend(g.resources.include.iter().cloned());
+            v.operations.extend(g.operations.include.iter().cloned());
+        }
+        for list in [&mut v.handlers, &mut v.resources, &mut v.operations] {
+            list.sort();
+            list.dedup();
+        }
+        v
     }
 
     /// The `GrantEntry` set this profile confers on `target_pid` over backend

@@ -297,7 +297,7 @@ impl SettingsModel {
                 // rename validates against its current key (not dropped to fallback).
                 let window_type = crate::window::canonical_window_type(window_type);
                 let valid = self.scope_valid_window_types(peers, value);
-                let window_type = if valid.iter().any(|t| *t == window_type) {
+                let window_type = if valid.contains(&window_type) {
                     window_type.to_string()
                 } else {
                     valid.first().map(|s| s.to_string()).unwrap_or_default()
