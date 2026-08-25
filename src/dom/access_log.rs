@@ -176,7 +176,7 @@ fn authorized_line(peer: &PeerCapabilities) -> Element {
     let line = util::create_element("div");
     line.set_attribute(
         "style",
-        "font-size:12px;margin:0 0 6px 0;padding:4px 8px;border-left:2px solid var(--border,#333)",
+        "font-size:12px;margin:0 0 6px 0;padding:4px 8px;border-inline-start:2px solid var(--border,#333)",
     )
     .ok();
     line.set_attribute("data-field", "capability-authorized").ok();

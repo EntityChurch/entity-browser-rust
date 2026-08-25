@@ -1,0 +1,13 @@
+src/dom/content_site.rs raw=1 phys=0
+src/dom/execute_console.rs raw=6 phys=0
+src/dom/file_transfer.rs raw=6 phys=0
+src/dom/knowledge_base.rs raw=7 phys=0
+src/dom/peer_connections.rs raw=4 phys=0
+src/dom/settings.rs raw=6 phys=0
+src/dom/site_editor.rs raw=1 phys=0
+src/dom/system_overview.rs raw=4 phys=0
+src/dom/system_peers.rs raw=2 phys=0
+src/dom/theme_editor.rs raw=7 phys=0
+src/views/content_site/model.rs raw=3 phys=0
+src/views/entity_tree/model.rs raw=2 phys=0
+src/views/knowledge_base/model.rs raw=3 phys=0

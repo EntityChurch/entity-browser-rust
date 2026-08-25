@@ -8,7 +8,9 @@
 //! the upstream contract in `entity-apps/docs/EMBEDDING.md`.
 //!
 //! Protocol (app `source:'entity-app'` ↔ host `source:'entity-host'`):
-//! - app `ready-for-init` → host `init {state}` (saved object or null)
+//! - app `ready-for-init` → host `init {state, locale, dir}` (saved object or
+//!   null; plus the host locale id + `ltr`/`rtl` so the app localizes itself —
+//!   the sandbox is a separate document our `<html lang/dir>` can't reach, i18n P2)
 //! - app `state {state}`  → host persists it, keyed by game id
 //!
 //! The iframe is created **inside the window's shadow DOM**, so the `message`
@@ -67,7 +69,7 @@ overflow:hidden;border:1px solid var(--border, #2a2a3e);\
 border-radius:10px;background:var(--surface, #15151a);}\
 .gm-frame{flex:1;width:100%;min-height:0;display:block;border:0;\
 background:var(--surface, #15151a);}\
-.gm-expand-btn{margin-left:auto;flex-shrink:0;cursor:pointer;\
+.gm-expand-btn{margin-inline-start:auto;flex-shrink:0;cursor:pointer;\
 background:var(--surface-hover, #22223a);color:var(--text, #e2e2ea);\
 border:1px solid var(--border, #2a2a3e);border-radius:6px;padding:5px 12px;\
 font-size:13px;font-family:inherit;white-space:nowrap;}\
@@ -172,7 +174,7 @@ pub fn render_grid(
             &card,
             "style",
             &format!(
-                "display:flex;flex-direction:column;gap:11px;height:100%;text-align:left;\
+                "display:flex;flex-direction:column;gap:11px;height:100%;text-align:start;\
                  cursor:pointer;box-sizing:border-box;padding:16px;border-radius:12px;\
                  border:1px solid var(--border, #2a2a3e);\
                  background:var(--surface, #1a1a26);color:var(--text, #e2e2ea);\
@@ -637,7 +639,26 @@ pub fn render_player(
                     js_sys::JSON::parse(&init_state).unwrap_or(JsValue::NULL)
                 };
                 let _ = js_sys::Reflect::set(&out, &JsValue::from_str("state"), &state_val);
+                // i18n P2: hand the app the host locale + direction so it can
+                // localize itself. The sandboxed iframe is a SEPARATE document —
+                // our `<html lang/dir>` doesn't cross into it — so the app reads
+                // these and applies them to its own root. `locale` is a BCP-47
+                // id (`en`, `en-XA`, …); `dir` is `ltr`/`rtl`. A locale switch
+                // re-inits the iframe (mark_all_dirty rebuild → fresh
+                // ready-for-init) with the new values, state restored from the
+                // app's own save. Contract: REFERENCE-ENTITY-JS-APPS-PLATFORM §2.
+                let locale = crate::i18n::active_id();
+                let dir = crate::i18n::resolve(locale).dir;
+                let _ = js_sys::Reflect::set(
+                    &out,
+                    &JsValue::from_str("locale"),
+                    &JsValue::from_str(locale),
+                );
+                let _ = js_sys::Reflect::set(&out, &JsValue::from_str("dir"), &JsValue::from_str(dir));
                 let _ = content.post_message(&out, "*");
+                // Record what locale we initialized this app with — a debug
+                // affordance + the e2e's observable that the host delivered it.
+                let _ = frame_iframe.set_attribute("data-host-locale", locale);
 
                 // Honor the host contract: forward the frame's viewport + safe-area
                 // insets (the app's env() reads 0 inside the sandbox). The game's

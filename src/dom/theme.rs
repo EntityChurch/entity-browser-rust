@@ -98,7 +98,7 @@ pub const TOGGLE_INACTIVE: &str = "background:var(--bg,#1a1a2e);color:var(--text
 /// carrying a ▾/▸ marker + label. One look for every "New/section" disclosure,
 /// so Peers, Site Creator, etc. can't drift into bespoke reveals.
 pub const COLLAPSIBLE_HEADER: &str = "display:flex;align-items:center;gap:8px;width:100%;\
-    text-align:left;background:var(--surface-sunken,#15152a);color:var(--text,#e0e0e0);\
+    text-align:start;background:var(--surface-sunken,#15152a);color:var(--text,#e0e0e0);\
     border:1px solid var(--border,#2a2a4e);border-radius:6px;padding:9px 12px;margin-top:12px;\
     font-size:15px;font-weight:bold;cursor:pointer";
 
@@ -125,12 +125,12 @@ pub const SCROLL_LIST: &str = "margin:4px 0;max-height:260px;overflow:auto";
 pub const TREE_ROW: &str = "display:flex;align-items:center;gap:4px;margin:2px 0";
 pub const TREE_CARET: &str = "background:transparent;border:none;color:var(--text,#e0e0e0);\
     cursor:pointer;font-size:15px;width:22px;padding:0;line-height:1;flex:0 0 22px";
-pub const TREE_NODE: &str = "flex:1 1 auto;text-align:left;background:transparent;\
+pub const TREE_NODE: &str = "flex:1 1 auto;text-align:start;background:transparent;\
     color:var(--text,#e0e0e0);border:1px solid transparent;border-radius:4px;\
     padding:3px 8px;font-size:14px;cursor:pointer;overflow:hidden;text-overflow:ellipsis";
 /// One shared "selected" highlight (accent border + accent text) so the open
 /// page and the selected file read the same across windows.
-pub const TREE_NODE_SELECTED: &str = "flex:1 1 auto;text-align:left;background:transparent;\
+pub const TREE_NODE_SELECTED: &str = "flex:1 1 auto;text-align:start;background:transparent;\
     color:var(--accent,#3a6ea5);border:2px solid var(--accent,#3a6ea5);\
     border-radius:4px;padding:2px 7px;font-size:14px;font-weight:600;cursor:pointer;\
     overflow:hidden;text-overflow:ellipsis";

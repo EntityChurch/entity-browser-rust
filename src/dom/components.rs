@@ -205,7 +205,7 @@ pub fn tree_row(
     let row = util::create_element("div");
     row.set_attribute(
         "style",
-        &format!("{};padding-left:{}px", theme::TREE_ROW, depth * 16),
+        &format!("{};padding-inline-start:{}px", theme::TREE_ROW, depth * 16),
     )
     .ok();
 
@@ -423,7 +423,7 @@ pub fn table(headers: &[&str]) -> (Element, Element) {
         th.set_attribute(
             "style",
             &format!(
-                "text-align:left;padding:{} {};font-size:11px;font-weight:600;\
+                "text-align:start;padding:{} {};font-size:11px;font-weight:600;\
                  text-transform:uppercase;letter-spacing:0.05em;\
                  color:var(--text-dim,#888);border-bottom:1px solid var(--border,#333)",
                 theme::SP_1, theme::SP_2

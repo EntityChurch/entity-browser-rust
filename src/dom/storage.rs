@@ -17,7 +17,7 @@ const CARD: &str = "background:var(--surface-sunken,#0a0a1a);border:1px solid \
 const STAT_ROW: &str =
     "display:flex;justify-content:space-between;gap:12px;font-size:13px;margin:2px 0";
 const BADGE: &str = "font-size:10px;font-weight:bold;padding:1px 6px;border-radius:8px;\
-    background:var(--surface,#2a2a4e);color:var(--text-dim,#888);margin-left:8px";
+    background:var(--surface,#2a2a4e);color:var(--text-dim,#888);margin-inline-start:8px";
 
 pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     util::clear_children(container);

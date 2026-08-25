@@ -133,7 +133,7 @@ fn render_tree_row(parent: &Element, row: &KbTreeRow, ctx: &DomCtx) {
         &item,
         "style",
         &format!(
-            "padding:5px 8px;padding-left:{}px;cursor:pointer;\
+            "padding:5px 8px;padding-inline-start:{}px;cursor:pointer;\
              border-bottom:1px solid var(--border, #1a1a2a);white-space:nowrap;\
              overflow:hidden;text-overflow:ellipsis;",
             8 + row.depth * INDENT_PX

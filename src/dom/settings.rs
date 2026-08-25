@@ -39,7 +39,11 @@ pub fn render(container: &Element, output: &SettingsOutput, ctx: &DomCtx) {
 }
 
 fn render_appearance(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
-    let card = components::card("Appearance");
+    // i18n P1 demonstrators: these labels resolve through `t()` (the string
+    // seam). Switch the Language dropdown to the `en-XA` pseudo-locale and they
+    // visibly bracket/accent — the end-to-end proof of catalog + pseudolocale +
+    // the force-rebuild path. The rest of the app is NOT migrated yet (P4).
+    let card = components::card(&crate::i18n::t("settings.appearance", &[]));
 
     // Theme dropdown (registry-driven — one <option> per registered theme).
     let theme_options: Vec<(&str, &str)> =
@@ -54,7 +58,34 @@ fn render_appearance(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
     theme_select
         .set_attribute("name", &format!("theme-{}", output.window_id))
         .ok();
-    util::append(&card, &components::field("Theme", "", &theme_select));
+    util::append(
+        &card,
+        &components::field(&crate::i18n::t("settings.theme", &[]), "", &theme_select),
+    );
+
+    // Language dropdown (registry-driven — one <option> per locale in the
+    // roster). Drives `lang`/`dir`; the pseudo-locale (RTL) surfaces layout
+    // bugs before real translations exist.
+    let lang_options: Vec<(&str, &str)> =
+        output.languages.iter().map(|o| (o.value, o.label)).collect();
+    let lang_selected = output
+        .languages
+        .iter()
+        .find(|o| o.selected)
+        .map(|o| o.value)
+        .unwrap_or("");
+    let lang_select = components::select(ctx, &lang_options, lang_selected, "set_language");
+    lang_select
+        .set_attribute("name", &format!("language-{}", output.window_id))
+        .ok();
+    util::append(
+        &card,
+        &components::field(
+            &crate::i18n::t("settings.language", &[]),
+            &crate::i18n::t("settings.language.hint", &[]),
+            &lang_select,
+        ),
+    );
 
     // Site appearance dropdown — how the Content Site overlay is colored,
     // independent of the chrome theme above (default: the site's own theme).

@@ -147,6 +147,7 @@ impl WindowView for SettingsWindow {
         if let Action::WindowEvent { event, value, .. } = action {
             match event.as_str() {
                 "set_theme" => self.model.set_theme(value, peers),
+                "set_language" => self.model.set_language(value, peers),
                 "set_site_appearance" => self.model.set_site_appearance(value, peers),
                 "toggle_inspector" => self.model.toggle_inspector(peers),
                 "toggle_autoconnect" => self.model.toggle_autoconnect(peers),

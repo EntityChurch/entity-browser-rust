@@ -32,6 +32,7 @@ mod event_log_writer;
 mod format;
 #[cfg(feature = "measurement")]
 mod frame_counters;
+mod i18n;
 mod ops;
 mod peers;
 #[cfg(target_arch = "wasm32")]
@@ -320,6 +321,14 @@ pub async fn start() -> Result<(), JsValue> {
     // CSS fallbacks; `"system"` / a strict theme override its colors. Installed
     // before fast-paint so a configured override doesn't flash.
     theme_tokens::install_site_root(&theme_tokens::site_appearance_boot_choice());
+
+    // i18n P0: drive `lang`/`dir` from the persisted/detected locale BEFORE
+    // fast-paint, the twin of `install_root` above. `boot_choice()` reads the
+    // localStorage mirror (written on every language change), else detects from
+    // `navigator.language` — so an RTL locale lays out correctly from frame one
+    // (no LTR flash) even before any string is translated. Sets `dir` on BOTH
+    // the shadow host (`#dom-layer`) and `<html>` (i18n::install_lang_dir).
+    i18n::apply(&i18n::boot_choice());
 
     // Boot-closure cut 2c: Phase-1 fast paint. For a content-site deployment
     // (remote home + boots-into-site), paint the home over HTTP into

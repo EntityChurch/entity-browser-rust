@@ -185,7 +185,7 @@ fn render_tree_row(parent: &Element, row: &TreeRow) {
     util::set_attr(
         &item,
         "style",
-        &format!("padding-left:{}px", row.depth * INDENT_PX),
+        &format!("padding-inline-start:{}px", row.depth * INDENT_PX),
     );
     util::set_attr(&item, "data-path", &row.path);
     util::set_attr(&item, "role", "treeitem");

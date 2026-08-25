@@ -20,6 +20,8 @@ pub struct SettingsOutput {
     pub state_path: String,
     /// Theme dropdown options (pre-flagged with `selected`).
     pub themes: Vec<ThemeOption>,
+    /// Language dropdown options — the locale roster (pre-flagged `selected`).
+    pub languages: Vec<LanguageOption>,
     /// "Site appearance" dropdown options — how the Content Site overlay is
     /// themed (its own theme / match system / a strict per-theme override).
     pub site_appearance: Vec<SiteAppearanceOption>,
@@ -35,6 +37,15 @@ pub struct SettingsOutput {
 
 #[derive(Debug, Clone)]
 pub struct ThemeOption {
+    pub value: &'static str,
+    pub label: &'static str,
+    pub selected: bool,
+}
+
+/// One language-picker option — the twin of [`ThemeOption`], driven by the
+/// locale roster ([`crate::i18n::available_locales`]).
+#[derive(Debug, Clone)]
+pub struct LanguageOption {
     pub value: &'static str,
     pub label: &'static str,
     pub selected: bool,

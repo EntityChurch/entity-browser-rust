@@ -42,7 +42,7 @@ select optgroup {
 .command-palette {
     width: 180px;
     min-width: 140px;
-    border-right: 1px solid var(--border, #333);
+    border-inline-end: 1px solid var(--border, #333);
     padding: 8px;
     overflow-y: auto;
     flex-shrink: 0;
@@ -58,7 +58,7 @@ select optgroup {
 }
 
 .command-palette summary::-webkit-details-marker {
-    margin-right: 6px;
+    margin-inline-end: 6px;
 }
 
 .command-palette summary:hover {
@@ -148,7 +148,7 @@ select optgroup {
     border-radius: 3px;
     cursor: pointer;
     font-size: 12px;
-    text-align: left;
+    text-align: start;
 }
 
 .spawn-btn:hover {
@@ -191,7 +191,7 @@ select optgroup {
     cursor: pointer;
     padding: 0 4px;
     font-size: 11px;
-    margin-left: 4px;
+    margin-inline-start: 4px;
     flex-shrink: 0;
 }
 
@@ -285,7 +285,7 @@ select optgroup {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
+    margin-inline-start: auto;
 }
 
 .window-content {
@@ -319,7 +319,7 @@ select optgroup {
     width: 220px;
     min-width: 150px;
     overflow-y: auto;
-    border-right: 1px solid var(--border, #333);
+    border-inline-end: 1px solid var(--border, #333);
     padding: 8px;
     flex-shrink: 0;
 }
@@ -376,7 +376,7 @@ select optgroup {
     background: var(--surface-hover, #3a3a5e);
 }
 
-/* Tree rows — flat list, indentation via inline padding-left. */
+/* Tree rows — flat list, indentation via inline padding-inline-start. */
 .tree-row {
     padding: 3px 8px;
     cursor: pointer;
@@ -452,7 +452,7 @@ select optgroup {
     width: 250px;
     min-width: 180px;
     overflow-y: auto;
-    border-left: 1px solid var(--border, #333);
+    border-inline-start: 1px solid var(--border, #333);
     padding: 8px;
     flex-shrink: 0;
 }
@@ -589,7 +589,7 @@ select optgroup {
 }
 
 .peer-table th {
-    text-align: left;
+    text-align: start;
     padding: 8px 10px;
     border-bottom: 2px solid var(--border-bold, #555);
     color: var(--text-dim, #999);
@@ -654,7 +654,7 @@ select optgroup {
     color: var(--text-faint, #666);
     text-transform: none;
     letter-spacing: 0;
-    margin-left: 8px;
+    margin-inline-start: 8px;
 }
 
 /* Per-row badge — color comes from kind modifier. */
@@ -679,18 +679,18 @@ select optgroup {
     border: 1px solid var(--border, #333);
     border-radius: 3px;
     padding: 1px 5px;
-    margin-left: 4px;
+    margin-inline-start: 4px;
     white-space: nowrap;
 }
 
 .peer-saved {
     font-size: 0.7em;
     color: var(--text-faint, #666);
-    margin-left: 4px;
+    margin-inline-start: 4px;
 }
 
 .peer-action-delete {
-    margin-left: 6px;
+    margin-inline-start: 6px;
 }
 
 /* Peer Connections — backend peer rows */
@@ -746,7 +746,7 @@ select optgroup {
        can't-scroll-on-mobile regressions from the menu redesign. */
     .command-palette {
         width: auto;
-        border-right: none;
+        border-inline-end: none;
         border-bottom: 1px solid var(--border, #333);
         padding: 6px 8px;
         display: block;
@@ -778,7 +778,7 @@ select optgroup {
 
     .palette-toggle {
         flex: 3;
-        text-align: left;
+        text-align: start;
     }
 
     .palette-windows-toggle {
@@ -876,7 +876,7 @@ select optgroup {
     .tree-panel {
         width: auto;
         min-width: auto;
-        border-right: none;
+        border-inline-end: none;
         border-bottom: 1px solid var(--border, #333);
         max-height: 200px;
         overflow-y: auto;
@@ -885,7 +885,7 @@ select optgroup {
     .inspector-panel {
         width: auto;
         min-width: auto;
-        border-left: none;
+        border-inline-start: none;
         border-top: 1px solid var(--border, #333);
         max-height: 200px;
         overflow-y: auto;
@@ -908,7 +908,7 @@ select optgroup {
         width: 40%;
         max-height: 150px;
         border-bottom: 1px solid var(--border, #333);
-        border-right: 1px solid var(--border, #333);
+        border-inline-end: 1px solid var(--border, #333);
     }
 
     .inspector-panel {
