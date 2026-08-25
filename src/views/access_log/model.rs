@@ -226,8 +226,8 @@ fn authored_grant(
     let backend = ctx.backend_pid.as_deref().unwrap_or("<backend>");
     let view = profile.grant_view(backend);
     Some(super::output::AuthoredGrant {
-        profile_label: profile.label().to_string(),
-        summary: profile.scope_summary().to_string(),
+        profile_label: crate::i18n::t(profile.label(), &[]),
+        summary: crate::i18n::t(profile.scope_summary(), &[]),
         handlers: view.handlers,
         resources: view.resources,
         operations: view.operations,

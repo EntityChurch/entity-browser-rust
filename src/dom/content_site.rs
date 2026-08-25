@@ -531,8 +531,8 @@ fn render_share_button(bar: &Element, output: &SiteRenderOutput, ctx: &DomCtx, b
     share_button(
         bar,
         ctx,
-        "Share link \u{1f517}",
-        "Copy a link that re-opens this page in the live entity browser",
+        &crate::i18n::t("contentsite.share_link", &[]),
+        &crate::i18n::t("contentsite.share_link_hint", &[]),
         live_link,
         block,
     );

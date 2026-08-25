@@ -356,8 +356,8 @@ fn grant_cell(profile: Option<&str>) -> Element {
     span.set_attribute("style", "font-size:12px").ok();
     match profile.and_then(crate::backend_auth::GrantProfile::from_token) {
         Some(p) => {
-            util::set_text(&span, p.label());
-            span.set_attribute("title", p.scope_summary()).ok();
+            util::set_text(&span, &crate::i18n::t(p.label(), &[]));
+            span.set_attribute("title", &crate::i18n::t(p.scope_summary(), &[])).ok();
         }
         None => {
             util::set_text(&span, &crate::i18n::t("status.granted", &[]));

@@ -20,10 +20,7 @@ pub fn render(container: &Element, output: &PathTapOutput, _ctx: &DomCtx) {
 
     let hint = util::create_element("div");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &hint,
-        "Live dispatch facts from this peer (newest first; ring buffer).",
-    );
+    util::set_text(&hint, &crate::i18n::t("pathtap.hint", &[]));
     util::append(&wrapper, &hint);
 
     // Diagnostic counters — visible to E2E + users so an empty ring
@@ -35,7 +32,7 @@ pub fn render(container: &Element, output: &PathTapOutput, _ctx: &DomCtx) {
     util::set_text(
         &counters,
         &format!(
-            "facts: dispatch={} wire={} binding={}",
+            "facts: dispatch={} wire={} binding={}", // i18n-ignore — diagnostic counters (e2e probe)
             output.counts.dispatch, output.counts.wire, output.counts.binding
         ),
     );

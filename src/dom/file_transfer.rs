@@ -82,11 +82,13 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
 /// back to a plain title when nothing is connected.
 fn title_for(output: &FileTransferOutput) -> String {
     if !output.has_target {
-        return "File Transfer".to_string();
+        return crate::i18n::window_title("File Transfer"); // i18n-ignore — lookup key
     }
     match output.target_options.iter().find(|o| o.selected) {
-        Some(o) if !o.label.is_empty() => format!("Files — {}", o.label),
-        _ => "File Transfer".to_string(),
+        Some(o) if !o.label.is_empty() => {
+            crate::i18n::t("filetransfer.title_files", &[("label", &o.label)])
+        }
+        _ => crate::i18n::window_title("File Transfer"), // i18n-ignore — lookup key
     }
 }
 
@@ -143,19 +145,16 @@ fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     if matches!(output.access, TargetAccess::Denied) {
         let msg = util::create_element("p");
         msg.set_attribute("style", theme::NOTE).ok();
-        util::set_text(
-            &msg,
-            "The exposing device must authorize this one before transfers succeed.",
-        );
+        util::set_text(&msg, &crate::i18n::t("filetransfer.needs_auth", &[]));
         util::append(parent, &msg);
 
         // Deep-link to the authority surface — focuses the singleton Peer
         // Connections window (or spawns it) where the grant is made.
         let btn = components::button_action(
             ctx,
-            "Authorize this device",
+            &crate::i18n::t("filetransfer.authorize_device", &[]),
             components::ButtonKind::Primary,
-            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None },
+            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None }, // i18n-ignore — identity key; registry lookup
         );
         util::append(parent, &btn);
     }
@@ -193,7 +192,7 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
         } else {
             let browse = components::button(
                 ctx,
-                "Browse shared files",
+                &crate::i18n::t("filetransfer.browse_shared", &[]),
                 components::ButtonKind::Secondary,
                 "ft_refresh",
             );
@@ -207,7 +206,7 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     list.set_attribute("data-scroll-key", "file-transfer-tree").ok();
     if output.tree_rows.is_empty() {
         // Empty state (S5) — a helpful line, not a void.
-        util::append(&list, &components::empty("This share is empty."));
+        util::append(&list, &components::empty(&crate::i18n::t("filetransfer.share_empty", &[])));
     } else {
         for row in &output.tree_rows {
             render_tree_row(&list, row, ctx);
@@ -273,7 +272,7 @@ fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &Dom
 
 fn human_size(n: u64) -> String {
     if n < 1024 {
-        format!("{n} B")
+        format!("{n} B") // i18n-ignore — byte unit, language-neutral
     } else if n < 1024 * 1024 {
         format!("{:.1} KB", n as f64 / 1024.0)
     } else {

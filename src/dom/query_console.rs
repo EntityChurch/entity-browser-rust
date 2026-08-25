@@ -31,8 +31,8 @@ pub fn render(container: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
     text_field(
         &wrapper,
         ctx,
-        "Type Filter:",
-        "Exact type, glob (app/*), or * for all",
+        &crate::i18n::t("queryconsole.type_filter", &[]),
+        &crate::i18n::t("queryconsole.type_filter_hint", &[]),
         "type_filter",
         &output.fields.type_filter,
         None,
@@ -40,8 +40,8 @@ pub fn render(container: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
     text_field(
         &wrapper,
         ctx,
-        "Path Prefix:",
-        "Filter results by path prefix (optional)",
+        &crate::i18n::t("queryconsole.path_prefix", &[]),
+        &crate::i18n::t("queryconsole.path_prefix_hint", &[]),
         "path_prefix",
         &output.fields.path_prefix,
         None,
@@ -49,8 +49,8 @@ pub fn render(container: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
     text_field(
         &wrapper,
         ctx,
-        "Ref Filter (hash):",
-        "Find entities referencing a content hash (hex, optional)",
+        &crate::i18n::t("queryconsole.ref_filter", &[]),
+        &crate::i18n::t("queryconsole.ref_filter_hint", &[]),
         "ref_filter",
         &output.fields.ref_filter,
         Some("00aabbccdd..."),
@@ -58,8 +58,8 @@ pub fn render(container: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
     text_field(
         &wrapper,
         ctx,
-        "Path Filter:",
-        "Find entities linking to this path (optional)",
+        &crate::i18n::t("queryconsole.path_filter", &[]),
+        &crate::i18n::t("queryconsole.path_filter_hint", &[]),
         "path_filter",
         &output.fields.path_filter,
         None,
@@ -67,7 +67,7 @@ pub fn render(container: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
     text_field(
         &wrapper,
         ctx,
-        "Limit:",
+        &crate::i18n::t("queryconsole.limit", &[]),
         "",
         "limit",
         &output.fields.limit,
@@ -123,7 +123,7 @@ fn render_include_entities(parent: &Element, output: &QueryConsoleOutput, ctx: &
             "include_entities",
             output.fields.include_entities,
             "toggle_include_entities",
-            " Include full entities in results",
+            &crate::i18n::t("queryconsole.include_entities", &[]),
         ),
     );
 }
@@ -192,7 +192,12 @@ fn render_results(parent: &Element, output: &QueryConsoleOutput) {
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();
     if output.events.is_empty() {
-        pre.set_inner_html("<span style='color:var(--text-dim, #888)'>(no results yet — run a query)</span>");
+        // Escaped like the sibling branch below: the empty-state text now comes
+        // from the catalog, so it is interpolated content, not a static literal.
+        pre.set_inner_html(&format!(
+            "<span style='color:var(--text-dim, #888)'>{}</span>",
+            util::escape_html(&crate::i18n::t("queryconsole.no_results", &[]))
+        ));
     } else {
         let mut html = String::new();
         for entry in &output.events {

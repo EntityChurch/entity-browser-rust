@@ -662,7 +662,8 @@ impl ContentSiteModel {
                 // bounds the underlying resolve to Unreachable→shell; this just
                 // makes the wait non-blank and navigable. No cached manifest
                 // ⇒ the bare loading state (first-ever visit, still fetching).
-                self.shell_from_manifest(peers, &loc, can_go_back, "_Loading the live page…_")
+                let loading = crate::i18n::t("contentsite.loading_page", &[]);
+                self.shell_from_manifest(peers, &loc, can_go_back, &loading)
                     .unwrap_or(SiteRenderOutput {
                         site_id: loc.site_id.clone(),
                         current_page: loc.page.clone(),
@@ -677,19 +678,25 @@ impl ContentSiteModel {
 
     fn error_output(&self, loc: &Location, err: ResolveError) -> SiteRenderOutput {
         let msg = match err {
-            ResolveError::ManifestMissing => {
-                format!("No site manifest at '{}' (peer: {}).", loc.site_id, loc.peer_id.clone().unwrap_or_else(|| self.peer_id.clone()))
-            }
+            ResolveError::ManifestMissing => crate::i18n::t(
+                "contentsite.err_no_manifest",
+                &[
+                    ("site", &loc.site_id),
+                    ("peer", &loc.peer_id.clone().unwrap_or_else(|| self.peer_id.clone())),
+                ],
+            ),
             ResolveError::PageMissing => {
+                // i18n-ignore — technical placeholder for the site's root page
                 let page = if loc.page.is_empty() { "<root>" } else { &loc.page };
-                format!("Page '{}' not found in site '{}'.", page, loc.site_id)
-            }
-            ResolveError::Unreachable => {
-                format!(
-                    "Couldn't reach peer '{}' — no route is registered for it.",
-                    loc.peer_id.clone().unwrap_or_else(|| self.peer_id.clone())
+                crate::i18n::t(
+                    "contentsite.err_page_not_found",
+                    &[("page", page), ("site", &loc.site_id)],
                 )
             }
+            ResolveError::Unreachable => crate::i18n::t(
+                "contentsite.err_unreachable",
+                &[("peer", &loc.peer_id.clone().unwrap_or_else(|| self.peer_id.clone()))],
+            ),
         };
         SiteRenderOutput {
             site_id: loc.site_id.clone(),
@@ -716,16 +723,14 @@ impl ContentSiteModel {
         let notice = match err {
             // We hold the page's site but not its body, and the origin answered:
             // a genuinely-missing page (not offline).
-            ResolveError::PageMissing => {
-                "_This page isn't kept for offline viewing — reconnect to load it._"
-            }
+            ResolveError::PageMissing => "contentsite.offline_page_missing",
             // The live source is unreachable (origin down / 404'd the fetch),
             // but we have the cached outline.
             ResolveError::Unreachable | ResolveError::ManifestMissing => {
-                "_This site's source is unreachable. Showing its cached outline._"
+                "contentsite.offline_source_unreachable"
             }
         };
-        self.shell_from_manifest(peers, loc, can_go_back, notice)
+        self.shell_from_manifest(peers, loc, can_go_back, &crate::i18n::t(notice, &[]))
     }
 
     /// Build the manifest-pinned **shell** — the cached site chrome (nav /

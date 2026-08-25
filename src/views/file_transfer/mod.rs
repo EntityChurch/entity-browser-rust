@@ -91,8 +91,8 @@ impl FileTransferWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "File Transfer",
-            description: "Move files between this device and a paired peer",
+            name: "File Transfer", // i18n-ignore — identity key; display via window.file_transfer
+            description: "Move files between this device and a paired peer", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |id, peer_id, pm| {
                 let mut window = FileTransferWindow::new(id, peer_id.to_string());
@@ -129,11 +129,11 @@ impl FileTransferWindow {
 
 impl WindowView for FileTransferWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("File Transfer")
+        crate::i18n::window_title("File Transfer") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "File Transfer"
+        "File Transfer" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

@@ -68,7 +68,7 @@ pub fn format_entity_data(data: &[u8]) -> String {
         }
         Err(_) => {
             let hex: String = data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-            format!("(raw {} bytes) {}", data.len(), hex)
+            format!("(raw {} bytes) {}", data.len(), hex) // i18n-ignore — hex-dump diagnostic
         }
     }
 }
@@ -76,7 +76,7 @@ pub fn format_entity_data(data: &[u8]) -> String {
 /// Format a HandlerResult for display in event log.
 pub fn format_handler_result(result: &entity_handler::HandlerResult) -> String {
     let mut out = format!(
-        "status={} type=\"{}\" hash={} size={} bytes",
+        "status={} type=\"{}\" hash={} size={} bytes", // i18n-ignore — protocol dump for the developer event log
         result.status,
         result.result.entity_type,
         result.result.content_hash,

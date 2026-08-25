@@ -64,16 +64,16 @@ fn demo_tokens(set: &str) -> &'static [Token] {
     match set {
         paths::GAMES_SET => &[Token {
             id: "war",
-            name: "War",
-            description: "Flip the higher card to capture the pile — the classic luck game.",
+            name: "War", // i18n-ignore — e2e-only demo fixture, not in production builds
+            description: "Flip the higher card to capture the pile — the classic luck game.", // i18n-ignore — e2e-only demo fixture
             saves: true,
             glyph: "🃏",
             html: include_str!("fixtures/war.html"),
         }],
         paths::APPS_SET => &[Token {
             id: "calculator",
-            name: "Calculator",
-            description: "A standard four-function calculator: +, −, ×, ÷, %, ±. Tap or type.",
+            name: "Calculator", // i18n-ignore — e2e-only demo fixture, not in production builds
+            description: "A standard four-function calculator: +, −, ×, ÷, %, ±. Tap or type.", // i18n-ignore — e2e-only demo fixture
             saves: false,
             glyph: "🧮",
             html: include_str!("fixtures/calculator.html"),
@@ -225,11 +225,23 @@ impl FetchWhat {
     }
 }
 
-/// The grid title + empty-state message for a set.
-fn set_labels(set: &str) -> (&'static str, &'static str) {
+/// The **catalog keys** for a set's grid title + empty-state message. Returns
+/// keys (not prose) so every consumer resolves through `t()` at render time —
+/// same shape as the Theme Editor's `section_for`. The stable English type
+/// identifier is [`set_type_name`], which must NOT be localized.
+fn set_label_keys(set: &str) -> (&'static str, &'static str) {
     match set {
-        paths::APPS_SET => ("Apps", "No apps available yet."),
-        _ => ("Games", "No games available yet."),
+        paths::APPS_SET => ("window.apps", "apps.empty"),
+        _ => ("window.games", "games.empty"),
+    }
+}
+
+/// The set's stable English window-type identifier — an identity string used
+/// for registry lookup / persistence, never rendered as UI text.
+fn set_type_name(set: &str) -> &'static str {
+    match set {
+        paths::APPS_SET => "Apps", // i18n-ignore — stable type identifier, not UI text
+        _ => "Games",              // i18n-ignore — stable type identifier, not UI text
     }
 }
 
@@ -285,8 +297,8 @@ impl AppWindow {
     /// The Games window type (the `games` set).
     pub fn games_window_type() -> WindowType {
         WindowType {
-            name: "Games",
-            description: "Play embedded self-contained HTML games in a sandbox",
+            name: "Games", // i18n-ignore — identity key; display via window.games
+            description: "Play embedded self-contained HTML games in a sandbox", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             // `create` is a bare fn pointer (can't capture `set`), so each set
             // gets its own non-capturing factory delegating to `create_set`.
@@ -297,8 +309,8 @@ impl AppWindow {
     /// The Apps window type (the `apps` set — non-game tools).
     pub fn apps_window_type() -> WindowType {
         WindowType {
-            name: "Apps",
-            description: "Run embedded self-contained HTML apps (tools) in a sandbox",
+            name: "Apps", // i18n-ignore — identity key; display via window.apps
+            description: "Run embedded self-contained HTML apps (tools) in a sandbox", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| create_set(id, peer_id, pm, paths::APPS_SET),
         }
@@ -445,11 +457,11 @@ fn create_set(
 
 impl WindowView for AppWindow {
     fn title(&self) -> String {
-        set_labels(self.set).0.to_string()
+        crate::i18n::t(set_label_keys(self.set).0, &[])
     }
 
     fn type_name(&self) -> &'static str {
-        set_labels(self.set).0
+        set_type_name(self.set)
     }
 
     fn peer_id(&self) -> &str {
@@ -487,7 +499,9 @@ impl WindowView for AppWindow {
             crate::dom::games::remove_listener(&old);
         }
 
-        let (grid_title, empty_msg) = set_labels(self.set);
+        let (title_key, empty_key) = set_label_keys(self.set);
+        let grid_title = crate::i18n::t(title_key, &[]);
+        let empty_msg = crate::i18n::t(empty_key, &[]);
 
         // Which peer's apps to show + where to fetch them from (foreign-first;
         // local baked token when no origins). Reads route by `self.peer_id` (MY
@@ -536,7 +550,7 @@ impl WindowView for AppWindow {
         };
 
         let Some(bundle) = bundle else {
-            crate::dom::games::render_grid(container, ctx, &catalog.entries, grid_title, empty_msg);
+            crate::dom::games::render_grid(container, ctx, &catalog.entries, &grid_title, &empty_msg);
             return;
         };
 
@@ -565,7 +579,7 @@ impl WindowView for AppWindow {
         let cfg = crate::dom::games::GamesHostConfig {
             peer_id: self.peer_id.clone(),
             set: self.set.to_string(),
-            set_label: grid_title.to_string(),
+            set_label: grid_title.clone(),
             // The app's preferred-size hint (catalog `size`), or None → the
             // per-set default (games square-capped, tools fill).
             size,

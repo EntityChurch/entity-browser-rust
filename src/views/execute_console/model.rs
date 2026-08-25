@@ -290,7 +290,10 @@ impl ExecuteConsoleModel {
         for rpid in &connected {
             peer_options.push(PeerOption {
                 value: rpid.clone(),
-                label: format!("Remote: {}", crate::views::display_name(peers, rpid)),
+                label: crate::i18n::t(
+                    "label.remote_option",
+                    &[("name", &crate::views::display_name(peers, rpid))],
+                ),
                 selected: state.selected_peer == *rpid,
             });
         }

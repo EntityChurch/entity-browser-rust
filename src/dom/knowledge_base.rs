@@ -80,9 +80,13 @@ fn render_list_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx
         );
         util::set_text(
             &empty,
-            &format!(
-                "No articles yet on peer {}. Click \"+ New article\" to create one.",
-                output.peer_label
+            &crate::i18n::t(
+                "kb.empty_on_peer",
+                &[
+                    ("peer", &output.peer_label),
+                    // Pass the button's own label so the two can never drift.
+                    ("button", &crate::i18n::t("kb.new_article", &[])),
+                ],
             ),
         );
         util::append(parent, &empty);
@@ -208,7 +212,7 @@ fn render_reader_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomC
             // loud error state (S5) + the way back.
             util::append(
                 parent,
-                &components::error("The selected article is no longer available."),
+                &components::error(&crate::i18n::t("kb.article_gone", &[])),
             );
             let row = util::create_element("div");
             let btn =
@@ -304,8 +308,11 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
     // Heading on its own line.
     let h2 = util::create_element("h2");
     util::set_attr(&h2, "style", "margin:0 0 4px 0");
-    let label = if draft.is_new { "New Article" } else { "Edit Article" };
-    util::set_text(&h2, label);
+    let label = crate::i18n::t(
+        if draft.is_new { "kb.heading_new" } else { "kb.heading_edit" },
+        &[],
+    );
+    util::set_text(&h2, &label);
     util::append(parent, &h2);
 
     // Slug line (Editor mode only).

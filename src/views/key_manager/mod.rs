@@ -38,8 +38,8 @@ impl KeyManagerWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Key Manager",
-            description: "Hosted-peer public identities and roles",
+            name: "Key Manager", // i18n-ignore — identity key; display via window.key_manager
+            description: "Hosted-peer public identities and roles", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |_id, peer_id, pm| {
                 let mut window = KeyManagerWindow::new(peer_id.to_string());
@@ -61,11 +61,11 @@ impl KeyManagerWindow {
 
 impl WindowView for KeyManagerWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Key Manager")
+        crate::i18n::window_title("Key Manager") // i18n-ignore — lookup key
     }
 
     fn type_name(&self) -> &'static str {
-        "Key Manager"
+        "Key Manager" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {
