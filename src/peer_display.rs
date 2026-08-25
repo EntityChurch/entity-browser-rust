@@ -238,7 +238,7 @@ impl PeerDescriptor {
                 .peer_metadata(peer_id)
                 .and_then(|m| m.label)
                 .as_deref()
-                == Some(crate::views::system_backend::model::SYSTEM_BACKEND_LABEL);
+                == Some(crate::views::system_overview::model::SYSTEM_BACKEND_LABEL);
 
         let runtime = if is_native {
             PeerRuntime::Native
@@ -381,7 +381,7 @@ mod tests {
         let pid = "2KNativeSystemBackend1".to_string();
         peers.register_backend_peer_primary(
             pid.clone(),
-            Some(crate::views::system_backend::model::SYSTEM_BACKEND_LABEL.to_string()),
+            Some(crate::views::system_overview::model::SYSTEM_BACKEND_LABEL.to_string()),
             vec!["ws://127.0.0.1:4042".to_string()],
         );
         let d = PeerDescriptor::describe(&peers, &pid, &HashMap::new());

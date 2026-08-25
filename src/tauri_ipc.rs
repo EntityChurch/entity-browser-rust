@@ -245,6 +245,59 @@ pub async fn backend_log_tail(after: u64) -> Result<BackendLogTail, String> {
     Ok(BackendLogTail { lines, cursor })
 }
 
+/// One inbound access row from the native backend: who called, what they hit,
+/// the operation, and the handler exit status (for allow/deny classification).
+#[derive(Debug, Clone)]
+pub struct InboundAccess {
+    pub caller: String,
+    pub target_uri: String,
+    pub operation: String,
+    pub status: u32,
+}
+
+/// Result of a `backend_access_log_tail` poll: new inbound access rows plus the
+/// cursor to poll with next (`{ records, cursor }`). Mirrors `backend_log_tail`.
+#[derive(Debug, Clone, Default)]
+pub struct BackendAccessTail {
+    pub records: Vec<InboundAccess>,
+    pub cursor: u64,
+}
+
+/// Tail the backend peer's inbound access log ("who reached into my share").
+/// `after` is the last cursor seen (0 for a fresh poll); pass back the returned
+/// `cursor` each time. In-memory only server-side.
+pub async fn backend_access_log_tail(after: u64) -> Result<BackendAccessTail, String> {
+    let args = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &args,
+        &JsValue::from_str("after"),
+        &JsValue::from_f64(after as f64),
+    )
+    .map_err(|_| "failed to set after arg")?;
+    let result = invoke("backend_access_log_tail", &args.into()).await?;
+    let cursor = js_sys::Reflect::get(&result, &JsValue::from_str("cursor"))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(after as f64) as u64;
+    let mut records = Vec::new();
+    if let Some(arr) = js_sys::Reflect::get(&result, &JsValue::from_str("records"))
+        .ok()
+        .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
+    {
+        for entry in arr.iter() {
+            let caller = get_string(&entry, "caller").unwrap_or_default();
+            let target_uri = get_string(&entry, "target_uri").unwrap_or_default();
+            let operation = get_string(&entry, "operation").unwrap_or_default();
+            let status = js_sys::Reflect::get(&entry, &JsValue::from_str("status"))
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as u32;
+            records.push(InboundAccess { caller, target_uri, operation, status });
+        }
+    }
+    Ok(BackendAccessTail { records, cursor })
+}
+
 /// List all managed backend peers (running + stopped).
 pub async fn list_backend_peers() -> Result<Vec<BackendPeerInfo>, String> {
     let result = invoke("list_backend_peers", &JsValue::undefined()).await?;

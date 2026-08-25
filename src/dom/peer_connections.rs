@@ -90,23 +90,42 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
             components::td_text(&kp.addr)
         };
 
-        // Offer Reconnect unless it's already connected (that's the confusing
-        // case) — and only when there's an address to dial.
-        let action_cell = if kp.addr.is_empty() || kp.liveness == Liveness::Connected {
-            components::td_text("")
-        } else {
-            let btn = util::create_element("button");
-            util::set_text(&btn, "Reconnect");
-            btn.set_attribute("style", theme::BTN_SECONDARY).ok();
-            ctx.on_action(
-                &btn,
-                "click",
-                Action::ConnectPeer {
-                    peer_id: output.bound_peer.peer_id.clone(),
-                    addr: kp.addr.clone(),
-                },
-            );
-            components::td(&btn)
+        // Actions: Reconnect (when there's an address and it isn't already
+        // live) + Forget (drop a dead/stale row so the list can be cleaned up).
+        // A live connection gets neither — don't invite dropping the working link.
+        let action_cell = {
+            let wrap = util::create_element("div");
+            wrap.set_attribute("style", "display:flex;gap:6px").ok();
+            if !kp.addr.is_empty() && kp.liveness != Liveness::Connected {
+                let btn = util::create_element("button");
+                util::set_text(&btn, "Reconnect");
+                btn.set_attribute("style", theme::BTN_SECONDARY).ok();
+                ctx.on_action(
+                    &btn,
+                    "click",
+                    Action::ConnectPeer {
+                        peer_id: output.bound_peer.peer_id.clone(),
+                        addr: kp.addr.clone(),
+                    },
+                );
+                util::append(&wrap, &btn);
+            }
+            // Forget on every row — a remembered link can read a stale
+            // "Connected" (no liveness probe for arbitrary peers), so the
+            // operator must be able to clear those too. Forget only drops the
+            // remembered entry; it doesn't sever a live transport.
+            {
+                let btn = util::create_element("button");
+                util::set_text(&btn, "Forget");
+                btn.set_attribute("style", theme::BTN_SECONDARY).ok();
+                ctx.on_action(
+                    &btn,
+                    "click",
+                    Action::ForgetConnection { remote_pid: kp.remote_pid.clone() },
+                );
+                util::append(&wrap, &btn);
+            }
+            components::td(&wrap)
         };
 
         util::append(

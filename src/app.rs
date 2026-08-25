@@ -152,6 +152,14 @@ pub struct EntityApp {
     /// the single peer-membership reactivity mechanism — there is no separate
     /// signal or manual dirty-mark.
     peer_registry: PeerRegistry,
+    /// Session-lived inspect sink on the system peer feeding the app-tier
+    /// access log (`crate::access_log_store`) with local dispatches. Installed
+    /// once at boot — app-global, not per-window — so the Access Log window is a
+    /// pure reader and multiple windows can't double-record. `Drop` detaches it
+    /// at app teardown. (The outbound-remote half is captured in `ops::execute`.)
+    #[cfg(target_arch = "wasm32")]
+    #[allow(dead_code)]
+    access_log_sink: Option<crate::inspect_router::PeersInspectSinkHandle>,
     #[cfg(target_arch = "wasm32")]
     dom: Option<crate::dom::DomRenderer>,
     /// Pending backend peer registrations from async Tauri IPC results.
@@ -511,6 +519,22 @@ struct PendingIdbPeer {
     ctx: entity_sdk::PeerContext,
     seed: [u8; 32],
     label: Option<String>,
+}
+
+/// `setTimeout`-backed async sleep for the inbound access-log poll loop (no
+/// timer-crate dep). Mirrors the System Backend window's poll cadence helper.
+#[cfg(target_arch = "wasm32")]
+async fn access_log_poll_sleep_ms(ms: i32) {
+    use wasm_bindgen::JsCast;
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(win) = web_sys::window() {
+            let _ = win.set_timeout_with_callback_and_timeout_and_arguments_0(
+                resolve.unchecked_ref(),
+                ms,
+            );
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1111,6 +1135,61 @@ impl EntityApp {
             ));
         }
 
+        // App-tier access log: install ONE inspect sink on the system peer,
+        // session-lived, so local dispatches (queries/counts/local executes)
+        // land in the shared `access_log_store` with `actor` = system peer.
+        // App-global (not per-window) so the Access Log window is a pure reader
+        // and multiple windows can't double-record. The outbound-remote half
+        // (file transfers etc.) is captured separately in `ops::execute`.
+        let access_log_sink = {
+            let actor = peer_manager.system_peer_id().to_string();
+            let actor_for_cb = actor.clone();
+            match peer_manager.install_inspect_sink(&actor, move |fact| {
+                if let Some(entry) = crate::access_log_store::dispatch_to_entry(&actor_for_cb, fact) {
+                    crate::access_log_store::global().record(entry);
+                }
+            }) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    tracing::warn!(error = %e, "access log: system-peer inspect sink failed to install");
+                    None
+                }
+            }
+        };
+
+        // Inbound half of the access log: under Tauri, poll the native backend's
+        // `backend_access_log_tail` (who reached into this device's share) and
+        // fold each row into the same app-global store, tagged Inbound. Session-
+        // lived, cursor-persistent (no dupes across window opens); store.record
+        // wakes the Access Log window. No-op in the browser (no native backend).
+        if crate::tauri_ipc::is_tauri() {
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut cursor = 0u64;
+                loop {
+                    if let Ok(tail) = crate::tauri_ipc::backend_access_log_tail(cursor).await {
+                        cursor = tail.cursor;
+                        for r in tail.records {
+                            let (target_peer, handler) =
+                                crate::access_log_store::parse_target(&r.target_uri);
+                            crate::access_log_store::global().record(
+                                crate::access_log_store::AccessEntry {
+                                    direction: crate::access_log_store::AccessDirection::Inbound,
+                                    actor: r.caller,
+                                    target_peer,
+                                    handler,
+                                    operation: r.operation,
+                                    resource: None,
+                                    outcome: crate::access_log_store::classify(r.status),
+                                    detail: format!("status {}", r.status),
+                                },
+                            );
+                        }
+                    }
+                    access_log_poll_sleep_ms(1000).await;
+                }
+            });
+        }
+
         Self {
             peer_manager,
             window_manager,
@@ -1119,6 +1198,7 @@ impl EntityApp {
             backend_auth_writer,
             connection_health_writer,
             peer_registry,
+            access_log_sink,
             dom,
             pending_backend_peers,
             system_backend_connect,
@@ -2208,6 +2288,17 @@ impl EntityApp {
                     tracing::info!(peer_id = %peer_id, addr = %addr, "Action::ConnectPeer received");
                     self.handle_connect_peer(peer_id.clone(), addr.clone());
                 }
+                Action::ForgetConnection { remote_pid } => {
+                    tracing::info!(remote_pid = %remote_pid, "Action::ForgetConnection");
+                    // Drop the remembered row + its health mirror so a dead
+                    // backend stops cluttering the known-devices list.
+                    self.connections_writer.remove(remote_pid);
+                    self.connection_health_writer.record(
+                        remote_pid,
+                        crate::connection_health::Liveness::Unreachable,
+                        None,
+                    );
+                }
                 Action::StartListener(addr) => {
                     tracing::info!(addr = %addr, "Action::StartListener received");
                     self.handle_start_listener(addr.clone());
@@ -2530,6 +2621,19 @@ impl EntityApp {
 
         log.log(format!("Connecting to {}...", addr));
 
+        // Snapshot other remembered identities already recorded at THIS address.
+        // A network address hosts one peer at a time, so once the (possibly
+        // re-provisioned) backend answers with its current id, any *other* id at
+        // the same address is definitively stale — prune it so reconnecting
+        // REPLACES the dead row instead of piling up a new one (the "four dead
+        // peers" bug).
+        #[cfg(target_arch = "wasm32")]
+        let same_addr_pids: Vec<String> = crate::connections::read_connections(&self.peer_manager)
+            .into_iter()
+            .filter(|c| c.addr == addr)
+            .map(|c| c.remote_pid)
+            .collect();
+
         let connect_future = self.peer_manager.connect_peer(&pid, addr.clone());
 
         #[cfg(target_arch = "wasm32")]
@@ -2553,6 +2657,16 @@ impl EntityApp {
             // remembered + one-tap reconnectable (§13.2). `addr` was moved
             // in for exactly this.
             connections.add(&remote_pid, &addr);
+            // Prune stale identities that were remembered at this same address
+            // (a re-provisioned / wiped backend). The address just answered as
+            // `remote_pid`, so any other id here is dead — drop it + its health
+            // mirror so the known-devices list collapses to the one live row.
+            for old in &same_addr_pids {
+                if old != &remote_pid {
+                    connections.remove(old);
+                    health.record(old, crate::connection_health::Liveness::Unreachable, None);
+                }
+            }
             // Reactive liveness: a fresh handshake ⇒ Connected. Windows watching
             // the conn-health mirror repaint without a manual refresh.
             health.record(&remote_pid, crate::connection_health::Liveness::Connected, None);

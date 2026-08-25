@@ -1,51 +1,120 @@
 //! Access Log output — the user-facing "who did what, where, with what result"
-//! projection of the live dispatch stream. Pure presentation (no SDK refs);
-//! built by [`super::model::AccessLogModel::render_output`].
+//! projection. Pure presentation (no SDK refs); built by
+//! [`super::model::AccessLogModel::render_output`] from the app-tier
+//! [`crate::access_log_store`].
 //!
 //! This is the *visible* half of the capability-audit direction
 //! (`RESEARCH-CAPABILITY-MANAGEMENT-UX §4 Step 1`): every row is one operation
-//! that actually crossed the dispatch boundary — the handler (where), the
-//! operation (how), and the result (allowed / denied). The set of rows is also
-//! the raw material for the internal minimal-permission map.
+//! that actually crossed the dispatch boundary — the **actor** (who), the
+//! target and handler (where), the operation (how), and the result (allowed /
+//! denied). The set of rows is also the raw material for the internal
+//! minimal-permission map.
 
-/// The result of one dispatched operation, classified from its status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccessOutcome {
-    /// A 2xx — the operation was permitted and succeeded.
-    Allowed,
-    /// A 401/403 — a capability refusal (the enforcement signal). While
-    /// `debug_open_grants` is on this is rare, but it's the exact edge the
-    /// cutover cares about, surfaced honestly.
-    Denied,
-    /// Any other non-2xx — a real error, not an authorization decision.
-    Error,
-    /// Entry phase (status 0) — dispatched, not yet resolved. Kept out of the
-    /// log (see the model), listed here for completeness of the classifier.
-    Pending,
+// The entry + outcome types live with the store that produces them; re-export so
+// the renderer and callers keep importing them from the view module.
+pub use crate::access_log_store::{AccessDirection, AccessEntry, AccessOutcome};
+
+/// Which directions the log is showing — the operator's dropdown selection.
+/// `All` is the default; the rest narrow to one boundary crossing so the single
+/// unified log can stand in for the old per-direction windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DirectionFilter {
+    #[default]
+    All,
+    Outbound,
+    Inbound,
+    Local,
 }
 
-/// One access-log entry: a completed operation and its outcome.
+impl DirectionFilter {
+    /// The stable value used on the `<option>` + parsed back from the change
+    /// event (kept short + ascii — it round-trips through the DOM).
+    pub fn as_value(self) -> &'static str {
+        match self {
+            DirectionFilter::All => "all",
+            DirectionFilter::Outbound => "out",
+            DirectionFilter::Inbound => "in",
+            DirectionFilter::Local => "local",
+        }
+    }
+
+    /// Parse the dropdown value back into a filter; unknown → `All` (safe default).
+    pub fn from_value(v: &str) -> Self {
+        match v {
+            "out" => DirectionFilter::Outbound,
+            "in" => DirectionFilter::Inbound,
+            "local" => DirectionFilter::Local,
+            _ => DirectionFilter::All,
+        }
+    }
+
+    /// Human label for the option.
+    pub fn label(self) -> &'static str {
+        match self {
+            DirectionFilter::All => "All",
+            DirectionFilter::Outbound => "→ Outbound (you called a peer)",
+            DirectionFilter::Inbound => "← Inbound (a peer called this device)",
+            DirectionFilter::Local => "· Local (this app's own peer)",
+        }
+    }
+
+    /// Whether an entry passes this filter.
+    pub fn matches(self, dir: AccessDirection) -> bool {
+        match self {
+            DirectionFilter::All => true,
+            DirectionFilter::Outbound => dir == AccessDirection::Outbound,
+            DirectionFilter::Inbound => dir == AccessDirection::Inbound,
+            DirectionFilter::Local => dir == AccessDirection::Local,
+        }
+    }
+
+    /// The options, in display order.
+    pub const ALL: [DirectionFilter; 4] = [
+        DirectionFilter::All,
+        DirectionFilter::Outbound,
+        DirectionFilter::Inbound,
+        DirectionFilter::Local,
+    ];
+}
+
+/// One selectable peer in the Peer dropdown — the *subject* of an access log
+/// (whose log the row belongs to), with a friendly label.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccessEntry {
-    /// Target peer id, from an `entity://{peer}/...` handler URI; `None` for a
-    /// local/self dispatch (a bare handler path like `system/tree`).
-    pub peer: Option<String>,
-    /// The handler invoked — the "where" (e.g. `local/files`, `system/tree`).
-    pub handler: String,
-    /// The operation verb — the "how" (e.g. `list`, `read`, `write`).
-    pub operation: String,
-    /// The classified result.
-    pub outcome: AccessOutcome,
-    /// The raw status, kept for the detail/tooltip.
-    pub status: u32,
+pub struct PeerOption {
+    /// Stable key: a peer id for a local actor, or the native-backend key for
+    /// inbound rows. Round-trips through the dropdown value.
+    pub key: String,
+    /// Human label — "System peer", "System backend", etc. (canonical names, see
+    /// docs/architecture/specs/TERMINOLOGY-AND-WINDOWS.md).
+    pub label: String,
 }
 
-/// The whole window's render input.
+/// The subject peer of an access row — *whose* access log it belongs to. This is
+/// the axis the operator manages by: the System peer (its own dispatches out) vs
+/// the System backend (who reached into it). Local/Outbound belong to the acting
+/// peer; Inbound belongs to the System backend that was called.
+pub fn subject_key(entry: &AccessEntry, backend_key: &str) -> String {
+    match entry.direction {
+        AccessDirection::Inbound => backend_key.to_string(),
+        AccessDirection::Local | AccessDirection::Outbound => entry.actor.clone(),
+    }
+}
+
+/// The whole window's render input: completed accesses (newest first, already
+/// narrowed to the active filters) plus the state the two dropdowns reflect.
 pub struct AccessLogOutput {
-    /// Whether the inspect sink attached at window creation. `false` → the
-    /// empty state explains that routing isn't wired (unknown peer / SDK built
-    /// without inspect routing).
-    pub routing_active: bool,
-    /// Completed accesses, newest first.
     pub entries: Vec<AccessEntry>,
+    /// Active direction filter (→/←/·).
+    pub direction: DirectionFilter,
+    /// Active peer filter — a `PeerOption.key`, or empty for "all peers".
+    pub peer_filter: String,
+    /// The distinct subject peers present in the (unfiltered) log, for the
+    /// dropdown — the System peer, the System backend, any others.
+    pub peer_options: Vec<PeerOption>,
+    /// The subject key inbound rows are attributed to (the System backend peer id
+    /// when known, else a stable sentinel) — the renderer's Peer column uses it.
+    pub backend_key: String,
+    /// Subject key → friendly label, for the Peer column (superset of
+    /// `peer_options`, so a row always resolves even mid-filter).
+    pub labels: std::collections::HashMap<String, String>,
 }

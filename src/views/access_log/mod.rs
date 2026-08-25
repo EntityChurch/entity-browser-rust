@@ -1,15 +1,26 @@
 //! Access Log window — the user-facing capability-audit surface: what
-//! operations are crossing the dispatch boundary, against which target, and
-//! whether they were allowed or denied.
+//! operations are crossing the dispatch boundary, **which peer issued them**,
+//! against which target, and whether they were allowed or denied.
 //!
-//! Owns an `InspectSinkHandle` for the bound (system) peer; the sink pushes
-//! exit-phase `InspectFact::Dispatch` facts into a ring the renderer reads.
-//! Sink detaches on window drop. Same live-event substrate as Path Tap / Wire
-//! Recorder — reframed from a raw dev trace into a legible access log
-//! (`RESEARCH-CAPABILITY-MANAGEMENT-UX §4 Step 1`). System-scoped: bound to the
-//! system peer (the control point most operations dispatch from); a multi-peer
-//! aggregate + the durable, subscribable audit + the grant-used column are the
-//! documented next steps.
+//! Pure reader over the app-tier [`crate::access_log_store`] global ring, which
+//! is fed from two complementary sources so both halves of an access are visible:
+//!
+//! - **Local dispatches** (queries, counts, local executes) — a session-lived
+//!   inspect sink installed once at app boot on the system peer (`EntityApp`),
+//!   whose `Dispatch` facts become rows with `actor` = system peer.
+//! - **Outbound remote executes** (e.g. a file transfer to a backend) — the
+//!   app's `ops::execute` chokepoint. A remote execute fires its `Dispatch` fact
+//!   on the *remote* peer, so the local sink structurally can't see it (it only
+//!   emits a `Wire` frame); `ops::execute` records it with the actor + target.
+//!
+//! The window just subscribes its dirty flag to the store so a new record
+//! re-renders it (the store isn't tree-backed, so `WindowWatch`'s tree-prefix
+//! subscriptions would never fire) — capture is app-global, so any number of
+//! Access Log windows read the same ring without double-recording. Reframed from
+//! a raw dev trace into a legible access log
+//! (`RESEARCH-CAPABILITY-MANAGEMENT-UX §4 Step 1`); the inbound "who accessed my
+//! share" half (backend-side) + a durable, subscribable audit + the grant-used
+//! column are the documented next steps.
 
 pub mod model;
 pub mod output;
@@ -21,59 +32,47 @@ use crate::peers::Peers;
 #[allow(unused_imports)]
 use crate::window::{WindowId, WindowType, WindowView};
 
-use crate::inspect_router::PeersInspectSinkHandle;
 use crate::window_watch::WindowWatch;
 use model::AccessLogModel;
+use output::DirectionFilter;
 
 pub struct AccessLogWindow {
+    window_id: WindowId,
     peer_id: String,
     model: AccessLogModel,
     watch: WindowWatch,
-    /// Existence is the contract; `Drop` detaches the sink.
-    #[allow(dead_code)]
-    sink_handle: Option<PeersInspectSinkHandle>,
+    /// The active direction filter (→/←/·). View-only state: the store is
+    /// app-global + ephemeral, so this lives on the window, not the tree.
+    filter: DirectionFilter,
+    /// The active peer filter — which peer's access log to show (a subject key),
+    /// or empty for "all peers". The frontend system peer and the native backend
+    /// each keep their own log; this is how the operator picks between them.
+    peer_filter: String,
 }
 
 impl AccessLogWindow {
     pub fn new(window_id: WindowId, peer_id: String) -> Self {
         let model = AccessLogModel::new(window_id, peer_id.clone());
+        let watch = WindowWatch::new();
+        // The store is app-global, not tree-backed — subscribe the dirty flag so
+        // a new record (from either source) re-renders this window.
+        model.store().subscribe(watch.flag());
         Self {
+            window_id,
             peer_id,
             model,
-            watch: WindowWatch::new(),
-            sink_handle: None,
+            watch,
+            filter: DirectionFilter::default(),
+            peer_filter: String::new(),
         }
     }
 
     pub fn window_type() -> WindowType {
         WindowType {
             name: "Access Log",
-            description: "Live access log: operations, targets, and allow/deny outcomes",
+            description: "Live access log: who accessed what, and allow/deny outcomes",
             scope: crate::window::WindowScope::System,
-            create: |id, peer_id, pm| {
-                let mut window = AccessLogWindow::new(id, peer_id.to_string());
-
-                let ring = window.model.ring();
-                let dirty = window.watch.flag();
-                match pm.install_inspect_sink(peer_id, move |fact| {
-                    ring.push(fact);
-                    dirty.mark();
-                }) {
-                    Ok(handle) => {
-                        window.sink_handle = Some(handle);
-                        window.model.mark_routing_active();
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            peer = %window.peer_id,
-                            "Access Log: install_inspect_sink failed; window will show empty state"
-                        );
-                    }
-                }
-
-                Box::new(window)
-            },
+            create: |id, peer_id, _pm| Box::new(AccessLogWindow::new(id, peer_id.to_string())),
         }
     }
 }
@@ -95,18 +94,41 @@ impl WindowView for AccessLogWindow {
         &self.watch
     }
 
-    fn handle_action(&mut self, _action: &Action, _peers: &Peers) {
-        // Passive, sink-fed — no interactive state in v1.
+    fn handle_action(&mut self, action: &Action, _peers: &Peers) {
+        // The interactive state is the two dropdowns (direction + peer). The store
+        // isn't tree-backed, so mark the watch dirty ourselves to force a rebuild.
+        if let Action::WindowEvent { window_id, event, value } = action {
+            if *window_id != self.window_id {
+                return;
+            }
+            let changed = match event.as_str() {
+                "set_direction_filter" => {
+                    let next = DirectionFilter::from_value(value);
+                    let changed = next != self.filter;
+                    self.filter = next;
+                    changed
+                }
+                "set_peer_filter" => {
+                    let changed = *value != self.peer_filter;
+                    self.peer_filter = value.clone();
+                    changed
+                }
+                _ => false,
+            };
+            if changed {
+                self.watch.mark_dirty();
+            }
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
     fn render_dom(
         &self,
         container: &web_sys::Element,
-        _peers: &Peers,
+        peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.model.render_output();
+        let output = self.model.render_output(peers, self.filter, &self.peer_filter);
         crate::dom::access_log::render(container, &output, ctx);
     }
 }
@@ -123,7 +145,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn factory_installs_sink() {
+    async fn factory_builds_and_reads_the_store() {
         let peers = Peers::new_direct();
         let pid = peers.primary_peer_id().to_string();
         let wt = AccessLogWindow::window_type();

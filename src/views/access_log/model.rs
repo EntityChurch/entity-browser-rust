@@ -1,195 +1,237 @@
-//! Access Log — a bounded ring of completed dispatch operations, fed by the
-//! same `InspectFact::Dispatch` stream as Path Tap (via
-//! `Peers::install_inspect_sink`), but reframed as a **user-facing access log**:
-//! target · operation · outcome (`RESEARCH-CAPABILITY-MANAGEMENT-UX §4 Step 1`).
+//! Access Log model — a thin reader over the app-tier
+//! [`crate::access_log_store`] global ring.
 //!
-//! Why its own ring (not `PathTapRing`): the raw dispatch stream fires twice per
-//! op — an entry fact (`status == 0`) then an exit fact with the result. Path Tap
-//! keeps both (a raw dev trace); the access log keeps **only the exit phase**, so
-//! each completed access is exactly one row. Same substrate, different retention.
+//! The store is fed at the `ops::execute` chokepoint (every app-issued execute,
+//! local OR remote — see the store's module doc for why not the per-peer inspect
+//! sink). The window subscribes its dirty flag to the store so a new access
+//! re-renders it; this model just snapshots the ring on render.
 //!
-//! Ephemeral per session (a ring, not tree-backed) — the durable, subscribable
-//! audit surface + the aggregated minimal-permission map are the next steps; this
-//! is the live view.
+//! Ephemeral per session — the durable, subscribable audit surface + the
+//! aggregated minimal-permission map are the next steps; this is the live view.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
-use entity_sdk::InspectFact;
-
-use super::output::{AccessEntry, AccessLogOutput, AccessOutcome};
+use crate::access_log_store::{self, AccessStore};
+use crate::peers::Peers;
 use crate::window::WindowId;
 
-/// Max completed accesses retained; older rows drop from the front. Sized for a
-/// visual scan of recent activity (matches the Inspect-family ring caps).
-pub const RING_CAP: usize = 200;
+use super::output::{subject_key, AccessLogOutput, DirectionFilter, PeerOption};
 
-#[derive(Clone, Default)]
-pub struct AccessRing {
-    inner: Arc<Mutex<VecDeque<AccessEntry>>>,
-}
-
-impl AccessRing {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Fold a fact into the ring. Only **exit-phase** `Dispatch` facts become
-    /// rows (one per completed access); entry-phase (`status == 0`) and
-    /// non-Dispatch variants are ignored.
-    pub fn push(&self, fact: &InspectFact) {
-        let InspectFact::Dispatch { handler_uri, operation, status, .. } = fact else {
-            return;
-        };
-        if *status == 0 {
-            return; // entry phase — wait for the resolved exit fact
-        }
-        let (peer, handler) = parse_target(handler_uri);
-        let entry = AccessEntry {
-            peer,
-            handler,
-            operation: operation.clone(),
-            outcome: classify(*status),
-            status: *status,
-        };
-        let mut g = self.inner.lock().unwrap();
-        g.push_back(entry);
-        while g.len() > RING_CAP {
-            g.pop_front();
-        }
-    }
-
-    pub fn snapshot_newest_first(&self) -> Vec<AccessEntry> {
-        let g = self.inner.lock().unwrap();
-        g.iter().rev().cloned().collect()
-    }
-
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
-    }
-}
-
-/// Split a handler URI into (target peer, handler path). `entity://{peer}/{rest}`
-/// yields the peer and the handler; a bare local path yields `(None, path)`.
-pub(crate) fn parse_target(uri: &str) -> (Option<String>, String) {
-    if let Some(rest) = uri.strip_prefix("entity://") {
-        let mut parts = rest.splitn(2, '/');
-        let peer = parts.next().unwrap_or("").to_string();
-        let handler = parts.next().unwrap_or("").to_string();
-        (Some(peer).filter(|p| !p.is_empty()), handler)
-    } else {
-        (None, uri.to_string())
-    }
-}
-
-/// Classify a dispatch status into an access outcome. 401/403 are the capability
-/// refusal — the enforcement signal we most want visible.
-pub(crate) fn classify(status: u32) -> AccessOutcome {
-    match status {
-        0 => AccessOutcome::Pending,
-        200..=299 => AccessOutcome::Allowed,
-        401 | 403 => AccessOutcome::Denied,
-        _ => AccessOutcome::Error,
-    }
-}
+/// Stable subject key for inbound rows when the System backend peer id isn't
+/// resolvable yet (it registers asynchronously at boot). Base58 peer ids never
+/// start with `@`, so this can't collide with a real actor.
+pub const SYSTEM_BACKEND_KEY: &str = "@system-backend";
 
 pub struct AccessLogModel {
-    ring: AccessRing,
-    routing_active: bool,
+    store: AccessStore,
 }
 
 impl AccessLogModel {
     // `window_id`/`peer_id` accepted for factory-signature parity, not stored —
-    // a passive sink-fed window; the renderer reads no identity.
+    // the access store is app-global, not per-peer (a file transfer's actor and
+    // target are both recorded, whichever peer this window is bound to).
     pub fn new(_window_id: WindowId, _peer_id: String) -> Self {
         Self {
-            ring: AccessRing::new(),
-            routing_active: false,
+            store: access_log_store::global().clone(),
         }
     }
 
-    pub fn ring(&self) -> AccessRing {
-        self.ring.clone()
+    pub fn store(&self) -> &AccessStore {
+        &self.store
     }
 
-    pub fn mark_routing_active(&mut self) {
-        self.routing_active = true;
-    }
+    /// Snapshot the ring (newest first), attribute each row to its **subject
+    /// peer** (whose access log it is), build the peer dropdown, and narrow to the
+    /// active direction + peer filters. Filtering here (not in the DOM) keeps the
+    /// rebuilt row count proportional to what's shown — the point of the dropdowns
+    /// when one peer/direction floods.
+    ///
+    /// Peers is needed to resolve the System backend peer (so inbound rows read as
+    /// "Native backend", not a raw caller) and to label each subject.
+    pub fn render_output(
+        &self,
+        peers: &Peers,
+        direction: DirectionFilter,
+        peer_filter: &str,
+    ) -> AccessLogOutput {
+        let all = self.store.snapshot_newest_first();
 
-    pub fn render_output(&self) -> AccessLogOutput {
+        // The System backend peer (System + Native), if provisioned — inbound
+        // access is attributed to it. Same structural test the System Overview
+        // uses (no magic label).
+        let modes = crate::persistence::peer_modes();
+        let backend_pid = crate::peer_registry::read_registry(peers)
+            .into_iter()
+            .map(|r| r.peer_id)
+            .find(|pid| {
+                let d = crate::peer_display::PeerDescriptor::describe(peers, pid, &modes);
+                d.role == crate::peer_display::PeerRole::System
+                    && d.runtime == crate::peer_display::PeerRuntime::Native
+            });
+        let backend_key = backend_pid
+            .clone()
+            .unwrap_or_else(|| SYSTEM_BACKEND_KEY.to_string());
+        let system_pid = peers.system_peer_id().to_string();
+
+        // Label every distinct subject present, preserving first-seen order but
+        // floating the two named system peers to the top of the dropdown.
+        let mut labels: HashMap<String, String> = HashMap::new();
+        let mut order: Vec<String> = Vec::new();
+        for e in &all {
+            let key = subject_key(e, &backend_key);
+            if !labels.contains_key(&key) {
+                let label = label_for(peers, &key, &system_pid, backend_pid.as_deref(), &modes);
+                labels.insert(key.clone(), label);
+                order.push(key);
+            }
+        }
+        order.sort_by_key(|k| subject_rank(k, &system_pid, &backend_key));
+        let peer_options: Vec<PeerOption> = order
+            .iter()
+            .map(|k| PeerOption { key: k.clone(), label: labels[k].clone() })
+            .collect();
+
+        let entries = all
+            .into_iter()
+            .filter(|e| direction.matches(e.direction))
+            .filter(|e| peer_filter.is_empty() || subject_key(e, &backend_key) == peer_filter)
+            .collect();
+
         AccessLogOutput {
-            routing_active: self.routing_active,
-            entries: self.ring.snapshot_newest_first(),
+            entries,
+            direction,
+            peer_filter: peer_filter.to_string(),
+            peer_options,
+            backend_key,
+            labels,
         }
+    }
+}
+
+/// A friendly label for a subject peer — the two named system peers get plain,
+/// operator-legible names; anything else falls back to its descriptor + short id.
+fn label_for(
+    peers: &Peers,
+    key: &str,
+    system_pid: &str,
+    backend_pid: Option<&str>,
+    modes: &HashMap<String, crate::peer_mode::PeerMode>,
+) -> String {
+    // Canonical UI names (see docs/architecture/specs/TERMINOLOGY-AND-WINDOWS.md):
+    // the frontend peer is the "System peer"; the native backend is the
+    // "System backend". One name each, used on every surface.
+    if key == SYSTEM_BACKEND_KEY || Some(key) == backend_pid {
+        return "System backend".to_string();
+    }
+    if key == system_pid {
+        return "System peer".to_string();
+    }
+    let d = crate::peer_display::PeerDescriptor::describe(peers, key, modes);
+    format!("{} · {}", d.role_name(), crate::views::short_pid(key))
+}
+
+/// Sort key: system peer first, native backend second, everyone else after (by
+/// key) — a stable, predictable dropdown ordering.
+fn subject_rank(key: &str, system_pid: &str, backend_key: &str) -> (u8, String) {
+    if key == system_pid {
+        (0, String::new())
+    } else if key == backend_key {
+        (1, String::new())
+    } else {
+        (2, key.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::access_log_store::{AccessDirection, AccessEntry, AccessOutcome};
 
-    fn dispatch(uri: &str, op: &str, status: u32) -> InspectFact {
-        InspectFact::Dispatch {
-            request_id: "r".into(),
-            handler_uri: uri.into(),
+    fn entry(actor: &str, op: &str) -> AccessEntry {
+        AccessEntry {
+            direction: AccessDirection::Local,
+            actor: actor.into(),
+            target_peer: None,
+            handler: "system/tree".into(),
             operation: op.into(),
-            status,
-            elapsed_micros: None,
-            chain_id: None,
+            resource: None,
+            outcome: AccessOutcome::Allowed,
+            detail: "status 200".into(),
+        }
+    }
+
+    fn inbound(actor: &str, op: &str) -> AccessEntry {
+        AccessEntry {
+            direction: AccessDirection::Inbound,
+            actor: actor.into(),
+            target_peer: None,
+            handler: "local/files".into(),
+            operation: op.into(),
+            resource: None,
+            outcome: AccessOutcome::Allowed,
+            detail: "status 200".into(),
         }
     }
 
     #[test]
-    fn entry_phase_is_dropped_only_exit_is_logged() {
-        let ring = AccessRing::new();
-        ring.push(&dispatch("entity://B/local/files", "list", 0)); // entry
-        assert_eq!(ring.len(), 0, "entry phase is not an access row");
-        ring.push(&dispatch("entity://B/local/files", "list", 200)); // exit
-        assert_eq!(ring.len(), 1);
-    }
-
-    #[test]
-    fn parses_remote_and_local_targets() {
-        assert_eq!(
-            parse_target("entity://PEER_B/local/files"),
-            (Some("PEER_B".to_string()), "local/files".to_string())
+    fn render_output_reflects_the_store() {
+        // The model reads the app-global store, shared across parallel tests, so
+        // assert on presence of a uniquely-tagged row rather than exact counts.
+        let peers = Peers::new_direct();
+        let model = AccessLogModel::new(1, "peer".into());
+        let uniq = "op-model-render-test";
+        model.store().record(entry("PEER_S", uniq));
+        let rows = model.render_output(&peers, DirectionFilter::All, "").entries;
+        assert!(
+            rows.iter().any(|e| e.operation == uniq && e.actor == "PEER_S"),
+            "recorded row should be visible in render_output"
         );
-        assert_eq!(parse_target("system/tree"), (None, "system/tree".to_string()));
-        // Peer with no trailing handler.
-        assert_eq!(parse_target("entity://PEER_B"), (Some("PEER_B".to_string()), String::new()));
     }
 
     #[test]
-    fn classifies_outcomes() {
-        assert_eq!(classify(200), AccessOutcome::Allowed);
-        assert_eq!(classify(204), AccessOutcome::Allowed);
-        assert_eq!(classify(403), AccessOutcome::Denied);
-        assert_eq!(classify(401), AccessOutcome::Denied);
-        assert_eq!(classify(500), AccessOutcome::Error);
-        assert_eq!(classify(0), AccessOutcome::Pending);
+    fn direction_filter_narrows_to_one_direction() {
+        let peers = Peers::new_direct();
+        let model = AccessLogModel::new(1, "peer".into());
+        // A uniquely-tagged Local row (the app-global store is shared across
+        // parallel tests, so assert on the tag, not counts).
+        let uniq = "op-filter-local-test";
+        model.store().record(entry("PEER_S", uniq)); // entry() is Local
+        // Inbound must not appear when filtering to Local.
+        let local = model.render_output(&peers, DirectionFilter::Local, "").entries;
+        assert!(local.iter().any(|e| e.operation == uniq), "Local row shows under Local");
+        let inbound = model.render_output(&peers, DirectionFilter::Inbound, "").entries;
+        assert!(
+            !inbound.iter().any(|e| e.operation == uniq),
+            "a Local row must not appear under the Inbound filter"
+        );
     }
 
     #[test]
-    fn entry_captures_target_op_and_outcome() {
-        let ring = AccessRing::new();
-        ring.push(&dispatch("entity://PEER_B/local/files", "read", 403));
-        let rows = ring.snapshot_newest_first();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].peer.as_deref(), Some("PEER_B"));
-        assert_eq!(rows[0].handler, "local/files");
-        assert_eq!(rows[0].operation, "read");
-        assert_eq!(rows[0].outcome, AccessOutcome::Denied);
+    fn peer_filter_narrows_to_one_subject_and_inbound_buckets_to_backend() {
+        let peers = Peers::new_direct();
+        let model = AccessLogModel::new(1, "peer".into());
+        let out_op = "op-peer-out-test";
+        let in_op = "op-peer-in-test";
+        model.store().record(entry("PEER_ACTOR_X", out_op)); // Local, subject = actor
+        model.store().record(inbound("REMOTE_CALLER", in_op)); // Inbound, subject = backend
+
+        // Inbound rows are attributed to the native-backend key, not the caller.
+        let out = model.render_output(&peers, DirectionFilter::All, &model_backend_key());
+        assert!(out.entries.iter().any(|e| e.operation == in_op), "inbound shows under the backend subject");
+        assert!(
+            !out.entries.iter().any(|e| e.operation == out_op),
+            "a local actor's row must not appear under the backend subject"
+        );
+
+        // Filtering to the local actor shows its row, not the inbound one.
+        let byactor = model.render_output(&peers, DirectionFilter::All, "PEER_ACTOR_X");
+        assert!(byactor.entries.iter().any(|e| e.operation == out_op));
+        assert!(!byactor.entries.iter().any(|e| e.operation == in_op));
     }
 
-    #[test]
-    fn ring_caps_and_newest_first() {
-        let ring = AccessRing::new();
-        for i in 0..(RING_CAP + 10) {
-            ring.push(&dispatch("system/tree", &format!("op{i}"), 200));
-        }
-        assert_eq!(ring.len(), RING_CAP);
-        let rows = ring.snapshot_newest_first();
-        assert_eq!(rows[0].operation, format!("op{}", RING_CAP + 9), "newest first");
+    // No native backend is registered in this unit test, so inbound buckets under
+    // the sentinel key.
+    fn model_backend_key() -> String {
+        SYSTEM_BACKEND_KEY.to_string()
     }
 }
