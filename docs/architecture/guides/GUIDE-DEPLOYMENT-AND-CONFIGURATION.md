@@ -284,12 +284,15 @@ suppresses the ⛶ toggle (`exposes_toggle()` ⇒ `false`). `home_site`/`origins
 unnecessary here. Emit it with:
 
 ```bash
-make site OUT=dist DEPLOY_CONFIG=1 SURFACE=chrome \
-     --ingest-apps=../entity-apps/dist
+make site OUT=dist DEPLOY_CONFIG=1 SURFACE=chrome APPS_DIST=../entity-apps/dist
 ```
 
-…then hand-edit the emitted `site_mode` block to the above, **or** simply have
-the deploy tool write `entity-deployment.json` directly (every field optional).
+**No hand-edit is needed** — `SURFACE=chrome` emits exactly that `site_mode`
+block itself (see [§6a](#6a-what-surface-emits-for-site_mode)). An earlier
+version of this section told you to edit the emitted file; that instruction is
+obsolete and following it would just retype what the publisher already wrote.
+(You can of course have a deploy tool write `entity-deployment.json` directly —
+every field is optional.)
 
 > **Note:** a publish currently requires **at least one site** in the tree
 > (`"no sites found — nothing to publish"`). For an apps-only deployment you
@@ -308,7 +311,7 @@ chrome (un-maximize, open other windows, browse the rail). See [§4.1](#41-the-t
   "window_type": "Site Browser",
   "home_site": { "peer": "<published-peer-id>", "site": "<site-id>", "loc": "" },
   "origins": { "<published-peer-id>": "" },
-  "site_mode": { "enabled": true, "show_toggle": true, "locked": false }
+  "site_mode": { "enabled": false, "show_toggle": false }
 }
 ```
 
@@ -316,7 +319,17 @@ chrome (un-maximize, open other windows, browse the rail). See [§4.1](#41-the-t
 make site OUT=dist DEPLOY_CONFIG=1 SURFACE=window WINDOW_TYPE="Site Browser" CONFIG_SITE=<site-id>
 ```
 
-(This is the publish default — `SURFACE`/`WINDOW_TYPE` unset gives exactly this.)
+(This is the publish default — `SURFACE`/`WINDOW_TYPE` unset gives exactly this.
+Measured against the emitter 2026-08-24.)
+
+> **The overlay is OFF here, and that is deliberate.** This block used to read
+> `{ enabled: true, show_toggle: true, locked: false }`, which is not what the
+> emitter writes for a `window` surface and has not been since the 2026-07-02
+> fix: the window *is* where the content lives, so a status-bar "View Site"
+> toggle into the overlay is redundant — and on a fresh peer it resolved the
+> overlay's default home to a site that does not exist locally
+> (`No site manifest at 'demo'`). Only a `site` surface enables the overlay. See
+> [§6a](#6a-what-surface-emits-for-site_mode).
 
 > Want the full-viewport **site overlay** for a non-kiosk site instead of the
 > windowed browser? Use `SURFACE=site` **without** `LOCKED` (overlay + an escape
@@ -436,6 +449,27 @@ Higher-level convenience targets:
   `DEPLOY_CONFIG=1 CONFIG_SITE=<id>` to boot the SPA into a published site as a
   cache-backed foreign-site overlay (the real remote-peer path).
 - **`make site-bare`** — bare static site ([§5.4](#54-bare-static-site-no-spa-no-entity-chrome-at-all)).
+
+### 6a. What `SURFACE` emits for `site_mode`
+
+**The surface determines the overlay posture; you do not hand-write it.** This is
+the one canonical statement of that mapping — §5's recipes show it applied.
+Emitted by `emit_deployment_config` (`src/content_site/publish.rs`), measured
+against the emitter 2026-08-24:
+
+| `SURFACE` | emitted `site_mode` | also |
+|---|---|---|
+| `window` *(default)* | `{ enabled: false, show_toggle: false }` | `window_type` |
+| `chrome` | `{ enabled: false, show_toggle: false }` | — |
+| `site` | `{ enabled: true, show_toggle: true, locked: false }` | — |
+| `site` + `LOCKED=1` | `{ enabled: true, show_toggle: false, locked: true }` | `peer_creation_enabled: false` |
+
+**`window` and `chrome` turn the overlay off**, which surprises people who expect
+"a site deployment" to enable site mode. The content of a `window` deployment
+lives *in the window*; the status-bar ⛶ toggle into the overlay would be a second
+route to the same thing, and on a fresh peer it resolved the overlay's default
+home to a missing local site (`No site manifest at 'demo'` — bug report
+2026-07-02). Only `site` means "the overlay is the surface".
 
 ---
 

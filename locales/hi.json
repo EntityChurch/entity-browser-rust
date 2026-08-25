@@ -116,6 +116,7 @@
   "contentsite.document_empty": "यह दस्तावेज़ खाली है — इस पृष्ठ में कोई सामग्री नहीं है।",
   "contentsite.enter_peer": "पीयर में प्रवेश करें",
   "contentsite.err_no_manifest": "'{site}' पर कोई साइट मेनिफ़ेस्ट नहीं (पीयर: {peer})।",
+  "contentsite.err_no_manifest_foreign": "{origin} पर '{site}' नाम से कुछ भी प्रकाशित नहीं है। यह साइट किसी अन्य पीयर ({peer}) की है और संभवतः अपने ही डोमेन पर होस्ट है — उसे वहाँ खोलें, या रजिस्ट्री ब्राउज़र में ढूँढें।",
   "contentsite.err_page_not_found": "साइट '{site}' में पेज '{page}' नहीं मिला।",
   "contentsite.err_unreachable": "पीयर '{peer}' तक नहीं पहुँच सके — इसके लिए कोई रूट पंजीकृत नहीं है।",
   "contentsite.loading_page": "_लाइव पेज लोड हो रहा है…_",

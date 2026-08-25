@@ -210,3 +210,124 @@ pub struct SiteRenderOutput {
     /// the app's own theme table, never from site-supplied bytes.
     pub site_theme_css: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Why a site would not resolve — the message-selection rule.
+// ---------------------------------------------------------------------------
+
+/// Why we could not produce a page for a location whose **manifest** is
+/// missing, at the granularity a reader can act on.
+///
+/// This exists because `ResolveError::ManifestMissing` collapses two very
+/// different situations into one sentence, and the sentence it produced —
+/// *"No site manifest at 'X' (peer: Y)"* — reads as **"that site does not
+/// exist"** in both. Measured against production on 2026-08-24: following a
+/// shared link to a site published by *another* peer reports exactly that,
+/// while the site is live and perfectly reachable at its own domain. The
+/// reader is told the content is missing when what is missing is *this
+/// browser's knowledge of where that peer is hosted*.
+///
+/// The discriminator is **which origin we looked at**, and it is worth
+/// spelling out because it is the whole diagnosis: a `?site=` deep link for a
+/// foreign peer seeds a *same-origin* entry for that peer at boot
+/// (`app.rs::boot_load`, the static→live round-trip case), so the resolver
+/// dutifully fetches `{this origin}/{their peer}/sites/…`, gets a 404, and
+/// reports a missing manifest. Naming the origin turns an apparently-broken
+/// site into an obviously-wrong lookup.
+///
+/// **We deliberately do NOT mention this tab's storage durability here.** A
+/// secondary tab is ephemeral and therefore holds no origins it learned
+/// earlier, which is a real contributing factor — and it is *not* the cause:
+/// a fresh durable profile following the same link fails identically
+/// (measured, both arms). The multi-tab situation already has its own honest
+/// banner; asserting it as the cause of *this* failure would be the same
+/// mistake this type exists to fix. Grade by the measured consequence, never
+/// by an asserted one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissingSite<'a> {
+    /// The site should have been in our own tree. The original message is
+    /// correct here: nothing was published under this peer at that id.
+    Local,
+    /// Published by another peer, and we looked for it at `origin` — which
+    /// answered, and does not carry it. Almost always "that peer lives on a
+    /// different domain".
+    Foreign { peer: &'a str, origin: &'a str },
+    /// Published by another peer we hold no route for at all. The resolver
+    /// normally reports this as `Unreachable` before a manifest read is even
+    /// attempted; kept so the mapping is total rather than defaulting a
+    /// genuinely-unknown host into a claim about an origin.
+    ForeignUnknownHost { peer: &'a str },
+}
+
+/// Classify a missing-manifest failure.
+///
+/// `loc_peer` is the peer named by the location (`None` ⇒ our own tree), and
+/// `origin` is whatever the site-origin registry holds for that peer *from
+/// our vantage*. Pure — no `Peers`, no DOM — so the rule is reachable from
+/// `make test`, which the renderer that consumes it is not (wasm-only).
+pub fn classify_missing_site<'a>(
+    our_peer: &str,
+    loc_peer: Option<&'a str>,
+    origin: Option<&'a str>,
+) -> MissingSite<'a> {
+    match loc_peer {
+        // No peer named, or it is us: our own tree, our own missing site.
+        None => MissingSite::Local,
+        Some(p) if p == our_peer => MissingSite::Local,
+        Some(p) => match origin {
+            // An empty origin string is the same-origin sentinel used
+            // throughout the origins registry; it is still an origin we
+            // looked at, and the caller renders it as the current location.
+            Some(o) => MissingSite::Foreign { peer: p, origin: o },
+            None => MissingSite::ForeignUnknownHost { peer: p },
+        },
+    }
+}
+
+#[cfg(test)]
+mod missing_site_tests {
+    use super::*;
+
+    const ME: &str = "2KMineMineMine";
+    const THEM: &str = "2KTheirsTheirs";
+
+    #[test]
+    fn our_own_tree_keeps_the_original_reading() {
+        assert_eq!(classify_missing_site(ME, None, None), MissingSite::Local);
+        assert_eq!(classify_missing_site(ME, Some(ME), None), MissingSite::Local);
+        // Even if an origin somehow exists for ourselves, a local miss is local.
+        assert_eq!(
+            classify_missing_site(ME, Some(ME), Some("https://example.org")),
+            MissingSite::Local
+        );
+    }
+
+    /// The shipped bug, as a rule: a foreign peer whose origin resolved to
+    /// *this* domain must not be reported as a missing site without naming
+    /// the origin we actually asked.
+    #[test]
+    fn a_foreign_peer_names_the_origin_we_looked_at() {
+        assert_eq!(
+            classify_missing_site(ME, Some(THEM), Some("https://entitycoreprotocol.org")),
+            MissingSite::Foreign { peer: THEM, origin: "https://entitycoreprotocol.org" }
+        );
+    }
+
+    /// The same-origin sentinel is an origin, not an absence — collapsing it
+    /// into `ForeignUnknownHost` would drop the one fact worth printing.
+    #[test]
+    fn the_same_origin_sentinel_is_still_an_origin_we_looked_at() {
+        assert_eq!(
+            classify_missing_site(ME, Some(THEM), Some("")),
+            MissingSite::Foreign { peer: THEM, origin: "" }
+        );
+    }
+
+    #[test]
+    fn a_foreign_peer_with_no_route_is_not_a_claim_about_an_origin() {
+        assert_eq!(
+            classify_missing_site(ME, Some(THEM), None),
+            MissingSite::ForeignUnknownHost { peer: THEM }
+        );
+    }
+}

@@ -120,6 +120,7 @@
   "contentsite.document_empty": "هذا المستند فارغ — لا تحتوي الصفحة على أي محتوى.",
   "contentsite.enter_peer": "دخول النظير",
   "contentsite.err_no_manifest": "لا يوجد مانيفست للموقع '{site}' (النظير: {peer}).",
+  "contentsite.err_no_manifest_foreign": "لا يوجد شيء منشور على '{site}' في {origin}. هذا الموقع يخصّ نظيرًا آخر ({peer}) وغالبًا ما يُستضاف على نطاقه الخاص — افتحه هناك، أو ابحث عنه في متصفّح السجل.",
   "contentsite.err_page_not_found": "الصفحة '{page}' غير موجودة في الموقع '{site}'.",
   "contentsite.err_unreachable": "تعذّر الوصول إلى النظير '{peer}' — لا يوجد مسار مسجّل له.",
   "contentsite.loading_page": "_جارٍ تحميل الصفحة الحية…_",

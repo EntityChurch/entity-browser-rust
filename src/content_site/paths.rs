@@ -264,16 +264,62 @@ pub const SITE_QUERY_PARAM: &str = "site";
 /// is the follow-up that pairs with stable hosting identity.
 pub const SELF_PEER: &str = "self";
 
-/// Build the live deep link **to the serving peer** (`self`): the same link
-/// the static banner emits and the in-app "Share" control copies. Both halves
-/// of the round-trip resolve `self` → the booting system peer, so the link is
-/// **same-origin robust** regardless of which peer-id published the snapshot
-/// (the publish peer is ephemeral and differs from the live peer; see
-/// [`SELF_PEER`]). A cross-peer *archive* link with a real, stable peer-id is
-/// the deferred hosting-identity follow-up. Kept here as the one place the
-/// `self`-sharing decision lives, shared by the banner and the Share button.
+/// Build the live deep link **to the serving peer** (`self`).
+///
+/// **This is correct only for a site in THIS peer's own store**, and the note
+/// that used to sit here — *"the same link … the in-app Share control copies"* —
+/// described a bug. `self` resolves at boot to **the reader's own booting
+/// system peer** (`app.rs`, the `?site=` override), so it addresses a site the
+/// *recipient* holds. That is right for the seeded demo site the sentinel was
+/// built for, and wrong for **every published site**, whose content lives under
+/// the publisher's peer and is reached through `origins` + HTTP-poll.
+///
+/// Use [`share_deep_link`], which picks between this and the concrete form.
 pub fn self_deep_link(base: &str, site_id: &str, page: &str) -> String {
     site_deep_link(base, SELF_PEER, site_id, page)
+}
+
+/// The link the **Share** control copies: the concrete publisher peer-id when
+/// the page on screen belongs to one, and the [`SELF_PEER`] sentinel only for a
+/// site on this peer's own store. `peer` is the viewed [`Location`]'s
+/// `peer_id` — `None` means "the bound/current peer", i.e. mine.
+///
+/// [`Location`]: super::location::Location
+///
+/// # Why this is not `self_deep_link`
+///
+/// Measured against production 2026-08-24, fresh profile, same page:
+/// `?site=self/entity-core-protocol-main/index` → **"No site manifest at
+/// 'entity-core-protocol-main' (peer: 2KDdokFX…)"**, while
+/// `?site=2K4J5qsD…/entity-core-protocol-main/index` → the site renders. The
+/// peer-id in that error is the **reader's own**, freshly generated — it differs
+/// per visitor, which is what identifies the sentinel as the cause rather than a
+/// publishing fault. So a link copied out of any published domain was
+/// unopenable by anyone, including the person who copied it.
+///
+/// **`self` was not wrong when it was written; its precondition expired.** The
+/// sentinel exists because a same-origin static export could not know the live
+/// peer's id at publish time. Under per-domain publishing the content is under a
+/// **stable, durable publisher identity** that the deployment names and the
+/// registry signs — so the id is knowable, and the share button's own doc
+/// comment already stated the unblocking condition: *"a working live→static link
+/// needs the hosting-identity piece: the live peer publishing its OWN tree, or a
+/// registry telling the app where this peer's site is published."* Both shipped.
+///
+/// **The static exporter already emits the concrete form** (`static_export.rs`,
+/// `?site={peer}/{site}/{page}`, with a test pinning it). This was the in-app
+/// half of one surface not having taken the same lesson — the recurring
+/// two-renderers-of-one-surface shape.
+pub fn share_deep_link(base: &str, peer: Option<&str>, site_id: &str, page: &str) -> String {
+    match peer {
+        // A concrete peer: emit it. Boot's non-`self` branch seeds a same-origin
+        // origin entry before navigating, so the first resolve HTTP-polls
+        // `/{peer}/sites/…` instead of doing a local read that 404s.
+        Some(p) if !p.is_empty() && p != SELF_PEER => site_deep_link(base, p, site_id, page),
+        // Mine: `self` is right, and is stronger than my own id would be — that
+        // id is per-profile, so a link carrying it opens nothing for anyone else.
+        _ => self_deep_link(base, site_id, page),
+    }
 }
 
 /// Build the live deep link: `{base}/?site={peer_id}/{site_id}[/{page}]`.
@@ -513,6 +559,51 @@ mod tests {
         );
         // Root page (empty) → site root; empty base → root-relative.
         assert_eq!(self_deep_link("", "demo", ""), "/?site=self/demo");
+    }
+
+    /// A shared link to somebody else's site must carry **their** peer-id.
+    ///
+    /// The regression this pins was live on every published domain: the Share
+    /// button emitted the `self` sentinel unconditionally, `self` resolves at
+    /// boot to the **reader's own** peer, and the reader holds no such site — so
+    /// the link reported *"No site manifest"* at a peer-id that differed per
+    /// visitor. Measured against production before the fix; see
+    /// [`share_deep_link`].
+    ///
+    /// The `assert_ne!` is the load-bearing half: a "fix" that emits `self` for a
+    /// foreign peer satisfies every positive assertion about shape and still
+    /// ships the bug.
+    #[test]
+    fn a_shared_link_carries_the_publishers_peer_not_the_readers() {
+        const PUB: &str = "2K4J5qsDq63SLHXkk1fHHBq12dRx4iBrrrkFFzzGdo4Awg";
+
+        // Foreign site → the publisher's id, never the sentinel.
+        let shared = share_deep_link("https://ex.test", Some(PUB), "proto-main", "index");
+        assert_eq!(shared, format!("https://ex.test/?site={PUB}/proto-main/index"));
+        assert!(!shared.contains(SELF_PEER), "a foreign site must not share as `self`: {shared}");
+        assert_ne!(shared, self_deep_link("https://ex.test", "proto-main", "index"));
+
+        // My own site → `self`, which is STRONGER than my own id would be: that
+        // id is per-profile, so a link carrying it opens nothing for anyone else.
+        assert_eq!(
+            share_deep_link("https://ex.test", None, "demo", "guide/intro"),
+            "https://ex.test/?site=self/demo/guide/intro"
+        );
+        // An empty peer means the same thing as `None` (the bound peer), and a
+        // caller that hands the sentinel straight back must not double-wrap it.
+        assert_eq!(
+            share_deep_link("https://ex.test", Some(""), "demo", ""),
+            "https://ex.test/?site=self/demo"
+        );
+        assert_eq!(
+            share_deep_link("https://ex.test", Some(SELF_PEER), "demo", ""),
+            "https://ex.test/?site=self/demo"
+        );
+
+        // The round-trip closes: what we emit is what the boot parser reads back.
+        let (peer, site, page) =
+            parse_site_query(shared.split("?site=").nth(1).unwrap()).expect("parses");
+        assert_eq!((peer.as_str(), site.as_str(), page.as_str()), (PUB, "proto-main", "index"));
     }
 
     #[test]

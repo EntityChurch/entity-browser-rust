@@ -115,6 +115,7 @@
   "contentsite.document_empty": "此文档为空 — 该页面没有任何内容。",
   "contentsite.enter_peer": "进入对等节点",
   "contentsite.err_no_manifest": "'{site}' 没有站点清单（对等节点：{peer}）。",
+  "contentsite.err_no_manifest_foreign": "在 {origin} 上没有发布 '{site}'。该站点属于另一个对等节点（{peer}），可能托管在它自己的域名下 — 请在那里打开，或在注册表浏览器中查找。",
   "contentsite.err_page_not_found": "在站点 '{site}' 中未找到页面 '{page}'。",
   "contentsite.err_unreachable": "无法访问对等节点 '{peer}' — 没有为它注册路由。",
   "contentsite.loading_page": "_正在加载实时页面…_",

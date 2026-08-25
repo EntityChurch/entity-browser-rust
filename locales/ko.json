@@ -115,6 +115,7 @@
   "contentsite.document_empty": "이 문서는 비어 있습니다 — 이 페이지에는 콘텐츠가 없습니다.",
   "contentsite.enter_peer": "피어 입장",
   "contentsite.err_no_manifest": "'{site}'에 사이트 매니페스트가 없습니다(피어: {peer}).",
+  "contentsite.err_no_manifest_foreign": "{origin}에는 '{site}'로 게시된 것이 없습니다. 이 사이트는 다른 피어({peer})의 것이며 자체 도메인에서 호스팅되고 있을 가능성이 높습니다. 그곳에서 열거나 레지스트리 브라우저에서 찾아보세요.",
   "contentsite.err_page_not_found": "사이트 '{site}'에서 페이지 '{page}'을(를) 찾을 수 없습니다.",
   "contentsite.err_unreachable": "피어 '{peer}'에 연결할 수 없습니다 — 등록된 경로가 없습니다.",
   "contentsite.loading_page": "_라이브 페이지 로드 중…_",

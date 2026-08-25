@@ -116,6 +116,7 @@
   "contentsite.document_empty": "Ce document est vide — la page ne contient aucun contenu.",
   "contentsite.enter_peer": "Entrer dans le pair",
   "contentsite.err_no_manifest": "Aucun manifeste de site à « {site} » (pair : {peer}).",
+  "contentsite.err_no_manifest_foreign": "Rien n'est publié à '{site}' sur {origin}. Ce site appartient à un autre pair ({peer}) et est probablement hébergé sur son propre domaine — ouvrez-le là-bas, ou trouvez-le dans le Navigateur de registre.",
   "contentsite.err_page_not_found": "Page « {page} » introuvable dans le site « {site} ».",
   "contentsite.err_unreachable": "Impossible de joindre le pair « {peer} » — aucune route n'est enregistrée pour lui.",
   "contentsite.loading_page": "_Chargement de la page en direct…_",

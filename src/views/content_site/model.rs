@@ -628,6 +628,31 @@ impl ContentSiteModel {
         }
     }
 
+    /// The address this page is being served from, for the one message that
+    /// has to name it. The origins registry stores same-origin as `""`, which
+    /// is the right thing to *store* (it keeps a publish portable across
+    /// domains) and useless to *show* — so it is expanded at display time,
+    /// never in the registry.
+    ///
+    /// `None` means we could not determine it, and the caller then falls back
+    /// to a message that makes **no claim about an origin** rather than
+    /// inventing a word for one. That is deliberate: a placeholder like "this
+    /// site" would be untranslated prose standing in for the single fact this
+    /// message exists to deliver.
+    #[cfg(target_arch = "wasm32")]
+    fn current_origin_display() -> Option<String> {
+        web_sys::window()
+            .and_then(|w| w.location().origin().ok())
+            .filter(|o| !o.is_empty())
+    }
+
+    /// Native has no `location`. This message is only ever rendered in a
+    /// browser; the arm exists so the module compiles under `make test`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn current_origin_display() -> Option<String> {
+        None
+    }
+
     pub fn render_output(&self, peers: &Peers) -> SiteRenderOutput {
         let (loc, can_go_back) = {
             let inner = self.inner.lock().unwrap();
@@ -664,8 +689,9 @@ impl ContentSiteModel {
                 // chrome (title + nav) from the durable manifest, with a notice
                 // — instead of a bare error. A local page-miss is a genuine
                 // not-found (no shell).
-                self.shell_output(peers, &loc, e, can_go_back)
-                    .unwrap_or_else(|| SiteRenderOutput { can_go_back, ..self.error_output(&loc, e) })
+                self.shell_output(peers, &loc, e, can_go_back).unwrap_or_else(|| {
+                    SiteRenderOutput { can_go_back, ..self.error_output(peers, &loc, e) }
+                })
             }
             ResolveOutcome::Pending => {
                 // While the live page is still resolving, show the cached
@@ -691,15 +717,51 @@ impl ContentSiteModel {
         }
     }
 
-    fn error_output(&self, loc: &Location, err: ResolveError) -> SiteRenderOutput {
+    fn error_output(&self, peers: &Peers, loc: &Location, err: ResolveError) -> SiteRenderOutput {
         let msg = match err {
-            ResolveError::ManifestMissing => crate::i18n::t(
-                "contentsite.err_no_manifest",
-                &[
-                    ("site", &loc.site_id),
-                    ("peer", &loc.peer_id.clone().unwrap_or_else(|| self.peer_id.clone())),
-                ],
-            ),
+            // A missing manifest means two different things, and saying the
+            // same sentence for both is what made a live foreign site read as
+            // deleted. `classify_missing_site` owns the rule (and its tests);
+            // this only maps the verdict to a string.
+            ResolveError::ManifestMissing => {
+                use super::output::{classify_missing_site, MissingSite};
+                let origin = loc.peer_id.as_deref().and_then(|p| {
+                    crate::content_site::origins::get_origin(peers, &self.peer_id, p)
+                });
+                match classify_missing_site(&self.peer_id, loc.peer_id.as_deref(), origin.as_deref())
+                {
+                    MissingSite::Local => crate::i18n::t(
+                        "contentsite.err_no_manifest",
+                        &[("site", &loc.site_id), ("peer", &self.peer_id)],
+                    ),
+                    MissingSite::Foreign { peer, origin } => {
+                        // An empty origin is the same-origin sentinel. Render
+                        // it as the address the reader is actually on, because
+                        // "" tells them nothing and the whole point of this
+                        // message is naming the host we asked.
+                        let shown = if origin.is_empty() {
+                            Self::current_origin_display()
+                        } else {
+                            Some(origin.to_string())
+                        };
+                        match shown {
+                            Some(o) => crate::i18n::t(
+                                "contentsite.err_no_manifest_foreign",
+                                &[("site", &loc.site_id), ("peer", peer), ("origin", &o)],
+                            ),
+                            // Cannot name the origin — say the thing that is
+                            // still true rather than guessing at the one fact
+                            // this message is for.
+                            None => {
+                                crate::i18n::t("contentsite.err_unreachable", &[("peer", peer)])
+                            }
+                        }
+                    }
+                    MissingSite::ForeignUnknownHost { peer } => {
+                        crate::i18n::t("contentsite.err_unreachable", &[("peer", peer)])
+                    }
+                }
+            }
             ResolveError::PageMissing => {
                 // i18n-ignore — technical placeholder for the site's root page
                 let page = if loc.page.is_empty() { "<root>" } else { &loc.page };

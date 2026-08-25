@@ -514,26 +514,33 @@ fn render_more_dropdown(bar: &Element, overflow: &[&NavLink], ctx: &DomCtx, host
     util::append(bar, &wrap);
 }
 
-/// Append the share control — a single **"🔗 Share link"** that copies the
-/// same-origin `?site=` deep link ([`paths::self_deep_link`], the `self`
-/// sentinel — the *same* link the static banner emits) re-opening this page in
-/// the live entity browser. Always works same-origin.
+/// Append the share control — a single **"🔗 Share link"** copying the `?site=`
+/// deep link that re-opens *this* page in the live entity browser.
 ///
-/// **Why no "static link" here (removed):** a static permalink is
-/// peer-qualified (`/sites/{peer}/…`), but the live app shows ITS OWN
-/// (ephemeral, localStorage) system peer's site, which is NOT statically
-/// published anywhere the app knows — `make site`/`site-serve` exports a
-/// SEPARATE ephemeral publish peer. So a static link built from the live
-/// peer-id 404s (the reported bug). A working live→static link needs the
-/// hosting-identity piece: the live peer publishing its OWN tree, or a registry
-/// (`content_site::origins`, `peer_id → origin`) telling the app where this
-/// peer's site is published. Until then we only offer the live link (the
-/// same-origin round-trip that works) and the static banner (static→live).
+/// **It carries the concrete publisher peer-id, not the `self` sentinel** — see
+/// [`paths::share_deep_link`], which owns that choice and the measurement behind
+/// it. Emitting `self` here was a real defect: `self` resolves to the *reader's*
+/// own booting peer, so every link copied out of a published domain reported
+/// *"No site manifest"* at a peer-id that differed per visitor.
+///
+/// **The "why no static link" note that stood here is spent.** It said a static
+/// permalink was unavailable until *"the hosting-identity piece: the live peer
+/// publishing its OWN tree, or a registry telling the app where this peer's site
+/// is published."* Per-domain publishing gave us durable publisher identities and
+/// the registry signs `name → peer-id`, so both arrived — which is exactly what
+/// makes the link below expressible. A separate *static* (`/sites/{peer}/…`)
+/// permalink is still not offered; the live link now works for foreign sites,
+/// which is what the removed control was reaching for.
 fn render_share_button(bar: &Element, output: &SiteRenderOutput, ctx: &DomCtx, block: bool) {
     let origin = web_sys::window()
         .and_then(|w| w.location().origin().ok())
         .unwrap_or_default();
-    let live_link = paths::self_deep_link(&origin, &output.site_id, &output.current_page);
+    let live_link = paths::share_deep_link(
+        &origin,
+        output.peer.as_deref(),
+        &output.site_id,
+        &output.current_page,
+    );
     share_button(
         bar,
         ctx,
@@ -552,6 +559,14 @@ fn share_button(bar: &Element, ctx: &DomCtx, label: &str, title: &str, link: Str
     let btn = util::create_element("button");
     util::set_text(&btn, label);
     util::set_attr(&btn, "title", title);
+    // **The link is a host-side observable, because otherwise nothing can gate
+    // it.** It is captured by the click closure and written to the clipboard,
+    // and a headless clipboard read is both awkward and permission-gated — so
+    // the one property worth asserting (*does a shared link carry the
+    // publisher's peer or the reader's own?*) would be untestable in a browser.
+    // That is not hypothetical: emitting the `self` sentinel here shipped and
+    // was found by a person, not a gate. Same move as `data-app-state-seq`.
+    util::set_attr(&btn, "data-share-link", &link);
     let style = if block {
         "display:block;width:100%;text-align:start;\
          background:var(--site-control-bg, #22223a);\

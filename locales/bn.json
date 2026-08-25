@@ -116,6 +116,7 @@
   "contentsite.document_empty": "এই নথিটি খালি — পৃষ্ঠাটিতে কোনও বিষয়বস্তু নেই।",
   "contentsite.enter_peer": "পিয়ারে প্রবেশ করুন",
   "contentsite.err_no_manifest": "'{site}' সাইটের কোনো ম্যানিফেস্ট নেই (পিয়ার: {peer})।",
+  "contentsite.err_no_manifest_foreign": "{origin}-এ '{site}' নামে কিছুই প্রকাশিত হয়নি। এই সাইটটি অন্য একটি পিয়ারের ({peer}) এবং সম্ভবত নিজস্ব ডোমেইনে হোস্ট করা — সেখানে খুলুন, বা রেজিস্ট্রি ব্রাউজার-এ খুঁজুন।",
   "contentsite.err_page_not_found": "'{site}' সাইটে '{page}' পৃষ্ঠা পাওয়া যায়নি।",
   "contentsite.err_unreachable": "'{peer}' পিয়ারে পৌঁছানো যায়নি — এর জন্য কোনো রুট নিবন্ধিত নেই।",
   "contentsite.loading_page": "_লাইভ পৃষ্ঠা লোড হচ্ছে…_",

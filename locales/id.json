@@ -115,6 +115,7 @@
   "contentsite.document_empty": "Dokumen ini kosong — halaman tidak memuat konten apa pun.",
   "contentsite.enter_peer": "Masuk Peer",
   "contentsite.err_no_manifest": "Tidak ada manifes situs di '{site}' (peer: {peer}).",
+  "contentsite.err_no_manifest_foreign": "Tidak ada yang diterbitkan di '{site}' pada {origin}. Situs ini milik peer lain ({peer}) dan kemungkinan di-host di domainnya sendiri — buka di sana, atau cari di Peramban Registri.",
   "contentsite.err_page_not_found": "Halaman '{page}' tidak ditemukan di situs '{site}'.",
   "contentsite.err_unreachable": "Tidak dapat menjangkau peer '{peer}' — tidak ada rute yang terdaftar untuknya.",
   "contentsite.loading_page": "_Memuat halaman langsung…_",
