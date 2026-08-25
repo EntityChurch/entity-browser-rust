@@ -26,9 +26,30 @@ pub struct FileTransferOutput {
     pub share_prefix: String,
     /// Initial value of the filename input (defaults to the seeded file).
     pub filename_initial: String,
+    /// The share browsed as a **tree** (`DESIGN-CROSS-DEVICE-FILE-TRANSFER`) —
+    /// flattened rows from the shared `TreeNode` machinery, one per visible
+    /// file/folder. Empty until the root has been listed.
+    pub tree_rows: Vec<FileRow>,
+    /// True once the share root has been listed (drives "Browse" vs the tree).
+    pub root_listed: bool,
+    /// True while the root list is in flight.
+    pub root_loading: bool,
+    /// Full tree path of the currently-selected file (the Pull target), if any.
+    pub selected_full_path: Option<String>,
+    /// Last browse error, surfaced loudly (D13).
+    pub browse_error: Option<String>,
     /// True when at least one remote peer is connected — drives the
     /// role-aware hint ("connect a backend peer first" vs. the controls).
     pub has_target: bool,
+    /// Access status of the **effective target** — what drives the status chip
+    /// and the (only-when-real) authorize affordance. File Transfer is a pure
+    /// *consumer* of authorization (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §2.1`);
+    /// it never authors grants. The signal is **ground-truth, result-driven**:
+    /// a real refusal (`403`) from an operation against the target, not a guess
+    /// from the local mirror (which records grants *we* authored as a host, not
+    /// whether the *remote* authorized us — the two only coincide under mutual
+    /// pairing). See [`TargetAccess`].
+    pub access: TargetAccess,
     /// Result log (shared event log, pre-classified) — where list/read
     /// responses surface.
     pub events: Vec<EventEntry>,
@@ -39,4 +60,45 @@ pub struct TargetOption {
     pub value: String,
     pub label: String,
     pub selected: bool,
+}
+
+/// One visible row of the share tree — a flattened [`crate::views::entity_tree::
+/// tree::VisibleRow`] enriched with file/dir metadata. Indentation comes from
+/// `depth`; the toggle glyph from `is_dir`/`expanded`; a spinner from `loading`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRow {
+    /// Relative-to-share path — the key for expand/select events.
+    pub path: String,
+    /// Leaf display name.
+    pub name: String,
+    pub depth: usize,
+    pub is_dir: bool,
+    pub expanded: bool,
+    /// This directory is expanded but its listing hasn't arrived yet.
+    pub loading: bool,
+    pub selected: bool,
+    pub size: Option<u64>,
+    /// Full tree path (`local/files/shared/…`) for a file pull.
+    pub full_path: String,
+}
+
+/// Access status of the effective transfer target — honest and evidence-based.
+///
+/// The gate for a *client* pull/push is the **remote's** grant to us, which we
+/// cannot read cheaply while `debug_open_grants` confers kernel-level wildcards
+/// invisible to the policy table. So the only reliable signal is what actually
+/// happens when we talk to the target: a `403`/`401` refusal (`Denied`) or a
+/// `2xx` success (`Authorized`). We never manufacture a "not authorized" claim
+/// from an empty local mirror — that false-alarmed a working transfer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetAccess {
+    /// A recent operation against the target succeeded (`2xx`), or the local
+    /// authz mirror confirms a grant. Optional profile string when known.
+    Authorized(Option<String>),
+    /// A recent operation was **refused** (`403`/`401`) — the real signal to
+    /// surface the "[Authorize in Peer Connections]" affordance.
+    Denied,
+    /// No evidence yet (nothing tried, no mirror entry). Neutral — do NOT
+    /// alarm; with `debug_open_grants` on the peer is in fact allowed.
+    Unknown,
 }
