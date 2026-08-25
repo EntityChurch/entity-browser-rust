@@ -130,8 +130,16 @@ echo "=== registry ==="
 mkdir -p "$OUT/registry"
 # ONE invocation — emitting twice would work (it is idempotent) but a second
 # publish is a second chance for the two to disagree.
+# `ISSUED_AT_MS` pins the clock so the emission is REPRODUCIBLE. `issued_at`
+# rides every binding body, so it decides every binding hash and therefore the
+# whole trie shape: unpinned, two runs over identical content produce different
+# bytes, and a fixture cut from one of them can neither be regenerated nor
+# checked. Unset ⇒ wall clock, which is right for a real deployment and wrong
+# for a corpus other repos consume.
+issued_at_args=()
+[ -n "${ISSUED_AT_MS:-}" ] && issued_at_args=("--issued-at=$ISSUED_AT_MS")
 reg_out=$($BIN registry "$OUT/registry" --identity-seed="$REGISTRY_SEED" \
-  --ttl-days="$TTL_DAYS" "${binds[@]}" 2>&1) || { echo "$reg_out" >&2; exit 1; }
+  --ttl-days="$TTL_DAYS" "${issued_at_args[@]}" "${binds[@]}" 2>&1) || { echo "$reg_out" >&2; exit 1; }
 printf '%s\n' "$reg_out"
 # The emit prints the id it published under; the domains were seeded with the id
 # `--peer-id` predicted. They come from the same derivation, so they cannot

@@ -343,6 +343,81 @@ fn selection_marker(peers: &Peers, peer_id: &str) -> Option<String> {
     peers.get_entity(peer_id, &path).and_then(|e| selection_from_entity(&e))
 }
 
+/// **The node this session actually rendezvous through** — the registry row when
+/// there is one, otherwise the provisioning in force, synthesized into a row.
+///
+/// # The bug this exists to close
+///
+/// Provisioning has three sources (`resolve_provisioning_quietly`: URL query >
+/// selected connector > build knob) and **only the middle one writes a registry
+/// row**. So a session provisioned by URL or by the build knob installs a
+/// working §6.5 establisher and then refuses every operation that asks the
+/// registry: `meet` answered *"no connector selected — `connector add …`"* while
+/// `net`, one command earlier, printed `OK rendezvous` and `OK establisher`.
+/// Two rows of the same report contradicting each other, and the person is told
+/// to add the node they already have.
+///
+/// Reproduced in two real browsers against a real desktop (2026-08-21) and it
+/// is not a corner: it is **every** `make pair-serve` build (the whole point of
+/// which is that the node is baked in and nobody types one) and **every**
+/// browser that loads the desktop's served URL. Both provision by a path that
+/// leaves the registry empty.
+///
+/// # Why synthesize rather than write a row
+///
+/// A registry row is durable, user-owned state — the thing `connector rm` and
+/// the connector list manage. URL provisioning is explicitly *"never persisted"*
+/// and the build knob is a property of the binary; materializing either as a row
+/// would put a connector the user cannot account for into their list, and
+/// re-materialize it after they removed it. The synthesized row is derived,
+/// lasts one call, and carries `label` empty so no surface claims the user named
+/// it.
+///
+/// **Callers that manage the registry must keep using [`selected_connector`]** —
+/// this is for callers that need *a node to talk to*.
+#[cfg(target_arch = "wasm32")]
+pub fn node_in_force(peers: &Peers, peer_id: &str) -> Option<Connector> {
+    if let Some(c) = selected_connector(peers, peer_id) {
+        return Some(c);
+    }
+    // No row: fall back to what this session BOOTED with, so the node we dial is
+    // the node the establisher was actually installed with, by construction.
+    //
+    // `booted_snapshot`, not a fresh `resolve_provisioning_quietly` — a re-resolve
+    // here has no URL to read (the verb holds only `&Peers`), so it would silently
+    // skip the highest-precedence source and answer with the build knob or
+    // nothing. It would also drift from the installed establisher the moment the
+    // selection mirror changed, which is the same "what a reload would use"
+    // vacuity `capture_booted` exists to prevent.
+    let p = booted_snapshot()?;
+    Some(Connector {
+        node_peer_id: p.node_peer_id,
+        node_addr: p.node_addr,
+        label: String::new(),
+        // The reflectors ride the provisioning too; they are already merged and
+        // parsed there, and re-deriving them here would be a second expression
+        // of the merge that could disagree with the one the agent got.
+        ice: p
+            .ice_servers
+            .iter()
+            .filter(|s| !s.is_relay())
+            .flat_map(|s| s.urls.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" "),
+        ice_advertised: String::new(),
+        relay: String::new(),
+        relay_username: String::new(),
+        relay_credential: String::new(),
+    })
+}
+
+/// The native shadow: there is no URL and no localStorage mirror off-wasm, so
+/// the registry row is the only source and this is exactly `selected_connector`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn node_in_force(peers: &Peers, peer_id: &str) -> Option<Connector> {
+    selected_connector(peers, peer_id)
+}
+
 pub fn selected_connector(peers: &Peers, peer_id: &str) -> Option<Connector> {
     let chosen = selection_marker(peers, peer_id)?;
     let found = read_connectors(peers, peer_id).into_iter().find(|c| c.node_peer_id == chosen);
@@ -1430,6 +1505,36 @@ pub(crate) mod tests {
         let urls: Vec<&str> =
             p.ice_servers.iter().flat_map(|s| s.urls.iter()).map(String::as_str).collect();
         assert_eq!(urls, vec!["stun:mine.example:3478", "stun:node.example:3478"]);
+    }
+
+    /// **The registry is not the only source of a rendezvous, and asking it as
+    /// though it were refused every provisioned session that had no row.**
+    ///
+    /// Native can only pin the half it has — off wasm there is no URL and no
+    /// boot snapshot, so `node_in_force` *is* `selected_connector` and the
+    /// property to hold is that it agrees with it exactly. The half that matters
+    /// (falling back to `booted_snapshot`) is `wasm32`-only and was measured in
+    /// two real browsers instead: before, `meet` answered "no connector
+    /// selected" one command after `net` printed `OK rendezvous`; after, both
+    /// browsers met and learned each other's ids with nobody typing one.
+    ///
+    /// Recording the gap rather than implying coverage: a green `make test` says
+    /// nothing about the fallback arm.
+    #[tokio::test]
+    async fn the_node_in_force_is_the_selected_row_when_there_is_one() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        assert!(node_in_force(&peers, &me).is_none(), "nothing selected, nothing provisioned");
+
+        add_connector(&peers, &me, &conn("2KnodeA", "ws://a:4041")).unwrap();
+        settle(|| node_in_force(&peers, &me).is_some()).await;
+        let n = node_in_force(&peers, &me).expect("the first add selects itself");
+        assert_eq!(n.node_peer_id, "2KnodeA");
+        assert_eq!(
+            n.node_peer_id,
+            selected_connector(&peers, &me).unwrap().node_peer_id,
+            "with a row present the two must never disagree",
+        );
     }
 
     /// A selection left pointing at a node that vanished must resolve to

@@ -688,3 +688,52 @@ pub fn error(msg: &str) -> Element {
     util::set_text(&p, &format!("\u{2717} {msg}")); // ✗
     p
 }
+
+/// **A long string plus a Copy button** — the shared affordance for getting an
+/// identifier onto another device.
+///
+/// This exists because the two surfaces whose whole job is that (System
+/// Overview's pairing rows, Peer Connections' devices) had one copy button
+/// between them, and the table that lists *the peers you can transfer files to*
+/// rendered only a friendly name — so "which peer is this" and "let me send it
+/// to the other machine" had no answer on the screen that raised the question.
+///
+/// `title` is the hover hint; pass `None` when the surrounding label already
+/// says what the string is.
+pub fn copy_code(ctx: &crate::dom::util::DomCtx, text: &str, title: Option<&str>) -> Element {
+    let holder = crate::dom::util::create_element("span");
+    holder.set_attribute("style", crate::dom::theme::ID_ROW).ok();
+
+    let code = crate::dom::util::create_element("code");
+    code.set_attribute("style", crate::dom::theme::ID_CODE).ok();
+    if let Some(t) = title {
+        code.set_attribute("title", t).ok();
+    }
+    crate::dom::util::set_text(&code, text);
+    crate::dom::util::append(&holder, &code);
+
+    let copy = button_el(&crate::i18n::t("btn.copy", &[]), ButtonKind::Secondary);
+    {
+        let value = text.to_string();
+        let el = copy.clone();
+        ctx.listen(&copy, "click", move |_| {
+            if let Some(win) = web_sys::window() {
+                let promise = win.navigator().clipboard().write_text(&value);
+                // MUST consume the promise: a dropped *rejecting* promise hits
+                // index.html's `unhandledrejection` guard, which reloads the
+                // whole app. Clipboard writes reject on denied permission, no
+                // focus, or an insecure context — and an insecure context is
+                // exactly where someone pairing two machines will be.
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                });
+            }
+            // Acknowledge regardless: the write may be denied, and a button
+            // that never responds reads as broken. The text stays selectable,
+            // which is the fallback.
+            el.set_text_content(Some(&crate::i18n::t("status.copied", &[])));
+        });
+    }
+    crate::dom::util::append(&holder, &copy);
+    holder
+}

@@ -179,6 +179,20 @@ impl WindowView for SystemOverviewWindow {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _ = value;
             }
+            // Serve (or stop serving) the SPA over HTTP, so another device on
+            // this network can load it. Same `\x1f`-packed shape as its two
+            // neighbours and for the same reason — the row is the only place
+            // that knows both which backend and which direction.
+            "sb_set_app_server" => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some((pid, want)) = value.split_once('\u{1f}') {
+                        self.model.set_app_server(pid, want == "1", self.watch.flag());
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = value;
+            }
             "sb_set_port_mapping" => {
                 #[cfg(target_arch = "wasm32")]
                 {

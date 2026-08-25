@@ -105,39 +105,7 @@ fn render_bound_header(parent: &Element, output: &PeerConnectionsOutput, ctx: &D
     // an id for (pasting it into another device, a chat participant list, a bug
     // report). The full value existed in the output all along
     // (`BoundPeerInfo::peer_id`) and was simply never rendered.
-    let id_row = util::create_element("div");
-    id_row.set_attribute("style", theme::ID_ROW).ok();
-
-    let code = util::create_element("code");
-    code.set_attribute("style", theme::ID_CODE).ok();
-    util::set_text(&code, &output.bound_peer.peer_id);
-    util::append(&id_row, &code);
-
-    let copy = components::button_el(
-        &crate::i18n::t("btn.copy", &[]),
-        components::ButtonKind::Secondary,
-    );
-    {
-        let pid = output.bound_peer.peer_id.clone();
-        let el = copy.clone();
-        ctx.listen(&copy, "click", move |_| {
-            if let Some(win) = web_sys::window() {
-                let promise = win.navigator().clipboard().write_text(&pid);
-                // MUST consume the promise. Clipboard writes reject on denied
-                // permission / no focus / insecure context, and a DROPPED
-                // rejected promise hits index.html's `unhandledrejection`
-                // guard, which reloads the whole app (AGENTS.md).
-                wasm_bindgen_futures::spawn_local(async move {
-                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-                });
-            }
-            // Confirm regardless — the write may be denied, but the click was
-            // still received, and a button that never acknowledges reads broken.
-            el.set_text_content(Some(&crate::i18n::t("status.copied", &[])));
-        });
-    }
-    util::append(&id_row, &copy);
-    util::append(parent, &id_row);
+    util::append(parent, &components::copy_code(ctx, &output.bound_peer.peer_id, None));
 }
 
 /// What became of the last Connect press — in-flight, failed (with the reason),
@@ -203,6 +171,21 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
             components::td_text(&kp.addr)
         };
 
+        // **The device's peer id, copyable.** The Device column showed only a
+        // friendly name ("system-backend"), so the table listing *the peers you
+        // can send a file to* could not answer "which peer is this" or "get it
+        // onto the other machine" — on the surface that raises both questions.
+        // A peer id is the one string every pairing, meet and offer is keyed
+        // on, and it was on screen nowhere you could select it.
+        let device_cell = {
+            let wrap = util::create_element("div");
+            let name = util::create_element("div");
+            util::set_text(&name, &kp.display);
+            util::append(&wrap, &name);
+            util::append(&wrap, &components::copy_code(ctx, &kp.remote_pid, None));
+            components::td(&wrap)
+        };
+
         // Actions: Reconnect (when there's an address and it isn't already
         // live) + Forget (drop a dead/stale row so the list can be cleaned up).
         // A live connection gets neither — don't invite dropping the working link.
@@ -245,7 +228,7 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
         util::append(
             &body,
             &components::tr(vec![
-                components::td_text(&kp.display),
+                device_cell,
                 status_cell,
                 addr_cell,
                 action_cell,

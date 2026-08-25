@@ -2402,6 +2402,25 @@ impl Peers {
     /// unreachable peer) publishes nothing, so a dead address never becomes a
     /// route the ladder will spend a timeout on.
     ///
+    /// **It publishes TWO facts on that 200, and the second one was missing for
+    /// months.** The route is what the dispatch ladder reads; the connections
+    /// registry row is what every *human-facing target picker* reads
+    /// (`connections::read_connections` — Chat's "start a chat with", File
+    /// Transfer's device list, Peer Connections' known devices). The registry
+    /// write used to live only at `connect_peer` and in `reach_keeper`, i.e.
+    /// exactly the manual paths — so inside Tori the app auto-connected to its
+    /// own backend, the kernel said `connected`, File Transfer worked against
+    /// it if you could name it, and **every picker showed nothing**, telling
+    /// the user to "go to Peer Connections and connect" to a peer they were
+    /// already connected to. `the_system_backend_is_shown_like_any_other_device`
+    /// did not catch it because it seeds the row by hand and so only ever
+    /// asserted the *downstream* half.
+    ///
+    /// That is this doc comment's own paragraph happening a second time to a
+    /// different fact. When a seam exists because "the manual path is not how
+    /// peers actually connect", **every** fact derived from connecting belongs
+    /// on it — not just the one that motivated it.
+    ///
     /// Returns the raw `HandlerResult` so callers keep their own retry/backoff
     /// judgement — this helper adds the publish, it does not interpret failure.
     pub fn maintain_peer(
@@ -2411,6 +2430,10 @@ impl Peers {
         address: &str,
     ) -> MaintainPeerFuture<'static> {
         let writer = self.writer_handle_for(local_pid);
+        // System-peer-scoped by construction (`ConnectionsWriter::new`), because
+        // that is the one namespace `read_connections` reads — a row written
+        // under the dialing local peer would be invisible to every picker.
+        let connections = crate::connections::ConnectionsWriter::new(self);
         let fut = self.execute(
             local_pid,
             format!("/{local_pid}/system/network"),
@@ -2439,6 +2462,11 @@ impl Peers {
                          transport profile not published"
                     ),
                 }
+                // "We have connected to this peer at least once" — the fact
+                // every target picker reads. Idempotent on the path, so the
+                // repeated maintains of a long-lived link just refresh
+                // `last_seen`.
+                connections.add(&remote);
             }
             Ok(res)
         })
@@ -3007,6 +3035,34 @@ mod memory_transport_tests {
             peers_a.get_entity(&pid_a, &profile_path(&ghost)).is_none(),
             "an address that never connected must NOT become a route — the \
              ladder would spend a dial timeout on it at every later dispatch"
+        );
+
+        // (3) The OTHER fact this seam owes, and the one that was missing.
+        //
+        // The route is what the dispatch ladder reads. The connections registry
+        // is what every human-facing picker reads, and it used to be written
+        // only on the manual paths — so inside Tori the app auto-connected to
+        // its own backend over `maintain-peer`, the kernel said `connected`,
+        // and Chat + File Transfer both showed an empty device list and told
+        // the user to go connect to a peer they were already connected to.
+        //
+        // Asserted here rather than in a new test precisely because it is the
+        // same seam with the same 200 gate: a fact published beside another
+        // fact should be gated by the same evidence, and keeping them in one
+        // test makes a future edit that splits them visible.
+        let remembered = crate::connections::read_connections(&peers_a);
+        assert!(
+            remembered.iter().any(|p| p.remote_pid == pid_b),
+            "a maintained peer must be REMEMBERED, not just routed — this is \
+             the row Chat's 'start a chat with' and File Transfer's device list \
+             read, and an auto-connected peer that is missing from it is \
+             invisible while being connected. Got: {:?}",
+            remembered.iter().map(|p| &p.remote_pid).collect::<Vec<_>>()
+        );
+        assert!(
+            !remembered.iter().any(|p| p.remote_pid == ghost),
+            "the 200 gate binds this fact too: a peer we never reached must not \
+             appear in a picker as somewhere you can send a file"
         );
     }
 

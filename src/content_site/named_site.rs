@@ -302,7 +302,7 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
         Err(e) => return Err(NameError::Registry(e)),
     }
 
-    let layout = http_poll_layout(&binding.transports);
+    let layout = http_poll_layout(registry, src, &binding.transports).await?;
     Ok(NamedTarget {
         name: norm,
         origin: layout.as_ref().map(|l: &PublishLayout| l.origin_for(&binding.target_peer_id)),
@@ -352,11 +352,63 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
 /// binding, or one that does not advertise what a fetch needs** — not "a layout
 /// we cannot consume".
 ///
+/// # D8: `transports` is a list of hashes, so this fetches
+///
+/// `EXTENSION-REGISTRY` v1.21 §3 makes `transports` bare `system/hash` naming
+/// `system/peer/transport/*` entities, and D8a obliges the publishing registry
+/// to serve them. So this is no longer a pure read of the binding — it
+/// dereferences through [`SignedSession::content`], which verifies each body
+/// against the hash the binding named and classifies a missing referent as
+/// `IncompleteWalk` rather than as a transport blip.
+///
+/// **The refusal is the point, and it is `REG-BINDING-TRANSPORTS-SHAPE-1` row
+/// (b).** A `transports` element that is *not* a hash is refused by the decoder
+/// one layer down (`BindingData::from_entity` → `field_hash_array`), so the
+/// binding never reaches here — which is exactly the discriminator arch wrote:
+/// a decoder liberal in both directions passes row (a) and fails row (b), and
+/// is otherwise indistinguishable from a conformant one.
+///
+/// **An unresolvable referent fails the resolution rather than degrading to
+/// `None`.** `None` means *this binding advertises no usable http-poll layout*
+/// — a statement about the publisher's intent. A profile we could not fetch is
+/// a statement about the origin, and collapsing the two would reinstate the
+/// seam this repo has now paid for six times: *absent* and *withheld* arriving
+/// as the same value.
+///
 /// [`PinnedPublisher`]: super::signed_fetch::PinnedPublisher
 /// [`PublishLayout::origin_for`]: super::publish_layout::PublishLayout::origin_for
-fn http_poll_layout(transports: &[entity_ecf::Value]) -> Option<PublishLayout> {
-    transports.iter().find_map(PublishLayout::from_http_poll_profile)
+/// [`SignedSession::content`]: super::signed_fetch::SignedSession::content
+async fn http_poll_layout<S: BinSource + ?Sized>(
+    registry: &SignedSession,
+    src: &S,
+    transports: &[entity_hash::Hash],
+) -> Result<Option<PublishLayout>, NameError> {
+    for hash in transports {
+        let entity = registry.content(src, hash).await.map_err(NameError::Registry)?;
+        // The entity is typed, which is what the by-hash form buys us: a
+        // consumer runs `EXTENSION-NETWORK` §6.5.1a D5's fail-closed
+        // `transport_type` check against the entity's own type instead of
+        // trusting an unsigned inner field. A profile of another transport is
+        // skipped, not an error — a peer may advertise several.
+        if entity.entity_type != TYPE_TRANSPORT_HTTP_POLL {
+            continue;
+        }
+        let value: entity_ecf::Value = match ciborium::from_reader(&entity.data[..]) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(layout) = PublishLayout::from_http_poll_profile(&value) {
+            return Ok(Some(layout));
+        }
+    }
+    Ok(None)
 }
+
+/// The `http-poll` profile entity type. **Not an upstream constant** — see
+/// `registry_publish::http_poll_profile_entity` for why, and note that the
+/// emitter and this reader must name the same string or every advertised layout
+/// silently becomes "no layout".
+const TYPE_TRANSPORT_HTTP_POLL: &str = "system/peer/transport/http-poll";
 
 /// Strip the `/{peer}/` qualification — the upstream path helpers return
 /// absolute paths and a trie key is relative to the publisher's prefix.
@@ -416,12 +468,60 @@ pub async fn list_names<S: BinSource + ?Sized>(
         .get(url, super::http_poll::Freshness::Mutable)
         .await
         .map_err(|e| format!("by-name listing: {e}"))?;
-    Ok(String::from_utf8_lossy(&bytes)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect())
+    decode_names_listing(&bytes)
+}
+
+/// Decode the `system/tree/listing` wire entity a registry serves at
+/// `{by-name}.list` and return its keys.
+///
+/// **Decoded with `ciborium`, never `entity_wire::decode_entity`** — the same
+/// two independent reasons as `PublishLayout::from_profile_artifact`: `entity_wire`
+/// is not linked on `wasm32`, so a browser could not call it at all, and the
+/// `data` field arrives as an inline map on some arms and a `bstr` of encoded
+/// ECF on others. Accept both; a consumer that accepts only its own arm's shape
+/// is the front-door defect one layer down.
+///
+/// Returns an error rather than an empty list on a body it cannot read, because
+/// *"this registry carries no names"* and *"I could not parse the artifact"* are
+/// different answers and the caller's next move differs.
+fn decode_names_listing(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let outer: entity_ecf::Value =
+        ciborium::from_reader(bytes).map_err(|e| format!("by-name listing decodes: {e}"))?;
+    let map = outer.as_map().ok_or("by-name listing is not a map")?;
+    let field = |k: &str| {
+        map.iter().find_map(|(mk, mv)| match mk {
+            entity_ecf::Value::Text(s) if s == k => Some(mv.clone()),
+            _ => None,
+        })
+    };
+    let data = field("data").ok_or("by-name listing carries no `data`")?;
+    let inner: entity_ecf::Value = match data {
+        entity_ecf::Value::Map(_) => data,
+        entity_ecf::Value::Bytes(b) => ciborium::from_reader(&b[..])
+            .map_err(|e| format!("by-name listing `data` decodes: {e}"))?,
+        _ => return Err("by-name listing `data` is neither a map nor bytes".into()),
+    };
+    let entries = inner
+        .as_map()
+        .and_then(|m| {
+            m.iter().find_map(|(k, v)| match k {
+                entity_ecf::Value::Text(s) if s == "entries" => v.as_map(),
+                _ => None,
+            })
+        })
+        .ok_or("by-name listing carries no `entries` map")?;
+    // **Sorted here, not by the emitter.** A `system/tree/listing`'s `entries`
+    // is a canonical-CBOR map, and canonical key order is *length-first* — so
+    // the artifact's order is `entitychurch.org, lab.…, docs.…, protocol.…`,
+    // which is correct and is not alphabetical. Ordering for a reader is the
+    // reader's business; sorting at the emitter would have produced a
+    // non-canonical map instead.
+    let mut names: Vec<String> = entries
+        .iter()
+        .filter_map(|(k, _)| k.as_text().map(str::to_string))
+        .collect();
+    names.sort();
+    Ok(names)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -753,9 +853,32 @@ mod tests {
     /// meets registries it did not emit, and D10 binds issuers, not readers. No
     /// transports ⇒ `None`, recorded rather than guessed, so a caller can tell
     /// "no transport published" from "the origin is empty".
+    ///
+    /// Now that `transports` is a list of **hashes** (D8), this also pins the
+    /// stronger property the by-hash form makes checkable: no transports must
+    /// mean **no fetches**. The source panics if touched, so a future
+    /// "helpfully" probing a conventional location on an empty list — the exact
+    /// move `http_poll_origin`'s F6 verdict made and that §6.5.3 v1.8 forbids —
+    /// fails here rather than in a cross-impl run.
     #[test]
     fn a_binding_with_no_transports_yields_no_origin_rather_than_a_guess() {
-        assert!(super::http_poll_layout(&[]).is_none());
+        struct NeverFetched;
+        impl BinSource for NeverFetched {
+            fn get(
+                &self,
+                url: String,
+                _f: Freshness,
+            ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PollError>>>> {
+                panic!("a binding with no transports must fetch nothing; asked for {url}");
+            }
+        }
+        let peer = entity_crypto::Keypair::generate().peer_id().to_string();
+        let pin = PinnedPublisher::from_peer_id("https://x.example", &peer)
+            .expect("a canonical peer-id pins");
+        let session = super::super::signed_fetch::SignedSession::new(pin);
+        let got = block_on(super::http_poll_layout(&session, &NeverFetched, &[]))
+            .expect("an empty transports list is not an error");
+        assert!(got.is_none(), "no transports published ⇒ no layout, never a guess");
     }
 
     /// **F6's rule survives; F6's verdict does not.** Both halves matter, and
@@ -783,7 +906,7 @@ mod tests {
     fn a_prefix_is_read_as_peer_rooted_or_origin_rooted_never_truncated() {
         use crate::content_site::registry_publish::http_poll_profile;
         let peer = "2PEERTARGET";
-        let layout = |p: entity_ecf::Value| super::http_poll_layout(&[p]).expect("decodes");
+        let layout = |p: entity_ecf::Value| PublishLayout::from_http_poll_profile(&p).expect("decodes");
 
         // 1. **Peer-rooted** — our emitter's `{origin}/{peer_id}`. The segment
         //    is dropped to recover the origin, including when the origin itself
@@ -829,18 +952,18 @@ mod tests {
         use crate::content_site::registry_publish::http_poll_profile;
         let peer = "2PEERTARGET";
 
-        let ours = super::http_poll_layout(&[http_poll_profile(peer, "https://x.example")])
+        let ours = PublishLayout::from_http_poll_profile(&http_poll_profile(peer, "https://x.example"))
             .expect("decodes");
         assert_eq!(
             ours.manifest_url,
             "https://x.example/2PEERTARGET/system/peer/published-root"
         );
 
-        let theirs = super::http_poll_layout(&[profile_with(
+        let theirs = PublishLayout::from_http_poll_profile(&profile_with(
             peer,
             "https://y.example",
             "https://y.example/manifest",
-        )])
+        ))
         .expect("decodes");
         assert_eq!(
             theirs.manifest_url, "https://y.example/manifest",
@@ -1205,6 +1328,128 @@ mod tests {
         }
     }
 
+    /// **D8a, both directions — `REG-PUBLISH-CLOSURE-1`.**
+    ///
+    /// `EXTENSION-REGISTRY` v1.21 §6a.3: *a publishing registry MUST serve what
+    /// its bindings reference.* Since D8 made `transports` a list of hashes, a
+    /// binding now points **out** of the trie, and a hash nobody can resolve
+    /// reinstates the exact gap §6a.3 exists to close, one indirection later.
+    ///
+    /// Two halves, and the second is the one arch calls the discriminating row:
+    ///
+    /// 1. **We serve it.** Every issued binding's transports resolve by hash out
+    ///    of our own emitted closure, and yield the layout the name needs.
+    /// 2. **Withholding one is TERMINAL and says so.** Arch's reason for the
+    ///    MUST is that *"a missing referent and a withheld one are byte-identical
+    ///    at the consumer"* — so the failure must not degrade into "that name is
+    ///    not bound" (`NotBound`) or "this binding advertises no layout"
+    ///    (`Ok(origin: None)`). Either would report a **withholding origin** as a
+    ///    **fact about the name**, which is the sixth appearance of this repo's
+    ///    most-repeated seam and the reason `SignedSession::content` classifies
+    ///    through `declared_fetch_error` rather than reaching for `Transport`.
+    ///
+    /// Enumeration is asserted to still succeed with the profile gone, because
+    /// that is precisely the shape arch names: *enumeration-succeeds-then-
+    /// resolve-fails*. A registry publishing only `by-name/` passes every
+    /// enumeration assertion and fails this one.
+    #[test]
+    fn a_registry_serves_the_transport_profiles_its_bindings_reference() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry_id, expected) = stand_up(root.path());
+        let web = LocalWeb::new(root.path());
+        let reg_pin = || PinnedPublisher::from_peer_id("registry", &registry_id).unwrap();
+        let name = expected.keys().next().unwrap().clone();
+
+        // (1) Served: the name resolves AND carries the layout that only a
+        //     dereferenced profile can supply.
+        let session = SignedSession::new(reg_pin());
+        let target = block_on(resolve_name(
+            &web, &session, &name, now_ms(), &ResolverPolicy::undeclared(),
+        ))
+        .expect("a conformant registry serves what it references");
+        assert!(
+            target.origin.is_some(),
+            "the layout comes from the referenced profile entity — a `None` here \
+             means we resolved the name and learned nothing about where to fetch it"
+        );
+
+        // Find the profile blob this binding referenced, by the key the emitter
+        // published it at, and withhold ONLY that.
+        let target_peer = expected.get(&name).unwrap();
+        let ptr = root
+            .path()
+            .join("registry")
+            .join(&registry_id)
+            .join(format!("system/peer/transport/{target_peer}/primary.bin"));
+        assert!(ptr.exists(), "the profile must also be reachable by path, not only by hash");
+
+        // **In the closure the SIGNED ROOT commits to, not merely on disk** —
+        // arch's item 2, and the property a disk check cannot see. `write_entity`
+        // writes the blob whether or not the projector records it, so a version
+        // that skipped `root.record` would serve a profile the root says nothing
+        // about: fetchable, unverifiable, and indistinguishable from one an
+        // origin invented. Resolving the key THROUGH the session is the check,
+        // because that path walks the trie from the verified root.
+        let committed = SignedSession::new(reg_pin());
+        let key = format!("system/peer/transport/{target_peer}/primary");
+        let profile_entity = block_on(committed.resolve(&web, &key)).unwrap_or_else(|e| {
+            panic!("the signed root must commit to the profile it references: {e:?}")
+        });
+        assert_eq!(
+            profile_entity.entity_type, "system/peer/transport/http-poll",
+            "and it must arrive TYPED — that is what the by-hash form buys a \
+             consumer over an inline map (§6.5.1a D5's fail-closed check)"
+        );
+        let hash = {
+            let v: entity_ecf::Value =
+                ciborium::from_reader(&std::fs::read(&ptr).unwrap()[..]).unwrap();
+            let bytes = v
+                .as_map()
+                .unwrap()
+                .iter()
+                .find_map(|(k, val)| match (k.as_text(), val) {
+                    (Some("data"), entity_ecf::Value::Bytes(b)) => Some(b.clone()),
+                    _ => None,
+                })
+                .expect("a system/hash pointer carries its hash in `data`");
+            hex_of(&bytes)
+        };
+        let blob = root
+            .path()
+            .join("registry")
+            .join("content")
+            .join(&hash[0..2])
+            .join(&hash[2..4])
+            .join(&hash);
+        assert!(blob.exists(), "D8a: the referenced profile MUST be in the served closure");
+        std::fs::remove_file(&blob).unwrap();
+
+        // (2) Withheld: enumeration still succeeds — which is what makes this a
+        //     discriminator rather than a smoke test — and the resolve fails
+        //     terminally, naming the origin rather than the name.
+        let listed = block_on(list_names(&web, &reg_pin())).unwrap();
+        assert!(
+            listed.contains(&name),
+            "the discriminating row is enumeration-succeeds-then-resolve-fails; \
+             enumeration must still succeed here"
+        );
+        let session = SignedSession::new(reg_pin());
+        let got = block_on(resolve_name(
+            &web, &session, &name, now_ms(), &ResolverPolicy::undeclared(),
+        ));
+        match got {
+            Err(NameError::Registry(SignedFetchError::IncompleteWalk(_))) => {}
+            other => panic!(
+                "a withheld referent must be a terminal statement about the ORIGIN, \
+                 never NotBound and never a silently layout-less success. Got: {other:?}"
+            ),
+        }
+    }
+
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
     /// **A name invented by a hostile listing fails to resolve**, which is why
     /// the transport-trusted listing is safe to read. Hiding a name is the
     /// undetectable half, and nothing anywhere claims completeness.
@@ -1217,9 +1462,45 @@ mod tests {
             .join("registry")
             .join(&registry_id)
             .join("system/registry/binding/by-name.list");
-        let mut body = std::fs::read_to_string(&listing).unwrap();
-        body.push_str("evil.example\n");
-        std::fs::write(&listing, body).unwrap();
+        // Inject a name into the `system/tree/listing` entity the host serves.
+        // It does NOT repair `content_hash`, deliberately — the listing is
+        // transport-trusted and nothing verifies it, which is precisely the
+        // property under test. (It was a `push_str` while the artifact was
+        // newline text; the attack is the same, the encoding is not.)
+        let outer: entity_ecf::Value =
+            ciborium::from_reader(&std::fs::read(&listing).unwrap()[..]).unwrap();
+        let mut fields = outer.as_map().unwrap().to_vec();
+        for (k, v) in fields.iter_mut() {
+            if k.as_text() != Some("data") {
+                continue;
+            }
+            let mut inner: entity_ecf::Value = match &*v {
+                entity_ecf::Value::Bytes(b) => ciborium::from_reader(&b[..]).unwrap(),
+                other => other.clone(),
+            };
+            let mut body = inner.as_map().unwrap().to_vec();
+            for (bk, bv) in body.iter_mut() {
+                if bk.as_text() != Some("entries") {
+                    continue;
+                }
+                let mut entries = bv.as_map().unwrap().to_vec();
+                entries.push((
+                    entity_ecf::Value::Text("evil.example".into()),
+                    entity_ecf::cbor_map! {
+                        "hash" => entity_ecf::Value::Bytes(vec![0u8; 33]),
+                        "has_children" => entity_ecf::Value::Bool(false)
+                    },
+                ));
+                *bv = entity_ecf::Value::Map(entries);
+            }
+            inner = entity_ecf::Value::Map(body);
+            let mut re = Vec::new();
+            ciborium::into_writer(&inner, &mut re).unwrap();
+            *v = entity_ecf::Value::Bytes(re);
+        }
+        let mut out = Vec::new();
+        ciborium::into_writer(&entity_ecf::Value::Map(fields), &mut out).unwrap();
+        std::fs::write(&listing, out).unwrap();
 
         let web = LocalWeb::new(root.path());
         let reg_pin = PinnedPublisher::from_peer_id("registry", &registry_id).unwrap();

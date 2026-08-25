@@ -1,0 +1,77 @@
+¢ddata£dbodyy<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A Pre-Rendered Document</title>
+<style>
+  body { font-family: "Liberation Serif", Georgia, serif; line-height: 1.55;
+         color: #1a1a1a; background: #fafafa; margin: 0; padding: 2rem 1rem; }
+  main { max-width: 42rem; margin: 0 auto; background: #fff; padding: 2rem 2.5rem;
+         border: 1px solid #e0e0e0; border-radius: 4px; }
+  h1 { font-size: 2rem; margin-top: 0; }
+  code { font-family: "Liberation Mono", monospace; background: #f5f5f5; padding: 0 3px; }
+  /* Tall on purpose: an anchor jump is only observable in a document that
+     does not fit on screen. The gate measures where the target sits after
+     the click, and in a short document it never moved. */
+  #entity-demo-doc-spacer { height: 2400px; }
+  /* Trailing height, so the target can reach the TOP of the frame. Without
+     it the document runs out of scroll and the target stops part-way down â€”
+     still a working jump, but one the gate can only assert loosely. */
+  #entity-demo-doc-tail { height: 1600px; }
+  /* One jump is not evidence about navigation. See the chapter list below. */
+  .demo-chapter { height: 900px; }
+</style>
+</head>
+<body>
+<main>
+<h1 id="entity-demo-doc-marker">A Pre-Rendered Document</h1>
+<p>This page is stored as a <code>format:html</code> entity and carried
+<strong>verbatim</strong> from the tree â€” the app renders none of it. It is
+mounted in a fully-restricted sandbox, which is why its own typography survives
+while nothing in it can execute or reach the page around it.</p>
+<p id="script-probe">Scripts do not run here.</p>
+<p>Jump to <a id="entity-demo-doc-toc" href="#entity-demo-doc-deep">the deep
+section</a> â€” this is what a paper's table of contents is, and what a one-file
+book's chapter links are.</p>
+<div id="entity-demo-doc-spacer">
+<p>Everything between here and the deep section exists so the jump is
+<em>observable</em>: a document short enough to fit on screen cannot show
+whether its own anchors work, which is how a broken table of contents shipped
+under prose claiming it worked.</p>
+</div>
+<h2 id="entity-demo-doc-deep">The deep section</h2>
+<p>If you arrived here by clicking the link above, the document kept its own
+base URL. Under <code>srcdoc</code> that link resolved against the surrounding
+app instead, and this document was replaced by it.</p>
+<div id="entity-demo-doc-tail">
+<p>The tail below exists so the jump above can complete. Without it the
+document runs out of scroll and the target lands part-way down the frame,
+which is a working jump the gate can only check loosely.</p>
+</div>
+<nav id="entity-demo-doc-chapters">
+<p>A reader does not click one link. This list is the repetition:</p>
+<a class="demo-ch" href="#entity-demo-ch1">1</a>
+<a class="demo-ch" href="#entity-demo-ch2">2</a>
+<a class="demo-ch" href="#entity-demo-ch3">3</a>
+<a class="demo-ch" href="#entity-demo-ch4">4</a>
+<a class="demo-ch" href="#entity-demo-ch5">5</a>
+<a class="demo-ch" href="#entity-demo-ch6">6</a>
+<a class="demo-ch" href="#entity-demo-ch7">7</a>
+<a class="demo-ch" href="#entity-demo-ch8">8</a>
+</nav>
+<h2 id="entity-demo-ch1">Chapter 1</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch2">Chapter 2</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch3">Chapter 3</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch4">Chapter 4</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch5">Chapter 5</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch6">Chapter 6</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch7">Chapter 7</h2><div class="demo-chapter"></div>
+<h2 id="entity-demo-ch8">Chapter 8</h2><div class="demo-chapter"></div>
+<script>
+  document.getElementById('script-probe').textContent =
+    'SCRIPT RAN â€” the document sandbox is not restricting scripts';
+</script>
+</main>
+</body>
+</html>
+fformatdhtmlkfrontmatter¡etitleuPre-Rendered Documentdtypemapp/site-page

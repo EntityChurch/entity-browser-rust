@@ -366,9 +366,36 @@ test-tauri: image
 # directory. It must stay INSIDE the repo — the container's only bind mount is
 # the repo — so a `/tmp` path is not available here the way it is for SERVE_DIR.
 FED_OUT ?= dist-federation
+federation: EXTRA_RUN_ENV := $(if $(ISSUED_AT_MS),-e ISSUED_AT_MS=$(ISSUED_AT_MS),)
 federation: image
 	$(call CHECK_IN_TREE,federation,$(FED_OUT),FED_OUT)
 	$(call RUN,./tools/local-federation.sh $(FED_OUT))
+
+# ---------------------------------------------------------------------------
+# federation-vectors — the COMMITTED cross-impl test-vector corpus.
+#
+# `dist-federation/` is gitignored, so no commit in any repo contained the
+# federation bytes — and workbench-go's fixture is a copy of them, so their
+# conformance claim was pinned to "the tree beside which they were cut" rather
+# than to the bytes themselves. That is the second time this corpus has paid
+# for that (the compute corpus drifted 330 → 343 undetected). Arch offered a
+# tag, a committed fixture, or a release artifact; this is the committed
+# fixture, which is the only one of the three that pins the bytes *and* stays
+# regenerable.
+#
+# `ISSUED_AT_MS` is fixed here on purpose: `issued_at` rides every binding body,
+# so it decides every binding hash and the whole trie shape. Without the pin,
+# regenerating produces a different corpus for identical content and the
+# fixture cannot be diffed against a fresh emit.
+FED_VECTORS := tests/fixtures/registry-federation
+FED_VECTORS_ISSUED_AT := 1756000000000
+.PHONY: federation-vectors
+federation-vectors:
+	rm -rf $(FED_VECTORS)
+	$(MAKE) federation FED_OUT=$(FED_VECTORS) ISSUED_AT_MS=$(FED_VECTORS_ISSUED_AT)
+	@echo ""
+	@echo "  wrote $(FED_VECTORS) — commit it; consumers cut fixtures from these bytes."
+	@echo "  Regenerate with the SAME command; a diff means the emitter changed."
 
 # Lint, in-container: clippy + the UI ratchet gate (raw atoms / inline style
 # literals / untokenized hex must match tools/ui-lint-baseline.txt — see
@@ -1112,6 +1139,84 @@ build-serve: wasm-release
 	@echo "  → http://localhost:$(PORT)   (override with: make build-serve PORT=8082)"
 	@echo ""
 	$(call RUN_SERVE,dist)
+
+# ---------------------------------------------------------------------------
+# pair-serve — serve an app that is ALREADY paired with this machine's node.
+#
+# THE PAIRING PROBLEM, AND WHY THIS IS THE ANSWER. Joining a rendezvous means
+# getting a Base58 peer id onto the other device. Every channel for that is
+# bad: retyping it across a room is where a real two-machine run actually
+# stalls (and a typo presents as a connectivity failure), and the QR scanner
+# needs a camera, which `getUserMedia` denies on the plain-http LAN origin you
+# are necessarily on.
+#
+# But the side channel was never needed: **this machine is already serving the
+# app to that device**, so the URL they have to type anyway can BE the pairing.
+# `build.rs` bakes the node into the bundle; a browser that merely LOADS
+# `http://<this-ip>:$(PORT)` is provisioned — nothing to copy, no QR, no
+# reload, no Shell verb.
+#
+# The identity store makes discovery free: a backend peer is stored as
+# `~/.entity/backend-peers/{peer_id}` — **the filename IS the peer id** — so
+# this needs no crypto and no running Tori.
+#
+# Override either half explicitly:
+#   make pair-serve NODE_PEER=2K… NODE_ADDR=ws://10.0.0.5:4041
+BACKEND_PEER_DIR := $(HOME)/.entity/backend-peers
+# Newest FIRST (`ls -t`). The sidecar `.meta` files are empty in this layout —
+# no label, no flags, nothing to choose by — so mtime is the only real signal
+# on disk, and it is the right one: the identity Tori touched most recently is
+# the one it is running. Defaulting to it and SAYING SO beats asking the
+# operator to pick between two opaque Base58 strings using information that does
+# not exist (which is what the first version of this did).
+NODE_CANDIDATES := $(shell ls -1t $(BACKEND_PEER_DIR) 2>/dev/null | grep -vE '\.(meta|pub|toml)$$')
+NODE_PEER ?= $(firstword $(NODE_CANDIDATES))
+LAN_IP ?= $(shell ip -4 addr show scope global 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $$2}' | head -1)
+NODE_ADDR ?= $(if $(LAN_IP),ws://$(LAN_IP):4041,)
+
+pair-serve: EXTRA_RUN_ENV := -e ENTITY_WEBRTC_NODE_PEER=$(NODE_PEER) -e ENTITY_WEBRTC_NODE_ADDR=$(NODE_ADDR)
+pair-serve: pair-check wasm-release
+	@echo ""
+	@echo "=== serving a PRE-PAIRED build ==="
+	@echo "  node    $(NODE_PEER)"
+	@echo "  at      $(NODE_ADDR)"
+	@echo ""
+	@echo "  On the phone / the other computer, open:"
+	@echo "      http://$(LAN_IP):$(PORT)"
+	@echo "  That is the whole pairing. Nothing to copy, nothing to type."
+	@echo "  Then: Peer Connections -> Meet -> same word on both -> File Transfer."
+	@echo ""
+	$(call RUN_SERVE,dist)
+
+# Refuse BEFORE the release build rather than after it. A missing half bakes
+# nothing (build.rs panics on a half-config), and the ambiguous case must be a
+# question rather than a guess: picking one of several identities silently
+# would serve a build pointed at a node nobody is running, which fails as "the
+# rendezvous is empty" — the failure this target exists to abolish.
+.PHONY: pair-check
+pair-check:
+	@if [ -z "$(NODE_PEER)" ]; then \
+	  echo "pair-serve: no backend peer identity found in $(BACKEND_PEER_DIR)."; \
+	  echo "  Start Tori once so it creates one:"; \
+	  echo "    make host-run   then  System Overview -> Rendezvous -> Start"; \
+	  exit 1; \
+	fi
+	@echo "using node identity  $(NODE_PEER)"
+	@echo "  (most recently used in $(BACKEND_PEER_DIR))"
+	@if [ "$(words $(NODE_CANDIDATES))" -gt 1 ]; then \
+	  echo "  other identities on this machine, newest first:"; \
+	  for p in $(filter-out $(NODE_PEER),$(NODE_CANDIDATES)); do \
+	    echo "    $$p   last used $$(date -r $(BACKEND_PEER_DIR)/$$p '+%Y-%m-%d %H:%M')"; \
+	  done; \
+	  echo "  override with: make pair-serve NODE_PEER=<id>"; \
+	fi
+	@echo "  Tori shows the id it is actually running in System Overview -> Rendezvous."
+	@echo "  If it differs from the line above, pass it explicitly."
+	@if [ -z "$(NODE_ADDR)" ]; then \
+	  echo "pair-serve: could not determine this machine's LAN address."; \
+	  echo "  Pass it: make pair-serve NODE_ADDR=ws://<this-machine-ip>:4041"; \
+	  exit 1; \
+	fi
 
 # Publish — render the site set to static no-JS HTML (the legacy-web /
 # CDN / permalink projection). Headless native, no browser: builds a peer,

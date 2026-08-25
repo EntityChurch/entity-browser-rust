@@ -1929,6 +1929,15 @@ impl EntityApp {
             // absent on every one after it — a default that works once [AP22].
             crate::session_config::set_active_registry_pin(cfg.name_registry_pin.clone());
 
+            // The USER's pin, restored from its localStorage mirror. It only
+            // ever outranks the deployment's — never replaces it — so restoring
+            // it here rather than in the seed above keeps the precedence in one
+            // place (`session_config::pinned_registry`). A user who pinned a
+            // registry and reloaded must not be silently moved back onto the
+            // deployment's, which is what a pin scoped to one window did.
+            #[cfg(target_arch = "wasm32")]
+            crate::session_config::restore_user_registry_pin();
+
             // (1.2.5) Warm-boot origin RECONCILE (P1, symptom 2 — "site source
             // unreachable"). On a warm boot we deliberately don't re-fetch the
             // deployment config: POSTURE (profile / home / toggle) is a user
@@ -4829,10 +4838,96 @@ impl EntityApp {
                     info.listen_addresses(),
                 );
             }
+            self.adopt_backend_rendezvous(&info);
         }
         // No signal bump: the end-of-frame `peer_registry.sync()`
         // reconciles these registered/updated backend peers into the
         // tree registry, which every peer-aware window subscribes to.
+    }
+
+    /// **If this desktop's own backend is serving a rendezvous, use it.**
+    ///
+    /// # The bug this closes
+    ///
+    /// The Tauri WebView loads `frontendDist` over Tauri's custom protocol —
+    /// not over HTTP — so it never sees the SPA server's
+    /// `?webrtc_node_peer=…` redirect, and unless the user typed a connector by
+    /// hand it booted with **no provisioning at all**. The result, reported from
+    /// the outside and reproduced: a browser on another device loads the URL this
+    /// desktop is serving and meets a peer fine, while **the desktop's own UI**
+    /// answers *"no signaling node"* — the one client of the rendezvous that
+    /// could not find it was the process running it.
+    ///
+    /// # Why a connector row rather than a special case
+    ///
+    /// A row is the durable, user-visible, user-removable form: it shows up in
+    /// Peer Connections, `connector ls` lists it, and `connector rm` gets rid of
+    /// it. A hidden "and also check the backend" branch inside provisioning
+    /// would be a fourth source of the same fact that no surface could show and
+    /// nobody could turn off.
+    ///
+    /// `add_connector` **auto-selects when there is no selection and never
+    /// overrides one**, so this seeds a desktop that has never been configured
+    /// and stays out of the way of a user who chose a different node.
+    ///
+    /// # The reload, stated rather than discovered [AP22]
+    ///
+    /// Provisioning is consumed at boot, so the row written here installs no
+    /// establisher until the next load. `meet` works immediately anyway
+    /// (`connectors::node_in_force` reads the registry at call time), but a peer
+    /// met before the reload has no way to connect *back* — which is worse than
+    /// failing, so the notice says so. The second boot needs nothing.
+    fn adopt_backend_rendezvous(&mut self, info: &crate::tauri_ipc::BackendPeerInfo) {
+        if !info.signaling_node {
+            return;
+        }
+        let Some(addr) = info.ws_addr.as_deref().filter(|a| !a.is_empty()) else {
+            // Serving with no address is not a state the backend reports; if it
+            // ever did, a connector row with no address is unusable.
+            return;
+        };
+        let sys = self.peer_manager.system_peer_id().to_string();
+        // Idempotent by the ROW, not by a flag: this drains on every backend
+        // start and reload, and re-adding would overwrite a label the user had
+        // edited. `add_connector` already refuses to override an existing
+        // *selection*, so declining to touch an existing *row* is the other half.
+        if crate::connectors::read_connectors(&self.peer_manager, &sys)
+            .iter()
+            .any(|c| c.node_peer_id == info.peer_id)
+        {
+            return;
+        }
+        let row = crate::connectors::Connector {
+            node_peer_id: info.peer_id.clone(),
+            node_addr: addr.to_string(),
+            label: crate::i18n::t("connector.this_desktop", &[]),
+            // No reflectors and no relay: a desktop serving its own LAN needs
+            // neither (`e2e-webrtc-lan` connects on host candidates alone), and
+            // inventing one here would enrol a third party the user never chose.
+            // If the node advertises reflectors, `learn_node_reflectors` fills
+            // `ice_advertised` on the first call — which is its job, not ours.
+            ice: String::new(),
+            ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
+        };
+        match crate::connectors::add_connector(&self.peer_manager, &sys, &row) {
+            Ok(outcome) => {
+                tracing::info!(
+                    node = %info.peer_id, %addr, selected = outcome.selected,
+                    "adopted this desktop's own rendezvous"
+                );
+                // Only worth a line when it became the one in force; a row added
+                // beside a node the user already chose changes nothing they need
+                // to know about.
+                if outcome.selected {
+                    self.event_log_writer
+                        .log(crate::i18n::t("connector.adopted_backend", &[("addr", addr)]));
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not adopt the backend's rendezvous"),
+        }
     }
 }
 

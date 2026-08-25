@@ -802,9 +802,14 @@ pub const EN: &[(&str, Message)] = &[
         "sysoverview.rendezvous_on",
         Message::Simple("Serving — browsers can meet here: {addr}"),
     ),
+    // The off-state used to read "browsers cannot use this desktop to find each
+    // other", which an operator with a perfectly good WebSocket link to this
+    // backend reads as a fault in the connection they can see working. It is not
+    // about *your* connection — it is a service this desktop can perform for
+    // *other* devices — so the string says whose problem it is.
     (
         "sysoverview.rendezvous_off",
-        Message::Simple("Off — browsers cannot use this desktop to find each other"),
+        Message::Simple("Off — this desktop is not helping other devices find each other"),
     ),
     ("sysoverview.rendezvous_start", Message::Simple("Start serving")),
     ("sysoverview.rendezvous_stop", Message::Simple("Stop serving")),
@@ -815,6 +820,34 @@ pub const EN: &[(&str, Message)] = &[
              so nobody has to run a server. Restarts the backend, which drops open connections.",
         ),
     ),
+    // Serve the app. Three states, because "serving" and "serving usefully" are
+    // different answers: with a rendezvous the other device types a URL and is
+    // finished; without one it gets a working app that cannot reach anybody.
+    ("sysoverview.appserver", Message::Simple("Serve the app")),
+    (
+        "sysoverview.appserver_on",
+        Message::Simple("Serving — open this on the other device and it is ready to connect"),
+    ),
+    (
+        "sysoverview.appserver_unprovisioned",
+        Message::Simple(
+            "Serving — but turn on Rendezvous above, or the other device still has to add a \
+             connector by hand",
+        ),
+    ),
+    (
+        "sysoverview.appserver_off",
+        Message::Simple("Off — other devices cannot load the app from this desktop"),
+    ),
+    (
+        "sysoverview.appserver_hint",
+        Message::Simple(
+            "Hands this app to a phone or laptop on this network, so you do not have to run a \
+             separate web server. Takes effect immediately — nothing restarts.",
+        ),
+    ),
+    ("sysoverview.appserver_start", Message::Simple("Start serving the app")),
+    ("sysoverview.appserver_stop", Message::Simple("Stop serving the app")),
     // Pairing. The composition of the two rows around it: the one line a person
     // carries to the other machine, per address that works from where they are.
     ("sysoverview.pair_lan", Message::Simple("Pair (same network)")),
@@ -1227,6 +1260,30 @@ pub const EN: &[(&str, Message)] = &[
     ("registry.no_pin", Message::Simple(
         "No registry pinned. This deployment seeds none and none was typed, so name resolution \
          fails closed \u{2014} nothing is trusted by default.")),
+    // The pin FORM. Until 2026-08-21 this window could only report a pin and
+    // there was no way to set one anywhere in the GUI at all.
+    ("registry.pin_pid_ph", Message::Simple("Registry peer id")),
+    (
+        "registry.pin_origin_ph",
+        Message::Simple("Where it is published (leave empty for this site)"),
+    ),
+    ("registry.pin_btn", Message::Simple("Pin this registry")),
+    ("registry.unpin_btn", Message::Simple("Unpin")),
+    (
+        "registry.pin_needs_peer_id",
+        Message::Simple(
+            "A registry is pinned by its peer id, not by its address \u{2014} pinning an address \
+             would mean trusting whoever answers at it.",
+        ),
+    ),
+    (
+        "registry.pin_not_canonical",
+        Message::Simple(
+            "That peer id carries no public key, so nothing it publishes could be verified. \
+             Registries are pinned by the modern peer-id form; the older form needs a key \
+             supplied separately.",
+        ),
+    ),
     ("registry.sessions", Message::Simple("{n} publisher(s) pinned in this tab")),
     ("registry.names", Message::Simple("Names")),
     ("registry.browse", Message::Simple("Walk the signed root")),
@@ -1517,6 +1574,18 @@ pub const EN: &[(&str, Message)] = &[
     (
         "keymanager.subtitle",
         Message::Simple("Hosted-peer public identities (Ed25519)"),
+    ),
+    // The desktop adopting its OWN backend as a rendezvous. It is a real
+    // connector row (listed, selectable, removable), so it gets a real label —
+    // and the message names the reload, because the row takes effect for
+    // *reaching* people only on the next load [AP22].
+    ("connector.this_desktop", Message::Simple("This desktop")),
+    (
+        "connector.adopted_backend",
+        Message::Simple(
+            "Using this desktop as the meeting point ({addr}). Reload once so other devices \
+             can connect back to this one.",
+        ),
     ),
     ("peerconn.this_peer", Message::Simple("This peer {pid} · {kind}")),
     ("peerconn.listening", Message::Simple(" · listening {addr}")),

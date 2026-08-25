@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=./sites/">
+<title>Published sites</title>
+<script>
+if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(function(rs){ rs.forEach(function(r){ r.unregister(); }); }); }
+location.replace('./sites/');
+</script>
+</head>
+<body>
+<p>Redirecting to the <a href="./sites/">published sites</a>…</p>
+</body>
+</html>

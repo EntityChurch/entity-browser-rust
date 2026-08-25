@@ -90,4 +90,12 @@ pub struct RegistryBrowserOutput {
     /// True on native builds, where the fetch has no implementation. Saying so
     /// beats an empty panel that reads as a broken registry.
     pub browser_only: bool,
+    /// Why the last pin attempt was refused, if it was.
+    ///
+    /// Carried to the pixel rather than dropped: the two refusals (no peer-id, a
+    /// non-canonical peer-id that carries no key) are both things the person can
+    /// fix, and a Pin button that silently does nothing is the operator-surface
+    /// failure this repo keeps meeting — the one person who could correct it is
+    /// told nothing at all.
+    pub pin_error: Option<String>,
 }

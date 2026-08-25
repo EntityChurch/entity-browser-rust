@@ -65,6 +65,66 @@ pub struct SystemOverviewOutput {
     /// authority surface (moved here from Peer Connections, Direction A). `None`
     /// until a backend is known.
     pub authorizations: Option<AuthorizationsView>,
+    /// Whether another device on this network can load the app from this
+    /// desktop, and whether it arrives already knowing the rendezvous.
+    pub app_server: AppServerView,
+}
+
+/// The "serve the app from here" row.
+///
+/// Three states, deliberately not two. Collapsing `Serving` and
+/// `ServingUnprovisioned` into one "on" would promise *type a URL and you are
+/// done* while delivering *type a URL, then add a connector by hand* — which is
+/// the same shape of half-truth as a rendezvous row that reports the persisted
+/// setting instead of what is mounted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AppServerView {
+    /// Not serving. Another device cannot load the app from here at all.
+    #[default]
+    Off,
+    /// Serving, and a visitor arrives provisioned with this desktop's
+    /// rendezvous — the whole flow is "type this URL".
+    Serving { url: String, node_peer_id: String },
+    /// Serving, but this desktop is not a rendezvous, so a visitor gets the app
+    /// and still has to be told how to reach anybody. The remedy is the
+    /// Rendezvous row directly above, which is why they sit together.
+    ServingUnprovisioned { url: String },
+}
+
+impl AppServerView {
+    /// Grade the IPC report into the three states.
+    ///
+    /// A **pure function over plain arguments, not over `AppServerInfo`** — the
+    /// IPC type is `wasm32`-only, and taking it here would put this classifier
+    /// out of reach of `make test`, which is where the "serving but
+    /// unprovisioned" distinction is actually checked. Same native-shadow split
+    /// as `WebRtcProvisioning` against the worker wire types.
+    pub fn grade(serving: bool, url: Option<&str>, node_peer_id: Option<&str>) -> Self {
+        match (serving, url, node_peer_id) {
+            (true, Some(url), Some(node)) if !url.is_empty() && !node.is_empty() => {
+                Self::Serving { url: url.to_string(), node_peer_id: node.to_string() }
+            }
+            (true, Some(url), _) if !url.is_empty() => {
+                Self::ServingUnprovisioned { url: url.to_string() }
+            }
+            // Serving with no URL is not a state the backend can produce — the
+            // address is read back from the bound socket. If it ever were, the
+            // honest answer is Off rather than a row with nothing to type.
+            _ => Self::Off,
+        }
+    }
+
+    pub fn is_serving(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// The URL to hand a person, when there is one.
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Off => None,
+            Self::Serving { url, .. } | Self::ServingUnprovisioned { url } => Some(url),
+        }
+    }
 }
 
 /// The canonical backend's inbound-device authorization surface — a render-ready
@@ -224,5 +284,44 @@ mod pairing_tests {
 
         let blank = BackendStatusView { ws_addr: Some(String::new()), ..backend() };
         assert!(pairing_commands(&blank).is_empty(), "an empty address is not an address");
+    }
+
+    /// The distinction the whole three-state enum exists for: serving *with* a
+    /// rendezvous is "type this URL and you are done"; serving *without* one
+    /// hands over a working app that still cannot reach anybody. A two-state
+    /// "on/off" would promise the first while delivering the second.
+    #[test]
+    fn serving_without_a_rendezvous_is_its_own_state_not_just_on() {
+        assert_eq!(
+            AppServerView::grade(true, Some("http://192.168.1.9:8081"), Some("2KaNODE")),
+            AppServerView::Serving {
+                url: "http://192.168.1.9:8081".into(),
+                node_peer_id: "2KaNODE".into(),
+            },
+        );
+        assert_eq!(
+            AppServerView::grade(true, Some("http://192.168.1.9:8081"), None),
+            AppServerView::ServingUnprovisioned { url: "http://192.168.1.9:8081".into() },
+            "a visitor gets the app but must still add a connector by hand",
+        );
+        // An empty node-id is the same absence as a missing one — it arrives
+        // over IPC, where "" and null are not reliably distinct.
+        assert_eq!(
+            AppServerView::grade(true, Some("http://x:8081"), Some("")),
+            AppServerView::ServingUnprovisioned { url: "http://x:8081".into() },
+        );
+    }
+
+    /// Serving with nothing to type is not a state the backend can produce (the
+    /// URL is read back from the bound socket). If it ever were, the row must
+    /// say Off rather than claim a service with no address — the same rule as
+    /// the pairing row, which renders nothing when nothing is listening.
+    #[test]
+    fn serving_with_no_url_is_reported_as_off() {
+        assert_eq!(AppServerView::grade(true, None, Some("2KaNODE")), AppServerView::Off);
+        assert_eq!(AppServerView::grade(true, Some(""), Some("2KaNODE")), AppServerView::Off);
+        assert_eq!(AppServerView::grade(false, Some("http://x:8081"), Some("n")), AppServerView::Off);
+        assert!(!AppServerView::Off.is_serving());
+        assert!(AppServerView::grade(true, Some("http://x:8081"), None).is_serving());
     }
 }
