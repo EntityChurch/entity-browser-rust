@@ -359,10 +359,10 @@ fn render_results(parent: &Element, output: &FileTransferOutput) {
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();
     if output.events.is_empty() {
-        pre.set_inner_html(
-            "<span style='color:var(--text-dim, #888)'>List or pull a file to see \
-             results.</span>",
-        );
+        pre.set_inner_html(&format!(
+            "<span style='color:var(--text-dim, #888)'>{}</span>",
+            util::escape_html(&crate::i18n::t("filetransfer.no_results", &[]))
+        ));
     } else {
         let mut html = String::new();
         for entry in &output.events {

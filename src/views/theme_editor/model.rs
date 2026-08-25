@@ -316,7 +316,7 @@ impl ThemeEditorModel {
             .into_iter()
             .map(|t| ThemeChoice {
                 name: t.name.to_string(),
-                label: t.label.to_string(),
+                label: theme_tokens::display_label(t),
                 selected: t.name == "dark",
             })
             .collect();

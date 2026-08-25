@@ -283,7 +283,10 @@ impl ExecuteConsoleModel {
         // Peer selector options.
         let mut peer_options = vec![PeerOption {
             value: "local".into(),
-            label: format!("Local ({})", crate::views::display_name(peers, &self.peer_id)),
+            label: crate::i18n::t(
+                "executeconsole.local",
+                &[("peer", &crate::views::display_name(peers, &self.peer_id))],
+            ),
             selected: state.selected_peer == "local",
         }];
         let connected: Vec<String> = crate::connections::read_connected(peers);

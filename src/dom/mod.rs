@@ -19,7 +19,6 @@ pub mod key_manager;
 pub mod knowledge_base;
 pub mod peer_connections;
 pub mod peer_management;
-pub mod programs;
 pub mod query_console;
 pub mod scanner;
 pub mod settings;
@@ -467,7 +466,10 @@ impl DomRenderer {
 
         let bar = util::create_element_with_class("div", "palette-bar");
         let menu_toggle = util::create_element_with_class("button", "palette-toggle");
-        util::set_text(&menu_toggle, "☰ Menu");
+        util::set_text(
+            &menu_toggle,
+            &format!("☰ {}", crate::i18n::t("windows.menu", &[])),
+        );
         {
             let so = self.shell_open.clone();
             let wo = self.windows_open.clone();
@@ -704,7 +706,13 @@ impl DomRenderer {
         let details = util::create_element_with_class("details", "palette-group");
         util::set_attr(&details, "open", "");
         let summary = util::create_element("summary");
-        util::set_text(&summary, &format!("Open Windows ({})", open_count));
+        util::set_text(
+            &summary,
+            &crate::i18n::t(
+                "windows.open_windows_count",
+                &[("n", &open_count.to_string())],
+            ),
+        );
         util::append(&details, &summary);
 
         for win in &window_manager.windows {
@@ -1110,11 +1118,7 @@ fn build_empty_state() -> Element {
 
     let body = util::create_element("div");
     util::set_attr(&body, "style", "font-size:13px;max-width:380px;line-height:1.5;");
-    util::set_text(
-        &body,
-        "Entity Browser is a workspace over your entity tree. \
-         Pick a window from the menu to get started.",
-    );
+    util::set_text(&body, &crate::i18n::t("windows.welcome_body", &[]));
     util::append(&wrap, &body);
 
     // A small legend of the menu sections so a first-timer knows what's inside.
@@ -1166,11 +1170,7 @@ fn build_empty_state() -> Element {
         "style",
         "font-size:12.5px;max-width:380px;line-height:1.5;margin-top:4px;",
     );
-    util::set_text(
-        &modes,
-        "Sites can open full-screen in Site Mode, and any window — games and \
-         apps included — can be maximized to fill the screen. Explore and enjoy.",
-    );
+    util::set_text(&modes, &crate::i18n::t("windows.welcome_modes", &[]));
     util::append(&wrap, &modes);
 
     // Outbound link to the foundation — opens in a new tab (rel=noopener so the

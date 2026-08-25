@@ -310,6 +310,7 @@ pub const EN: &[(&str, Message)] = &[
     ("btn.count", Message::Simple("Count")),
     ("btn.trace", Message::Simple("Trace")),
     ("btn.dismiss", Message::Simple("Dismiss")),
+    ("btn.reload", Message::Simple("Reload")),
     ("btn.clear", Message::Simple("Clear")),
     ("btn.expand", Message::Simple("Expand")),
     ("btn.collapse", Message::Simple("Collapse")),
@@ -322,6 +323,8 @@ pub const EN: &[(&str, Message)] = &[
     ("label.device", Message::Simple("Device")),
     ("label.name", Message::Simple("Name")),
     ("label.label", Message::Simple("Label")),
+    ("label.role", Message::Simple("Role")),
+    ("label.peer_id", Message::Simple("Peer ID")),
     ("label.level", Message::Simple("Level")),
     ("label.results", Message::Simple("Results")),
     ("label.content", Message::Simple("Content")),
@@ -443,8 +446,57 @@ pub const EN: &[(&str, Message)] = &[
     // -- input placeholders --
     ("kb.title_placeholder", Message::Simple("Article title")),
     ("theme.name_placeholder", Message::Simple("name (a-z, 0-9, dashes)")),
+    // Built-in theme names, keyed `theme.<name>` (dashes → underscores) and
+    // resolved by `theme_tokens::display_label`. The descriptive words are
+    // translated; the scheme proper nouns (Solarized, Nord, Dracula, Gruvbox,
+    // Monokai) name a specific published palette and stay as written, the way
+    // a typeface name would.
+    ("theme.dark", Message::Simple("Dark")),
+    ("theme.light", Message::Simple("Light")),
+    ("theme.sepia", Message::Simple("Sepia")),
+    ("theme.neon", Message::Simple("Neon")),
+    ("theme.solarized_dark", Message::Simple("Solarized Dark")),
+    ("theme.solarized_light", Message::Simple("Solarized Light")),
+    ("theme.nord", Message::Simple("Nord")),
+    ("theme.nord_light", Message::Simple("Nord Light")),
+    ("theme.dracula", Message::Simple("Dracula")),
+    ("theme.gruvbox_dark", Message::Simple("Gruvbox Dark")),
+    ("theme.gruvbox_light", Message::Simple("Gruvbox Light")),
+    ("theme.monokai", Message::Simple("Monokai")),
+    // Site-appearance dropdown.
+    ("theme.site_theme", Message::Simple("Site's theme")),
+    ("theme.match_system", Message::Simple("Match system theme")),
+    ("theme.always", Message::Simple("Always {theme}")),
+    // User-theme name/scheme validation — surfaced on the Theme Editor status
+    // line, so user-facing despite reading like developer errors.
+    ("theme.err_name_empty", Message::Simple("theme name is empty")),
+    (
+        "theme.err_name_too_long",
+        Message::Simple("theme name too long (max {max})"),
+    ),
+    (
+        "theme.err_name_charset",
+        Message::Simple("theme name must be lowercase letters, digits, and dashes"),
+    ),
+    (
+        "theme.err_name_reserved",
+        Message::Simple("“{name}” is a reserved appearance mode"),
+    ),
+    (
+        "theme.err_name_builtin",
+        Message::Simple("“{name}” is a built-in theme"),
+    ),
+    (
+        "theme.err_scheme",
+        Message::Simple("scheme must be “dark” or “light”, got “{got}”"),
+    ),
+    ("theme.err_no_tokens", Message::Simple("theme has no token values")),
     ("theme.label_placeholder", Message::Simple("display label")),
     // -- file transfer surface --
+    (
+        "filetransfer.no_results",
+        Message::Simple("List or pull a file to see results."),
+    ),
     ("filetransfer.device", Message::Simple("Device")),
     ("filetransfer.shared_files", Message::Simple("Shared files")),
     ("filetransfer.send_file", Message::Simple("Send a file")),
@@ -463,6 +515,13 @@ pub const EN: &[(&str, Message)] = &[
     ("filetransfer.browse_shared", Message::Simple("Browse shared files")),
     ("filetransfer.share_empty", Message::Simple("This share is empty.")),
     // -- site editor surface --
+    (
+        "siteeditor.hint",
+        Message::Simple(
+            "Build a site as a tree of folders and pages. Saves write to your \
+             peer's tree; the Site Browser window picks them up automatically.",
+        ),
+    ),
     ("siteeditor.create_site", Message::Simple("Create site")),
     ("siteeditor.delete_site", Message::Simple("Delete site")),
     ("siteeditor.save_page", Message::Simple("Save page")),
@@ -687,6 +746,15 @@ pub const EN: &[(&str, Message)] = &[
     // -- system overview surface --
     ("sysoverview.clear_logs", Message::Simple("Clear logs")),
     ("sysoverview.logs", Message::Simple("Logs")),
+    ("sysoverview.no_logs", Message::Simple("(no logs yet)")),
+    (
+        "sysoverview.backend_logs_note",
+        Message::Simple(
+            "The System backend runs in the desktop app. Its live logs aren't \
+             streamed over this browser session yet — exposing them to an \
+             authorized peer is planned.",
+        ),
+    ),
     ("sysoverview.native_peer", Message::Simple("Native peer")),
     ("sysoverview.listen", Message::Simple("Listen")),
     ("sysoverview.not_listening", Message::Simple("(not listening)")),
@@ -964,6 +1032,13 @@ pub const EN: &[(&str, Message)] = &[
     ("storage.native_sqlite", Message::Simple("Native / SQLite")),
     ("storage.by_path", Message::Simple("By top-level path:")),
     (
+        "storage.append_only_hint",
+        Message::Simple(
+            "Read-only. The content store is append-only — overwriting a path \
+             leaves the old value behind; it isn't reclaimed until GC (GUIDE-GC).",
+        ),
+    ),
+    (
         "storage.peer_not_created",
         Message::Simple("Peer not created — {reason}"),
     ),
@@ -997,7 +1072,80 @@ pub const EN: &[(&str, Message)] = &[
         "storage.no_breakdown",
         Message::Simple("(per-prefix breakdown unavailable on the Worker/OPFS arm)"),
     ),
+    // -- developer-tool prose --
+    //
+    // These windows had their hints and buttons localized in the dev-tools
+    // pass; their empty states and attach errors were invisible to the gate
+    // (blind spot #4 — they render as innerHTML). Extracting them brings the
+    // windows to parity rather than leaving them half-translated.
+    ("devtools.no_events", Message::Simple("(no events yet)")),
+    (
+        "inspect.attach_failed",
+        Message::Simple("Inspect routing failed to attach on this peer."),
+    ),
+    (
+        "inspect.attach_failed_detail",
+        Message::Simple(
+            "No facts will arrive. Check tracing logs for the \
+             install_inspect_sink error.",
+        ),
+    ),
+    (
+        "pathtap.empty",
+        Message::Simple(
+            "(no dispatch facts yet — trigger an exec, query, put, etc. on \
+             this peer)",
+        ),
+    ),
+    (
+        "contentstream.hint",
+        Message::Simple(
+            "Live binding events (entity writes/removes/snapshots) for this \
+             peer (newest first; ring buffer).",
+        ),
+    ),
+    (
+        "contentstream.empty",
+        Message::Simple(
+            "(no binding events yet — trigger a put / remove / snapshot on \
+             this peer)",
+        ),
+    ),
+    (
+        "wirerecorder.hint",
+        Message::Simple(
+            "Live wire frames for this peer (newest first; ring buffer). Only \
+             populates when cross-peer traffic flows.",
+        ),
+    ),
+    (
+        "wirerecorder.empty",
+        Message::Simple(
+            "(no wire frames yet — connect to a remote peer or accept an \
+             inbound dial to see traffic)",
+        ),
+    ),
+    (
+        "shell.scrollback_cleared",
+        Message::Simple("(scrollback cleared)"),
+    ),
+    ("executeconsole.local", Message::Simple("Local ({peer})")),
     // -- chain trace surface --
+    (
+        "chaintrace.no_marker",
+        Message::Simple(
+            "(no continuation or chain-error marker bound for chain_id \
+             {chain} on peer {peer})",
+        ),
+    ),
+    (
+        "chaintrace.body_redacted",
+        Message::Simple("(body redacted per renderer policy)"),
+    ),
+    (
+        "chaintrace.body_undecoded",
+        Message::Simple("(body not yet decoded)"),
+    ),
     ("chaintrace.chain_id", Message::Simple("Chain ID:")),
     ("chaintrace.continuations", Message::Simple("Continuations")),
     ("chaintrace.error_markers", Message::Simple("Chain-error markers")),
@@ -1007,14 +1155,159 @@ pub const EN: &[(&str, Message)] = &[
     ),
     // -- window switcher / desktop chrome --
     ("windows.none_open", Message::Simple("No windows open")),
+    // -- key manager / peer connections header / site nav overflow --
+    (
+        "keymanager.subtitle",
+        Message::Simple("Hosted-peer public identities (Ed25519)"),
+    ),
+    ("peerconn.this_peer", Message::Simple("This peer {pid} · {kind}")),
+    ("peerconn.listening", Message::Simple(" · listening {addr}")),
+    (
+        "peerconn.qr_failed",
+        Message::Simple("Failed to generate QR code"),
+    ),
+    // The caret is part of the affordance, so it lives in the value — that
+    // also lets an RTL locale put it on the correct side.
+    ("contentsite.more", Message::Simple("More \u{25be} ({n})")),
     ("windows.open_windows", Message::Simple("Open Windows")),
     ("windows.menu", Message::Simple("Menu")),
     (
         "windows.open_windows_hint",
         Message::Simple("— jump to or close your active windows"),
     ),
+    // The palette's own group header. A separate key from `open_windows`
+    // rather than `format!("{} ({})", …)` so a locale controls where the
+    // count sits, and so `t()` bidi-isolates the number for RTL.
+    (
+        "windows.open_windows_count",
+        Message::Simple("Open Windows ({n})"),
+    ),
+    (
+        "windows.welcome_body",
+        Message::Simple(
+            "Entity Browser is a workspace over your entity tree. \
+             Pick a window from the menu to get started.",
+        ),
+    ),
+    (
+        "windows.welcome_modes",
+        Message::Simple(
+            "Sites can open full-screen in Site Mode, and any window — games and \
+             apps included — can be maximized to fill the screen. Explore and enjoy.",
+        ),
+    ),
+    // -- storage durability / watchdog / peer-creation refusal --
+    //
+    // The copy a user reads when something has gone wrong: their tree is not
+    // being saved, the UI froze, an action was refused. Least likely to be
+    // seen in casual testing; most important to get right in every locale.
+    (
+        "durability.ephemeral_direct",
+        Message::Simple(
+            "Direct mode: your entity tree lives in memory only and is lost on \
+             reload (your identity is preserved).",
+        ),
+    ),
+    (
+        "durability.storage_unavailable",
+        Message::Simple(
+            "Storage unavailable: background (Worker) storage failed to start, so \
+             your entity tree won't be saved this session and any previously saved \
+             tree isn't loaded. Try reloading.",
+        ),
+    ),
+    (
+        "durability.secondary_tab",
+        Message::Simple(
+            "This app is already open in another tab, which owns your saved data. \
+             Changes in THIS tab are not being saved. Close the other tab and \
+             reload here to edit your saved tree.",
+        ),
+    ),
+    (
+        "durability.evictable",
+        Message::Simple(
+            "Your data is saved on this device, but the browser hasn't granted \
+             persistent storage — it may be cleared if the device runs low on space, \
+             or (on iOS/Safari) after about a week without opening this site. \
+             Bookmark or install to Home Screen to make it permanent.",
+        ),
+    ),
+    (
+        "watchdog.snag",
+        Message::Simple(
+            "The app hit a snag and briefly stopped responding. Reload to get back \
+             to a clean state — your saved data is kept.",
+        ),
+    ),
+    (
+        "peercreate.disabled",
+        Message::Simple("peer creation is disabled in this deployment"),
+    ),
+    (
+        "peercreate.cannot_save",
+        Message::Simple(
+            "this tab can't save — another tab owns your storage, or storage is \
+             unavailable. Close the other tab and reload to create peers here.",
+        ),
+    ),
+    (
+        "peercreate.log",
+        Message::Simple("Cannot create peer: {reason}"),
+    ),
     // -- access log surface --
     ("accesslog.operations", Message::Simple("operations: {n}")),
+    (
+        "accesslog.hint",
+        Message::Simple(
+            "Access crossing the boundary — → out (you called a peer), ← in \
+             (a peer called this device), · local — showing who, the target, the \
+             operation, and whether it was allowed or denied (newest first).",
+        ),
+    ),
+    (
+        "accesslog.empty_all",
+        Message::Simple(
+            "No operations yet. Dispatch something — browse a peer, run a shell \
+             verb, transfer a file — and it appears here.",
+        ),
+    ),
+    // The two filter labels are slots, not baked copy: they name options the
+    // user has to find in the `<select>` above, and those options are
+    // themselves localized (`accesslog.all_peers` / `accesslog.filter_all`).
+    // Spelling them out here would let the instruction drift from the UI in
+    // any of the 30 locales.
+    (
+        "accesslog.empty_filtered",
+        Message::Simple(
+            "Nothing for this peer / direction yet. Widen the filters (peer \
+             “{peers}”, direction “{all}”) to see every access.",
+        ),
+    ),
+    (
+        "accesslog.caps_hint",
+        Message::Simple(
+            "What each peer has actually done — the minimal grant it would need if \
+             enforcement were on. Aggregated from the activity log (this session). \
+             Compare against what a peer is authorized for to find the gap. (Resource \
+             path is captured on outbound calls only; “—” elsewhere means the path \
+             wasn't exposed to the log, not that none was used.)",
+        ),
+    ),
+    (
+        "accesslog.caps_empty",
+        Message::Simple(
+            "No capabilities observed yet. Dispatch something — browse a peer, \
+             transfer a file — and each peer's used grants appear here.",
+        ),
+    ),
+    (
+        "accesslog.no_grant",
+        Message::Simple(
+            "No explicit grant recorded — an owned system peer, or a device not \
+             yet authorized.",
+        ),
+    ),
     (
         "accesslog.authorized_head",
         Message::Simple("Authorized: {profile} — {summary}"),

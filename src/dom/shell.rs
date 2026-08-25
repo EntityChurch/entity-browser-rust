@@ -67,7 +67,10 @@ fn render_scrollback(parent: &Element, output: &ShellOutput) {
     pre.set_attribute("data-field", "shell-scrollback").ok();
 
     if output.scrollback.is_empty() {
-        pre.set_inner_html("<span style='color:var(--text-dim, #888)'>(scrollback cleared)</span>");
+        pre.set_inner_html(&format!(
+            "<span style='color:var(--text-dim, #888)'>{}</span>",
+            util::escape_html(&crate::i18n::t("shell.scrollback_cleared", &[]))
+        ));
     } else {
         let mut html = String::new();
         for entry in &output.scrollback {

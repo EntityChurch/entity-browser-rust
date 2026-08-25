@@ -238,7 +238,7 @@ fn on_freeze_detected(gap_ms: f64) {
     if freeze_report_suppressed(document_hidden(), ms_since_resume, gap_ms) {
         crate::diagnostics::note(format!(
             "frozen-frame watchdog: ignored a ~{secs}s gap (tab backgrounded / \
-             device sleep — not a real freeze)."
+             device sleep — not a real freeze)." // i18n-ignore — diagnostics sink
         ));
         return;
     }
@@ -282,15 +282,12 @@ fn show_reload_banner() {
          font:13px/1.4 system-ui,-apple-system,sans-serif;",
     );
     if let Ok(text) = doc.create_element("span") {
-        text.set_text_content(Some(
-            "The app hit a snag and briefly stopped responding. Reload to get back \
-             to a clean state — your saved data is kept.",
-        ));
+        text.set_text_content(Some(&crate::i18n::t("watchdog.snag", &[])));
         let _ = text.set_attribute("style", "flex:1;");
         let _ = banner.append_child(&text);
     }
     if let Ok(btn) = doc.create_element("button") {
-        btn.set_text_content(Some("Reload"));
+        btn.set_text_content(Some(&crate::i18n::t("btn.reload", &[])));
         let _ = btn.set_attribute(
             "style",
             "padding:3px 10px;cursor:pointer;background:transparent;color:#eee;\
@@ -300,7 +297,7 @@ fn show_reload_banner() {
         let _ = banner.append_child(&btn);
     }
     if let Ok(btn) = doc.create_element("button") {
-        btn.set_text_content(Some("Dismiss"));
+        btn.set_text_content(Some(&crate::i18n::t("btn.dismiss", &[])));
         let _ = btn.set_attribute(
             "style",
             "padding:3px 10px;cursor:pointer;background:transparent;color:#eee;\

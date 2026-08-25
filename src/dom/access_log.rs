@@ -42,12 +42,7 @@ pub fn render(container: &Element, output: &AccessLogOutput, view: AccessView, c
     // remote peer), ← inbound (a remote peer reached into this device's backend
     // share, via the native backend), · local (a dispatch on this app's own
     // peer). Browsing cached data isn't a dispatch and won't appear.
-    util::set_text(
-        &hint,
-        "Access crossing the boundary — → out (you called a peer), ← in \
-         (a peer called this device), · local — showing who, the target, the \
-         operation, and whether it was allowed or denied (newest first).",
-    );
+    util::set_text(&hint, &crate::i18n::t("accesslog.hint", &[]));
     util::append(&wrapper, &hint);
 
     // Two filters, side by side: which peer's log (the frontend system peer vs
@@ -58,14 +53,16 @@ pub fn render(container: &Element, output: &AccessLogOutput, view: AccessView, c
     if output.entries.is_empty() {
         let peer_scoped = !output.peer_filter.is_empty();
         let msg = match (output.direction, peer_scoped) {
-            (DirectionFilter::All, false) => {
-                "No operations yet. Dispatch something — browse a peer, run a shell \
-                 verb, transfer a file — and it appears here."
-            }
-            _ => "Nothing for this peer / direction yet. Widen the filters (peer \
-                  “All peers”, direction “All”) to see every access.",
+            (DirectionFilter::All, false) => crate::i18n::t("accesslog.empty_all", &[]),
+            _ => crate::i18n::t(
+                "accesslog.empty_filtered",
+                &[
+                    ("peers", &crate::i18n::t("accesslog.all_peers", &[])),
+                    ("all", &crate::i18n::t("accesslog.filter_all", &[])),
+                ],
+            ),
         };
-        util::append(&wrapper, &components::empty(msg));
+        util::append(&wrapper, &components::empty(&msg));
         util::append(container, &wrapper);
         return;
     }
@@ -117,23 +114,13 @@ pub fn render_capabilities(
 
     let hint = util::create_element("p");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &hint,
-        "What each peer has actually done — the minimal grant it would need if \
-         enforcement were on. Aggregated from the activity log (this session). \
-         Compare against what a peer is authorized for to find the gap. (Resource \
-         path is captured on outbound calls only; “—” elsewhere means the path \
-         wasn't exposed to the log, not that none was used.)",
-    );
+    util::set_text(&hint, &crate::i18n::t("accesslog.caps_hint", &[]));
     util::append(&wrapper, &hint);
 
     if output.peers.is_empty() {
         util::append(
             &wrapper,
-            &components::empty(
-                "No capabilities observed yet. Dispatch something — browse a peer, \
-                 transfer a file — and each peer's used grants appear here.",
-            ),
+            &components::empty(&crate::i18n::t("accesslog.caps_empty", &[])),
         );
         util::append(container, &wrapper);
         return;
@@ -231,11 +218,7 @@ fn authorized_line(peer: &PeerCapabilities) -> Element {
         None => {
             let none = util::create_element("div");
             none.set_attribute("style", theme::HINT).ok();
-            util::set_text(
-                &none,
-                "No explicit grant recorded — an owned system peer, or a device not \
-                 yet authorized.",
-            );
+            util::set_text(&none, &crate::i18n::t("accesslog.no_grant", &[]));
             util::append(&line, &none);
         }
     }

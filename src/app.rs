@@ -2330,16 +2330,19 @@ impl EntityApp {
                     // (Peers window, shell verb) issued the action. Silence is
                     // the enemy (D13): a refused create is logged loud, written
                     // to the Event Log, and surfaced as a transient banner.
-                    if let Some(reason) = self.peer_create_refusal() {
+                    if let Some(reason_key) = self.peer_create_refusal() {
+                        // `reason_key` is an i18n key — the log keeps the stable
+                        // identifier, the user-facing banner gets the resolved text.
                         tracing::warn!(
-                            reason = reason,
+                            reason = reason_key,
                             mode = %mode.label(),
                             "CreatePeerWithMode REFUSED — no peer created, no vault write"
                         );
+                        let reason = crate::i18n::t(reason_key, &[]);
                         self.event_log_writer
-                            .log(format!("Cannot create peer: {reason}"));
+                            .log(crate::i18n::t("peercreate.log", &[("reason", &reason)]));
                         #[cfg(target_arch = "wasm32")]
-                        crate::storage_durability::show_action_refused_banner(reason);
+                        crate::storage_durability::show_action_refused_banner(&reason);
                     } else {
                         match mode {
                             crate::peer_mode::PeerMode::Frontend => {
@@ -3056,17 +3059,17 @@ impl EntityApp {
                     // Now prove it's really there.
                     match verify_fut.await {
                         Ok(v) if v.result.status == entity_handler::STATUS_OK => {
-                            let vmsg = format!("✓ FILE-XFER verified {} readable back ({})", path, v.summary.lines().next().unwrap_or(""));
+                            let vmsg = format!("✓ FILE-XFER verified {} readable back ({})", path, v.summary.lines().next().unwrap_or("")); // i18n-ignore — console diagnostic (greppable "FILE-XFER", dev log surface)
                             tracing::info!("{}", vmsg);
                             log.log(vmsg);
                         }
                         Ok(v) => {
-                            let vmsg = format!("✗ FILE-XFER VERIFY FAILED {} → write reported OK but read-back is {} — the write did NOT land on the peer", path, v.summary.lines().next().unwrap_or(""));
+                            let vmsg = format!("✗ FILE-XFER VERIFY FAILED {} → write reported OK but read-back is {} — the write did NOT land on the peer", path, v.summary.lines().next().unwrap_or("")); // i18n-ignore — console diagnostic (greppable "FILE-XFER", dev log surface)
                             tracing::error!("{}", vmsg);
                             log.log(vmsg);
                         }
                         Err(e) => {
-                            let vmsg = format!("✗ FILE-XFER VERIFY FAILED {} → read-back errored: {}", path, e);
+                            let vmsg = format!("✗ FILE-XFER VERIFY FAILED {} → read-back errored: {}", path, e); // i18n-ignore — console diagnostic (greppable "FILE-XFER", dev log surface)
                             tracing::error!("{}", vmsg);
                             log.log(vmsg);
                         }
@@ -3077,12 +3080,12 @@ impl EntityApp {
                 // at error level so it stands out RED in the tauri-run terminal
                 // (greppable: "FILE-XFER") rather than getting lost in the log.
                 Ok(resp) => {
-                    let msg = format!("✗ FILE-XFER upload REJECTED {} → {}", path, resp.summary);
+                    let msg = format!("✗ FILE-XFER upload REJECTED {} → {}", path, resp.summary); // i18n-ignore — console diagnostic (greppable "FILE-XFER", dev log surface)
                     tracing::error!("{}", msg);
                     log.log(msg);
                 }
                 Err(e) => {
-                    let msg = format!("✗ FILE-XFER upload FAILED {} → {}", path, e);
+                    let msg = format!("✗ FILE-XFER upload FAILED {} → {}", path, e); // i18n-ignore — console diagnostic (greppable "FILE-XFER", dev log surface)
                     tracing::error!("{}", msg);
                     log.log(msg);
                 }
@@ -3851,7 +3854,7 @@ async fn derive_and_record_backend_auth(
                 &writer,
                 &log,
                 &backend_pid,
-                format!("the backend link isn't ready ({})", e),
+                format!("the backend link isn't ready ({})", e), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
                 &health,
             )
@@ -3876,7 +3879,7 @@ async fn derive_and_record_backend_auth(
                 &writer,
                 &log,
                 &backend_pid,
-                format!("policy read failed ({})", e),
+                format!("policy read failed ({})", e), // i18n-ignore — auth-failure diagnostic detail (dev log surface)
                 &prev,
                 &health,
             )

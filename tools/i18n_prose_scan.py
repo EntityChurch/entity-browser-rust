@@ -37,7 +37,30 @@ CSS_HINT = re.compile(
     r'|translate|scale\(|rotate\(|cubic-bezier|linear-gradient|[0-9]+ms\b'
     r'|!important)')
 # debug/value renderings & format specs: `Foo({})`, `{:?}`, `{e:?}`, `{n:>4}`
-VALUE_RENDER = re.compile(r'\{:?[^}]*:[^}]*\}|\{:[^}]*\}|\{\}[)\]]|\w+\(\{\}|\(\{\} ')
+#
+# NOTE (2026-07-22): this deliberately does NOT include a bare `\{\}[)\]]`
+# alternative. It used to, to catch a Debug render like `Bytes({} bytes)` — but
+# `\w+\(\{\}` already catches those (identifier, then `(`, no space), while
+# `\{\}[)\]]` additionally swallowed every **counted header**:
+#   "Open Windows ({})"  ·  "More ▾ ({})"  ·  "Local ({})"
+# That is one of the most common translatable shapes in any UI, and it made the
+# main navigation menu's own label invisible to the gate. Blind spot #3.
+VALUE_RENDER = re.compile(r'\{:?[^}]*:[^}]*\}|\{:[^}]*\}|\w+\(\{\}|\(\{\} ')
+
+# Markup stripping (blind spot #4, 2026-07-22). Several windows render through
+# `set_inner_html` with prose baked into the template:
+#   "<span style='…'>(no events yet)</span>"
+#   "<div …><h2 …>Key Manager</h2><p …>Hosted-peer public identities…</p>"
+# `is_code()` rejected any literal containing `<` and `>` outright, so the prose
+# inside every such template was discarded along with the tags. We now strip the
+# markup and judge the remaining TEXT CONTENT — which is what a user reads.
+TAG = re.compile(r'<[^>]*>')
+HTML_ENTITY = re.compile(r'&[a-z]+;')
+
+# Leading decoration: a glyph-prefixed label is still a label (blind spot #5).
+# "☰ Menu" is the main menu button; rejecting on the first character hid it.
+# A string that is *only* glyphs still falls out via the len/alpha checks below.
+GLYPHS = '◆☰✗✓•⛁⌂▾▸→· '
 
 # KeyboardEvent.key values and modifier names — string-compared in event
 # handlers (`if key == "ArrowUp"`), never rendered as UI text.
@@ -49,6 +72,13 @@ KEYNAMES = {
 
 
 def is_pathy(s):
+    # A path/URI is a TOKEN, not a sentence. Testing `'://' in s` over the whole
+    # string rejected a sentence that merely *mentions* one — which hid File
+    # Transfer's entire no-peer paragraph ("…or connect its ws:// address, then
+    # come back here…") for as long as the gate has existed (blind spot #6,
+    # found by driving the app, not by the tooling).
+    if ' ' in s.strip():
+        return False
     if '://' in s or s.startswith('/') or s.startswith('app/') or s.startswith('system/'):
         return True
     if re.search(r'\{[a-z_]+\}/', s):
@@ -82,9 +112,12 @@ def is_css(s):
 MARKUP_CONST = {'noopener noreferrer', 'noopener', 'noreferrer'}
 
 
+def strip_markup(s):
+    """Reduce an HTML template literal to the text a user actually reads."""
+    return re.sub(r'\s+', ' ', HTML_ENTITY.sub(' ', TAG.sub(' ', s))).strip()
+
+
 def is_code(s):
-    if '<' in s and '>' in s:              # HTML tags: <p>…</p>
-        return True
     if '&&' in s or '=>' in s or '.parentNode' in s or '.remove(' in s \
             or '||' in s:                   # inline JS
         return True
@@ -99,6 +132,11 @@ def is_code(s):
 
 def looks_prose(s):
     s2 = s.strip()
+    # Normalize BEFORE judging: a glyph prefix and surrounding markup are
+    # decoration, not evidence that the string isn't prose. See TAG / GLYPHS.
+    s2 = s2.lstrip(GLYPHS) or s2
+    if '<' in s2 and '>' in s2:
+        s2 = strip_markup(s2)
     if len(s2) < 2:
         return False
     if not re.search(r'[A-Za-z]', s2):
@@ -107,9 +145,7 @@ def looks_prose(s):
         return False
     if '::' in s2:  # Rust path in a diagnostic/error string, never UI prose
         return False
-    if is_code(s2):  # HTML / inline JS / markup const / Debug struct name
-        return False
-    if s2[:1] in '◆☰✗✓•':  # demo glyphs / console status-led diagnostic lines
+    if is_code(s2):  # inline JS / markup const / Debug struct name
         return False
     if is_pathy(s2) or is_keyish(s2) or is_css(s2):
         return False
@@ -117,20 +153,37 @@ def looks_prose(s):
     # but NOT an all-caps DOM node name (BODY/HTML) or a KeyboardEvent.key /
     # modifier constant used in an event comparison (never UI text).
     if ' ' not in s2:
-        if s2.isupper():
+        # Strip trailing label punctuation FIRST. "Direction:" is a field label
+        # exactly like "Direction", but the bare fullmatch below rejected it on
+        # the colon — so every single-word `Label:` in the app was invisible
+        # (blind spot #7; the Access Log's own direction filter was one).
+        bare = s2.rstrip(':：…')
+        if bare.isupper():
             return False
-        if s2 in KEYNAMES:
+        if bare in KEYNAMES:
             return False
-        return bool(re.fullmatch(r'[A-Z][A-Za-z]{2,}', s2))
-    # multi-token: reject an all-lowercase short token list with no sentence
-    # words (likely a class/attr list, not prose)
+        return bool(re.fullmatch(r'[A-Z][A-Za-z]{2,}', bare))
+    # Multi-token: a short all-lowercase run with no sentence words is USUALLY
+    # a class/attr list — but "main thread", "native store", "(empty tree)" are
+    # plain prose that this rule was swallowing (blind spot #8; the peer-mode
+    # labels are on screen in the Peers and System Overview windows).
+    #
+    # So reject only when it actually looks like a token list or a template
+    # fragment: a `{slot}`, markup, `key=value`, a comma-separated stack (a
+    # font-family), or a hyphenated class-ish token. Plain words fall through
+    # as prose. Tightening it this way surfaced 15 real strings where dropping
+    # the rule outright would have added 44 more font stacks and format
+    # templates — noise that would have cost the baseline its signal.
     letters = re.sub(r'[^A-Za-z ]', '', s2)
     if letters and letters == letters.lower() and len(s2.split()) <= 3 and not any(
             w in s2.lower() for w in (
                 'the', ' to', ' on', ' a ', 'no ', 'not', ' is', 'are', 'use',
                 'show', 'peer', 'device', 'window', 'file', 'site', 'save',
                 'open', 'close', 'this', 'your', 'from')):
-        return False
+        if '{' in s2 or '<' in s2 or '=' in s2:
+            return False
+        if ',' in s2 or any('-' in t for t in s2.split()):
+            return False
     return True
 
 
@@ -279,10 +332,36 @@ def files():
     # buttons) and `session_config.rs` (the "this tab can't save" copy) — both
     # write straight to the DOM from outside the two render dirs, and both were
     # invisible purely because this list did not name them (2026-07-21).
+    #
+    # The set was closed deliberately on 2026-07-22 against the principle
+    # proposed by the previous handoff — *a file belongs if it can reach
+    # `set_text` / `set_text_content` / `components::` / a notice or banner*.
+    # Of the 70 `src/` files that were outside it, exactly SIX can reach the
+    # DOM at all; each was then triaged by hand rather than added by glob:
+    #
+    #   boot_fast_paint.rs    ADDED  — writes the pre-WASM splash (0 prose today;
+    #                                  in-set so it cannot silently grow prose)
+    #   content_site/render.rs ADDED — set_inner_html for rendered pages (0 prose)
+    #   theme_tokens.rs       ADDED  — `label:` fields ARE the Theme Editor's
+    #                                  picker text (theme_editor renders
+    #                                  `(t.name, t.label)`); scheme proper nouns
+    #                                  carry `i18n-ignore`, see that file
+    #   i18n.rs               OUT    — IS the catalog. Scanning it would count
+    #                                  every English source string plus the
+    #                                  language endonyms (Deutsch/Svenska), which
+    #                                  are deliberately never translated.
+    #   main.rs               OUT    — native CLI stub; its prose is `println!`
+    #                                  help for `make publish`, never DOM text.
+    #   ops/download.rs       OUT    — its 5 strings are `Err(String)` diagnostics
+    #                                  routed to the File Transfer log pane
+    #                                  ("no window", "anchor is not an
+    #                                  HtmlElement"), the same dev-facing class
+    #                                  as any other log line.
     for extra in ('src/app.rs', 'src/window.rs', 'src/peer_display.rs',
                   'src/storage_durability.rs', 'src/format.rs',
                   'src/backend_auth.rs', 'src/watchdog.rs',
-                  'src/session_config.rs'):
+                  'src/session_config.rs', 'src/boot_fast_paint.rs',
+                  'src/content_site/render.rs', 'src/theme_tokens.rs'):
         out.append(extra)
     return sorted(set(out))
 

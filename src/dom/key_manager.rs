@@ -11,16 +11,22 @@ pub fn render(container: &Element, output: &KeyManagerOutput) {
 }
 
 fn build_html(output: &KeyManagerOutput) -> String {
-    let mut html = String::from(
+    let t = |k: &str| util::escape_html(&crate::i18n::t(k, &[]));
+    let mut html = format!(
         "<div style='padding:12px'>\
-         <h2 style='margin:0 0 4px'>Key Manager</h2>\
-         <p style='color:var(--text-dim, #888);margin:0 0 12px'>Hosted-peer public identities (Ed25519)</p>\
+         <h2 style='margin:0 0 4px'>{}</h2>\
+         <p style='color:var(--text-dim, #888);margin:0 0 12px'>{}</p>\
          <div style='overflow-x:auto'>\
          <table style='width:100%;border-collapse:collapse;font-size:13px'>\
          <tr style='border-bottom:1px solid var(--border, #333)'>\
-         <th style='text-align:start;padding:4px'>Label</th>\
-         <th style='text-align:start;padding:4px'>Peer ID</th>\
-         <th style='text-align:start;padding:4px'>Role</th></tr>",
+         <th style='text-align:start;padding:4px'>{}</th>\
+         <th style='text-align:start;padding:4px'>{}</th>\
+         <th style='text-align:start;padding:4px'>{}</th></tr>",
+        t("window.key_manager"),
+        t("keymanager.subtitle"),
+        t("label.label"),
+        t("label.peer_id"),
+        t("label.role"),
     );
     for key in &output.keys {
         html.push_str(&format!(

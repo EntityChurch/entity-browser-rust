@@ -321,6 +321,8 @@ pub fn generate_qr_svg(payload: &str) -> String {
             .dark_color(qrcode::render::svg::Color("#000000"))
             .light_color(qrcode::render::svg::Color("#ffffff"))
             .build(),
-        Err(_) => "<p>Failed to generate QR code</p>".into(),
+        // Not escaped: the value is a catalog string, not user input, and this
+        // module compiles on native too — `dom::util::escape_html` is wasm-only.
+        Err(_) => format!("<p>{}</p>", crate::i18n::t("peerconn.qr_failed", &[])),
     }
 }

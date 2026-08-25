@@ -11,7 +11,6 @@ use crate::views::system_overview::output::{
     AuthorizationsView, AuthRow, SystemOverviewOutput,
 };
 use crate::views::system_peers::output::SystemPeersOutput;
-use crate::theme_tokens;
 
 use web_sys::Element;
 
@@ -82,12 +81,7 @@ pub fn render(
         let note = util::create_element("p");
         note.set_attribute("style", "color:var(--text-dim, #888);margin:4px 0")
             .ok();
-        util::set_text(
-            &note,
-            "The System backend runs in the desktop app. Its live logs aren't \
-             streamed over this browser session yet — exposing them to an \
-             authorized peer is planned.",
-        );
+        util::set_text(&note, &crate::i18n::t("sysoverview.backend_logs_note", &[]));
         util::append(&wrapper, &note);
         util::append(container, &wrapper);
         return;
@@ -148,9 +142,10 @@ pub fn render(
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();
     if output.log_lines.is_empty() {
-        pre.set_inner_html(
-            "<span style='color:var(--text-dim, #888)'>(no logs yet)</span>",
-        );
+        pre.set_inner_html(&format!(
+            "<span style='color:var(--text-dim, #888)'>{}</span>",
+            util::escape_html(&crate::i18n::t("sysoverview.no_logs", &[]))
+        ));
     } else {
         // The backend keeps ANSI color on its `tracing` output; convert the
         // escapes to colored HTML so the logs render with their level/field
