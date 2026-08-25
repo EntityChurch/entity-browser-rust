@@ -49,6 +49,13 @@ import spike_meet_then_chat as meet
 SIZE = int(os.environ.get("FILE_SIZE", "700000") or 700000)
 NAME = os.environ.get("FILE_NAME", "report.bin").strip()
 
+# The second file, offered from the WINDOW's picker instead of the Shell. A
+# different size (so a different content id) and a different name, so nothing in
+# phases 7–9 can pass on the strength of the Shell's offer still being there.
+# Still multi-chunk, for the same reason `SIZE` is.
+WINDOW_SIZE = int(os.environ.get("WINDOW_FILE_SIZE", "700001") or 700001)
+WINDOW_NAME = os.environ.get("WINDOW_FILE_NAME", "from-window.bin").strip()
+
 A_BASE, B_BASE = meet.A_BASE, meet.B_BASE
 ex, run_until, type_once = meet.ex, meet.run_until, meet.type_once
 SHELL_TEXT = meet.SHELL_TEXT
@@ -56,6 +63,80 @@ SHELL_TEXT = meet.SHELL_TEXT
 # `offered <name> <n> bytes  id <hex>` / `pulled …` — the two lines the verbs
 # print. Captured with the id, because the id is the content hash: the same id
 # on both sides is the strongest single statement this gate can make.
+def _root():
+    return ("const l=document.getElementById('dom-layer');const r=l.shadowRoot||l;")
+
+
+def ROW_NAMED(name):
+    """Is there a File Transfer row for this filename? (Its tree key is a
+    content hash for an offer, so the NAME is the only stable handle — which is
+    the manifest's whole purpose.)"""
+    return _root() + f"const e=r.querySelector('[data-row-name=\"{name}\"]');return !!e;"
+
+
+def FIELD_TEXT(field):
+    return _root() + f"const e=r.querySelector('[data-field=\"{field}\"]');return e?e.textContent:'';"
+
+
+def OWN_OFFER_ROW(name):
+    """Is this file listed in *our own* "Files you are offering" table? The
+    sender's view — the only place a person can see what strangers may read
+    from them."""
+    return _root() + (
+        f"const e=r.querySelector('[data-field=\"ft-offer-row\"]"
+        f"[data-offer-name=\"{name}\"]');return !!e;"
+    )
+
+
+REFRESH_CLICK = _root() + (
+    "const e=r.querySelector('[data-field=\"ft-refresh\"]');"
+    "if(!e)return 'no-el';e.click();return 'clicked';"
+)
+
+
+def OFFER_VIA_PICKER(name, size):
+    """Drive the window's file picker.
+
+    A harness cannot answer a native file dialog, so it assigns the input's
+    `files` and dispatches `change` — the exact point a real choice enters the
+    app, with the whole `array_buffer()` → `Action::OfferFile` path downstream
+    of it unchanged. The bytes match the Shell verb's generator
+    (`(i * 31) % 251`, `parse_offer_payload`), so a size here yields the same
+    content id it would there — which keeps this phase's offer id checkable
+    against the model's own arithmetic if it ever needs to be."""
+    return _root() + (
+        "const inp=r.querySelector('[data-field=\"ft-offer-input\"]');"
+        "if(!inp)return 'no-input';"
+        f"const n={size};const a=new Uint8Array(n);"
+        "for(let i=0;i<n;i++)a[i]=(i*31)%251;"
+        f"const f=new File([a],'{name}',{{type:'application/octet-stream'}});"
+        "const dt=new DataTransfer();dt.items.add(f);inp.files=dt.files;"
+        "inp.dispatchEvent(new Event('change'));return 'sent';"
+    )
+
+
+def click_field(base, sid, selector):
+    """Click the first element matching `selector`, in the page's own DOM.
+
+    Deliberately a scripted click rather than a WebDriver element click: the
+    window re-renders on every repaint, so an element handle taken a moment ago
+    is routinely stale — and a stale-element exception here would read like the
+    button did nothing."""
+    script = _root() + f"const e=r.querySelector('{selector}');if(!e)return 'no-el';e.click();return 'clicked';"
+    return ex(base, sid, script)
+
+
+# The Firefox profile must not stop on a save dialog: the Pull button hands the
+# bytes to the browser as a download, and a modal would leave the run hanging on
+# something that is not the app's behaviour.
+meet.CAPS["capabilities"]["alwaysMatch"]["moz:firefoxOptions"]["prefs"].update({
+    "browser.download.folderList": 2,
+    "browser.download.dir": "/tmp",
+    "browser.download.useDownloadDir": True,
+    "browser.helperApps.neverAsk.saveToDisk":
+        "application/octet-stream,application/binary,text/plain",
+})
+
 OFFERED = re.compile(r"offered\s+(\S+)\s+(\d+)\s+bytes\s+id\s+([0-9a-f]+)")
 PULLED = re.compile(r"pulled\s+(\S+)\s+(\d+)\s+bytes\s+id\s+([0-9a-f]+)")
 LISTED = re.compile(r"offer\s+(\S+)\s+(\d+)\s+bytes\s+id\s+([0-9a-f]+)")
@@ -164,21 +245,24 @@ def main():
         # first byte of the transfer to actually cross, and it separates "the
         # link is dead" from "the content walk is broken" in the phase below.
         #
-        # **A dispatches too, and that is not decoration — it is a measured
-        # requirement.** `establish_live` runs only when the peer *itself*
-        # consults the §10.3 ladder; nothing polls the pair's rendezvous bucket
-        # on the strength of someone else having deposited an offer. So a peer
-        # that only ever receives never negotiates, and the puller's offers sit
-        # unanswered: measured here as B depositing 52 offers to A's 0 collects
-        # on that key, every negotiation dying `sdp_exchange=INCOMPLETE,
-        # fed=0`. Chat never meets this because BOTH sides poll each other at
-        # 5 Hz — the serving side's attempt is a side effect of its own
-        # delivery loop. Giving A a harmless read toward B (it has no offers;
-        # the dispatch is the point) is the same mutuality, made explicit.
-        # The app-side answer — who keeps the serving side attempting while an
-        # offer stands — is a Track A item this gate exists to keep visible.
+        # **A is never told to dispatch, and that is the assertion.**
+        # `establish_live` runs only when the peer *itself* consults the §10.3
+        # ladder; nothing polls the pair's rendezvous bucket on the strength of
+        # someone else having deposited an offer there. So a peer that only
+        # serves never negotiates, and the puller's offers sit unanswered —
+        # measured on this rig before `reach_keeper` existed: B deposited 52
+        # offers, A collected 0 on that key, every negotiation dying
+        # `sdp_exchange=INCOMPLETE, fed=0`, and caller-side retry did NOT fix
+        # it. Chat never meets this because both sides poll each other at 5 Hz.
+        #
+        # `src/reach_keeper.rs` is the app's answer: meeting someone registers
+        # the intent to be reachable to them, and while they are not connected
+        # this peer probes them on a slow cadence — so A attempts because it
+        # met B, not because a test typed a command at it. **The mutation check
+        # for the keeper is this phase**: an earlier revision typed
+        # `offers {pb}` into A here, and deleting that line is what turned the
+        # gate red before the keeper and leaves it green after.
         print(f"\n── 4. B lists A's offers ──────────────────────")
-        type_once(A_BASE, sa, "Shell", "shell-input", f"offers {pb}")
         type_once(B_BASE, sb, "Shell", "shell-input", f"offers {pa}")
         m_list = wait_for(B_BASE, sb, LISTED, budget=120, label="B listed")
         checks["the offer manifest crossed to B"] = bool(m_list)
@@ -200,7 +284,143 @@ def main():
             bool(m_pull) and m_pull.group(3) == offer_id
         )
 
-        # ── 6. it really was the data channel ────────────────────────────
+        # ── 6. the WINDOW, which is what a person actually uses ──────────
+        # Everything above drives Shell verbs — the model with no UI in the
+        # way. This drives the File Transfer window instead, and it is a
+        # different claim in three places, each of which was broken until it
+        # was tested rather than assumed:
+        #
+        #   (a) the target list reads the "ever connected" registry, which only
+        #       the manual Connect button used to write — so a peer met by NAME
+        #       appeared nowhere, and the window said there was nobody to
+        #       transfer with while the bytes were already crossing;
+        #   (b) an offered file has to render as an ordinary row under its
+        #       FILENAME (its tree key is a content hash);
+        #   (c) Pull has to know it is a content walk rather than a
+        #       `local/files:read` — decided in the model, so the button and
+        #       the DOM stay peer-kind-blind.
+        print("\n── 6. the File Transfer WINDOW ────────────────")
+        ex(B_BASE, sb, meet.spawn_script("File Transfer"))
+        row = None
+        for i in range(60):
+            time.sleep(1)
+            row = ex(B_BASE, sb, ROW_NAMED(NAME))
+            if row:
+                print(f"  B's window lists {NAME} at t={i + 1}s")
+                break
+        checks["the window lists the offered file by name"] = bool(row)
+
+        saved = False
+        if row:
+            # Select the row, then Pull. Retried: a spawn only queues the
+            # window, and the row is re-rendered on every repaint, so an
+            # element found a moment ago can be stale.
+            for _ in range(20):
+                click_field(B_BASE, sb, f'[data-row-name="{NAME}"]')
+                time.sleep(0.5)
+                click_field(B_BASE, sb, '[data-field="ft-pull"]')
+                for _ in range(10):
+                    time.sleep(1)
+                    out = ex(B_BASE, sb, FIELD_TEXT("ft-results")) or ""
+                    if "✓ saved" in out and NAME in out:
+                        saved = True
+                        break
+                if saved:
+                    break
+            print(f"  B's window saved the file: {saved}")
+            if not saved:
+                print(f"  results pane: {(ex(B_BASE, sb, FIELD_TEXT('ft-results')) or '')[-400:]!r}")
+        checks["the window pulls it (Pull → saved)"] = saved
+
+        # ── 7. A OFFERS from the window, with no Shell at all ────────────
+        # Phase 3 offered through `offer <name> size=…`, which is the model
+        # with no UI in the way — and a CLI a person does not have. This is the
+        # same act through the shipped surface: the picker in A's own File
+        # Transfer window.
+        #
+        # The file input is driven directly rather than by clicking the button,
+        # because the button opens a NATIVE file dialog no harness can answer.
+        # Assigning `files` and dispatching `change` enters the app at exactly
+        # the point a real choice does — everything from the `change` listener
+        # onward is the shipped path, including the `array_buffer()` read.
+        print(f"\n── 7. A offers {WINDOW_NAME} from the WINDOW ─")
+        ex(A_BASE, sa, meet.spawn_script("File Transfer"))
+        sent = None
+        for _ in range(30):
+            time.sleep(1)
+            sent = ex(A_BASE, sa, OFFER_VIA_PICKER(WINDOW_NAME, WINDOW_SIZE))
+            if sent == "sent":
+                break
+        print(f"  picker driven: {sent}")
+        own_row = False
+        for i in range(60):
+            time.sleep(1)
+            own_row = ex(A_BASE, sa, OWN_OFFER_ROW(WINDOW_NAME))
+            if own_row:
+                print(f"  A's window lists its own offer at t={i + 1}s")
+                break
+        # Two distinct claims: the window can MAKE an offer, and it shows the
+        # person what they are now serving — which is the only place anyone can
+        # see what a stranger may read from them.
+        checks["the window can offer a file (no Shell)"] = bool(own_row)
+
+        # ── 8. B pulls the window's offer ────────────────────────────────
+        # Refresh rather than reopen: the offer landed after B's window listed
+        # A, so this also proves Refresh re-asks for offers.
+        print(f"\n── 8. B pulls {WINDOW_NAME} ──────────────────")
+        w_row = False
+        for i in range(60):
+            ex(B_BASE, sb, REFRESH_CLICK)
+            time.sleep(1)
+            w_row = ex(B_BASE, sb, ROW_NAMED(WINDOW_NAME))
+            if w_row:
+                print(f"  B's window lists {WINDOW_NAME} at t={i + 1}s")
+                break
+        checks["B sees the window-made offer"] = bool(w_row)
+
+        w_saved = False
+        if w_row:
+            for _ in range(20):
+                click_field(B_BASE, sb, f'[data-row-name="{WINDOW_NAME}"]')
+                time.sleep(0.5)
+                click_field(B_BASE, sb, '[data-field="ft-pull"]')
+                for _ in range(10):
+                    time.sleep(1)
+                    out = ex(B_BASE, sb, FIELD_TEXT("ft-results")) or ""
+                    if "✓ saved" in out and WINDOW_NAME in out:
+                        w_saved = True
+                        break
+                if w_saved:
+                    break
+            if not w_saved:
+                print(f"  results pane: {(ex(B_BASE, sb, FIELD_TEXT('ft-results')) or '')[-400:]!r}")
+        checks["B pulls what the window offered"] = w_saved
+
+        # ── 9. A stops offering, and B stops seeing it ───────────────────
+        # A listing that only ever *adds* cannot show a withdrawal: Refresh
+        # would fetch the shorter list, insert nothing, and leave a dead row
+        # with a Pull button behind it. This is that assertion, driven from the
+        # far side (A's button), which is the only shape that can fail if the
+        # cache is merge-only.
+        print(f"\n── 9. A stops offering {WINDOW_NAME} ─────────")
+        click_field(A_BASE, sa, f'[data-field="ft-stop-offer"][data-offer-name="{WINDOW_NAME}"]')
+        gone_a = False
+        for _ in range(30):
+            time.sleep(1)
+            if not ex(A_BASE, sa, OWN_OFFER_ROW(WINDOW_NAME)):
+                gone_a = True
+                break
+        checks["A's own list drops what it withdrew"] = gone_a
+        gone_b = False
+        for _ in range(60):
+            ex(B_BASE, sb, REFRESH_CLICK)
+            time.sleep(1)
+            if not ex(B_BASE, sb, ROW_NAMED(WINDOW_NAME)):
+                gone_b = True
+                break
+        checks["B's listing drops it on the next refresh"] = gone_b
+
+        # ── 10. it really was the data channel ───────────────────────────
         # Structural first: neither browser was ever given the other's address,
         # so no WebSocket between them exists. This log check is the visible
         # confirmation of the same thing.

@@ -52,6 +52,13 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
 
     if !output.has_target {
         render_no_target_hint(&wrapper);
+        // ...and then keep going. Offering is NOT addressed to anybody: it
+        // publishes on our side, so it works before a peer is remembered, and a
+        // person can put the file up first and meet second. Returning here (as
+        // this did while "send" meant only "push into their share") would hide
+        // the browser↔browser send behind a precondition it does not have.
+        render_offer_controls(&wrapper, output, ctx);
+        render_results(&wrapper, output);
         util::append(container, &wrapper);
         return;
     }
@@ -84,6 +91,11 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
         render_upload_controls(&send_group, output, ctx);
         util::append(&wrapper, &send_group);
     }
+
+    // Serve: publish a file for the other side to pull. Outside the `denied`
+    // gate for the same reason it survives "no target" — it is not a
+    // conversation with the selected device.
+    render_offer_controls(&wrapper, output, ctx);
 
     render_results(&wrapper, output);
 
@@ -146,6 +158,9 @@ fn render_target_selector(parent: &Element, output: &FileTransferOutput, ctx: &D
         .map(|o| o.value.as_str())
         .unwrap_or("");
     let select = components::select(ctx, &options, selected, "select_target");
+    // e2e hook (the repo's `data-field` convention): the target picker is where
+    // a harness — and a user — chooses which peer is serving.
+    select.set_attribute("data-field", "ft-target").ok();
     util::append(
         parent,
         &components::field(&crate::i18n::t("filetransfer.from_peer", &[]), "", &select),
@@ -197,6 +212,10 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
             components::ButtonKind::Small,
             "ft_refresh",
         );
+        // The re-ask hook. Refresh re-lists BOTH sources (the share and what the
+        // peer offers), which is what makes a withdrawal visible — so a harness
+        // needs to be able to press it without matching on button text.
+        refresh.set_attribute("data-field", "ft-refresh").ok();
         util::append(&header, &refresh);
         util::append(parent, &header);
     }
@@ -216,6 +235,10 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
                 components::ButtonKind::Secondary,
                 "ft_refresh",
             );
+            // Same event, same hook: before the first listing this button IS
+            // Refresh, and a harness should not have to know which of the two
+            // is on screen.
+            browse.set_attribute("data-field", "ft-refresh").ok();
             util::append(parent, &browse);
         }
         return;
@@ -248,6 +271,17 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
 
     let (el, caret, node) =
         components::tree_row(row.depth, row.is_dir, row.expanded, row.selected, &label);
+    // e2e hooks. A row carries its own name rather than only its tree key,
+    // because an OFFER's key is a content hash — a harness (or a human reading
+    // the DOM) must be able to find "report.bin", which is the whole reason the
+    // manifest exists.
+    el.set_attribute("data-field", "ft-row").ok();
+    el.set_attribute("data-row-path", &row.path).ok();
+    // The NAME goes on the element that actually carries the click handler,
+    // not on the row wrapper: a click dispatched at the wrapper does not reach
+    // a listener bound to a child (events bubble up, never down), so a harness
+    // — or any script — clicking the wrapper would silently select nothing.
+    node.set_attribute("data-row-name", &row.name).ok();
     if let Some(caret) = caret {
         ctx.on_window_event(&caret, "click", "ft_toggle", &row.path);
     }
@@ -262,23 +296,24 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
 /// selected — reuses the proven `Action::DownloadFile` path.
 fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     let btn = components::button_el(&crate::i18n::t("filetransfer.pull_selected", &[]), components::ButtonKind::Primary);
-    match &output.selected_full_path {
-        Some(path) => {
+    btn.set_attribute("data-field", "ft-pull").ok();
+    // The plan comes from the model already decided — a share `read` or an
+    // offer's content-closure walk. This layer must never learn which.
+    match &output.selected_pull {
+        Some(plan) => {
             let actions = ctx.actions.clone();
             let rp = ctx.repaint.clone();
             let peer_id = output.peer_id.clone();
             let target = output.selected_target.clone();
-            let path = path.clone();
+            let plan = plan.clone();
             ctx.listen(&btn, "click", move |_| {
                 if target.is_empty() {
                     return;
                 }
-                let filename = path.rsplit('/').next().unwrap_or("file").to_string();
-                actions.borrow_mut().push(Action::DownloadFile {
+                actions.borrow_mut().push(Action::PullFile {
                     peer_id: peer_id.clone(),
-                    handler_uri: format!("entity://{}/local/files", target),
-                    path: path.clone(),
-                    filename,
+                    target: target.clone(),
+                    plan: plan.clone(),
                 });
                 rp();
             });
@@ -290,24 +325,40 @@ fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &Dom
     util::append(parent, &btn);
 }
 
+/// Byte counts read the same here as in the model's own messages — one
+/// implementation, in the model, because the first caller was a *refusal*
+/// (`file_offer::MAX_OFFER_BYTES`) and a limit stated by the window must match
+/// the limit stated by the error.
 fn human_size(n: u64) -> String {
-    if n < 1024 {
-        format!("{n} B") // i18n-ignore — byte unit, language-neutral
-    } else if n < 1024 * 1024 {
-        format!("{:.1} KB", n as f64 / 1024.0)
-    } else {
-        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
-    }
+    crate::file_offer::human_bytes(n)
 }
 
-fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    // Hidden native file picker; the visible button triggers it.
+/// A hidden native file picker plus the button that opens it. Calls `on_file`
+/// with `(filename, bytes)` once the user has chosen one.
+///
+/// Shared by the two sends this window has — push a file into a peer's share,
+/// and offer one for a peer to pull — which are the same nine lines of picker
+/// and differ only in the action they raise. `field` is the `data-field` hook on
+/// the visible button; the input itself carries `{field}-input`, because a
+/// harness cannot open a native file dialog and drives the input directly
+/// instead (assigning `files` and dispatching `change` — the same entry point a
+/// real choice takes).
+fn file_picker(
+    parent: &Element,
+    ctx: &DomCtx,
+    label: &str,
+    kind: components::ButtonKind,
+    field: &str,
+    on_file: impl Fn(String, Vec<u8>) + 'static,
+) {
     let input = util::create_element("input");
     input.set_attribute("type", "file").ok();
     input.set_attribute("style", "display:none").ok();
+    input.set_attribute("data-field", &format!("{field}-input")).ok();
     util::append(parent, &input);
 
-    let btn = components::button_el(&crate::i18n::t("filetransfer.upload_file", &[]), components::ButtonKind::Secondary);
+    let btn = components::button_el(label, kind);
+    btn.set_attribute("data-field", field).ok();
     {
         let input_for_click = input.clone();
         ctx.listen(&btn, "click", move |_| {
@@ -318,57 +369,154 @@ fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &D
     }
     util::append(parent, &btn);
 
-    // On selection, read the file's bytes and push an UploadFile action.
+    let on_file = std::rc::Rc::new(on_file);
+    let input_ref = input.clone();
+    ctx.listen(&input, "change", move |_| {
+        let Ok(inp) = input_ref.clone().dyn_into::<web_sys::HtmlInputElement>() else {
+            return;
+        };
+        let Some(files) = inp.files() else { return };
+        let Some(file) = files.get(0) else { return };
+        let filename = file.name();
+        let on_file = on_file.clone();
+        // Consume the (fallible) array_buffer promise via JsFuture — a
+        // dropped rejecting promise would reload the whole app (index.html
+        // unhandledrejection guard).
+        wasm_bindgen_futures::spawn_local(async move {
+            match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                Ok(buf) => on_file(filename, js_sys::Uint8Array::new(&buf).to_vec()),
+                Err(e) => {
+                    web_sys::console::error_1(
+                        &format!("file read failed for {}: {:?}", filename, e).into(),
+                    );
+                }
+            }
+        });
+    });
+}
+
+fn render_upload_controls(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     let actions = ctx.actions.clone();
     let rp = ctx.repaint.clone();
     let peer_id = output.peer_id.clone();
     let target = output.selected_target.clone();
     let prefix = output.share_prefix.clone();
     let window_id = ctx.window_id;
-    let input_ref = input.clone();
-    ctx.listen(&input, "change", move |_| {
-        if target.is_empty() {
-            return;
-        }
-        let Ok(inp) = input_ref.clone().dyn_into::<web_sys::HtmlInputElement>() else {
-            return;
-        };
-        let Some(files) = inp.files() else { return };
-        if files.length() == 0 {
-            return;
-        }
-        let Some(file) = files.get(0) else { return };
-        let filename = file.name();
-        let path = format!("{}{}", prefix, filename);
-        let handler_uri = format!("entity://{}/local/files", target);
-
-        let actions = actions.clone();
-        let rp = rp.clone();
-        let peer_id = peer_id.clone();
-        // Consume the (fallible) array_buffer promise via JsFuture — a
-        // dropped rejecting promise would reload the whole app (index.html
-        // unhandledrejection guard).
-        wasm_bindgen_futures::spawn_local(async move {
-            match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-                Ok(buf) => {
-                    let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-                    actions.borrow_mut().push(Action::UploadFile {
-                        peer_id,
-                        handler_uri,
-                        path,
-                        bytes,
-                        window_id,
-                    });
-                    rp();
-                }
-                Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("file read failed for {}: {:?}", path, e).into(),
-                    );
-                }
+    file_picker(
+        parent,
+        ctx,
+        &crate::i18n::t("filetransfer.upload_file", &[]),
+        components::ButtonKind::Secondary,
+        "ft-upload",
+        move |filename, bytes| {
+            if target.is_empty() {
+                return;
             }
-        });
-    });
+            actions.borrow_mut().push(Action::UploadFile {
+                peer_id: peer_id.clone(),
+                handler_uri: format!("entity://{}/local/files", target),
+                path: format!("{}{}", prefix, filename),
+                bytes,
+                window_id,
+            });
+            rp();
+        },
+    );
+}
+
+/// **Offer a file** — the serving half, and the only send that works between
+/// two browsers (neither mounts a `local/files` share for the other to write
+/// into). Publishing is untargeted: the file goes up on *our* side and any peer
+/// we are willing to be read by can pull it, which is why this card renders with
+/// no target selected and outside the authorization gate.
+///
+/// The list below the button is not decoration — it is the only place a person
+/// can see **what strangers can read from them**, and the only place to take it
+/// back down.
+fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    let card = components::card(&crate::i18n::t("filetransfer.offering", &[]));
+
+    // State the ceiling before the picker, not after a refusal (D13): the
+    // model's limit, formatted here, so the two can never disagree.
+    let hint = util::create_element("p");
+    hint.set_attribute("style", theme::NOTE).ok();
+    util::set_text(
+        &hint,
+        &crate::i18n::t(
+            "filetransfer.offer_hint",
+            &[("limit", &human_size(output.offer_limit))],
+        ),
+    );
+    util::append(&card, &hint);
+
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let peer_id = output.peer_id.clone();
+        file_picker(
+            &card,
+            ctx,
+            &crate::i18n::t("filetransfer.offer_file", &[]),
+            components::ButtonKind::Primary,
+            "ft-offer",
+            move |filename, bytes| {
+                actions.borrow_mut().push(Action::OfferFile {
+                    peer_id: peer_id.clone(),
+                    filename,
+                    bytes,
+                });
+                rp();
+            },
+        );
+    }
+
+    if output.own_offers.is_empty() {
+        util::append(&card, &components::empty(&crate::i18n::t("filetransfer.offer_none", &[])));
+    } else {
+        let (table, tbody) = components::table(&[
+            &crate::i18n::t("filetransfer.col_file", &[]),
+            &crate::i18n::t("filetransfer.col_size", &[]),
+            "",
+        ]);
+        for offer in &output.own_offers {
+            let stop = components::button_el(
+                &crate::i18n::t("filetransfer.stop_offering", &[]),
+                components::ButtonKind::Small,
+            );
+            // The hook goes on the button that carries the handler, and it
+            // carries the FILE's name: an offer's id is a content hash, so the
+            // name is the only handle a person (or a harness) has.
+            stop.set_attribute("data-field", "ft-stop-offer").ok();
+            stop.set_attribute("data-offer-name", &offer.name).ok();
+            let actions = ctx.actions.clone();
+            let rp = ctx.repaint.clone();
+            let peer_id = output.peer_id.clone();
+            let offer_id = offer.id.clone();
+            let filename = offer.name.clone();
+            ctx.listen(&stop, "click", move |_| {
+                actions.borrow_mut().push(Action::WithdrawOffer {
+                    peer_id: peer_id.clone(),
+                    offer_id: offer_id.clone(),
+                    filename: filename.clone(),
+                });
+                rp();
+            });
+
+            let row = components::tr(vec![
+                components::td_text(&offer.name),
+                components::td_text(&human_size(offer.size)),
+                components::td(&stop),
+            ]);
+            // Row-level hook too: a harness asserting "this file is offered"
+            // should not have to find the button to see the row.
+            row.set_attribute("data-field", "ft-offer-row").ok();
+            row.set_attribute("data-offer-name", &offer.name).ok();
+            util::append(&tbody, &row);
+        }
+        util::append(&card, &table);
+    }
+
+    util::append(parent, &card);
 }
 
 fn render_results(parent: &Element, output: &FileTransferOutput) {
@@ -378,6 +526,9 @@ fn render_results(parent: &Element, output: &FileTransferOutput) {
 
     let pre = util::create_element("pre");
     pre.set_attribute("style", theme::PRE_OUTPUT).ok();
+    // The window's feedback surface — where "✓ saved …" lands, and what a gate
+    // reads to know a pull finished rather than merely started.
+    pre.set_attribute("data-field", "ft-results").ok();
     if output.events.is_empty() {
         pre.set_inner_html(&format!(
             "<span style='color:var(--text-dim, #888)'>{}</span>",

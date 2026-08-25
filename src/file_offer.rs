@@ -60,7 +60,7 @@ use std::sync::Arc;
 
 use entity_capability::ResourceTarget;
 use entity_content::{blob_chunk_hashes, create_blob_fixed, reassemble, GET_BATCH_SIZE};
-use entity_ecf::{bytes as ecf_bytes, integer, text, to_ecf, Value, ValueExt};
+use entity_ecf::{bytes as ecf_bytes, integer, text, to_ecf, Value};
 use entity_entity::Entity;
 use entity_handler::ExecuteOptions;
 use entity_hash::Hash;
@@ -82,6 +82,26 @@ pub const NAMESPACE: &str = "files";
 /// while leaving ~60 chunks per `get` batch inside the 16 MiB frame budget.
 pub const CHUNK_SIZE: usize = 256 * 1024;
 
+/// The largest file this peer will offer — **a stated limit, refused at the
+/// door, rather than an unstated one discovered as a dead tab.**
+///
+/// It is not a protocol bound. The *pull* side is already streaming-shaped
+/// (`GET_BATCH_SIZE` = 16 chunks ≈ 4 MiB per response, well inside the 16 MiB
+/// frame budget), so what sets the ceiling is the **offer** side, and it is
+/// memory: [`chunk_bytes`] holds the whole file and a full set of chunk entities
+/// at once, [`ingest_params`] then encodes *every* chunk into one CBOR envelope,
+/// and the picker handed us a `Vec` copied out of a JS `ArrayBuffer` before any
+/// of that. That is ~4 live copies at the peak, in a wasm linear memory a
+/// WebView may refuse to grow (`AGENTS.md`: WebKit denying `memory.grow` under
+/// pressure) — and the failure mode of exceeding it is an OOM abort or a frozen
+/// tab, neither of which tells the user what went wrong.
+///
+/// 16 MiB therefore buys a ~64 MiB peak, which is survivable everywhere we run.
+/// **Raising it is a streaming-ingest change, not a bigger number**: ingest the
+/// chunks in batches the way the pull already fetches them, and the constant
+/// stops being the binding one.
+pub const MAX_OFFER_BYTES: u64 = 16 * 1024 * 1024;
+
 /// One advertised file. `blob` is the content hash of its `system/content/blob`
 /// manifest — the id under which the offer is published, so re-offering the
 /// same bytes is an idempotent overwrite rather than a second row.
@@ -101,6 +121,22 @@ impl FileOffer {
     pub fn id(&self) -> String {
         self.blob.to_hex()
     }
+}
+
+/// The inverse of [`FileOffer::id`] — an offer id back to its blob hash.
+///
+/// `to_hex` encodes the **whole wire form** (`[format varint || digest]`), so
+/// this decodes to bytes and hands them to `Hash::from_bytes`, which is what
+/// validates the format code. Lives beside `id()` so the pair cannot drift.
+pub fn hash_from_id(id: &str) -> Result<Hash, String> {
+    if !id.len().is_multiple_of(2) || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!("offer id is not hex: {id:?}"));
+    }
+    let bytes: Vec<u8> = (0..id.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&id[i..i + 2], 16).expect("validated as hex above"))
+        .collect();
+    Hash::from_bytes(&bytes).map_err(|e| format!("offer id is not a hash: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +313,28 @@ pub fn get_params(hashes: &[Hash]) -> Result<Entity, String> {
 // Chunking
 // ---------------------------------------------------------------------------
 
+/// A byte count in human terms. Lives here rather than in the DOM because the
+/// first thing that needed it was a *refusal message* from the model
+/// (`MAX_OFFER_BYTES`), and a size the window prints must read identically to a
+/// size the model prints — `dom::file_transfer::human_size` delegates here.
+pub fn human_bytes(n: u64) -> String {
+    if n < 1024 {
+        format!("{n} B") // i18n-ignore — byte unit, language-neutral
+    } else if n < 1024 * 1024 {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// How many §3.2 chunks a file of `size` bytes becomes. The window states this
+/// *before* the work starts — a count is the only honest progress an ingest can
+/// offer, since chunking is one synchronous pass with nothing to report from
+/// inside it.
+pub fn chunk_count(size: u64) -> u64 {
+    size.div_ceil(CHUNK_SIZE as u64).max(1)
+}
+
 /// Chunk `raw` into the §3.2 fixed-size entity shape. Returns the blob manifest
 /// entity plus its chunk entities, in blob-declared order.
 ///
@@ -318,6 +376,18 @@ pub async fn offer_file(
     raw: &[u8],
 ) -> Result<FileOffer, String> {
     let local_pid = dispatch.local_peer_id();
+    // Refuse **before** allocating anything: the whole point of a stated limit
+    // is that the user is told, in a sentence, instead of watching the tab die
+    // partway through an ingest they cannot see. See [`MAX_OFFER_BYTES`].
+    if raw.len() as u64 > MAX_OFFER_BYTES {
+        return Err(format!(
+            "{name} is {} — this browser offers files up to {} \
+             (it holds the whole file, its chunks and one CBOR envelope in memory \
+             at once; larger files need a streaming ingest, not a larger limit)",
+            human_bytes(raw.len() as u64),
+            human_bytes(MAX_OFFER_BYTES),
+        ));
+    }
     let (blob, chunks) = chunk_bytes(raw)?;
     let params = ingest_params(&blob, &chunks)?;
     let result = dispatch
@@ -413,6 +483,32 @@ pub async fn pull_offer(
     remote_pid: &str,
     blob: &Hash,
 ) -> Result<Vec<u8>, String> {
+    pull_offer_with(dispatch, remote_pid, blob, |_, _| {}).await
+}
+
+/// [`pull_offer`], reporting progress as `(chunks_held, chunks_total)` after
+/// every batch.
+///
+/// The callback exists because a pull is the one part of a transfer with a
+/// **genuinely reportable** interior: the closure walk is N round trips, and on
+/// a slow link the whole of it happens between "↓ pulling" and "✓ saved" with
+/// nothing in between — which is indistinguishable from a hang. It fires per
+/// *batch* (16 chunks ≈ 4 MiB), not per chunk: a per-chunk callback would write
+/// more event-log lines than there are bytes worth reporting.
+///
+/// The first call is `(held, total)` as soon as the blob is decoded, so a caller
+/// can state the size of the job before the first chunk arrives.
+///
+/// **Generic, not `&dyn Fn`, and that is load-bearing on native.** The future
+/// this returns captures the callback, so a trait object would make the future
+/// `!Send` for every caller — including the Shell's `spawn_task`, which requires
+/// `Send`. Monomorphizing keeps the no-op case exactly as `Send` as it was.
+pub async fn pull_offer_with<P: Fn(usize, usize)>(
+    dispatch: &DispatchHandle,
+    remote_pid: &str,
+    blob: &Hash,
+    progress: P,
+) -> Result<Vec<u8>, String> {
     let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
     let namespace = namespace_resource(remote_pid);
 
@@ -426,16 +522,19 @@ pub async fn pull_offer(
 
     let (_total, chunk_hashes) =
         blob_chunk_hashes(&store, blob).map_err(|e| format!("blob decode: {e}"))?;
+    let total = chunk_hashes.len();
     let mut missing: Vec<Hash> = chunk_hashes
         .iter()
         .filter(|h| store.get(h).is_none())
         .copied()
         .collect();
+    progress(total - missing.len(), total);
     while !missing.is_empty() {
         let batch: Vec<Hash> = missing.iter().take(GET_BATCH_SIZE).copied().collect();
         let before = missing.len();
         fetch_into(dispatch, remote_pid, &namespace, &store, &batch).await?;
         missing.retain(|h| store.get(h).is_none());
+        progress(total - missing.len(), total);
         if missing.len() == before {
             return Err(format!(
                 "closure stalled: {} chunk(s) still missing after a full batch \
@@ -478,9 +577,59 @@ async fn fetch_into(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// What *we* are offering (the sender's own view)
+// ---------------------------------------------------------------------------
+
+/// The offers this peer is publishing, read from its **own** tree.
+///
+/// Deliberately a plain local read (`tree_listing` + `get_entity`) rather than
+/// [`list_offers`] against our own id: the two look interchangeable and are not.
+/// `list_offers` dispatches `entity://{pid}/system/tree` — a *remote* shape
+/// whose failure path is ten one-second retries — where the answer is sitting in
+/// our own store. A caller must subscribe the prefix
+/// ([`crate::app_paths::offers_prefix`]) for this to be populated on the Worker
+/// arm, where a tree read is a cache mirror seeded only for subscribed prefixes.
+///
+/// Sorted by name so the list does not reshuffle under the cursor when an offer
+/// is added (the tree order is by content hash, which is effectively random).
+pub fn read_own_offers(peers: &crate::peers::Peers, peer_id: &str) -> Vec<FileOffer> {
+    let prefix = offers_prefix(APP_ID, peer_id);
+    let mut out: Vec<FileOffer> = peers
+        .tree_listing(peer_id, &prefix)
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.path.strip_prefix(&prefix)?;
+            if id.is_empty() || id.contains('/') {
+                return None; // one level; defensive — it never nests today
+            }
+            decode_manifest(&peers.get_entity(peer_id, &entry.path)?)
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name).then(a.blob.to_hex().cmp(&b.blob.to_hex())));
+    out
+}
+
+/// Stop listing an offer: remove its manifest from our tree.
+///
+/// **Say what this does and does not do.** It withdraws the *name* — the row
+/// disappears from every peer's listing, and nobody can discover the file from
+/// us again. It does **not** unpublish the bytes: content is hash-addressed, the
+/// ingest left a §6.4.2 presence binding in our `system/content` namespace, and
+/// a peer that already pulled (or merely saw) the content id can still `get` it.
+/// Reclaiming the content itself is a separate, binding-aware operation
+/// (`WriterHandle::content_remove` refuses while a live path binds the blob, and
+/// the presence binding is exactly such a path), so the honest surface says
+/// "stop offering", never "delete".
+pub fn withdraw_offer(writer: &crate::writer_handle::WriterHandle, peer_id: &str, offer_id: &str) {
+    writer.remove(offer_path(APP_ID, peer_id, offer_id));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `.get(field)` on a CBOR map — used only by the wire-shape assertions.
+    use entity_ecf::ValueExt;
 
     #[test]
     fn a_manifest_round_trips() {

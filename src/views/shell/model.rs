@@ -1093,6 +1093,9 @@ impl ShellModel {
                     push(ScrollbackEntry::ErrorText("usage: offers <peer-id>".into())); // i18n-ignore — dev-facing CLI
                     return;
                 };
+                // Talking to a peer is intent to reach it: keep our side of the
+                // §6.5 attempt alive even after this one command finishes.
+                crate::reach_keeper::global().want(&self.peer_id, &peer);
                 push(ScrollbackEntry::Info(format!(
                     "asking {} what it offers…", // i18n-ignore — dev-facing CLI
                     crate::views::short_pid(&peer)
@@ -1128,6 +1131,7 @@ impl ShellModel {
                     ));
                     return;
                 };
+                crate::reach_keeper::global().want(&self.peer_id, &peer);
                 push(ScrollbackEntry::Info(format!(
                     "pulling {sel} from {}…", // i18n-ignore — dev-facing CLI
                     crate::views::short_pid(&peer)
@@ -1185,6 +1189,12 @@ impl ShellModel {
 
         let mut changed = false;
         for found in &status.found {
+            // Meeting someone IS the intent to talk to them, so it is where the
+            // reach keeper learns its targets. Without this the meet is
+            // one-directional in practice: whichever side dispatches first
+            // negotiates, the other never does, and a peer that only serves is
+            // unreachable (`reach_keeper`'s module doc has the measurement).
+            crate::reach_keeper::global().want(&self.peer_id, &found.peer_id);
             if run.reported.insert(found.peer_id.clone()) {
                 let mark = if found.verified { "" } else { "  (unverified claim)" }; // i18n-ignore — dev-facing CLI
                 self.inner.lock().unwrap().push(ScrollbackEntry::Info(format!(

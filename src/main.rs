@@ -60,6 +60,7 @@ mod peers_worker;
 mod listener_state;
 mod peer_mode;
 mod peer_registry;
+mod reach_keeper;
 mod rendezvous;
 mod roster;
 mod transport_profiles;

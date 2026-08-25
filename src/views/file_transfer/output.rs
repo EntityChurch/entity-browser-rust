@@ -47,6 +47,12 @@ pub struct FileTransferOutput {
     pub root_loading: bool,
     /// Full tree path of the currently-selected file (the Pull target), if any.
     pub selected_full_path: Option<String>,
+    /// **How** to pull the selected file — resolved in the model, carried
+    /// verbatim by the DOM. `Share` for a file in a native peer's `local/files`
+    /// mount, `Offer` for one a browser peer published as hash-addressed
+    /// content. The window renders one Pull button either way, and knows
+    /// nothing about which kind of peer it is talking to.
+    pub selected_pull: Option<crate::action::PullPlan>,
     /// Last browse error, surfaced loudly (D13).
     pub browse_error: Option<String>,
     /// True when at least one remote peer is **remembered** — drives the
@@ -85,6 +91,27 @@ pub struct FileTransferOutput {
     /// Result log (shared event log, pre-classified) — where list/read
     /// responses surface.
     pub events: Vec<EventEntry>,
+    /// What **this** peer is offering — the serving half of the window.
+    ///
+    /// Independent of everything above it, and rendered even with no target at
+    /// all: an offer is published on our side and is not addressed to anyone, so
+    /// gating it behind "is a peer selected / has it authorized us" would hide
+    /// the only send a browser↔browser pair has behind a question it never asks.
+    /// (Read from our own tree, so it needs the offers prefix subscribed — see
+    /// `FileTransferWindow::window_type`.)
+    pub own_offers: Vec<OwnOffer>,
+    /// The stated ceiling on one offered file (`file_offer::MAX_OFFER_BYTES`),
+    /// carried so the window can say it **before** a picker refuses.
+    pub offer_limit: u64,
+}
+
+/// One file this peer is publishing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnOffer {
+    /// Hex of the blob hash — the manifest's key, and what a withdrawal names.
+    pub id: String,
+    pub name: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone)]
