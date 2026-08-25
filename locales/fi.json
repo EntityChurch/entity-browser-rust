@@ -115,6 +115,7 @@
   "contentsite.more": "Lisää ▾ ({n})",
   "contentsite.offline_page_missing": "_Tätä sivua ei säilytetä offline-katselua varten — yhdistä uudelleen ladataksesi sen._",
   "contentsite.offline_source_unreachable": "_Tämän sivuston lähde ei ole tavoitettavissa. Näytetään sen välimuistiin tallennettu rakenne._",
+  "contentsite.document_empty": "Tämä asiakirja on tyhjä — sivulla ei ole sisältöä.",
   "contentsite.share_link": "Jaa linkki 🔗",
   "contentsite.share_link_hint": "Kopioi linkki, joka avaa tämän sivun uudelleen live-entiteettiselaimessa",
   "contentstream.empty": "(ei vielä sidontatapahtumia — käynnistä put / remove / snapshot tällä vertaisella)",

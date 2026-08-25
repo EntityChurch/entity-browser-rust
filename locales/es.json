@@ -115,6 +115,7 @@
   "contentsite.more": "Más ▾ ({n})",
   "contentsite.offline_page_missing": "_Esta página no se guarda para verla sin conexión: vuelve a conectarte para cargarla._",
   "contentsite.offline_source_unreachable": "_La fuente de este sitio no está disponible. Se muestra su esquema en caché._",
+  "contentsite.document_empty": "Este documento está vacío — la página no contiene ningún contenido.",
   "contentsite.share_link": "Compartir enlace 🔗",
   "contentsite.share_link_hint": "Copia un enlace que vuelve a abrir esta página en el navegador de entidades en vivo",
   "contentstream.empty": "(aún no hay eventos de vinculación — lanza un put / remove / snapshot en este par)",

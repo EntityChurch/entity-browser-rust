@@ -201,10 +201,107 @@ image origins (curated SVG, computed PNG, authored PNG).
 
 ### 4.3 Render security (`src/content_site/render.rs`, F-CONTENT-1)
 
-`render_page_body` renders `markdown` (default) via `markdown_to_html`
-(tables/strikethrough/tasklists; embeds lowered to `<img>`). Raw HTML blocks/inline
-**escape to text** (no `<script>` passthrough). `format:"html"` is rendered as
-**escaped text**, not raw — there is no sanitizer, so there is no raw passthrough.
+`render_page` returns a **typed** `PageRender`, not a string, and the type *is*
+the enforcement point — a caller cannot mount one variant as the other by
+forgetting a branch.
+
+| `format` | Variant | Mount | Why |
+|---|---|---|---|
+| `markdown` (default) + anything unrecognized | `Markup(String)` | `set_inner_html` into our document | `markdown_to_html` (tables/strikethrough/tasklists; embeds lowered to `<img>`); raw HTML blocks/inline **escape to text** — no `<script>` passthrough |
+| `html` (§3.1 web tier) | `Document(String)` | `<iframe sandbox="allow-same-origin">` loaded from the document's own `blob:` URL | a complete untrusted document, carried byte-for-byte |
+
+**There is still no sanitizer, and F-CONTENT-1's rule is unchanged: raw HTML
+never reaches our origin.** What changed is that it now reaches a *sandbox*
+instead of being downgraded to escaped text. `DOCUMENT_SANDBOX`
+(`dom/content_site.rs`) is **`allow-same-origin` and nothing else** — no
+scripts, no forms, no top-navigation. That is strictly stronger than the
+allowlist sanitizer gate G2 anticipates (§8 flags allowlist completeness as the
+fragile part and warns "text-escaping ≠ sanitization"): **nothing executes**, so
+completeness is not a property we have to get right.
+
+`allow-same-origin` grants an origin to a document that has no way to use one —
+without `allow-scripts` nothing in the frame can read a cookie, touch storage,
+or reach `parent.document`. **The two tokens together are the one edit that
+must never be made here**, and Phase 19-doc compares the whole attribute with
+`==` rather than `contains` so a second token cannot slip past.
+
+Three consequences worth stating, because each one looks like a bug otherwise:
+
+- **The link and image rewriters do not run on a document.** They operate on
+  elements in our tree, and a document has none there. Its `<a href>` and
+  `<img src>` are its own.
+- **The document is loaded from its own `blob:` URL, not inline `srcdoc`.** A
+  `srcdoc` document inherits the **parent's** base URL, so `href="#section"`
+  resolved against *our* page and the frame navigated away from the paper
+  entirely. Measured on the real 7.9 MB corpus book across Firefox 149 and
+  Chrome:
+
+  | delivery | sandbox | anchors | 7.9 MB book |
+  |---|---|---|---|
+  | `srcdoc` | `""` | destroys the document | renders |
+  | `blob:` | `""` | inert | renders |
+  | `data:` | `""` | works | **blank in Chrome** |
+  | **`blob:`** | **`allow-same-origin`** | **works** | **renders in both** |
+  | `http` URL | `""` | works | renders in both |
+
+  **`data:` shipped for one commit and was wrong: Chrome caps a `data:` URL at
+  2 MiB** (bisected: 1,398,856 renders, 2,098,624 does not) and past the cap
+  renders an empty frame with no error. Every published book is over it. The
+  object URL is **revoked on the frame's `load` event** — fragment navigation
+  still works afterwards (measured), since a jump refetches nothing.
+  A consequence: the document's **relative** subresources no longer resolve at
+  all, which is a tightening (under `srcdoc` they resolved against our origin).
+- **A real same-origin URL is the delivery with neither a ceiling nor a token**
+  (measured: `http` src at `sandbox=""` renders the book *and* keeps anchors).
+  Reaching it needs a service-worker or asset-protocol route plus a cache
+  lifetime — the right move if this tier ever has to be tightened again.
+- **Our theme does not cross the frame.** `--site-*` tokens cannot reach an
+  opaque origin, so the frame carries no border, radius, or background — a
+  themed frame around unthemed content would advertise a relationship that does
+  not exist. The document supplies its own furniture.
+- **The layout differs deliberately.** A document already carries its own
+  column width, so the pane goes full-bleed (`.cs-pane-doc` / `.cs-docframe`)
+  rather than nesting a 42rem column inside our 720px reading column.
+
+**Open limitation, restated after measurement.** An **external link inside a
+document REPLACES the document** with that site — it is not a dead click. A
+sandbox blocks *top-level* navigation; navigating the frame **itself** is never
+sandboxed, so a citation with no `target` loads in place of the paper (measured
+on every delivery tier, both engines). Only `target="_blank"` is blocked, which
+is what `allow-popups allow-popups-to-escape-sandbox` would enable — and that
+half only helps if the publisher emits `target="_blank"`, which is a
+papers-side pandoc filter. **Papers shipped their half on 2026-08-20** —
+`target="_blank" rel="noopener"` on all external links — so this is now a
+one-sided decision here: widening the tier is defensible but is a security
+decision owed its own commit, and their half is harmless while it waits (a
+blocked link is the behaviour we have today).
+
+**Tauri CSP.** A `blob:` frame needs `frame-src 'self' blob:` — `default-src
+'self'` covers frames and `blob:` is not `'self'`. Mutation-checked: without the
+term the frame is blocked with `securitypolicyviolation: frame-src`, while the
+`srcdoc` app/game frames and the same-origin L5 frame are untouched (3/3 render,
+zero violations with it). The browser deployment ships no CSP.
+
+Fail-closed: anything that is not **exactly** `html` (`HTML_PAGE_FORMAT`) takes
+the escaping path — `"HTML"`, `"text/html"` and `"html5"` are markdown, not
+documents (`an_unknown_format_falls_closed_to_the_escaping_path`).
+
+Gate: e2e **Phase 19-doc** asserts the property, not the spelling — it enters
+the frame, checks that a script *inside* the demo document did not run, and
+**clicks the document's own table-of-contents link**, requiring that the frame
+is still the same document AND that the target moved into view. Every cheap
+check (the sandbox attribute, the `data:` scheme, the byte count) sits
+deliberately **last** so none of them can shadow a behavioural one — the
+`src_len` check inherited the old `srcdoc_len` check's position and did exactly
+that on the first mutation run. Mutation-verified red both ways: reverting to
+`srcdoc` fails on *"navigated the frame AWAY"*, and an anchor pointing at a
+missing id fails on *"did not move the document"*.
+
+**Static export**: a document page is emitted **verbatim** and skips the export
+template entirely (it is already a standalone file; wrapping it would nest
+`<html>` inside `<body>` and leak its stylesheet onto our chrome). The cost is
+stated in `static_export.rs`: such a page carries no site nav in the static
+projection.
 
 ---
 
@@ -216,7 +313,7 @@ The model (`views/content_site/model.rs`) builds the renderer-neutral
 ```rust
 struct SiteRenderOutput {
     site_title, nav: Vec<NavLink>, breadcrumbs: Vec<Crumb>, sidebar: Vec<SectionLink>,
-    can_go_back, page_title, body_html,          // markdown already rendered to sanitized HTML
+    can_go_back, page_title, body: PageRender,   // Markup (sanitized) | Document (sandboxed)
     peer: Option<String>, site_id, current_page, // location, for relative link classification
     error: Option<String>, loading,              // loading = async HTTP-poll Pending
 }
@@ -452,7 +549,7 @@ are set alongside it:
 | `src/content_site/prefs.rs` | `SitePrefs` (visit/bookmark/home/keep_offline) read/write/update |
 | `src/content_site/origins.rs` | `peer-id → origin` registry (`set_origin`/`get_origin`/`list_origins`) |
 | `src/content_site/embed.rs` | embed standard; `markdown_to_embed`/`embed_to_markdown_image`/`embed_refs`; `base64_encode` |
-| `src/content_site/render.rs` | `render_page_body`, `markdown_to_html` (sanitized; raw HTML neutralized) |
+| `src/content_site/render.rs` | `render_page` → `PageRender::Markup` (markdown, sanitized) or `::Document` (`format:html`, sandboxed); `markdown_to_html` |
 | `src/content_site/read.rs` | recursive tree reader → `OwnedSite` |
 | `src/content_site/publish.rs` | `publish` CLI verb + flags |
 | `src/content_site/publish_fixture.rs` | emit entity-native `.bin` + content blobs |

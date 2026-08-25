@@ -114,6 +114,7 @@
   "contentsite.more": "เพิ่มเติม ▾ ({n})",
   "contentsite.offline_page_missing": "_หน้านี้ไม่ได้เก็บไว้สำหรับดูแบบออฟไลน์ — เชื่อมต่อใหม่เพื่อโหลด_",
   "contentsite.offline_source_unreachable": "_แหล่งที่มาของไซต์นี้เข้าถึงไม่ได้ กำลังแสดงโครงร่างที่แคชไว้_",
+  "contentsite.document_empty": "เอกสารนี้ว่างเปล่า — หน้านี้ไม่มีเนื้อหา",
   "contentsite.share_link": "แชร์ลิงก์ 🔗",
   "contentsite.share_link_hint": "คัดลอกลิงก์ที่เปิดหน้านี้อีกครั้งในเบราว์เซอร์เอนทิตีแบบสด",
   "contentstream.empty": "(ยังไม่มีเหตุการณ์การผูก — ลองสั่ง put / remove / snapshot บนเพียร์นี้)",

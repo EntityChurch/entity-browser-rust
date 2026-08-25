@@ -115,6 +115,7 @@
   "contentsite.more": "Mer ▾ ({n})",
   "contentsite.offline_page_missing": "_Den här sidan sparas inte för offlinevisning — anslut igen för att läsa in den._",
   "contentsite.offline_source_unreachable": "_Källan för den här webbplatsen är onåbar. Visar dess cachade översikt._",
+  "contentsite.document_empty": "Det här dokumentet är tomt — sidan saknar innehåll.",
   "contentsite.share_link": "Dela länk 🔗",
   "contentsite.share_link_hint": "Kopiera en länk som öppnar den här sidan igen i den aktiva entitetsläsaren",
   "contentstream.empty": "(inga bindningshändelser ännu — utlös en put / remove / snapshot på den här peeren)",

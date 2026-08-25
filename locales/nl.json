@@ -115,6 +115,7 @@
   "contentsite.more": "Meer ▾ ({n})",
   "contentsite.offline_page_missing": "_Deze pagina wordt niet offline bewaard — maak opnieuw verbinding om hem te laden._",
   "contentsite.offline_source_unreachable": "_De bron van deze site is onbereikbaar. De gecachte structuur wordt getoond._",
+  "contentsite.document_empty": "Dit document is leeg — de pagina bevat geen inhoud.",
   "contentsite.share_link": "Link delen 🔗",
   "contentsite.share_link_hint": "Kopieer een link die deze pagina opnieuw opent in de live entiteitenbrowser",
   "contentstream.empty": "(nog geen bindingsgebeurtenissen — voer een put / remove / snapshot uit op deze peer)",

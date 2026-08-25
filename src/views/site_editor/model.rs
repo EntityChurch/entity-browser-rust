@@ -1205,6 +1205,6 @@ mod tests {
         assert!(out.error.is_none(), "browser renders the editor-created site: {:?}", out.error);
         assert_eq!(out.site_title, "Proof Site");
         assert_eq!(out.current_page, "index");
-        assert!(out.body_html.contains("Proof Site"), "rendered body: {}", out.body_html);
+        assert!(out.body.as_str().contains("Proof Site"), "rendered body: {}", out.body.as_str());
     }
 }

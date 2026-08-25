@@ -116,6 +116,7 @@
   "contentsite.more": "Více ▾ ({n})",
   "contentsite.offline_page_missing": "_Tato stránka není uchována pro offline prohlížení — pro načtení se znovu připojte._",
   "contentsite.offline_source_unreachable": "_Zdroj tohoto webu je nedostupný. Zobrazuje se jeho uložený přehled._",
+  "contentsite.document_empty": "Tento dokument je prázdný — stránka neobsahuje žádný obsah.",
   "contentsite.share_link": "Sdílet odkaz 🔗",
   "contentsite.share_link_hint": "Zkopírovat odkaz, který tuto stránku znovu otevře v živém prohlížeči entit",
   "contentstream.empty": "(zatím žádné události vazeb — spusťte na tomto peerovi put / remove / snapshot)",

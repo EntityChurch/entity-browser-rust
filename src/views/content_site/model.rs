@@ -22,7 +22,7 @@ use super::output::{
 };
 use crate::content_site::resolver::ResolvedPage;
 use crate::content_site::{
-    classify_link, humanize, render_page_body, resolve_target, ContentResolver, Location,
+    classify_link, humanize, render_page, resolve_target, ContentResolver, Location,
     MultiResolver, NavItem, RepaintCell, ResolveError, ResolveOutcome, SitePage,
 };
 use crate::peers::Peers;
@@ -87,9 +87,10 @@ pub fn output_from_resolved(
         sidebar,
         can_go_back,
         page_title: rp.page.title().to_string(),
-        // F-CONTENT-1: format-aware, but `html` is NOT raw passthrough
-        // (no sanitizer in the tree) — render_page_body escapes it.
-        body_html: render_page_body(&rp.page.format, &rp.page.body),
+        // F-CONTENT-1: format-aware. `markdown` escapes embedded HTML;
+        // `html` becomes a typed `Document` whose only mount is the
+        // sandboxed frame — never our origin. See `render::PageRender`.
+        body: render_page(&rp.page.format, &rp.page.body),
         peer: rp.location.peer_id.clone(),
         site_id: rp.location.site_id.clone(),
         current_page: rp.location.page.clone(),
@@ -838,7 +839,7 @@ mod tests {
         assert_eq!(out.current_page, "index");
         assert!(!out.site_title.is_empty());
         assert!(!out.nav.is_empty());
-        assert!(out.body_html.contains("<h1>"), "rendered markdown: {}", out.body_html);
+        assert!(out.body.as_str().contains("<h1>"), "rendered markdown: {}", out.body.as_str());
     }
 
     #[test]
@@ -971,7 +972,69 @@ mod tests {
         assert!(out.sidebar.is_empty(), "no sidebar without a peer");
         assert!(out.breadcrumbs.is_empty(), "root page has no trail");
         assert!(out.error.is_none() && !out.loading);
-        assert!(out.body_html.contains("Welcome"), "body rendered: {}", out.body_html);
+        assert!(out.body.as_str().contains("Welcome"), "body rendered: {}", out.body.as_str());
+    }
+
+    #[test]
+    fn an_html_page_reaches_the_renderer_as_a_document_not_as_markup() {
+        // The model is the seam where the page's `format` decides its mount.
+        // If this ever produced `Markup`, the DOM layer would `set_inner_html`
+        // an untrusted document into our own origin — so the assertion is on
+        // the VARIANT, not on the bytes (which are equal either way for prose).
+        use crate::content_site::resolver::ResolvedPage;
+        use crate::content_site::{Location, PageRender, SiteManifest, SitePage};
+        let doc = "<!DOCTYPE html><html><head><title>Doc</title></head>\
+                   <body><h1>Paper</h1><script>alert(1)</script></body></html>";
+        let rp = ResolvedPage {
+            location: Location {
+                peer_id: Some("labs-host".into()),
+                site_id: "labs".into(),
+                page: "paper".into(),
+            },
+            manifest: SiteManifest::new("labs", "Bill's Labs", "index", vec![]),
+            page: SitePage::html("Paper", doc),
+            assets: Vec::new(),
+        };
+        let out = output_from_resolved(&rp, &rp.location, false, vec![]);
+        assert!(
+            matches!(out.body, PageRender::Document(_)),
+            "an html page must reach the renderer as a Document: {:?}",
+            out.body
+        );
+        assert_eq!(out.body.as_str(), doc, "the document is carried verbatim");
+        // And the site still names it — a document is a page like any other.
+        assert_eq!(out.page_title, "Paper");
+    }
+
+    #[test]
+    fn the_bundled_demo_document_page_is_a_document() {
+        // The demo site's visible artifact for the html tier (DEMO_DOCUMENT_HTML)
+        // must actually BE one — it is what e2e Phase 19-doc drives, and a demo
+        // page that silently degraded to markdown would make that gate assert
+        // against escaped text while still passing its own weaker checks.
+        use crate::content_site::PageRender;
+        let peers = crate::peers::Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        super::super::ensure_demo_site(&peers, &pid);
+        let site = crate::content_site::read::read_site(&peers, &pid, super::super::DEMO_SITE_ID)
+            .expect("demo site reads");
+        let (_, page) = site
+            .pages
+            .iter()
+            .find(|(slug, _)| slug == "document")
+            .expect("the demo site seeds a `document` page");
+        assert_eq!(page.format, crate::content_site::format::HTML_PAGE_FORMAT);
+        assert!(
+            matches!(
+                crate::content_site::render_page(&page.format, &page.body),
+                PageRender::Document(_)
+            ),
+            "the demo document page must render as a Document"
+        );
+        // The two markers Phase 19-doc depends on must be present, or that gate
+        // silently stops testing what its comments say it tests.
+        assert!(page.body.contains("entity-demo-doc-marker"), "the DOM marker is gone");
+        assert!(page.body.contains("<script"), "the inert-script probe is gone");
     }
 
     #[test]
@@ -1059,7 +1122,7 @@ mod tests {
         let out = m.render_output(&peers);
         assert_eq!(out.current_page, "guide/intro", "WORKS: 2-level slug resolves");
         assert!(out.error.is_none(), "WORKS: deep page resolves: {:?}", out.error);
-        assert!(out.body_html.contains("Intro"), "WORKS: deep page body renders");
+        assert!(out.body.as_str().contains("Intro"), "WORKS: deep page body renders");
         assert!(nav_active(&out, "Guide"), "WORKS: Guide nav active on exact deep target");
 
         // -- WORKS: 3-level-deep page resolves (deep→deep link) --
@@ -1068,7 +1131,7 @@ mod tests {
         let out = m.render_output(&peers);
         assert_eq!(out.current_page, "guide/advanced/caching", "WORKS: 3-level slug resolves");
         assert!(out.error.is_none(), "WORKS: 3-deep page resolves: {:?}", out.error);
-        assert!(out.body_html.contains("Caching"));
+        assert!(out.body.as_str().contains("Caching"));
 
         // -- GAP1 active-trail: FIXED. On a child of the
         // Guide section, the "Guide" nav item (./guide/intro) stays
@@ -1190,9 +1253,9 @@ mod tests {
         assert_eq!(out.site_title, "Bob's Labs", "the cached site title shows while loading");
         assert_eq!(out.nav.len(), 2, "the cached nav shows so the site stays navigable");
         assert!(
-            out.body_html.to_lowercase().contains("loading"),
+            out.body.as_str().to_lowercase().contains("loading"),
             "the content pane carries the loading note, got: {}",
-            out.body_html
+            out.body.as_str()
         );
     }
 
@@ -1513,10 +1576,10 @@ mod tests {
         assert_eq!(shell.site_title, "Bill's Labs");
         assert_eq!(shell.nav.len(), 2, "nav comes from the durable manifest");
         assert!(
-            shell.body_html.to_lowercase().contains("reconnect")
-                || shell.body_html.to_lowercase().contains("offline"),
+            shell.body.as_str().to_lowercase().contains("reconnect")
+                || shell.body.as_str().to_lowercase().contains("offline"),
             "a notice explains the page isn't loaded: {}",
-            shell.body_html
+            shell.body.as_str()
         );
 
         // THE REGRESSION (Phase 21b): an unreachable origin 404s the manifest
@@ -1529,9 +1592,9 @@ mod tests {
         assert_eq!(shell_mm.site_title, "Bill's Labs");
         assert!(shell_mm.error.is_none());
         assert!(
-            shell_mm.body_html.to_lowercase().contains("unreachable"),
+            shell_mm.body.as_str().to_lowercase().contains("unreachable"),
             "ManifestMissing notice says the source is unreachable: {}",
-            shell_mm.body_html
+            shell_mm.body.as_str()
         );
 
         // A LOCAL page-miss gets NO shell — that's a genuine not-found.
@@ -1581,9 +1644,9 @@ mod tests {
         assert_eq!(out.current_page, "reference");
         // The generated index links to the section's child page(s).
         assert!(
-            out.body_html.contains("reference/api"),
+            out.body.as_str().contains("reference/api"),
             "section index lists children as links: {}",
-            out.body_html
+            out.body.as_str()
         );
     }
 }

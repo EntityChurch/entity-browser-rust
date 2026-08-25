@@ -115,6 +115,7 @@
   "contentsite.more": "بیشتر ▾ ({n})",
   "contentsite.offline_page_missing": "_این صفحه برای مشاهدهٔ آفلاین نگه‌داری نمی‌شود — برای بارگذاری دوباره وصل شوید._",
   "contentsite.offline_source_unreachable": "_منبع این سایت در دسترس نیست. طرح کلی ذخیره‌شدهٔ آن نمایش داده می‌شود._",
+  "contentsite.document_empty": "این سند خالی است — این صفحه هیچ محتوایی ندارد.",
   "contentsite.share_link": "اشتراک پیوند 🔗",
   "contentsite.share_link_hint": "پیوندی را کپی کنید که این صفحه را دوباره در مرورگر موجودیت زنده باز می‌کند",
   "contentstream.empty": "(هنوز رویداد اتصالی نیست — روی این همتا put / remove / snapshot اجرا کنید)",

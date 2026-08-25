@@ -9,8 +9,11 @@
 //! `#site-layer` overlay later (P2). Nothing else changes when the host
 //! swaps.
 
+mod demo_content;
 pub mod model;
 pub mod output;
+
+use demo_content::{DEMO_DOCUMENT_HTML, DEMO_FIGURE_SVG, SHOWCASE_MD};
 
 #[allow(unused_imports)]
 use crate::action::Action;
@@ -312,7 +315,7 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
             "index",
             SitePage::markdown(
                 "Welcome",
-                "# Welcome to the Entity Demo Site\n\nThis page is a **content-addressed entity** rendered as HTML — you're browsing it inside a full entity peer, but it looks like any other site.\n\n::embed[Entity Demo Figure — a content-addressed SVG asset, embedded via the ::embed directive]{ref=assets/figures/demo.svg}\n\n- It's just markdown stored in the tree.\n- Links navigate within the entity system.\n- The overlay toggle reveals the peer underneath.\n\nStart with the [Guide](./guide/intro), read [About](./about) or the [Theory](./theory), hop to the companion [Field Notes](site:demo-notes/index) site, or visit [the web](https://example.com).\n",
+                "# Welcome to the Entity Demo Site\n\nThis page is a **content-addressed entity** rendered as HTML — you're browsing it inside a full entity peer, but it looks like any other site.\n\n::embed[Entity Demo Figure — a content-addressed SVG asset, embedded via the ::embed directive]{ref=assets/figures/demo.svg}\n\n- It's just markdown stored in the tree.\n- Links navigate within the entity system.\n- The overlay toggle reveals the peer underneath.\n\nStart with the [Guide](./guide/intro), read [About](./about) or the [Theory](./theory), open a [Pre-Rendered Document](./document), hop to the companion [Field Notes](site:demo-notes/index) site, or visit [the web](https://example.com).\n",
             ),
         ),
         (
@@ -356,6 +359,13 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
         // fidelity is evaluable at a glance in both the live overlay and the
         // static export. Authored as a raw string (real newlines/indent) below.
         ("showcase", SitePage::markdown("Markdown Showcase", SHOWCASE_MD)),
+        // The document tier's visible artifact (§3.1 web tier) — a page whose
+        // body is a whole pre-rendered HTML file rather than markdown. It
+        // renders in a restricted sandbox, so it is also the one demo page
+        // whose content our own DOM never touches. See `DEMO_DOCUMENT_HTML`.
+        // A demo site's page title is content, like every other title in this
+        // list; the app does not translate the pages it renders.
+        ("document", SitePage::html("Pre-Rendered Document", DEMO_DOCUMENT_HTML)), // i18n-ignore
     ];
 
     // Arm-aware seed write via the blessed `Peers::seed_write` router
@@ -425,80 +435,3 @@ pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
         peers.seed_write(peer_id, paths::page_path(peer_id, DEMO_NOTES_SITE_ID, slug), page.to_entity());
     }
 }
-
-/// A small authored SVG figure the demo site's index page embeds — proof of
-/// the embed→asset→`<img>` path with a visible artifact.
-const DEMO_FIGURE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240" viewBox="0 0 480 240">
-  <rect width="480" height="240" rx="12" fill="#15151f"/>
-  <rect x="1" y="1" width="478" height="238" rx="12" fill="none" stroke="#2a2a3e"/>
-  <circle cx="120" cy="150" r="44" fill="#3a6ea5"/>
-  <rect x="200" y="100" width="84" height="96" rx="6" fill="#9fd0ff"/>
-  <polygon points="330,196 392,100 440,196" fill="#6ad0a0"/>
-  <text x="24" y="46" fill="#cfe3ff" font-family="system-ui,sans-serif" font-size="22" font-weight="700">Entity Demo Figure</text>
-  <text x="24" y="72" fill="#9aa3b2" font-family="system-ui,sans-serif" font-size="13">A content-addressed SVG asset, embedded via ::embed</text>
-</svg>"##;
-
-/// The demo site's "Markdown Showcase" page body — one page exercising the full
-/// rendered feature set (headings, emphasis, strikethrough, inline + fenced
-/// code, blockquote, ordered/unordered/nested/task lists, an aligned table, a
-/// rule, an embedded image, links) so markdown fidelity can be evaluated at a
-/// glance. Content-only (no raw HTML — the renderer neutralizes it); the
-/// `::embed` reuses the seeded demo figure asset. Column-0 content so nothing
-/// is accidentally indented into a code block.
-const SHOWCASE_MD: &str = r#"# Markdown Showcase
-
-One page that exercises the full markdown feature set, so rendering fidelity is easy to evaluate at a glance — in the live overlay and in the static export.
-
-## Text styles
-
-**Bold**, *italic*, ***bold italic***, ~~strikethrough~~, and `inline code`. A [link back Home](./index) and a [link to the web](https://example.com).
-
-## Blockquote
-
-> Format ⊥ transport — the same page renders from the local tree, a peer, or a CDN.
-> A second line of the same quote, to show it wraps as one block.
-
-## Lists
-
-- First item
-- Second item
-  - Nested item a
-  - Nested item b
-- Third item
-
-1. Step one
-2. Step two
-3. Step three
-
-- [x] Styled tables
-- [x] Fenced code blocks
-- [ ] Footnotes (not yet)
-
-## Table
-
-| Feature     | Status |               Notes |
-| :---------- | :----: | ------------------: |
-| Tables      |  Done  | header + zebra rows |
-| Code blocks |  Done  | monospace, bordered |
-| Blockquotes |  Done  |     left accent bar |
-| Images      |  Done  |      scale to width |
-
-## Code block
-
-```rust
-fn markdown_to_html(md: &str) -> String {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
-    render(md, opts)
-}
-```
-
-## Image
-
-::embed[Entity Demo Figure — a content-addressed SVG asset]{ref=assets/figures/demo.svg}
-
----
-
-Back to [Home](./index).
-"#;

@@ -114,6 +114,7 @@
   "contentsite.more": "Thêm ▾ ({n})",
   "contentsite.offline_page_missing": "_Trang này không được giữ để xem ngoại tuyến — hãy kết nối lại để tải._",
   "contentsite.offline_source_unreachable": "_Không thể truy cập nguồn của trang web này. Đang hiển thị bản phác thảo đã lưu đệm._",
+  "contentsite.document_empty": "Tài liệu này trống — trang không có nội dung nào.",
   "contentsite.share_link": "Chia sẻ liên kết 🔗",
   "contentsite.share_link_hint": "Sao chép liên kết mở lại trang này trong trình duyệt thực thể trực tiếp",
   "contentstream.empty": "(chưa có sự kiện liên kết — hãy kích hoạt put / remove / snapshot trên điểm ngang hàng này)",

@@ -530,43 +530,6 @@ endif
 	# child may not honour TERM.
 	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
 
-# The MULTI-HOST federation origin — the publisher on its own host, so a
-# consumer's fetches are real network hops rather than loopback ones. Prints the
-# two strings a consumer needs (`E2E_FED_ORIGIN`, `E2E_FED_REGISTRY`); the e2e's
-# `federation_target()` reads them and refuses a loopback origin.
-#
-# `federation-multihost` stands the rig up and prints the consumer's environment
-# (logs go to stderr, so stdout is pure `KEY=value`); `DOWN=1` tears it down.
-# `e2e-federation` is the GATE: rig up → the browser walk against it → rig down,
-# with the teardown running whatever the result, so a red run does not leave
-# three containers and a network behind.
-federation-multihost:
-	@bash tools/e2e/federation-multihost.sh $(if $(DOWN),down,up)
-
-# The multi-host gate. Deliberately NOT part of `e2e-worker`: it needs its own
-# network and its own browser, and folding it in would make the everyday suite
-# depend on both. Run it before claiming the naming chain works off loopback.
-e2e-federation: image
-	@bash tools/e2e/federation-multihost.sh up > $(FEDENV)
-	@cat $(FEDENV)
-	# The rig's stdout becomes `-e` flags, so a line that is not KEY=value becomes
-	# a bogus env var on the test container. That is not hypothetical: `podman
-	# exec -d` printed its exec ID here and shipped `-e <64-hex>` for one run.
-	# Cheap check, and it fails the gate instead of quietly mis-configuring it.
-	@grep -qvE '^[A-Z0-9_]+=' $(FEDENV) && { echo "FATAL: non-KEY=value line in $(FEDENV):"; cat $(FEDENV); exit 1; } || true
-	@set -e; trap 'bash tools/e2e/federation-multihost.sh down >/dev/null 2>&1' EXIT; \
-	 $(MAKE) --no-print-directory e2e-federation-run \
-	   EXTRA_RUN_ENV="$$(sed 's/^/-e /' $(FEDENV) | tr '\n' ' ')"
-
-FEDENV = target/federation-multihost.env
-
-# The inner half — never call directly; `e2e-federation` supplies the env.
-# `--network host` so cargo reaches the browser's published control port; the
-# browser's own fetches do not come back this way, they stay on the bridge.
-e2e-federation-run:
-	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e \
-	  --test e2e_worker a_name_resolves_cross_origin -- --nocapture --test-threads=1,--network host)
-
 # List what `T=` and `UNTIL=` accept. Reads the test source, so it can never
 # drift from what actually runs — and needs neither the image nor Selenium.
 e2e-phases:
@@ -961,14 +924,46 @@ appimage: wasm-release
 # boots into the baked content; to re-test, clear ~/.local/share/<app-identifier>.
 APPS_STAGE   := .apps-stage
 INGEST_STAGE := .ingest-stage
+# Stage an out-of-mount INGEST / APPS_DIST into repo-local dirs, so a path
+# ANYWHERE on the host works with a publish that runs in a container mounting
+# only the parent meta dir.
+#
+# **This is shared by every publish target on purpose.** It lived only on
+# `tauri-bundle` for a while, and the consequence was not "site is less
+# convenient" — it was that the real sources (papers and entity-apps, which sit
+# in a sibling meta tree) had to be hand-copied before `make site` could see
+# them at all. A manual copy step is a step you can skip, and skipping the
+# APPS_DIST half is exactly the omission that deletes a domain's whole apps
+# tree. Convenience here removes a footgun, it does not just save typing.
+#
+# Always copies when the variable is set, rather than testing whether the path
+# happens to be inside the mount: one behaviour is predictable, and "it worked
+# on my machine because my checkout was in the right place" is the failure this
+# replaces.
+#
+# Skipped entirely under VERIFY=1: `--verify` walks the OUTPUT directory and
+# never reads a source (that is the whole point — a shipped tree can be checked
+# without still having what produced it), so staging there would copy a
+# multi-hundred-megabyte corpus to look at none of it.
+define stage_publish_sources
+	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE))
+	$(if $(VERIFY),,$(if $(INGEST),@echo "==> staging INGEST=$(INGEST) → $(INGEST_STAGE)/ (the publish container mounts only this repo)"))
+	$(if $(VERIFY),,$(if $(INGEST),@cp -r $(INGEST) $(INGEST_STAGE)))
+	$(if $(VERIFY),,$(if $(APPS_DIST),@echo "==> staging APPS_DIST=$(APPS_DIST) → $(APPS_STAGE)/"))
+	$(if $(VERIFY),,$(if $(APPS_DIST),@cp -r $(APPS_DIST) $(APPS_STAGE)))
+endef
+define unstage_publish_sources
+	@rm -rf $(INGEST_STAGE) $(APPS_STAGE)
+endef
+# The flags every staged publish passes — the staged paths, never the caller's.
+INGEST_STAGED_FLAG = $(if $(INGEST),--ingest=$(INGEST_STAGE),)
+APPS_STAGED_FLAG   = $(if $(APPS_DIST),--ingest-apps=$(APPS_STAGE),)
 tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
-	@rm -rf $(APPS_STAGE) $(INGEST_STAGE)
-	$(if $(APPS_DIST),cp -r $(APPS_DIST) $(APPS_STAGE))
-	$(if $(INGEST),cp -r $(INGEST) $(INGEST_STAGE))
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(if $(INGEST),--ingest=$(INGEST_STAGE),) $(if $(APPS_DIST),--ingest-apps=$(APPS_STAGE),) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
-	@rm -rf $(APPS_STAGE) $(INGEST_STAGE)
+	$(stage_publish_sources)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
 	@echo "Built content-baked desktop app: ./src-tauri/target/debug/entity-browser-tauri"
@@ -1119,7 +1114,63 @@ site: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR)
 site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(stage_publish_sources)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(unstage_publish_sources)
+
+# ============================================================================
+# === site-dist — THE UPLOADABLE PRODUCTION WEB TREE =========================
+# ============================================================================
+# **This is the artifact a domain actually serves, and until now it had no
+# name.** `make site` emits the CONTENT HALF ONLY: its root index.html is a
+# redirect to /sites/ and there is no wasm. Uploading that to a bucket root
+# REPLACES THE LIVE SPA WITH A REDIRECT PAGE and orphans every app bundle —
+# `.bin` bundles under {peer}/apps/** reachable only through the SPA, which
+# nothing in the static HTML projection links to. Production serves the SPA at
+# the apex with content under /sites/ (verified: entitycoreprotocol.org returns
+# <title>Entity Browser</title> and loads entity-browser-*_bg.wasm).
+#
+# The composition existed in two places and neither emitted an uploadable tree:
+# `site-serve` builds it and SERVES it, `tauri-bundle` builds it and EMBEDS it
+# in a desktop binary. So the only written record of the rule was a comment on
+# a DESKTOP target, which is not where anyone doing a web release is reading.
+#
+# THE ORDERING IS LOAD-BEARING: wasm-release FIRST (trunk WIPES its dist dir),
+# THEN publish INTO it (the publish cleans only its own roots — sites/, content/,
+# {peer}/ — leaving the SPA). Reverse them and you ship a content-less shell.
+#
+# It is TWO SUB-MAKES rather than two prerequisites, deliberately: prerequisites
+# are order-independent under `make -j`, and the one thing this target exists to
+# guarantee is an order. A parallel build would race trunk's wipe against the
+# publish and produce a tree that is wrong intermittently — the worst possible
+# failure for a release artifact. Command-line knobs (INGEST, APPS_DIST,
+# DEMO_IDENTITY, PREFIX, LIVE, CONFIG_SITE, …) propagate to sub-makes on their
+# own; INGEST/APPS_DIST may point ANYWHERE (they are staged, see
+# stage_publish_sources).
+#
+# DEPLOY_CONFIG defaults to 1 here for the same reason site-serve defaults it:
+# without /entity-deployment.json the SPA boots to its own seed and every
+# published site appears MISSING. A production upload needs it, and nothing
+# else enforces that.
+#
+#   make site-dist INGEST=<papers/render/output> APPS_DIST=<entity-apps/dist>
+#   make site-dist SITE_DIST_OUT=dist-ecp CONFIG_SITE=home LIVE=https://example.org
+SITE_DIST_OUT ?= dist-site
+SITE_DIST_TARGET ?= target-publish
+SITE_DIST_DEPLOY_CONFIG ?= 1
+site-dist:
+	$(MAKE) wasm-release DIST=$(SITE_DIST_OUT) TARGET_DIR=$(SITE_DIST_TARGET)
+	$(MAKE) site OUT=$(SITE_DIST_OUT) DEPLOY_CONFIG=$(SITE_DIST_DEPLOY_CONFIG)
+	@echo ""
+	@echo "==> verifying the tree we are about to be able to upload"
+	$(MAKE) site OUT=$(SITE_DIST_OUT) VERIFY=1
+	@echo ""
+	@echo "=== uploadable web tree: $(SITE_DIST_OUT)/ ==="
+	@echo "  objects: $$(find $(SITE_DIST_OUT) -type f | wc -l)   size: $$(du -sh $(SITE_DIST_OUT) | cut -f1)"
+	@echo "  apex:    SPA (index.html + wasm)   content: sites/ + content/"
+	@echo "  apps:    $$(find $(SITE_DIST_OUT) -path '*/apps/*/bundles/*.bin' | wc -l) bundle(s)"
+	@echo "  config:  $$(test -f $(SITE_DIST_OUT)/entity-deployment.json && echo entity-deployment.json || echo 'MISSING — the SPA will show no published sites')"
+	@echo "  serve it locally:  make serve DIST=$(SITE_DIST_OUT)"
 
 # Bare-root SSG: render ONE site at the domain root (no sites/{peer}/{site}/
 # prefix, no entity branding) — the "just a site generator" output. Pick the
@@ -1226,7 +1277,9 @@ site-serve: DEPLOY_CONFIG := 1
 site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(if $(INGEST),--ingest=$(INGEST),) $(if $(APPS_DIST),--ingest-apps=$(APPS_DIST),) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
+	$(stage_publish_sources)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
+	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="
 	@echo "  ▶ live entity browser (SPA):  http://localhost:$(PORT)/"
@@ -1457,5 +1510,5 @@ publish publish-bare publish-serve:
 	@echo '  namespace and did NOT change: entity-browser publish <dir>'
 	@exit 1
 
-.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle e2e-webrtc-lan
+.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-dist site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle e2e-webrtc-lan
 

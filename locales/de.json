@@ -115,6 +115,7 @@
   "contentsite.more": "Mehr ▾ ({n})",
   "contentsite.offline_page_missing": "_Diese Seite wird nicht offline vorgehalten — verbinde dich erneut, um sie zu laden._",
   "contentsite.offline_source_unreachable": "_Die Quelle dieser Site ist nicht erreichbar. Es wird ihre zwischengespeicherte Übersicht gezeigt._",
+  "contentsite.document_empty": "Dieses Dokument ist leer — die Seite enthält keinen Inhalt.",
   "contentsite.share_link": "Link teilen 🔗",
   "contentsite.share_link_hint": "Einen Link kopieren, der diese Seite im laufenden Entity-Browser erneut öffnet",
   "contentstream.empty": "(noch keine Binding-Ereignisse — löse ein put / remove / snapshot an diesem Peer aus)",

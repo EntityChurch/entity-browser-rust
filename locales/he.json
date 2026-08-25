@@ -116,6 +116,7 @@
   "contentsite.more": "עוד ▾ ({n})",
   "contentsite.offline_page_missing": "_הדף הזה אינו נשמר לצפייה לא מקוונת — התחבר מחדש כדי לטעון אותו._",
   "contentsite.offline_source_unreachable": "_המקור של האתר הזה אינו זמין. מוצג המתאר השמור שלו._",
+  "contentsite.document_empty": "מסמך זה ריק — הדף אינו מכיל תוכן.",
   "contentsite.share_link": "שיתוף קישור 🔗",
   "contentsite.share_link_hint": "העתקת קישור שפותח מחדש את הדף הזה בדפדפן הישויות החי",
   "contentstream.empty": "(אין עדיין אירועי קישור — הפעל put / remove / snapshot על העמית הזה)",

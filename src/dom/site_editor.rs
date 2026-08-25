@@ -500,13 +500,13 @@ fn page_editor(
         util::append(&prev_pane, &doc_style);
         let preview = util::create_element_with_class("div", "cs-doc");
         preview.set_attribute("style", PREVIEW).ok();
-        preview.set_inner_html(&crate::content_site::render_page_body("markdown", &buffer));
+        preview.set_inner_html(&crate::content_site::markdown_to_html(&buffer));
         util::append(&prev_pane, &preview);
         util::append(&cols, &prev_pane);
         util::append(&block, &cols);
 
         // Live preview: re-render the buffer on each keystroke (no rebuild → no
-        // focus loss). Safe: render_page_body escapes raw HTML (F-CONTENT-1).
+        // focus loss). Safe: markdown_to_html escapes raw HTML (F-CONTENT-1).
         // Also flip the unsaved marker on.
         let preview_ref = preview.clone();
         let marker = dirty_marker.clone();
@@ -516,7 +516,7 @@ fn page_editor(
                 .and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
                 .map(|t| t.value())
                 .unwrap_or_default();
-            preview_ref.set_inner_html(&crate::content_site::render_page_body("markdown", &val));
+            preview_ref.set_inner_html(&crate::content_site::markdown_to_html(&val));
             marker.set_attribute("style", &format!("font-weight:600;color:{}", crate::theme_tokens::STATUS_ERR)).ok();
         });
     } else {

@@ -1286,6 +1286,14 @@ pub const EN: &[(&str, Message)] = &[
         "contentsite.offline_source_unreachable",
         Message::Simple("_This site's source is unreachable. Showing its cached outline._"),
     ),
+    // A `format:html` document page whose body is empty. Its own state, not an
+    // error and not the markdown empty-page path: the sandboxed frame would
+    // otherwise render an empty rectangle indistinguishable from a document
+    // that failed to display (D13 — we cannot see into an opaque origin).
+    (
+        "contentsite.document_empty",
+        Message::Simple("This document is empty — the page carries no content."),
+    ),
     // -- storage surface --
     (
         "storage.origin_disk",

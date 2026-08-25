@@ -319,6 +319,10 @@ web-sys = { version = "0.3", features = [
     "File",
     "FileList",
     "Blob",
+    # A content-site `format:html` document is mounted from a blob: URL, and the
+    # blob MUST carry `type: text/html` or the frame renders it as plain text —
+    # so the property bag is not optional decoration (src/dom/content_site.rs).
+    "BlobPropertyBag",
     "HtmlVideoElement",
     # Games window: embedded self-contained HTML apps run in a sandboxed iframe
     # (`HtmlIFrameElement::content_window` to postMessage into the frame) and the

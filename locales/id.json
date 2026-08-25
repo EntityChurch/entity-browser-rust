@@ -114,6 +114,7 @@
   "contentsite.more": "Lainnya ▾ ({n})",
   "contentsite.offline_page_missing": "_Halaman ini tidak disimpan untuk dilihat secara luring — sambungkan kembali untuk memuatnya._",
   "contentsite.offline_source_unreachable": "_Sumber situs ini tidak dapat dijangkau. Menampilkan kerangkanya dari cache._",
+  "contentsite.document_empty": "Dokumen ini kosong — halaman tidak memuat konten apa pun.",
   "contentsite.share_link": "Bagikan tautan 🔗",
   "contentsite.share_link_hint": "Salin tautan yang membuka kembali halaman ini di peramban entitas langsung",
   "contentstream.empty": "(belum ada peristiwa pengikatan — picu put / remove / snapshot pada peer ini)",

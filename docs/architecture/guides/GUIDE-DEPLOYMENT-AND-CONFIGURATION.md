@@ -385,9 +385,10 @@ ingests its sites + apps, reads them back off the tree, and projects them to
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OUT=<dir>` | `dist/static-demo` | Output directory. **Must stay under the repo tree** (publish runs in a container with only the repo bind-mounted; an absolute `/tmp/x` writes into the container's throwaway fs and never reaches the host). |
-| `INGEST=<dir>` | — | Source sites from a content-team `render/` emit (disk→tree) instead of the bundled demo seed. One site dir, or a parent of site dirs. |
-| `INGEST_APPS=<dir>` *(flag `--ingest-apps`)* | bundled demo seed | Source the embedded apps from an entity-apps `dist/` (split into games/apps by entry type). |
+| `OUT=<dir>` | `dist/static-demo` | Output directory. **Must stay under the repo tree** (publish runs in a container with only the repo bind-mounted; an absolute `/tmp/x` writes into the container's throwaway fs and never reaches the host — enforced by `CHECK_IN_TREE`). |
+| `INGEST=<dir>` | — | Source sites from a content-team `render/` emit (disk→tree) instead of the bundled demo seed. One site dir, or a parent of site dirs. **May point anywhere** — it is staged into a repo-local dir for the container automatically; you do not copy anything by hand. |
+| `APPS_DIST=<dir>` *(flag `--ingest-apps`)* | bundled demo seed | Source the embedded apps from an entity-apps `dist/` (split into games/apps by entry type). Staged like `INGEST`, so it may point anywhere. |
+| `PLAN=1` | off | Resolve the sources and report what the publish **would** add/keep/**remove**, writing nothing. Exit `0` = nothing removed · `2` = removes something · `1` = error, so `make site PLAN=1 … && make site …` is a gate. **Covers sites *and* app sets**: a publish replaces everything under the peer prefix, so omitting `APPS_DIST` deletes `{peer}/apps/**`. |
 | `PREFIX=<path>` | empty (root) | Per-peer **hosting scope** — nest all content (`.html`, `.bin`, origin) under `{OUT}/{PREFIX}/…` so one domain can host many isolated peers. Empty = domain root, byte-identical to un-prefixed. Validated (no leading/trailing `/`, no `..`, not `sites`/`content`). |
 | `LIVE=<origin>` | empty (same-origin) | The "open in live entity browser" banner target + the deployment-config origin. **Empty = same-origin** (relative — the same `dist/` works at localhost and on any CDN root, no rebuild). Set a concrete `https://host` only for a deliberate cross-origin pin. **Never `LIVE=http://localhost` for a shipped bundle** (guarded — it bakes a loopback that serves a content-less shell off your machine). |
 | `HTML_ONLY=1` | both forms | Skip the entity-native `.bin` content data (dumb-CDN-only — no live overlay, just the static `.html`). |
@@ -406,6 +407,19 @@ ingests its sites + apps, reads them back off the tree, and projects them to
 
 Higher-level convenience targets:
 
+- **`make site-dist` — the artifact you upload.** ⚠️ **`make site` alone is the
+  content half only.** Its root `index.html` is a redirect to `/sites/` and
+  there is no wasm, so uploading that to a bucket root **replaces the live SPA
+  with a redirect page** and orphans every app bundle (they are `.bin` files
+  under `{peer}/apps/**` reachable only through the SPA — nothing in the static
+  HTML projection links to them). `site-dist` emits the production shape into
+  `dist-site/`: SPA at the apex, content under `sites/` + `content/`, apps, and
+  `/entity-deployment.json`. It is `wasm-release` **then** publish into the same
+  dir — that order is load-bearing (trunk wipes its dist dir; the publish cleans
+  only `sites/`, `content/`, `{peer}/`) — and it runs `--verify` at the end.
+  `DEPLOY_CONFIG` defaults to **1** here, because without the config the SPA
+  boots to its own seed and every published site appears missing. Takes the same
+  knobs as `make site`; override the output with `SITE_DIST_OUT=<dir>`.
 - **`make site-serve`** — rebuild the SPA, publish sites (the bundled demo, or
   `INGEST=<dir>`) + optional apps (`APPS_DIST=<dir>`) into an isolated `/tmp` copy,
   and serve on one origin (`:8081`). The one-command end-to-end round-trip on your

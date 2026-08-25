@@ -235,7 +235,7 @@ be short-TTL so a redeploy is picked up.
 | `read.rs` | `OwnedSite` (+ `.assets` closure) — read a site subgraph back out |
 | `embed.rs` | the embed standard — `markdown_to_embed`, `embed_to_markdown_image`, `parse_embeds`/`embed_refs`, `base64_encode` |
 | `format.rs` | `SiteAsset` (content-addressed), manifests, `media_type_for_path` |
-| `render.rs` | markdown→sanitized HTML; `::embed` lowering |
+| `render.rs` | markdown→sanitized HTML; `format:html`→a sandboxed document; `::embed` lowering |
 | `paths.rs` | tree path helpers + `asset_name_from_ref` (**the security gate**) |
 | `http_poll.rs` | remote fetch — pages + `asset_bin_url`/`fetch_asset` (the two-hop), `resolve_closure_via` |
 | `resolver.rs` | local/cached/remote resolution; `ResolvedPage.assets`; `persist_to_cache` write-through |

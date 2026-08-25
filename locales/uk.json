@@ -116,6 +116,7 @@
   "contentsite.more": "Ще ▾ ({n})",
   "contentsite.offline_page_missing": "_Цю сторінку не збережено для офлайн-перегляду — перепідключіться, щоб завантажити її._",
   "contentsite.offline_source_unreachable": "_Джерело цього сайту недоступне. Показано його кешований план._",
+  "contentsite.document_empty": "Цей документ порожній — на сторінці немає вмісту.",
   "contentsite.share_link": "Поділитися посиланням 🔗",
   "contentsite.share_link_hint": "Скопіювати посилання, яке знову відкриє цю сторінку в живому браузері сутностей",
   "contentstream.empty": "(подій прив'язки поки немає — виконайте put / remove / snapshot на цьому пірі)",

@@ -115,6 +115,7 @@
   "contentsite.more": "Mere ▾ ({n})",
   "contentsite.offline_page_missing": "_Denne side er ikke gemt til offline visning — opret forbindelse igen for at indlæse den._",
   "contentsite.offline_source_unreachable": "_Dette websteds kilde er utilgængelig. Viser dets cachelagrede oversigt._",
+  "contentsite.document_empty": "Dette dokument er tomt — siden har intet indhold.",
   "contentsite.share_link": "Del link 🔗",
   "contentsite.share_link_hint": "Kopiér et link, der genåbner denne side i den live entitetsbrowser",
   "contentstream.empty": "(ingen bindingshændelser endnu — udløs en put / remove / snapshot på denne peer)",

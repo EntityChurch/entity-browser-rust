@@ -119,6 +119,7 @@
   "contentsite.more": "المزيد ▾ ({n})",
   "contentsite.offline_page_missing": "_هذه الصفحة غير محفوظة للعرض دون اتصال — أعد الاتصال لتحميلها._",
   "contentsite.offline_source_unreachable": "_مصدر هذا الموقع غير متاح. يتم عرض مخططه المخزّن مؤقتًا._",
+  "contentsite.document_empty": "هذا المستند فارغ — لا تحتوي الصفحة على أي محتوى.",
   "contentsite.share_link": "مشاركة الرابط 🔗",
   "contentsite.share_link_hint": "انسخ رابطًا يعيد فتح هذه الصفحة في متصفّح الكيانات الحي",
   "contentstream.empty": "(لا توجد أحداث ربط بعد — نفّذ put أو remove أو snapshot على هذا النظير)",

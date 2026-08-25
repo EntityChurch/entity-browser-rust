@@ -1,10 +1,12 @@
 //! Renderer-neutral output for the Content Site window.
 //!
-//! The model builds this (markdown already rendered to `body_html`);
-//! the DOM renderer (`dom/content_site.rs`) mounts it and rewrites the
-//! entity-native `<a>` links into nav handlers. Carries enough of the
-//! current location (`peer` / `site_id` / `current_page`) for the
-//! renderer to classify in-page links relative to where we are.
+//! The model builds this (the page body already rendered into a typed
+//! [`PageRender`]); the DOM renderer (`dom/content_site.rs`) mounts it and
+//! rewrites the entity-native `<a>` links into nav handlers. Carries enough of
+//! the current location (`peer` / `site_id` / `current_page`) for the renderer
+//! to classify in-page links relative to where we are.
+
+use crate::content_site::PageRender;
 
 /// One nav-menu entry, with whether it points at the current page.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -162,9 +164,13 @@ pub struct SiteRenderOutput {
     /// in-memory and does not survive a reload.
     pub can_go_back: bool,
     pub page_title: String,
-    /// Markdown already rendered to (sanitized) HTML; the renderer
-    /// mounts this and rewrites `<a>` hrefs.
-    pub body_html: String,
+    /// The rendered page body **and how it must be mounted**
+    /// ([`PageRender`]). `Markup` is sanitized markdown output — the renderer
+    /// `set_inner_html`s it and rewrites `<a>` hrefs and `<img>` srcs.
+    /// `Document` is an untrusted `format:html` body that must go to the
+    /// sandboxed document frame instead; the rewriters do not run on it (they
+    /// cannot reach into an opaque origin, and its links are its own).
+    pub body: PageRender,
 
     // -- current location, for relative link classification --
     pub peer: Option<String>,
