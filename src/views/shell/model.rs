@@ -239,6 +239,7 @@ fn all_verbs() -> Vec<&'static str> {
 /// added in both places — caught by the e2e if missed.
 pub const WINDOW_TYPES: &[&str] = &[
     "Shell", // i18n-ignore — identity key; mirrors WindowType.name
+    "Chat", // i18n-ignore — identity key; mirrors WindowType.name
     "Entity Tree", // i18n-ignore — identity key; mirrors WindowType.name
     "Settings", // i18n-ignore — identity key; mirrors WindowType.name
     "Event Log", // i18n-ignore — identity key; mirrors WindowType.name
@@ -1631,6 +1632,7 @@ mod tests {
         // and verify each name appears.
         let registered: Vec<&'static str> = vec![
             crate::views::chain_trace::ChainTraceWindow::window_type().name,
+            crate::views::chat::ChatWindow::window_type().name,
             crate::views::content_stream::ContentStreamWindow::window_type().name,
             crate::views::entity_tree::EntityTreeWindow::window_type().name,
             crate::views::event_log::EventLogWindow::window_type().name,

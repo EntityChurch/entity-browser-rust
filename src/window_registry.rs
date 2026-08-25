@@ -59,6 +59,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         EventLogWindow::window_type(),
         PeerManagementWindow::window_type(),
         ShellWindow::window_type(),
+        crate::views::chat::ChatWindow::window_type(),
         ChainTraceWindow::window_type(),
         PathTapWindow::window_type(),
         WireRecorderWindow::window_type(),
@@ -96,7 +97,7 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
     vec![
         (
             AppsContent,
-            vec!["Games", "Apps", "Programs", "Site Browser", "Site Creator", "Knowledge Base"],
+            vec!["Games", "Apps", "Programs", "Chat", "Site Browser", "Site Creator", "Knowledge Base"],
         ),
         (
             System,
@@ -148,7 +149,7 @@ mod tests {
     #[test]
     fn roster_is_twentytwo_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
-        assert_eq!(meta.len(), 24, "the standard roster is 24 windows");
+        assert_eq!(meta.len(), 25, "the standard roster is 25 windows"); // +Chat (app/chat)
         // Spot-check the scope partition the settings filter relies on.
         let settings = meta.iter().find(|(n, _)| *n == "Settings").expect("Settings present");
         assert_eq!(settings.1, WindowScope::System);

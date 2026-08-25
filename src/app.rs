@@ -2365,7 +2365,8 @@ impl EntityApp {
                 | Action::ShellTabComplete { window_id, .. }
                 | Action::ShellHistoryPrev { window_id, .. }
                 | Action::ShellHistoryNext { window_id, .. }
-                | Action::ShellTail { window_id, .. } => {
+                | Action::ShellTail { window_id, .. }
+                | Action::ChatSend { window_id, .. } => {
                     if let Some(win) = self.window_manager.get_mut(*window_id) {
                         win.view.handle_action(action, &self.peer_manager);
                     }

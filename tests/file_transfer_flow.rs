@@ -134,6 +134,9 @@ async fn dial(shared_a: &Arc<PeerShared>, addr: &str) -> String {
         &shared_a.keypair,
         shared_a.config.home_hash_format,
         Some(shared_a.clone()),
+        // §4.4: dial-by-address test harness — no §3 rendezvous key, so no
+        // reciprocal grant (asymmetric establishment, §6.6).
+        false,
     )
     .await
     .expect("A handshakes B");

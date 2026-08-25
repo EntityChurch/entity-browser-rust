@@ -215,6 +215,11 @@ pub enum Action {
     /// Clear the shared event log.
     ClearEventLog,
 
+    // -- Chat actions (app/chat window) --
+    /// User sent a chat message (Enter in the compose box). `body` is the raw
+    /// composed text; the Chat window authors it into the tree.
+    ChatSend { window_id: WindowId, body: String },
+
     // -- Shell actions (entity-shell window) --
     /// User pressed Enter in the shell prompt. `line` is the raw input.
     ShellSubmit { window_id: WindowId, line: String },

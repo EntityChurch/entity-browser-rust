@@ -2,6 +2,7 @@
 
 pub mod access_log;
 pub mod chain_trace;
+pub mod chat;
 pub mod content_site;
 pub mod content_stream;
 pub mod entity_tree;

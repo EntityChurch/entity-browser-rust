@@ -5,6 +5,7 @@
 
 pub mod access_log;
 pub mod chain_trace;
+pub mod chat;
 pub mod components;
 pub mod content_site;
 pub mod content_stream;
@@ -19,6 +20,7 @@ pub mod key_manager;
 pub mod knowledge_base;
 pub mod peer_connections;
 pub mod peer_management;
+pub mod programs;
 pub mod query_console;
 pub mod scanner;
 pub mod settings;

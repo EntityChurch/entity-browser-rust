@@ -325,6 +325,9 @@ async fn run_cross_peer_write(backend_sqlite: bool, real_ws: bool) {
         &shared_a.keypair,
         shared_a.config.home_hash_format,
         Some(shared_a.clone()),
+        // §4.4: dial-by-address test harness — no §3 rendezvous key, so no
+        // reciprocal grant (asymmetric establishment, §6.6).
+        false,
     )
     .await
     .expect("A handshakes B");
@@ -423,6 +426,9 @@ async fn live_upload_against_running_backend() {
         &shared_a.keypair,
         shared_a.config.home_hash_format,
         Some(shared_a.clone()),
+        // §4.4: dial-by-address test harness — no §3 rendezvous key, so no
+        // reciprocal grant (asymmetric establishment, §6.6).
+        false,
     )
     .await
     .expect("handshake with live backend");

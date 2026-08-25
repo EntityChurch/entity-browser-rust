@@ -5,16 +5,24 @@ establishment path and reports where it gets to. Built 2026-08-04 while validati
 it is the reproduction behind
 [`docs/status/ROUTING-2026-08-04-webrtc-rung1-rendezvous-encoding-mismatch-to-core-rust.md`](../../../docs/status/ROUTING-2026-08-04-webrtc-rung1-rendezvous-encoding-mismatch-to-core-rust.md).
 
-**Current state:** the pipeline stands up end-to-end — both browsers boot Worker mode, confirm the
-establisher, auto-escalate on a cross-peer `exec`, connect+authenticate to the signaling node, and
-exchange `offer`/`collect` — but the **pair rendezvous never matches** (`collect` always returns
-`included_count=0`), so no `RTCDataChannel` forms. Root cause: an id-encoding asymmetry into
-`entity-signaling`'s `pair_key`/`glare_role` (self = base58, dial target = `ecfv1-sha256:` author
-hash). See the routing doc. This is upstream; the harness is the reproduction, not a passing test.
+**Current state (2026-08-05): BIDIRECTIONAL green — this is now a fail-closed gate.** Both browsers
+boot Worker mode, confirm the establisher, auto-escalate on a cross-peer `exec`, rendezvous at the
+§3.2 `pair` key, open an `RTCDataChannel`, and complete a cross-peer round-trip in **both** directions
+(`status=200`) over the one §6.5 channel — including the §6.5 (b) reciprocal grant (mutual minting)
+that lets the *answerer* originate back. Re-verified against core-rust HEAD `f227df8` under the
+§7-narrowed grant (reciprocal mint gated on `established_via_rendezvous_key`). The two earlier walls
+are both resolved: the id-encoding never-meet (`pair_key`/`glare_role` self=base58 vs
+target=`ecfv1-sha256:`) and the ICE/DTLS channel-close. See the `STATUS-2026-08-05-webrtc-rung1-*`
+docs for the arc.
 
-These are throwaway Python/WebDriver spikes (no Rust compile for the drive), kept because they encode
-hard-won substrate facts. The eventual real coverage is a `tests/e2e_worker.rs` test — this is the
-scouting that de-risked it.
+**Run it as a gate:** `make e2e-webrtc` (host podman) — stands up the topology, drives both browsers,
+tears everything down, and **the BIDIRECTIONAL verdict is the exit code** (both channels open AND both
+directions `status=200`; a lone direction is a FAIL, not a known gap).
+
+The drive is still a Python/WebDriver spike (no Rust compile for the drive), kept because it encodes
+hard-won substrate facts and because the two-container-on-a-bridge topology has no equivalent in the
+single-session Selenium harness `e2e-worker` uses. A future `tests/e2e_worker.rs` port (two fantoccini
+clients) would fold the assertions into the Rust suite; until then `make e2e-webrtc` is the gate.
 
 ## Substrate facts (load-bearing — see AGENTS.md "WebRTC / two-browser" gotcha)
 
@@ -37,7 +45,14 @@ scouting that de-risked it.
 Prereq: `make wasm` has produced `dist/`; the pinned selenium image is pulled (see `../README.md`).
 
 ```bash
-bash tools/e2e/webrtc-rung1/rung1_repro.sh            # set up everything + drive
+make e2e-webrtc              # THE GATE: teardown → setup → drive → teardown; verdict = exit code
+make e2e-webrtc BUILD=1      # rebuild dist/ first
+```
+
+Or drive the rig directly (leaves containers up for inspection — the manual-debug path):
+
+```bash
+bash tools/e2e/webrtc-rung1/rung1_repro.sh            # set up everything + drive (exits non-zero on FAIL)
 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown   # remove containers + network + host procs
 ```
 
