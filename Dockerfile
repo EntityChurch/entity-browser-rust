@@ -67,4 +67,24 @@ RUN rustup component add clippy rustfmt \
 # Trunk's own dependency resolution reproducible.
 RUN cargo install --locked trunk@0.21.14
 
+# AppImage release-bundling toolchain (`make appimage` — Tauri's bundler packs
+# the binary + webkit2gtk + every runtime lib into ONE portable file that runs
+# on other Linux hosts with no dev toolchain). The bundler shells out to:
+# desktop-file-utils (validate), librsvg2-bin (rsvg-convert, icon rasterize),
+# patchelf (rpath fixups), squashfs-tools + zsync (AppImage assembly). FUSE is
+# NOT available in the container, so the `appimage` target runs the downloaded
+# appimagetool/linuxdeploy via APPIMAGE_EXTRACT_AND_RUN=1.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        desktop-file-utils \
+        librsvg2-bin \
+        patchelf \
+        squashfs-tools \
+        zsync \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tauri v2 CLI (drives `cargo tauri build --bundles appimage`). Matches the
+# `tauri = "2"` crate in src-tauri/Cargo.toml.
+RUN cargo install --locked tauri-cli --version '^2'
+
 WORKDIR /src/entity-systems

@@ -84,6 +84,30 @@ pub enum Action {
         path: String,
         bytes: Vec<u8>,
     },
+    /// Refresh the **backend-auth observability** surface for one backend
+    /// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`). Reads B's
+    /// `system/peer/session/*` (connected peers) and
+    /// `system/capability/policy/*` (authorized) over the wire via S's manager
+    /// grant, derives pending (`session ∧ ¬policy`), and writes the derived rows
+    /// to the local watchable mirror the Peer Connections window renders.
+    /// `local_peer_id` is the dispatch origin (S); `backend_pid` the remote B.
+    RefreshBackendAuth {
+        local_peer_id: String,
+        backend_pid: String,
+    },
+    /// Authorize a connected peer on a backend under a grant **profile**
+    /// (`§2.2`, `§3 Step 3.3`). Authors `system/capability/policy/{target}` on B
+    /// via the capability `configure` op (S's manager cap), then stamps the
+    /// S-side `authz` mirror and re-refreshes. The grant applies on the target's
+    /// **next handshake** (the design's fresh-reconnect constraint, §3 Step 4).
+    /// `target_pid` is keyed as B's session reports it (identity-hash hex).
+    AuthorizePeer {
+        local_peer_id: String,
+        backend_pid: String,
+        target_pid: String,
+        profile: String,
+    },
+
     /// Run an L1 query via the typed `ctx.query()` helper
     /// (SDK-OPERATIONS §5.1). Carries the prebuilt
     /// `system/query/expression` entity from the calling window.

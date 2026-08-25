@@ -53,10 +53,27 @@ impl PeerConnectionsWindow {
                     &sys_pid,
                     crate::app_paths::connections_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
+                // `render_output` reads `read_connections`, which joins the
+                // sibling `authz` mirror — so watch it too, or an authorize
+                // write wouldn't wake this window in the Worker arm (§4,
+                // `feedback_worker_cache_get_needs_subscription`).
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::authz_prefix(crate::app_paths::APP_ID, &sys_pid),
+                );
                 pm.watch_prefix(
                     &mut window.watch,
                     &sys_pid,
                     crate::app_paths::listener_state_path(crate::app_paths::APP_ID, &sys_pid),
+                );
+                // Authorize-gate observability mirror (§3 Step 3): the async
+                // remote read writes derived pending/authorized rows here; wake
+                // the render when they land.
+                pm.watch_prefix(
+                    &mut window.watch,
+                    &sys_pid,
+                    crate::app_paths::backend_auth_prefix(crate::app_paths::APP_ID, &sys_pid),
                 );
                 // Wake on roster changes via the tree-backed registry
                 // instead of the content-free signal.

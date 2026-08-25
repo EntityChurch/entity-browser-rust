@@ -27,6 +27,42 @@ pub struct PeerConnectionsOutput {
     /// useless) while the *scanner* stays available. See the Peer
     /// Connections renderer's `render_qr_section`.
     pub qr_payload: Option<String>,
+    /// The **authorize-gate observability surface** (§2, §2.1): one entry per
+    /// known backend we can manage, carrying its discovered / pending /
+    /// authorized peers as last read from the backend's tree. Empty until a
+    /// backend has been checked (an async remote read writes the local mirror
+    /// this is built from). `DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3-4`.
+    pub backend_auth: Vec<BackendAuthView>,
+}
+
+/// One backend's authorization surface — the render-ready projection of a
+/// `backend_auth::BackendAuthObservation`.
+#[derive(Debug, Clone)]
+pub struct BackendAuthView {
+    /// Backend peer id (base58) — the dispatch target for refresh/authorize.
+    pub backend_pid: String,
+    /// Human-legible backend name.
+    pub backend_display: String,
+    /// Whether an observation mirror exists yet (a refresh has run). `false`
+    /// renders a "not checked — Refresh" prompt rather than an empty list that
+    /// could read as "no pending peers".
+    pub checked: bool,
+    /// A loud read-failure message (§5); shown as a banner, not swallowed.
+    pub error: Option<String>,
+    /// Connected peers awaiting authorization — each an actionable row.
+    pub pending: Vec<AuthRowView>,
+    /// Peers already authorized on the backend.
+    pub authorized: Vec<AuthRowView>,
+}
+
+/// One connected peer in a [`BackendAuthView`].
+#[derive(Debug, Clone)]
+pub struct AuthRowView {
+    /// Peer id as the backend reports it (identity-hash hex) — the authorize
+    /// target key.
+    pub peer_id: String,
+    /// Short display form (truncated id).
+    pub display: String,
 }
 
 #[derive(Debug, Clone)]

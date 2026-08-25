@@ -24,6 +24,7 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
 
     render_bound_info(&wrapper, output);
     render_known_peers(&wrapper, output, ctx);
+    render_device_authorizations(&wrapper, output, ctx);
     render_backend_peers(&wrapper, output, ctx);
     render_manual_connect(&wrapper, output, ctx);
     render_qr_section(&wrapper, output, ctx);
@@ -103,6 +104,156 @@ fn render_known_peers(parent: &Element, output: &PeerConnectionsOutput, ctx: &Do
         util::append(&known_div, &row);
     }
     util::append(parent, &known_div);
+}
+
+/// The **authorize-gate observability surface** (§2, §2.1): for each known
+/// backend, its discovered / pending / authorized peers with a per-peer
+/// **Authorize** action. This is the authority surface — managing *who can do
+/// what* lives here, not in the file-transfer app. Reads the locally-mirrored
+/// observation (written by the async remote read); a **Check access** button
+/// triggers a fresh read. A read failure renders a loud banner (§5), never a
+/// silent empty list.
+fn render_device_authorizations(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
+    if output.backend_auth.is_empty() {
+        return;
+    }
+    let group = util::create_element("div");
+    group.set_attribute("style", theme::SECTION_GROUP).ok();
+    let label = util::create_element("strong");
+    util::set_text(&label, "Device Authorizations");
+    util::append(&group, &label);
+
+    for view in &output.backend_auth {
+        // Header: backend name + a Check-access (refresh) button.
+        let header = util::create_element_with_class("div", "peer-conn-backend-row");
+        let info = util::create_element_with_class("span", "peer-conn-backend-info");
+        info.set_inner_html(&format!(
+            "<strong>{}</strong>",
+            util::escape_html(&view.backend_display)
+        ));
+        util::append(&header, &info);
+
+        let refresh = util::create_element("button");
+        util::set_text(&refresh, if view.checked { "Refresh" } else { "Check access" });
+        refresh.set_attribute("style", theme::BTN_SECONDARY).ok();
+        ctx.on_action(
+            &refresh,
+            "click",
+            Action::RefreshBackendAuth {
+                local_peer_id: output.bound_peer.peer_id.clone(),
+                backend_pid: view.backend_pid.clone(),
+            },
+        );
+        util::append(&header, &refresh);
+        util::append(&group, &header);
+
+        if let Some(err) = &view.error {
+            let banner = util::create_element("div");
+            banner
+                .set_attribute(
+                    "style",
+                    "color:var(--status-err, #f66);font-size:13px;margin:4px 0",
+                )
+                .ok();
+            util::set_text(&banner, &format!("⚠ {}", err));
+            util::append(&group, &banner);
+            continue;
+        }
+        if !view.checked {
+            let hint = util::create_element("p");
+            hint.set_attribute("style", "color:var(--text-dim, #888);font-size:13px;margin:4px 0")
+                .ok();
+            util::set_text(
+                &hint,
+                "Not checked yet — click Check access to see connected devices.",
+            );
+            util::append(&group, &hint);
+            continue;
+        }
+        if view.pending.is_empty() && view.authorized.is_empty() {
+            let hint = util::create_element("p");
+            hint.set_attribute("style", "color:var(--text-dim, #888);font-size:13px;margin:4px 0")
+                .ok();
+            util::set_text(&hint, "No devices connected to this backend.");
+            util::append(&group, &hint);
+        }
+
+        for row in &view.pending {
+            render_pending_auth_row(&group, output, view, row, ctx);
+        }
+        for row in &view.authorized {
+            let r = util::create_element_with_class("div", "peer-conn-backend-row");
+            let span = util::create_element_with_class("span", "peer-conn-backend-info");
+            span.set_inner_html(&format!(
+                "{} <span style='color:var(--status-ok, #4c4)'>✓ authorized</span>",
+                util::escape_html(&row.display)
+            ));
+            util::append(&r, &span);
+            util::append(&group, &r);
+        }
+    }
+    util::append(parent, &group);
+}
+
+/// One pending-authorization row: the connected device, a grant-profile picker
+/// (§2.2), and an **Authorize** button that authors the policy grant on the
+/// backend. The `trusted` (wide-open) profile is deliberately NOT offered here
+/// yet — it ships build-gated in step 6.
+fn render_pending_auth_row(
+    parent: &Element,
+    output: &PeerConnectionsOutput,
+    view: &crate::views::peer_connections::output::BackendAuthView,
+    row: &crate::views::peer_connections::output::AuthRowView,
+    ctx: &DomCtx,
+) {
+    let r = util::create_element_with_class("div", "peer-conn-backend-row");
+    let span = util::create_element_with_class("span", "peer-conn-backend-info");
+    span.set_inner_html(&format!(
+        "{} <span style='color:var(--text-dim, #888)'>pending</span>",
+        util::escape_html(&row.display)
+    ));
+    util::append(&r, &span);
+
+    let select = util::create_element("select");
+    select.set_attribute("style", theme::SELECT).ok();
+    for (token, label) in [
+        ("file-transfer", "Pull only"),
+        ("file-transfer-rw", "Two-way"),
+    ] {
+        let opt = util::create_element("option");
+        opt.set_attribute("value", token).ok();
+        util::set_text(&opt, label);
+        util::append(&select, &opt);
+    }
+    util::append(&r, &select);
+
+    let authorize = util::create_element("button");
+    util::set_text(&authorize, "Authorize");
+    authorize.set_attribute("style", theme::BTN_PRIMARY).ok();
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let local = output.bound_peer.peer_id.clone();
+        let backend = view.backend_pid.clone();
+        let target = row.peer_id.clone();
+        let select_ref = select.clone();
+        ctx.listen(&authorize, "click", move |_| {
+            let profile = select_ref
+                .clone()
+                .dyn_into::<web_sys::HtmlSelectElement>()
+                .map(|s| s.value())
+                .unwrap_or_else(|_| "file-transfer".to_string());
+            actions.borrow_mut().push(Action::AuthorizePeer {
+                local_peer_id: local.clone(),
+                backend_pid: backend.clone(),
+                target_pid: target.clone(),
+                profile,
+            });
+            rp();
+        });
+    }
+    util::append(&r, &authorize);
+    util::append(parent, &r);
 }
 
 fn render_backend_peers(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {

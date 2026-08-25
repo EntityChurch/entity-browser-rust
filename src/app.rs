@@ -110,6 +110,11 @@ pub struct EntityApp {
     /// Tree-backed registry of connected remote peers. Cheap to clone
     /// into spawned tasks (e.g. the connect handler).
     connections_writer: ConnectionsWriter,
+    /// Tree-backed mirror of the backend-auth observability surface — derived
+    /// pending/authorized rows per backend, written by the async remote read
+    /// (`Action::RefreshBackendAuth`) so the Peer Connections window can render
+    /// them synchronously (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`).
+    backend_auth_writer: crate::backend_auth::BackendAuthWriter,
     /// Tree-backed publisher for the WS listener's bound address.
     /// Cloned into the listener-bind spawned task; only used on native.
     #[cfg(feature = "native-ws")]
@@ -855,6 +860,7 @@ impl EntityApp {
         // lost to the console. Modest scope — main-thread error/rejection only.
         crate::diagnostics::install_main_thread(event_log_writer.clone());
         let connections_writer = ConnectionsWriter::new(&peer_manager);
+        let backend_auth_writer = crate::backend_auth::BackendAuthWriter::new(&peer_manager);
         let mut peer_registry = PeerRegistry::new(&peer_manager);
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
@@ -948,6 +954,7 @@ impl EntityApp {
             window_manager,
             event_log_writer,
             connections_writer,
+            backend_auth_writer,
             peer_registry,
             dom,
             pending_backend_peers,
@@ -2301,6 +2308,14 @@ impl EntityApp {
                     tracing::info!(peer = %peer_id, expr_type = %expression.entity_type, "Action::Count");
                     self.handle_count(peer_id.clone(), expression.clone());
                 }
+                Action::RefreshBackendAuth { local_peer_id, backend_pid } => {
+                    tracing::info!(local = %local_peer_id, backend = %backend_pid, "Action::RefreshBackendAuth");
+                    self.handle_refresh_backend_auth(local_peer_id.clone(), backend_pid.clone());
+                }
+                Action::AuthorizePeer { local_peer_id, backend_pid, target_pid, profile } => {
+                    tracing::info!(local = %local_peer_id, backend = %backend_pid, target = %target_pid, profile = %profile, "Action::AuthorizePeer");
+                    self.handle_authorize_peer(local_peer_id.clone(), backend_pid.clone(), target_pid.clone(), profile.clone());
+                }
             }
         }
         self.window_manager.gc_closed();
@@ -2708,6 +2723,144 @@ impl EntityApp {
         });
     }
 
+    /// Refresh the backend-auth observability surface for one backend B
+    /// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`). Builds the two one-shot
+    /// remote reads over S's manager grant and spawns the shared derive-record
+    /// task ([`derive_and_record_backend_auth`]).
+    #[cfg(target_arch = "wasm32")]
+    fn handle_refresh_backend_auth(&self, local_pid: String, backend_pid: String) {
+        let (session_fut, policy_fut) = self.backend_auth_read_futures(&local_pid, &backend_pid);
+        wasm_bindgen_futures::spawn_local(derive_and_record_backend_auth(
+            session_fut,
+            policy_fut,
+            self.backend_auth_writer.clone(),
+            self.event_log_writer.clone(),
+            self.peer_manager.system_peer_id().to_string(),
+            backend_pid,
+        ));
+    }
+
+    /// Build the two `'static` remote-read futures for a backend-auth refresh:
+    /// B's `system/peer/session/*` (connected) and `system/capability/policy/*`
+    /// (authorized). A trailing `/` makes `system/tree:get` return a
+    /// single-level listing whose child keys are the peer-id keys (hex). The
+    /// futures dispatch at await time, so callers may build them ahead and
+    /// await them later (e.g. after an authorize).
+    #[cfg(target_arch = "wasm32")]
+    fn backend_auth_read_futures(
+        &self,
+        local_pid: &str,
+        backend_pid: &str,
+    ) -> (
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::ops::ExecuteResponse, String>>>>,
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::ops::ExecuteResponse, String>>>>,
+    ) {
+        let session_fut = crate::ops::execute(
+            &self.peer_manager,
+            crate::ops::ExecuteRequest {
+                peer_id: local_pid.to_string(),
+                handler_uri: format!("entity://{}/system/tree", backend_pid),
+                operation: "get".into(),
+                params: None,
+                resource: Some("system/peer/session/".into()),
+            },
+        );
+        let policy_fut = crate::ops::execute(
+            &self.peer_manager,
+            crate::ops::ExecuteRequest {
+                peer_id: local_pid.to_string(),
+                handler_uri: format!("entity://{}/system/tree", backend_pid),
+                operation: "get".into(),
+                params: None,
+                resource: Some("system/capability/policy/".into()),
+            },
+        );
+        (session_fut, policy_fut)
+    }
+
+    /// Authorize `target_pid` on backend B under a grant `profile`
+    /// (`§2.2`, `§3 Step 3.3`). Authors `policy/{target}` on B via the
+    /// capability `configure` op (over S's manager cap), mirrors the profile
+    /// to the S-side `authz` entity, and re-reads the surface so the peer moves
+    /// pending → authorized. The grant applies on the target's **next
+    /// handshake** (the design's fresh-reconnect constraint, §3 Step 4) — this
+    /// authors it; making the peer re-handshake is the reconnect affordance.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_authorize_peer(
+        &self,
+        local_pid: String,
+        backend_pid: String,
+        target_pid: String,
+        profile: String,
+    ) {
+        let log = self.event_log_writer.clone();
+        let connections = self.connections_writer.clone();
+        let writer = self.backend_auth_writer.clone();
+        let system_pid = self.peer_manager.system_peer_id().to_string();
+
+        let Some(prof) = crate::backend_auth::GrantProfile::from_token(&profile) else {
+            log.log(format!("✗ authorize {} → unknown grant profile '{}'", target_pid, profile));
+            return;
+        };
+        let params = match crate::backend_auth::build_authorize_params(&backend_pid, &target_pid, prof) {
+            Ok(p) => p,
+            Err(e) => {
+                log.log(format!("✗ authorize {} → {}", target_pid, e));
+                return;
+            }
+        };
+
+        log.log(format!(
+            "authorizing {} on {} as '{}'...",
+            &target_pid[..12.min(target_pid.len())],
+            &backend_pid[..12.min(backend_pid.len())],
+            profile
+        ));
+
+        let configure_fut = crate::ops::execute(
+            &self.peer_manager,
+            crate::ops::ExecuteRequest {
+                peer_id: local_pid.clone(),
+                handler_uri: format!("entity://{}/system/capability", backend_pid),
+                operation: "configure".into(),
+                params: Some(params),
+                resource: None,
+            },
+        );
+        // Built ahead (dispatch at await time) so the post-authorize refresh
+        // runs in the same task once the grant has landed — no self needed.
+        let (session_fut, policy_fut) = self.backend_auth_read_futures(&local_pid, &backend_pid);
+        let refresh_log = log.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match configure_fut.await {
+                Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
+                    log.log(format!("✓ authorized {} on backend as '{}'", target_pid, profile));
+                    // Mirror the decision locally (§4). Keyed by the target as
+                    // B reports it (hex); the base58↔hex reconciliation for the
+                    // app-side connection join is a step-5 item.
+                    connections.set_authorized(&target_pid, &profile);
+                    // Re-read so the row reclassifies pending → authorized.
+                    derive_and_record_backend_auth(
+                        session_fut,
+                        policy_fut,
+                        writer,
+                        refresh_log,
+                        system_pid,
+                        backend_pid,
+                    )
+                    .await;
+                }
+                Ok(resp) => {
+                    log.log(format!("✗ authorize {} REJECTED → {}", target_pid, resp.summary));
+                }
+                Err(e) => {
+                    log.log(format!("✗ authorize {} FAILED → {}", target_pid, e));
+                }
+            }
+        });
+    }
+
     /// Create a backend peer via Tauri IPC (WASM only — Tauri IPC is
     /// JS-based). `EntityApp` is wasm-only; there is no native build.
     fn handle_create_backend_peer(&mut self, label: Option<String>) {
@@ -3070,6 +3223,112 @@ impl EntityApp {
         // reconciles these registered/updated backend peers into the
         // tree registry, which every peer-aware window subscribes to.
     }
+}
+
+/// Shared derive-and-record task for the backend-auth observability surface
+/// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`). Awaits the two prebuilt
+/// remote reads (B's `session/*` and `policy/*`), derives pending
+/// (`session ∧ ¬policy`) via `peer_auth::classify`, and records the result to
+/// the local mirror. Any read failure records a `failed` observation + a loud
+/// log line (§5) — never a silent blank that reads as "no peers". Shared by the
+/// refresh handler and the post-authorize re-read so the two stay in lockstep.
+#[cfg(target_arch = "wasm32")]
+async fn derive_and_record_backend_auth(
+    session_fut: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::ops::ExecuteResponse, String>>>,
+    >,
+    policy_fut: std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::ops::ExecuteResponse, String>>>,
+    >,
+    writer: crate::backend_auth::BackendAuthWriter,
+    log: EventLogWriter,
+    system_pid: String,
+    backend_pid: String,
+) {
+    let session_keys = match session_fut.await {
+        Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
+            crate::backend_auth::parse_listing_keys(&resp.result.result)
+        }
+        Ok(resp) => {
+            return record_auth_failure(
+                &writer,
+                &log,
+                &backend_pid,
+                format!("session read returned status {}", resp.result.status),
+            )
+        }
+        Err(e) => {
+            return record_auth_failure(
+                &writer,
+                &log,
+                &backend_pid,
+                format!("no manager capability? ({})", e),
+            )
+        }
+    };
+    let policy_keys = match policy_fut.await {
+        Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
+            crate::backend_auth::parse_listing_keys(&resp.result.result)
+        }
+        Ok(resp) => {
+            return record_auth_failure(
+                &writer,
+                &log,
+                &backend_pid,
+                format!("policy read returned status {}", resp.result.status),
+            )
+        }
+        Err(e) => {
+            return record_auth_failure(
+                &writer,
+                &log,
+                &backend_pid,
+                format!("policy read failed ({})", e),
+            )
+        }
+    };
+
+    // Exclude S (manager) and B (self) — base58. Sessions are hex-keyed; S's
+    // base58 won't string-match its hex session key, but S holds the manager
+    // policy grant → once that self-heals to hex at S's handshake, classify
+    // marks S Authorized (not Pending), so it never surfaces as an *actionable*
+    // row. Cleanly hiding the manager row entirely would need S's identity-hash
+    // hex — a documented follow-up (the `peer_auth` keying contract).
+    let mut exclude = std::collections::BTreeSet::new();
+    exclude.insert(system_pid);
+    exclude.insert(backend_pid.clone());
+    let authorized: std::collections::BTreeSet<String> = policy_keys.into_iter().collect();
+    let rows = crate::peer_auth::classify(&session_keys, &authorized, &exclude);
+    let pending = rows
+        .iter()
+        .filter(|r| r.state == crate::peer_auth::AuthState::Pending)
+        .count();
+    log.log(format!(
+        "✓ auth-refresh {} → {} connected, {} authorized, {} pending",
+        backend_pid,
+        session_keys.len(),
+        authorized.len(),
+        pending
+    ));
+    writer.record(&crate::backend_auth::BackendAuthObservation::ok(&backend_pid, rows));
+}
+
+/// Record a loud backend-auth read failure (§5): the observation mirror gets a
+/// `failed` entry (so the window renders an error banner, not "no peers") and
+/// the event log gets a line.
+#[cfg(target_arch = "wasm32")]
+fn record_auth_failure(
+    writer: &crate::backend_auth::BackendAuthWriter,
+    log: &EventLogWriter,
+    backend_pid: &str,
+    detail: String,
+) {
+    let msg = format!("cannot read backend authorizations — {}", detail);
+    log.log(format!("✗ auth-refresh {} → {}", backend_pid, msg));
+    writer.record(&crate::backend_auth::BackendAuthObservation::failed(
+        backend_pid,
+        msg,
+    ));
 }
 
 /// Compose the always-on status-bar summary (`N windows · M peers · Saved`).
