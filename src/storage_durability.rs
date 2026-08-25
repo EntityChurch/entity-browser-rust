@@ -133,34 +133,21 @@ pub fn show_storage_banner(status: BootStorageStatus, in_tauri: bool) {
     if in_tauri {
         return;
     }
-    let (msg, bg, border) = match status {
+    let (key, bg, border) = match status {
         BootStorageStatus::DurableWorker => return,
         // Durable on a normal reload (IDB journal) — no "not saved" banner,
         // same as Worker mode. The tiny abrupt-kill window is covered by
         // checkpoint-flush on identity ops.
         BootStorageStatus::DurableDirectIdb => return,
-        BootStorageStatus::EphemeralDirect => (
-            "Direct mode: your entity tree lives in memory only and is lost on \
-             reload (your identity is preserved).",
-            "#3a2e10",
-            "#9a7d22",
-        ),
-        BootStorageStatus::DowngradedToDirect => (
-            "Storage unavailable: background (Worker) storage failed to start, so \
-             your entity tree won't be saved this session and any previously saved \
-             tree isn't loaded. Try reloading.",
-            "#4a1e1e",
-            "#a23a3a",
-        ),
-        BootStorageStatus::SecondaryTabEphemeral => (
-            "This app is already open in another tab, which owns your saved data. \
-             Changes in THIS tab are not being saved. Close the other tab and \
-             reload here to edit your saved tree.",
-            "#3a2e10",
-            "#9a7d22",
-        ),
+        BootStorageStatus::EphemeralDirect => ("durability.ephemeral_direct", "#3a2e10", "#9a7d22"),
+        BootStorageStatus::DowngradedToDirect => {
+            ("durability.storage_unavailable", "#4a1e1e", "#a23a3a")
+        }
+        BootStorageStatus::SecondaryTabEphemeral => {
+            ("durability.secondary_tab", "#3a2e10", "#9a7d22")
+        }
     };
-    inject_banner(msg, bg, border);
+    inject_banner(&crate::i18n::t(key, &[]), bg, border);
 }
 
 /// C5d — durable-but-evictable honesty (D16).
@@ -181,10 +168,7 @@ pub fn show_storage_banner(status: BootStorageStatus, in_tauri: bool) {
 /// [`show_storage_banner`] (inline-onclick dismiss, no Rust `Closure`).
 pub fn show_evictable_banner() {
     inject_banner(
-        "Your data is saved on this device, but the browser hasn't granted \
-         persistent storage — it may be cleared if the device runs low on space, \
-         or (on iOS/Safari) after about a week without opening this site. \
-         Bookmark or install to Home Screen to make it permanent.",
+        &crate::i18n::t("durability.evictable", &[]),
         "#2e2a14",
         "#7d6b22",
     );

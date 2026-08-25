@@ -24,6 +24,13 @@ pub struct Theme {
     /// Stable id, persisted in `SettingsState.theme` (e.g. `"dark"`).
     pub name: &'static str,
     /// Human label for the Settings radio (e.g. `"Dark"`).
+    ///
+    /// For a **built-in** this is the canonical English only — the displayed
+    /// name comes from [`display_label`], which resolves `theme.<name>` out of
+    /// the catalog. That is why every built-in's `label:` below carries a bare
+    /// `// i18n-ignore`: the string is const data behind a key, not a render
+    /// path. For a **user** theme it IS the displayed label, typed by the user
+    /// and never translated.
     pub label: &'static str,
     /// CSS `color-scheme` keyword for this theme (`"dark"` / `"light"`).
     /// Emitted into the `:root` block so the browser renders NATIVE form
@@ -50,7 +57,7 @@ pub const STATUS_WARN: &str = "var(--status-warn, #fc9)";
 /// pre-theming hardcoded palette (status family harmonized per module docs).
 pub const DARK: Theme = Theme {
     name: "dark",
-    label: "Dark",
+    label: "Dark", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces --
@@ -112,7 +119,7 @@ pub const DARK: Theme = Theme {
 /// red still reads as error).
 pub const LIGHT: Theme = Theme {
     name: "light",
-    label: "Light",
+    label: "Light", // i18n-ignore
     scheme: "light",
     vars: &[
         // -- surfaces --
@@ -172,7 +179,7 @@ pub const LIGHT: Theme = Theme {
 /// built-in; same token keys as [`DARK`], values shifted warm).
 pub const SEPIA: Theme = Theme {
     name: "sepia",
-    label: "Sepia",
+    label: "Sepia", // i18n-ignore
     scheme: "light",
     vars: &[
         // -- surfaces (warm paper) --
@@ -231,7 +238,7 @@ pub const SEPIA: Theme = Theme {
 /// duplicate if you want the palette without the typeface).
 pub const NEON: Theme = Theme {
     name: "neon",
-    label: "Neon",
+    label: "Neon", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces (near-black, green-cast) --
@@ -311,7 +318,7 @@ pub const NEON: Theme = Theme {
 /// Solarized Dark — Ethan Schoonover's low-contrast palette on base03.
 pub const SOLARIZED_DARK: Theme = Theme {
     name: "solarized-dark",
-    label: "Solarized Dark",
+    label: "Solarized Dark", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces (base03 / base02) --
@@ -368,7 +375,7 @@ pub const SOLARIZED_DARK: Theme = Theme {
 /// Solarized Light — the same accents on base3 (its light twin).
 pub const SOLARIZED_LIGHT: Theme = Theme {
     name: "solarized-light",
-    label: "Solarized Light",
+    label: "Solarized Light", // i18n-ignore
     scheme: "light",
     vars: &[
         // -- surfaces (base3 / base2) --
@@ -425,7 +432,7 @@ pub const SOLARIZED_LIGHT: Theme = Theme {
 /// Nord — Arctic Ice Studio's polar palette (Polar Night + Snow Storm + Frost).
 pub const NORD: Theme = Theme {
     name: "nord",
-    label: "Nord",
+    label: "Nord", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces (Polar Night nord0..3) --
@@ -482,7 +489,7 @@ pub const NORD: Theme = Theme {
 /// Nord Light — Snow Storm surfaces, Polar Night text (community light variant).
 pub const NORD_LIGHT: Theme = Theme {
     name: "nord-light",
-    label: "Nord Light",
+    label: "Nord Light", // i18n-ignore
     scheme: "light",
     vars: &[
         // -- surfaces (Snow Storm) --
@@ -540,7 +547,7 @@ pub const NORD_LIGHT: Theme = Theme {
 /// Dracula — Zeno Rocha's purple-forward dark palette.
 pub const DRACULA: Theme = Theme {
     name: "dracula",
-    label: "Dracula",
+    label: "Dracula", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces (bg / current-line) --
@@ -597,7 +604,7 @@ pub const DRACULA: Theme = Theme {
 /// Gruvbox Dark — Pavel Pertsev's warm retro-groove palette.
 pub const GRUVBOX_DARK: Theme = Theme {
     name: "gruvbox-dark",
-    label: "Gruvbox Dark",
+    label: "Gruvbox Dark", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces (bg0..bg2) --
@@ -654,7 +661,7 @@ pub const GRUVBOX_DARK: Theme = Theme {
 /// Gruvbox Light — the same warm palette inverted onto light backgrounds.
 pub const GRUVBOX_LIGHT: Theme = Theme {
     name: "gruvbox-light",
-    label: "Gruvbox Light",
+    label: "Gruvbox Light", // i18n-ignore
     scheme: "light",
     vars: &[
         // -- surfaces (light bg0..bg2) --
@@ -712,7 +719,7 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
 /// Monokai — Wimer Hazenberg's high-chroma scheme on warm near-black.
 pub const MONOKAI: Theme = Theme {
     name: "monokai",
-    label: "Monokai",
+    label: "Monokai", // i18n-ignore
     scheme: "dark",
     vars: &[
         // -- surfaces (bg / selection) --
@@ -833,21 +840,40 @@ thread_local! {
 /// corrupt that value space).
 pub fn validate_theme_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
-        return Err("theme name is empty".into());
+        return Err(crate::i18n::t("theme.err_name_empty", &[]));
     }
     if name.len() > 40 {
-        return Err("theme name too long (max 40)".into());
+        return Err(crate::i18n::t("theme.err_name_too_long", &[("max", "40")]));
     }
     if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
-        return Err("theme name must be lowercase letters, digits, and dashes".into());
+        return Err(crate::i18n::t("theme.err_name_charset", &[]));
     }
     if name == "site" || name == "system" {
-        return Err(format!("\"{name}\" is a reserved appearance mode"));
+        return Err(crate::i18n::t("theme.err_name_reserved", &[("name", name)]));
     }
     if THEMES.iter().any(|t| t.name == name) {
-        return Err(format!("\"{name}\" is a built-in theme"));
+        return Err(crate::i18n::t("theme.err_name_builtin", &[("name", name)]));
     }
     Ok(())
+}
+
+/// The user-facing name of `theme`.
+///
+/// A built-in resolves through the catalog (`theme.<name>`, dashes →
+/// underscores) so the picker reads in the active language; the descriptive
+/// words are translated while the scheme proper nouns (Nord, Dracula, Gruvbox,
+/// Monokai, Solarized) stay as written — they name a specific published
+/// palette, not a shade.
+///
+/// A **user** theme's label was typed by the user, so it is returned verbatim:
+/// running it through the catalog would miss (rendering a raw key) and
+/// translating it at all would rename something they own.
+pub fn display_label(theme: &Theme) -> String {
+    if THEMES.iter().any(|t| t.name == theme.name) {
+        crate::i18n::t(&format!("theme.{}", theme.name.replace('-', "_")), &[])
+    } else {
+        theme.label.to_string()
+    }
 }
 
 /// Register (or replace, keyed by name) a user theme. Validates the name and
@@ -855,10 +881,10 @@ pub fn validate_theme_name(name: &str) -> Result<(), String> {
 pub fn register_user_theme(spec: UserThemeSpec) -> Result<(), String> {
     validate_theme_name(&spec.name)?;
     if spec.scheme != "dark" && spec.scheme != "light" {
-        return Err(format!("scheme must be \"dark\" or \"light\", got \"{}\"", spec.scheme));
+        return Err(crate::i18n::t("theme.err_scheme", &[("got", &spec.scheme)]));
     }
     if spec.vars.is_empty() {
-        return Err("theme has no token values".into());
+        return Err(crate::i18n::t("theme.err_no_tokens", &[]));
     }
     for (k, v) in &spec.vars {
         if !k.starts_with("--") || v.is_empty() {
@@ -1175,11 +1201,14 @@ pub const SITE_CSS_LS_KEY: &str = "entity_site_theme_css";
 /// override automatically.
 pub fn site_appearance_catalog() -> Vec<(&'static str, String)> {
     let mut v = vec![
-        ("site", "Site's theme".to_string()),
-        ("system", "Match system theme".to_string()),
+        ("site", crate::i18n::t("theme.site_theme", &[])),
+        ("system", crate::i18n::t("theme.match_system", &[])),
     ];
     for t in all_themes() {
-        v.push((t.name, format!("Always {}", t.label)));
+        v.push((
+            t.name,
+            crate::i18n::t("theme.always", &[("theme", &display_label(t))]),
+        ));
     }
     v
 }
@@ -1608,7 +1637,10 @@ mod tests {
         // Dropdown catalogs pick it up.
         assert!(all_themes().iter().any(|t| t.name == "mytheme"));
         let cat = site_appearance_catalog();
-        assert!(cat.iter().any(|(v, l)| *v == "mytheme" && l == "Always My mytheme"));
+        // Compare through `t()` — it bidi-isolates the interpolated label, so a
+        // hand-written "Always My mytheme" would never match.
+        let want = crate::i18n::t("theme.always", &[("theme", "My mytheme")]);
+        assert!(cat.iter().any(|(v, l)| *v == "mytheme" && *l == want));
 
         assert!(unregister_user_theme("mytheme"));
         assert!(registered("mytheme").is_none());
@@ -1698,7 +1730,10 @@ mod tests {
         // Each theme yields an "Always <Label>" strict override keyed by name.
         for t in THEMES {
             let entry = cat.iter().find(|(v, _)| *v == t.name).expect("theme override listed");
-            assert_eq!(entry.1, format!("Always {}", t.label));
+            assert_eq!(
+                entry.1,
+                crate::i18n::t("theme.always", &[("theme", &display_label(t))])
+            );
         }
     }
 }

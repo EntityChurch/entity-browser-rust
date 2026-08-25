@@ -89,11 +89,7 @@ pub fn render(container: &Element, output: &SiteEditorOutput, ctx: &DomCtx) {
 
     let hint = util::create_element("p");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &hint,
-        "Build a site as a tree of folders and pages. Saves write to your \
-         peer's tree; the Site Browser window picks them up automatically.",
-    );
+    util::set_text(&hint, &crate::i18n::t("siteeditor.hint", &[]));
     util::append(&wrapper, &hint);
 
     if let Some(notice) = &output.notice {

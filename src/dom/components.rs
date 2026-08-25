@@ -505,6 +505,35 @@ pub fn empty(msg: &str) -> Element {
     p
 }
 
+/// A `<pre>` output pane holding a single dim message — the empty state of the
+/// scrollback-style dev tools (Event Log, Execute Console, Shell, Path Tap,
+/// Wire Recorder, Content Stream), which render their body as innerHTML.
+pub fn pre_notice(msg: &str) -> Element {
+    let pre = util::create_element("pre");
+    pre.set_attribute("style", theme::PRE_OUTPUT).ok();
+    pre.set_inner_html(&format!(
+        "<span style='color:var(--text-dim, #888)'>{}</span>",
+        util::escape_html(msg)
+    ));
+    pre
+}
+
+/// The "inspect routing failed to attach" warning pane — a loud first line and
+/// a dim line telling the developer where to look. Identical in Path Tap, Wire
+/// Recorder and Content Stream, which is why it lives here rather than being
+/// written out three times.
+pub fn inspect_attach_warning() -> Element {
+    let pre = util::create_element("pre");
+    pre.set_attribute("style", theme::PRE_OUTPUT).ok();
+    pre.set_inner_html(&format!(
+        "<span style='color:var(--status-err, #f66)'>{}</span>\n\
+         <span style='color:var(--text-dim, #888)'>{}</span>",
+        util::escape_html(&crate::i18n::t("inspect.attach_failed", &[])),
+        util::escape_html(&crate::i18n::t("inspect.attach_failed_detail", &[])),
+    ));
+    pre
+}
+
 /// Error state — loud, specific, actionable. Renders in the error color.
 pub fn error(msg: &str) -> Element {
     let p = util::create_element("p");

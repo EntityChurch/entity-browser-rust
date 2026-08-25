@@ -122,9 +122,14 @@ fn render_results(parent: &Element, output: &ChainTraceOutput) {
         pre.set_attribute("style", theme::PRE_OUTPUT).ok();
         let escaped = util::escape_html(&output.chain_id);
         pre.set_inner_html(&format!(
-            "<span style='color:var(--text-dim, #888)'>(no continuation or chain-error marker bound for chain_id <b>{}</b> on peer {})</span>",
-            escaped,
-            util::escape_html(&output.peer_id),
+            "<span style='color:var(--text-dim, #888)'>{}</span>",
+            crate::i18n::t(
+                "chaintrace.no_marker",
+                &[
+                    ("chain", &format!("<b>{escaped}</b>")),
+                    ("peer", &util::escape_html(&output.peer_id)),
+                ],
+            )
         ));
         util::append(parent, &pre);
         return;
@@ -165,7 +170,9 @@ fn render_entries(parent: &Element, entries: &[TraceEntry], is_marker: bool) {
             let reason = if entry.reason_label.is_empty() { "?" } else { &entry.reason_label };
             let kind_color = if kind == "rejected" { "var(--status-err, #f66)" } else { "var(--status-warn, #fc9)" };
             html.push_str(&format!(
-                "<div><span style='color:{}'><b>{}</b></span> · reason=<span style='color:var(--status-warn, #fc9)'>{}</span> · type=<span style='color:var(--status-info, #9cf)'>{}</span></div>\n",
+                // `reason=` / `type=` are protocol field names echoed verbatim
+                // from the chain marker, not UI copy.
+                "<div><span style='color:{}'><b>{}</b></span> · reason=<span style='color:var(--status-warn, #fc9)'>{}</span> · type=<span style='color:var(--status-info, #9cf)'>{}</span></div>\n", // i18n-ignore
                 kind_color,
                 util::escape_html(kind),
                 util::escape_html(reason),
@@ -189,13 +196,15 @@ fn render_entries(parent: &Element, entries: &[TraceEntry], is_marker: bool) {
                 body_escaped,
             ));
         } else if entry.body_available {
-            html.push_str(
-                "<div style='margin:0 0 10px 12px;color:var(--text-dim, #aaa);font-style:italic'>(body redacted per renderer policy)</div>\n",
-            );
+            html.push_str(&format!(
+                "<div style='margin:0 0 10px 12px;color:var(--text-dim, #aaa);font-style:italic'>{}</div>\n",
+                util::escape_html(&crate::i18n::t("chaintrace.body_redacted", &[]))
+            ));
         } else {
-            html.push_str(
-                "<div style='margin:0 0 10px 12px;color:var(--text-dim, #888);font-style:italic'>(body not yet decoded)</div>\n",
-            );
+            html.push_str(&format!(
+                "<div style='margin:0 0 10px 12px;color:var(--text-dim, #888);font-style:italic'>{}</div>\n",
+                util::escape_html(&crate::i18n::t("chaintrace.body_undecoded", &[]))
+            ));
         }
     }
     pre.set_inner_html(&html);

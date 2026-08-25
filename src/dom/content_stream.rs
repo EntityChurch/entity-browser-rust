@@ -1,6 +1,7 @@
 //! Content Stream DOM renderer — pure consumer of
 //! [`ContentStreamOutput`](crate::views::content_stream::output::ContentStreamOutput).
 
+use crate::dom::components;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::views::content_stream::output::{BindingKind, BindingRow, ContentStreamOutput};
@@ -20,11 +21,7 @@ pub fn render(container: &Element, output: &ContentStreamOutput, _ctx: &DomCtx) 
 
     let hint = util::create_element("div");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &hint,
-        "Live binding events (entity writes/removes/snapshots) for this peer \
-         (newest first; ring buffer).",
-    );
+    util::set_text(&hint, &crate::i18n::t("contentstream.hint", &[]));
     util::append(&wrapper, &hint);
 
     let counters = util::create_element("div");
@@ -40,26 +37,16 @@ pub fn render(container: &Element, output: &ContentStreamOutput, _ctx: &DomCtx) 
     util::append(&wrapper, &counters);
 
     if !output.routing_active {
-        let warn = util::create_element("pre");
-        warn.set_attribute("style", theme::PRE_OUTPUT).ok();
-        warn.set_inner_html(
-            "<span style='color:var(--status-err, #f66)'>Inspect routing failed to attach on this peer.</span>\n\
-             <span style='color:var(--text-dim, #888)'>No facts will arrive. Check tracing logs for the \
-             install_inspect_sink error.</span>",
-        );
-        util::append(&wrapper, &warn);
+        util::append(&wrapper, &components::inspect_attach_warning());
         util::append(container, &wrapper);
         return;
     }
 
     if output.rows.is_empty() {
-        let pre = util::create_element("pre");
-        pre.set_attribute("style", theme::PRE_OUTPUT).ok();
-        pre.set_inner_html(
-            "<span style='color:var(--text-dim, #888)'>(no binding events yet — trigger a put / remove / \
-             snapshot on this peer)</span>",
+        util::append(
+            &wrapper,
+            &components::pre_notice(&crate::i18n::t("contentstream.empty", &[])),
         );
-        util::append(&wrapper, &pre);
         util::append(container, &wrapper);
         return;
     }

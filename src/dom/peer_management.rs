@@ -5,7 +5,6 @@ use wasm_bindgen::JsCast;
 
 use crate::action::Action;
 use crate::dom::components;
-use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::peer_display::PeerRole;
 use crate::views::peer_management::output::{

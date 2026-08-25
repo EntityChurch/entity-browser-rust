@@ -49,16 +49,33 @@ fn render_bound_header(parent: &Element, output: &PeerConnectionsOutput) {
         &format!("margin:0 0 {} 0;font-size:12px;color:var(--text-dim,#888)", theme::SP_3),
     )
     .ok();
-    let mut html = format!(
-        "This peer <code>{}</code> · {}",
-        util::escape_html(&output.bound_peer.short_pid),
-        util::escape_html(&output.bound_peer.kind.to_string()),
+    // The `<code>` wrapper travels inside the slot value: `t()` bidi-isolates
+    // each arg, so the peer id stays LTR inside an RTL sentence, and the locale
+    // keeps control of where the id and the kind sit.
+    let mut html = crate::i18n::t(
+        "peerconn.this_peer",
+        &[
+            (
+                "pid",
+                &format!("<code>{}</code>", util::escape_html(&output.bound_peer.short_pid)),
+            ),
+            (
+                "kind",
+                &util::escape_html(&output.bound_peer.kind.to_string()),
+            ),
+        ],
     );
     if output.bound_peer.kind == PeerDisplay::Primary {
         if let Some(addr) = &output.bound_peer.ws_listen_addr {
-            html.push_str(&format!(
-                " · listening <code style='color:var(--status-ok,#4c4)'>{}</code>",
-                util::escape_html(addr)
+            html.push_str(&crate::i18n::t(
+                "peerconn.listening",
+                &[(
+                    "addr",
+                    &format!(
+                        "<code style='color:var(--status-ok,#4c4)'>{}</code>",
+                        util::escape_html(addr)
+                    ),
+                )],
             ));
         }
     }

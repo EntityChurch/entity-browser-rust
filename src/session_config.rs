@@ -71,7 +71,8 @@ pub const DEMO_SITE_ID: &str = "demo";
 // runtime doesn't call it directly anymore (the old `Profile::Site` preset did),
 // so it reads as dead on wasm32 — keep it as the canonical name, don't inline it.
 #[allow(dead_code)]
-pub const SITE_BROWSER_WINDOW: &str = "Site Browser";
+// identity key: a WindowType name, displayed via `window.<slug>`
+pub const SITE_BROWSER_WINDOW: &str = "Site Browser"; // i18n-ignore
 
 /// Which surface boot lands in (reframe §4-B).
 ///
@@ -452,6 +453,12 @@ pub fn boot_default() -> SessionConfig {
 /// §10 items 1a + 1b). Pure decision shared by the hard action guard
 /// (`CreatePeerWithMode`) and the UI gate, so both agree.
 ///
+/// Returns an **i18n key**, not display text: the refusal is shown to the user
+/// as a banner (`show_action_refused_banner`), so the caller resolves it with
+/// `t()` at the point of display. Keeping the key `&'static str` also lets the
+/// tracing log and the unit tests assert on a stable identifier rather than on
+/// prose that a copy-edit would break.
+///
 /// - `creation_enabled` — the **deployment capability** flag (1b). Checked
 ///   first because it's the deployment's *intent*: a kiosk reports "disabled
 ///   here" regardless of this tab's durability.
@@ -463,13 +470,10 @@ pub fn boot_default() -> SessionConfig {
 ///   evaporate on reload.
 pub fn peer_create_refusal_reason(can_persist: bool, creation_enabled: bool) -> Option<&'static str> {
     if !creation_enabled {
-        return Some("peer creation is disabled in this deployment");
+        return Some("peercreate.disabled");
     }
     if !can_persist {
-        return Some(
-            "this tab can't save — another tab owns your storage, or storage is \
-             unavailable. Close the other tab and reload to create peers here.",
-        );
+        return Some("peercreate.cannot_save");
     }
     None
 }
@@ -949,17 +953,23 @@ mod tests {
         // Capability off → "disabled in this deployment", regardless of durability.
         assert_eq!(
             peer_create_refusal_reason(true, false),
-            Some("peer creation is disabled in this deployment")
+            Some("peercreate.disabled")
         );
         assert_eq!(
             peer_create_refusal_reason(false, false),
-            Some("peer creation is disabled in this deployment"),
+            Some("peercreate.disabled"),
             "capability is reported first (deployment intent)"
         );
         // Enabled but not durable → the durability message.
-        assert!(peer_create_refusal_reason(false, true)
-            .unwrap()
-            .contains("can't save"));
+        assert_eq!(
+            peer_create_refusal_reason(false, true),
+            Some("peercreate.cannot_save")
+        );
+        // The keys must resolve — a refusal that renders as a raw key is the
+        // silent-failure D13 forbids.
+        for key in ["peercreate.disabled", "peercreate.cannot_save"] {
+            assert_ne!(crate::i18n::t(key, &[]), key, "{key} missing from EN");
+        }
     }
 
     #[test]

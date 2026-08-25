@@ -44,11 +44,7 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
 
     let hint = util::create_element("p");
     hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(
-        &hint,
-        "Read-only. The content store is append-only — overwriting a path \
-         leaves the old value behind; it isn't reclaimed until GC (GUIDE-GC).",
-    );
+    util::set_text(&hint, &crate::i18n::t("storage.append_only_hint", &[]));
     util::append(&wrapper, &hint);
 
     // Origin-wide disk estimate.

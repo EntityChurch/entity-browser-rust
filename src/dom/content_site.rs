@@ -462,7 +462,10 @@ fn render_more_dropdown(bar: &Element, overflow: &[&NavLink], ctx: &DomCtx, host
 
     let btn = util::create_element("button");
     util::set_attr(&btn, "type", "button");
-    util::set_text(&btn, &format!("More \u{25be} ({})", overflow.len()));
+    util::set_text(
+        &btn,
+        &crate::i18n::t("contentsite.more", &[("n", &overflow.len().to_string())]),
+    );
     util::set_attr(
         &btn,
         "style",
