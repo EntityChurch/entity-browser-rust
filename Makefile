@@ -422,7 +422,7 @@ federation-vectors:
 # a missing key renders the RAW KEY to the user, and keys are strings, so
 # nothing else catches a rename that misses a call site).
 lint: image
-	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py)
+	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image
@@ -1132,7 +1132,7 @@ tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
@@ -1370,6 +1370,27 @@ PLAN ?=
 # which is the shipped default: a catch-all registry chosen for everybody is how
 # two app tiers ship two, so a pin is always a per-deployment decision.
 REGISTRY_PIN ?=
+# An out-of-set `site:`/`entity://` link — one naming a target OUTSIDE this
+# export set — is a publish FAILURE. Such a link is resolved against THIS peer
+# and ships a 404 (measured on production; the projection href carries no host
+# component, so a cross-DOMAIN target cannot be expressed at all today — author
+# it as an absolute https:// URL).
+#
+# **This was a warning until 2026-08-23, and the flip was the concession's
+# stated expiry, not a tightening.** It warned for one reason — refusing would
+# have broken the per-domain builds shipping at that moment, over seven authored
+# links in content this repo does not own. `entity-core-papers` swept them
+# (`ef3f662`); verified here across all five domains of the corpus (0 remaining)
+# and by publishing all four domains under the refusal (412 pages, 0 dangling).
+#
+# ALLOW_OUT_OF_SET_LINKS=1 downgrades it to a warning — for a deliberately
+# partial set mid-migration. STRICT_LINKS=1 is still accepted and is now a no-op
+# (it asked for the default), so an existing caller keeps working.
+# Honoured by `site`, `site-dist` (inherited), `site-serve` and `tauri-bundle`;
+# `site-bare` is a single site, so there is no set to be outside of.
+# Background: docs/plans/DESIGN-CROSS-DOMAIN-SITE-LINKS.md
+ALLOW_OUT_OF_SET_LINKS ?=
+STRICT_LINKS ?=
 # VERIFY=1 — walk an ALREADY-published OUT dir and prove the two-hop chain
 # resolves: every .bin pointer cracks, names a blob that exists, and whose bytes
 # hash to the address it claims. Runs the SAME check the browser runs per fetch,
@@ -1386,7 +1407,7 @@ site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 
 # ============================================================================
@@ -1549,7 +1570,7 @@ site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
 	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="

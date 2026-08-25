@@ -250,7 +250,7 @@ be short-TTL so a redeploy is picked up.
 SPA boot → page fetch (http_poll) → render → **image two-hop → `data:` URL paints**.
 All three image origins (curated SVG, compute `::embed` PNG, authored
 content-addressed PNG) verified in a real browser, zero leaked srcs. Direct arm +
-remote/http_poll arm both exercised. Permanent guard: demo-SVG e2e pin (`d10dab0`).
+remote/http_poll arm both exercised. Permanent guard: the demo-SVG assertion in `tests/e2e_worker.rs` Phase 19-img.
 
 **Proven live + pinned:** **intra-domain cross-site links** (§10
 below). A `site:{site_id}/{page}` body link projects to a sibling site under the
