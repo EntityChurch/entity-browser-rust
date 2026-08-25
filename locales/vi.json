@@ -323,7 +323,52 @@
     "other": "{actor} — {n} khả năng đã quan sát"
   },
 
+  "storage.refresh": "Làm mới dung lượng đĩa",
+  "storage.no_peers": "(không có điểm ngang hàng được lưu trữ)",
+  "storage.used_quota": "Đã dùng / hạn mức",
+  "storage.persisted": "Được lưu giữ",
+  "storage.persisted_yes": "có (được bảo vệ khỏi bị xóa)",
+  "storage.persisted_no": "không (nỗ lực tối đa / có thể bị xóa)",
+  "storage.persisted_unknown": "không rõ",
+  "storage.on_disk_sqlite": "Trên đĩa (SQLite)",
+  "storage.content_blobs": "Blob của kho nội dung",
+  "storage.live_paths": "Đường dẫn cây đang hoạt động",
+  "storage.backend_stopped": "(backend đã dừng — số đếm trực tiếp không khả dụng)",
+  "storage.orphaned_blobs": "Blob bị thay thế / mồ côi (xấp xỉ)",
+  "storage.save_state_paths": "Đường dẫn trạng thái đã lưu",
+  "storage.no_breakdown": "(không thể phân tích theo tiền tố trên Worker/OPFS)",
+
+  "sysoverview.native_peer": "Điểm ngang hàng gốc",
+  "sysoverview.listen": "Lắng nghe",
+  "sysoverview.not_listening": "(không lắng nghe)",
+  "sysoverview.link": "Liên kết (S↔B)",
+  "sysoverview.share_tree": "Chia sẻ (cây)",
+  "sysoverview.share_tree_hint": "Tệp mà thiết bị đã kết nối có thể duyệt và tải về, hiển thị dưới cây của điểm ngang hàng này",
+  "sysoverview.share_disk": "Chia sẻ (đĩa)",
+  "sysoverview.no_backend": "Chưa cấp phát backend hệ thống.",
+  "sysoverview.loading_status": "Đang tải trạng thái…",
+  "sysoverview.waiting_link": "Đang chờ liên kết backend — thiết bị xuất hiện sau khi kết nối.",
+  "sysoverview.checking_devices": "Đang kiểm tra thiết bị đã kết nối…",
+  "sysoverview.devices_error": "Không thể đọc thiết bị của backend — liên kết trình quản lý có thể chưa sẵn sàng.",
+  "sysoverview.no_devices": "Không có thiết bị nào kết nối với backend này.",
+  "sysoverview.col_grant": "Cấp quyền",
+
   "peer.count": {
     "other": "{n} điểm ngang hàng"
-  }
+  },
+
+  "window.programs": "Chương trình",
+  "programs.subtitle": "Chương trình tính toán di động — viết một lần (workbench-go), gắn từ bộ mô tả của chúng, được máy tính toán của peer này đánh giá.",
+  "programs.install": "Cài đặt",
+  "programs.start": "Bắt đầu",
+  "programs.stop": "Dừng",
+  "programs.restart": "Khởi động lại",
+  "programs.status_absent": "chưa cài đặt",
+  "programs.status_refused": "không thể gắn",
+  "programs.status_materializing": "đang cài {done}/{total}…",
+  "programs.status_stopped": "đã dừng",
+  "programs.status_running": "đang chạy",
+  "programs.status_faulted": "lỗi",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "đang chờ khung hình đầu tiên"
 }

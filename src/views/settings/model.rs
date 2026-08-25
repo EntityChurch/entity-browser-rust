@@ -759,9 +759,11 @@ mod tests {
         let s = model.render_output(&pm).session;
         assert_eq!(s.boot_kind, "window");
         assert!(!s.target_disabled);
-        // On the system peer ALL 23 window types are valid targets, and exactly
+        // On the system peer ALL window types are valid targets (derived from
+        // the registry so a new window can't silently break this), and exactly
         // one is pre-selected (the default the mutator picked).
-        assert_eq!(s.targets.len(), 23, "system peer hosts every window type");
+        let roster = crate::window_registry::standard_window_types().len();
+        assert_eq!(s.targets.len(), roster, "system peer hosts every window type");
         assert_eq!(s.targets.iter().filter(|t| t.selected).count(), 1);
     }
 

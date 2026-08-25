@@ -31,13 +31,13 @@ const MAX_SEGMENT_LEN: usize = 64;
 pub fn validate_site_id(site_id: &str) -> Result<(), String> {
     let s = site_id.trim();
     if s.is_empty() {
-        return Err("Enter a site id.".into());
+        return Err(crate::i18n::t("siteeditor.err_enter_site_id", &[]));
     }
     if s.len() > MAX_SEGMENT_LEN {
-        return Err(format!("Site id is too long (max {MAX_SEGMENT_LEN})."));
+        return Err(crate::i18n::t("siteeditor.err_site_id_long", &[("max", &MAX_SEGMENT_LEN.to_string())]));
     }
     if !s.chars().all(is_slug_char) {
-        return Err("Site id may use only letters, digits, '-' and '_'.".into());
+        return Err(crate::i18n::t("siteeditor.err_site_id_chars", &[]));
     }
     Ok(())
 }
@@ -48,23 +48,23 @@ pub fn validate_site_id(site_id: &str) -> Result<(), String> {
 pub fn validate_page_slug(slug: &str) -> Result<(), String> {
     let s = slug.trim();
     if s.is_empty() {
-        return Err("Enter a page name.".into());
+        return Err(crate::i18n::t("siteeditor.err_enter_page_name", &[]));
     }
     if s.starts_with('/') || s.ends_with('/') {
-        return Err("Page name must not start or end with '/'.".into());
+        return Err(crate::i18n::t("siteeditor.err_page_slashes", &[]));
     }
     for seg in s.split('/') {
         if seg.is_empty() {
-            return Err("Page name has an empty path segment ('//').".into());
+            return Err(crate::i18n::t("siteeditor.err_page_empty_seg", &[]));
         }
         if seg == "." || seg == ".." {
-            return Err("Page name must not contain '.' or '..' segments.".into());
+            return Err(crate::i18n::t("siteeditor.err_page_dots", &[]));
         }
         if seg.len() > MAX_SEGMENT_LEN {
-            return Err(format!("A page-name segment is too long (max {MAX_SEGMENT_LEN})."));
+            return Err(crate::i18n::t("siteeditor.err_page_seg_long", &[("max", &MAX_SEGMENT_LEN.to_string())]));
         }
         if !seg.chars().all(is_slug_char) {
-            return Err("Page name may use only letters, digits, '-', '_' and '/'.".into());
+            return Err(crate::i18n::t("siteeditor.err_page_chars", &[]));
         }
     }
     Ok(())
@@ -88,7 +88,7 @@ pub enum SiteHealth {
 pub fn site_health(peers: &Peers, peer_id: &str, site_id: &str) -> SiteHealth {
     let manifest = match peers.get_entity(peer_id, &paths::manifest_path(peer_id, site_id)) {
         Some(e) => SiteManifest::from_entity(&e),
-        None => return SiteHealth::NotRenderable("no manifest for this site".into()),
+        None => return SiteHealth::NotRenderable(crate::i18n::t("siteeditor.no_manifest", &[])),
     };
     let root = manifest.root().to_string();
     if peers.get_entity(peer_id, &paths::page_path(peer_id, site_id, &root)).is_some() {
@@ -98,7 +98,7 @@ pub fn site_health(peers: &Peers, peer_id: &str, site_id: &str) -> SiteHealth {
     if !discovery::list_child_pages(peers, peer_id, site_id, &format!("{root}/")).is_empty() {
         return SiteHealth::Renderable;
     }
-    SiteHealth::NotRenderable(format!("no '{root}' page — create it to make the site render"))
+    SiteHealth::NotRenderable(crate::i18n::t("siteeditor.no_root_page", &[("root", &root)]))
 }
 
 #[cfg(test)]

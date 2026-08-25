@@ -326,8 +326,53 @@
     "other": "{actor} — {n} megfigyelt képesség"
   },
 
+  "storage.refresh": "Lemezhasználat frissítése",
+  "storage.no_peers": "(nincs üzemeltetett peer)",
+  "storage.used_quota": "Használt / kvóta",
+  "storage.persisted": "Megőrizve",
+  "storage.persisted_yes": "igen (kilakoltatás ellen védett)",
+  "storage.persisted_no": "nem (legjobb szándék / eltávolítható)",
+  "storage.persisted_unknown": "ismeretlen",
+  "storage.on_disk_sqlite": "Lemezen (SQLite)",
+  "storage.content_blobs": "Tartalomtár blobok",
+  "storage.live_paths": "Aktív fa-útvonalak",
+  "storage.backend_stopped": "(backend leállítva — élő számlálók nem elérhetők)",
+  "storage.orphaned_blobs": "Felváltott / árva blobok (kb.)",
+  "storage.save_state_paths": "Mentési állapot útvonalak",
+  "storage.no_breakdown": "(előtag szerinti bontás nem elérhető Worker/OPFS esetén)",
+
+  "sysoverview.native_peer": "Natív peer",
+  "sysoverview.listen": "Figyelés",
+  "sysoverview.not_listening": "(nem figyel)",
+  "sysoverview.link": "Kapcsolat (S↔B)",
+  "sysoverview.share_tree": "Megosztás (fa)",
+  "sysoverview.share_tree_hint": "Fájlok, amelyeket egy csatlakoztatott eszköz böngészhet és letölthet, e peer fája alatt közzétéve",
+  "sysoverview.share_disk": "Megosztás (lemez)",
+  "sysoverview.no_backend": "Nincs rendszer-backend kiépítve.",
+  "sysoverview.loading_status": "Állapot betöltése…",
+  "sysoverview.waiting_link": "Várakozás a backend kapcsolatra — az eszközök csatlakozás után jelennek meg.",
+  "sysoverview.checking_devices": "Csatlakoztatott eszközök ellenőrzése…",
+  "sysoverview.devices_error": "Nem sikerült beolvasni a backend eszközeit — a kezelő kapcsolata még nem biztos, hogy készen áll.",
+  "sysoverview.no_devices": "Nincs eszköz csatlakoztatva ehhez a backendhez.",
+  "sysoverview.col_grant": "Engedély",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Programok",
+  "programs.subtitle": "Átvihető számítási programok — egyszer megírva (workbench-go), a leíróikból csatolva, e peer számítási motorja értékeli ki őket.",
+  "programs.install": "Telepítés",
+  "programs.start": "Indítás",
+  "programs.stop": "Leállítás",
+  "programs.restart": "Újraindítás",
+  "programs.status_absent": "nincs telepítve",
+  "programs.status_refused": "nem csatolható",
+  "programs.status_materializing": "telepítés {done}/{total}…",
+  "programs.status_stopped": "leállítva",
+  "programs.status_running": "fut",
+  "programs.status_faulted": "hibás",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "várakozás az első képkockára"
 }

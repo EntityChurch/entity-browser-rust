@@ -323,7 +323,52 @@
     "other": "{actor} — สังเกตเห็น {n} ความสามารถ"
   },
 
+  "storage.refresh": "รีเฟรชการใช้ดิสก์",
+  "storage.no_peers": "(ไม่มีเพียร์ที่โฮสต์)",
+  "storage.used_quota": "ใช้ไป / โควตา",
+  "storage.persisted": "คงอยู่",
+  "storage.persisted_yes": "ใช่ (ป้องกันการลบ)",
+  "storage.persisted_no": "ไม่ (ทำเท่าที่ได้ / ลบได้)",
+  "storage.persisted_unknown": "ไม่ทราบ",
+  "storage.on_disk_sqlite": "บนดิสก์ (SQLite)",
+  "storage.content_blobs": "blob ของที่เก็บเนื้อหา",
+  "storage.live_paths": "เส้นทางแผนผังที่ใช้งาน",
+  "storage.backend_stopped": "(แบ็กเอนด์หยุด — จำนวนแบบสดไม่พร้อมใช้งาน)",
+  "storage.orphaned_blobs": "blob ที่ถูกแทนที่ / กำพร้า (โดยประมาณ)",
+  "storage.save_state_paths": "เส้นทางสถานะที่บันทึก",
+  "storage.no_breakdown": "(ไม่สามารถแยกตามคำนำหน้าบน Worker/OPFS)",
+
+  "sysoverview.native_peer": "เพียร์เนทีฟ",
+  "sysoverview.listen": "รับฟัง",
+  "sysoverview.not_listening": "(ไม่รับฟัง)",
+  "sysoverview.link": "ลิงก์ (S↔B)",
+  "sysoverview.share_tree": "แชร์ (แผนผัง)",
+  "sysoverview.share_tree_hint": "ไฟล์ที่อุปกรณ์ที่เชื่อมต่อสามารถเรียกดูและดึงได้ เปิดเผยภายใต้แผนผังของเพียร์นี้",
+  "sysoverview.share_disk": "แชร์ (ดิสก์)",
+  "sysoverview.no_backend": "ยังไม่ได้จัดเตรียมแบ็กเอนด์ระบบ",
+  "sysoverview.loading_status": "กำลังโหลดสถานะ…",
+  "sysoverview.waiting_link": "กำลังรอลิงก์แบ็กเอนด์ — อุปกรณ์จะปรากฏเมื่อเชื่อมต่อแล้ว",
+  "sysoverview.checking_devices": "กำลังตรวจสอบอุปกรณ์ที่เชื่อมต่อ…",
+  "sysoverview.devices_error": "ไม่สามารถอ่านอุปกรณ์ของแบ็กเอนด์ — ลิงก์ตัวจัดการอาจยังไม่พร้อม",
+  "sysoverview.no_devices": "ไม่มีอุปกรณ์เชื่อมต่อกับแบ็กเอนด์นี้",
+  "sysoverview.col_grant": "การให้สิทธิ์",
+
   "peer.count": {
     "other": "{n} เพียร์"
-  }
+  },
+
+  "window.programs": "โปรแกรม",
+  "programs.subtitle": "โปรแกรมประมวลผลแบบพกพา — เขียนครั้งเดียว (workbench-go) เมานต์จากตัวบรรยาย และประเมินโดยเอนจินประมวลผลของเพียร์นี้",
+  "programs.install": "ติดตั้ง",
+  "programs.start": "เริ่ม",
+  "programs.stop": "หยุด",
+  "programs.restart": "เริ่มใหม่",
+  "programs.status_absent": "ยังไม่ได้ติดตั้ง",
+  "programs.status_refused": "เมานต์ไม่ได้",
+  "programs.status_materializing": "กำลังติดตั้ง {done}/{total}…",
+  "programs.status_stopped": "หยุดแล้ว",
+  "programs.status_running": "กำลังทำงาน",
+  "programs.status_faulted": "ขัดข้อง",
+  "programs.status_line": "{status} · ติ๊ก {ticks} · {rate}/วินาที",
+  "programs.display_waiting": "กำลังรอเฟรมแรก"
 }

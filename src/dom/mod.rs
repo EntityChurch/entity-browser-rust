@@ -19,6 +19,7 @@ pub mod key_manager;
 pub mod knowledge_base;
 pub mod peer_connections;
 pub mod peer_management;
+pub mod programs;
 pub mod query_console;
 pub mod scanner;
 pub mod settings;

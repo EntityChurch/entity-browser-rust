@@ -51,8 +51,8 @@ impl SystemOverviewWindow {
             // reference still resolves via `window::canonical_window_type` (the
             // back-compat alias). Per-window state keys on the numeric id, not
             // this, so no state was stranded. See TERMINOLOGY-AND-WINDOWS.md.
-            name: "System Overview",
-            description: "Govern the System peer and System backend: status, authorizations, share, live logs",
+            name: "System Overview", // i18n-ignore — identity key; display via window.system_overview
+            description: "Govern the System peer and System backend: status, authorizations, share, live logs", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |id, _peer_id, pm| {
                 let sys_pid = pm.system_peer_id().to_string();
@@ -116,12 +116,12 @@ impl SystemOverviewWindow {
 
 impl WindowView for SystemOverviewWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("System Overview")
+        crate::i18n::window_title("System Overview") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
         // Durable key — must match `window_type().name`. See the note there.
-        "System Overview"
+        "System Overview" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

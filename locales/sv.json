@@ -326,8 +326,53 @@
     "other": "{actor} — {n} observerade förmågor"
   },
 
+  "storage.refresh": "Uppdatera diskanvändning",
+  "storage.no_peers": "(inga hostade peers)",
+  "storage.used_quota": "Använt / kvot",
+  "storage.persisted": "Bevarad",
+  "storage.persisted_yes": "ja (skyddad mot vräkning)",
+  "storage.persisted_no": "nej (best-effort / vräkbar)",
+  "storage.persisted_unknown": "okänt",
+  "storage.on_disk_sqlite": "På disk (SQLite)",
+  "storage.content_blobs": "Innehållslagrets blobar",
+  "storage.live_paths": "Aktiva trädsökvägar",
+  "storage.backend_stopped": "(backend stoppad — livräkningar otillgängliga)",
+  "storage.orphaned_blobs": "Ersatta / föräldralösa blobar (ca)",
+  "storage.save_state_paths": "Sparat tillstånd-sökvägar",
+  "storage.no_breakdown": "(uppdelning per prefix ej tillgänglig på Worker/OPFS)",
+
+  "sysoverview.native_peer": "Nativ peer",
+  "sysoverview.listen": "Lyssnar",
+  "sysoverview.not_listening": "(lyssnar inte)",
+  "sysoverview.link": "Länk (S↔B)",
+  "sysoverview.share_tree": "Dela (träd)",
+  "sysoverview.share_tree_hint": "Filer som en ansluten enhet kan bläddra i och hämta, exponerade under den här peerens träd",
+  "sysoverview.share_disk": "Dela (disk)",
+  "sysoverview.no_backend": "Ingen systembackend tillhandahållen.",
+  "sysoverview.loading_status": "Läser in status…",
+  "sysoverview.waiting_link": "Väntar på backend-länken — enheter visas när de anslutits.",
+  "sysoverview.checking_devices": "Kontrollerar anslutna enheter…",
+  "sysoverview.devices_error": "Kunde inte läsa backendens enheter — hanterarlänken kanske inte är klar ännu.",
+  "sysoverview.no_devices": "Inga enheter anslutna till denna backend.",
+  "sysoverview.col_grant": "Beviljande",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"
-  }
+  },
+
+  "window.programs": "Program",
+  "programs.subtitle": "Överförbara beräkningsprogram — skrivna en gång (workbench-go), monterade från sina deskriptorer, utvärderade av denna peers beräkningsmotor.",
+  "programs.install": "Installera",
+  "programs.start": "Starta",
+  "programs.stop": "Stoppa",
+  "programs.restart": "Starta om",
+  "programs.status_absent": "inte installerat",
+  "programs.status_refused": "kan inte monteras",
+  "programs.status_materializing": "installerar {done}/{total}…",
+  "programs.status_stopped": "stoppat",
+  "programs.status_running": "körs",
+  "programs.status_faulted": "felade",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "väntar på första bildrutan"
 }

@@ -38,8 +38,8 @@ impl ThemeEditorWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Theme Editor",
-            description: "Create and edit user-defined color themes",
+            name: "Theme Editor", // i18n-ignore — identity key; display via window.theme_editor
+            description: "Create and edit user-defined color themes", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::System,
             create: |id, peer_id, pm| {
                 let mut window = ThemeEditorWindow::new(id, peer_id.to_string());
@@ -73,11 +73,11 @@ impl ThemeEditorWindow {
 
 impl WindowView for ThemeEditorWindow {
     fn title(&self) -> String {
-        crate::i18n::window_title("Theme Editor")
+        crate::i18n::window_title("Theme Editor") // i18n-ignore — lookup key, resolves via catalog
     }
 
     fn type_name(&self) -> &'static str {
-        "Theme Editor"
+        "Theme Editor" // i18n-ignore — stable type identifier, not UI text
     }
 
     fn peer_id(&self) -> &str {

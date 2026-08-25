@@ -326,8 +326,53 @@
     "other": "{actor} — {n} gözlemlenen yetenek"
   },
 
+  "storage.refresh": "Disk kullanımını yenile",
+  "storage.no_peers": "(barındırılan peer yok)",
+  "storage.used_quota": "Kullanılan / kota",
+  "storage.persisted": "Kalıcı",
+  "storage.persisted_yes": "evet (tahliyeye karşı korumalı)",
+  "storage.persisted_no": "hayır (en iyi çaba / tahliye edilebilir)",
+  "storage.persisted_unknown": "bilinmiyor",
+  "storage.on_disk_sqlite": "Diskte (SQLite)",
+  "storage.content_blobs": "İçerik deposu blob'ları",
+  "storage.live_paths": "Etkin ağaç yolları",
+  "storage.backend_stopped": "(backend durduruldu — canlı sayımlar kullanılamıyor)",
+  "storage.orphaned_blobs": "Değiştirilen / sahipsiz blob'lar (yaklaşık)",
+  "storage.save_state_paths": "Kayıt durumu yolları",
+  "storage.no_breakdown": "(Worker/OPFS'te önek bazında döküm kullanılamıyor)",
+
+  "sysoverview.native_peer": "Yerel peer",
+  "sysoverview.listen": "Dinleme",
+  "sysoverview.not_listening": "(dinlemiyor)",
+  "sysoverview.link": "Bağlantı (S↔B)",
+  "sysoverview.share_tree": "Paylaş (ağaç)",
+  "sysoverview.share_tree_hint": "Bağlı bir cihazın göz atıp çekebileceği dosyalar, bu peer'in ağacı altında sunulur",
+  "sysoverview.share_disk": "Paylaş (disk)",
+  "sysoverview.no_backend": "Sistem arka ucu sağlanmadı.",
+  "sysoverview.loading_status": "Durum yükleniyor…",
+  "sysoverview.waiting_link": "Arka uç bağlantısı bekleniyor — cihazlar bağlandıklarında görünür.",
+  "sysoverview.checking_devices": "Bağlı cihazlar denetleniyor…",
+  "sysoverview.devices_error": "Arka ucun cihazları okunamadı — yönetici bağlantısı henüz hazır olmayabilir.",
+  "sysoverview.no_devices": "Bu arka uca bağlı cihaz yok.",
+  "sysoverview.col_grant": "İzin",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"
-  }
+  },
+
+  "window.programs": "Programlar",
+  "programs.subtitle": "Taşınabilir hesaplama programları — bir kez yazılır (workbench-go), tanımlayıcılarından bağlanır, bu eşin hesaplama motorunca değerlendirilir.",
+  "programs.install": "Kur",
+  "programs.start": "Başlat",
+  "programs.stop": "Durdur",
+  "programs.restart": "Yeniden başlat",
+  "programs.status_absent": "kurulu değil",
+  "programs.status_refused": "bağlanamıyor",
+  "programs.status_materializing": "kuruluyor {done}/{total}…",
+  "programs.status_stopped": "durduruldu",
+  "programs.status_running": "çalışıyor",
+  "programs.status_faulted": "hata verdi",
+  "programs.status_line": "{status} · tik {ticks} · {rate}/s",
+  "programs.display_waiting": "ilk kare bekleniyor"
 }

@@ -326,8 +326,53 @@
     "other": "{actor} — {n} قابلیت مشاهده‌شده"
   },
 
+  "storage.refresh": "به‌روزرسانی مصرف دیسک",
+  "storage.no_peers": "(هیچ همتای میزبانی‌شده‌ای نیست)",
+  "storage.used_quota": "استفاده‌شده / سهمیه",
+  "storage.persisted": "ماندگار",
+  "storage.persisted_yes": "بله (محافظت‌شده در برابر حذف)",
+  "storage.persisted_no": "خیر (بهترین تلاش / قابل حذف)",
+  "storage.persisted_unknown": "نامشخص",
+  "storage.on_disk_sqlite": "روی دیسک (SQLite)",
+  "storage.content_blobs": "blobهای فروشگاه محتوا",
+  "storage.live_paths": "مسیرهای فعال درخت",
+  "storage.backend_stopped": "(بک‌اند متوقف شد — شمارش‌های زنده در دسترس نیست)",
+  "storage.orphaned_blobs": "blobهای جایگزین‌شده / یتیم (تقریبی)",
+  "storage.save_state_paths": "مسیرهای وضعیت ذخیره",
+  "storage.no_breakdown": "(تفکیک بر اساس پیشوند روی Worker/OPFS در دسترس نیست)",
+
+  "sysoverview.native_peer": "همتای بومی",
+  "sysoverview.listen": "گوش‌دادن",
+  "sysoverview.not_listening": "(گوش نمی‌دهد)",
+  "sysoverview.link": "پیوند (S↔B)",
+  "sysoverview.share_tree": "اشتراک (درخت)",
+  "sysoverview.share_tree_hint": "فایل‌هایی که یک دستگاه متصل می‌تواند مرور و دریافت کند، زیر درخت این همتا نمایان می‌شوند",
+  "sysoverview.share_disk": "اشتراک (دیسک)",
+  "sysoverview.no_backend": "هیچ بک‌اند سیستمی فراهم نشده است.",
+  "sysoverview.loading_status": "در حال بارگذاری وضعیت…",
+  "sysoverview.waiting_link": "در انتظار پیوند بک‌اند — دستگاه‌ها پس از اتصال ظاهر می‌شوند.",
+  "sysoverview.checking_devices": "در حال بررسی دستگاه‌های متصل…",
+  "sysoverview.devices_error": "خواندن دستگاه‌های بک‌اند ممکن نشد — پیوند مدیر ممکن است هنوز آماده نباشد.",
+  "sysoverview.no_devices": "هیچ دستگاهی به این بک‌اند متصل نیست.",
+  "sysoverview.col_grant": "اعطا",
+
   "peer.count": {
     "one": "{n} همتا",
     "other": "{n} همتا"
-  }
+  },
+
+  "window.programs": "برنامه‌ها",
+  "programs.subtitle": "برنامه‌های محاسباتی قابل‌انتقال — یک بار نوشته می‌شوند (workbench-go)، از توصیف‌گرهایشان سوار می‌شوند و موتور محاسبات این همتا آن‌ها را ارزیابی می‌کند.",
+  "programs.install": "نصب",
+  "programs.start": "شروع",
+  "programs.stop": "توقف",
+  "programs.restart": "راه‌اندازی مجدد",
+  "programs.status_absent": "نصب نشده",
+  "programs.status_refused": "سوار نمی‌شود",
+  "programs.status_materializing": "در حال نصب {done}/{total}…",
+  "programs.status_stopped": "متوقف",
+  "programs.status_running": "در حال اجرا",
+  "programs.status_faulted": "خراب",
+  "programs.status_line": "{status} · تیک {ticks} · {rate}/ثانیه",
+  "programs.display_waiting": "در انتظار نخستین فریم"
 }

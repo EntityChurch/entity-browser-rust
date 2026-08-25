@@ -123,21 +123,21 @@ pub struct ThemeEditorOutput {
 /// sections contiguous, so the renderer emits one table per title change.
 fn section_for(token: &str) -> &'static str {
     if token.starts_with("--font") || token.starts_with("--fs") {
-        "Fonts"
+        "theme.section_fonts"
     } else if token.starts_with("--status") {
-        "Status"
+        "theme.section_status"
     } else if token.starts_with("--peer") {
-        "Peer badges"
+        "theme.section_peer_badges"
     } else if token.starts_with("--app-card") {
-        "App cards"
+        "theme.section_app_cards"
     } else if token.starts_with("--accent") || token.starts_with("--btn") {
-        "Accents"
+        "theme.section_accents"
     } else if token.starts_with("--border") {
-        "Borders"
+        "theme.section_borders"
     } else if token.starts_with("--text") || token.starts_with("--title") {
-        "Text"
+        "theme.section_text"
     } else {
-        "Surfaces"
+        "theme.section_surfaces"
     }
 }
 
@@ -202,7 +202,7 @@ impl ThemeEditorModel {
             // Keep whatever is loaded — a failed create shouldn't eject
             // the theme being edited (matches the other error branches).
             let editing = self.read_state(peers).editing;
-            self.transition(peers, editing, format!("Unknown base theme \"{base}\""));
+            self.transition(peers, editing, crate::i18n::t("theme.status_unknown_base", &[("base", base)]));
             return;
         };
         let spec = UserThemeSpec {
@@ -212,7 +212,7 @@ impl ThemeEditorModel {
             vars: base_theme.vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         };
         match user_themes::save_theme(peers, spec) {
-            Ok(()) => self.transition(peers, name.clone(), format!("Created \"{name}\"")),
+            Ok(()) => self.transition(peers, name.clone(), crate::i18n::t("theme.status_created", &[("name", &name)])),
             Err(reason) => {
                 let editing = self.read_state(peers).editing;
                 self.transition(peers, editing, reason);
@@ -242,7 +242,7 @@ impl ThemeEditorModel {
         };
         match user_themes::save_theme(peers, spec) {
             Ok(()) => {
-                self.transition(peers, state.editing.clone(), format!("Saved \"{}\"", state.editing))
+                self.transition(peers, state.editing.clone(), crate::i18n::t("theme.status_saved", &[("name", &state.editing)]))
             }
             Err(reason) => self.transition(peers, state.editing.clone(), reason),
         }
@@ -253,7 +253,7 @@ impl ThemeEditorModel {
     pub fn revert(&self, peers: &Peers) {
         theme_tokens::reinstall_current();
         let editing = self.read_state(peers).editing;
-        self.transition(peers, editing, "Reverted".into());
+        self.transition(peers, editing, crate::i18n::t("theme.status_reverted", &[]));
     }
 
     pub fn delete_theme(&self, peers: &Peers) {
@@ -266,7 +266,7 @@ impl ThemeEditorModel {
                 theme_tokens::reinstall_current();
                 let next =
                     theme_tokens::user_theme_names().first().map(|n| n.to_string()).unwrap_or_default();
-                self.transition(peers, next, format!("Deleted \"{}\"", state.editing));
+                self.transition(peers, next, crate::i18n::t("theme.status_deleted", &[("name", &state.editing)]));
             }
             Err(reason) => self.transition(peers, state.editing.clone(), reason),
         }

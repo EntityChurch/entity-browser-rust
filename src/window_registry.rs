@@ -25,6 +25,7 @@ use crate::views::{
     path_tap::PathTapWindow,
     peer_connections::PeerConnectionsWindow,
     peer_management::PeerManagementWindow,
+    programs::ProgramsWindow,
     query_console::QueryConsoleWindow,
     settings::SettingsWindow,
     shell::ShellWindow,
@@ -36,7 +37,7 @@ use crate::views::{
 };
 use crate::window::{WindowCategory, WindowScope, WindowType};
 
-/// The 23 standard window types, in registration order. The single source —
+/// The 24 standard window types, in registration order. The single source —
 /// `build_wasm_app` registers exactly these, and the settings UI reads their
 /// metadata from the same list. Add a window here and it shows up in both.
 /// (Was 22 until the standalone "System Overview" window was merged into the
@@ -48,6 +49,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         AppWindow::games_window_type(),
         AppWindow::apps_window_type(),
         KnowledgeBaseWindow::window_type(),
+        ProgramsWindow::window_type(),
         KeyManagerWindow::window_type(),
         PeerConnectionsWindow::window_type(),
         FileTransferWindow::window_type(),
@@ -94,7 +96,7 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
     vec![
         (
             AppsContent,
-            vec!["Games", "Apps", "Site Browser", "Site Creator", "Knowledge Base"],
+            vec!["Games", "Apps", "Programs", "Site Browser", "Site Creator", "Knowledge Base"],
         ),
         (
             System,
@@ -146,7 +148,7 @@ mod tests {
     #[test]
     fn roster_is_twentytwo_and_settings_is_system_scoped() {
         let meta = standard_window_type_meta();
-        assert_eq!(meta.len(), 23, "the standard roster is 23 windows");
+        assert_eq!(meta.len(), 24, "the standard roster is 24 windows");
         // Spot-check the scope partition the settings filter relies on.
         let settings = meta.iter().find(|(n, _)| *n == "Settings").expect("Settings present");
         assert_eq!(settings.1, WindowScope::System);

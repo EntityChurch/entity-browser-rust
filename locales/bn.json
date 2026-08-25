@@ -326,8 +326,53 @@
     "other": "{actor} — {n}টি পর্যবেক্ষিত সক্ষমতা"
   },
 
+  "storage.refresh": "ডিস্ক ব্যবহার রিফ্রেশ করুন",
+  "storage.no_peers": "(কোনো হোস্ট করা পিয়ার নেই)",
+  "storage.used_quota": "ব্যবহৃত / কোটা",
+  "storage.persisted": "সংরক্ষিত",
+  "storage.persisted_yes": "হ্যাঁ (উচ্ছেদ থেকে সুরক্ষিত)",
+  "storage.persisted_no": "না (সর্বোত্তম প্রচেষ্টা / উচ্ছেদযোগ্য)",
+  "storage.persisted_unknown": "অজানা",
+  "storage.on_disk_sqlite": "ডিস্কে (SQLite)",
+  "storage.content_blobs": "কনটেন্ট-স্টোর blob",
+  "storage.live_paths": "সক্রিয় ট্রি পাথ",
+  "storage.backend_stopped": "(ব্যাকএন্ড বন্ধ — লাইভ গণনা অনুপলব্ধ)",
+  "storage.orphaned_blobs": "প্রতিস্থাপিত / অনাথ blob (আনুমানিক)",
+  "storage.save_state_paths": "সেভ-স্টেট পাথ",
+  "storage.no_breakdown": "(Worker/OPFS-এ প্রিফিক্স অনুযায়ী বিভাজন অনুপলব্ধ)",
+
+  "sysoverview.native_peer": "নেটিভ পিয়ার",
+  "sysoverview.listen": "শোনা",
+  "sysoverview.not_listening": "(শুনছে না)",
+  "sysoverview.link": "লিঙ্ক (S↔B)",
+  "sysoverview.share_tree": "শেয়ার (ট্রি)",
+  "sysoverview.share_tree_hint": "সংযুক্ত ডিভাইস যে ফাইলগুলো ব্রাউজ ও পুল করতে পারে, এই পিয়ারের ট্রির অধীনে প্রকাশিত",
+  "sysoverview.share_disk": "শেয়ার (ডিস্ক)",
+  "sysoverview.no_backend": "কোনো সিস্টেম ব্যাকএন্ড প্রভিশন করা হয়নি।",
+  "sysoverview.loading_status": "স্ট্যাটাস লোড হচ্ছে…",
+  "sysoverview.waiting_link": "ব্যাকএন্ড লিঙ্কের অপেক্ষায় — সংযুক্ত হলে ডিভাইস দেখা যাবে।",
+  "sysoverview.checking_devices": "সংযুক্ত ডিভাইস পরীক্ষা করা হচ্ছে…",
+  "sysoverview.devices_error": "ব্যাকএন্ডের ডিভাইস পড়া যায়নি — ম্যানেজার লিঙ্ক এখনও প্রস্তুত না-ও হতে পারে।",
+  "sysoverview.no_devices": "এই ব্যাকএন্ডে কোনো ডিভাইস সংযুক্ত নেই।",
+  "sysoverview.col_grant": "অনুমোদন",
+
   "peer.count": {
     "one": "{n} পিয়ার",
     "other": "{n} পিয়ার"
-  }
+  },
+
+  "window.programs": "প্রোগ্রাম",
+  "programs.subtitle": "স্থানান্তরযোগ্য কম্পিউট প্রোগ্রাম — একবার লেখা হয় (workbench-go), তাদের ডেসক্রিপ্টর থেকে মাউন্ট হয়, এবং এই পিয়ারের কম্পিউট ইঞ্জিন এগুলি মূল্যায়ন করে।",
+  "programs.install": "ইনস্টল",
+  "programs.start": "শুরু",
+  "programs.stop": "থামান",
+  "programs.restart": "পুনরায় শুরু",
+  "programs.status_absent": "ইনস্টল করা নেই",
+  "programs.status_refused": "মাউন্ট করা যাচ্ছে না",
+  "programs.status_materializing": "ইনস্টল হচ্ছে {done}/{total}…",
+  "programs.status_stopped": "থেমে আছে",
+  "programs.status_running": "চলছে",
+  "programs.status_faulted": "ত্রুটিপূর্ণ",
+  "programs.status_line": "{status} · টিক {ticks} · {rate}/সে",
+  "programs.display_waiting": "প্রথম ফ্রেমের অপেক্ষায়"
 }

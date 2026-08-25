@@ -323,7 +323,52 @@
     "other": "{actor} — 관찰된 기능 {n}개"
   },
 
+  "storage.refresh": "디스크 사용량 새로고침",
+  "storage.no_peers": "(호스팅된 피어 없음)",
+  "storage.used_quota": "사용량 / 할당량",
+  "storage.persisted": "유지됨",
+  "storage.persisted_yes": "예(제거 보호됨)",
+  "storage.persisted_no": "아니요(최선 노력 / 제거 가능)",
+  "storage.persisted_unknown": "알 수 없음",
+  "storage.on_disk_sqlite": "디스크에 저장(SQLite)",
+  "storage.content_blobs": "콘텐츠 저장소 blob",
+  "storage.live_paths": "활성 트리 경로",
+  "storage.backend_stopped": "(백엔드 중지됨 — 실시간 카운트 사용 불가)",
+  "storage.orphaned_blobs": "대체됨 / 고아 blob(대략)",
+  "storage.save_state_paths": "저장 상태 경로",
+  "storage.no_breakdown": "(Worker/OPFS에서는 접두사별 분석을 사용할 수 없음)",
+
+  "sysoverview.native_peer": "네이티브 피어",
+  "sysoverview.listen": "수신 대기",
+  "sysoverview.not_listening": "(수신 대기 안 함)",
+  "sysoverview.link": "링크(S↔B)",
+  "sysoverview.share_tree": "공유(트리)",
+  "sysoverview.share_tree_hint": "연결된 기기가 탐색하고 가져올 수 있는 파일로, 이 피어의 트리 아래에 노출됩니다",
+  "sysoverview.share_disk": "공유(디스크)",
+  "sysoverview.no_backend": "시스템 백엔드가 프로비저닝되지 않았습니다.",
+  "sysoverview.loading_status": "상태 로드 중…",
+  "sysoverview.waiting_link": "백엔드 링크 대기 중 — 기기는 연결되면 나타납니다.",
+  "sysoverview.checking_devices": "연결된 기기 확인 중…",
+  "sysoverview.devices_error": "백엔드의 기기를 읽을 수 없습니다 — 관리자 링크가 아직 준비되지 않았을 수 있습니다.",
+  "sysoverview.no_devices": "이 백엔드에 연결된 기기가 없습니다.",
+  "sysoverview.col_grant": "권한 부여",
+
   "peer.count": {
     "other": "피어 {n}개"
-  }
+  },
+
+  "window.programs": "프로그램",
+  "programs.subtitle": "전송 가능한 컴퓨트 프로그램 — 한 번 작성되어(workbench-go) 디스크립터에서 마운트되고 이 피어의 컴퓨트 엔진이 평가합니다.",
+  "programs.install": "설치",
+  "programs.start": "시작",
+  "programs.stop": "정지",
+  "programs.restart": "재시작",
+  "programs.status_absent": "설치되지 않음",
+  "programs.status_refused": "마운트할 수 없음",
+  "programs.status_materializing": "설치 중 {done}/{total}…",
+  "programs.status_stopped": "정지됨",
+  "programs.status_running": "실행 중",
+  "programs.status_faulted": "오류",
+  "programs.status_line": "{status} · 틱 {ticks} · {rate}/s",
+  "programs.display_waiting": "첫 프레임을 기다리는 중"
 }

@@ -323,7 +323,52 @@
     "other": "{actor} — 观测到 {n} 项能力"
   },
 
+  "storage.refresh": "刷新磁盘用量",
+  "storage.no_peers": "（无托管对等节点）",
+  "storage.used_quota": "已用 / 配额",
+  "storage.persisted": "已持久化",
+  "storage.persisted_yes": "是（受逐出保护）",
+  "storage.persisted_no": "否（尽力而为 / 可逐出）",
+  "storage.persisted_unknown": "未知",
+  "storage.on_disk_sqlite": "磁盘上（SQLite）",
+  "storage.content_blobs": "内容存储 blob",
+  "storage.live_paths": "活动树路径",
+  "storage.backend_stopped": "（后端已停止 — 实时计数不可用）",
+  "storage.orphaned_blobs": "被取代 / 孤立的 blob（约）",
+  "storage.save_state_paths": "保存状态路径",
+  "storage.no_breakdown": "（Worker/OPFS 上无法按前缀细分）",
+
+  "sysoverview.native_peer": "原生对等节点",
+  "sysoverview.listen": "监听",
+  "sysoverview.not_listening": "（未监听）",
+  "sysoverview.link": "链接（S↔B）",
+  "sysoverview.share_tree": "共享（树）",
+  "sysoverview.share_tree_hint": "已连接设备可浏览和拉取的文件，暴露在此对等节点的树下",
+  "sysoverview.share_disk": "共享（磁盘）",
+  "sysoverview.no_backend": "未预配系统后端。",
+  "sysoverview.loading_status": "正在加载状态…",
+  "sysoverview.waiting_link": "正在等待后端链接 — 设备连接后即会出现。",
+  "sysoverview.checking_devices": "正在检查已连接的设备…",
+  "sysoverview.devices_error": "无法读取后端的设备 — 管理器链接可能尚未就绪。",
+  "sysoverview.no_devices": "没有设备连接到此后端。",
+  "sysoverview.col_grant": "授权",
+
   "peer.count": {
     "other": "{n} 个对等节点"
-  }
+  },
+
+  "window.programs": "程序",
+  "programs.subtitle": "可迁移的计算程序 —— 一次编写（workbench-go），从描述符挂载，由本对等节点的计算引擎求值。",
+  "programs.install": "安装",
+  "programs.start": "启动",
+  "programs.stop": "停止",
+  "programs.restart": "重启",
+  "programs.status_absent": "未安装",
+  "programs.status_refused": "无法挂载",
+  "programs.status_materializing": "正在安装 {done}/{total}…",
+  "programs.status_stopped": "已停止",
+  "programs.status_running": "运行中",
+  "programs.status_faulted": "已故障",
+  "programs.status_line": "{status} · 节拍 {ticks} · {rate}/秒",
+  "programs.display_waiting": "等待第一帧"
 }

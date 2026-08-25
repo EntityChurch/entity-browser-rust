@@ -338,6 +338,36 @@
     "other": "{actor} — {n} قدرة مرصودة"
   },
 
+  "storage.refresh": "تحديث استخدام القرص",
+  "storage.no_peers": "(لا نظائر مستضافة)",
+  "storage.used_quota": "المستخدَم / الحصة",
+  "storage.persisted": "مُحتفَظ به",
+  "storage.persisted_yes": "نعم (محمي من الإخلاء)",
+  "storage.persisted_no": "لا (أفضل جهد / قابل للإخلاء)",
+  "storage.persisted_unknown": "غير معروف",
+  "storage.on_disk_sqlite": "على القرص (SQLite)",
+  "storage.content_blobs": "كتل مخزن المحتوى",
+  "storage.live_paths": "مسارات الشجرة النشطة",
+  "storage.backend_stopped": "(الخلفية متوقفة — العدّ المباشر غير متاح)",
+  "storage.orphaned_blobs": "كتل مُستبدَلة / يتيمة (تقريبًا)",
+  "storage.save_state_paths": "مسارات حالة الحفظ",
+  "storage.no_breakdown": "(التفصيل حسب البادئة غير متاح على Worker/OPFS)",
+
+  "sysoverview.native_peer": "نظير أصلي",
+  "sysoverview.listen": "استماع",
+  "sysoverview.not_listening": "(لا يستمع)",
+  "sysoverview.link": "الرابط (S↔B)",
+  "sysoverview.share_tree": "مشاركة (شجرة)",
+  "sysoverview.share_tree_hint": "الملفات التي يمكن لجهاز متصل تصفحها وسحبها، معروضة ضمن شجرة هذا النظير",
+  "sysoverview.share_disk": "مشاركة (قرص)",
+  "sysoverview.no_backend": "لم يتم توفير خلفية نظام.",
+  "sysoverview.loading_status": "جارٍ تحميل الحالة…",
+  "sysoverview.waiting_link": "في انتظار رابط الخلفية — تظهر الأجهزة بمجرد الاتصال.",
+  "sysoverview.checking_devices": "جارٍ التحقق من الأجهزة المتصلة…",
+  "sysoverview.devices_error": "تعذّر قراءة أجهزة الخلفية — قد لا يكون رابط المدير جاهزًا بعد.",
+  "sysoverview.no_devices": "لا توجد أجهزة متصلة بهذه الخلفية.",
+  "sysoverview.col_grant": "منح",
+
   "peer.count": {
     "zero": "{n} نظير",
     "one": "{n} نظير",
@@ -345,5 +375,20 @@
     "few": "{n} نظراء",
     "many": "{n} نظيرًا",
     "other": "{n} نظير"
-  }
+  },
+
+  "window.programs": "البرامج",
+  "programs.subtitle": "برامج حوسبة قابلة للنقل — تُكتب مرة واحدة (workbench-go)، وتُركَّب من واصفاتها، ويقيّمها محرّك الحوسبة لدى هذا النظير.",
+  "programs.install": "تثبيت",
+  "programs.start": "تشغيل",
+  "programs.stop": "إيقاف",
+  "programs.restart": "إعادة تشغيل",
+  "programs.status_absent": "غير مثبَّت",
+  "programs.status_refused": "يتعذّر التركيب",
+  "programs.status_materializing": "جارٍ التثبيت {done}/{total}…",
+  "programs.status_stopped": "متوقّف",
+  "programs.status_running": "قيد التشغيل",
+  "programs.status_faulted": "معطّل",
+  "programs.status_line": "{status} · نبضة {ticks} · {rate}/ث",
+  "programs.display_waiting": "بانتظار الإطار الأول"
 }

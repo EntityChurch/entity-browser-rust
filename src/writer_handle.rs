@@ -119,6 +119,48 @@ impl WriterHandle {
         }
     }
 
+    /// Awaitable write at `path` — resolves once the write has been
+    /// applied by the owning store (Direct: synchronously, ready
+    /// future; Worker: after the worker round-trips the put), so a
+    /// dispatch created *after* awaiting this observes the value.
+    ///
+    /// This is the ordering primitive the compute-program tick
+    /// pipeline needs (`program_host`): the step's state write must be
+    /// visible before the display projection evals `lookup/tree` reads
+    /// it. Plain [`WriterHandle::put`] can't promise that on the
+    /// Worker arm (it spawns the proxy put fire-and-forget). Errors
+    /// surface to the caller instead of only logging.
+    pub fn put_wait(
+        &self,
+        path: String,
+        entity: Entity,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>> {
+        match self {
+            WriterHandle::Direct(shared) => {
+                let r = shared
+                    .tree
+                    .put(&path, entity)
+                    .map(|_| ())
+                    .map_err(|e| format!("direct put {path}: {e}"));
+                Box::pin(async move { r })
+            }
+            #[cfg(target_arch = "wasm32")]
+            WriterHandle::Worker { proxy, peer_id } => {
+                let proxy = proxy.clone();
+                let pid = peer_id.clone();
+                Box::pin(async move {
+                    let wire = entity_wasm_worker_protocol::WireEntity::try_from(entity)
+                        .map_err(|e| format!("WireEntity conversion {path}: {e}"))?;
+                    proxy
+                        .put(pid, path.clone(), wire)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| format!("worker put {path}: {e:?}"))
+                })
+            }
+        }
+    }
+
     /// Fire-and-forget remove at `path`. Same shape as `put`.
     pub fn remove(&self, path: String) {
         match self {

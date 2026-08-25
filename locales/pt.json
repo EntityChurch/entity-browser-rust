@@ -326,8 +326,53 @@
     "other": "{actor} — {n} capacidades observadas"
   },
 
+  "storage.refresh": "Atualizar uso do disco",
+  "storage.no_peers": "(nenhum par hospedado)",
+  "storage.used_quota": "Usado / cota",
+  "storage.persisted": "Persistido",
+  "storage.persisted_yes": "sim (protegido contra remoção)",
+  "storage.persisted_no": "não (melhor esforço / removível)",
+  "storage.persisted_unknown": "desconhecido",
+  "storage.on_disk_sqlite": "Em disco (SQLite)",
+  "storage.content_blobs": "Blobs do armazenamento de conteúdo",
+  "storage.live_paths": "Caminhos de árvore ativos",
+  "storage.backend_stopped": "(backend parado — contagens ao vivo indisponíveis)",
+  "storage.orphaned_blobs": "Blobs substituídos / órfãos (aprox.)",
+  "storage.save_state_paths": "Caminhos de estado salvo",
+  "storage.no_breakdown": "(detalhamento por prefixo indisponível no Worker/OPFS)",
+
+  "sysoverview.native_peer": "Par nativo",
+  "sysoverview.listen": "Escuta",
+  "sysoverview.not_listening": "(sem escuta)",
+  "sysoverview.link": "Link (S↔B)",
+  "sysoverview.share_tree": "Compartilhar (árvore)",
+  "sysoverview.share_tree_hint": "Arquivos que um dispositivo conectado pode navegar e baixar, expostos sob a árvore deste par",
+  "sysoverview.share_disk": "Compartilhar (disco)",
+  "sysoverview.no_backend": "Nenhum backend do sistema provisionado.",
+  "sysoverview.loading_status": "Carregando status…",
+  "sysoverview.waiting_link": "Aguardando o link do backend — os dispositivos aparecem quando conectados.",
+  "sysoverview.checking_devices": "Verificando dispositivos conectados…",
+  "sysoverview.devices_error": "Não foi possível ler os dispositivos do backend — o link do gerenciador pode não estar pronto ainda.",
+  "sysoverview.no_devices": "Nenhum dispositivo conectado a este backend.",
+  "sysoverview.col_grant": "Concessão",
+
   "peer.count": {
     "one": "{n} par",
     "other": "{n} pares"
-  }
+  },
+
+  "window.programs": "Programas",
+  "programs.subtitle": "Programas de computação transferíveis — escritos uma única vez (workbench-go), montados a partir dos seus descritores, avaliados pelo motor de computação deste par.",
+  "programs.install": "Instalar",
+  "programs.start": "Iniciar",
+  "programs.stop": "Parar",
+  "programs.restart": "Reiniciar",
+  "programs.status_absent": "não instalado",
+  "programs.status_refused": "não é possível montar",
+  "programs.status_materializing": "instalando {done}/{total}…",
+  "programs.status_stopped": "parado",
+  "programs.status_running": "em execução",
+  "programs.status_faulted": "com falha",
+  "programs.status_line": "{status} · tick {ticks} · {rate}/s",
+  "programs.display_waiting": "aguardando o primeiro quadro"
 }
