@@ -333,6 +333,16 @@ pub fn http_poll_profile(peer_id: &str, origin: &str) -> entity_ecf::Value {
                 crate::content_site::paths::PUBLISHED_ROOT_REL
             )),
         },
+        // **What we are asserting**, as distinct from where to fetch it. The
+        // profile carried `freshness: static-immutable+signed-pointer` while
+        // omitting the field that names the pointer — the posture claimed in one
+        // field and absent from the one that means it. §6.5.3 is explicit that
+        // the two answer different questions, and that advertising the
+        // `signed_pointer` obliges us to ship the trie closure (Amendment 10) —
+        // which `RootProjector::finish` does, so we are entitled to say it.
+        "signed_pointer" => entity_ecf::Value::Text(
+            crate::content_site::paths::PUBLISHED_ROOT_REL.to_string(),
+        ),
         "supported_ops" => entity_ecf::Value::Array(vec![
             entity_ecf::Value::Text("TREE_GET".into()),
             entity_ecf::Value::Text("CONTENT_GET".into()),

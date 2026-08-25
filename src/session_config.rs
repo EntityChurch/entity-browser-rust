@@ -207,6 +207,57 @@ pub struct WebRtcProvisioning {
     pub max_deadline_ms: Option<u64>,
 }
 
+impl WebRtcProvisioning {
+    /// Append a parsed relay to [`Self::ice_servers`].
+    ///
+    /// Additive rather than a fourth argument to [`resolve_webrtc_provisioning`]
+    /// because only the connector-registry path has a relay to supply: the URL
+    /// query and the build knob carry reflectors only, and widening the shared
+    /// signature would make every caller state a `None` it has no opinion about.
+    ///
+    /// **A second `IceServer`, never merged into the first.** An `RTCIceServer`
+    /// carries one credential pair for all its URLs, so folding a credentialed
+    /// relay in beside credential-free reflectors would either attach the
+    /// username to the reflectors (which §9.3 forbids them to have) or drop it
+    /// from the relay (which gathers no relay candidates). Two entries is what
+    /// the browser API means.
+    pub fn with_relay(mut self, relay: Option<IceServer>) -> Self {
+        if let Some(r) = relay {
+            self.ice_servers.push(r);
+        }
+        self
+    }
+
+    /// Is a **reflector** provisioned — as opposed to *any* ICE server?
+    ///
+    /// **The distinction only came into existence when the relay field landed,
+    /// and reading `!ice_servers.is_empty()` for it is now wrong.** That list is
+    /// mixed: a relay-only session has one entry and no reflector at all. The
+    /// consumer is [`crate::reachability`], where this single bool is the whole
+    /// difference between *"we asked a reflector and learned nothing"* and *"we
+    /// never asked"* — so conflating the two tells a user with a rented relay
+    /// and no reflector that **their reflector did not answer**, sending them to
+    /// fix something they never configured. That is the cry-wolf failure the
+    /// classifier exists to prevent, arriving through the back door.
+    pub fn has_reflector(&self) -> bool {
+        self.ice_servers.iter().any(|s| !s.is_relay())
+    }
+
+    /// Is a **relay** provisioned? Not yet an input to the classifier — see the
+    /// `RelayUnreachable` gap in `BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md`
+    /// §8C item 27 — but it is the other half of [`Self::has_reflector`] and the
+    /// two must be read off the same discriminator.
+    ///
+    /// Deliberately built and left unwired: shipping it with `has_reflector`
+    /// keeps the pair symmetric and means the `RelayUnreachable` arm is a
+    /// classifier change alone. Allowed rather than deleted per the standing
+    /// rule on no-caller surfaces.
+    #[allow(dead_code)]
+    pub fn has_relay(&self) -> bool {
+        self.ice_servers.iter().any(|s| s.is_relay())
+    }
+}
+
 /// One ICE server for the browser's ICE agent (native shadow of the protocol's
 /// `WireIceServer`). A `stun:` entry carries no credentials; a `turn:`/`turns:`
 /// entry carries both.
@@ -215,6 +266,23 @@ pub struct IceServer {
     pub urls: Vec<String>,
     pub username: Option<String>,
     pub credential: Option<String>,
+}
+
+impl IceServer {
+    /// **An entry is a relay iff it carries credentials.** The one discriminator
+    /// — `parse_relay` enforces it on the way in (both halves or a refusal),
+    /// `connectors::pack_mirror` partitions the localStorage mirror on it, and
+    /// [`WebRtcProvisioning::has_reflector`] reads it back out. Three call sites
+    /// that must agree, so they ask the same function rather than each spelling
+    /// the predicate: the mirror already ate a relay once by disagreeing with
+    /// the parser about what a relay looks like.
+    ///
+    /// Deliberately `||` rather than `&&`: a half-credentialed entry cannot be
+    /// built through `parse_relay`, and if one ever appears it is a relay we
+    /// should not mistake for a reflector.
+    pub fn is_relay(&self) -> bool {
+        self.username.is_some() || self.credential.is_some()
+    }
 }
 
 /// Parse a user-supplied reflector list into [`IceServer`] entries.
@@ -255,6 +323,113 @@ pub fn parse_ice_urls(raw: &str) -> Result<Vec<IceServer>, String> {
     Ok(vec![IceServer { urls, username: None, credential: None }])
 }
 
+/// Parse a user-supplied **relay** (TURN) list plus its credentials into an
+/// [`IceServer`], or `Ok(None)` when no relay is configured.
+///
+/// # Why this is a separate field from the reflectors, and not one list
+///
+/// A reflector and a relay are different kinds of thing and the split is not
+/// cosmetic. A reflector is a commodity — credential-free by spec
+/// (`EXTENSION-SIGNALING` §9.3 forbids reflector authentication: no credential,
+/// nothing to expire, nothing to rotate), and **node-advertisable**, which is
+/// why `Connector::ice_advertised` exists and why its dedup is defined over
+/// published bytes exactly. A relay is rented, carries credentials, forwards
+/// every packet, and `EXTENSION-REGISTRY` §3b deliberately has **no credential
+/// channel** — a node cannot advertise one. Merging them into one field would
+/// put a credentialed entry into the list §4.5.1 merges byte-for-byte.
+///
+/// # The refusal that is the whole point
+///
+/// A relay URL **without** both a username and a credential is refused. It is
+/// not a harmless partial config: `RTCPeerConnection` accepts it, the entry
+/// looks configured in every surface, and it gathers **no relay candidates at
+/// all**. That is the exact failure mode this area keeps producing — something
+/// that looks set up and silently does nothing — and it is worse than an empty
+/// field, because an empty field is at least legible. Refuse it where the user
+/// typed it, and say which half is missing.
+///
+/// A `stun:` URI here is refused too, pointing back at the reflector field: the
+/// two lists have different credential semantics, and a reflector smuggled in
+/// here would be handed a username it must not have.
+///
+/// # Where the credential lives
+///
+/// In the connector row, in this peer's own tree, in plaintext — the same place
+/// and the same protection as the rest of the app's configuration. Worth stating
+/// rather than implying: a TURN credential is usually a shared, rotatable
+/// secret, and this is not a secret store.
+pub fn parse_relay(
+    raw_urls: &str,
+    username: &str,
+    credential: &str,
+) -> Result<Option<IceServer>, String> {
+    let urls: Vec<String> = raw_urls
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    let (user, cred) = (username.trim(), credential.trim());
+
+    if urls.is_empty() {
+        // No relay is the norm and is not an error — but credentials with no
+        // URL to attach them to is a half-filled form, and saying so beats
+        // discarding what was typed.
+        if !user.is_empty() || !cred.is_empty() {
+            return Err(
+                "a relay username/credential needs a relay URL — \
+                 add one like turn:relay.example.org:3478" // i18n-ignore
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    }
+
+    for u in &urls {
+        let scheme = u.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
+        match scheme.as_deref() {
+            Some("turn") | Some("turns") => {
+                if u.contains("//") {
+                    return Err(format!(
+                        "'{u}' is not a TURN URI — RFC 7065 is turn:host[:port], with no '//'" // i18n-ignore
+                    ));
+                }
+                if u.split_once(':').map(|(_, r)| r.trim().is_empty()).unwrap_or(true) {
+                    return Err(format!("'{u}' names no host")); // i18n-ignore
+                }
+            }
+            Some("stun") | Some("stuns") => {
+                return Err(format!(
+                    "'{u}' is a reflector (STUN) — put it in the Reflectors field. \
+                     A reflector takes no credentials" // i18n-ignore
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "'{u}' is not a relay URI — expected turn:host[:port]" // i18n-ignore
+                ))
+            }
+        }
+    }
+
+    // Name the missing half specifically. "Invalid relay" would send the user
+    // looking at the URL they got right.
+    match (user.is_empty(), cred.is_empty()) {
+        (true, true) => Err(
+            "a relay needs a username and a credential — without them it gathers \
+             no relay candidates while looking configured" // i18n-ignore
+                .to_string(),
+        ),
+        (true, false) => Err("a relay needs a username as well as a credential".to_string()), // i18n-ignore
+        (false, true) => Err("a relay needs a credential as well as a username".to_string()), // i18n-ignore
+        (false, false) => Ok(Some(IceServer {
+            urls,
+            username: Some(user.to_string()),
+            credential: Some(cred.to_string()),
+        })),
+    }
+}
+
 /// Validate ONE reflector URI against `EXTENSION-SIGNALING` §4.5.1 /
 /// `EXTENSION-REGISTRY` §3b.0 — the RFC 7064 form, which both fields pin
 /// identically and which MUST NOT differ in shape between them.
@@ -289,8 +464,8 @@ pub fn validate_reflector_uri(u: &str) -> Result<(), String> {
             Ok(())
         }
         Some("turn") | Some("turns") => Err(format!(
-            "'{u}' is a TURN server, which needs a username and credential — \
-             this field carries reflectors (stun:) only" // i18n-ignore
+            "'{u}' is a relay (TURN), which needs a username and credential — \
+             put it in the Relay field, not here" // i18n-ignore
         )),
         _ => Err(format!(
             "'{u}' is not a reflector URI — expected stun:host[:port]" // i18n-ignore
@@ -1341,15 +1516,153 @@ mod tests {
         assert!(parse_ice_urls("").unwrap().is_empty());
         assert!(parse_ice_urls("   ").unwrap().is_empty());
 
-        // TURN is refused with its reason, not silently accepted into an entry
-        // that would gather no relay candidates.
+        // A relay in the REFLECTOR field is refused and pointed at the right
+        // one. The two lists have different credential semantics — §9.3 forbids
+        // a reflector to carry credentials — so a relay smuggled in here would
+        // silently lose the username it cannot work without.
         let e = parse_ice_urls("turn:relay.example:3478").expect_err("turn needs credentials");
         assert!(e.contains("username"), "the refusal must say what is missing: {e}");
+        assert!(e.contains("Relay field"), "and where it goes instead: {e}");
         // RFC 7064 has no authority component; `stun://` is the typo to catch.
         assert!(parse_ice_urls("stun://a.example:3478").is_err(), "no '//' in a STUN URI");
         assert!(parse_ice_urls("stun:").is_err(), "names no host");
         assert!(parse_ice_urls("https://a.example").is_err(), "not a reflector");
         assert!(parse_ice_urls("a.example:3478").is_err(), "no scheme");
+    }
+
+    /// The relay parser, and the refusal it exists for.
+    ///
+    /// **A relay URL with no credentials is the failure this whole area keeps
+    /// producing**: `RTCPeerConnection` accepts it, every surface shows it as
+    /// configured, and it gathers no relay candidates at all. Refusing it where
+    /// the user typed it — and naming *which* half is missing — is the entire
+    /// point of splitting these into three fields.
+    #[test]
+    fn a_relay_needs_both_credentials_and_says_which_is_missing() {
+        // The happy path: one entry, credentials attached.
+        let s = parse_relay("turn:relay.example:3478", "alice", "s3cret")
+            .expect("valid")
+            .expect("some");
+        assert_eq!(s.urls, vec!["turn:relay.example:3478"]);
+        assert_eq!(s.username.as_deref(), Some("alice"));
+        assert_eq!(s.credential.as_deref(), Some("s3cret"));
+        // Comma- and whitespace-separated, same as the reflector field.
+        assert_eq!(
+            parse_relay("turn:a:1, turns:b:2", "u", "p").unwrap().unwrap().urls.len(),
+            2
+        );
+
+        // No relay at all is the norm, not an error.
+        assert!(parse_relay("", "", "").unwrap().is_none());
+        assert!(parse_relay("   ", "", "").unwrap().is_none());
+
+        // Each missing half names ITSELF. "Invalid relay" would send someone to
+        // re-check the URL they got right.
+        let both = parse_relay("turn:r:1", "", "").expect_err("needs both");
+        assert!(both.contains("username") && both.contains("credential"), "{both}");
+        let no_user = parse_relay("turn:r:1", "", "p").expect_err("needs a username");
+        assert!(no_user.contains("username"), "{no_user}");
+        let no_cred = parse_relay("turn:r:1", "u", "").expect_err("needs a credential");
+        assert!(no_cred.contains("credential"), "{no_cred}");
+
+        // Credentials with nowhere to attach are a half-filled form, and saying
+        // so beats silently discarding what was typed.
+        assert!(parse_relay("", "alice", "s3cret").is_err());
+
+        // A reflector in the RELAY field is refused and pointed back — it would
+        // otherwise be handed a username §9.3 says it must not have.
+        let wrong = parse_relay("stun:a.example:3478", "u", "p").expect_err("stun is not a relay");
+        assert!(wrong.contains("Reflectors field"), "{wrong}");
+        // RFC 7065, like 7064, has no authority component.
+        assert!(parse_relay("turn://r:1", "u", "p").is_err(), "no '//' in a TURN URI");
+        assert!(parse_relay("turn:", "u", "p").is_err(), "names no host");
+        assert!(parse_relay("https://r.example", "u", "p").is_err(), "not a relay URI");
+    }
+
+    /// A relay is a **second** `IceServer`, never folded into the reflectors.
+    ///
+    /// An `RTCIceServer` carries one credential pair for all its URLs, so
+    /// merging would either attach the username to credential-free reflectors
+    /// or drop it from the relay — and a relay with no credential gathers
+    /// nothing, which is the exact silent-nothing this feature exists to stop.
+    #[test]
+    fn a_relay_rides_beside_the_reflectors_not_inside_them() {
+        let p = resolve_webrtc_provisioning(
+            Some("2KNode"),
+            Some("ws://n:9000"),
+            Some("stun:a.example:3478 stun:b.example:3478"),
+        )
+        .expect("provisions")
+        .with_relay(parse_relay("turn:r.example:3478", "alice", "s3cret").unwrap());
+
+        assert_eq!(p.ice_servers.len(), 2, "reflectors and relay are separate entries");
+        // The reflectors keep NO credentials.
+        assert_eq!(p.ice_servers[0].urls.len(), 2);
+        assert!(p.ice_servers[0].username.is_none());
+        assert!(p.ice_servers[0].credential.is_none());
+        // The relay keeps both.
+        assert_eq!(p.ice_servers[1].urls, vec!["turn:r.example:3478"]);
+        assert_eq!(p.ice_servers[1].username.as_deref(), Some("alice"));
+
+        // No relay configured leaves the list exactly as it was — host-only and
+        // reflector-only deployments must not gain an empty entry, which would
+        // throw at `RTCPeerConnection` construction.
+        let none = resolve_webrtc_provisioning(Some("2KNode"), Some("ws://n:9000"), None)
+            .expect("provisions")
+            .with_relay(None);
+        assert!(none.ice_servers.is_empty());
+    }
+
+    /// **A relay is not a reflector, and the list they share cannot be asked
+    /// with `is_empty()`.**
+    ///
+    /// `reachability::classify` takes one bool for "was a reflector
+    /// configured", and it is the whole difference between *"we asked and
+    /// learned nothing"* (`ReflectorUnreachable` — go fix the URL) and *"we
+    /// never asked"* (`NoReflector` — go add one). The install site read
+    /// `!ice_servers.is_empty()`, which was exactly right until the relay field
+    /// landed one commit later and made that list mixed: a relay-only session
+    /// has one entry, no reflector, and was being told its **reflector** did not
+    /// answer.
+    ///
+    /// Neither feature's own tests could see it — the classifier's predate the
+    /// relay, and the relay gate asserts on `ice_servers` counts, never on a
+    /// verdict. So it is pinned here, at the discriminator both of them share.
+    #[test]
+    fn a_relay_only_session_has_no_reflector() {
+        let node = || resolve_webrtc_provisioning(Some("2KNode"), Some("ws://n:9000"), None);
+        let relay = || parse_relay("turn:r.example:3478", "alice", "s3cret").unwrap();
+
+        let relay_only = node().expect("provisions").with_relay(relay());
+        assert_eq!(relay_only.ice_servers.len(), 1, "precondition: the list is non-empty");
+        assert!(
+            !relay_only.has_reflector(),
+            "a relay-only session must not report a configured reflector — \
+             that tells the user to fix a reflector they never configured"
+        );
+        assert!(relay_only.has_relay());
+
+        // Host-only: neither half.
+        let bare = node().expect("provisions");
+        assert!(!bare.has_reflector() && !bare.has_relay());
+
+        // Reflector-only: the arm that was always right, still right.
+        let refl = resolve_webrtc_provisioning(
+            Some("2KNode"),
+            Some("ws://n:9000"),
+            Some("stun:a.example:3478"),
+        )
+        .expect("provisions");
+        assert!(refl.has_reflector() && !refl.has_relay());
+
+        // Both: each is seen, and neither masks the other.
+        let both = refl.clone().with_relay(relay());
+        assert!(both.has_reflector() && both.has_relay());
+
+        // The discriminator itself, stated once so the mirror and the install
+        // site cannot drift apart again.
+        assert!(relay().expect("a relay").is_relay());
+        assert!(!refl.ice_servers[0].is_relay());
     }
 
     /// A malformed list must not cost the user their *rendezvous*. Meet and

@@ -69,6 +69,7 @@ use entity_registry::data::{normalize_name, BindingData, KIND_PEER_ISSUED};
 use entity_registry::{by_name_pointer_path, revocation_by_target_path};
 
 use super::http_poll::BinSource;
+use super::publish_layout::PublishLayout;
 use super::signed_fetch::{SignedFetchError, SignedSession};
 
 /// Why a name did not resolve to a usable target.
@@ -220,11 +221,19 @@ pub struct NamedTarget {
     /// registration it already holds. With `Some`, one pinned registry is enough
     /// to reach a domain nothing configured.
     ///
-    /// `None` covers **two** cases the caller must not conflate in its wording:
-    /// no `http-poll` profile at all, and a profile whose layout this client
-    /// cannot consume ([`http_poll_origin`]'s known limit). Both mean "no
-    /// fetchable origin"; neither means the binding is invalid.
+    /// `None` means **no `http-poll` profile in the binding, or one that does
+    /// not advertise what a fetch needs** — never "a layout we cannot consume",
+    /// which was the case audit F6 left open and
+    /// [`layout`](Self::layout) closed.
     pub origin: Option<String>,
+    /// **Where that peer's artifacts are, as the publisher advertised them.**
+    ///
+    /// This is what the signed walk uses. [`origin`](Self::origin) is derived
+    /// from it for the transport-trusted `.list` menus only — a convenience
+    /// surface where nothing is verified — and the two must never be re-fused:
+    /// deriving a fetch URL from the origin is exactly the hop-0 defect
+    /// §6.5.3 v1.8 forbids.
+    pub layout: Option<PublishLayout>,
     pub evidence: NameEvidence,
 }
 
@@ -293,9 +302,11 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
         Err(e) => return Err(NameError::Registry(e)),
     }
 
+    let layout = http_poll_layout(&binding.transports);
     Ok(NamedTarget {
         name: norm,
-        origin: http_poll_origin(&binding.transports, &binding.target_peer_id),
+        origin: layout.as_ref().map(|l: &PublishLayout| l.origin_for(&binding.target_peer_id)),
+        layout,
         peer_id: binding.target_peer_id,
         evidence: NameEvidence {
             registry_peer_id: registry_id,
@@ -310,67 +321,41 @@ pub async fn resolve_name<S: BinSource + ?Sized>(
     })
 }
 
-/// Recover a fetchable origin from a binding's `transports`.
+/// **Read the publisher's `http-poll` endpoint out of a binding's `transports`.**
 ///
-/// Reads the **`tree_url_prefix`** of the first `http-poll` profile and strips
-/// the trailing `/{peer_id}` our layout puts there — the profile describes URL
-/// prefixes while [`PinnedPublisher`] wants the origin they were built from.
+/// Returns the layout **as advertised** — `manifest_url_prefix`,
+/// `content_url_prefix`, `content_layout`, `tree_url_prefix`,
+/// `tree_leaf_suffix`. Nothing is re-derived, which is the §6.5.3 v1.8 MUST:
+/// *the manifest's location is DISCOVERED from the profile, never derived by
+/// convention from the tree path.*
 ///
-/// ## The strip is CONDITIONAL, and that is the whole point
+/// ## What this replaced, and why the old shape could not be patched
 ///
-/// It fires only when the last path segment is exactly `target_peer_id`. An
-/// unconditional `rsplit_once('/')` — what this did until audit F6 — turns a
-/// perfectly legal `tree_url_prefix: "https://x.example"` into **`"https:/"`**,
-/// and hop 2 then fails as a transport error that reads as *"the origin is
-/// down"*. Returning `None` sends the caller down the already-correct
-/// "resolved WHO but not WHERE" path instead of fetching from a mangled URL.
+/// Until now this function returned an *origin string* — the `tree_url_prefix`
+/// with a trailing `/{peer_id}` conditionally stripped — and
+/// [`PinnedPublisher`] rebuilt every URL from it by our own convention. The
+/// function's own doc comment recorded the consequence: *"a publisher who is not
+/// us is unconsumable even when their profile told us everything we needed."*
+/// The cross-implementation run turned that recorded limit into a measured
+/// **hop-0 failure** against workbench-go's origin, so the "trust-chain refactor,
+/// deliberately not this cleanup" is now the work
+/// (`ROUTING-2026-08-19-c`).
 ///
-/// ## Known limit, recorded rather than guessed at
+/// The conditional strip survives — it is [`PublishLayout::origin_for`], the
+/// audit-F6 rule intact (act only when the last segment is **exactly** the
+/// peer-id, because an unconditional split turns a legal
+/// `tree_url_prefix: "https://x.example"` into `"https:/"`). What changed is
+/// that a failure to recognise our own shape no longer means *unconsumable*:
+/// it means the prefix is origin-rooted, which is the other conformant form.
 ///
-/// We are consuming a profile that states its layout in full —
-/// `content_url_prefix`, `manifest_url_prefix`, `tree_leaf_suffix`,
-/// `content_layout` — and then **ignoring all of it** to re-derive our own
-/// (`PinnedPublisher::manifest_url`). That round-trips because we publish and
-/// consume both ends; it means a publisher who is *not us* is unconsumable even
-/// when their profile told us everything we needed, and a split origin (immutable
-/// `content/` on a CDN, mutable root elsewhere — exactly what
-/// `RUNBOOK-CDN-BROWSER-DEPLOYMENT` §3 wants) is expressible in the profile and
-/// inexpressible here. Honouring the endpoint properly means
-/// [`PinnedPublisher`] carrying the endpoint instead of an origin string, which
-/// is a trust-chain refactor and deliberately not this cleanup.
+/// `None` now means something narrow and true: **no `http-poll` profile in this
+/// binding, or one that does not advertise what a fetch needs** — not "a layout
+/// we cannot consume".
 ///
 /// [`PinnedPublisher`]: super::signed_fetch::PinnedPublisher
-fn http_poll_origin(transports: &[entity_ecf::Value], target_peer_id: &str) -> Option<String> {
-    for t in transports {
-        let Some(map) = t.as_map() else { continue };
-        let get = |k: &str| {
-            map.iter().find_map(|(mk, mv)| match mk {
-                entity_ecf::Value::Text(s) if s == k => Some(mv),
-                _ => None,
-            })
-        };
-        if get("transport_type").and_then(|v| v.as_text()) != Some("http-poll") {
-            continue;
-        }
-        let endpoint = get("endpoint")?.as_map()?;
-        let tree_prefix = endpoint.iter().find_map(|(mk, mv)| match mk {
-            entity_ecf::Value::Text(s) if s == "tree_url_prefix" => mv.as_text(),
-            _ => None,
-        })?;
-        // `{origin}/{peer_id}` → `{origin}`, and ONLY that shape. Splitting on
-        // the last separator so an origin that itself carries path segments
-        // survives — but the segment we drop has to be the peer we are about to
-        // pin, or we are not looking at a layout this client can fetch.
-        return match tree_prefix.rsplit_once('/') {
-            Some((origin, peer)) if peer == target_peer_id && !origin.is_empty() => {
-                Some(origin.to_string())
-            }
-            // A legal profile in a layout we cannot consume. See the fn docs:
-            // mangling it into `https:/` was audit F6.
-            _ => None,
-        };
-    }
-    None
+/// [`PublishLayout::origin_for`]: super::publish_layout::PublishLayout::origin_for
+fn http_poll_layout(transports: &[entity_ecf::Value]) -> Option<PublishLayout> {
+    transports.iter().find_map(PublishLayout::from_http_poll_profile)
 }
 
 /// Strip the `/{peer}/` qualification — the upstream path helpers return
@@ -770,56 +755,98 @@ mod tests {
     /// "no transport published" from "the origin is empty".
     #[test]
     fn a_binding_with_no_transports_yields_no_origin_rather_than_a_guess() {
-        assert_eq!(super::http_poll_origin(&[], "2PEERTARGET"), None);
+        assert!(super::http_poll_layout(&[]).is_none());
     }
 
-    /// **F6 — the strip must be conditional, and a mangled origin is worse than
-    /// none.**
+    /// **F6's rule survives; F6's verdict does not.** Both halves matter, and
+    /// this test carries both.
     ///
-    /// `http_poll_origin` recovers an origin by dropping the trailing
-    /// `/{peer_id}` *our* emitter appends. Until this test it did that with an
-    /// unconditional `rsplit_once('/')`, so a perfectly legal
-    /// `tree_url_prefix: "https://x.example"` — a publisher who is not us —
-    /// became **`"https:/"`**. Hop 2 then fetched from a non-URL and failed as a
-    /// transport error, which reads as *"the origin is down"* rather than *"we
-    /// cannot consume this layout"*.
+    /// The rule: the trailing `/{peer_id}` is dropped **only** when the last
+    /// segment is exactly the peer we are about to pin. An unconditional
+    /// `rsplit_once('/')` turns a legal `tree_url_prefix: "https://x.example"`
+    /// into **`"https:/"`**, and the fetch then fails as a transport error that
+    /// reads *"the origin is down"*. That guard is now
+    /// [`PublishLayout::origin_for`] and is asserted below.
     ///
-    /// Three shapes, and the middle one is the regression:
-    /// our layout strips; a prefix whose last segment is not the target peer is
-    /// refused; a peer-id appearing at a different position does not count.
+    /// The verdict F6 reached — that a prefix without our peer segment is a
+    /// *layout we cannot consume*, reported as `None` — was **wrong, and the
+    /// cross-implementation run is what proved it**. It is the other conformant
+    /// form of §6.5.3's tree join (origin-rooted, peer-id appended by the
+    /// consumer): workbench-go publishes exactly that. Refusing it meant
+    /// refusing every publisher who is not our emitter, which is the failure F6
+    /// was trying to *avoid*, arrived at from the other side.
     ///
-    /// Mutation check: restore the unconditional split and case 2 yields
-    /// `Some("https:/")`, failing here.
+    /// Mutation check: restore the unconditional split and case 1's second
+    /// assertion yields `"https:/"`; drop the conditional entirely and case 2's
+    /// URL doubles the peer-id.
     #[test]
-    fn an_http_poll_prefix_we_cannot_consume_yields_none_rather_than_a_mangled_origin() {
+    fn a_prefix_is_read_as_peer_rooted_or_origin_rooted_never_truncated() {
+        use crate::content_site::registry_publish::http_poll_profile;
+        let peer = "2PEERTARGET";
+        let layout = |p: entity_ecf::Value| super::http_poll_layout(&[p]).expect("decodes");
+
+        // 1. **Peer-rooted** — our emitter's `{origin}/{peer_id}`. The segment
+        //    is dropped to recover the origin, including when the origin itself
+        //    carries path segments.
+        let ours = layout(http_poll_profile(peer, "https://x.example"));
+        assert_eq!(ours.origin_for(peer), "https://x.example");
+        let nested = layout(http_poll_profile(peer, "https://x.example/base"));
+        assert_eq!(
+            nested.origin_for(peer),
+            "https://x.example/base",
+            "an unconditional split would say `https:/` here — that was F6"
+        );
+        assert_eq!(
+            ours.tree_leaf_url(peer, "system/peer/published-root"),
+            "https://x.example/2PEERTARGET/system/peer/published-root.bin",
+            "peer-rooted: the prefix already carries the peer, so it is not appended twice"
+        );
+
+        // 2. **Origin-rooted** — the form F6 refused and §6.5.3's normative
+        //    sentence specifies. Consumable: the consumer appends the peer-id.
+        let theirs = layout(profile_with(peer, "https://y.example", "https://y.example/manifest"));
+        assert_eq!(theirs.origin_for(peer), "https://y.example");
+        assert_eq!(
+            theirs.tree_leaf_url(peer, "system/peer/published-root"),
+            "https://y.example/2PEERTARGET/system/peer/published-root.bin"
+        );
+
+        // 3. A prefix ending in some OTHER peer's id is origin-rooted too — the
+        //    segment dropped has to be the peer being pinned, or nothing is
+        //    dropped.
+        let other = layout(profile_with(
+            peer,
+            "https://y.example/2SOMEONEELSE",
+            "https://y.example/2SOMEONEELSE/manifest",
+        ));
+        assert_eq!(other.origin_for(peer), "https://y.example/2SOMEONEELSE");
+    }
+
+    /// **The manifest comes from the profile, not from our convention** — the
+    /// §6.5.3 v1.8 MUST, at the one call site a name resolution goes through.
+    #[test]
+    fn a_binding_carries_the_publishers_own_manifest_url_not_ours() {
         use crate::content_site::registry_publish::http_poll_profile;
         let peer = "2PEERTARGET";
 
-        // 1. Our own layout — `{origin}/{peer_id}` — strips cleanly, including
-        //    an origin that itself carries path segments.
+        let ours = super::http_poll_layout(&[http_poll_profile(peer, "https://x.example")])
+            .expect("decodes");
         assert_eq!(
-            super::http_poll_origin(&[http_poll_profile(peer, "https://x.example")], peer),
-            Some("https://x.example".to_string())
-        );
-        assert_eq!(
-            super::http_poll_origin(&[http_poll_profile(peer, "https://x.example/base")], peer),
-            Some("https://x.example/base".to_string())
+            ours.manifest_url,
+            "https://x.example/2PEERTARGET/system/peer/published-root"
         );
 
-        // 2. **The regression.** A profile with no peer segment at all. Legal,
-        //    and unconsumable by this client — which must say so by returning
-        //    `None`, not by inventing `https:/`.
-        let bare = hand_rolled_profile(peer, "https://x.example");
+        let theirs = super::http_poll_layout(&[profile_with(
+            peer,
+            "https://y.example",
+            "https://y.example/manifest",
+        )])
+        .expect("decodes");
         assert_eq!(
-            super::http_poll_origin(&[bare], peer),
-            None,
-            "a prefix that does not end in /{{peer-id}} must be refused, not truncated"
+            theirs.manifest_url, "https://y.example/manifest",
+            "a publisher who serves its root somewhere else is consumable — deriving \
+             this from the origin is the hop-0 defect the cross-impl run found"
         );
-
-        // 3. A prefix ending in some OTHER peer's id is equally unconsumable —
-        //    the segment we drop has to be the peer we are about to pin.
-        let wrong = hand_rolled_profile(peer, "https://x.example/2SOMEONEELSE");
-        assert_eq!(super::http_poll_origin(&[wrong], peer), None);
     }
 
     /// **Arch's §4 invariant, on the path where it is a security property.**
@@ -1055,6 +1082,22 @@ mod tests {
             "transport_type" => entity_ecf::Value::Text("http-poll".into()),
             "endpoint" => entity_ecf::cbor_map! {
                 "tree_url_prefix" => entity_ecf::Value::Text(tree_url_prefix.to_string()),
+            },
+        }
+    }
+
+    /// A **complete** `http-poll` profile in the origin-rooted form — what a
+    /// publisher who is not our emitter advertises (workbench-go's shape).
+    fn profile_with(peer_id: &str, tree_url_prefix: &str, manifest_url: &str) -> entity_ecf::Value {
+        entity_ecf::cbor_map! {
+            "peer_id" => entity_ecf::Value::Text(peer_id.to_string()),
+            "transport_type" => entity_ecf::Value::Text("http-poll".into()),
+            "endpoint" => entity_ecf::cbor_map! {
+                "tree_url_prefix" => entity_ecf::Value::Text(tree_url_prefix.to_string()),
+                "content_url_prefix" => entity_ecf::Value::Text(format!("{tree_url_prefix}/content")),
+                "content_layout" => entity_ecf::Value::Text("sharded-2-4".into()),
+                "tree_leaf_suffix" => entity_ecf::Value::Text(".bin".into()),
+                "manifest_url_prefix" => entity_ecf::Value::Text(manifest_url.to_string()),
             },
         }
     }

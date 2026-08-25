@@ -589,6 +589,39 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet: PASS"; else echo ">>> e2e-webrtc-meet: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
+# SAME LAN, THE WAY A REAL BROWSER DOES IT — row 1 of
+# reviews/ANALYSIS-NAT-REACHABILITY. Same shared-bridge topology as
+# e2e-webrtc-meet, but with mDNS host-candidate obfuscation ON: candidates carry
+# `{uuid}.local` names resolved over multicast, which is what Chrome and Firefox
+# actually send and what every other gate here turns OFF so the rig works.
+#
+# It is a separate target rather than a default because the NAT rigs need raw-IP
+# host candidates (`.local` does not resolve between isolated networks, and
+# `traverse` is about srflx anyway) — so the pref belongs to the topology that
+# is genuinely a LAN, not to the spike.
+#
+# The gate asserts the pref IS IN EFFECT (at least one `.local` candidate on both
+# sides, printed on pass) before crediting the connection. Without that a green
+# run cannot be told from the ordinary raw-IP run — Firefox scopes obfuscation by
+# permission state, so a set pref that never bites is a real outcome.
+#
+# Proven 2026-08-19: `.local` on both sides, **0 reflectors**, message delivered
+# both ways. Two people on one Wi-Fi need neither STUN nor TURN.
+e2e-webrtc-lan:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-lan SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-lan BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-lan: same LAN, mDNS .local host candidates, no reflector"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; E2E_MDNS=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-lan: PASS — host candidates alone, as a real browser sends them"; \
+	 else echo ">>> e2e-webrtc-lan: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
 # FILE OVER WEBRTC — the stretch goal's payload. Same ladder as e2e-webrtc-meet
 # (nothing handed to the browsers; they add the node, reload, meet at a name),
 # but the last phase transfers a FILE instead of a chat message: A `offer`s
@@ -1354,5 +1387,5 @@ publish publish-bare publish-serve:
 	@echo '  namespace and did NOT change: entity-browser publish <dir>'
 	@exit 1
 
-.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle
+.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle e2e-webrtc-lan
 

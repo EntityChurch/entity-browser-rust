@@ -324,6 +324,13 @@ pub const EN: &[(&str, Message)] = &[
     ("label.name", Message::Simple("Name")),
     ("label.label", Message::Simple("Label")),
     ("label.ice_servers", Message::Simple("Reflectors (STUN)")),
+    // A relay is a different kind of thing from a reflector and the labels say
+    // so: a reflector only tells you your own address, a relay forwards every
+    // packet for you. Naming the protocol in parentheses keeps the field
+    // findable for someone who was handed "TURN credentials" by an operator.
+    ("label.relay", Message::Simple("Relay (TURN)")),
+    ("label.relay_username", Message::Simple("Relay username")),
+    ("label.relay_credential", Message::Simple("Relay credential")),
     ("label.role", Message::Simple("Role")),
     ("label.peer_id", Message::Simple("Peer ID")),
     ("label.level", Message::Simple("Level")),
@@ -782,6 +789,32 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Files a connected device can browse and pull, exposed under this peer's tree"),
     ),
     ("sysoverview.share_disk", Message::Simple("Share (disk)")),
+    // --- Rendezvous (§6.5 signaling node) ---
+    //
+    // The vocabulary here is deliberate. "Rendezvous" rather than "signaling
+    // node" because the row answers *what it does for you*, and the on-state
+    // string carries the ADDRESS because "it's on" is not something a user can
+    // act on — that address is what the other browser types into `connector
+    // add`. The off-state says what turning it on would buy, since a person
+    // arriving here is asking "why can't my two browsers find each other".
+    ("sysoverview.rendezvous", Message::Simple("Rendezvous")),
+    (
+        "sysoverview.rendezvous_on",
+        Message::Simple("Serving — browsers can meet here: {addr}"),
+    ),
+    (
+        "sysoverview.rendezvous_off",
+        Message::Simple("Off — browsers cannot use this desktop to find each other"),
+    ),
+    ("sysoverview.rendezvous_start", Message::Simple("Start serving")),
+    ("sysoverview.rendezvous_stop", Message::Simple("Stop serving")),
+    (
+        "sysoverview.rendezvous_hint",
+        Message::Simple(
+            "Lets two browsers on this network exchange a connection offer through this desktop, \
+             so nobody has to run a server. Restarts the backend, which drops open connections.",
+        ),
+    ),
     (
         "sysoverview.no_backend",
         Message::Simple("No System backend provisioned."),
@@ -965,6 +998,38 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple(
             "This peer can’t be reached back — they can find you, but nothing can \
              connect to you. Switch this window to your main peer.",
+        ),
+    ),
+    // --- Why the network could not carry it (`crate::reachability`) ---
+    //
+    // Three rules these strings obey, from the design's §3.3:
+    //   - never name a specific NAT type — we can observe our own candidate
+    //     types, we cannot observe whether the far side is symmetric, and a
+    //     confident wrong diagnosis is worse than a vague right one;
+    //   - never promise a relay will fix it — it fixes the restrictive-NAT
+    //     rows, and it does not fix a friend who closed their laptop, which is
+    //     why `no_direct_path` describes the situation instead of predicting;
+    //   - never quote a TTL or a retry count.
+    // Each names the fix without naming a culprit.
+    (
+        "chat.reach_no_reflector",
+        Message::Simple(
+            "No reflector is set up, so this app can only reach devices on your local \
+             network. Add one on the connector you rendezvous through.",
+        ),
+    ),
+    (
+        "chat.reach_reflector_unreachable",
+        Message::Simple(
+            "The reflector didn’t answer, so we never learned this device’s address \
+             beyond your local network. Check its address, or its operator may be down.",
+        ),
+    ),
+    (
+        "chat.reach_no_direct_path",
+        Message::Simple(
+            "This network needs a relay — neither device can be reached directly. \
+             Add a relay on the connector you rendezvous through.",
         ),
     ),
     ("window.chain_trace", Message::Simple("Chain Trace")),
@@ -1312,6 +1377,21 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.ice_help",
         Message::Simple(
             "Optional. Needed to connect across different networks; leave empty for same-network only.",
+        ),
+    ),
+    (
+        "peerconn.relay_help",
+        Message::Simple(
+            "Optional. Needed only when neither device can be reached directly — \
+             the app tells you when that happens. Forwards your traffic, so it is \
+             usually rented or self-hosted.",
+        ),
+    ),
+    (
+        "peerconn.relay_secret_help",
+        Message::Simple(
+            "Stored with your settings on this device, unencrypted. Both the \
+             username and the credential are required.",
         ),
     ),
     ("peerconn.connector_add", Message::Simple("Add connector")),

@@ -164,6 +164,21 @@ impl WindowView for SystemOverviewWindow {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _ = value;
             }
+            // Serve (or stop serving) §6.5 rendezvous for browsers that can
+            // reach this desktop. `value` carries the backend peer-id and the
+            // desired state, because the row that raises this is the only place
+            // that knows which backend it is describing.
+            "sb_set_signaling_node" => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some((pid, want)) = value.split_once('\u{1f}') {
+                        self.model
+                            .set_signaling_node(pid, want == "1", self.watch.flag());
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = value;
+            }
             _ => {}
         }
     }

@@ -49,6 +49,12 @@ pub struct BackendStatus {
     pub peer_id: String,
     pub status: String,
     pub ws_addr: Option<String>,
+    /// Whether the backend is serving `system/signaling` right now — browsers
+    /// on this LAN can rendezvous through it. Part of the polled identity so a
+    /// change to it dirties the view like any other (the poll compares the
+    /// whole struct); a field left out here is a toggle whose result never
+    /// repaints.
+    pub signaling_node: bool,
 }
 
 #[derive(Default)]
@@ -209,11 +215,19 @@ impl SystemOverviewModel {
                 .as_ref()
                 .map(|b| b.status.clone())
                 .unwrap_or_else(|| if connected { "running".into() } else { "starting…".into() });
+            // Only the IPC poll knows this — it is native-process state, not a
+            // tree fact, and there is no registry fallback. Absent poll ⇒ not
+            // serving, which is the truthful reading of "we do not know yet".
+            let signaling_node = inner
+                .backend
+                .as_ref()
+                .is_some_and(|b| b.signaling_node);
             BackendStatusView {
                 short_id: short,
                 peer_id: r.peer_id.clone(),
                 status,
                 ws_addr,
+                signaling_node,
             }
         });
 
@@ -240,6 +254,42 @@ impl SystemOverviewModel {
         let level = level.to_string();
         wasm_bindgen_futures::spawn_local(async move {
             let _ = crate::tauri_ipc::set_backend_log_level(&level).await;
+        });
+    }
+
+    /// Turn the backend's §6.5 rendezvous on or off.
+    ///
+    /// **Deliberately NOT optimistic**, unlike [`Self::set_level`]. The backend
+    /// has to stop and rebuild the peer to add or remove the handler, so the
+    /// flip can fail (the config write), and until the restart completes the
+    /// node genuinely is not serving. Painting "on" immediately would claim a
+    /// rendezvous that browsers would then fail to reach — the exact
+    /// "that peer is offline" confusion this whole arc exists to remove. The
+    /// poll picks up the real state within its cadence, and the response is
+    /// folded in here as soon as it lands so the common case is not a wait.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_signaling_node(&self, peer_id: &str, enabled: bool, dirty: crate::window_watch::DirtyFlag) {
+        let peer_id = peer_id.to_string();
+        let inner = std::sync::Arc::downgrade(&self.inner);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::tauri_ipc::set_backend_signaling_node(&peer_id, enabled).await;
+            let Some(inner) = inner.upgrade() else { return };
+            let Ok(mut inner) = inner.lock() else { return };
+            match result {
+                Ok(info) => {
+                    if let Some(b) = inner.backend.as_mut() {
+                        // Report what is actually served, which is not
+                        // necessarily what was asked for.
+                        b.signaling_node = info.signaling_node;
+                        b.status = info.status;
+                        b.ws_addr = info.ws_addr;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "rendezvous toggle failed");
+                }
+            }
+            dirty.mark();
         });
     }
 
@@ -331,6 +381,7 @@ impl SystemOverviewModel {
                                 peer_id: p.peer_id,
                                 status: p.status,
                                 ws_addr: p.ws_addr,
+                                signaling_node: p.signaling_node,
                             });
                         if found != inner.backend {
                             inner.backend = found;

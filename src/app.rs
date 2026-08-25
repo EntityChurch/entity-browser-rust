@@ -595,7 +595,9 @@ fn build_direct_webrtc_establisher(
         std::sync::Arc::new(entity_peer::transport::BrowserWebSocketConnector),
         entity_peer::PeerConfig::default().home_hash_format,
     );
-    let ice_servers = p
+    // Annotated: the element type used to be inferred from `new`'s parameter,
+    // and reading `is_empty()` before the move takes that inference away.
+    let ice_servers: Vec<entity_peer::transport::WireIceServer> = p
         .ice_servers
         .iter()
         .map(|s| entity_peer::transport::WireIceServer {
@@ -605,18 +607,38 @@ fn build_direct_webrtc_establisher(
         })
         .collect();
 
-    Some(std::sync::Arc::new(MainThreadWebRtcEstablisher::new(
-        carrier,
-        self_peer_id.to_string(),
-        p.poll_interval_ms.unwrap_or(DEFAULT_WEBRTC_POLL_INTERVAL_MS),
-        p.max_deadline_ms.unwrap_or(DEFAULT_WEBRTC_MAX_DEADLINE_MS),
-        // `Require`: a §6.5 counterpart is always another peer running this
-        // crate, so the only thing this refuses is a build older than the
-        // sealed-deposit flip — the mixed-build case worth refusing loudly.
-        // Same posture as the worker host.
-        VerificationPolicy::Require,
-        ice_servers,
-    )) as std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>)
+    // Whether a **reflector** is provisioned. This is the input `reachability`
+    // cannot get from the candidates: it separates "we asked a reflector and
+    // learned nothing" from "we never asked", which are different sentences with
+    // different fixes.
+    //
+    // **Not `!ice_servers.is_empty()`, which is what this said until the relay
+    // field landed and made the list mixed.** A relay-only session has one entry
+    // and no reflector, and the old reading told that user their reflector had
+    // not answered — sending them to fix something they never configured.
+    let reflectors_configured = p.has_reflector();
+
+    Some(std::sync::Arc::new(
+        MainThreadWebRtcEstablisher::new(
+            carrier,
+            self_peer_id.to_string(),
+            p.poll_interval_ms.unwrap_or(DEFAULT_WEBRTC_POLL_INTERVAL_MS),
+            p.max_deadline_ms.unwrap_or(DEFAULT_WEBRTC_MAX_DEADLINE_MS),
+            // `Require`: a §6.5 counterpart is always another peer running this
+            // crate, so the only thing this refuses is a build older than the
+            // sealed-deposit flip — the mixed-build case worth refusing loudly.
+            // Same posture as the worker host.
+            VerificationPolicy::Require,
+            ice_servers,
+        )
+        // Observation only — it can neither change nor delay the seam result.
+        // Without it every reachability failure reaches the user as the one
+        // sentence "that peer is not connected", which is why rows 2 and 5–8 of
+        // the NAT analysis are all indistinguishable from a closed laptop.
+        .with_ice_observer(std::sync::Arc::new(
+            crate::reachability::EstablisherObserver::new(reflectors_configured),
+        )),
+    ) as std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>)
 }
 
 /// Free-function spawn dispatcher used by both fresh-create and reload

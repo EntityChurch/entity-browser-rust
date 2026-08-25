@@ -142,6 +142,16 @@ fn write_default_config(dir: &Path, label: Option<&str>) {
 struct PeerConfigFile {
     storage_backend: String,
     label: Option<String>,
+    /// Serve `system/signaling` — act as a §6.5 rendezvous for peers that
+    /// reach this listener. **Absent means false**, which is both the
+    /// fail-closed direction and what every peer written before this key
+    /// existed meant, so an old `config.toml` needs no migration.
+    signaling_node: bool,
+    /// Ask the router to forward this peer's listening port from the internet
+    /// (PCP / NAT-PMP). **Absent means false**, same fail-closed reading as
+    /// `signaling_node` and for a stronger reason: this one changes who can
+    /// reach the listener from *this LAN* to *anyone*.
+    port_mapping: bool,
 }
 
 impl Default for PeerConfigFile {
@@ -149,6 +159,8 @@ impl Default for PeerConfigFile {
         Self {
             storage_backend: "sqlite".into(),
             label: None,
+            signaling_node: false,
+            port_mapping: false,
         }
     }
 }
@@ -176,6 +188,67 @@ fn read_config(dir: &Path) -> PeerConfigFile {
             .and_then(|v| v.as_str())
             .map(String::from)
             .filter(|s| !s.is_empty()),
+        signaling_node: table
+            .get("signaling_node")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        port_mapping: table
+            .get("port_mapping")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    }
+}
+
+/// Flip the persisted "serve rendezvous" setting for one peer, preserving the
+/// rest of its `config.toml`.
+///
+/// Returns whether the write landed. A peer whose directory cannot be found is
+/// `false` rather than a panic — the caller surfaces that as a failed toggle.
+///
+/// **Rewrites the file from the parsed table** rather than appending a line, so
+/// flipping twice cannot leave two `signaling_node` keys with the first one
+/// winning (toml takes the first, which would make the toggle appear to stop
+/// working after one use).
+pub fn set_signaling_node(peer_id: &str, enabled: bool) -> bool {
+    set_peer_flag(peer_id, "signaling_node", enabled)
+}
+
+/// Flip the persisted "ask the router to forward my port" setting.
+/// See [`set_peer_flag`] for the round-trip rule both toggles depend on.
+pub fn set_port_mapping(peer_id: &str, enabled: bool) -> bool {
+    set_peer_flag(peer_id, "port_mapping", enabled)
+}
+
+/// Flip one boolean in a peer's `config.toml`, preserving the rest.
+///
+/// Parameterized rather than copied per setting: the second toggle would
+/// otherwise be a second copy of the round-trip rule below, and a copy is where
+/// one of them quietly starts appending instead.
+fn set_peer_flag(peer_id: &str, key: &str, enabled: bool) -> bool {
+    let Some(dir) = find_peer_dir_by_id(peer_id) else {
+        log::warn!("set_peer_flag({key}): no peer dir for {}", peer_id);
+        return false;
+    };
+    let path = dir.join("config.toml");
+    let mut table = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|b| b.parse::<toml::Table>().ok())
+        .unwrap_or_default();
+    table.insert(key.into(), toml::Value::Boolean(enabled));
+    match std::fs::write(&path, table.to_string()) {
+        Ok(()) => {
+            log::info!(
+                "Backend peer {} {} = {}",
+                &peer_id[..12.min(peer_id.len())],
+                key,
+                enabled
+            );
+            true
+        }
+        Err(e) => {
+            log::warn!("set_peer_flag({key}): write {:?} failed: {}", path, e);
+            false
+        }
     }
 }
 
@@ -191,6 +264,13 @@ pub struct LoadedBackendPeer {
     pub keypair: Keypair,
     pub label: Option<String>,
     pub sqlite_path: Option<PathBuf>,
+    /// Persisted "serve §6.5 rendezvous" setting. Consulted at start, where
+    /// `signaling_node::resolve_enabled` lets the environment override it.
+    pub signaling_node: bool,
+    /// Persisted "ask the router to forward my port" setting. Consulted at
+    /// start, where `port_mapping::resolve_enabled` lets the environment
+    /// override it.
+    pub port_mapping: bool,
 }
 
 pub fn save_peer(keypair: &Keypair, label: Option<&str>) -> Option<PathBuf> {
@@ -243,6 +323,8 @@ pub fn load_all_peers() -> Vec<LoadedBackendPeer> {
             keypair,
             label: cfg.label,
             sqlite_path,
+            signaling_node: cfg.signaling_node,
+            port_mapping: cfg.port_mapping,
         });
     }
     log::info!("Loaded {} backend peer(s) from {:?}", peers.len(), dir);

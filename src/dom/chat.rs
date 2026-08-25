@@ -209,7 +209,34 @@ fn render_reachability(parent: &Element, output: &ChatOutput) {
         );
     }
 
+    // *Why* the network could not carry it, when our own ICE agent can say.
+    // Subordinate to the chips above, never a replacement: they say whether,
+    // this says why, and the point of the whole classifier is that "this network
+    // needs a relay" and "your friend is offline" stop arriving as one sentence.
+    if let Some(advice) = output.reachability_advice {
+        if let Some(key) = reachability_message_key(advice) {
+            util::append(&row, &crate::dom::components::notice(&crate::i18n::t(key, &[])));
+        }
+    }
+
     util::append(parent, &row);
+}
+
+/// The catalog key for one advisory verdict, or `None` for the verdicts that
+/// must stay silent.
+///
+/// The `None` arms are the enforcement of §3.2's rule, one layer out from the
+/// classifier: `Unknown` and `Connected` have nothing to add to a state the
+/// kernel already published, and a surface that invented a sentence for them
+/// would be crying wolf during ordinary establishment.
+fn reachability_message_key(v: crate::reachability::Reachability) -> Option<&'static str> {
+    use crate::reachability::Reachability as R;
+    match v {
+        R::Unknown | R::Connected => None,
+        R::NoReflector => Some("chat.reach_no_reflector"),
+        R::ReflectorUnreachable => Some("chat.reach_reflector_unreachable"),
+        R::NoDirectPath => Some("chat.reach_no_direct_path"),
+    }
 }
 
 fn render_messages(parent: &Element, output: &ChatOutput) {

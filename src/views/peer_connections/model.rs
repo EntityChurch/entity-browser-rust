@@ -688,6 +688,9 @@ mod tests {
             label: String::new(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
         connectors::add_connector(&peers, &sys, &ghost).expect("add");
         // Both halves need waiting on: `select_connector` refuses until the
@@ -747,6 +750,9 @@ mod tests {
             label: String::new(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
 
         let peers = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(

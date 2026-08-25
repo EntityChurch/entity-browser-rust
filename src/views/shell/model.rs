@@ -868,16 +868,16 @@ impl ShellModel {
             // (`named_site::http_poll_origin`'s known limit — audit F6). Saying
             // only "publishes no origin" sent a reader looking for a missing
             // field that was in fact present.
-            let Some(origin) = target.origin.clone() else {
+            let (Some(layout), Some(origin)) = (target.layout.clone(), target.origin.clone())
+            else {
                 report(ScrollbackEntry::ErrorText(
                     "resolved WHO but not WHERE — this binding carries no http-poll transport \
-                     profile this client can fetch from (either none at all, which arch D10 now \
-                     forbids issuing, or one whose tree_url_prefix is not {origin}/{peer-id})" // i18n-ignore — dev-facing CLI
+                     profile (arch D10 now forbids issuing one without transports)" // i18n-ignore — dev-facing CLI
                         .into(),
                 ));
                 return;
             };
-            let Some(domain) = session_cache::session_for(&target.peer_id, &origin) else {
+            let Some(domain) = session_cache::session_for_layout(&target.peer_id, layout) else {
                 report(ScrollbackEntry::ErrorText(
                     "the named peer-id carries no public key — cannot pin it".into(), // i18n-ignore — dev-facing CLI
                 ));
@@ -1051,14 +1051,23 @@ impl ShellModel {
                 // the label is free text and already eats the tail — a fourth
                 // position would make `connector add id addr my box` ambiguous.
                 let rest = &args[3..];
-                let ice = rest
-                    .iter()
-                    .find_map(|a| a.strip_prefix("ice="))
-                    .unwrap_or("")
-                    .to_string();
+                // Same flag shape as `ice=` for the relay's three parts, for the
+                // same reason: the label eats the tail, so anything else has to
+                // announce itself.
+                let flag = |k: &str| {
+                    rest.iter()
+                        .find_map(|a| a.strip_prefix(k))
+                        .unwrap_or("")
+                        .to_string()
+                };
+                const FLAGS: [&str; 4] = ["ice=", "relay=", "relay_user=", "relay_cred="];
+                let ice = flag("ice=");
+                let relay = flag("relay=");
+                let relay_username = flag("relay_user=");
+                let relay_credential = flag("relay_cred=");
                 let label = rest
                     .iter()
-                    .filter(|a| !a.starts_with("ice="))
+                    .filter(|a| !FLAGS.iter().any(|f| a.starts_with(f)))
                     .copied()
                     .collect::<Vec<_>>()
                     .join(" ");
@@ -1070,6 +1079,9 @@ impl ShellModel {
                     // Ignored by `add_connector` — a node's own advertisement is
                         // learned, never typed.
                         ice_advertised: String::new(),
+                    relay,
+                    relay_username,
+                    relay_credential,
                     };
                 match connectors::add_connector(peers, &registry_pid, &c) {
                     Ok(()) => {
@@ -1923,6 +1935,9 @@ mod tests {
                 label: String::new(),
                 ice: String::new(),
                 ice_advertised: String::new(),
+                relay: String::new(),
+                relay_username: String::new(),
+                relay_credential: String::new(),
             };
             connectors::add_connector(&peers, &sys, &node).expect("add");
             for _ in 0..400 {
@@ -3361,6 +3376,9 @@ mod tests {
             label: String::new(),
             ice: String::new(),
             ice_advertised: String::new(),
+            relay: String::new(),
+            relay_username: String::new(),
+            relay_credential: String::new(),
         };
 
         // The shell's peer, with the node in its registry and selected.

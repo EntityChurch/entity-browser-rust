@@ -62,6 +62,10 @@ mod listener_state;
 mod peer_mode;
 mod peer_registry;
 mod reach_keeper;
+// Why a peer could not be reached, from our own ICE agent's gathered candidate
+// types. `dial_markers`' shape (local, in-flight, in-memory) — NOT a fourth
+// liveness store; the kernel owns connection state and this only advises.
+mod reachability;
 mod rendezvous;
 mod roster;
 mod transport_profiles;

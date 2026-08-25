@@ -48,6 +48,15 @@ pub mod registry_publish;
 pub mod read;
 pub mod render;
 pub mod resolver;
+/// The `http-poll` endpoint, **read rather than assumed** — the v1.8 MUST that
+/// says a consumer never derives the manifest's location by convention.
+pub mod publish_layout;
+/// **The cross-implementation consume check** — a site published by
+/// `entity-workbench-go`, walked by our reader. Tests only; ADR-0012's
+/// cohort-consistent-vs-independent distinction is why it is not enough to
+/// publish and consume with the same arm.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod crossimpl_go;
 /// B15 — consume a signed published root over an async transport (both arches).
 pub mod session_cache;
 pub mod signed_fetch;
