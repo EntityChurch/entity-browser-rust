@@ -550,7 +550,7 @@
   "theme.err_no_tokens": "थीम में कोई टोकन मान नहीं है",
 
   "label.role": "भूमिका",
-  "label.peer_id": "पीयर आईडी",
+  "label.peer_id": "पीयर ID",
   "keymanager.subtitle": "होस्ट किए गए पीयर की सार्वजनिक पहचान (Ed25519)",
   "peerconn.this_peer": "यह पीयर {pid} · {kind}",
   "peerconn.listening": " · {addr} पर सुन रहा है",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(पीयर {peer} पर chain_id {chain} के लिए कोई कंटिन्युएशन या चेन-एरर मार्कर बाउंड नहीं है)",
   "chaintrace.body_redacted": "(रेंडरर नीति के अनुसार बॉडी छिपाई गई)",
   "chaintrace.body_undecoded": "(बॉडी अभी डिकोड नहीं हुई)",
+
+  "state.loading": "लोड हो रहा है…",
+  "entitytree.empty": "(खाली ट्री)",
+  "accesslog.direction_label": "दिशा:",
+  "peers.alias_placeholder": "उपनाम (वैकल्पिक)",
+  "filetransfer.no_peer_hint": "कोई पीयर कनेक्ट नहीं है। {window} खोलें और कोई Tori-नेटिव बैकएंड जोड़ें (उसका QR स्कैन करें या उसके {scheme} पते से जुड़ें), फिर फ़ाइलें ट्रांसफ़र करने यहाँ लौटें।",
+  "peerdisplay.runtime_main_thread": "मुख्य थ्रेड",
+  "peerdisplay.runtime_worker": "वर्कर",
+  "peerdisplay.runtime_native": "नेटिव",
+  "peerdisplay.storage_in_memory": "मेमोरी में",
+  "peerdisplay.storage_native_store": "नेटिव स्टोर",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "प्राथमिक",
+  "peerdisplay.kind_local": "स्थानीय",
+  "peerdisplay.kind_remote": "दूरस्थ",
 
   "peer.count": {
     "one": "{n} पीयर",

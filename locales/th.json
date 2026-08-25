@@ -566,6 +566,23 @@
   "chaintrace.body_redacted": "(ซ่อนเนื้อหาตามนโยบายของตัวเรนเดอร์)",
   "chaintrace.body_undecoded": "(ยังไม่ได้ถอดรหัสเนื้อหา)",
 
+  "state.loading": "กำลังโหลด…",
+  "entitytree.empty": "(แผนผังว่าง)",
+  "accesslog.direction_label": "ทิศทาง:",
+  "peers.alias_placeholder": "ชื่อแทน (ไม่บังคับ)",
+  "filetransfer.no_peer_hint": "ไม่มีเพียร์ที่เชื่อมต่อ เปิด {window} แล้วจับคู่แบ็กเอนด์ Tori เนทีฟ (สแกน QR หรือเชื่อมต่อที่อยู่ {scheme}) จากนั้นกลับมาที่นี่เพื่อโอนไฟล์",
+  "peerdisplay.runtime_main_thread": "เธรดหลัก",
+  "peerdisplay.runtime_worker": "เวิร์กเกอร์",
+  "peerdisplay.runtime_native": "เนทีฟ",
+  "peerdisplay.storage_in_memory": "ในหน่วยความจำ",
+  "peerdisplay.storage_native_store": "ที่จัดเก็บเนทีฟ",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "หลัก",
+  "peerdisplay.kind_local": "ภายในเครื่อง",
+  "peerdisplay.kind_remote": "ระยะไกล",
+
   "peer.count": {
     "other": "{n} เพียร์"
   }

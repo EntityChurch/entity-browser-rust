@@ -319,7 +319,7 @@
   "accesslog.filter_local": "· Paikallinen (sovelluksen oma vertainen)",
   "accesslog.tab_activity": "Toiminta (reaaliaikainen loki)",
   "accesslog.tab_capabilities": "Havaitut ominaisuudet",
-  "accesslog.actor_system_backend": "Järjestelmän taustapalvelu",
+  "accesslog.actor_system_backend": "Järjestelmän taustaosa",
   "accesslog.actor_system_peer": "Järjestelmävertainen",
   "accesslog.capabilities_observed": {
     "one": "{actor} — {n} havaittu ominaisuus",
@@ -376,7 +376,7 @@
   "theme.status_saved": "Tallennettu \"{name}\"",
   "theme.status_reverted": "Palautettu",
   "theme.status_deleted": "Poistettu \"{name}\"",
-  "theme.status_unknown_base": "Tuntematon perustemа \"{base}\"",
+  "theme.status_unknown_base": "Tuntematon perustema \"{base}\"",
 
   "siteeditor.your_sites": "Sivustosi",
   "siteeditor.new_site": "Uusi sivusto",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(chain_id {chain} -tunnukselle ei ole sidottu jatko- tai ketjuvirhemerkintää vertaisella {peer})",
   "chaintrace.body_redacted": "(runko peitetty renderöijän käytännön mukaan)",
   "chaintrace.body_undecoded": "(runkoa ei ole vielä purettu)",
+
+  "state.loading": "Ladataan…",
+  "entitytree.empty": "(tyhjä puu)",
+  "accesslog.direction_label": "Suunta:",
+  "peers.alias_placeholder": "alias (valinnainen)",
+  "filetransfer.no_peer_hint": "Ei yhdistettyä vertaista. Avaa {window} ja parita Tori-natiivi taustapalvelu (skannaa sen QR tai yhdistä sen {scheme}-osoitteeseen) ja palaa sitten tänne siirtämään tiedostoja.",
+  "peerdisplay.runtime_main_thread": "pääsäie",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "natiivi",
+  "peerdisplay.storage_in_memory": "muistissa",
+  "peerdisplay.storage_native_store": "natiivi tallennus",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "ensisijainen",
+  "peerdisplay.kind_local": "paikallinen",
+  "peerdisplay.kind_remote": "etä",
 
   "peer.count": {
     "one": "{n} vertainen",

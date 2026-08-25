@@ -2846,7 +2846,7 @@ impl EntityApp {
                         String::new()
                     };
                     log.log(format!(
-                        "← system/query find → {} match(es), total={}, has_more={}{}",
+                        "← system/query find → {} match(es), total={}, has_more={}{}", // i18n-ignore — console diagnostic (dev log surface)
                         results.matches.len(),
                         results.total,
                         results.has_more,
@@ -2861,7 +2861,7 @@ impl EntityApp {
                     }
                 }
                 Err(e) => {
-                    let msg = format!("✗ system/query find → {}", e);
+                    let msg = format!("✗ system/query find → {}", e); // i18n-ignore — console diagnostic (dev log surface)
                     tracing::error!("{}", msg);
                     log.log(msg);
                 }
@@ -2880,9 +2880,9 @@ impl EntityApp {
         let fut = self.peer_manager.count(&pid, expression);
         let task = async move {
             match fut.await {
-                Ok(n) => log.log(format!("← system/query count → {}", n)),
+                Ok(n) => log.log(format!("← system/query count → {}", n)), // i18n-ignore — console diagnostic (dev log surface)
                 Err(e) => {
-                    let msg = format!("✗ system/query count → {}", e);
+                    let msg = format!("✗ system/query count → {}", e); // i18n-ignore — console diagnostic (dev log surface)
                     tracing::error!("{}", msg);
                     log.log(msg);
                 }

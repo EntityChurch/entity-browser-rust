@@ -578,6 +578,23 @@
   "chaintrace.body_redacted": "(conținut ascuns conform politicii randării)",
   "chaintrace.body_undecoded": "(conținut încă nedecodat)",
 
+  "state.loading": "Se încarcă…",
+  "entitytree.empty": "(arbore gol)",
+  "accesslog.direction_label": "Direcție:",
+  "peers.alias_placeholder": "alias (opțional)",
+  "filetransfer.no_peer_hint": "Niciun peer conectat. Deschide {window} și asociază un backend nativ Tori (scanează codul QR sau conectează-te la adresa {scheme}), apoi revino aici pentru a transfera fișiere.",
+  "peerdisplay.runtime_main_thread": "fir principal",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "nativ",
+  "peerdisplay.storage_in_memory": "în memorie",
+  "peerdisplay.storage_native_store": "stocare nativă",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "principal",
+  "peerdisplay.kind_local": "local",
+  "peerdisplay.kind_remote": "la distanță",
+
   "peer.count": {
     "one": "{n} peer",
     "few": "{n} peeri",

@@ -78,11 +78,11 @@ fn append_peer_facts(card: &Element, peer: &SystemPeerCard) {
     util::append(&row, &badge);
 
     let runtime = util::create_element_with_class("span", "peer-chip");
-    util::set_text(&runtime, peer.descriptor.runtime.label());
+    util::set_text(&runtime, &peer.descriptor.runtime.display_label());
     util::append(&row, &runtime);
 
     let storage = util::create_element_with_class("span", "peer-chip");
-    util::set_text(&storage, peer.descriptor.storage.label());
+    util::set_text(&storage, &peer.descriptor.storage.display_label());
     util::append(&row, &storage);
 
     util::append(card, &row);

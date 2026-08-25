@@ -61,7 +61,7 @@ fn render_bound_header(parent: &Element, output: &PeerConnectionsOutput) {
             ),
             (
                 "kind",
-                &util::escape_html(&output.bound_peer.kind.to_string()),
+                &util::escape_html(&output.bound_peer.kind.display_label()),
             ),
         ],
     );

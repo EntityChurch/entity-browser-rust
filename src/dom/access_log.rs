@@ -299,7 +299,7 @@ fn controls_bar(output: &AccessLogOutput, ctx: &DomCtx) -> Element {
     util::append(&bar, &peer_select);
 
     // --- Direction filter ---
-    util::append(&bar, &field_label("Direction:"));
+    util::append(&bar, &field_label(&crate::i18n::t("accesslog.direction_label", &[])));
     let dir_select = compact_select("access-log-direction");
     for opt in DirectionFilter::ALL {
         append_option(&dir_select, opt.as_value(), &crate::i18n::t(opt.label(), &[]), opt == output.direction);

@@ -572,6 +572,23 @@
   "chaintrace.body_redacted": "(innehållet maskerat enligt renderarens policy)",
   "chaintrace.body_undecoded": "(innehållet ännu inte avkodat)",
 
+  "state.loading": "Läser in…",
+  "entitytree.empty": "(tomt träd)",
+  "accesslog.direction_label": "Riktning:",
+  "peers.alias_placeholder": "alias (valfritt)",
+  "filetransfer.no_peer_hint": "Ingen peer ansluten. Öppna {window} och para ihop en Tori-nativ backend (skanna dess QR eller anslut till dess {scheme}-adress), och kom sedan tillbaka hit för att överföra filer.",
+  "peerdisplay.runtime_main_thread": "huvudtråd",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "native",
+  "peerdisplay.storage_in_memory": "i minnet",
+  "peerdisplay.storage_native_store": "native-lagring",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primär",
+  "peerdisplay.kind_local": "lokal",
+  "peerdisplay.kind_remote": "fjärr",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"

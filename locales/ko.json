@@ -566,6 +566,23 @@
   "chaintrace.body_redacted": "(렌더러 정책에 따라 본문이 가려졌습니다)",
   "chaintrace.body_undecoded": "(본문이 아직 디코딩되지 않았습니다)",
 
+  "state.loading": "불러오는 중…",
+  "entitytree.empty": "(빈 트리)",
+  "accesslog.direction_label": "방향:",
+  "peers.alias_placeholder": "별칭(선택)",
+  "filetransfer.no_peer_hint": "연결된 피어가 없습니다. {window}을(를) 열어 Tori 네이티브 백엔드를 페어링한 뒤(QR을 스캔하거나 {scheme} 주소로 연결), 여기로 돌아와 파일을 전송하세요.",
+  "peerdisplay.runtime_main_thread": "메인 스레드",
+  "peerdisplay.runtime_worker": "워커",
+  "peerdisplay.runtime_native": "네이티브",
+  "peerdisplay.storage_in_memory": "메모리",
+  "peerdisplay.storage_native_store": "네이티브 저장소",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "기본",
+  "peerdisplay.kind_local": "로컬",
+  "peerdisplay.kind_remote": "원격",
+
   "peer.count": {
     "other": "피어 {n}개"
   }

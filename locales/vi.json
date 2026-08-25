@@ -317,7 +317,7 @@
   "accesslog.filter_local": "· Cục bộ (điểm ngang hàng của chính ứng dụng này)",
   "accesslog.tab_activity": "Hoạt động (nhật ký trực tiếp)",
   "accesslog.tab_capabilities": "Khả năng đã quan sát",
-  "accesslog.actor_system_backend": "Backend hệ thống",
+  "accesslog.actor_system_backend": "Phần phụ trợ hệ thống",
   "accesslog.actor_system_peer": "Điểm ngang hàng hệ thống",
   "accesslog.capabilities_observed": {
     "other": "{actor} — {n} khả năng đã quan sát"
@@ -565,6 +565,23 @@
   "chaintrace.no_marker": "(không có dấu tiếp nối hoặc dấu lỗi chuỗi nào gắn với chain_id {chain} trên điểm ngang hàng {peer})",
   "chaintrace.body_redacted": "(nội dung được ẩn theo chính sách của bộ kết xuất)",
   "chaintrace.body_undecoded": "(nội dung chưa được giải mã)",
+
+  "state.loading": "Đang tải…",
+  "entitytree.empty": "(cây rỗng)",
+  "accesslog.direction_label": "Hướng:",
+  "peers.alias_placeholder": "bí danh (tuỳ chọn)",
+  "filetransfer.no_peer_hint": "Chưa có điểm ngang hàng nào được kết nối. Hãy mở {window} và ghép nối một backend Tori gốc (quét mã QR hoặc kết nối tới địa chỉ {scheme}), rồi quay lại đây để truyền tệp.",
+  "peerdisplay.runtime_main_thread": "luồng chính",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "gốc",
+  "peerdisplay.storage_in_memory": "trong bộ nhớ",
+  "peerdisplay.storage_native_store": "kho lưu trữ gốc",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "chính",
+  "peerdisplay.kind_local": "cục bộ",
+  "peerdisplay.kind_remote": "từ xa",
 
   "peer.count": {
     "other": "{n} điểm ngang hàng"

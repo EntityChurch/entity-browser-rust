@@ -491,7 +491,19 @@ pub fn td(child: &Element) -> Element {
 pub fn loading(msg: &str) -> Element {
     let p = util::create_element("p");
     p.set_attribute("style", theme::HINT).ok();
-    util::set_text(&p, if msg.is_empty() { "Loading\u{2026}" } else { msg });
+    // The empty-arg default is a real on-screen string, so it resolves through
+    // the catalog like any other. `components.rs` is ALLOW-listed in the prose
+    // scan (atoms hold the default labels they emit), which means a hardcoded
+    // default here is invisible to the gate by construction — the one place
+    // where "the atom owns it" has to mean "the atom localizes it".
+    let fallback;
+    let text = if msg.is_empty() {
+        fallback = crate::i18n::t("state.loading", &[]);
+        fallback.as_str()
+    } else {
+        msg
+    };
+    util::set_text(&p, text);
     p
 }
 

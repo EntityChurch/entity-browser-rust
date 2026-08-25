@@ -327,7 +327,7 @@
   "accesslog.filter_local": "· محلي (النظير الخاص بهذا التطبيق)",
   "accesslog.tab_activity": "النشاط (سجل مباشر)",
   "accesslog.tab_capabilities": "القدرات المرصودة",
-  "accesslog.actor_system_backend": "الخلفية النظامية",
+  "accesslog.actor_system_backend": "الواجهة الخلفية للنظام",
   "accesslog.actor_system_peer": "نظير النظام",
   "accesslog.capabilities_observed": {
     "zero": "{actor} — {n} قدرة مرصودة",
@@ -595,6 +595,23 @@
   "chaintrace.no_marker": "(لا يوجد مؤشر استمرار أو خطأ سلسلة مرتبط بـ chain_id {chain} على النظير {peer})",
   "chaintrace.body_redacted": "(تم حجب المحتوى وفق سياسة العارض)",
   "chaintrace.body_undecoded": "(لم يُفك ترميز المحتوى بعد)",
+
+  "state.loading": "جارٍ التحميل…",
+  "entitytree.empty": "(شجرة فارغة)",
+  "accesslog.direction_label": "الاتجاه:",
+  "peers.alias_placeholder": "اسم مستعار (اختياري)",
+  "filetransfer.no_peer_hint": "لا يوجد نظير متصل. افتح {window} وقم بإقران خدمة Tori خلفية (امسح رمز QR الخاص بها أو اتصل بعنوان {scheme})، ثم عد إلى هنا لنقل الملفات.",
+  "peerdisplay.runtime_main_thread": "الخيط الرئيسي",
+  "peerdisplay.runtime_worker": "عامل",
+  "peerdisplay.runtime_native": "أصلي",
+  "peerdisplay.storage_in_memory": "في الذاكرة",
+  "peerdisplay.storage_native_store": "مخزن أصلي",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "أساسي",
+  "peerdisplay.kind_local": "محلي",
+  "peerdisplay.kind_remote": "بعيد",
 
   "peer.count": {
     "zero": "{n} نظير",

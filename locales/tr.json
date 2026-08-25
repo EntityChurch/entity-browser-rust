@@ -572,6 +572,23 @@
   "chaintrace.body_redacted": "(gövde, işleyici politikası gereği gizlendi)",
   "chaintrace.body_undecoded": "(gövde henüz çözülmedi)",
 
+  "state.loading": "Yükleniyor…",
+  "entitytree.empty": "(boş ağaç)",
+  "accesslog.direction_label": "Yön:",
+  "peers.alias_placeholder": "takma ad (isteğe bağlı)",
+  "filetransfer.no_peer_hint": "Bağlı peer yok. {window} penceresini açıp bir Tori-native arka uç eşleyin (QR'ını tarayın veya {scheme} adresine bağlanın), sonra dosya aktarmak için buraya dönün.",
+  "peerdisplay.runtime_main_thread": "ana iş parçacığı",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "yerel",
+  "peerdisplay.storage_in_memory": "bellekte",
+  "peerdisplay.storage_native_store": "yerel depo",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "birincil",
+  "peerdisplay.kind_local": "yerel",
+  "peerdisplay.kind_remote": "uzak",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peer"

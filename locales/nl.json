@@ -320,7 +320,7 @@
   "accesslog.tab_activity": "Activiteit (live logboek)",
   "accesslog.tab_capabilities": "Waargenomen mogelijkheden",
   "accesslog.actor_system_backend": "Systeem-backend",
-  "accesslog.actor_system_peer": "Systeempeer",
+  "accesslog.actor_system_peer": "Systeem-peer",
   "accesslog.capabilities_observed": {
     "one": "{actor} — {n} waargenomen mogelijkheid",
     "other": "{actor} — {n} waargenomen mogelijkheden"
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(geen voortzettings- of ketenfoutmarkering gekoppeld aan chain_id {chain} op peer {peer})",
   "chaintrace.body_redacted": "(inhoud geredigeerd volgens rendererbeleid)",
   "chaintrace.body_undecoded": "(inhoud nog niet gedecodeerd)",
+
+  "state.loading": "Laden…",
+  "entitytree.empty": "(lege boom)",
+  "accesslog.direction_label": "Richting:",
+  "peers.alias_placeholder": "alias (optioneel)",
+  "filetransfer.no_peer_hint": "Geen peer verbonden. Open {window} en koppel een Tori-native backend (scan de QR-code of verbind met het {scheme}-adres), en kom dan hier terug om bestanden over te zetten.",
+  "peerdisplay.runtime_main_thread": "hoofdthread",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "native",
+  "peerdisplay.storage_in_memory": "in geheugen",
+  "peerdisplay.storage_native_store": "native opslag",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primair",
+  "peerdisplay.kind_local": "lokaal",
+  "peerdisplay.kind_remote": "extern",
 
   "peer.count": {
     "one": "{n} peer",

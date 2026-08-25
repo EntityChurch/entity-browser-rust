@@ -73,6 +73,20 @@ impl PeerDisplay {
         }
     }
 
+    /// The localized form, for the one place this classification is shown to a
+    /// user (the Peer Connections header). [`as_str`](Self::as_str) stays the
+    /// CSS-class / log / registry-tag token and must not be translated — the
+    /// `from_tag` round-trip depends on it.
+    pub fn display_label(self) -> String {
+        crate::i18n::t(
+            match self {
+                Self::Primary => "peerdisplay.kind_primary",
+                Self::Local => "peerdisplay.kind_local",
+                Self::Remote => "peerdisplay.kind_remote",
+            },
+            &[],
+        )
+    }
 }
 
 impl std::fmt::Display for PeerDisplay {
@@ -105,10 +119,24 @@ pub enum PeerRuntime {
 impl PeerRuntime {
     pub fn label(self) -> &'static str {
         match self {
-            Self::MainThread => "main thread",
+            Self::MainThread => "main thread", // i18n-ignore — identity token; display twin below
             Self::Worker => "worker",
             Self::Native => "native",
         }
+    }
+
+    /// The localized chip text (Peers, System Overview). Separate from
+    /// [`Self::label`], which stays a stable identity token for the registry
+    /// and the logs — the same split `theme_tokens` makes for theme names.
+    pub fn display_label(self) -> String {
+        crate::i18n::t(
+            match self {
+                Self::MainThread => "peerdisplay.runtime_main_thread",
+                Self::Worker => "peerdisplay.runtime_worker",
+                Self::Native => "peerdisplay.runtime_native",
+            },
+            &[],
+        )
     }
 }
 
@@ -131,8 +159,24 @@ impl PeerStorage {
             Self::InMemory => "in-memory",
             Self::IndexedDb => "IndexedDB",
             Self::Opfs => "OPFS",
-            Self::NativeStore => "native store",
+            Self::NativeStore => "native store", // i18n-ignore — identity token; display twin below
         }
+    }
+
+    /// The localized chip text. `IndexedDB` and `OPFS` are product names and
+    /// stay as written in every locale (audit §"Technical labels": translate
+    /// the surrounding sentence, keep the acronym); the descriptive ones —
+    /// "in-memory", "native store" — are words and do get translated.
+    pub fn display_label(self) -> String {
+        crate::i18n::t(
+            match self {
+                Self::InMemory => "peerdisplay.storage_in_memory",
+                Self::IndexedDb => "peerdisplay.storage_indexeddb",
+                Self::Opfs => "peerdisplay.storage_opfs",
+                Self::NativeStore => "peerdisplay.storage_native_store",
+            },
+            &[],
+        )
     }
 
     /// Whether the tree survives a reload. `false` only for [`Self::InMemory`].
@@ -191,14 +235,14 @@ impl PeerDescriptor {
     /// of "frontend"/"backend".
     pub fn role_name(self) -> &'static str {
         match (self.role, self.runtime) {
-            (PeerRole::System, PeerRuntime::Native) => "system (native)",
+            (PeerRole::System, PeerRuntime::Native) => "system (native)", // i18n-ignore — registry `role` data field; display twin is peers.kind_label.*
             (PeerRole::System, _) => "system",
             (PeerRole::User, PeerRuntime::Native) => "native",
             (PeerRole::User, PeerRuntime::MainThread) => {
                 if self.storage == PeerStorage::IndexedDb {
                     "main thread (IndexedDB)" // i18n-ignore — registry `role` data field + technical tokens; user-facing twin is peers.kind_label.*
                 } else {
-                    "main thread"
+                    "main thread" // i18n-ignore — registry `role` data field; display twin is peers.kind_label.*
                 }
             }
             (PeerRole::User, PeerRuntime::Worker) => {

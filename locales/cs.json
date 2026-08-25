@@ -578,6 +578,23 @@
   "chaintrace.body_redacted": "(tělo skryto podle zásad rendereru)",
   "chaintrace.body_undecoded": "(tělo zatím není dekódováno)",
 
+  "state.loading": "Načítání…",
+  "entitytree.empty": "(prázdný strom)",
+  "accesslog.direction_label": "Směr:",
+  "peers.alias_placeholder": "alias (volitelné)",
+  "filetransfer.no_peer_hint": "Není připojen žádný peer. Otevřete {window} a spárujte nativní Tori backend (naskenujte jeho QR nebo se připojte na jeho adresu {scheme}), pak se sem vraťte a přenášejte soubory.",
+  "peerdisplay.runtime_main_thread": "hlavní vlákno",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "nativní",
+  "peerdisplay.storage_in_memory": "v paměti",
+  "peerdisplay.storage_native_store": "nativní úložiště",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primární",
+  "peerdisplay.kind_local": "lokální",
+  "peerdisplay.kind_remote": "vzdálený",
+
   "peer.count": {
     "one": "{n} peer",
     "few": "{n} peery",

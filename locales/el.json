@@ -572,6 +572,23 @@
   "chaintrace.body_redacted": "(το σώμα αποκρύφτηκε βάσει πολιτικής απόδοσης)",
   "chaintrace.body_undecoded": "(το σώμα δεν έχει αποκωδικοποιηθεί ακόμη)",
 
+  "state.loading": "Φόρτωση…",
+  "entitytree.empty": "(κενό δέντρο)",
+  "accesslog.direction_label": "Κατεύθυνση:",
+  "peers.alias_placeholder": "ψευδώνυμο (προαιρετικό)",
+  "filetransfer.no_peer_hint": "Δεν έχει συνδεθεί ομότιμος. Ανοίξτε {window} και συνδέστε ένα Tori-native backend (σαρώστε το QR του ή συνδεθείτε στη διεύθυνση {scheme}), και επιστρέψτε εδώ για μεταφορά αρχείων.",
+  "peerdisplay.runtime_main_thread": "κύριο νήμα",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "εγγενές",
+  "peerdisplay.storage_in_memory": "στη μνήμη",
+  "peerdisplay.storage_native_store": "εγγενής αποθήκη",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "κύριος",
+  "peerdisplay.kind_local": "τοπικός",
+  "peerdisplay.kind_remote": "απομακρυσμένος",
+
   "peer.count": {
     "one": "{n} ομότιμος",
     "other": "{n} ομότιμοι"

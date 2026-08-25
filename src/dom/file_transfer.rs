@@ -105,11 +105,19 @@ fn auth_state(access: &TargetAccess) -> AuthState {
 fn render_no_target_hint(parent: &Element) {
     let hint = util::create_element("p");
     hint.set_attribute("style", &format!("color:var(--text-dim, #888);{}", theme::NOTE)).ok();
-    hint.set_inner_html(
-        "No peer connected. Open <strong>Peer Connections</strong> and pair a \
-         Tori-native backend (scan its QR or connect its <code>ws://</code> \
-         address), then come back here to transfer files.",
-    );
+    hint.set_inner_html(&crate::i18n::t(
+        "filetransfer.no_peer_hint",
+        &[
+            (
+                "window",
+                &format!(
+                    "<strong>{}</strong>",
+                    util::escape_html(&crate::i18n::t("window.peer_connections", &[]))
+                ),
+            ),
+            ("scheme", "<code>ws://</code>"),
+        ],
+    ));
     util::append(parent, &hint);
 }
 
@@ -188,7 +196,7 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
 
     if !output.root_listed {
         if output.root_loading {
-            util::append(parent, &components::loading("")); // "Loading…"
+            util::append(parent, &components::loading(""));
         } else {
             let browse = components::button(
                 ctx,

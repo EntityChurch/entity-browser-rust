@@ -141,7 +141,7 @@
   "label.results": "Resultater",
   "label.content": "Innhold",
   "label.system": "System",
-  "status.loading": "Laster inn…",
+  "status.loading": "Laster…",
 
   "peers.scan_qr": "Skann en QR-kode",
   "peers.scan_hint": "Skann dette fra en annen enhet for å koble den til her.",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(ingen fortsettelses- eller kjedefeilmarkør bundet til chain_id {chain} på peer {peer})",
   "chaintrace.body_redacted": "(innhold sladdet i henhold til renderer-policy)",
   "chaintrace.body_undecoded": "(innhold ikke dekodet ennå)",
+
+  "state.loading": "Laster…",
+  "entitytree.empty": "(tomt tre)",
+  "accesslog.direction_label": "Retning:",
+  "peers.alias_placeholder": "alias (valgfritt)",
+  "filetransfer.no_peer_hint": "Ingen peer tilkoblet. Åpne {window} og par en Tori-nativ backend (skann QR-koden eller koble til {scheme}-adressen), og kom så tilbake hit for å overføre filer.",
+  "peerdisplay.runtime_main_thread": "hovedtråd",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "native",
+  "peerdisplay.storage_in_memory": "i minnet",
+  "peerdisplay.storage_native_store": "native lager",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primær",
+  "peerdisplay.kind_local": "lokal",
+  "peerdisplay.kind_remote": "ekstern",
 
   "peer.count": {
     "one": "{n} peer",

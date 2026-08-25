@@ -566,6 +566,23 @@
   "chaintrace.body_redacted": "（依据渲染器策略，正文已隐去）",
   "chaintrace.body_undecoded": "（正文尚未解码）",
 
+  "state.loading": "加载中…",
+  "entitytree.empty": "（空树）",
+  "accesslog.direction_label": "方向：",
+  "peers.alias_placeholder": "别名（可选）",
+  "filetransfer.no_peer_hint": "未连接对等节点。请打开 {window} 并配对一个 Tori 原生后端（扫描其二维码或连接其 {scheme} 地址），然后回到这里传输文件。",
+  "peerdisplay.runtime_main_thread": "主线程",
+  "peerdisplay.runtime_worker": "工作线程",
+  "peerdisplay.runtime_native": "原生",
+  "peerdisplay.storage_in_memory": "内存中",
+  "peerdisplay.storage_native_store": "原生存储",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "主要",
+  "peerdisplay.kind_local": "本地",
+  "peerdisplay.kind_remote": "远程",
+
   "peer.count": {
     "other": "{n} 个对等节点"
   }

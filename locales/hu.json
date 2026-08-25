@@ -319,8 +319,8 @@
   "accesslog.filter_local": "· Helyi (az alkalmazás saját peere)",
   "accesslog.tab_activity": "Tevékenység (élő napló)",
   "accesslog.tab_capabilities": "Megfigyelt képességek",
-  "accesslog.actor_system_backend": "Rendszer-backend",
-  "accesslog.actor_system_peer": "Rendszerpeer",
+  "accesslog.actor_system_backend": "Rendszer-háttérrendszer",
+  "accesslog.actor_system_peer": "Rendszer-peer",
   "accesslog.capabilities_observed": {
     "one": "{actor} — {n} megfigyelt képesség",
     "other": "{actor} — {n} megfigyelt képesség"
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(nincs folytatás- vagy lánchiba-jelölő kötve a(z) {chain} chain_id-hoz a(z) {peer} peeren)",
   "chaintrace.body_redacted": "(a törzs a megjelenítő házirendje szerint kitakarva)",
   "chaintrace.body_undecoded": "(a törzs még nincs dekódolva)",
+
+  "state.loading": "Betöltés…",
+  "entitytree.empty": "(üres fa)",
+  "accesslog.direction_label": "Irány:",
+  "peers.alias_placeholder": "álnév (nem kötelező)",
+  "filetransfer.no_peer_hint": "Nincs csatlakoztatott peer. Nyisd meg a(z) {window} ablakot, és párosíts egy Tori-natív háttérszolgáltatást (olvasd be a QR-kódját, vagy csatlakozz a(z) {scheme} címéhez), majd térj vissza ide fájlokat átvinni.",
+  "peerdisplay.runtime_main_thread": "fő szál",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "natív",
+  "peerdisplay.storage_in_memory": "memóriában",
+  "peerdisplay.storage_native_store": "natív tároló",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "elsődleges",
+  "peerdisplay.kind_local": "helyi",
+  "peerdisplay.kind_remote": "távoli",
 
   "peer.count": {
     "one": "{n} peer",

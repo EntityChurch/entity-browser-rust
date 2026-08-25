@@ -566,6 +566,23 @@
   "chaintrace.body_redacted": "(レンダラーのポリシーにより本文は伏せられています)",
   "chaintrace.body_undecoded": "(本文はまだデコードされていません)",
 
+  "state.loading": "読み込み中…",
+  "entitytree.empty": "(空のツリー)",
+  "accesslog.direction_label": "方向:",
+  "peers.alias_placeholder": "エイリアス (任意)",
+  "filetransfer.no_peer_hint": "接続されたピアがありません。{window} を開いて Tori ネイティブバックエンドをペアリングし (QR をスキャンするか {scheme} アドレスに接続)、ここに戻ってファイルを転送してください。",
+  "peerdisplay.runtime_main_thread": "メインスレッド",
+  "peerdisplay.runtime_worker": "ワーカー",
+  "peerdisplay.runtime_native": "ネイティブ",
+  "peerdisplay.storage_in_memory": "メモリ上",
+  "peerdisplay.storage_native_store": "ネイティブストア",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "プライマリ",
+  "peerdisplay.kind_local": "ローカル",
+  "peerdisplay.kind_remote": "リモート",
+
   "peer.count": {
     "other": "{n} 個のピア"
   }

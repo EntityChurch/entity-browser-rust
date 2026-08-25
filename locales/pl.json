@@ -321,7 +321,7 @@
   "accesslog.filter_local": "· Lokalne (własny peer tej aplikacji)",
   "accesslog.tab_activity": "Aktywność (dziennik na żywo)",
   "accesslog.tab_capabilities": "Zaobserwowane możliwości",
-  "accesslog.actor_system_backend": "Backend systemu",
+  "accesslog.actor_system_backend": "Zaplecze systemowe",
   "accesslog.actor_system_peer": "Peer systemowy",
   "accesslog.capabilities_observed": {
     "one": "{actor} — {n} zaobserwowana możliwość",
@@ -577,6 +577,23 @@
   "chaintrace.no_marker": "(brak znacznika kontynuacji ani błędu łańcucha powiązanego z chain_id {chain} na peerze {peer})",
   "chaintrace.body_redacted": "(treść ukryta zgodnie z zasadami renderera)",
   "chaintrace.body_undecoded": "(treść jeszcze niezdekodowana)",
+
+  "state.loading": "Ładowanie…",
+  "entitytree.empty": "(puste drzewo)",
+  "accesslog.direction_label": "Kierunek:",
+  "peers.alias_placeholder": "alias (opcjonalnie)",
+  "filetransfer.no_peer_hint": "Brak połączonego peera. Otwórz {window} i sparuj natywny backend Tori (zeskanuj jego kod QR lub połącz się z adresem {scheme}), a potem wróć tutaj, aby przesyłać pliki.",
+  "peerdisplay.runtime_main_thread": "wątek główny",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "natywny",
+  "peerdisplay.storage_in_memory": "w pamięci",
+  "peerdisplay.storage_native_store": "magazyn natywny",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "podstawowy",
+  "peerdisplay.kind_local": "lokalny",
+  "peerdisplay.kind_remote": "zdalny",
 
   "peer.count": {
     "one": "{n} peer",

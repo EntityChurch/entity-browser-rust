@@ -355,12 +355,12 @@ impl<'a> PeerBinding for PeersBinding<'a> {
             };
             Ok(Some(vec![
                 ("subgraph".into(), s.subgraph_path),
-                ("root expression".into(), s.root_expression_path),
-                ("result path".into(), s.result_path),
+                ("root expression".into(), s.root_expression_path), // i18n-ignore — shell command output field name (design §6)
+                ("result path".into(), s.result_path), // i18n-ignore — shell command output field name (design §6)
                 ("status".into(), s.status),
-                ("installed by".into(), short_hash(&s.installed_by)),
+                ("installed by".into(), short_hash(&s.installed_by)), // i18n-ignore — shell command output field name (design §6)
                 (
-                    "installation grant".into(),
+                    "installation grant".into(), // i18n-ignore — shell command output field name (design §6)
                     short_hash(&s.installation_grant),
                 ),
             ]))
@@ -495,7 +495,7 @@ fn format_bootstrap_result(r: entity_sdk::BootstrapResult) -> Vec<(String, Strin
     use entity_sdk::BootstrapResult::*;
     match r {
         AlreadyBootstrapped { identity_hash, quorum_id } => vec![
-            ("status".into(), "already bootstrapped".into()),
+            ("status".into(), "already bootstrapped".into()), // i18n-ignore — shell command output field name (design §6)
             ("identity".into(), short_hash(&identity_hash)),
             ("quorum".into(), short_hash(&quorum_id)),
         ],
@@ -510,12 +510,12 @@ fn format_bootstrap_result(r: entity_sdk::BootstrapResult) -> Vec<(String, Strin
                 ("status".into(), "bootstrapped".into()),
                 ("identity".into(), short_hash(&identity_hash)),
                 ("quorum".into(), short_hash(&quorum_id)),
-                ("controller cert".into(), short_hash(&controller_cert)),
+                ("controller cert".into(), short_hash(&controller_cert)), // i18n-ignore — shell command output field name (design §6)
                 ("peer config".into(), peer_config_path), // i18n-ignore — diagnostic table row key (§6)
             ];
             if !issued_caps.is_empty() {
                 rows.push((
-                    "issued caps".into(),
+                    "issued caps".into(), // i18n-ignore — shell command output field name (design §6)
                     issued_caps
                         .iter()
                         .map(short_hash)

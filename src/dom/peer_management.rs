@@ -96,7 +96,7 @@ fn render_header(container: &Element, output: &PeerManagementOutput, ctx: &DomCt
     // usable min-width and goes full-width when the panel wraps.
     let alias_input = util::create_element_with_class("input", "peer-create-alias");
     util::set_attr(&alias_input, "type", "text");
-    util::set_attr(&alias_input, "placeholder", "alias (optional)");
+    util::set_attr(&alias_input, "placeholder", &crate::i18n::t("peers.alias_placeholder", &[]));
     util::set_attr(&alias_input, "data-field", "peer-alias");
     util::append(&create_panel, &alias_input);
 
@@ -284,11 +284,11 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
     util::append(&td_kind, &badge);
 
     let runtime_chip = util::create_element_with_class("span", "peer-chip");
-    util::set_text(&runtime_chip, row.descriptor.runtime.label());
+    util::set_text(&runtime_chip, &row.descriptor.runtime.display_label());
     util::append(&td_kind, &runtime_chip);
 
     let storage_chip = util::create_element_with_class("span", "peer-chip");
-    util::set_text(&storage_chip, row.descriptor.storage.label());
+    util::set_text(&storage_chip, &row.descriptor.storage.display_label());
     util::append(&td_kind, &storage_chip);
 
     if row.persisted {
