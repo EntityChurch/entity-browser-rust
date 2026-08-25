@@ -134,6 +134,74 @@ def looks_prose(s):
     return True
 
 
+def join_continued_literals(lines):
+    """Collapse Rust `\\`-at-end-of-line string continuations onto the literal's
+    opening line, blanking the consumed lines so every later line number is
+    preserved.
+
+    WHY (2026-07-21): the scan below is line-by-line and `STR` is not DOTALL, so
+    a literal written as
+
+        "Live wire frames for this peer (newest first; ring buffer). Only \\
+         populates when cross-peer traffic flows."
+
+    matched NOTHING — the regex cannot close the quote on either physical line.
+    Every multi-line literal was therefore invisible to the gate, and multi-line
+    is exactly how the longest prose is written: window hints, empty states,
+    help text, the durability banners. `raw=24` was reported as "done" while ~20
+    user-facing strings sat unseen. Same failure mode as the audit's original
+    finding, one level down. See AUDIT-I18N-COVERAGE-GAP-2026-07-19.md.
+
+    An `i18n-ignore` marker anywhere in the literal's span is carried onto the
+    joined line, so a marker may sit on the opening OR the closing line.
+    """
+    out = list(lines)
+    i = 0
+    while i < len(out):
+        line = out[i]
+        # An in-string continuation is a backslash immediately before the
+        # newline, with an odd number of unescaped quotes so far on the line.
+        stripped = line.rstrip('\n')
+        if not stripped.endswith('\\') or stripped.lstrip().startswith(('//', '*', '/*')):
+            i += 1
+            continue
+        if _unescaped_quote_count(stripped) % 2 == 0:
+            i += 1  # backslash, but not inside an open literal
+            continue
+        # Consume following lines until the literal closes.
+        j, merged, ignored = i, stripped[:-1], 'i18n-ignore' in line
+        while j + 1 < len(out):
+            j += 1
+            nxt = out[j].rstrip('\n')
+            ignored = ignored or 'i18n-ignore' in out[j]
+            merged += nxt.lstrip()
+            if _unescaped_quote_count(nxt) % 2 == 1:
+                break  # this line closed the literal
+            if not nxt.endswith('\\'):
+                break  # malformed / not a continuation after all
+            merged = merged[:-1]
+        if ignored and 'i18n-ignore' not in merged:
+            merged += ' // i18n-ignore'
+        out[i] = merged + '\n'
+        for k in range(i + 1, j + 1):
+            out[k] = '\n'
+        i = j + 1
+    return out
+
+
+def _unescaped_quote_count(s):
+    """Count `"` not preceded by an odd run of backslashes."""
+    n, k = 0, 0
+    while k < len(s):
+        if s[k] == '\\':
+            k += 2
+            continue
+        if s[k] == '"':
+            n += 1
+        k += 1
+    return n
+
+
 def test_region_lines(lines):
     in_test = set()
     i, n = 0, len(lines)
@@ -168,6 +236,9 @@ def scan(path):
     if any('i18n-ignore-file' in ln for ln in lines[:20]):
         return 0
     test_lines = test_region_lines(lines)
+    # Collapse `\`-continued literals BEFORE the line loop (see the function's
+    # docstring): without this every multi-line string is structurally invisible.
+    lines = join_continued_literals(lines)
     count = 0
     log_depth = 0  # >0 while inside a multi-line log/diagnostic macro call
     for ln, line in enumerate(lines, 1):
@@ -204,9 +275,14 @@ def files():
     # display labels (peer_display), byte/size formatting (format), and the
     # authorization profile labels + scope summaries rendered in the grant
     # picker and Access Log (backend_auth — enum→&'static str display methods).
+    # Also `watchdog.rs` (the frozen-frame overlay: its message + Reload/Dismiss
+    # buttons) and `session_config.rs` (the "this tab can't save" copy) — both
+    # write straight to the DOM from outside the two render dirs, and both were
+    # invisible purely because this list did not name them (2026-07-21).
     for extra in ('src/app.rs', 'src/window.rs', 'src/peer_display.rs',
                   'src/storage_durability.rs', 'src/format.rs',
-                  'src/backend_auth.rs'):
+                  'src/backend_auth.rs', 'src/watchdog.rs',
+                  'src/session_config.rs'):
         out.append(extra)
     return sorted(set(out))
 
