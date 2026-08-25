@@ -14,7 +14,7 @@ downloading the artifact.
 
 _Nothing yet._
 
-## [0.9.0] — unreleased (runway)
+## [0.9.0] — 2026-08-24
 
 The first release since `v0.8.0` (2026-06-21), and a large one: **two peers on
 two machines can now find each other, connect, chat, and send each other
