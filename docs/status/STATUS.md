@@ -1,6 +1,6 @@
 # entity-browser-rust — status
 
-_Updated: 2026-07-02 · public: v0.8.0 (master)_
+_Updated: 2026-08-15 · public: v0.8.0 (master) · working branch `dev`_
 
 ## Where it is
 
@@ -14,7 +14,62 @@ been removed; HTML DOM is the only render path (`make native` prints a deprecati
 redirect). Building green (`make wasm` produces both `entity-browser-*_bg.wasm` and
 `entity-worker_bg.wasm`; `check-dist` consistent).
 
-## Current session (2026-07-02) — post-release: surfaces, republish, desktop content-baking
+## Current arc (2026-07-08 → 2026-08-15) — connectivity, and it is no longer the blocker
+
+The work since the release arc below has been one continuous thread: **make two peers on
+different machines actually reach each other**, and make every surface that claims they are
+connected be telling the truth. It is done to the point where connectivity is no longer what
+blocks the product.
+
+**Where connectivity stands — four gates, each proving something different:**
+
+| gate | proves | status |
+|---|---|---|
+| `make e2e-webrtc-traverse` | media crosses **two separate NATs** via a reflector | ✅ |
+| `make e2e-webrtc-nat` | negative control: no reflectors ⇒ no media | ✅ |
+| `make e2e-webrtc-meet` | the **shipped** path: name → id → connection → message | ✅ |
+| `make e2e-webrtc-chat` | the §6.5 mechanism | ✅ |
+
+`traverse` + `nat` together are what separate *"ICE is configured"* from *"ICE works"*; neither
+alone is enough. Re-verified at HEAD 2026-08-15 alongside `make test` **1001/0**, lint, wasm.
+
+**The load-bearing changes, in the order they mattered:**
+
+1. **Liveness is kernel-owned.** The app-tier `connection_health` mirror — which guessed from
+   connect *attempts* and reported "Connected" straight through a mid-session drop — is
+   **deleted**. Every surface now subscribes `system/peer/status` through the `peer_liveness`
+   read-model, and `watch_all_vantages` made the subscription one call instead of three
+   hand-rolled loops. **Reachability** followed the same way: a successful dial publishes a
+   kernel transport profile, so `connections.rs` is a petname/authz registry and **not** an
+   address book. Authoritative: `MODEL-REMOTE-PEER-FACTS.md`.
+2. **Reconnect is the EXTENSION-NETWORK driver**, not a hand-rolled loop — `maintain-peer`, with
+   engines started per-local-peer by a frame sweep, and `release-peer(idle)` on unbind that
+   stops the retries without hanging up.
+3. **Meet at a name** — a connector registry on the system peer, `meet tag <label>`, and the
+   discovery/reachability split made honest (a peer with no establisher warns before handing
+   out an id it cannot be reached on).
+4. **ICE has a source.** The provisioning pipe already existed end-to-end; what was missing was
+   an input box. `Connector.ice` is it — a reflector belongs to the same operator as the node
+   you rendezvous through. `stun:` only; TURN is refused **with its reason** (no credential
+   carrier yet). Never a public default — that would enrol a third party invisibly.
+5. **A sequential bound on §10.3 seam consultations** (upstream, `entity-core-rust`): an
+   unreachable peer produced ~974 negotiations per 196 s at 5 Hz, each individually conformant.
+   Now 28. Healthy path byte-identical.
+
+**The most expensive lesson, worth reading before the next rig:** the traversal rig was red for
+most of a session and two app-level blockers were reported upstream — both were symptoms of a
+defect in **the rig's own NAT**. A thirty-line bare UDP hole punch settled in one step what an
+afternoon of theorising could not. Now catalogued as **AP24**
+(`DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md`) and reproduced in the rig's own self-probing
+controls. Full account: `HANDOFF-2026-08-14-nat-traversal-works-and-what-it-cost-to-learn.md`.
+
+**Known holes, stated rather than implied:** the traverse rig models a **cone** NAT — symmetric
+NAT is untested and needs TURN; the `…/transport/websocket` profile type is missing upstream (we
+write `tcp` for `ws://` and it works because the resolver returns the scheme); transport-profile
+staleness is unmanaged (a saved LAN address dies when the machine changes networks, and
+"offline" is not "wrong address").
+
+## Release arc (2026-07-02) — post-release: surfaces, republish, desktop content-baking
 
 Working the post-release list toward a **billslab.com re-release**. On `dev`,
 **pushed to origin**; each step gated green.
@@ -95,7 +150,7 @@ deploy, no scope prefix; peer `2KD9pbm…`; ~985 pages (methodology 799) = the
   one — to see the emit fix, clear storage / fresh profile (else the old
   `show_toggle:true` persists).
 
-## Where we left off
+## Release-week hardening (2026-07, historical)
 
 The last arc before release was a **mobile / menu hardening pass** driven out of
 "get Tauri working." All five fixes shipped and are present:
@@ -140,6 +195,21 @@ a pre-ship QA checklist.
 - Clippy nit at `src/views/shell/binding.rs` (`field_reassign_with_default`).
 - `Peers::sdks` Vec compaction — no `detach_worker_sdk`; deleted Backend* peers leave an
   empty SDK slot until reload. Gated on upstream `WorkerProxy::terminate()`.
+
+**Security — deferred, NOT needed for the first release (call made 2026-07-02)**
+- **Frame-scoped CSP so the main app can be strict.** Today the app CSP is loose
+  (`script-src 'unsafe-inline' 'unsafe-eval'`, Tauri) or absent (browser) because the
+  sandboxed `srcdoc` app iframes inherit it and need inline scripts to run. That
+  removes a *backstop* against a bug in the site-renderer's HTML sanitizer. **Decision:
+  don't do it now** — all shipped content is first-party (we author the sites; apps are
+  our entity-apps), the sandbox already isolates apps, and the sanitizer already handles
+  site HTML; a CSP on top only guards against our own sanitizer having a hole, and the
+  browser already ships with no CSP (no regression). **Trigger to do it:** when users
+  routinely browse **untrusted third-party peers' sites** (the open web-of-sites) — a
+  malicious page + a sanitizer hole would then run script in the main app with access to
+  the user's tree. **Fix:** serve app bundles via a custom Tauri URI scheme (and a
+  browser equivalent) that carries its OWN permissive CSP header, so the frame is loose
+  while the main app goes strict. (Context: commit `be5573bf`.)
 
 **Performance (ranked, ready)** — see `docs/architecture/reviews/PERF-ANALYSIS.md` §7
 - **Entity Tree local-state refactor** — biggest single win; 381–655 `get_entity`/render on
@@ -216,24 +286,48 @@ Pull into roadmap when scoped.
 
 ## Next
 
-1. **Kill the `profile` presets → expose the real startup settings** (full design +
-   ~15-file scope in `HANDOFF-2026-07-02.md`). Profiles (`full`/`site`/`strict-site`)
-   obscure the settings; the engine already has the primitives (`BootSurface` =
-   Chrome/Window{type}/Site + `SiteModePosture`). Expose **surface / window_type /
-   escapable** directly in `entity-deployment.json`, Settings, and the publish flags;
-   delete `Profile` + `ENTITY_PROFILE`. No engine change — just remove the preset layer.
-2. **Republish / incremental-publish analysis** (operator flagged for its own session):
+**Connectivity thread (current):**
+
+1. **P0 — `reflection_endpoints` in `entity-core-rust`'s signaling advertisement**
+   (`extensions/signaling/src/{core,data}.rs`). The **only** item on our critical path. It is
+   the *automatic* half of ICE provisioning: a node telling browsers which STUN to use, which
+   fills in `Connector.ice`. Routed to us as P0 by arch's cohort packet
+   (`ROUTING-2026-08-15-cohort-packet-service-advertisement-and-reflection-endpoints`) with
+   `entity-browser-rust` named as the blocked consumer — we consume rust's client decoder
+   directly, so the field must exist there before it can exist for us. **One optional field,
+   both surfaces** (§2.2 makes the unwrapped §9.2 response a MUST too, and it is the easy half
+   to skip). The `endpoint`-as-URI-string fork that blocked this is **settled** — arch ruled it
+   2026-08-15 (`EXTENSION-REGISTRY` §3b.0, RFC 7064 `stun:`), so this is no longer upstream-blocked.
+2. **`entity-workbench-go` app tier.** Its kernel is ready — core-go has `ext/signaling`
+   (punch, pool, coordinator, node), the §10.3 seam with single-flight, and srflx — but the app
+   tier has none of it (no `MaintainPeer`, `peer/status`, `connector`, or `meet`). It needs the
+   same four pieces we built here: liveness read-model (its `ConnectedPeers()` is a pool
+   snapshot — the `connection_health` shape we deleted), a `maintain-peer` driver,
+   transport-profile publish, connector registry + meet. **No WebRTC needed** — Go has no stack
+   and does not need one to interoperate over WebSocket. **The prize:** every P2P gate we have
+   is rust-browser ↔ rust-browser, which is *cohort-consistent, not independent convergence*
+   ([ADR-0012]). This buys the first genuinely independent evidence for the product surface.
+3. **TURN** — `parse_ice_urls` refuses `turn:` because there is nowhere to put a username and
+   credential. Symmetric NAT, which the traverse rig deliberately does **not** model, needs it.
+   The next real reachability increment after (1).
+4. **Awaiting an arch ruling, blocking nothing:** §10.3 obligation 6 (the consultation bound) —
+   proposal at `entity-core-rust/docs/PROPOSAL-ESTABLISH-CONSULTATION-BACKOFF.md`, routed
+   `ROUTING-2026-08-15-b-item-6-is-remedied-and-three-things-we-told-you-were-wrong`.
+
+**Product thread (carried, unchanged):**
+
+5. **Republish / incremental-publish analysis** (operator flagged for its own session):
    republish the same site, add one app/article, immutable content store vs tree
    rebuild, orphan pruning, peer-id churn. Deliver a documented, coherent republish
    pathway before a wide release. (Details in the handoff.)
-3. **Locked-surface safety** (longer-term, per handoff): don't let users self-lockout —
+6. **Locked-surface safety** (longer-term, per handoff): don't let users self-lockout —
    confirm + temporary password on entering a locked mode, a "lock the settings surface"
    option, and a documented recovery path (`?chrome=1` / `?systemrecovery=1`). Design
    end-to-end before shipping locked Window/kiosk modes.
-4. **Pre-ship QA sign-offs** (human device checks — see the checklist above, NOT
+7. **Pre-ship QA sign-offs** (human device checks — see the checklist above, NOT
    engineering-open): the rebuilt `make wasm-release` bundle on a real iPhone + desktop
    Safari; IndexedDB across-restart durability under WebKitGTK/Tauri (`make tauri-run`,
    runnable locally). The Safari fix (binaryen 119) is landed + the release bundle
    rebuilds clean; only the on-device observation remains.
-5. **Entity Tree perf refactor** — self-contained, over budget today; establishes the
+8. **Entity Tree perf refactor** — self-contained, over budget today; establishes the
    per-window local-state pattern the other views reuse.

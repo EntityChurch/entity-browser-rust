@@ -250,34 +250,52 @@ pub fn parse_ice_urls(raw: &str) -> Result<Vec<IceServer>, String> {
         return Ok(Vec::new());
     }
     for u in &urls {
-        let scheme = u.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
-        match scheme.as_deref() {
-            // RFC 7064: `stun:host[:port]` — non-hierarchical, so there is no
-            // `//` and a `stun://…` is a typo worth catching here.
-            Some("stun") | Some("stuns") => {
-                if u.contains("//") {
-                    return Err(format!(
-                        "'{u}' is not a STUN URI — RFC 7064 is stun:host[:port], with no '//'" // i18n-ignore
-                    ));
-                }
-                if u.split_once(':').map(|(_, rest)| rest.trim().is_empty()).unwrap_or(true) {
-                    return Err(format!("'{u}' names no host")); // i18n-ignore
-                }
-            }
-            Some("turn") | Some("turns") => {
-                return Err(format!(
-                    "'{u}' is a TURN server, which needs a username and credential — \
-                     this field carries reflectors (stun:) only" // i18n-ignore
-                ))
-            }
-            _ => {
-                return Err(format!(
-                    "'{u}' is not a reflector URI — expected stun:host[:port]" // i18n-ignore
-                ))
-            }
-        }
+        validate_reflector_uri(u)?;
     }
     Ok(vec![IceServer { urls, username: None, credential: None }])
+}
+
+/// Validate ONE reflector URI against `EXTENSION-SIGNALING` §4.5.1 /
+/// `EXTENSION-REGISTRY` §3b.0 — the RFC 7064 form, which both fields pin
+/// identically and which MUST NOT differ in shape between them.
+///
+/// **Split out from [`parse_ice_urls`] because the two callers need different
+/// failure granularity, and that difference is deliberate.** A *typed* list is
+/// all-or-nothing: it is refused whole at `connectors::add_connector` so the
+/// user fixes their typo. A *node-advertised* list is merged per entry — one
+/// malformed entry from a remote node must not discard the reflectors the user
+/// configured themselves, because the node is not the user's to correct.
+///
+/// Never repairs. §4.5.1 pins the published form precisely so that no consumer
+/// runs a transform: given `1.2.3.4:3478` one consumer prepends `stun:` and
+/// another does not, and a prepending consumer handed `stun:1.2.3.4:3478`
+/// produces `stun:stun:…`. A browser hands these to `RTCIceServer.urls`
+/// verbatim, where a malformed entry **throws at `RTCPeerConnection`
+/// construction** rather than degrading to host-only.
+pub fn validate_reflector_uri(u: &str) -> Result<(), String> {
+    let scheme = u.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
+    match scheme.as_deref() {
+        // RFC 7064: `stun:host[:port]` — non-hierarchical, so there is no
+        // `//` and a `stun://…` is a typo worth catching here.
+        Some("stun") | Some("stuns") => {
+            if u.contains("//") {
+                return Err(format!(
+                    "'{u}' is not a STUN URI — RFC 7064 is stun:host[:port], with no '//'" // i18n-ignore
+                ));
+            }
+            if u.split_once(':').map(|(_, rest)| rest.trim().is_empty()).unwrap_or(true) {
+                return Err(format!("'{u}' names no host")); // i18n-ignore
+            }
+            Ok(())
+        }
+        Some("turn") | Some("turns") => Err(format!(
+            "'{u}' is a TURN server, which needs a username and credential — \
+             this field carries reflectors (stun:) only" // i18n-ignore
+        )),
+        _ => Err(format!(
+            "'{u}' is not a reflector URI — expected stun:host[:port]" // i18n-ignore
+        )),
+    }
 }
 
 /// Resolve WebRTC provisioning from a `(node_peer_id, node_addr)` pair, plus the

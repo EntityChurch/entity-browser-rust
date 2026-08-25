@@ -518,6 +518,34 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet: PASS"; else echo ">>> e2e-webrtc-meet: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
+# §4.5.1's AUTOMATIC half: the node is started serving a reflector and PUBLISHES
+# it in `advertise`; the browsers are handed nothing and type nothing. They add
+# the connector, ask the node what it serves, store the answer on the row, and
+# the ICE agent comes up configured.
+#
+# The contrast with `e2e-webrtc-meet E2E_ICE=…` is the whole point: that proves a
+# user CAN type a reflector, this proves they no longer have to. Passing here
+# with an empty `ice=` on the connector row is what says the automatic half
+# works end to end — node → advertise → registry row → provisioning → ICE agent.
+#
+# ICE_URI is deliberately a plain (unreachable) STUN address by default: this
+# gate asserts the reflector reaches the AGENT, not that it traverses anything.
+# `e2e-webrtc-traverse` is what proves traversal, and it drives real media.
+ICE_URI ?= stun:198.51.100.7:3478
+e2e-webrtc-advertised:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-advertised SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-advertised BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-advertised: the node publishes its reflector (§4.5.1); the browsers type NOTHING"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; E2E_NODE_REFLECTION="$(ICE_URI)" SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-advertised: PASS"; else echo ">>> e2e-webrtc-advertised: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
 # The NEGATIVE control: the same two browsers, but on ISOLATED networks with no
 # route between them — what "two peers behind different NATs" looks like to the
 # app. Rendezvous still works (both reach the node through the host); the data
@@ -919,4 +947,4 @@ publish-serve: wasm
 	@echo ""
 	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
 
-.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat e2e-webrtc-advertised e2e-webrtc-traverse tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve

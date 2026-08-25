@@ -731,12 +731,21 @@ impl ShellModel {
                     node_addr: (*addr).to_string(),
                     label,
                     ice,
-                };
+                    // Ignored by `add_connector` — a node's own advertisement is
+                        // learned, never typed.
+                        ice_advertised: String::new(),
+                    };
                 match connectors::add_connector(peers, &registry_pid, &c) {
-                    Ok(()) => push(ScrollbackEntry::Info(format!(
-                        "added connector {}", // i18n-ignore — dev-facing CLI
-                        crate::views::short_pid(id)
-                    ))),
+                    Ok(()) => {
+                        // Same as the window's Add: ask the node what it serves
+                        // so §4.5.1's reflectors need no separate `connector
+                        // check` (D13 — the automatic half must be automatic).
+                        connectors::learn_node_reflectors(peers, &registry_pid, &c);
+                        push(ScrollbackEntry::Info(format!(
+                            "added connector {}", // i18n-ignore — dev-facing CLI
+                            crate::views::short_pid(id)
+                        )))
+                    }
                     Err(e) => push(ScrollbackEntry::ErrorText(e)),
                 }
             }
@@ -796,17 +805,36 @@ impl ShellModel {
                 let inner = self.inner.clone();
                 let dirty = dirty.clone();
                 let short = crate::views::short_pid(&node);
+                // §4.5.1's automatic half — the same recording the Peer
+                // Connections `Check` does, because it is the same round trip.
+                let writer = peers.writer_handle();
+                let sys_for_write = self.peer_id.clone();
                 spawn_task(async move {
                     let entry = match reach.await {
                         Err(e) => ScrollbackEntry::ErrorText(e),
                         Ok(()) => match fut.await {
-                            Ok(ad) => ScrollbackEntry::Info(format!(
-                                "{short}  endpoint {}  lobby {}  ttl {}s  max-blob {}B", // i18n-ignore — dev-facing CLI
-                                ad.endpoint,
-                                connectors::lobby_constant_for(&ad),
-                                ad.limits.ttl_seconds,
-                                ad.limits.max_blob_bytes,
-                            )),
+                            Ok(ad) => {
+                                if let Some(w) = writer.as_ref() {
+                                    connectors::record_advertised_reflectors(
+                                        w,
+                                        &sys_for_write,
+                                        &node_row,
+                                        &ad.reflection_endpoints,
+                                    );
+                                }
+                                ScrollbackEntry::Info(format!(
+                                    "{short}  endpoint {}  lobby {}  ttl {}s  max-blob {}B  reflectors {}", // i18n-ignore — dev-facing CLI
+                                    ad.endpoint,
+                                    connectors::lobby_constant_for(&ad),
+                                    ad.limits.ttl_seconds,
+                                    ad.limits.max_blob_bytes,
+                                    if ad.reflection_endpoints.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        ad.reflection_endpoints.join(" ")
+                                    },
+                                ))
+                            }
                             Err(e) => ScrollbackEntry::ErrorText(e),
                         },
                     };
@@ -1378,6 +1406,7 @@ mod tests {
                 node_addr: "memory://2KNobodyHome".to_string(),
                 label: String::new(),
                 ice: String::new(),
+                ice_advertised: String::new(),
             };
             connectors::add_connector(&peers, &sys, &node).expect("add");
             for _ in 0..400 {
@@ -2781,6 +2810,7 @@ mod tests {
             node_addr: format!("memory://{node_pid}"),
             label: String::new(),
             ice: String::new(),
+            ice_advertised: String::new(),
         };
 
         // The shell's peer, with the node in its registry and selected.

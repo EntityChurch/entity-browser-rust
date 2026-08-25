@@ -304,6 +304,32 @@ def until_listed(base, sid, cmd, marker, tries=10):
 # only, which is what a shared bridge needs and all any gate has ever used.
 E2E_ICE = os.environ.get("E2E_ICE", "").strip()
 
+# The AUTOMATIC half (EXTENSION-SIGNALING §4.5.1): the node was started with
+# `--reflection-endpoint` and publishes this in `advertise`. The browsers are
+# handed NOTHING — they learn it by asking, which is the entire point. Set by
+# the rig, never typed into the Shell.
+E2E_NODE_REFLECTION = os.environ.get("E2E_NODE_REFLECTION", "").strip()
+
+def expected_ice_urls():
+    """The §4.5.1 merge, as an expectation — counted in URLs, not entries.
+
+    A consumer merges rather than replaces, deduplicated by endpoint bytes
+    *exactly as published*. So typed-only ⇒ 1, advertised-only ⇒ 1, both with
+    the SAME uri ⇒ 1 (the dedup is doing work), both DIFFERENT ⇒ 2 (the union
+    is doing work). Encoding the rule rather than a constant is what lets one
+    run prove dedup and another prove union.
+
+    **Counted on `ice_urls`, not `ice_servers`.** `parse_ice_urls` packs every
+    reflector into ONE `IceServer`, so `ice_servers` is 0-or-1 by construction
+    and can only ever say "configured or not" — it cannot see a merge. Asserting
+    the merge against it would pass for any non-empty list, which is exactly the
+    volume-blind shape §11.5.1 warns about.
+    """
+    typed = [E2E_ICE] if E2E_ICE else []
+    advertised = [a for a in ([E2E_NODE_REFLECTION] if E2E_NODE_REFLECTION else [])
+                  if a not in typed]
+    return len(typed + advertised)
+
 def provision(base, sid, node_peer, label):
     """Add + select the connector through the Shell — the user's own surface."""
     open_shell(base, sid, label)
@@ -390,23 +416,28 @@ def main():
         # prove the row was stored, not that the agent was configured. When
         # E2E_ICE is unset this asserts the LAN posture instead (0), so the
         # shared-bridge gates keep proving they add no third party.
-        want_ice = 1 if E2E_ICE else 0
-        ice_a = [l for l in log_lines(A_BASE, sa) if "establisher" in l and "ice_servers" in l]
-        ice_b = [l for l in log_lines(B_BASE, sb) if "establisher" in l and "ice_servers" in l]
+        want_ice = expected_ice_urls()
+        ice_a = [l for l in log_lines(A_BASE, sa) if "establisher" in l and "ice_urls" in l]
+        ice_b = [l for l in log_lines(B_BASE, sb) if "establisher" in l and "ice_urls" in l]
         # Format-agnostic on purpose: the field reaches this log as
         # `ice_servers=0`, `"ice_servers":0`, or `\"ice_servers\":0` depending
         # on how the entry was serialized on its way to `__entity_browser_log`.
         # Matching the NUMBER rather than one spelling keeps the assertion about
         # the ICE agent instead of about the logger.
-        ice_re = re.compile(r'ice_servers\D{0,4}(\d+)')
+        ice_re = re.compile(r'ice_urls\D{0,4}(\d+)')
         def got(ls):
             vals = [int(m.group(1)) for l in ls for m in [ice_re.search(l)] if m]
             return bool(vals) and all(v == want_ice for v in vals)
-        print(f"  A/B establisher ice_servers == {want_ice}: {got(ice_a)}/{got(ice_b)}"
-              + (f"   (E2E_ICE={E2E_ICE})" if E2E_ICE else "   (host-only, no reflector)"))
+        src = []
+        if E2E_ICE:
+            src.append(f"typed E2E_ICE={E2E_ICE}")
+        if E2E_NODE_REFLECTION:
+            src.append(f"node-advertised §4.5.1={E2E_NODE_REFLECTION}")
+        print(f"  A/B establisher ice_urls == {want_ice}: {got(ice_a)}/{got(ice_b)}"
+              + (f"   ({' + '.join(src)})" if src else "   (host-only, no reflector)"))
         if not ice_a or not ice_b:
-            print("  !! no establisher line carried an ice_servers field — cannot classify")
-        checks[f"the ICE agent is configured with {want_ice} reflector(s)"] = (
+            print("  !! no establisher line carried an ice_urls field — cannot classify")
+        checks[f"the ICE agent is configured with {want_ice} reflector url(s)"] = (
             bool(ice_a) and bool(ice_b) and got(ice_a) and got(ice_b)
         )
 
