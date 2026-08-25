@@ -86,6 +86,20 @@ pub struct DeploymentConfig {
     /// disable creation without becoming a locked site. Merges onto the base
     /// config like `site_mode`.
     pub peer_creation_enabled: Option<bool>,
+    /// **This resolver's own ceiling on a name binding's lifetime, in ms** —
+    /// `EXTENSION-REGISTRY` §6a's resolver-side TTL bound (1.11).
+    ///
+    /// A deployment knob rather than a constant because arch writes no number
+    /// and neither do we: there is no defensible one, and baking one in makes
+    /// every unconfigured deployment *look* configured. Absent = no ceiling
+    /// declared, which is conformant (§6a makes it a MAY, and a MUST only once
+    /// declared) and is what we ship.
+    ///
+    /// It is the half that protects **us**: a ceiling the registry enforces
+    /// cannot defend a consumer against that registry. Setting it shortens the
+    /// window in which a withheld revocation still resolves across a cold start
+    /// — the one bound our per-session `seq` floor cannot supply.
+    pub name_resolver_max_ttl_ms: Option<u64>,
 }
 
 impl DeploymentConfig {
@@ -146,6 +160,11 @@ impl DeploymentConfig {
 
         cfg.fast_paint = obj.get("fast_paint").and_then(|v| v.as_bool());
         cfg.peer_creation_enabled = obj.get("peer_creation_enabled").and_then(|v| v.as_bool());
+        // A zero or negative ceiling is dropped rather than honored: it would
+        // expire every binding instantly and read as "the registry is broken",
+        // which is the same failure shape as emitting `ttl` in seconds.
+        cfg.name_resolver_max_ttl_ms =
+            obj.get("name_resolver_max_ttl_ms").and_then(|v| v.as_u64()).filter(|ms| *ms > 0);
 
         Some(cfg)
     }
@@ -159,6 +178,7 @@ impl DeploymentConfig {
             && self.origins.is_empty()
             && self.site_mode.is_empty()
             && self.fast_paint.is_none()
+            && self.name_resolver_max_ttl_ms.is_none()
             && self.peer_creation_enabled.is_none()
     }
 
@@ -182,6 +202,9 @@ impl DeploymentConfig {
         }
         if let Some(home) = &self.home_site {
             cfg.home_site = home.clone();
+        }
+        if self.name_resolver_max_ttl_ms.is_some() {
+            cfg.name_resolver_max_ttl_ms = self.name_resolver_max_ttl_ms;
         }
         if let Some(b) = self.site_mode.enabled {
             cfg.site_mode.enabled = b;
@@ -368,6 +391,37 @@ mod tests {
         assert!(DeploymentConfig::parse("42").is_none());
         // A valid-but-empty object parses to an `is_empty` config.
         assert!(DeploymentConfig::parse("{}").unwrap().is_empty());
+    }
+
+    /// The §6a resolver ceiling is a **deployment** knob, and a nonsense value
+    /// is dropped rather than honored.
+    ///
+    /// Zero is the trap worth a test: honored literally it expires every
+    /// binding the instant it resolves, and the operator sees "no binding for
+    /// this name" — indistinguishable from a bad signature, a revocation, or a
+    /// broken registry. Exactly the failure shape as emitting `ttl` in seconds
+    /// instead of ms, which is how we learned to look for it.
+    #[test]
+    fn the_resolver_ceiling_is_read_from_the_deployment_and_zero_is_dropped() {
+        let cfg = DeploymentConfig::parse(r#"{"name_resolver_max_ttl_ms": 3600000}"#).unwrap();
+        assert_eq!(cfg.name_resolver_max_ttl_ms, Some(3_600_000));
+        assert!(!cfg.is_empty(), "a ceiling alone is actionable config");
+
+        // Applied onto a base config, it reaches the durable spine — which is
+        // what a warm boot reads, since a returning profile never re-fetches
+        // the deployment doc.
+        let applied = cfg.apply_to(SessionConfig::default());
+        assert_eq!(applied.name_resolver_max_ttl_ms, Some(3_600_000));
+
+        for bad in [r#"{"name_resolver_max_ttl_ms": 0}"#, r#"{"name_resolver_max_ttl_ms": -5}"#] {
+            let cfg = DeploymentConfig::parse(bad).unwrap();
+            assert_eq!(cfg.name_resolver_max_ttl_ms, None, "dropped: {bad}");
+        }
+
+        // Absent = no ceiling declared, which is conformant and is what we ship.
+        let cfg = DeploymentConfig::parse(r#"{"surface": "site"}"#).unwrap();
+        assert_eq!(cfg.name_resolver_max_ttl_ms, None);
+        assert_eq!(cfg.apply_to(SessionConfig::default()).name_resolver_max_ttl_ms, None);
     }
 
     #[test]

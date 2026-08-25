@@ -1890,6 +1890,14 @@ impl EntityApp {
             // settings toggle also writes it immediately for this-reload effect).
             crate::boot_fast_paint::write_enabled_mirror(cfg.fast_paint);
 
+            // Same move for the §6a resolver ceiling: mirror the durable value
+            // where a resolution can read it. The shell's `name` verb runs in a
+            // `spawn_task` holding no config, and a ceiling that applies only
+            // where a handle happened to be threaded is the half-reachable-gate
+            // shape. Set from the RESOLVED config, so a deployment's value and a
+            // returning profile's persisted one land identically.
+            crate::session_config::set_active_resolver_ceiling(cfg.name_resolver_max_ttl_ms);
+
             // (1.2.5) Warm-boot origin RECONCILE (P1, symptom 2 — "site source
             // unreachable"). On a warm boot we deliberately don't re-fetch the
             // deployment config: POSTURE (profile / home / toggle) is a user

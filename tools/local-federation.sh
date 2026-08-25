@@ -2,7 +2,11 @@
 # Stand up the WHOLE naming chain locally: N published domains + one registry
 # that names them, as static files. No live peer anywhere.
 #
-#   ./tools/local-federation.sh [OUT_DIR]        (default: dist/federation)
+#   ./tools/local-federation.sh [OUT_DIR]        (default: dist-federation)
+#
+# NOT under `dist/`: `make wasm` runs trunk, which WIPES dist/. See the Makefile's
+# `federation` target (audit F10) — publishing here and then building the app used
+# to delete the federation silently.
 #
 # What it produces:
 #
@@ -44,7 +48,7 @@ TTL_DAYS="${TTL_DAYS:-30}"
 ORIGIN_BASE="${ORIGIN_BASE:-}"
 
 set -euo pipefail
-OUT="${1:-dist/federation}"
+OUT="${1:-dist-federation}"
 BIN="${BIN:-cargo run --quiet --bin entity-browser --}"
 MAP="$OUT/MAPPING.txt"
 # A DEDICATED stamp, not the human-facing MAPPING.txt. Both would work as a
@@ -60,7 +64,7 @@ STAMP="$OUT/.local-federation"
 if [ -e "$OUT" ] && [ ! -f "$STAMP" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then
   echo "refusing to clean $OUT — it is not empty and carries no .local-federation" >&2
   echo "stamp, so this script did not produce it. Remove it yourself, or pick" >&2
-  echo "another path: make federation FED_OUT=dist/somewhere-else" >&2
+  echo "another path: make federation FED_OUT=dist-somewhere-else" >&2
   exit 1
 fi
 
@@ -128,6 +132,22 @@ for row in "${DOMAINS[@]}"; do
     echo "  FAIL $slug"; fail=1
   fi
 done
+# THE REGISTRY TOO — it was missing here for four sessions (audit F1). It is the
+# one tree the entire chain hangs from: a consumer pins this key and nothing
+# else, so an unwalkable registry root means every name resolves to nothing while
+# all four domains below it verify clean and the whole rig looks green.
+#
+# `registry --verify`, NOT `publish --verify`: the two verbs resolve different
+# durable identities, so `publish` would look under the publisher peer-id for a
+# tree the registry emit wrote under the registry one. It matters less here (the
+# seed is explicit either way) than as the shape a reader copies. Verify-only —
+# it returns before any emit. Measured: 13/13 pointers, signed root verifies,
+# 0 missing from the closure.
+if $BIN registry "$OUT/registry" --identity-seed="$REGISTRY_SEED" --verify >/dev/null 2>&1; then
+  echo "  ok   registry"
+else
+  echo "  FAIL registry"; fail=1
+fi
 if [ "$fail" -ne 0 ]; then
   echo "verification failed — this tree is not safe to serve" >&2
   exit 2

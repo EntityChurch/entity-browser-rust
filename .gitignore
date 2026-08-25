@@ -4,6 +4,8 @@
 # Output-isolated dirs for the publish-* family so it runs concurrently with
 # tauri-run without clobbering dist/ + target/ (Makefile DIST/TARGET_DIR).
 /dist-publish
+/dist-federation
+/dist-registry
 /target-publish
 # Transient staging dirs for `make tauri-bundle` — the recipe copies an external
 # APPS_DIST / INGEST here so the publish container (which mounts only this repo)

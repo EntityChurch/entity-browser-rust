@@ -681,6 +681,12 @@ impl ShellModel {
     /// name pins                               what this tab holds a seq floor for
     /// ```
     ///
+    /// **The optional arguments are resolved, never guessed** (audit F5). With no
+    /// `site`, this offers the publisher's own `sites.list` — labelled unverified,
+    /// because it is transport-trusted — instead of defaulting to a site id that
+    /// existed only in our test fixtures. With no `page`, the landing page comes
+    /// from that site's manifest read **through the signed root**.
+    ///
     /// **Browser-only**, and not by omission: the fetch is `FetchBinSource`
     /// (`window.fetch`), and the futures a `BinSource` hands back are `!Send`
     /// while native `spawn_task` requires `Send`. The logic itself is covered
@@ -814,8 +820,15 @@ impl ShellModel {
             let now_ms = js_sys::Date::now() as u64;
             let src = FetchBinSource;
 
+            // §6a's resolver-side ceiling, out of the durable config. `None`
+            // is the shipped default (no number is defensible) — the deployment
+            // sets `name_resolver_max_ttl_ms` when it wants the protection.
+            let policy = crate::content_site::named_site::ResolverPolicy {
+                max_ttl_ms: crate::session_config::active_resolver_ceiling_ms(),
+            };
+
             // Hop 1 — the name, through the registry's SIGNED root.
-            let target = match resolve_name(&src, &registry, &name, now_ms).await {
+            let target = match resolve_name(&src, &registry, &name, now_ms, &policy).await {
                 Ok(t) => t,
                 Err(e) => {
                     report(ScrollbackEntry::ErrorText(format!("{name}: {e}"))); // i18n-ignore — dev-facing CLI
@@ -833,6 +846,16 @@ impl ShellModel {
                 ev.revocation_checked,
                 ev.expires_at_ms
             )));
+            // AP25 — say it when OUR ceiling is why the expiry is sooner than
+            // the registry said. Silent clamping makes a correctly-issued
+            // binding look like a registry that mis-set its TTL, and the
+            // operator is the one person who can tell the difference.
+            if ev.ttl_was_clamped() {
+                report(ScrollbackEntry::Info(format!(
+                    "  ttl: registry issued {} ms, this resolver honors {} ms (local ceiling)", // i18n-ignore — dev-facing CLI
+                    ev.issued_ttl_ms, ev.effective_ttl_ms
+                )));
+            }
             if sub == "resolve" {
                 return;
             }
@@ -840,10 +863,16 @@ impl ShellModel {
             // Hop 2 — pin the DOMAIN by the peer-id the registry just named, at
             // the origin the binding carried, and walk ITS signed root. Two
             // hops, one a-priori string, and the origin is trusted for nothing.
+            // Two causes, deliberately named separately: no `http-poll` profile
+            // at all, or one whose layout this client cannot consume
+            // (`named_site::http_poll_origin`'s known limit — audit F6). Saying
+            // only "publishes no origin" sent a reader looking for a missing
+            // field that was in fact present.
             let Some(origin) = target.origin.clone() else {
                 report(ScrollbackEntry::ErrorText(
-                    "that binding publishes no origin — resolved WHO but not WHERE, so there \
-                     is nothing to fetch (arch D10 forbids issuing these now)" // i18n-ignore — dev-facing CLI
+                    "resolved WHO but not WHERE — this binding carries no http-poll transport \
+                     profile this client can fetch from (either none at all, which arch D10 now \
+                     forbids issuing, or one whose tree_url_prefix is not {origin}/{peer-id})" // i18n-ignore — dev-facing CLI
                         .into(),
                 ));
                 return;
@@ -854,8 +883,61 @@ impl ShellModel {
                 ));
                 return;
             };
-            let site = site.unwrap_or_else(|| "home".into());
-            let page = page.unwrap_or_else(|| "index".into());
+            // **No site given: ask, do not guess.** This used to default to
+            // `"home"` — a site id that exists nowhere in a real publish, only
+            // in this repo's test fixtures — so `name open <name>`, the obvious
+            // first command, always failed on a key nothing publishes and read
+            // as "that page isn't there" (audit F5). The publisher's own
+            // `sites.list` is a TRANSPORT-trusted enumeration, so it is offered
+            // as a menu and nothing is fetched from it except through the signed
+            // root on the next command.
+            let Some(site) = site else {
+                let msg = match crate::content_site::http_poll::fetch_sites_list(
+                    &src,
+                    &origin,
+                    &target.peer_id,
+                )
+                .await
+                {
+                    Ok(sites) if !sites.is_empty() => ScrollbackEntry::Info(format!(
+                        "which site? this publisher lists: {}\n  `name open {} <site>` — the \
+                         listing is unverified; what you pick is verified", // i18n-ignore — dev-facing CLI
+                        sites.join(", "),
+                        target.name
+                    )),
+                    Ok(_) => ScrollbackEntry::ErrorText(
+                        "that publisher's sites.list is empty — it published no sites, or not \
+                         the enumeration artifact" // i18n-ignore — dev-facing CLI
+                            .into(),
+                    ),
+                    Err(e) => ScrollbackEntry::ErrorText(format!(
+                        "no site given, and this publisher exposes no sites.list to offer one \
+                         ({e:?}) — pass it: `name open {} <site> [page]`", // i18n-ignore — dev-facing CLI
+                        target.name
+                    )),
+                };
+                report(msg);
+                return;
+            };
+            // The landing page comes from the site's OWN manifest, read through
+            // the signed root — verified, where `"index"` was a guess that
+            // happened to be right for our emitter and nobody else's.
+            let page = match page {
+                Some(p) => p,
+                None => match domain.resolve(&src, &format!("sites/{site}/manifest")).await {
+                    Ok(ent) => crate::content_site::format::SiteManifest::from_entity(&ent)
+                        .root()
+                        .to_string(),
+                    Err(e) => {
+                        report(ScrollbackEntry::ErrorText(format!(
+                            "sites/{site}/manifest: {e:?} — cannot learn the landing page, so \
+                             pass one: `name open {} {site} <page>`", // i18n-ignore — dev-facing CLI
+                            target.name
+                        )));
+                        return;
+                    }
+                },
+            };
             let key = format!("sites/{site}/pages/{page}");
             match domain.resolve(&src, &key).await {
                 Ok(entity) => {

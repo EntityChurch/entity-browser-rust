@@ -126,9 +126,16 @@ fn main() -> std::process::ExitCode {
     eprintln!("Native commands:");
     eprintln!("  entity-browser publish [OUT_DIR]  — render the site set to static HTML (make site)");
     eprintln!("      [--ingest=<dir>]              — source sites from a content-team render/ emit (disk→tree)");
-    eprintln!("  entity-browser registry OUT_DIR --bind NAME=PEER_ID [--bind ...]");
+    eprintln!("  entity-browser registry OUT_DIR --bind=NAME=PEER_ID@ORIGIN [--bind=...]");
     eprintln!("                                    — emit a static name registry (signed bindings + signed root)");
+    eprintln!("      @ORIGIN is REQUIRED           — arch D10: a binding with no transports resolves to a");
+    eprintln!("                                      peer-id the consumer has no way to reach");
     eprintln!("      [--ttl-days=N]                — binding lifetime (default 30; a null ttl is not expressible)");
+    eprintln!("      [--identity-seed=HEX]         — 32-byte hex; omit to use the durable registry identity");
+    eprintln!("      flags take `=`                — `--bind NAME=…` with a space is NOT this flag");
+    eprintln!("  entity-browser registry OUT_DIR --verify");
+    eprintln!("                                    — prove an emitted registry: pointers, signature, walkable closure");
+    eprintln!("                                      (use THIS, not `publish --verify` — different durable identity)");
     eprintln!();
     eprintln!("Active build targets:");
     eprintln!("  make wasm       — browser build (DOM)");

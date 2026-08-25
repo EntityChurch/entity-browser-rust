@@ -26,16 +26,80 @@
 //! Full reasoning, and the review asks that go with it:
 //! `docs/architecture/reviews/PROPOSAL-NAME-FORMAT-DISPATCH-DEFAULTS-AND-THE-NAME-BLIND-BACKEND.md`.
 //!
-//! ## Status — this ships the mechanism, NOT a default chain entry
+//! ## Status — RATIFIED, and still not a default chain entry
 //!
-//! [`DEFAULT_RULES`] is our *proposed* table and is **not installed anywhere**.
-//! Until arch ratifies, a deployment adds its registry explicitly and
-//! [`validate_rules`] refuses the configuration that would leak. Shipping our
-//! globs first is how two app tiers ship two — the failure §4.1 step 2 names.
+//! **Our position carried** — `EXTENSION-REGISTRY` 1.7 → 1.8 (arch `8bfc9b6`)
+//! re-keys §4.1 step 2 from **remoteness** to **name transmission**, and
+//! `peer-issued` resolved per §6a.4 through the signed root is now an explicit
+//! **MAY** in the catch-all. Arch's own reason for it being safe rather than a
+//! loosening is worth keeping: §6a.4 makes verification *inside the signed tree*
+//! mandatory and §6a.3a bars the host-served listing from being authoritative,
+//! so **the kind fixes the mechanism** — a conformant `peer-issued` resolution
+//! has no host-trusted-pointer path to fall back to.
+//!
+//! **[`default_rules`] is still not installed anywhere, and ratification did not
+//! change that.** The blocker was never only the ruling: there is no default
+//! registry to point a catch-all at. A deployment adds its registry explicitly
+//! and [`validate_rules`] refuses the configuration that would leak. Shipping
+//! our globs first is how two app tiers ship two — the failure §4.1 step 2 names.
+//!
+//! What the spec does **not** assert, deliberately, is zero disclosure: the walk
+//! descends by the name's own hash, so an origin sees a **hash-prefix oracle** on
+//! a miss and a public binding's blob on a hit — neither the queried string, and
+//! neither reaching a name the registry does not carry. Arch declined D-A's *"nor
+//! a reversible function of it"* wording for exactly that reason, and they were
+//! right: it is falsifiable on our own hit path.
 
 #![allow(dead_code)] // the evaluator ships ahead of B16b's surface, deliberately.
 
-use entity_registry::resolver::glob_match;
+/// **§4.1's dispatch matcher, implemented here — deliberately NOT
+/// `entity_registry::resolver::glob_match`.**
+///
+/// The grammar is CLOSED as of `EXTENSION-REGISTRY` v1.13: `*` matches any run
+/// of characters including none, **every other byte is a literal** — `?`, `[`,
+/// `]`, `\`, `.`, `:`, `@` and `/` match only themselves — any number of `*` is
+/// permitted, `/` is **not** a separator, and the match spans the whole name.
+///
+/// The spec says implementations MUST NOT delegate this to a path-glob or
+/// shell-glob library, and `glob_match` is that in local form: it gives `?`
+/// single-character-wildcard meaning and `[a-c]` / `[!a-c]` character-class
+/// meaning, neither of which this grammar grants. Delegating to it made
+/// `a?c` match `abc` — a name the pattern must **not** reach, which in a
+/// dispatch filter means a backend becomes eligible for names its operator
+/// never made eligible. Pinned by [`tests::the_dispatch_grammar_is_closed`]
+/// (conformance `REG-DISPATCH-GRAMMAR-1`).
+///
+/// **A matcher that merely omits those features and one that treats them as
+/// literals are indistinguishable until a name or pattern carries one** — which
+/// is why this is written out rather than assumed from the absence of a
+/// character-class branch.
+fn dispatch_match(pattern: &str, name: &str) -> bool {
+    fn go(p: &[u8], t: &[u8]) -> bool {
+        match p.first() {
+            None => t.is_empty(),
+            Some(b'*') => {
+                // Collapse a run of stars; `**` is not a token here, it is just
+                // two stars, and it means exactly what one means.
+                let mut rest = p;
+                while rest.first() == Some(&b'*') {
+                    rest = &rest[1..];
+                }
+                if rest.is_empty() {
+                    return true;
+                }
+                // `*` crosses EVERY byte, `/` included — the row that fails
+                // against every path-glob implementation.
+                (0..=t.len()).any(|i| go(rest, &t[i..]))
+            }
+            // No `?`, no `[…]`, no escapes. One literal byte, or no match.
+            Some(c) => match t.first() {
+                Some(d) if d == c => go(&p[1..], &t[1..]),
+                _ => false,
+            },
+        }
+    }
+    go(pattern.as_bytes(), name.as_bytes())
+}
 
 /// Whether consulting a backend for a name discloses that name.
 ///
@@ -56,7 +120,13 @@ pub enum Disclosure {
 /// rather than assumed.
 pub fn disclosure_of(backend_kind: &str) -> Disclosure {
     match backend_kind {
-        "local-name" | "pinned" | "out-of-band" | "self-certifying" => Disclosure::Blind,
+        // §2.4.1 IS the vocabulary. `pinned` and `did-key` used to sit here and
+        // are not in it — they were never declared kinds, which is why v1.12
+        // struck both from the shipped table. An undeclared token now falls to
+        // the `_` arm and is treated as transmitting, which is the fail-closed
+        // direction and matches §4.2 (an unknown kind is skipped with a warning,
+        // never honored).
+        "local-name" | "out-of-band" | "self-certifying" => Disclosure::Blind,
         // Ours, and only because `named_site::resolve_name` walks the signed root.
         "peer-issued" => Disclosure::Blind,
         _ => Disclosure::Transmitting,
@@ -132,7 +202,7 @@ pub fn validate_rules(rules: &[DispatchRule]) -> Result<(), Vec<String>> {
 pub fn eligible_backends(rules: &[DispatchRule], name: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for r in rules {
-        if glob_match(&r.pattern, name) {
+        if dispatch_match(&r.pattern, name) {
             for k in &r.backend_kinds {
                 if !out.iter().any(|e| e == k) {
                     out.push(k.clone());
@@ -194,18 +264,32 @@ fn peer_id_shaped(s: &str) -> bool {
     entity_crypto::PeerId::from(s.to_string()).validate().is_ok()
 }
 
-/// **Our proposed defaults (D-C) — NOT installed.** Present so the table can be
-/// tested and reviewed as one object rather than argued about in prose. Row 6 is
-/// the whole proposal: the catch-all carries the default registry *because*
-/// `peer-issued` over a signed root is name-blind, and carries nothing else.
+/// **The ratified §4.1a table — RATIFIED but still NOT installed, and those are
+/// two different facts.**
+///
+/// Ratified: our D-A/D-B position carried (`EXTENSION-REGISTRY` 1.7 → 1.8, arch
+/// `8bfc9b6`). §4.1 step 2 is re-keyed from **remoteness** to **name
+/// transmission**, so `peer-issued` resolved per §6a.4 through the signed root
+/// is an explicit **MAY** in the catch-all — which is row 6, and was the whole
+/// proposal. Row 6 gained `"pinned"` when the spec's own table landed; a pin is
+/// the user's own assertion and consults nothing, so it is `Disclosure::Blind`
+/// and belongs beside `local-name`.
+///
+/// **Not installed, and ratification did not change that.** The blocker was
+/// never only the ruling: there is **no default registry to point a catch-all
+/// at**, and shipping our own before the ecosystem has one is exactly how two
+/// app tiers ship two. B16b's surface stays fail-closed — a registry is added
+/// explicitly and every entry carries a non-`*` pattern — until that exists.
+/// This function is here so the table can be tested and reviewed as one object
+/// rather than argued about in prose.
 pub fn default_rules() -> Vec<DispatchRule> {
     vec![
         DispatchRule::new("did:web:*", &["did-web"]),
-        DispatchRule::new("did:key:*", &["did-key"]),
+        DispatchRule::new("did:key:*", &["self-certifying"]),
         DispatchRule::new("*.eth", &["consensus-anchored"]),
         DispatchRule::new("*@*.*", &["dns-txt", "well-known-url"]),
         DispatchRule::new("*@*", &["peer-issued"]),
-        DispatchRule::new("*", &["local-name", "peer-issued"]),
+        DispatchRule::new("*", &["local-name", "self-certifying", "out-of-band", "peer-issued"]),
     ]
 }
 
@@ -279,6 +363,81 @@ mod tests {
                 Disclosure::Blind,
                 "a bare name made {k} eligible, and it transmits the name"
             );
+        }
+    }
+
+    /// **Conformance `REG-DISPATCH-GRAMMAR-1` — the grammar is closed, and the
+    /// two rows that matter are the ones a shell-glob passes wrongly.**
+    ///
+    /// `EXTENSION-REGISTRY` §4.1 v1.13: `*` matches any run including none;
+    /// **every other byte is a literal**; any number of `*`; `/` is not a
+    /// separator; anchored at both ends. We used to delegate this to
+    /// `entity_registry::resolver::glob_match`, which implements `?` and
+    /// `[a-c]`/`[!a-c]` — so `a?c` matched `abc`, a name the pattern must not
+    /// reach. In a dispatch filter that is not cosmetic: a backend becomes
+    /// eligible for names its operator never made eligible, and the catch-all
+    /// MUST is the only thing standing between that and a leak.
+    ///
+    /// The spec's own note is why this is spelled out rather than inferred from
+    /// the absence of a character-class branch: **a matcher that omits those
+    /// features and one that treats them as literals are indistinguishable
+    /// until a name or a pattern carries one.**
+    #[test]
+    fn the_dispatch_grammar_is_closed() {
+        // Row 1 — `?` is a literal, not a single-character wildcard.
+        assert!(dispatch_match("a?c", "a?c"), "`?` matches itself");
+        assert!(!dispatch_match("a?c", "abc"), "`?` is NOT a wildcard");
+
+        // Row 2 — `[` `]` are literals, not a character class.
+        assert!(dispatch_match("a[bc]d", "a[bc]d"), "brackets match themselves");
+        assert!(!dispatch_match("a[bc]d", "abd"), "brackets are NOT a class");
+
+        // Row 3 — any number of `*`; our own table row 4 carries three.
+        assert!(dispatch_match("*@*.*", "alice@example.com"));
+        assert!(!dispatch_match("*@*.*", "noatsign"));
+
+        // Row 4 — `*` crosses `/`. The row that fails every path-glob impl.
+        assert!(dispatch_match("x*z", "x/y/z"), "`/` is not a separator here");
+
+        // Anchored at both ends: there is no substring form.
+        assert!(!dispatch_match("bc", "abcd"), "the match spans the WHOLE name");
+        assert!(dispatch_match("*", ""), "`*` matches none, too");
+        assert!(dispatch_match("**", "anything"), "`**` is two stars, not a token");
+
+        // A backslash is a literal — there are no escapes to strip.
+        assert!(dispatch_match(r"a\*", r"a\zz"), "the star still globs after a literal backslash");
+        assert!(!dispatch_match(r"a\b", "ab"), "the backslash is not an escape");
+
+        // And the whole point: this reaches the FILTER, not just the matcher.
+        let rules = vec![DispatchRule::new("a?c", &["local-name"])];
+        assert!(eligible_backends(&rules, "abc").is_empty(), "a literal `?` must not dispatch `abc`");
+        assert_eq!(eligible_backends(&rules, "a?c"), vec!["local-name".to_string()]);
+    }
+
+    /// **The table is a ratified external contract now, so drift from it is a
+    /// defect rather than a preference.** `EXTENSION-REGISTRY` §4.1a (1.8, arch
+    /// `8bfc9b6`) fixes all six rows; our row 6 read `["local-name",
+    /// "peer-issued"]` for a session after ratification and nothing caught it,
+    /// because every other test here asserts a *property* of the table (nothing
+    /// transmitting is eligible for a bare name) and every property held with a
+    /// row missing. A property test cannot notice an omission that is still
+    /// safe — `"pinned"` consults nothing, so leaving it out leaked nothing and
+    /// simply made us quietly non-conformant.
+    #[test]
+    fn our_table_matches_the_ratified_4_1a_rows() {
+        let ratified: Vec<(&str, Vec<&str>)> = vec![
+            ("did:web:*", vec!["did-web"]),
+            ("did:key:*", vec!["self-certifying"]),
+            ("*.eth", vec!["consensus-anchored"]),
+            ("*@*.*", vec!["dns-txt", "well-known-url"]),
+            ("*@*", vec!["peer-issued"]),
+            ("*", vec!["local-name", "self-certifying", "out-of-band", "peer-issued"]),
+        ];
+        let ours = default_rules();
+        assert_eq!(ours.len(), ratified.len(), "row count drifted from §4.1a");
+        for (i, (pattern, kinds)) in ratified.iter().enumerate() {
+            assert_eq!(&ours[i].pattern, pattern, "§4.1a row {} pattern", i + 1);
+            assert_eq!(&ours[i].backend_kinds, kinds, "§4.1a row {} backend_kinds", i + 1);
         }
     }
 
