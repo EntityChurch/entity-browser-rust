@@ -1079,6 +1079,37 @@ pub const EN: &[(&str, Message)] = &[
     // (blind spot #4 — they render as innerHTML). Extracting them brings the
     // windows to parity rather than leaving them half-translated.
     ("devtools.no_events", Message::Simple("(no events yet)")),
+    ("state.loading", Message::Simple("Loading…")),
+    ("entitytree.empty", Message::Simple("(empty tree)")),
+    ("accesslog.direction_label", Message::Simple("Direction:")),
+    ("peers.alias_placeholder", Message::Simple("alias (optional)")),
+    (
+        "filetransfer.no_peer_hint",
+        Message::Simple(
+            "No peer connected. Open {window} and pair a Tori-native backend \
+             (scan its QR or connect its {scheme} address), then come back \
+             here to transfer files.",
+        ),
+    ),
+    // Peer runtime/storage chips (Peers, System Overview). `IndexedDB` and
+    // `OPFS` are product names and stay as written everywhere; the descriptive
+    // ones are words and get translated.
+    (
+        "peerdisplay.runtime_main_thread",
+        Message::Simple("main thread"),
+    ),
+    ("peerdisplay.kind_primary", Message::Simple("primary")),
+    ("peerdisplay.kind_local", Message::Simple("local")),
+    ("peerdisplay.kind_remote", Message::Simple("remote")),
+    ("peerdisplay.runtime_worker", Message::Simple("worker")),
+    ("peerdisplay.runtime_native", Message::Simple("native")),
+    ("peerdisplay.storage_in_memory", Message::Simple("in-memory")),
+    ("peerdisplay.storage_indexeddb", Message::Simple("IndexedDB")),
+    ("peerdisplay.storage_opfs", Message::Simple("OPFS")),
+    (
+        "peerdisplay.storage_native_store",
+        Message::Simple("native store"),
+    ),
     (
         "inspect.attach_failed",
         Message::Simple("Inspect routing failed to attach on this peer."),
@@ -2123,6 +2154,114 @@ mod tests {
                 en_map().contains_key(key.as_str()),
                 "window '{}' has no '{key}' key in the EN catalog",
                 wt.name
+            );
+        }
+    }
+
+    #[test]
+    fn plural_forms_cover_every_category_the_selector_can_produce() {
+        // `tools/i18n_locale_check.py` checks that a locale's plural keys agree
+        // with **its own `peer.count`** — self-referential, the same shape as
+        // the `es`-as-reference bug. If `peer.count` itself carries the wrong
+        // category set for a locale, every other plural key agrees with the
+        // wrong set and the gate reports clean. The non-circular reference is
+        // the CLDR-pinned selector itself.
+        //
+        // A gap is not a crash: `plural_render` degrades cat -> Other -> first
+        // form. It renders the WRONG grammatical form silently, which is
+        // exactly the kind of thing no reviewer notices and no test catches.
+        for loc in EMBEDDED_LOCALES {
+            // Categories actually reachable for integer counts. 0..=200 covers
+            // every modulo-100 branch (ar's 3..10 / 11..99, the Slavic
+            // 12..14 exclusions, ro's 1..19).
+            let mut reachable: Vec<PluralCategory> = Vec::new();
+            for n in 0..=200 {
+                let c = plural_category(loc.id, n);
+                if !reachable.contains(&c) {
+                    reachable.push(c);
+                }
+            }
+
+            for (key, msg) in loc.entries {
+                let Message::Plural(forms) = msg else {
+                    continue;
+                };
+                let have: Vec<PluralCategory> = forms.iter().map(|(c, _)| *c).collect();
+                let missing: Vec<_> =
+                    reachable.iter().filter(|c| !have.contains(c)).collect();
+                assert!(
+                    missing.is_empty(),
+                    "locale '{}' key '{key}': no form for {missing:?}, which the \
+                     CLDR selector produces for some count — renders the wrong \
+                     grammatical form via the Other fallback. Has {have:?}",
+                    loc.id
+                );
+                let dead: Vec<_> =
+                    have.iter().filter(|c| !reachable.contains(c)).collect();
+                assert!(
+                    dead.is_empty(),
+                    "locale '{}' key '{key}': form(s) {dead:?} can never be \
+                     selected for an integer count — dead translation. \
+                     Reachable: {reachable:?}",
+                    loc.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_embedded_locale_is_pickable_and_dir_is_right() {
+        // A catalog that ships without a LOCALES row is embedded but
+        // unreachable — the user can never select it. The reverse (a roster row
+        // with no catalog) silently renders English for that language.
+        for loc in EMBEDDED_LOCALES {
+            let row = locale(loc.id).unwrap_or_else(|| {
+                panic!(
+                    "embedded catalog '{}' has no LOCALES row — it ships in the \
+                     binary but cannot be selected in Settings",
+                    loc.id
+                )
+            });
+            assert!(!row.pseudo, "'{}' is a real catalog, not a pseudo-locale", loc.id);
+        }
+        // The four RTL languages, and only those, carry dir=rtl.
+        const RTL: [&str; 4] = ["ar", "he", "fa", "ur"];
+        for row in LOCALES {
+            let want = if RTL.contains(&row.id) || row.pseudo { "rtl" } else { "ltr" };
+            assert_eq!(
+                row.dir, want,
+                "locale '{}' has dir={} — expected {want}",
+                row.id, row.dir
+            );
+        }
+    }
+
+    #[test]
+    fn every_window_title_key_has_a_registered_window() {
+        // The reverse of `every_registered_window_has_a_title_key`, and the
+        // direction nothing covered: renaming or removing a window leaves its
+        // old `window.<slug>` key behind, rendering nowhere while all 30
+        // overlays still carry a translation for it. Neither the catalog gate
+        // (which compares overlays to EN) nor the prose scanner can see that —
+        // the key exists and is "referenced" by the `format!("window.{}")`
+        // lookup, so it looks live from every angle except this one.
+        let registered: std::collections::HashSet<String> =
+            crate::window_registry::standard_window_types()
+                .iter()
+                .map(|wt| window_slug(wt.name))
+                .collect();
+        for (key, _) in EN {
+            let Some(slug) = key.strip_prefix("window.") else {
+                continue;
+            };
+            // `window.count` is the open-window plural, not a title.
+            if slug == "count" {
+                continue;
+            }
+            assert!(
+                registered.contains(slug),
+                "EN key '{key}' has no registered window — a stale title key \
+                 from a rename/removal, still translated in all 30 overlays"
             );
         }
     }

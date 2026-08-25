@@ -86,6 +86,38 @@ said 8081 / "don't run make serve in parallel" — no longer true.)
   the i18n pass. Re-run to confirm before investigating anything else; the
   suspicion is a race in which site is selected when `Delete site` fires.
 
+- **Second known intermittent (recorded `2026-07-22`, unfixed):** Phase 26.8's
+  *"after delete the theme must leave every registry-driven dropdown"*. This is
+  a **different failure from the Site Editor one above** and should not be
+  filed under it — the observed status line read `Deleted "⁨e2e-neon⁩"`, so the
+  right theme was deleted and the dropdown still listed it. That rules out the
+  wrong-selection suspicion that covers the Site Editor case.
+
+  Suspected mechanism, from reading the path (**not yet proven** — record what
+  you see before assuming this):
+
+  1. `user_themes::delete_theme` clears the main-thread registry
+     *synchronously* (`theme_tokens::unregister_user_theme`) and then issues
+     `peers.dispatch_remove` for the tree entity.
+  2. The Worker-arm cache mirror is updated **from subscription events, not
+     from write responses** (`wasm-worker-proxy` cache invariant 4), so
+     immediately after `dispatch_remove` the mirror still holds the theme.
+  3. `UserThemes::sync` re-derives the registry *from* `peers.tree_listing`
+     over that mirror. If anything dirties the themes watch in the window
+     between (1) and the removal event landing, sync **re-registers the theme
+     it just deleted** — and the dropdown lists it again.
+
+  `sync` reconciles both directions, so it should converge on the next event;
+  what is not yet explained is why it sometimes fails to inside the 5 s poll.
+  The cheap next diagnostic is the `registered=/removed=` counts already
+  emitted by `sync`'s `tracing::info!("user themes synced from tree")` — a
+  `registered=1` *after* the delete confirms resurrection. The
+  `audit-worker-reads` cargo feature (`peers_worker::warn_if_unsubscribed`) is
+  the break-glass lamp for the related "read a prefix nobody subscribed" case.
+
+  Both intermittents are delete-reflection races and are **orthogonal to i18n** —
+  neither asserts on translated text.
+
 - **Matching localized text:** `t()`/`t_plural()` wrap every interpolated arg in
   Unicode bidi isolates (FSI `\u2066` … PDI `\u2069`). `sec.textContent` therefore
   contains invisible marks *between the number and its noun*, and a regex like

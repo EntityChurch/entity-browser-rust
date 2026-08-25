@@ -269,7 +269,7 @@
   "boot_surface.window": "پنجره: {label}",
 
   "peers.add_a_peer": "افزودن یک همتا",
-  "peers.col_peer_id": "شناسه همتا",
+  "peers.col_peer_id": "شناسهٔ همتا",
   "peers.col_kind": "نوع",
   "peers.group_system": "همتاهای سیستم",
   "peers.group_system_sub": "همیشه فعال",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(هیچ نشانگر ادامه یا خطای زنجیره‌ای برای chain_id {chain} روی همتای {peer} وجود ندارد)",
   "chaintrace.body_redacted": "(بدنه طبق سیاست رندرکننده پنهان شد)",
   "chaintrace.body_undecoded": "(بدنه هنوز رمزگشایی نشده است)",
+
+  "state.loading": "در حال بارگذاری…",
+  "entitytree.empty": "(درخت خالی)",
+  "accesslog.direction_label": "جهت:",
+  "peers.alias_placeholder": "نام مستعار (اختیاری)",
+  "filetransfer.no_peer_hint": "هیچ همتایی متصل نیست. {window} را باز کنید و یک بک‌اند بومی Tori را جفت کنید (کد QR آن را اسکن کنید یا به نشانی {scheme} آن متصل شوید)، سپس برای انتقال فایل به اینجا بازگردید.",
+  "peerdisplay.runtime_main_thread": "رشتهٔ اصلی",
+  "peerdisplay.runtime_worker": "کارگر",
+  "peerdisplay.runtime_native": "بومی",
+  "peerdisplay.storage_in_memory": "در حافظه",
+  "peerdisplay.storage_native_store": "انبارهٔ بومی",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "اصلی",
+  "peerdisplay.kind_local": "محلی",
+  "peerdisplay.kind_remote": "دور",
 
   "peer.count": {
     "one": "{n} همتا",

@@ -572,6 +572,23 @@
   "chaintrace.body_redacted": "(indhold redigeret jf. renderer-politik)",
   "chaintrace.body_undecoded": "(indhold endnu ikke afkodet)",
 
+  "state.loading": "Indlæser…",
+  "entitytree.empty": "(tomt træ)",
+  "accesslog.direction_label": "Retning:",
+  "peers.alias_placeholder": "alias (valgfrit)",
+  "filetransfer.no_peer_hint": "Ingen peer forbundet. Åbn {window}, og par en Tori-native backend (scan dens QR, eller forbind til dens {scheme}-adresse), og kom så tilbage hertil for at overføre filer.",
+  "peerdisplay.runtime_main_thread": "hovedtråd",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "native",
+  "peerdisplay.storage_in_memory": "i hukommelsen",
+  "peerdisplay.storage_native_store": "native lager",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primær",
+  "peerdisplay.kind_local": "lokal",
+  "peerdisplay.kind_remote": "fjern",
+
   "peer.count": {
     "one": "{n} peer",
     "other": "{n} peers"

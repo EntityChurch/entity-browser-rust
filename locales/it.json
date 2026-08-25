@@ -380,7 +380,7 @@
 
   "siteeditor.your_sites": "I tuoi siti",
   "siteeditor.new_site": "Nuovo sito",
-  "siteeditor.no_sites": "(nessuno ancora — usa “Nuovo sito” sotto)",
+  "siteeditor.no_sites": "(nessuno ancora — usa «Nuovo sito» sotto)",
   "siteeditor.renders_ok": "Si renderizza nel browser",
   "siteeditor.wont_render": "Non si renderizzerà: {reason}",
   "siteeditor.site_id_placeholder": "nuovo id-sito (lettere, cifre, - _)",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(nessun marcatore di continuazione o di errore di catena associato a chain_id {chain} sul peer {peer})",
   "chaintrace.body_redacted": "(corpo oscurato secondo la policy del renderer)",
   "chaintrace.body_undecoded": "(corpo non ancora decodificato)",
+
+  "state.loading": "Caricamento…",
+  "entitytree.empty": "(albero vuoto)",
+  "accesslog.direction_label": "Direzione:",
+  "peers.alias_placeholder": "alias (facoltativo)",
+  "filetransfer.no_peer_hint": "Nessun peer connesso. Apri {window} e accoppia un backend nativo Tori (scansiona il suo QR o connettiti al suo indirizzo {scheme}), poi torna qui per trasferire file.",
+  "peerdisplay.runtime_main_thread": "thread principale",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "nativo",
+  "peerdisplay.storage_in_memory": "in memoria",
+  "peerdisplay.storage_native_store": "archivio nativo",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primario",
+  "peerdisplay.kind_local": "locale",
+  "peerdisplay.kind_remote": "remoto",
 
   "peer.count": {
     "one": "{n} peer",

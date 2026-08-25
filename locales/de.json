@@ -572,6 +572,23 @@
   "chaintrace.body_redacted": "(Inhalt gemäß Renderer-Richtlinie geschwärzt)",
   "chaintrace.body_undecoded": "(Inhalt noch nicht dekodiert)",
 
+  "state.loading": "Wird geladen…",
+  "entitytree.empty": "(leerer Baum)",
+  "accesslog.direction_label": "Richtung:",
+  "peers.alias_placeholder": "Alias (optional)",
+  "filetransfer.no_peer_hint": "Kein Peer verbunden. Öffne {window} und koppele ein Tori-natives Backend (scanne dessen QR-Code oder verbinde dich mit seiner {scheme}-Adresse), und komm dann hierher zurück, um Dateien zu übertragen.",
+  "peerdisplay.runtime_main_thread": "Haupt-Thread",
+  "peerdisplay.runtime_worker": "Worker",
+  "peerdisplay.runtime_native": "nativ",
+  "peerdisplay.storage_in_memory": "im Arbeitsspeicher",
+  "peerdisplay.storage_native_store": "nativer Speicher",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "primär",
+  "peerdisplay.kind_local": "lokal",
+  "peerdisplay.kind_remote": "entfernt",
+
   "peer.count": {
     "one": "{n} Peer",
     "other": "{n} Peers"

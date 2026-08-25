@@ -578,6 +578,23 @@
   "chaintrace.body_redacted": "(тело скрыто согласно политике рендерера)",
   "chaintrace.body_undecoded": "(тело ещё не декодировано)",
 
+  "state.loading": "Загрузка…",
+  "entitytree.empty": "(пустое дерево)",
+  "accesslog.direction_label": "Направление:",
+  "peers.alias_placeholder": "псевдоним (необязательно)",
+  "filetransfer.no_peer_hint": "Нет подключённых пиров. Откройте {window} и подключите нативный бэкенд Tori (отсканируйте его QR-код или подключитесь по адресу {scheme}), затем вернитесь сюда для передачи файлов.",
+  "peerdisplay.runtime_main_thread": "главный поток",
+  "peerdisplay.runtime_worker": "воркер",
+  "peerdisplay.runtime_native": "нативный",
+  "peerdisplay.storage_in_memory": "в памяти",
+  "peerdisplay.storage_native_store": "нативное хранилище",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "основной",
+  "peerdisplay.kind_local": "локальный",
+  "peerdisplay.kind_remote": "удалённый",
+
   "peer.count": {
     "one": "{n} пир",
     "few": "{n} пира",

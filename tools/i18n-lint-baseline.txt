@@ -1,10 +1,1 @@
-src/app.rs raw=2 phys=0
-src/dom/access_log.rs raw=1 phys=0
-src/dom/entity_tree.rs raw=1 phys=0
-src/dom/file_transfer.rs raw=2 phys=0
-src/dom/peer_management.rs raw=1 phys=0
-src/dom/shell.rs raw=1 phys=0
-src/peer_display.rs raw=4 phys=0
 src/views/content_site/mod.rs raw=24 phys=0
-src/views/shell/binding.rs raw=7 phys=0
-src/views/shell/output.rs raw=1 phys=0

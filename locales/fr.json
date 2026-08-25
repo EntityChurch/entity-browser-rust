@@ -269,7 +269,7 @@
   "boot_surface.window": "Fenêtre : {label}",
 
   "peers.add_a_peer": "Ajouter un pair",
-  "peers.col_peer_id": "ID de pair",
+  "peers.col_peer_id": "ID du pair",
   "peers.col_kind": "Type",
   "peers.group_system": "Pairs système",
   "peers.group_system_sub": "toujours actifs",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(aucun marqueur de continuation ou d'erreur de chaîne lié au chain_id {chain} sur le pair {peer})",
   "chaintrace.body_redacted": "(corps masqué selon la politique du moteur de rendu)",
   "chaintrace.body_undecoded": "(corps pas encore décodé)",
+
+  "state.loading": "Chargement…",
+  "entitytree.empty": "(arbre vide)",
+  "accesslog.direction_label": "Direction :",
+  "peers.alias_placeholder": "alias (facultatif)",
+  "filetransfer.no_peer_hint": "Aucun pair connecté. Ouvrez {window} et associez un backend natif Tori (scannez son QR ou connectez-vous à son adresse {scheme}), puis revenez ici pour transférer des fichiers.",
+  "peerdisplay.runtime_main_thread": "thread principal",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "natif",
+  "peerdisplay.storage_in_memory": "en mémoire",
+  "peerdisplay.storage_native_store": "stockage natif",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "principal",
+  "peerdisplay.kind_local": "local",
+  "peerdisplay.kind_remote": "distant",
 
   "peer.count": {
     "one": "{n} pair",

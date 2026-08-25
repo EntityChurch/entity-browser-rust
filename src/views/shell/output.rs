@@ -191,7 +191,7 @@ pub fn render_verb_output_lines(out: &VerbOutput) -> Vec<String> {
             }
         }
         VerbOutput::Lines(_) | VerbOutput::Dispatch(_) => {
-            rows.push("(streaming output)".into());
+            rows.push("(streaming output)".into()); // i18n-ignore — shell command output (design §6)
         }
     }
     rows

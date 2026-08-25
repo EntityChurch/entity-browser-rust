@@ -58,7 +58,7 @@ fn render_tree_panel(container: &Element, output: &EntityTreeOutput, ctx: &DomCt
 
     if output.rows.is_empty() {
         let p = util::create_element("p");
-        util::set_text(&p, "(empty tree)");
+        util::set_text(&p, &crate::i18n::t("entitytree.empty", &[]));
         util::append(container, &p);
     } else {
         for row in &output.rows {

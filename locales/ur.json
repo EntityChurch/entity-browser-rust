@@ -550,7 +550,7 @@
   "theme.err_no_tokens": "تھیم میں کوئی ٹوکن ویلیو نہیں",
 
   "label.role": "کردار",
-  "label.peer_id": "پیئر آئی ڈی",
+  "label.peer_id": "پیئر ID",
   "keymanager.subtitle": "ہوسٹ شدہ پیئرز کی عوامی شناختیں (Ed25519)",
   "peerconn.this_peer": "یہ پیئر {pid} · {kind}",
   "peerconn.listening": " · {addr} پر سن رہا ہے",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(پیئر {peer} پر chain_id {chain} کے لیے کوئی کنٹینیویشن یا چین ایرر مارکر منسلک نہیں)",
   "chaintrace.body_redacted": "(رینڈرر پالیسی کے تحت باڈی چھپائی گئی)",
   "chaintrace.body_undecoded": "(باڈی ابھی ڈی کوڈ نہیں ہوئی)",
+
+  "state.loading": "لوڈ ہو رہا ہے…",
+  "entitytree.empty": "(خالی ٹری)",
+  "accesslog.direction_label": "سمت:",
+  "peers.alias_placeholder": "عرفی نام (اختیاری)",
+  "filetransfer.no_peer_hint": "کوئی پیئر منسلک نہیں۔ {window} کھولیں اور کوئی Tori-نیٹو بیک اینڈ جوڑیں (اس کا QR اسکین کریں یا اس کے {scheme} پتے سے جڑیں)، پھر فائلیں منتقل کرنے یہاں واپس آئیں۔",
+  "peerdisplay.runtime_main_thread": "مرکزی تھریڈ",
+  "peerdisplay.runtime_worker": "ورکر",
+  "peerdisplay.runtime_native": "نیٹو",
+  "peerdisplay.storage_in_memory": "میموری میں",
+  "peerdisplay.storage_native_store": "نیٹو اسٹور",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "بنیادی",
+  "peerdisplay.kind_local": "مقامی",
+  "peerdisplay.kind_remote": "ریموٹ",
 
   "peer.count": {
     "one": "{n} پیئر",

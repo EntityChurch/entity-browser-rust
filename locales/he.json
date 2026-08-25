@@ -321,7 +321,7 @@
   "accesslog.filter_local": "· מקומי (העמית של היישום עצמו)",
   "accesslog.tab_activity": "פעילות (יומן חי)",
   "accesslog.tab_capabilities": "יכולות שנצפו",
-  "accesslog.actor_system_backend": " backend מערכת",
+  "accesslog.actor_system_backend": "צד שרת של המערכת",
   "accesslog.actor_system_peer": "עמית מערכת",
   "accesslog.capabilities_observed": {
     "one": "{actor} — {n} יכולת שנצפתה",
@@ -577,6 +577,23 @@
   "chaintrace.no_marker": "(אין סמן המשך או שגיאת שרשרת המקושר ל-chain_id {chain} בעמית {peer})",
   "chaintrace.body_redacted": "(הגוף הוסתר בהתאם למדיניות המעבד)",
   "chaintrace.body_undecoded": "(הגוף עדיין לא פוענח)",
+
+  "state.loading": "טוען…",
+  "entitytree.empty": "(עץ ריק)",
+  "accesslog.direction_label": "כיוון:",
+  "peers.alias_placeholder": "כינוי (אופציונלי)",
+  "filetransfer.no_peer_hint": "אין עמית מחובר. פתח את {window} והתאם שרת Tori מקורי (סרוק את ה-QR שלו או התחבר לכתובת {scheme} שלו), ואז חזור לכאן כדי להעביר קבצים.",
+  "peerdisplay.runtime_main_thread": "התהליכון הראשי",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "מקורי",
+  "peerdisplay.storage_in_memory": "בזיכרון",
+  "peerdisplay.storage_native_store": "אחסון מקורי",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "ראשי",
+  "peerdisplay.kind_local": "מקומי",
+  "peerdisplay.kind_remote": "מרוחק",
 
   "peer.count": {
     "one": "{n} עמית",

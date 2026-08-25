@@ -566,6 +566,23 @@
   "chaintrace.body_redacted": "(isi disunting sesuai kebijakan perender)",
   "chaintrace.body_undecoded": "(isi belum didekode)",
 
+  "state.loading": "Memuat…",
+  "entitytree.empty": "(pohon kosong)",
+  "accesslog.direction_label": "Arah:",
+  "peers.alias_placeholder": "alias (opsional)",
+  "filetransfer.no_peer_hint": "Tidak ada peer terhubung. Buka {window} dan pasangkan backend Tori-native (pindai QR-nya atau sambungkan ke alamat {scheme}), lalu kembali ke sini untuk mentransfer berkas.",
+  "peerdisplay.runtime_main_thread": "utas utama",
+  "peerdisplay.runtime_worker": "worker",
+  "peerdisplay.runtime_native": "native",
+  "peerdisplay.storage_in_memory": "di memori",
+  "peerdisplay.storage_native_store": "penyimpanan native",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "utama",
+  "peerdisplay.kind_local": "lokal",
+  "peerdisplay.kind_remote": "jarak jauh",
+
   "peer.count": {
     "other": "{n} peer"
   }

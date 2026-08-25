@@ -578,6 +578,23 @@
   "chaintrace.body_redacted": "(тіло приховано згідно з політикою рендерера)",
   "chaintrace.body_undecoded": "(тіло ще не декодовано)",
 
+  "state.loading": "Завантаження…",
+  "entitytree.empty": "(порожнє дерево)",
+  "accesslog.direction_label": "Напрямок:",
+  "peers.alias_placeholder": "псевдонім (необов'язково)",
+  "filetransfer.no_peer_hint": "Немає під'єднаних пірів. Відкрийте {window} і з'єднайте нативний бекенд Tori (відскануйте його QR-код або під'єднайтеся за адресою {scheme}), потім поверніться сюди для передавання файлів.",
+  "peerdisplay.runtime_main_thread": "головний потік",
+  "peerdisplay.runtime_worker": "воркер",
+  "peerdisplay.runtime_native": "нативний",
+  "peerdisplay.storage_in_memory": "в пам'яті",
+  "peerdisplay.storage_native_store": "нативне сховище",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "основний",
+  "peerdisplay.kind_local": "локальний",
+  "peerdisplay.kind_remote": "віддалений",
+
   "peer.count": {
     "one": "{n} пір",
     "few": "{n} піри",

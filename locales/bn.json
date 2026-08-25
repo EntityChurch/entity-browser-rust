@@ -550,7 +550,7 @@
   "theme.err_no_tokens": "থিমে কোনো টোকেন মান নেই",
 
   "label.role": "ভূমিকা",
-  "label.peer_id": "পিয়ার আইডি",
+  "label.peer_id": "পিয়ার ID",
   "keymanager.subtitle": "হোস্ট করা পিয়ারের সর্বজনীন পরিচয় (Ed25519)",
   "peerconn.this_peer": "এই পিয়ার {pid} · {kind}",
   "peerconn.listening": " · শুনছে {addr}",
@@ -571,6 +571,23 @@
   "chaintrace.no_marker": "(পিয়ার {peer}-এ chain_id {chain} এর জন্য কোনো ধারাবাহিকতা বা চেইন-ত্রুটি মার্কার নেই)",
   "chaintrace.body_redacted": "(রেন্ডারার নীতি অনুযায়ী বডি গোপন করা হয়েছে)",
   "chaintrace.body_undecoded": "(বডি এখনও ডিকোড করা হয়নি)",
+
+  "state.loading": "লোড হচ্ছে…",
+  "entitytree.empty": "(খালি ট্রি)",
+  "accesslog.direction_label": "দিক:",
+  "peers.alias_placeholder": "উপনাম (ঐচ্ছিক)",
+  "filetransfer.no_peer_hint": "কোনো পিয়ার সংযুক্ত নেই। {window} খুলুন এবং একটি Tori-নেটিভ ব্যাকএন্ড যুক্ত করুন (এর QR স্ক্যান করুন বা এর {scheme} ঠিকানায় সংযোগ করুন), তারপর ফাইল স্থানান্তরের জন্য এখানে ফিরে আসুন।",
+  "peerdisplay.runtime_main_thread": "মূল থ্রেড",
+  "peerdisplay.runtime_worker": "ওয়ার্কার",
+  "peerdisplay.runtime_native": "নেটিভ",
+  "peerdisplay.storage_in_memory": "মেমরিতে",
+  "peerdisplay.storage_native_store": "নেটিভ স্টোর",
+  "peerdisplay.storage_indexeddb": "IndexedDB",
+  "peerdisplay.storage_opfs": "OPFS",
+
+  "peerdisplay.kind_primary": "প্রাথমিক",
+  "peerdisplay.kind_local": "স্থানীয়",
+  "peerdisplay.kind_remote": "দূরবর্তী",
 
   "peer.count": {
     "one": "{n} পিয়ার",

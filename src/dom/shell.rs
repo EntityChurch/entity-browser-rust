@@ -143,7 +143,7 @@ fn append_verb_output_html(html: &mut String, out: &VerbOutput) {
         // they are decomposed into per-chunk `ScrollbackEntry` rows
         // upstream. Defensive: render the placeholder.
         VerbOutput::Lines(_) | VerbOutput::Dispatch(_) => {
-            push_row(html, COLOR_INFO, "(streaming output)");
+            push_row(html, COLOR_INFO, "(streaming output)"); // i18n-ignore — shell command output (design §6)
         }
     }
 }
