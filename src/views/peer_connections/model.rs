@@ -107,9 +107,12 @@ impl PeerConnectionsModel {
 
     fn ensure_state_in_tree(&self, peers: &Peers) {
         let path = self.state_path(peers);
-        if peers.get_entity(&self.peer_id, &path).is_none() {
-            peers.dispatch_write(&self.peer_id, path, PeerConnectionsState::default().to_entity());
-        }
+        peers.seed_state_if_absent(
+            &self.peer_id,
+            path,
+            PeerConnectionsState::default().to_entity(),
+            "peer_connections",
+        );
     }
 
     fn read_window_state(&self, peers: &Peers) -> PeerConnectionsState {

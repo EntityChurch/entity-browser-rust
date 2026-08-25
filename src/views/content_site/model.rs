@@ -397,14 +397,12 @@ impl ContentSiteModel {
 
     fn ensure_state_in_tree(&self, peers: &Peers) {
         let path = self.state_path();
-        if peers.get_entity(&self.peer_id, &path).is_none() {
-            let default = ContentSiteState {
-                peer: self.default_site_peer.clone(),
-                site_id: self.default_site_id.clone(),
-                page: String::new(),
-            };
-            peers.dispatch_write(&self.peer_id, path, default.to_entity());
-        }
+        let default = ContentSiteState {
+            peer: self.default_site_peer.clone(),
+            site_id: self.default_site_id.clone(),
+            page: String::new(),
+        };
+        peers.seed_state_if_absent(&self.peer_id, path, default.to_entity(), "content_site");
     }
 
     fn read_state(&self, peers: &Peers) -> ContentSiteState {

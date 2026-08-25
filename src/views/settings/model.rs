@@ -143,39 +143,18 @@ impl SettingsModel {
     /// `get_entity` miss does NOT mean absent, and the old
     /// get-then-`dispatch_write` here silently overwrote persisted settings
     /// with defaults on every fresh Settings spawn (the chrome theme reset
-    /// to "dark" after a reload — caught by e2e Phase 26.8). So on wasm,
-    /// BOTH arms go through the durable L1 `put_if_absent` (itself
-    /// arm-routed: sync store check on Direct, worker round-trip on
-    /// Worker) — no arm probe here at all; the first fix probed the arm
-    /// with `has_peer_context`, which is `true` for Worker-hosted peers
-    /// too (AP4), and kept clobbering while native tests stayed green.
+    /// to "dark" after a reload — caught by e2e Phase 26.8). The arm-split
+    /// that fixes it — and the whole clobber rationale — now lives on
+    /// [`Peers::seed_state_if_absent`], the shared helper this delegates to
+    /// (the same shape every window model's `ensure_state_in_tree` uses).
     pub fn ensure_state(&self, peers: &Peers) {
         let path = self.state_path(peers);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Native is Direct-only: the in-process store is authoritative
-            // and callers (tests) expect the seed synchronously dispatched.
-            if peers.get_entity(&self.peer_id, &path).is_none() {
-                peers.dispatch_write(&self.peer_id, path, SettingsState::default().to_entity());
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let fut = peers.put_if_absent(
-                &self.peer_id,
-                path,
-                SettingsState::default().to_entity(),
-                5_000,
-            );
-            wasm_bindgen_futures::spawn_local(async move {
-                match fut.await {
-                    // D13: `seeded=true` on a profile that SHOULD have settings
-                    // is the clobber signature — keep it visible.
-                    Ok(seeded) => tracing::info!(seeded, "settings ensure_state (durable check)"),
-                    Err(e) => tracing::warn!(error = %e, "settings ensure_state: durable seed failed"),
-                }
-            });
-        }
+        peers.seed_state_if_absent(
+            &self.peer_id,
+            path,
+            SettingsState::default().to_entity(),
+            "settings",
+        );
     }
 
     fn read_state(&self, peers: &Peers) -> SettingsState {
