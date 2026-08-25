@@ -925,7 +925,8 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
          body{{margin:0;background:{bg};color:{text};font:15px/1.6 system-ui,sans-serif}}\
          a{{color:{link};text-decoration:none}}a:hover{{text-decoration:underline}}\
          .site-header{{display:flex;flex-wrap:wrap;align-items:baseline;gap:16px;\
-         padding:14px 20px;background:{nav_bg};border-bottom:1px solid {border}}}\
+         padding:14px 20px;background:{nav_bg};border-bottom:1px solid {border};\
+         position:relative}}\
          .site-title{{font-size:18px;font-weight:700;color:{text}}}\
          .site-nav>ul{{list-style:none;display:flex;flex-wrap:wrap;align-items:flex-start;\
          gap:6px 22px;margin:0;padding:0}}\
@@ -935,17 +936,22 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
          .site-nav ul ul a{{font-size:13px;color:{muted2}}}\
          .site-nav ul ul a:hover{{color:{link}}}\
          .site-nav details.nav-group>summary{{cursor:pointer;list-style:none;\
-         display:flex;align-items:baseline;gap:5px}}\
+         display:flex;align-items:center;gap:6px;padding:3px 2px}}\
          .site-nav details.nav-group>summary::-webkit-details-marker{{display:none}}\
-         .site-nav details.nav-group>summary::after{{content:\"\\25B8\";color:{muted2};\
-         font-size:10px;line-height:1;transition:transform .12s ease}}\
-         .site-nav details.nav-group[open]>summary::after{{transform:rotate(90deg)}}\
+         .site-nav details.nav-group>summary::after{{content:\"\\25BE\";color:{muted2};\
+         font-size:13px;line-height:1;transition:transform .12s ease}}\
+         .site-nav details.nav-group[open]>summary::after{{transform:rotate(180deg);\
+         color:{accent}}}\
+         .site-nav details.nav-group>summary:hover::after{{color:{link}}}\
          .site-nav details.nav-group>summary.here{{color:{accent};font-weight:600}}\
          .site-nav details.nav-group>summary.here>a{{color:{accent}}}\
-         .site-nav details.nav-group>ul{{position:absolute;z-index:20;margin-top:6px;\
-         padding:8px 12px;background:{nav_bg};border:1px solid {border};border-radius:8px;\
-         box-shadow:0 10px 28px rgba(0,0,0,.45);min-width:150px}}\
-         .site-nav li{{position:relative}}\
+         .site-nav details.nav-group>ul{{position:absolute;left:0;right:0;top:100%;\
+         z-index:20;display:block;column-width:190px;column-gap:26px;\
+         margin:0;padding:16px 20px;background:{nav_bg};\
+         border-bottom:1px solid {border};box-shadow:0 14px 30px rgba(0,0,0,.45);\
+         max-height:60vh;overflow:auto}}\
+         .site-nav details.nav-group>ul li{{display:block;break-inside:avoid;margin:0 0 7px}}\
+         .site-nav details.nav-group>ul a{{font-size:13.5px}}\
          .site-nav a.active{{color:{accent};font-weight:600}}\
          .nav-section{{color:{muted2};font-size:12px;text-transform:uppercase;letter-spacing:.05em}}\
          main.page{{max-width:760px;margin:0 auto;padding:28px 20px}}\

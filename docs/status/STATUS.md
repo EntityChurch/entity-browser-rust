@@ -2,21 +2,27 @@
 
 _Updated: 2026-08-23 · public: **v0.8.0** (`master`) · working branch `dev`, version **0.8.2**_
 
-This is the tracker: where the product is, what is proven and on what, what blocks the next
-release, and what is open. It is a **published** document — so it cites files, symbols and
-measurements rather than commit SHAs, which do not resolve for a reader outside this tree
-(see *Commit pins* below).
+This is the tracker: where the product is, what is proven and on what, and what is open. It is a
+**published** document — so it cites files, symbols and measurements rather than commit SHAs, which
+do not resolve for a reader outside this tree (see *Commit pins* below).
+
+> **Release posture, 2026-08-23: this repo is going out.** Gates are green and re-measured, and
+> **there are no release blockers in this tree**. What remains is either DevOps' (branch promotion,
+> tagging, the GitHub Actions platform matrix), cosmetic (icons), or waiting on hardware nobody
+> here has (a second network). Everything under *Next* was reviewed and **deliberately held** for a
+> post-release cycle, which is intended to be a short one — the items are listed there so the
+> roadmap is legible, not because they are loose ends.
 
 **Deeper indexes, so this file does not restate them:**
 
 | For | Read |
 |---|---|
-| What blocks the release, ordered | `docs/plans/PUNCHLIST-RELEASE.md` |
+| Sequencing and open items, ordered | `docs/plans/PUNCHLIST-RELEASE.md` |
 | Release mechanics, matrix, open edges | `docs/RELEASE-READINESS.md` |
 | Deferred work with the reason | `docs/plans/BACKLOG.md` |
 | Connectivity open items (canonical table) | `docs/architecture/reviews/BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md` §8 |
 | What changed for a user | `CHANGELOG.md` |
-| Where the last session left off | `docs/status/HANDOFF-2026-08-23-c-full-screen-wake-lock-and-a-concession-spent.md` |
+| Where the last session left off | `docs/status/HANDOFF-2026-08-23-f-static-site-nav-and-a-full-gate-review.md` |
 
 Spot-check a row before acting on it. That table has carried stale rows, and they survived by
 being read instead of run.
@@ -38,7 +44,7 @@ Re-measured 2026-08-23 rather than quoted:
 
 | Gate | Result |
 |---|---|
-| `make test` | **1283 / 0 / 8-ignored** across 15 test binaries |
+| `make test` | **1289 / 0 / 8-ignored** across **16** test binaries (1283/15 earlier the same day — a concurrent seat landed `tests/foreign_namespace_write.rs` mid-session, which is exactly how the denominator moves without anyone noticing) |
 | `make test-tauri` | **55 / 0** across 4 binaries — re-run today; `src-tauri` is workspace-excluded, so it is not in the number above |
 | `make lint` | clean — clippy, ui-lint, i18n-lint, i18n-locale-check, i18n-callsite-check, i18n-untranslated, tree-hygiene |
 | `make e2e-worker` | **25 passed / 0 failed, 374.28 s** — unfiltered, end of session (+1 test: the R1 milestone-trace gate). An earlier unfiltered run the same afternoon was 23/1, the failure being blocker 5; it did not reproduce across 13 subsequent runs |
@@ -68,8 +74,10 @@ is no evidence that file even parses.
 
 ## What is proven, and on what
 
-Every connectivity gate is podman containers on a single Linux box. Each rig states its own scope;
-none of them is two physical machines on real networks.
+Every **gate** below is podman containers on a single Linux box, and each rig states its own scope.
+That is a statement about the automated gates, **not** about the product — the same flow was run by
+hand on two real devices on 2026-08-21 (see below the table). What no gate and no hand-run has
+covered is two devices on two *different networks*.
 
 | Capability | Gate |
 |---|---|
@@ -85,10 +93,18 @@ none of them is two physical machines on real networks.
 | Name → registry → signed root → page, in a browser | `make e2e-federation` (3 containers, 3 distinct addresses) |
 | Cross-impl: our reader vs core-go's live publisher | `make crossimpl-go` |
 
-**The headline gap is unchanged: nothing has been run on two computers.** The product's actual
-pitch — download Tori, run the signaling node yourself, connect your machines to it — has never
-been executed end to end by a person on real hardware over a real network. That is not a
-regression; it is the class of thing that has to be found by running it.
+**The product thesis HAS been demonstrated on real hardware, and the line that used to sit here
+saying otherwise was stale.** On 2026-08-21 the operator ran it outside any rig: **two browsers
+exchanged chat over WebRTC and then transferred a file between them, rendezvousing through a
+desktop Tori on the same network** — no peer id retyped, no harness, no `podman network create`.
+`docs/RUNBOOK-TWO-MACHINES.md` §5 is a transcript now, not a plan, and that run is what exposed six
+defects no gate we own could see (record:
+`docs/status/STATUS-2026-08-21-two-browsers-chatted-and-moved-a-file-through-a-desktop.md`).
+
+**What remains untested is two *networks*, not two computers** — a peer behind one ISP reaching a
+peer behind another, i.e. the port-forwarding / CGNAT / symmetric-NAT half. That needs a second
+network nobody here has, so it is a post-release item waiting on hardware, not an open engineering
+task. Same-LAN is proven on real devices; off-LAN is proven only in the container NAT rigs.
 
 ## Release prep — what this repo did, and where the line is
 
@@ -111,27 +127,24 @@ that the tree be correct and honest before it is promoted. Done 2026-08-23:
 - **The notes footer and the CHANGELOG no longer advertise five installers this release does not
   carry**, and the footer no longer links a doc the publish pipeline scrubs.
 
-## Release blockers
+## Release blockers — **none in this repo**
 
-1. **`CORE_RUST_REF: v0.8.2` is anticipated — the tag is cut as part of the release, not before
-   it.** Nothing to chase; noted here only so the *second* half of the pin check is not forgotten.
-   The ref has to be publicly resolvable **and** carry the symbols we call — `NegotiationReport`,
-   `IceObserver`, `with_ice_observer`. Both superseded pins failed one of those: `7528a9f` and
-   `302b7f4` were dev SHAs (unresolvable), and `302b7f4` additionally predated `NegotiationReport`
-   by five commits, so it would have failed at compile on five platforms rather than loudly at
-   checkout. **A tag cut before those symbols land is exactly as dead as the SHA it replaced** —
-   `git grep <symbol> $REF -- bindings/` is the check, and it is not retired by using a tag.
-   This affects **CI only**; the local build resolves the sibling checkout on disk and is
-   unaffected. Detail: `docs/RELEASE-READINESS.md`.
-2. **Icons are a placeholder upscale.** The Windows build is unblocked (the set is generated and
-   wired into `src-tauri/tauri.conf.json`), but the icon a user actually sees is not done. Replace
-   `src-tauri/icons/icon.png` with real 1024×1024 art and re-run `cargo tauri icon`.
-3. **The macOS legs and the Windows `.msi` are written but never executed** — and they are exactly
-   the artifacts that cannot be produced from Linux. Prove them with a `workflow_dispatch` dry run
-   before the first tag that depends on them. Windows NSIS **is** proven, cross-built here.
-4. **linux-arm64 is unproven** — the binaryen pin is arch-resolved but has not run on an aarch64
-   host.
-5. **R1 — the display-gated Tauri WebView phase. Red 3/3 then green 13/13 on one unchanged tree,
+**This repo is ready to ship.** All four gates are green, re-measured (see *Gate state*), and
+nothing below stops a tag. The list that used to sit here called four things "blockers" that are
+not this repo's work and not blocking: it is corrected below, with owners, because a false blocker
+costs the same as a missed one.
+
+| Was called a blocker | Actually |
+|---|---|
+| Branch promotion | **DevOps**, not us. Post-release the tree is reset to the public mirror on `master`, so `dev`'s relationship to it is expected to need a merge afterwards. Not an engineering task here, and not something to "fix" ahead of time |
+| `CORE_RUST_REF: v0.8.2` | **DevOps** tag it on GitHub at the release boundary. We build against the **sibling checkout on disk**, so it does not affect this repo's build at all — CI only |
+| Icons are a placeholder upscale | **Cosmetic, post-release.** Real art + `cargo tauri icon` whenever art exists |
+| macOS legs / Windows `.msi` / linux-arm64 unproven | **Post-release, GitHub Actions, DevOps.** Only comes back to this repo if a *code* bug turns up in Windows or macOS packaging — possible, but it is not pre-work |
+
+The one thing genuinely open in this repo is R1 below, and it is not a blocker either: it is a
+**test-harness** phase that is currently green and now self-diagnosing.
+
+1. **R1 — the display-gated Tauri WebView phase. Red 3/3 then green 13/13 on one unchanged tree,
    2026-08-23. Open, not reproducible, and the trigger is unidentified.** Full record:
    `docs/status/FINDING-2026-08-23-r1-is-a-stall-in-wasm-instantiate-not-a-slow-one.md`. The
    session ended on a full unfiltered **25 / 0 in 374.28 s** with the phase green at 1088 ms.
@@ -162,7 +175,7 @@ that the tree be correct and honest before it is promoted. Done 2026-08-23:
      `wasm-opt -Oz` and has never been measured on this path. The desktop is not shown broken for
      users by a rig failure against a debug artifact — nor shown fine.
 
-## Pre-ship QA — human device verification, not agent-doable
+## Device verification — human, not agent-doable, and **none of it gates the release**
 
 1. **Optimized bundle on Safari / iOS.** Engineering is done: the binaryen **119** pin in the
    `Dockerfile` fixes the reference-types funcref mis-optimization that threw `Table.grow`
@@ -177,11 +190,13 @@ that the tree be correct and honest before it is promoted. Done 2026-08-23:
    `document.fullscreenEnabled` is true, and a wake-lock request on an engine without the API is a
    no-op the app already handles — so the outcomes to tell apart are *absent* and *works*.
    `make tauri-run`, open Apps, launch something, press ⛶ and leave it running.
-4. **Two real devices on two real networks.** Open the SPA on two devices on two different
-   networks, `meet tag <label>` on both, offer a file from one and pull it from the other. A
-   failure here is data, not a regression, and it is the next thing that would change the roadmap.
-   What no rig on this box can produce: a phone on cellular, a captive portal, an ISP CGNAT, or a
-   symmetric NAT.
+4. **Two real devices on two real NETWORKS — blocked on hardware nobody here has, and note the
+   same-network half is already DONE.** Two devices on one LAN, meeting through a desktop Tori and
+   moving a file, was run on real hardware on 2026-08-21 and is a transcript in
+   `docs/RUNBOOK-TWO-MACHINES.md` §5. What is untested is the cross-*network* case — one ISP to
+   another — which needs a second network, i.e. a second physical location. Not an open engineering
+   task; a standing item for whenever the hardware exists. What no rig on this box can produce: a
+   phone on cellular, a captive portal, an ISP CGNAT, or a symmetric NAT.
 
 ## Commit pins — why this file has none
 
@@ -269,8 +284,36 @@ pipeline builder (SDK Layer 2), relay on the Tauri backend, the capability + ide
 Manager stays a placeholder until then), cross-renderer portability, self-modification. Pull into
 the roadmap when scoped.
 
-## Next
+## Next — **post-release**, and deliberately not started
 
+The release ships from where the tree is. Everything in this section was reviewed on 2026-08-23
+and **held**, not because it is unimportant but because the team is at the end of a long push and
+opening any of it now trades a shipped release for a wider one. The intent is a **shorter** cycle
+after this — closer to a week than to the two months this one took — so this list is the input to
+that, not a set of loose ends.
+
+0. **Peer-to-peer save transfer — the one that was nearly pulled in, and the design question that
+   stopped it.** `send_save` / `scan_peer_saves` / `import_save` (`views/games/mod.rs`) are
+   **built and work browser↔browser**, riding the ordinary offer/pull path: a `SaveBundle`
+   published as an offer, candidates identified by *decoding* rather than by filename, and an
+   incoming save backing up whatever it replaces. **It has no gate at all** — `make test` covers
+   only the local half (list / backup / restore / bundle round-trip), the two cross-peer halves are
+   `#[cfg(target_arch = "wasm32")]` so no native test can reach them even in principle, and the e2e
+   asserts only that the Saves panel opens.
+   - **The blocked leg is the desktop one, and it is blocked for a known reason:** the Linux
+     desktop WebView ships **no `RTCPeerConnection` at all**
+     (`docs/status/FINDING-2026-08-22-the-linux-desktop-webview-has-no-webrtc.md`), so offer/pull is
+     dead in both directions browser↔WebView — each end would have to dispatch at a peer it cannot
+     reach.
+   - **The shape that does not need a relay, and is the thing to try first:** both parties can read
+     and write the **backend's share** over a plain WebSocket — the browser by dialing it (proven
+     daily by `e2e_worker` Phase 14b), the WebView because it already dials its own backend. So
+     getting saves *into Tori* — or backed up to the native peer on connect — is a second **sink**
+     and a second **source** for `SaveBundle::to_bytes` / `from_bytes` / `import_save`, all of
+     which already exist. Not new transport; new endpoints on transport that works.
+   - **Cheapest proof if it is picked up:** `make e2e-webrtc-file` already stands up two browsers
+     that meet and move a file, so a save phase is a variation on an existing rig — that is the
+     browser↔browser half. The Tori half is the share, not the rig.
 1. **`entity-workbench-go`'s app tier.** Its kernel is ready — core-go has signaling (punch, pool,
    coordinator, node), the §10.3 seam with single-flight, and srflx — but the app tier has none of
    it. It needs the four pieces we built here: a liveness read-model, a `maintain-peer` driver,
@@ -292,5 +335,8 @@ the roadmap when scoped.
 
 - **`entity-core-rust`** — this crate uses path dependencies into `../entity-core-rust/`, so the
   build fails at dependency resolution if that checkout is missing or at an incompatible revision.
-  SDK-tier changes belong upstream there, not here. The public push of the pinned revision is
-  release blocker 1 above.
+  SDK-tier changes belong upstream there, not here. **This is a build-time relationship with the
+  checkout on disk and is not affected by tagging**: `CORE_RUST_REF` in the release workflow is a
+  CI concern owned by DevOps, not a precondition for anything in this tree.
+- **Meta-systems' pushes** — the next session here picks up after those land, to see whether they
+  leave any work on this side. Nothing in this repo is blocked on them today.
