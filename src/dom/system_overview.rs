@@ -87,62 +87,43 @@ pub fn render(
         return;
     }
 
-    // --- Status card ---
-    let status = components::card(&crate::i18n::t("label.status", &[]));
+    // --- Three cards, each answering ONE question ---
+    //
+    // This was one "Status" card carrying identity facts, three service
+    // switches and the pairing lines as identical `label: value` rows. Every
+    // row was individually correct and nothing told you which KIND of row you
+    // were reading, so finding "the address to type on the laptop" meant
+    // scanning eleven rows and knowing which two to combine. The split is the
+    // whole fix:
+    //
+    //   A. This device                     — what am I, and where do my files go
+    //   B. What other devices can do here  — the switches
+    //   C. Connect another device          — the strings you carry elsewhere
+    //
+    // The order is causal: B changes what C can offer, and C renders nothing at
+    // all until B is on. Do not fold them back together, and do not add a row
+    // to one that answers another's question — that is how this became a pile
+    // the first time.
     match &output.backend {
         Some(b) => {
-            add_row(&status, &crate::i18n::t("sysoverview.native_peer", &[]), &b.short_id, Some(&b.peer_id), None);
-            let status_color = status_color_for(&b.status);
-            add_row(&status, &crate::i18n::t("label.status", &[]), &b.status, None, Some(status_color));
-            add_row(
-                &status,
-                &crate::i18n::t("sysoverview.listen", &[]),
-                &b.ws_addr.clone().unwrap_or_else(|| crate::i18n::t("sysoverview.not_listening", &[])),
-                None,
-                None,
-            );
-            // Link status via the shared connection vocabulary (S4). Honest
-            // liveness: "Connected" only when the auth read actually succeeded
-            // over the transport (the real probe) — a remembered-but-stale link
-            // (read failing) shows Connecting, not a false Connected.
-            add_chip_row(&status, &crate::i18n::t("sysoverview.link", &[]), components::conn_chip(link_state(output)));
-            // Share: the tree prefix a paired device browses, plus the real
-            // on-disk directory (answers "where do shared files live").
-            add_row(
-                &status,
-                &crate::i18n::t("sysoverview.share_tree", &[]),
-                &output.share_prefix,
-                Some(&crate::i18n::t("sysoverview.share_tree_hint", &[])),
-                None,
-            );
-            if let Some(path) = &output.share_path {
-                add_row(&status, &crate::i18n::t("sysoverview.share_disk", &[]), path, Some(path), None);
-            }
-            // Rendezvous: whether browsers on this LAN can meet through this
-            // desktop. Two browsers need no STUN and no TURN on one LAN
-            // (`e2e-webrtc-lan`) — but they do need somewhere to exchange the
-            // offer, and this is the only thing that can be it without anyone
-            // running server infrastructure.
-            render_rendezvous_row(&status, b, ctx);
-            // Directly under the rendezvous, because the two are the halves of
-            // "this desktop is the thing the other device connects to", and the
-            // unprovisioned state of this row is fixed by the row above it.
-            render_app_server_row(&status, b, &output.app_server, ctx);
-            render_port_mapping_row(&status, b, ctx);
-            // Last, because it is composed from both rows above: the one line a
-            // person carries to the other machine.
-            render_pairing_row(&status, b, ctx);
+            render_device_card(&wrapper, output, b);
+            render_services_card(&wrapper, output, b, ctx);
+            render_connect_card(&wrapper, output, b, ctx);
         }
         None => {
-            // Non-content states (S5): still loading vs genuinely absent.
+            // Non-content states (S5): still loading vs genuinely absent. One
+            // card, because with no backend there are no services and nothing
+            // to connect to — three empty cards would be three copies of the
+            // same absence.
+            let status = components::card(&crate::i18n::t("sysoverview.card_device", &[]));
             if output.fetched {
                 util::append(&status, &components::empty(&crate::i18n::t("sysoverview.no_backend", &[])));
             } else {
                 util::append(&status, &components::loading(&crate::i18n::t("sysoverview.loading_status", &[])));
             }
+            util::append(&wrapper, &status);
         }
     }
-    util::append(&wrapper, &status);
 
     // --- Device authorizations card (inbound; Direction A home) ---
     render_authorizations(&wrapper, output, ctx);
@@ -177,6 +158,142 @@ pub fn render(
     util::schedule_scroll_to_bottom(&pre);
 
     util::append(container, &wrapper);
+}
+
+/// **Card A — This device.** Identity and local facts only: what this machine
+/// is, whether it is up, what it is listening on, where its shared files live,
+/// and whether the browser session is linked to it.
+///
+/// Nothing here is a control and nothing here is a string to carry to another
+/// machine. If a row you are adding is either of those, it belongs in card B or
+/// card C.
+fn render_device_card(parent: &Element, output: &SystemOverviewOutput, b: &BackendStatusView) {
+    let card = components::card(&crate::i18n::t("sysoverview.card_device", &[]));
+    add_row(
+        &card,
+        &crate::i18n::t("sysoverview.native_peer", &[]),
+        &b.short_id,
+        Some(&b.peer_id),
+        None,
+    );
+    add_row(
+        &card,
+        &crate::i18n::t("label.status", &[]),
+        &b.status,
+        None,
+        Some(status_color_for(&b.status)),
+    );
+    add_row(
+        &card,
+        &crate::i18n::t("sysoverview.listen", &[]),
+        &b.ws_addr.clone().unwrap_or_else(|| crate::i18n::t("sysoverview.not_listening", &[])),
+        None,
+        None,
+    );
+    // Link status via the shared connection vocabulary (S4). Honest liveness:
+    // "Connected" only when the auth read actually succeeded over the transport
+    // (the real probe) — a remembered-but-stale link (read failing) shows
+    // Connecting, not a false Connected.
+    add_chip_row(
+        &card,
+        &crate::i18n::t("sysoverview.link", &[]),
+        components::conn_chip(link_state(output)),
+    );
+    // Share: the tree prefix a paired device browses, plus the real on-disk
+    // directory (answers "where do shared files actually live").
+    add_row(
+        &card,
+        &crate::i18n::t("sysoverview.share_tree", &[]),
+        &output.share_prefix,
+        Some(&crate::i18n::t("sysoverview.share_tree_hint", &[])),
+        None,
+    );
+    if let Some(path) = &output.share_path {
+        add_row(&card, &crate::i18n::t("sysoverview.share_disk", &[]), path, Some(path), None);
+    }
+    util::append(parent, &card);
+}
+
+/// **Card B — What other devices can do here.** The three switches, and nothing
+/// else.
+///
+/// Each row is `what it is: what that means for other devices`, with a button
+/// that says only which way it goes. The address a person types is deliberately
+/// **not** here — it is card C's job — because mixing "what this switch does"
+/// with "the string to carry" is what made every one of these rows read as the
+/// same undifferentiated fact.
+fn render_services_card(
+    parent: &Element,
+    output: &SystemOverviewOutput,
+    b: &BackendStatusView,
+    ctx: &DomCtx,
+) {
+    let card = components::card(&crate::i18n::t("sysoverview.card_services", &[]));
+    // Rendezvous: whether browsers on this LAN can meet through this desktop.
+    // Two browsers need no STUN and no TURN on one LAN (`e2e-webrtc-lan`) — but
+    // they do need somewhere to exchange the offer, and this is the only thing
+    // that can be it without anyone running server infrastructure.
+    render_rendezvous_row(&card, b, ctx);
+    // Directly under the rendezvous, because the unprovisioned state of this
+    // row is fixed by the row above it and its own string says so.
+    render_app_server_row(&card, b, &output.app_server, ctx);
+    render_port_mapping_row(&card, b, ctx);
+    util::append(parent, &card);
+}
+
+/// **Card C — Connect another device.** The strings a person carries to another
+/// machine, best first.
+///
+/// Rendered only when there is something to carry. An empty version of this
+/// card is a question with no answer, and the remedy — the switches — is
+/// already on screen directly above it.
+///
+/// The composition (which steps, in what order, and whether the URL claims to
+/// be the finished flow) lives in
+/// [`connect_steps`](crate::views::system_overview::output::connect_steps),
+/// where native tests can read it. What would be wrong here is the ORDER, and
+/// that is not observable from inside `create_element` calls.
+fn render_connect_card(
+    parent: &Element,
+    output: &SystemOverviewOutput,
+    b: &BackendStatusView,
+    ctx: &DomCtx,
+) {
+    use crate::views::system_overview::output::{connect_steps, ConnectStep};
+
+    let steps = connect_steps(b, &output.app_server);
+    if steps.is_empty() {
+        return;
+    }
+    let card = components::card(&crate::i18n::t("sysoverview.card_connect", &[]));
+    for step in steps {
+        match step {
+            // The URL gets a copy button for the pairing line's reason: it is
+            // going to be typed on a *different* device, and every character
+            // retyped by hand is a chance to produce a failure that reads as
+            // connectivity.
+            ConnectStep::OpenUrl { url, provisioned } => {
+                let hint = if provisioned {
+                    crate::i18n::t("sysoverview.connect_url_hint", &[])
+                } else {
+                    crate::i18n::t("sysoverview.connect_url_hint_unprovisioned", &[])
+                };
+                add_chip_row(
+                    &card,
+                    &crate::i18n::t("sysoverview.connect_url", &[]),
+                    components::copy_code(ctx, &url, Some(&hint)),
+                );
+            }
+            ConnectStep::PasteCommand { scope, command } => {
+                let label = match scope {
+                    PairScope::Lan => crate::i18n::t("sysoverview.pair_lan", &[]),
+                    PairScope::Internet => crate::i18n::t("sysoverview.pair_wan", &[]),
+                };
+                add_command_row(&card, &label, &command, ctx);
+            }
+        }
+    }
+    util::append(parent, &card);
 }
 
 /// Build a compact `label: value` row. `title` sets a hover tooltip (e.g. the
@@ -268,9 +385,9 @@ fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) 
     // poll lands between the render and the click.
     let want = if b.signaling_node { "0" } else { "1" };
     let label = if b.signaling_node {
-        crate::i18n::t("sysoverview.rendezvous_stop", &[])
+        crate::i18n::t("label.turn_off", &[])
     } else {
-        crate::i18n::t("sysoverview.rendezvous_start", &[])
+        crate::i18n::t("label.turn_on", &[])
     };
     let btn = components::button_value(
         ctx,
@@ -336,21 +453,19 @@ fn render_app_server_row(parent: &Element, b: &BackendStatusView, s: &AppServerV
         Some(color),
     );
 
-    // The URL gets a copy button for the same reason the pairing line does: it
-    // is going to be typed on a *different* device, and every character retyped
-    // by hand is a chance to produce a failure that reads as connectivity.
-    if let Some(url) = s.url() {
-        add_chip_row(parent, "", components::copy_code(ctx, url, None));
-    }
+    // The URL is NOT rendered here — it lives in the "Connect another device"
+    // card below, whose whole job is the strings you carry to another machine.
+    // It used to sit under this row, which meant the one thing a person came to
+    // this window for was buried among three switches and six identity rows.
 
     // `\x1f`-packed backend id + wanted direction, for `render_rendezvous_row`'s
     // reason: the handler must not re-derive the current state, or a poll
     // landing between render and click flips the wrong way.
     let want = if s.is_serving() { "0" } else { "1" };
     let label = if s.is_serving() {
-        crate::i18n::t("sysoverview.appserver_stop", &[])
+        crate::i18n::t("label.turn_off", &[])
     } else {
-        crate::i18n::t("sysoverview.appserver_start", &[])
+        crate::i18n::t("label.turn_on", &[])
     };
     let btn = components::button_value(
         ctx,
@@ -362,49 +477,11 @@ fn render_app_server_row(parent: &Element, b: &BackendStatusView, s: &AppServerV
     add_chip_row(parent, "", btn);
 }
 
-/// The **pairing** row: the exact line to type on the *other* machine.
-///
-/// # Why a command and not two facts
-///
-/// Everything needed to join this rendezvous is already on this card — the
-/// node's peer id in the identity row, its address in the rendezvous row, and
-/// the forwarded address in the port-mapping row. Every one of them is
-/// individually correct and the *composition* is left to the reader: they have
-/// to know that `connector add` wants exactly those two, in that order, from
-/// two different rows, and retype a Base58 peer id by hand across a room. That
-/// is where a real two-machine run actually stalls, and it is a transcription
-/// error rather than a connectivity one — which makes it look like a
-/// connectivity one.
-///
-/// So the row renders the command itself, copyable. It is the same string the
-/// Shell's `connector add` parses, so there is nothing new to keep in step:
-/// if the verb's grammar changes, this line is wrong in a way its own test
-/// catches.
-///
-/// # Two addresses, deliberately, and never silently one
-///
-/// The LAN address works for another machine on this network and nowhere else.
-/// A forwarded address (when the router opened one) works from anywhere,
-/// **including** from this network on most routers — but not all of them
-/// (hairpin NAT), which is why the LAN line stays and is listed first. Showing
-/// only one would either strand a friend on another network or send someone on
-/// the same Wi-Fi out through the internet and back.
-///
-/// Absent a rendezvous there is nothing to join, so the row does not render:
-/// a pairing command for a node that is off is an instruction that fails.
-fn render_pairing_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
-    // The composition — which addresses, in what order, and the literal command
-    // text — lives in `views::system_overview::output::pairing_commands`, where
-    // native tests can read it. What is wrong here would be the argument order
-    // or a missing row, and neither is observable from inside `create_element`.
-    for (scope, command) in crate::views::system_overview::output::pairing_commands(b) {
-        let label = match scope {
-            PairScope::Lan => crate::i18n::t("sysoverview.pair_lan", &[]),
-            PairScope::Internet => crate::i18n::t("sysoverview.pair_wan", &[]),
-        };
-        add_command_row(parent, &label, &command, ctx);
-    }
-}
+// (`render_pairing_row` retired — the pairing lines are steps in
+// `render_connect_card`, beside the served URL that replaces them in the common
+// case. Its reasoning survives where it belongs: *why a command and not two
+// facts* is now `pairing_commands`' own doc, and *why two addresses and never
+// silently one* is enforced by that function's tests.)
 
 /// One `label: <code>command</code> [Copy]` row.
 ///

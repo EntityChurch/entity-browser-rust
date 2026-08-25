@@ -338,6 +338,18 @@ pub const EN: &[(&str, Message)] = &[
     ("label.content", Message::Simple("Content")),
     ("label.system", Message::Simple("System")),
     ("label.user", Message::Simple("User")),
+    // Generic switch verbs. One pair, shared by every on/off control, because
+    // three adjacent switches that each invented their own verb ("Start
+    // serving" / "Start serving the app") read as three different KINDS of
+    // thing — and two of those verbs were the same word for different jobs,
+    // which is precisely what made this surface unscannable. The row label says
+    // what the switch is; the button says only which way it goes.
+    //
+    // Port forwarding deliberately keeps its own verb (`portmap_start`): it is
+    // a REQUEST to a router that may be refused, not a switch this machine
+    // controls, and it has an "Asking…" state that no switch has.
+    ("label.turn_on", Message::Simple("Turn on")),
+    ("label.turn_off", Message::Simple("Turn off")),
     ("label.state_path", Message::Simple("State: {path}")),
     // Target-selector option shared by File Transfer + Execute Console.
     ("label.remote_option", Message::Simple("Remote: {name}")),
@@ -522,6 +534,15 @@ pub const EN: &[(&str, Message)] = &[
     ("filetransfer.authorize_device", Message::Simple("Authorize this device")),
     ("filetransfer.browse_shared", Message::Simple("Browse shared files")),
     ("filetransfer.share_empty", Message::Simple("This share is empty.")),
+    // Distinct from `share_empty`, and the distinction is the whole fix: an
+    // empty share is a peer that mounted a folder with nothing in it; THIS is a
+    // peer with no folder to mount at all — every browser peer, which cannot
+    // have one. It used to arrive as a red protocol error beside a file that
+    // was transferring perfectly through the offers half.
+    (
+        "filetransfer.no_share",
+        Message::Simple("This peer shares no folder — only files it offers directly."),
+    ),
     ("filetransfer.offering", Message::Simple("Files you are offering")),
     (
         "filetransfer.offer_hint",
@@ -779,6 +800,45 @@ pub const EN: &[(&str, Message)] = &[
              authorized peer is planned.",
         ),
     ),
+    // --- The three cards ---
+    //
+    // This window used to be ONE "Status" card holding identity facts, three
+    // service switches and the pairing lines, all rendered as the same kind of
+    // `label: value` row. Nothing said which rows described this machine, which
+    // ones changed what other machines could do, and which ones were strings to
+    // carry somewhere else — so the whole card read as a pile, and the operator
+    // reported it as exactly that. Each card now answers ONE question, and its
+    // heading is that question.
+    ("sysoverview.card_device", Message::Simple("This device")),
+    (
+        "sysoverview.card_services",
+        Message::Simple("What other devices can do here"),
+    ),
+    (
+        "sysoverview.card_connect",
+        Message::Simple("Connect another device"),
+    ),
+    // The two steps of the connect card, ordered by `output::connect_steps`.
+    // The URL is the whole flow; the pairing lines below it are the fallback.
+    ("sysoverview.connect_url", Message::Simple("Open on other device")),
+    (
+        "sysoverview.connect_url_hint",
+        Message::Simple(
+            "Type this into a browser on the other device. It arrives ready to connect — \
+             nothing to copy across, nothing to add, no reload.",
+        ),
+    ),
+    (
+        // The same URL, when this desktop is serving the app but is NOT a
+        // rendezvous. It still hands over a working app, and its visitor still
+        // cannot reach anybody — so the hint must not read as the finished
+        // flow, and it names the switch that finishes it.
+        "sysoverview.connect_url_hint_unprovisioned",
+        Message::Simple(
+            "Type this into a browser on the other device. It will load the app, but until \
+             Rendezvous is on above, it has no way to reach anybody.",
+        ),
+    ),
     ("sysoverview.native_peer", Message::Simple("Native peer")),
     ("sysoverview.listen", Message::Simple("Listen")),
     ("sysoverview.not_listening", Message::Simple("(not listening)")),
@@ -811,8 +871,10 @@ pub const EN: &[(&str, Message)] = &[
         "sysoverview.rendezvous_off",
         Message::Simple("Off — this desktop is not helping other devices find each other"),
     ),
-    ("sysoverview.rendezvous_start", Message::Simple("Start serving")),
-    ("sysoverview.rendezvous_stop", Message::Simple("Stop serving")),
+    // (`rendezvous_start` / `rendezvous_stop` retired — this switch uses the
+    // shared `label.turn_on` / `label.turn_off`. "Start serving" here and
+    // "Start serving the app" one row down were two different jobs wearing one
+    // verb.)
     (
         "sysoverview.rendezvous_hint",
         Message::Simple(
@@ -824,15 +886,18 @@ pub const EN: &[(&str, Message)] = &[
     // different answers: with a rendezvous the other device types a URL and is
     // finished; without one it gets a working app that cannot reach anybody.
     ("sysoverview.appserver", Message::Simple("Serve the app")),
+    // These two say what the switch DOES, not what to type. The address moved
+    // to the "Connect another device" card, whose whole job is the strings you
+    // carry elsewhere — so a state string here that still said "open this"
+    // would be pointing at something no longer beside it.
     (
         "sysoverview.appserver_on",
-        Message::Simple("Serving — open this on the other device and it is ready to connect"),
+        Message::Simple("On — other devices can load this app from this desktop"),
     ),
     (
         "sysoverview.appserver_unprovisioned",
         Message::Simple(
-            "Serving — but turn on Rendezvous above, or the other device still has to add a \
-             connector by hand",
+            "On — but they arrive with no way to reach anybody; turn on Rendezvous above",
         ),
     ),
     (
@@ -846,8 +911,7 @@ pub const EN: &[(&str, Message)] = &[
              separate web server. Takes effect immediately — nothing restarts.",
         ),
     ),
-    ("sysoverview.appserver_start", Message::Simple("Start serving the app")),
-    ("sysoverview.appserver_stop", Message::Simple("Stop serving the app")),
+    // (`appserver_start` / `appserver_stop` retired — shared switch verbs.)
     // Pairing. The composition of the two rows around it: the one line a person
     // carries to the other machine, per address that works from where they are.
     ("sysoverview.pair_lan", Message::Simple("Pair (same network)")),

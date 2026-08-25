@@ -78,8 +78,26 @@ impl FileTransferWindow {
                     let children = model::decode_listing(&resp.result.result.data);
                     cache.apply_listing(&relpath, children);
                 }
-                Ok(resp) => cache.fail_load(&relpath, &resp.summary),
-                Err(e) => cache.fail_load(&relpath, &e),
+                // A peer that serves no share answers 404 `handler_not_found`,
+                // which is an ANSWER and not a fault — every browser peer gives
+                // it, and rendering it as an error put a red banner beside
+                // working transfers. `classify_share_failure` decides; this
+                // site only decodes.
+                Ok(resp) => {
+                    let code = entity_handler::decode_error_entity(&resp.result.result)
+                        .and_then(|(code, _msg)| code);
+                    cache.fail_load(
+                        &relpath,
+                        browse::classify_share_failure(
+                            resp.result.status,
+                            code.as_deref(),
+                            &resp.summary,
+                        ),
+                    );
+                }
+                // A transport failure is never "this peer has no share" — we
+                // never heard an answer at all.
+                Err(e) => cache.fail_load(&relpath, browse::ShareState::Failed(e)),
             }
             dirty.mark();
         });

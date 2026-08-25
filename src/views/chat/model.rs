@@ -261,6 +261,41 @@ impl Conversation {
 /// genesis (`Conversation::room`, real creator + time); this convenience is for
 /// the 1:1 case only.
 #[allow(dead_code)]
+/// Could this peer ever hold up its end of a conversation?
+///
+/// # Why the picker cannot just list every connection
+///
+/// A conversation is a set of per-author logs and delivery is a direct
+/// `tree:get` at the counterpart — so a peer that never authors a message
+/// produces a chat that looks live and is a **monologue**. The system backend is
+/// exactly that: `grep -i chat src-tauri/src/*.rs` returns nothing, it has no
+/// `app/chat` writer and never will. Listing it invited the operator to chat
+/// with it, and two browsers each doing so saw only their own messages — the
+/// *"isolated chats"* reported on 2026-08-21, which is a picker defect wearing a
+/// delivery defect's clothes.
+///
+/// # What this actually knows, which is less than it sounds
+///
+/// **A listen address means a native process.** Browsers cannot bind a socket,
+/// so a peer we hold a listening address for is running the `entity-peer`
+/// binary — and no native peer in this ecosystem ships a chat app today. That is
+/// the whole inference, and it is structural rather than a name match: keying on
+/// the `system-backend` label would offer a user-created native backend instead,
+/// which is the same lie one peer along.
+///
+/// **It is a heuristic about a capability we cannot query**, and it fails in one
+/// direction on purpose: a native peer that *did* grow a chat app would be
+/// wrongly hidden, which costs a listing. The other direction costs a person a
+/// conversation with a wall. Closing it properly needs a capability probe —
+/// "does this peer serve `app/chat`" — which nothing in the protocol answers
+/// today, and which is the honest ask.
+fn can_participate_in_chat(peers: &Peers, peer_id: &str) -> bool {
+    peers
+        .peer_metadata(peer_id)
+        .map(|m| m.listen_addresses.iter().all(|a| a.trim().is_empty()))
+        .unwrap_or(true) // No local metadata at all = a peer we met. Browsers chat.
+}
+
 pub fn wellknown_one_to_one_id(a: &str, b: &str) -> String {
     let (x, y) = if a <= b { (a, b) } else { (b, a) };
     Conversation {
@@ -787,6 +822,7 @@ impl ChatModel {
         } else {
             crate::connections::read_connections(peers)
                 .into_iter()
+                .filter(|c| can_participate_in_chat(peers, &c.remote_pid))
                 .map(|c| StartablePeer {
                     name: crate::views::display_name(peers, &c.remote_pid),
                     peer_id: c.remote_pid,
@@ -1080,6 +1116,55 @@ mod tests {
 
     async fn flush_writes() {
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+
+    /// **A peer that cannot author a message must not be offered as someone to
+    /// talk to.** The system backend has no chat app, so a conversation with it
+    /// is a monologue that looks live — which is what "isolated chats" was.
+    ///
+    /// The predicate is exercised directly rather than through `render_output`,
+    /// because `startable` is built from the `connections` registry and seeding
+    /// that needs a dispatched write plus a settle; what is under test is the
+    /// rule, and routing it through two async round-trips would mostly test
+    /// those.
+    #[test]
+    fn a_peer_with_a_listener_is_not_offered_as_a_chat_partner() {
+        let mut peers = Peers::new_direct();
+
+        // A peer we met: no local metadata at all. Browsers chat.
+        assert!(
+            can_participate_in_chat(&peers, "2KaBrowserPeerWeMet"),
+            "a met peer must stay offered — this is the case the picker is FOR",
+        );
+
+        // A native backend: registered locally, and holding a listening address,
+        // which is the structural tell (a browser cannot bind a socket).
+        let backend = "2KaNativeBackend";
+        peers.sdk_mut_primary().set_metadata(
+            backend,
+            entity_sdk::sdk::PeerMetadata {
+                label: Some("system-backend".into()),
+                persisted: true,
+                listen_addresses: vec!["ws://192.168.1.10:4041".into()],
+            },
+        );
+        assert!(
+            !can_participate_in_chat(&peers, backend),
+            "a native peer runs no chat app; offering it invites a monologue",
+        );
+
+        // A registered peer with NO listener is still a chat candidate — the
+        // rule is about being a native process, not about being known to us.
+        let hosted = "2KaHostedBrowserPeer";
+        peers.sdk_mut_primary().set_metadata(
+            hosted,
+            entity_sdk::sdk::PeerMetadata {
+                label: Some("my other tab".into()),
+                persisted: true,
+                listen_addresses: vec![],
+            },
+        );
+        assert!(can_participate_in_chat(&peers, hosted));
     }
 
     #[tokio::test]

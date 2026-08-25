@@ -214,6 +214,172 @@ pub fn pairing_commands(b: &BackendStatusView) -> Vec<(PairScope, String)> {
     out
 }
 
+/// One step in *"how do I get another device connected to this one"*, in the
+/// order to try them.
+///
+/// **The two are not the same tier, and rendering them as a flat pile of
+/// strings is what made this card unreadable.** Opening the served URL is the
+/// WHOLE flow — the browser arrives provisioned, nothing typed, no reload. The
+/// pairing command is the FALLBACK, for a device that did not come from this
+/// desktop's URL: it loaded the app from somewhere else, or it is already
+/// running. Presenting them as two equivalent options asks the operator to
+/// work out which one they are in, which is the question this card exists to
+/// answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConnectStep {
+    /// Open this URL on the other device.
+    ///
+    /// `provisioned` is false when the app server is up and this desktop is
+    /// **not** a rendezvous — the URL still hands over a working app, and its
+    /// visitor still cannot reach anybody. A surface must not present that as
+    /// the finished flow; it is the same distinction [`AppServerView`]'s three
+    /// states exist for, carried one layer out.
+    OpenUrl { url: String, provisioned: bool },
+    /// Paste this into the other machine's Shell, then reload that page.
+    PasteCommand { scope: PairScope, command: String },
+}
+
+/// What to carry to the other device, best first.
+///
+/// Pure and separated from the renderer for [`pairing_commands`]' reason: what
+/// can be wrong here is the **order** and whether a step appears at all, and
+/// neither is observable from a native test while it lives inside
+/// `create_element` calls.
+///
+/// Empty means there is nothing to carry — nothing is served and no rendezvous
+/// is running — and the renderer omits the card rather than showing an empty
+/// one. The remedy is the switches directly above it, which are already on
+/// screen.
+pub fn connect_steps(b: &BackendStatusView, s: &AppServerView) -> Vec<ConnectStep> {
+    let mut out = Vec::new();
+    // The URL first, always: it is the only step that needs nothing typed on
+    // the far end, so an operator who reads no further has read the best one.
+    if let Some(url) = s.url() {
+        out.push(ConnectStep::OpenUrl {
+            url: url.to_string(),
+            provisioned: matches!(s, AppServerView::Serving { .. }),
+        });
+    }
+    out.extend(
+        pairing_commands(b)
+            .into_iter()
+            .map(|(scope, command)| ConnectStep::PasteCommand { scope, command }),
+    );
+    out
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::*;
+
+    fn backend() -> BackendStatusView {
+        BackendStatusView {
+            peer_id: "2KNodeSevenFullBase58Id".into(),
+            short_id: "2KNodeSevenF".into(),
+            status: "running".into(),
+            ws_addr: Some("ws://192.168.1.10:4041".into()),
+            signaling_node: true,
+            external_addr: None,
+            port_mapping: false,
+            port_mapping_note: None,
+        }
+    }
+
+    fn serving() -> AppServerView {
+        AppServerView::Serving {
+            url: "http://192.168.1.10:8081".into(),
+            node_peer_id: "2KNodeSevenFullBase58Id".into(),
+        }
+    }
+
+    /// **The order is the decision.** The URL needs nothing typed on the far
+    /// end; the command needs a paste and a reload. An operator who reads only
+    /// the first row must have read the better one, so this asserts position
+    /// and not merely membership.
+    #[test]
+    fn the_url_comes_before_the_command_it_replaces() {
+        let steps = connect_steps(&backend(), &serving());
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps[0],
+            ConnectStep::OpenUrl {
+                url: "http://192.168.1.10:8081".into(),
+                provisioned: true,
+            },
+        );
+        assert!(matches!(
+            steps[1],
+            ConnectStep::PasteCommand { scope: PairScope::Lan, .. }
+        ));
+    }
+
+    /// Serving without a rendezvous still yields a URL — and one that must not
+    /// claim to be the finished flow. The visitor gets a working app and no way
+    /// to reach anybody, which is exactly what `provisioned: false` is for.
+    ///
+    /// There is no pairing line in this state either, and that is not an
+    /// oversight: `pairing_commands` refuses to print a command for a node that
+    /// is off, because it would tell someone to join something that will refuse
+    /// them.
+    #[test]
+    fn serving_without_a_rendezvous_offers_the_url_unprovisioned_and_no_command() {
+        let b = BackendStatusView { signaling_node: false, ..backend() };
+        let s = AppServerView::ServingUnprovisioned { url: "http://192.168.1.10:8081".into() };
+        let steps = connect_steps(&b, &s);
+        assert_eq!(
+            steps,
+            vec![ConnectStep::OpenUrl {
+                url: "http://192.168.1.10:8081".into(),
+                provisioned: false,
+            }],
+        );
+    }
+
+    /// A rendezvous with no app server is the *other* half — the manual path,
+    /// which is what you want against a desktop that is not handing out the app
+    /// (or a device that is already running one).
+    #[test]
+    fn a_rendezvous_alone_offers_the_manual_path() {
+        let steps = connect_steps(&backend(), &AppServerView::Off);
+        assert_eq!(steps.len(), 1);
+        assert!(matches!(
+            steps[0],
+            ConnectStep::PasteCommand { scope: PairScope::Lan, .. }
+        ));
+    }
+
+    /// Both open doors produce both lines, still behind the URL. The internet
+    /// line only ever appears when a mapping is live (`pairing_commands`), so
+    /// this cannot advertise a door that is not there.
+    #[test]
+    fn an_open_router_adds_a_third_step_and_the_url_still_leads() {
+        let b = BackendStatusView {
+            external_addr: Some("ws://203.0.113.7:4041".into()),
+            ..backend()
+        };
+        let steps = connect_steps(&b, &serving());
+        assert_eq!(steps.len(), 3);
+        assert!(matches!(steps[0], ConnectStep::OpenUrl { .. }));
+        assert!(matches!(
+            steps[1],
+            ConnectStep::PasteCommand { scope: PairScope::Lan, .. }
+        ));
+        assert!(matches!(
+            steps[2],
+            ConnectStep::PasteCommand { scope: PairScope::Internet, .. }
+        ));
+    }
+
+    /// Nothing served and nothing to join: no steps, so the renderer omits the
+    /// card entirely. An empty "Connect another device" card is a question with
+    /// no answer, and the remedy — the switches — is already on screen above it.
+    #[test]
+    fn nothing_running_yields_no_steps_at_all() {
+        let off = BackendStatusView { signaling_node: false, ..backend() };
+        assert!(connect_steps(&off, &AppServerView::Off).is_empty());
+    }
+}
+
 #[cfg(test)]
 mod pairing_tests {
     use super::*;
