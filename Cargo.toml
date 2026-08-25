@@ -46,6 +46,10 @@ entity-types = { path = "../entity-core-rust/core/types" }
 # onto the device (`src/ops/download.rs`). Already compiled transitively via
 # the peer's `content`/`local-files` features; direct dep for `reassemble`.
 entity-content = { path = "../entity-core-rust/extensions/content" }
+# EXTENSION-NETWORK types — `TYPE_MAINTAIN_REQUEST` for the `maintain-peer`
+# execute that drives the reconnect graph (`app.rs` backend auto-connect).
+# Already compiled via `entity-peer/network`; direct edge names the const.
+entity-network = { path = "../entity-core-rust/extensions/network" }
 
 # Peer runtime (WASM-safe with default-features=false). Direct because
 # `Peer`/`Connection`/`MemoryConnector` etc. are referenced by app-tier

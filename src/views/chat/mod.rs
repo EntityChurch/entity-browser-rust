@@ -127,6 +127,17 @@ impl WindowView for ChatWindow {
         &self.peer_id
     }
 
+    /// A bound conversation's remote participants. Empty while the window shows
+    /// the default self-conversation (no remote, nothing to maintain) — binding
+    /// a 1:1 is the deliberate user act that makes the relationship worth
+    /// keeping alive across a drop.
+    fn maintained_remotes(&self) -> Vec<String> {
+        match &self.delivery {
+            Some(d) => d.remotes().to_vec(),
+            None => Vec::new(),
+        }
+    }
+
     fn watch(&self) -> &WindowWatch {
         &self.watch
     }
@@ -219,5 +230,37 @@ mod window_tests {
 
         let prefix = model::conversation_messages_prefix(&pid, model::DEFAULT_CONVERSATION);
         assert!(peers.tree_listing(&pid, &prefix).is_empty());
+    }
+
+    /// The window only offers a remote to `maintain-peer` once the user has
+    /// deliberately bound a conversation. An unbound window shows the default
+    /// self-conversation — maintaining anything there would either be a
+    /// self-maintain (which the handler rejects) or a connection kept alive
+    /// that nobody asked for.
+    #[tokio::test]
+    async fn maintained_remotes_is_empty_until_a_conversation_is_bound() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let wt = ChatWindow::window_type();
+        let view = (wt.create)(7, &pid, &peers);
+
+        assert!(
+            view.maintained_remotes().is_empty(),
+            "an unbound chat window has no remote to keep connected"
+        );
+
+        // Bind a 1:1 — now the other participant is what must survive a drop.
+        let other = "2KotherPeerIdForTheBoundConversation".to_string();
+        let mut win = ChatWindow::new(7, pid.clone());
+        win.bind_and_subscribe(&peers, &other).await;
+        assert_eq!(
+            win.maintained_remotes(),
+            vec![other],
+            "a bound 1:1 offers exactly the other participant — never ourselves"
+        );
+        assert!(
+            !win.maintained_remotes().contains(&pid),
+            "our own peer must never be offered: maintain-peer rejects self-maintain"
+        );
     }
 }

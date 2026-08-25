@@ -115,6 +115,14 @@ pub struct ChatDelivery {
 
 #[allow(dead_code)] // some methods are arm- or test-specific
 impl ChatDelivery {
+    /// The remote participants of this bound conversation — everyone but us.
+    /// These are the peers whose connection must survive a drop for the
+    /// conversation to keep delivering, so they are what the window hands to
+    /// `maintain-peer` (`WindowView::maintained_remotes`).
+    pub fn remotes(&self) -> &[String] {
+        &self.remote
+    }
+
     pub fn new(local_pid: String, conversation_id: String, participants: Vec<String>) -> Self {
         let (notified_tx, notified_rx) = unbounded_channel();
         let (fetched_tx, fetched_rx) = unbounded_channel();

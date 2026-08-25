@@ -510,6 +510,32 @@ impl Sdk {
         }
     }
 
+    /// Start this peer's kernel extension engines — the subscription **delivery**
+    /// loop and the EXTENSION-NETWORK `PeerLink` bind.
+    ///
+    /// Both the engines and the connection pool are **per-peer**
+    /// (`PeerShared::remote`), so this is not a one-off boot call for the system
+    /// peer: any peer that must answer `maintain-peer` on its own
+    /// `/{peer}/system/network` — or deliver its tree changes to a remote
+    /// subscriber — needs its own call, or the handler 500s "network handler not
+    /// bound". Idempotent: `Peer::start_engines` guards per-peer on an atomic.
+    ///
+    /// Direct arm only. The Worker arm's peers live in the worker and must start
+    /// their engines there (a separate wiring point, unbuilt).
+    pub fn start_engines(&self, peer_id: &str) -> EnginesStart {
+        match self {
+            Sdk::Direct(pm) => match pm.sdk().peer(peer_id) {
+                Some(ctx) => {
+                    ctx.peer().start_engines(&ctx.peer_shared());
+                    EnginesStart::Started
+                }
+                None => EnginesStart::Unknown,
+            },
+            #[cfg(target_arch = "wasm32")]
+            Sdk::Worker(_) => EnginesStart::NotApplicable,
+        }
+    }
+
     /// Direct-only: read-only access to the underlying SDK. Panics on Worker.
     pub fn sdk(&self) -> &entity_sdk::EntitySDK {
         match self {
@@ -962,6 +988,23 @@ impl Sdk {
 /// "default-to-primary" bug class at the type level.
 #[derive(Debug, Clone)]
 pub struct UnknownPeer(pub String);
+
+/// Outcome of [`Peers::start_engines`]. Three states, not a bool, because the
+/// caller sweeps the roster every frame and must tell "nothing to do, ever"
+/// apart from "not yet" — collapsing them either re-scans Worker peers forever
+/// or permanently skips a peer that was still being built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnginesStart {
+    /// Started, or already running (the kernel's own atomic guard made it a
+    /// no-op). Settled — don't call again.
+    Started,
+    /// The peer is known but lives on a Worker SDK; its engines belong in the
+    /// worker, which is a separate wiring point. Settled on this thread.
+    NotApplicable,
+    /// The peer isn't routable — either genuinely unknown, or registered a
+    /// moment from now. **Not** settled: retry.
+    Unknown,
+}
 
 impl std::fmt::Display for UnknownPeer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1752,6 +1795,18 @@ impl Peers {
         peer_id: &str,
     ) -> Option<std::sync::Arc<entity_peer::PeerShared>> {
         self.sdk_for(peer_id).ok()?.direct_peer_shared(peer_id)
+    }
+
+    /// Start `peer_id`'s kernel extension engines on whichever SDK routes it —
+    /// see [`Sdk::start_engines`] for why this is per-peer and not a boot
+    /// one-off. An unrouted peer is [`EnginesStart::Unknown`] (it may simply not
+    /// be registered *yet*), which is why the caller must distinguish that from
+    /// [`EnginesStart::NotApplicable`] rather than retrying both forever.
+    pub fn start_engines(&self, peer_id: &str) -> EnginesStart {
+        match self.sdk_for(peer_id) {
+            Ok(sdk) => sdk.start_engines(peer_id),
+            Err(_) => EnginesStart::Unknown,
+        }
     }
 
     /// Test-only Direct L0 context for seeding a peer's tree directly.
@@ -2658,6 +2713,256 @@ mod memory_transport_tests {
             !std::sync::Arc::ptr_eq(&e2, &e3),
             "reconnect_peer MUST replace the pooled connection"
         );
+    }
+
+    /// `start_engines` is a **per-peer** router op, not a boot one-off for the
+    /// system peer. The engines and the connection pool both hang off the
+    /// peer's own `PeerShared`, so every local peer that must answer
+    /// `maintain-peer` on `/{peer}/system/network` — or deliver its tree changes
+    /// to a remote subscriber — needs its own call. This pins the three outcomes
+    /// the frame sweep branches on; collapsing them back to a bool is what makes
+    /// the sweep either re-scan forever or skip a still-building peer.
+    #[tokio::test]
+    async fn start_engines_is_per_peer_and_settles_exactly_once() {
+        let registry = MemoryTransportRegistry::new();
+        // Two independent local peers, each its own Direct router.
+        let (peers_a, pid_a, _ha) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, _hb) = spawn_peer_on_registry(registry.clone());
+
+        // Each router starts ITS OWN peer's engines — A's start says nothing
+        // about B (the per-peer point; a shared/global start would let this
+        // pass while `maintain-peer` on B still 500s "not bound").
+        assert_eq!(peers_a.start_engines(&pid_a), EnginesStart::Started);
+        assert_eq!(peers_b.start_engines(&pid_b), EnginesStart::Started);
+
+        // Idempotent: the kernel guards on an atomic, so a repeat call is a
+        // no-op that still reports Started — the sweep may legitimately race a
+        // re-registration and must not panic or double-start the engine (the
+        // wasm subscription engine panics on a genuine double `start()`).
+        assert_eq!(peers_a.start_engines(&pid_a), EnginesStart::Started);
+
+        // A peer this router does not host is Unknown — NOT settled, because it
+        // may simply not be registered yet (a durable idb peer lands frames
+        // after boot). The sweep retries these.
+        assert_eq!(peers_a.start_engines(&pid_b), EnginesStart::Unknown);
+        assert_eq!(
+            peers_a.start_engines("2Kdefinitelynotapeer"),
+            EnginesStart::Unknown
+        );
+    }
+
+    /// Spawn a server for `pid` on `registry`, returning the task handle.
+    /// Aborting the handle drops the `MemoryListener`, which **unregisters the
+    /// endpoint** — so the peer stops answering AND new dials to it fail with a
+    /// clean `ConnectError`. That is the whole "the remote disappeared"
+    /// simulation, and re-calling this brings it back.
+    fn serve_peer(
+        pid: &str,
+        shared: std::sync::Arc<entity_peer::PeerShared>,
+        registry: std::sync::Arc<MemoryTransportRegistry>,
+    ) -> tokio::task::JoinHandle<()> {
+        let listener = MemoryListener::bind(pid.to_string(), registry).expect("bind listener");
+        tokio::spawn(async move {
+            let _ = entity_peer::server::run(listener, shared).await;
+        })
+    }
+
+    /// Build a `maintain-peer` request with a **fast** backoff so the retry loop
+    /// is observable inside a test's patience. The shipped app omits `backoff`
+    /// and takes the §2.2 defaults (1s, exponential); only the pacing differs.
+    fn fast_maintain_request(peer_id: &str, address: &str) -> Entity {
+        let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![
+            (entity_ecf::text("peer_id"), entity_ecf::text(peer_id)),
+            (entity_ecf::text("address"), entity_ecf::text(address)),
+            (
+                entity_ecf::text("backoff"),
+                entity_ecf::Value::Map(vec![
+                    (entity_ecf::text("min_ms"), entity_ecf::integer(100)),
+                    (entity_ecf::text("max_ms"), entity_ecf::integer(200)),
+                    (
+                        entity_ecf::text("strategy"),
+                        entity_ecf::text("constant"),
+                    ),
+                ]),
+            ),
+        ]));
+        Entity::new(entity_network::TYPE_MAINTAIN_REQUEST, data)
+            .expect("maintain-request entity construction is infallible")
+    }
+
+    /// The cross-peer read a bound conversation lives on — `ChatDelivery` runs
+    /// this shape against each remote every poll. `true` iff it reached the
+    /// remote, so it doubles as "is the conversation still working?".
+    async fn cross_peer_probe(peers: &Peers, local: &str, remote: &str) -> bool {
+        let params = Entity::new("system/empty", entity_ecf::to_ecf(&entity_ecf::Value::Null))
+            .expect("empty params");
+        matches!(
+            peers
+                .execute(
+                    local,
+                    format!("entity://{remote}/system/tree"),
+                    "get".to_string(),
+                    params,
+                    entity_handler::ExecuteOptions::default(),
+                )
+                .await,
+            Ok(r) if r.status < 400
+        )
+    }
+
+    /// Poll `f` until it holds or `budget` elapses. Returns whether it held.
+    async fn eventually(budget: std::time::Duration, mut f: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            if f() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// **THE RECONNECT PROOF** — the validation gap the Piece C review named.
+    ///
+    /// Both landed steps claim that a `maintain-peer`'d relationship *survives a
+    /// drop without the app re-dialing*. Nothing proved it: the e2e is Worker-arm
+    /// (where the app deliberately skips maintain), and the Tauri session has a
+    /// single local peer. This is two real peers over a real (in-process)
+    /// transport, and it asserts the claim end to end:
+    ///
+    ///   1. A maintains B → B is `connected` in **the app's own read-model**
+    ///      (`peer_liveness`, the surface every window renders).
+    ///   2. B disappears — its listener is unregistered, so it neither answers
+    ///      nor accepts new dials.
+    ///   3. A's read-model stops saying `connected` (the stale-"Connected" lie
+    ///      this whole arc exists to kill).
+    ///   4. **The retry loop runs with zero app involvement** — dials keep
+    ///      arriving at the registry although nothing in the app re-dials. This
+    ///      is the actual hand-off: the extension owns reconnect now.
+    ///   5. B comes back → A is `connected` again, again with no app action.
+    ///
+    /// What this does NOT cover: the wasm frame sweep that picks the pairs
+    /// (`sync_maintained_peers`, unit-tested separately) and a real WebSocket.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_maintained_peer_reconnects_itself_after_the_remote_disappears() {
+        use crate::peer_liveness::{liveness_of, LiveStatus};
+
+        let registry = MemoryTransportRegistry::new();
+
+        // A — the maintaining side.
+        let peers_a =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry.clone())));
+        let pid_a = peers_a.primary_peer_id().to_string();
+        let shared_a = peers_a.direct_peer_shared(&pid_a).expect("A shared");
+        assert_eq!(
+            peers_a.start_engines(&pid_a),
+            EnginesStart::Started,
+            "the network handler's PeerLink binds here — without it maintain-peer 500s"
+        );
+        let _srv_a = serve_peer(&pid_a, shared_a.clone(), registry.clone());
+
+        // B — the peer that will vanish and return.
+        let peers_b =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry.clone())));
+        let pid_b = peers_b.primary_peer_id().to_string();
+        let shared_b = peers_b.direct_peer_shared(&pid_b).expect("B shared");
+        assert_eq!(peers_b.start_engines(&pid_b), EnginesStart::Started);
+        let mut srv_b = serve_peer(&pid_b, shared_b.clone(), registry.clone());
+        tokio::task::yield_now().await;
+
+        let addr_b = format!("memory://{pid_b}");
+
+        // (1) Maintain B from A — exactly what `sync_maintained_peers` EXECUTEs
+        // for a bound conversation, on A's OWN system/network (per-peer pool).
+        let res = peers_a
+            .execute(
+                &pid_a,
+                format!("/{pid_a}/system/network"),
+                "maintain-peer".to_string(),
+                fast_maintain_request(&pid_b, &addr_b),
+                entity_handler::ExecuteOptions::default(),
+            )
+            .await
+            .expect("maintain-peer dispatch");
+        assert_eq!(
+            res.status, 200,
+            "maintain-peer must establish + install the reconnect graph"
+        );
+        assert!(
+            eventually(Duration::from_secs(3), || liveness_of(&peers_a, &pid_b)
+                == LiveStatus::Connected)
+                .await,
+            "the app read-model must show B connected after maintain-peer"
+        );
+
+        // (2) B disappears. Aborting the server drops its listener, which
+        // unregisters the endpoint: B now neither answers nor accepts dials.
+        srv_b.abort();
+        let endpoints_before = registry.len();
+        assert!(
+            eventually(Duration::from_secs(2), || registry.len() < endpoints_before).await,
+            "B's endpoint must leave the registry once its server is aborted \
+             (it was {endpoints_before}) — otherwise the 'remote is gone' \
+             premise of this test is false and the rest proves nothing"
+        );
+
+        // Provoke the drop detection: one dispatch over the dead connection.
+        // The transport error demotes B (§3.13) — the same path a real chat
+        // fetch takes when the other side goes away. Without this we would be
+        // waiting ~60s on keepalive.
+        //
+        // This is also the *conversation's* symptom: a cross-peer fetch to B is
+        // exactly what `ChatDelivery` does every poll, so its failure here is
+        // "the conversation stopped delivering" in miniature.
+        let during_outage = cross_peer_probe(&peers_a, &pid_a, &pid_b).await;
+        assert!(
+            !during_outage,
+            "a fetch to a vanished peer cannot succeed — the outage is not real"
+        );
+
+        // (3) The read-model must stop claiming `connected` — the stale
+        // "Connected" lie is exactly what this arc deleted the mirror to fix.
+        assert!(
+            eventually(Duration::from_secs(5), || liveness_of(&peers_a, &pid_b)
+                != LiveStatus::Connected)
+                .await,
+            "a dead peer must not still read as Connected"
+        );
+
+        // (4) THE HAND-OFF: dials keep arriving although nothing in the app
+        // re-dials. `dial_count` is the retry loop's observable from outside the
+        // peer — the app-tier loop that used to do this is deleted.
+        let dials_before = registry.dial_count();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let dials_after = registry.dial_count();
+        assert!(
+            dials_after > dials_before,
+            "the network extension must keep retrying on its own \
+             (dials {dials_before} → {dials_after}); nothing in the app re-dials"
+        );
+
+        // (5) B comes back — and A reconnects with no app action whatsoever.
+        srv_b = serve_peer(&pid_b, shared_b.clone(), registry.clone());
+        assert!(
+            eventually(Duration::from_secs(10), || liveness_of(&peers_a, &pid_b)
+                == LiveStatus::Connected)
+                .await,
+            "once B is reachable again the maintained relationship must heal itself"
+        );
+
+        // (6) …and the conversation's own traffic flows again. A healed status
+        // entity would be worth little if the fetches a chat actually makes
+        // still failed, so assert the thing the user cares about, not just the
+        // chip: the same cross-peer probe that failed mid-outage now succeeds.
+        assert!(
+            cross_peer_probe(&peers_a, &pid_a, &pid_b).await,
+            "after the heal, the cross-peer fetch a bound conversation depends on \
+             must work again"
+        );
+
+        srv_b.abort();
     }
 
     /// THE DELIVERY PROOF: a signed chat message authored by peer A crosses a
