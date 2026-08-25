@@ -1,8 +1,16 @@
 # Entity Browser — build targets
 #
 # Active deployments:
-#   make wasm        — browser build (DOM)
-#   make tauri-run   — desktop build (DOM in WebView + native backend peer)
+#   make wasm         — browser build (DOM), debug
+#   make tauri-run    — desktop build (DOM in WebView + native backend peer)
+#
+# Release paths (see docs/RELEASE-READINESS.md):
+#   make wasm-release — size-optimized browser SPA → dist/ (deploy to a CDN)
+#   make publish …    — emit sites/apps content alongside the SPA (CDN deploy)
+#   make tauri-bundle  — content-baked desktop app (sites+apps embedded, offline)
+#   NOTE: the tauri* targets produce a DEBUG test binary, NOT installers;
+#         packaging (.deb/.AppImage/.dmg/.msi via `tauri build`) is unwired — see
+#         RELEASE-READINESS §3.
 #
 # === make + podman build convention ===========================================
 # A bare machine needs ONLY `make` and `podman` (no rust/cargo/trunk on host).
@@ -57,8 +65,8 @@ DIST       ?= dist
 TARGET_DIR ?= target
 
 # ============================================================================
-# Podman resource caps — entity-systems standard (docs/release-readiness/
-# RESOURCE-CAPS.md). Per-container ceilings so a build/run can't take the host
+# Podman resource caps — entity-systems standard (docs/RELEASE-READINESS.md §4).
+# Per-container ceilings so a build/run can't take the host
 # down. Tune the COMMITTED defaults for THIS project; override per-machine
 # WITHOUT editing this file via env vars or an untracked caps.local.mk.
 #
@@ -72,7 +80,7 @@ TARGET_DIR ?= target
 # heaviest target is `make test` (595 native unit + 17 peer-integration + the
 # other integration suites, compiling + linking the full sibling workspace):
 # measured cold worst-case peak ~3.5 GiB at full --cpus=12 (see
-# RELEASE-READINESS.md). wasm-release peaks lower (~1.9 GiB). 6g leaves room for
+# docs/RELEASE-READINESS.md §4). wasm-release peaks lower (~1.9 GiB). 6g leaves room for
 # more-core machines + ongoing test growth while staying a hard protective
 # ceiling. A smaller machine lowers this via caps.local.mk (§4a).
 CAP_MEM           ?= 6g         # hard memory ceiling per container
@@ -107,6 +115,7 @@ help:
 	@echo "  clean    remove dist/ and the toolchain image"
 	@echo
 	@echo "  wasm / wasm-release / serve / build-serve / tauri-run / e2e-worker"
+	@echo "  release: wasm-release · publish · tauri-bundle (see docs/RELEASE-READINESS.md)"
 	@echo "  — see the Makefile header for the full target catalogue."
 
 # Build the toolchain image (rust 1.94.1 + wasm32 + trunk + binaryen + webkit2gtk).
@@ -463,4 +472,4 @@ publish-serve: wasm
 	@echo ""
 	python3 -m http.server $(PORT) --directory $(SERVE_DIR)
 
-.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run serve build-serve check-dist publish publish-bare publish-serve
+.PHONY: native test lint wasm wasm-release wasm-measurement e2e-worker tauri tauri-run tauri-bundle tauri-bundle-run serve build-serve check-dist publish publish-bare publish-serve
