@@ -338,6 +338,54 @@ pub fn human_bytes(n: u64) -> String {
 /// phone that read is exactly where the tab dies. Neither refusal is redundant:
 /// the picker's is a courtesy the Shell verb does not get, and the model's is
 /// the one that cannot be bypassed.
+/// Below this, a file chooser's `cancel` cannot have come from a human hand —
+/// nobody opens and dismisses a dialog in a quarter of a second. Above it, a
+/// cancel is an ordinary "changed my mind" and deserves no message at all.
+pub const PICKER_AUTO_DISMISS_MS: f64 = 300.0;
+
+/// A file chooser that the engine opened **and closed itself**, in `ms`.
+///
+/// **Why this is a message and a plain cancel is not.** A `cancel` event means
+/// "no file was chosen", and it covers two completely different situations: a
+/// person backing out of a chooser, and an engine that accepted the request and
+/// then dismissed it without ever showing anything. The first needs no comment;
+/// the second is a failure, and it is **the exact shape of the Android/Firefox
+/// report that this offer button "just doesn't do anything"** — no dialog, no
+/// error, nothing in the console, because the app listened only for `change`
+/// and `cancel` went nowhere.
+///
+/// The elapsed time is the only discriminator available: nothing in the event
+/// says whether a chooser was ever painted. So the number is quoted rather than
+/// hidden — if this message ever appears with a plausible human interval, the
+/// threshold is wrong and the reader can see that for themselves.
+///
+/// **It names no cause, and that is deliberate — it hands over a TEST instead.**
+/// The first version said "the browser has no permission to reach files", which
+/// is very likely wrong: on Android the chooser is the Storage Access Framework,
+/// which requires no permission at all. A confident wrong cause sends someone
+/// into the wrong settings screen, which is worse than saying less — the same
+/// rule this repo applies to the WebRTC banner and the insecure-origin row.
+///
+/// What the page genuinely knows is: the request was accepted, no chooser was
+/// shown, and nothing here can retry it.
+///
+/// **Measured 2026-08-24 on one Android device: Firefox auto-dismisses, Chrome
+/// opens the chooser normally — same page, same phone, same file.** So the
+/// message names the workaround that was actually observed to work rather than
+/// a settings screen nobody has confirmed matters. It stays hedged about the
+/// cause (one device is not a survey) while being concrete about the remedy,
+/// which is the split this repo keeps re-learning: state the consequence you
+/// measured, not the explanation you inferred.
+pub fn picker_auto_dismissed_message(ms: f64) -> String {
+    format!(
+        "the browser closed the file chooser itself after {ms:.0}ms, without showing it — \
+         so no file could be picked, and this is not something the page can retry. \
+         The cause is in the browser, not this app: the same page can open a file \
+         chooser in a different browser on the same device. If you are on Firefox for \
+         Android, try Chrome."
+    )
+}
+
 pub fn too_large_message(name: &str, size: u64) -> String {
     format!(
         "{name} is {} — this browser offers files up to {} \

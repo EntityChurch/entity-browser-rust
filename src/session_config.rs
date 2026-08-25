@@ -292,12 +292,20 @@ impl IceServer {
 /// credentials is, and matches `EXTENSION-SIGNALING` §9.3 forbidding reflector
 /// authentication: no credential, nothing to expire, nothing to rotate.
 ///
-/// **`turn:`/`turns:` is refused, deliberately and sayably.** A TURN server
-/// needs a username and credential, and there is nowhere to put them here yet.
-/// Accepting one would build an `RTCIceServer` that silently gathers no relay
-/// candidates — a reflector that looks configured and does nothing, which is the
-/// failure mode this whole area keeps producing. Refusing it says so where the
-/// user typed it. Carrying credentials is a later, additive shape.
+/// **`turn:`/`turns:` is refused here and belongs in the relay field** — which
+/// exists (see [`parse_relay`] directly below, and the three boxes on the
+/// connector row). Accepting one *here* would build an `RTCIceServer` with no
+/// credentials that silently gathers no relay candidates — a reflector that
+/// looks configured and does nothing, the failure mode this whole area keeps
+/// producing — so `validate_reflector_uri` refuses it **by pointing at the
+/// right field**, not by saying the product cannot do it.
+///
+/// This paragraph used to end *"carrying credentials is a later, additive
+/// shape"*. That shape landed. **A concession's expiry is worth writing down
+/// where the concession is made, and then the note has to be spent** — a
+/// comment describing a limitation the code no longer has reads as a product
+/// statement, and this one had already been copied into the release notes as
+/// one.
 ///
 /// An empty/blank input is `Ok(vec![])`, not an error: **host-candidates-only is
 /// a legal deployment** (a LAN, our own green gates), never "use a public

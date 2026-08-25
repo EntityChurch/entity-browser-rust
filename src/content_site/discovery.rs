@@ -401,6 +401,42 @@ pub fn refresh_site_index(peers: &Peers, me: &str) {
     }
 }
 
+/// Everything caching one warmed site writes: the manifest at its natural
+/// cached-foreign address, **and** the provenance record.
+///
+/// A free function because [`warm_peer_sites`] is wasm-only (its native twin is
+/// a stub), so the pair would otherwise be a decision `make test` cannot reach —
+/// and the pair is the whole point. Dropping the second write leaves a warm that
+/// still populates the rail for a reader watching this foreign peer's prefix and
+/// silently populates nothing for a reader that is not, which is the failure this
+/// closes and is invisible in every arrangement anyone would test by hand.
+///
+/// `now_ms` is passed in rather than read here so the caller owns the clock
+/// choice (it is a **wall** clock — see [`warm_peer_sites`]) and the gate can
+/// pin an exact value.
+fn warm_site_writes(
+    me: &str,
+    peer: &str,
+    site: &str,
+    origin: &str,
+    manifest: &entity_entity::Entity,
+    now_ms: u64,
+) -> [(String, entity_entity::Entity); 2] {
+    use crate::content_site::cache;
+    [
+        (paths::manifest_path(peer, site), manifest.clone()),
+        (
+            cache::provenance_path(me, peer, site),
+            cache::CacheProvenance {
+                last_reconciled: now_ms,
+                pinned_root_hash: cache::manifest_hash_hex(manifest),
+                source_transport: origin.to_string(),
+            }
+            .to_entity(),
+        ),
+    ]
+}
+
 /// **Boot-time site-discovery warm-up.** The deployment-config `origins` map
 /// registers *where* each hosting peer is reachable, but nothing enumerates a
 /// foreign peer's sites until you browse one — so a freshly-deployed peer's
@@ -424,6 +460,29 @@ pub fn refresh_site_index(peers: &Peers, me: &str) {
 /// lazily on first visit) — a peer that exposes no `sites.list` is simply
 /// skipped (enumeration is an optional enrichment, never required to browse).
 ///
+/// # It writes the provenance record too, and that is a dirty signal
+///
+/// The manifest alone is enough for [`scan_local_sites`] to *find* the site, and
+/// it fires the `sites/{peer}/` subscription — but only for a reader that
+/// subscribed **that** prefix, which a Site Browser can only have done for the
+/// foreign peers it knew about when it opened. Since this function grew a
+/// mid-session caller (the Registry Browser's *Open in Site Browser*, which
+/// warms a publisher nobody had heard of a second ago), that is exactly the
+/// reader that misses it: measured with single-instance windows on, the click
+/// focuses an already-open Site Browser and its rail stayed at **0 of 3** for a
+/// full minute while all three manifests sat in the store.
+///
+/// The provenance record lands under `system/cache/`, which **every** Site
+/// Browser watches unconditionally — so writing it gives the warm a signal that
+/// does not depend on which peers the reader happened to know about. That is the
+/// standing rule (*every render input carries its own dirty signal*) applied to
+/// an input whose writer is a spawned task touching no watcher the reader holds.
+///
+/// It is also the record the rail's subline reads to say *which host served
+/// this*, and [`crate::app::EntityApp::precache_origin_sites`] — the boot-time
+/// sibling of this function — has always written both. Writing one and not the
+/// other was the asymmetry, not a deliberate economy.
+///
 /// [`origins::list_origins`]: crate::content_site::origins::list_origins
 #[cfg(target_arch = "wasm32")]
 pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) {
@@ -438,6 +497,7 @@ pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) 
         tracing::warn!(me = %me, "warm_peer_sites: no writer handle for peer — site warm-up skipped");
         return;
     };
+    let me = me.to_string();
     wasm_bindgen_futures::spawn_local(async move {
         for (peer, origin) in targets {
             let sites = match fetch_sites_list(&FetchBinSource, &origin, &peer).await {
@@ -452,7 +512,15 @@ pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) 
             for site in &sites {
                 match fetch_manifest(&FetchBinSource, &origin, &peer, site).await {
                     Ok(manifest) => {
-                        writer.put(paths::manifest_path(&peer, site), manifest);
+                        // Both writes, from one place — see `warm_site_writes`.
+                        // WALL clock: `last_reconciled` answers "when did we
+                        // last fetch", and `performance.now()` would answer
+                        // "how long after this page loaded".
+                        for (path, entity) in
+                            warm_site_writes(&me, &peer, site, &origin, &manifest, js_sys::Date::now() as u64)
+                        {
+                            writer.put(path, entity);
+                        }
                         cached += 1;
                     }
                     Err(e) => tracing::debug!(peer = %peer, site = %site, error = ?e,
@@ -754,6 +822,53 @@ mod tests {
         assert_eq!(paths::parse_manifest_path(&paths::page_path("PEER", "blog", "x")), None);
         assert_eq!(paths::parse_manifest_path("/PEER/sites/blog"), None);
         assert_eq!(paths::parse_manifest_path("/PEER/sites/blog/manifest/extra"), None);
+    }
+
+    /// **Warming a site writes the manifest AND the provenance record, and the
+    /// second one is the dirty signal — not bookkeeping.**
+    ///
+    /// A Site Browser subscribes `sites/{foreign}/` only for the peers it knew
+    /// about when it opened, so a publisher warmed mid-session (the Registry
+    /// Browser's *Open in Site Browser*) reaches an already-open window through
+    /// no watched prefix at all. Measured before this landed: with
+    /// single-instance windows on, the click focuses that window and its rail
+    /// stayed at **0 of 3** for a full minute with all three manifests in the
+    /// store; with it, 3 of 3 in 1.8 s.
+    ///
+    /// `system/cache/` is watched by every Site Browser unconditionally, which
+    /// is what makes the provenance write reach a reader the manifest write
+    /// cannot. The prefix assertion is therefore the load-bearing one — a
+    /// provenance record written anywhere else would satisfy "two writes" and
+    /// restore the bug.
+    #[test]
+    fn warming_a_site_writes_the_record_every_site_browser_is_watching() {
+        use crate::content_site::{cache, SiteManifest};
+        let me = "2KME";
+        let foreign = "2KTHEM";
+        let manifest = SiteManifest::new("labs", "Bill's Labs", "index", vec![]).to_entity();
+
+        let writes = warm_site_writes(me, foreign, "labs", "https://billslab.example", &manifest, 1_700_000_000_123);
+
+        let manifest_write = writes
+            .iter()
+            .find(|(p, _)| *p == paths::manifest_path(foreign, "labs"))
+            .expect("the manifest lands at its natural cached-foreign address");
+        assert_eq!(manifest_write.1, manifest, "cached verbatim, not re-encoded");
+
+        let (prov_path, prov_entity) = writes
+            .iter()
+            .find(|(p, _)| *p != manifest_write.0)
+            .expect("a second write, or a mid-session warm reaches no open window");
+        assert!(
+            prov_path.starts_with(&cache::provenance_prefix(me)),
+            "the provenance record must land under the prefix EVERY Site Browser \
+             watches — that is what makes it a dirty signal. got {prov_path}"
+        );
+        let prov = cache::CacheProvenance::from_entity(prov_entity);
+        assert_eq!(prov.source_transport, "https://billslab.example",
+            "the rail's subline reads this to say which host served the site");
+        assert_eq!(prov.last_reconciled, 1_700_000_000_123, "wall clock, passed in");
+        assert_eq!(prov.pinned_root_hash, cache::manifest_hash_hex(&manifest));
     }
 
     #[test]

@@ -156,13 +156,16 @@ impl RegistryBrowserModel {
         self.mark();
     }
 
-    pub fn render_output(&self, _peers: &Peers) -> RegistryBrowserOutput {
+    pub fn render_output(&self, peers: &Peers) -> RegistryBrowserOutput {
         RegistryBrowserOutput {
             pinned: self.pinned(),
             listing: self.listing.borrow().clone(),
             resolved: self.resolved.borrow().clone(),
             sessions: crate::content_site::session_cache::len(),
             browser_only: cfg!(not(target_arch = "wasm32")),
+            // The store `open_in_site_browser` writes into, and so the only one
+            // an opened Site Browser can read those sites from.
+            local_peer: peers.system_peer_id().to_string(),
             pin_error: self.pin_error.borrow().clone(),
         }
     }
@@ -316,10 +319,32 @@ impl RegistryBrowserModel {
     /// B-3, and it must go through `session_cache::session_for_layout` — keyed on
     /// the **publisher**, or a second entry point means a second `seq` floor of
     /// zero and the rollback defence is gone.
+    /// **Registering an origin says WHERE a peer is; it does not say WHAT it
+    /// hosts, and the Site Browser's directory reads the second.** Without the
+    /// warm below, this opened a correctly-bound Site Browser onto *"No external
+    /// sites cached"* — measured against the live registry, resolving a real
+    /// name to a real publisher. The reader has no site id to type, so an empty
+    /// directory is a dead end that looks like the publisher has nothing.
+    ///
+    /// `warm_peer_sites` already exists for exactly this and had **one** call
+    /// site: `boot_load`, over the origins `/entity-deployment.json` declares.
+    /// So the enumeration only ever ran for peers the deployment named at
+    /// startup, and a peer learned mid-session from a signed binding — which is
+    /// the entire point of the naming chain — was never enumerated at all. Its
+    /// own comment says the alternative is *"only after a manual navigate"*,
+    /// which is unavailable here for want of a site id.
+    ///
+    /// Fire-and-forget and manifest-pinned, as at boot: a publisher that is down
+    /// leaves the rail empty rather than blocking the open.
     pub fn open_in_site_browser(&self, peers: &Peers, target: &ResolvedName) -> Option<String> {
         let origin = target.origin.clone()?;
         let system_pid = peers.system_peer_id().to_string();
         crate::content_site::origins::set_origin(peers, &system_pid, &target.peer_id, &origin);
+        crate::content_site::discovery::warm_peer_sites(
+            peers,
+            &system_pid,
+            vec![(target.peer_id.clone(), origin)],
+        );
         self.mark();
         Some(target.peer_id.clone())
     }

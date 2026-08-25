@@ -37,7 +37,7 @@ pub fn render(
 
     render_pin(&root, output, ctx);
     render_names(&root, output, ctx);
-    render_resolve(&root, output, ctx, window_id);
+    render_resolve(&root, output, ctx, window_id, &output.local_peer);
 
     container.set_inner_html("");
     util::append(container, &root);
@@ -254,6 +254,7 @@ fn render_resolve(
     output: &RegistryBrowserOutput,
     ctx: &DomCtx,
     _window_id: WindowId,
+    local_peer: &str,
 ) {
     let card = c::card(&crate::i18n::t("registry.resolve_a_name", &[]));
 
@@ -299,7 +300,7 @@ fn render_resolve(
             &c::loading(&crate::i18n::t("registry.resolving", &[])),
         ),
         Phase::Failed(e) => util::append(&card, &c::pre_notice(e)),
-        Phase::Done(target) => render_evidence(&card, target, ctx),
+        Phase::Done(target) => render_evidence(&card, target, ctx, local_peer),
     }
     util::append(root, &card);
 }
@@ -311,7 +312,12 @@ fn render_resolve(
 /// look like an unchecked one. `expires_at_ms` is shown as a date for the same
 /// reason `GUIDE-SERVING-MODE` §8 requires one on "Verified": a lifetime with no
 /// endpoint reads as permanent.
-fn render_evidence(card: &Element, target: &ResolvedName, ctx: &DomCtx) {
+fn render_evidence(
+    card: &Element,
+    target: &ResolvedName,
+    ctx: &DomCtx,
+    local_peer: &str,
+) {
     let (t, tbody) = c::table(&[&crate::i18n::t("registry.checked", &[]), ""]);
     let mut row = |k: &str, v: String| {
         util::append(&tbody, &c::tr(vec![c::td_text(k), c::td_text(&v)]));
@@ -361,12 +367,39 @@ fn render_evidence(card: &Element, target: &ResolvedName, ctx: &DomCtx) {
     // buried in a doc comment. The origin came from a registry-SIGNED binding
     // (better than the deployment list); the pages it then fetches are still
     // origin-trusted, and the Site Browser labels them "not verified".
-    if target.origin.is_some() {
+    if let Some((window_type, peer_id)) =
+        crate::views::registry_browser::output::open_target(&Phase::Done(target.clone()), local_peer)
+    {
+        // **TWO listeners on one click, and the order is load-bearing.** The
+        // window event runs the window's own handler, which registers the
+        // origin the signed binding carried and warms that publisher's
+        // manifests into MY store; the action then spawns the Site Browser.
+        // Both land in one `actions` queue and are drained in registration
+        // order, so the origin is registered before the Site Browser's factory
+        // reads the origin roster to decide what to subscribe — the other order
+        // opens a window that cannot see the peer it was opened for.
+        //
+        // The spawned window is bound to **my** peer, not the publisher's:
+        // `peer_id` on a window is the store it reads, and the publisher's
+        // cached sites live in mine. `open_target` carries that decision and
+        // the reasoning; it is where this was wrong.
+        //
+        // This composition is why the button was broken: the window handler
+        // alone can only mark itself dirty (it has no way to emit an `Action`),
+        // so a control that must open *another* window needs the DOM half. The
+        // same class as the Leave button that did nothing — an action that is
+        // never raised — except here it was never raised at all rather than
+        // dropped in routing.
         let open = c::button(
             ctx,
             &crate::i18n::t("registry.open_site", &[]),
             c::ButtonKind::Secondary,
             "registry_open",
+        );
+        ctx.on_action(
+            &open,
+            "click",
+            crate::action::Action::SpawnWindow { type_name: window_type, peer_id: Some(peer_id) },
         );
         util::append(card, &open);
         util::append(

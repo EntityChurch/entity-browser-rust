@@ -379,12 +379,17 @@ fn file_picker(
     let input = util::create_element("input");
     input.set_attribute("type", "file").ok();
     // **Visually hidden, not `display:none`.** A `display:none` input is not
-    // rendered at all, and several mobile browsers decline to open a picker for
-    // an unrendered control — which presents as a button that does nothing,
-    // with no error anywhere, because no `change` event is ever dispatched.
-    // Reported from a real Android run as exactly that. Keeping it in the layout
-    // at zero size costs nothing and removes a whole class of "it just doesn't
-    // work on my phone".
+    // rendered at all, and several mobile browsers are documented to decline a
+    // picker for an unrendered control. Keeping it in the layout at zero size
+    // costs nothing, so it stays.
+    //
+    // **It is NOT what fixes Android, and the record used to imply it was.**
+    // Measured 2026-08-24 against Firefox for Android with a nine-row matrix
+    // (`tools/picker-probe.html`): a clipped input, a laid-out `opacity:0`
+    // input, and a plainly visible input tapped directly ALL have their chooser
+    // dismissed by the engine in ~200-250ms — while Chrome on the same phone
+    // opens it. So the hiding style is not the discriminator; nothing here is.
+    // Keep this rule as cheap insurance for other engines, not as a fix.
     input
         .set_attribute(
             "style",
@@ -397,14 +402,6 @@ fn file_picker(
 
     let btn = components::button_el(label, kind);
     btn.set_attribute("data-field", field).ok();
-    {
-        let input_for_click = input.clone();
-        ctx.listen(&btn, "click", move |_| {
-            if let Ok(el) = input_for_click.clone().dyn_into::<web_sys::HtmlElement>() {
-                el.click();
-            }
-        });
-    }
     util::append(parent, &btn);
 
     let on_file = std::rc::Rc::new(on_file);
@@ -430,6 +427,67 @@ fn file_picker(
         rp();
     };
     let wake = std::rc::Rc::new(wake);
+
+    // **The button opens the chooser through `show_file_picker`, which reports.**
+    // This used to be a bare `el.click()` on the hidden input — fire-and-forget,
+    // so an engine that declines to open a chooser produced no dialog, no
+    // `change`, no exception and nothing in the console. Reported from
+    // Android/Firefox as a button that does nothing at all, on a build where the
+    // same button works on desktop. Registered *after* `wake` exists so a
+    // refusal can reach the status line: an error with nowhere to go is the
+    // silence this is replacing.
+    // When we last asked for a chooser. Shared with the `cancel` listener
+    // below, which needs the interval to tell a human dismissal from an
+    // engine that never showed anything.
+    let asked_at = std::rc::Rc::new(std::cell::Cell::new(0.0_f64));
+    {
+        let input_for_click = input.clone();
+        let attempt = attempt.clone();
+        let wake = wake.clone();
+        let asked_at = asked_at.clone();
+        ctx.listen(&btn, "click", move |_| {
+            let Ok(el) = input_for_click.clone().dyn_into::<web_sys::HtmlElement>() else {
+                return;
+            };
+            asked_at.set(js_sys::Date::now());
+            if let Err(reason) = util::show_file_picker(&el) {
+                // No filename yet — nothing was chosen. The slot renders the
+                // reason, which is the entire improvement over silence.
+                attempt.set_failed("", &reason);
+                web_sys::console::error_1(&format!("file picker refused: {reason}").into());
+                wake();
+            }
+        });
+    }
+
+    // **`cancel` was the missing half, and it is why this button was silent.**
+    // A chooser ends in `change` (a file) or `cancel` (none) — and the app
+    // listened only for `change`. So an engine that accepts `showPicker()` and
+    // then dismisses the chooser itself produced no dialog, no exception, no
+    // console entry and no status: nothing anywhere. Reported from Android as
+    // a button that does nothing, and it survived a `showPicker()` fix because
+    // nothing was ever *refused*; it was accepted and instantly withdrawn.
+    //
+    // A *slow* cancel is a person changing their mind and is deliberately
+    // silent — announcing it would put an error on the screen of everyone who
+    // ever backs out of a file dialog, which is the cry-wolf failure this repo
+    // keeps recording. The interval is the only discriminator the platform
+    // offers; nothing in the event says whether a chooser was painted.
+    {
+        let attempt = attempt.clone();
+        let wake = wake.clone();
+        let asked_at = asked_at.clone();
+        ctx.listen(&input, "cancel", move |_| {
+            let elapsed = js_sys::Date::now() - asked_at.get();
+            if asked_at.get() > 0.0 && elapsed < crate::file_offer::PICKER_AUTO_DISMISS_MS {
+                let why = crate::file_offer::picker_auto_dismissed_message(elapsed);
+                web_sys::console::error_1(&format!("file picker auto-dismissed: {why}").into());
+                attempt.set_failed("", &why);
+                wake();
+            }
+        });
+    }
+
     ctx.listen(&input, "change", move |_| {
         let Ok(inp) = input_ref.clone().dyn_into::<web_sys::HtmlInputElement>() else {
             return;

@@ -560,7 +560,7 @@ fn render_nav_items(
         // of opening it.
         let group = !item.children.is_empty();
         if group {
-            let here = if subtree_holds_active(&item.children, current, current_slug, ctx) {
+            let here = if subtree_holds_active(&item.children, current, current_slug) {
                 " class=\"here\""
             } else {
                 ""
@@ -597,18 +597,21 @@ fn render_nav_items(
 
 /// Does the page being rendered live anywhere inside this subtree?
 ///
-/// Decides whether a group ships `open`. Recursive because a group's active
-/// page may be several levels down, and a group that folds away the section the
-/// reader is *currently in* is worse than not folding at all.
+/// Whether this subtree contains the page being rendered — which decides
+/// whether its group is **marked**, not whether it ships `open` (see
+/// `render_nav_items`: an auto-opened group would cover the article on
+/// arrival, and without JS the reader could not dismiss it). Recursive
+/// because the active page may be several levels down.
 ///
-/// Deliberately does **not** call `ctx.audit` — this is a second pass over
-/// targets the render pass already notes, and double-noting would report every
-/// out-of-set nav link twice.
+/// **Takes no `LinkCtx`, and that absence is the point.** It classifies
+/// targets a second time, over links the render pass has already noted —
+/// so handing it the context would put `ctx.audit` within reach, and a
+/// second `note()` reports every out-of-set nav link twice. Not passing
+/// the audit sink is a weaker guarantee than not being able to reach it.
 fn subtree_holds_active(
     items: &[NavItem],
     current: &location::Location,
     current_slug: &str,
-    ctx: LinkCtx,
 ) -> bool {
     items.iter().any(|item| {
         if !item.target.is_empty() {
@@ -617,7 +620,7 @@ fn subtree_holds_active(
                 return true;
             }
         }
-        subtree_holds_active(&item.children, current, current_slug, ctx)
+        subtree_holds_active(&item.children, current, current_slug)
     })
 }
 
@@ -916,6 +919,28 @@ fn esc(s: &str) -> String {
 ///
 /// The live-mirror banner keeps its own fixed palette — a deliberately
 /// distinct notice surface (own bg + own text), not part of the site theme.
+///
+/// **The nav-group marker is DRAWN WITH BORDERS, never a glyph — and the
+/// reason is that `font-size` does not size a glyph.** The first fix for
+/// "the arrows are tiny" replaced the native `<details>` marker with
+/// `content:"\25BE"` at `font-size:13px`, and the operator reported back
+/// that it was *still a tiny little triangle*. They were right, and it was
+/// not a browser or font artifact: U+25BE is BLACK DOWN-POINTING **SMALL**
+/// TRIANGLE — a subscript-sized mark that occupies a fraction of its em box,
+/// so raising `font-size` scales the box the glyph sits in and barely moves
+/// the ink. A 8×8 element with two 2px borders rotated 45° is sized in the
+/// units the complaint was about, renders identically in every font, and
+/// stays crisp. Generally: **if a control's size is the property under
+/// review, do not express it as a character.**
+///
+/// The second half of that report was *"it's hard to see what the hitbox
+/// is"* — a separate defect, and the more accurate one. The whole
+/// `<summary>` has always toggled (everything but the `<a>`), but nothing
+/// said so: no padding, no hover feedback, so the only thing that looked
+/// pressable was the 10px mark. The summary is a pill now — hover and
+/// `[open]` both raise a background and a border, so the target advertises
+/// its own size. **An affordance that is bigger than it looks is a defect
+/// even when every click lands.**
 fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
     use super::doc_css::{doc_css, PaletteMode};
     let frozen = |token: &str| super::doc_css::frozen(theme, token);
@@ -936,13 +961,20 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
          .site-nav ul ul a{{font-size:13px;color:{muted2}}}\
          .site-nav ul ul a:hover{{color:{link}}}\
          .site-nav details.nav-group>summary{{cursor:pointer;list-style:none;\
-         display:flex;align-items:center;gap:6px;padding:3px 2px}}\
+         display:flex;align-items:center;gap:9px;padding:5px 10px;\
+         border:1px solid transparent;border-radius:7px}}\
+         .site-nav details.nav-group>summary:hover,\
+         .site-nav details.nav-group[open]>summary{{background:{panel};border-color:{border}}}\
+         .site-nav details.nav-group>summary:focus-visible{{outline:2px solid {link};\
+         outline-offset:2px}}\
          .site-nav details.nav-group>summary::-webkit-details-marker{{display:none}}\
-         .site-nav details.nav-group>summary::after{{content:\"\\25BE\";color:{muted2};\
-         font-size:13px;line-height:1;transition:transform .12s ease}}\
-         .site-nav details.nav-group[open]>summary::after{{transform:rotate(180deg);\
-         color:{accent}}}\
-         .site-nav details.nav-group>summary:hover::after{{color:{link}}}\
+         .site-nav details.nav-group>summary::after{{content:\"\";flex:none;\
+         width:9px;height:9px;border-right:2px solid {muted};\
+         border-bottom:2px solid {muted};transform:translateY(-3px) rotate(45deg);\
+         transition:transform .12s ease,border-color .12s ease}}\
+         .site-nav details.nav-group[open]>summary::after{{\
+         transform:translateY(2px) rotate(-135deg);border-color:{accent}}}\
+         .site-nav details.nav-group>summary:hover::after{{border-color:{link}}}\
          .site-nav details.nav-group>summary.here{{color:{accent};font-weight:600}}\
          .site-nav details.nav-group>summary.here>a{{color:{accent}}}\
          .site-nav details.nav-group>ul{{position:absolute;left:0;right:0;top:100%;\
@@ -976,6 +1008,8 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
         border = frozen("--site-border"),
         accent = frozen("--site-accent"),
         muted2 = frozen("--site-text-muted-2"),
+        muted = frozen("--site-text-muted"),
+        panel = frozen("--site-panel-bg"),
         faint2 = frozen("--site-text-faint-2"),
         doc = doc_css("main.page", PaletteMode::Frozen(theme)),
     )
@@ -1110,6 +1144,57 @@ mod nav_layout_tests {
         );
         // Marked, still closed.
         assert!(!html.contains(" open>") && !html.contains(" open "), "must stay closed: {html}");
+    }
+
+    /// The disclosure marker is **drawn**, and the group header is a **target**.
+    ///
+    /// Both halves are one operator report, made twice about the same control:
+    /// *"it's still a tiny little triangle … it's hard to see what the hitbox
+    /// is on it."* The first round of this fix hid the native marker and drew
+    /// its own with `content:"\25BE"` at `font-size:13px` — which changed
+    /// nothing visible, because U+25BE is BLACK DOWN-POINTING **SMALL**
+    /// TRIANGLE and `font-size` sizes the em box, not the ink inside it. So
+    /// the property this pins is not "there is a marker" (the broken version
+    /// had one) but **"its size is expressed in the units the complaint was
+    /// about"**: an empty `content` plus explicit `width`/`height`.
+    ///
+    /// It is a spelling check standing in for a rendered property, and it says
+    /// so — the honest gate is a browser, which this export still has none of.
+    /// What it *can* do is fail the specific regression that already shipped
+    /// once: someone reaching for a character again.
+    #[test]
+    fn the_disclosure_marker_is_drawn_rather_than_typed() {
+        let css = page_css(None);
+        let marker = css
+            .split(".site-nav details.nav-group>summary::after{")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("the nav group marker rule must exist");
+
+        // Empty content + an explicit box: sized in px, in every font.
+        assert!(
+            marker.contains("content:\"\"") && marker.contains("width:") && marker.contains("height:"),
+            "the marker must be a drawn box, not a glyph: {marker}"
+        );
+        // The regression, by name. A font-sized marker is the bug that shipped.
+        assert!(
+            !marker.contains("font-size"),
+            "font-size does not size a glyph — that is what looked unchanged: {marker}"
+        );
+
+        // The header advertises its own hit area: hover and [open] both paint.
+        assert!(
+            css.contains(
+                ".site-nav details.nav-group>summary:hover,\
+                 .site-nav details.nav-group[open]>summary{background:"
+            ),
+            "the group header must show its target on hover and when open: {css}"
+        );
+        // ...and it is reachable by keyboard, visibly.
+        assert!(
+            css.contains(".site-nav details.nav-group>summary:focus-visible{outline:"),
+            "a summary is focusable — the focus must be visible: {css}"
+        );
     }
 }
 
