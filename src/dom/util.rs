@@ -152,6 +152,92 @@ pub fn document() -> Document {
     web_sys::window().unwrap().document().unwrap()
 }
 
+// --- Fullscreen API ---------------------------------------------------------
+//
+// Reached through `Reflect` rather than `web_sys`, and the reason is not style:
+// `Element::request_fullscreen` is typed `-> Result<(), JsValue>` in web-sys
+// 0.3, so it **calls the method and drops the Promise the method returns**. That
+// Promise REJECTS whenever the request is refused — no transient activation, an
+// element the engine will not promote, a WebView built with fullscreen off — and
+// a dropped rejecting Promise is the standing footgun in this repo (`index.html`
+// warns on a post-start `unhandledrejection`, and reloads the whole app on a
+// pre-start one). Calling through `Reflect` hands us the return value so we can
+// consume it. The same applies to `Document::exit_fullscreen`, typed `-> ()`.
+//
+// The prefixed names are asked for second because WebKitGTK — the Tauri Linux
+// WebView — shipped the unprefixed API only recently, and the cost of a second
+// `Reflect::get` on a path that runs once per button press is nothing.
+
+/// Invoke the first of `names` that exists on `target`, consuming a returned
+/// Promise so a refusal never surfaces as an unhandled rejection. Returns
+/// whether a method was found and called (NOT whether the transition happened —
+/// that is asynchronous, and the only honest observer of it is
+/// `fullscreenchange`).
+fn call_consuming_promise(target: &wasm_bindgen::JsValue, names: &[&str]) -> bool {
+    for name in names {
+        let Ok(prop) = js_sys::Reflect::get(target, &wasm_bindgen::JsValue::from_str(name)) else {
+            continue;
+        };
+        let Ok(f) = prop.dyn_into::<js_sys::Function>() else {
+            continue;
+        };
+        let Ok(ret) = f.call0(target) else {
+            return false;
+        };
+        if let Ok(promise) = ret.dyn_into::<js_sys::Promise>() {
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            });
+        }
+        return true;
+    }
+    false
+}
+
+/// Can this document take an element fullscreen at all? A WebView embedder may
+/// compile the API out or switch it off; a button that cannot work must not be
+/// rendered rather than press silently.
+pub fn fullscreen_supported() -> bool {
+    let doc: wasm_bindgen::JsValue = document().into();
+    for name in ["fullscreenEnabled", "webkitFullscreenEnabled"] {
+        if let Ok(v) = js_sys::Reflect::get(&doc, &wasm_bindgen::JsValue::from_str(name)) {
+            if v.as_bool() == Some(true) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Ask for `el` to fill the screen. Must be called from a user gesture.
+pub fn request_fullscreen(el: &Element) {
+    let target: wasm_bindgen::JsValue = el.clone().into();
+    call_consuming_promise(&target, &["requestFullscreen", "webkitRequestFullscreen"]);
+}
+
+/// Leave fullscreen, whichever element is in it.
+pub fn exit_fullscreen() {
+    let target: wasm_bindgen::JsValue = document().into();
+    call_consuming_promise(&target, &["exitFullscreen", "webkitExitFullscreen"]);
+}
+
+/// Is `el` the element currently filling the screen?
+///
+/// Asked as `el.matches(":fullscreen")`, **not** by comparing against
+/// `document.fullscreenElement`: our windows render inside a shadow root, and
+/// that property retargets to the shadow *host*, so the comparison is false for
+/// every element we would ever ask about.
+pub fn is_fullscreen(el: &Element) -> bool {
+    for sel in [":fullscreen", ":-webkit-full-screen"] {
+        // `matches` throws on a selector the engine does not know, which is the
+        // signal to try the other spelling rather than an error.
+        if let Ok(true) = el.matches(sel) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn create_element(tag: &str) -> Element {
     document().create_element(tag).unwrap()
 }

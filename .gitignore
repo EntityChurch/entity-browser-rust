@@ -5,7 +5,7 @@
 # tauri-run without clobbering dist/ + target/ (Makefile DIST/TARGET_DIR).
 # **A GLOB, not an enumeration.** This list used to name each publish output
 # directory one at a time, so every NEW one was committable by default — and
-# that is exactly how `f9c8e7ca` (a chat fix) swept in 18,408 files: a 114 MB
+# that is exactly how one 2026-08-21 chat fix swept in 18,408 files: a 114 MB
 # `dist-all/` publish tree plus an 11 MB frozen SPA shell, neither of which any
 # target regenerates under those names. Same shape as the cache-header rule this
 # repo already learned: when a policy enumerates the exceptions and defaults the

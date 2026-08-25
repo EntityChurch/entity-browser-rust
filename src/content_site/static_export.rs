@@ -41,6 +41,144 @@ pub struct ExportSite<'a> {
     pub assets: &'a [(String, SiteAsset)],
 }
 
+/// A link whose target is **not in the export set** — the defect this audit
+/// exists for.
+///
+/// [`static_href`] resolves `site:other/page` against the **current** peer
+/// unconditionally. That is right when the whole body of sites ships together,
+/// and wrong under per-domain publishing, where each domain carries only its
+/// own sites: the href is emitted, the file is not there, and a reader gets a
+/// 404 that nothing on our side ever saw. Measured on production 2026-08-21
+/// (`docs/status/FINDING-2026-08-21-cross-site-links-404-under-per-domain-publishing.md`).
+///
+/// **`CrossPeer` is affected identically, which the finding did not say.**
+/// [`projection_href`] emits a root-absolute path with no host component at
+/// all, so an explicit `entity://{other-peer}/sites/x` link also lands on the
+/// *current* domain. The exporter cannot express a cross-domain link today;
+/// this type is what makes that visible at publish time instead of on
+/// production.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DanglingLink {
+    /// The peer whose tree the source page was written into.
+    pub from_peer: String,
+    pub from_site: String,
+    /// The page slug the link was authored on.
+    pub from_page: String,
+    /// The link as written, e.g. `site:billslab-entity-system/papers/07-deos`.
+    pub target: String,
+    /// Where it was rewritten to — the URL a reader actually requests, and
+    /// 404s on. Carried because the authored form alone does not show the
+    /// wrong peer the link was resolved against.
+    pub href: String,
+}
+
+impl std::fmt::Display for DanglingLink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let page = if self.from_page.is_empty() { "<root>" } else { &self.from_page };
+        write!(
+            f,
+            "{}/{}/{} → {} (emitted {})",
+            self.from_peer, self.from_site, page, self.target, self.href
+        )
+    }
+}
+
+/// The export set's membership, plus every out-of-set link found while
+/// rewriting.
+///
+/// Interior mutability because the render path is a tree of `&`-taking
+/// functions and threading `&mut` through [`render_nav_items`]' recursion
+/// would be a larger change than the check it carries. The publish CLI is
+/// single-threaded, so a `RefCell` is the right cell.
+pub struct LinkAudit {
+    /// `(peer_id, site_id)` present in this export.
+    members: std::collections::HashSet<(String, String)>,
+    dangling: std::cell::RefCell<Vec<DanglingLink>>,
+}
+
+impl LinkAudit {
+    fn new(sites: &[ExportSite]) -> Self {
+        Self {
+            members: sites
+                .iter()
+                .map(|s| (s.peer_id.to_string(), s.site_id.to_string()))
+                .collect(),
+            dangling: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Record `target` if the href just emitted for it points outside the set.
+    ///
+    /// Membership is asked of the peer the href was resolved **against**, not
+    /// of the peer the author meant: for a `CrossSite` those differ precisely
+    /// in the broken case, and the emitted path is what a reader requests.
+    fn note(&self, target: &LinkTarget, current: &location::Location, raw: &str, href: &str) {
+        let (peer, site) = match target {
+            LinkTarget::CrossSite { site_id, .. } => {
+                (current.peer_id.clone().unwrap_or_default(), site_id.clone())
+            }
+            LinkTarget::CrossPeer { peer_id, site_id, .. } => (peer_id.clone(), site_id.clone()),
+            // An in-site target resolves within a site we are writing; an
+            // external link passes through verbatim and is nobody's business
+            // here.
+            LinkTarget::InSite { .. } | LinkTarget::External { .. } => return,
+        };
+        if self.members.contains(&(peer.clone(), site.clone())) {
+            return;
+        }
+        self.dangling.borrow_mut().push(DanglingLink {
+            from_peer: current.peer_id.clone().unwrap_or_default(),
+            from_site: current.site_id.clone(),
+            from_page: current.page.clone(),
+            target: raw.to_string(),
+            href: href.to_string(),
+        });
+    }
+
+    /// Every out-of-set link, deduplicated and ordered — the same authored link
+    /// appears on every page that carries it, and an operator wants the list of
+    /// things to fix, not a per-page tally.
+    fn into_dangling(self) -> Vec<DanglingLink> {
+        let mut out = self.dangling.into_inner();
+        out.sort_by(|a, b| {
+            (&a.from_site, &a.from_page, &a.target).cmp(&(&b.from_site, &b.from_page, &b.target))
+        });
+        out.dedup();
+        out
+    }
+}
+
+/// What an export produced.
+///
+/// `pages` is what the call sites already consumed; `dangling` is the new half.
+/// Returned as a struct rather than a tuple so a future counter is a field
+/// rather than a signature change at every caller.
+#[derive(Debug, Default)]
+pub struct ExportReport {
+    pub pages: usize,
+    /// Out-of-set links — see [`DanglingLink`]. **Empty is the only clean
+    /// state**; a non-empty list is 404s that will ship.
+    pub dangling: Vec<DanglingLink>,
+}
+
+/// How links project, and what to do about one that leaves the export set.
+///
+/// Bundled rather than passed as three positionals because they are one
+/// concept — *where does an href point* — and because this is where a
+/// cross-domain resolution map lands if it is ever built (backlog **B-4**,
+/// `docs/plans/DESIGN-CROSS-DOMAIN-SITE-LINKS.md`): a field, not a fourth
+/// argument threaded through every function in the render path.
+#[derive(Clone, Copy)]
+struct LinkCtx<'a> {
+    layout: Layout,
+    /// Per-peer hosting scope; empty is the domain root.
+    prefix: &'a str,
+    /// Present for a multi-site projection export; `None` for bare-root — a
+    /// single site has no set to be outside of, and its cross-site links are
+    /// deliberately namespaced outbound hrefs (see [`Layout::BareRoot`]).
+    audit: Option<&'a LinkAudit>,
+}
+
 /// How a site projects onto the output tree + link space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
@@ -64,19 +202,27 @@ pub enum Layout {
 /// Cross-site / cross-peer links resolve across the whole set, so the
 /// export is internally navigable. When `live_base` is `Some(origin)`, each
 /// page carries a dismissable "open in the live entity browser" banner
-/// deep-linking to `{origin}/?site=…` ([F2]). Returns the number of HTML
-/// pages written.
+/// deep-linking to `{origin}/?site=…` ([F2]).
+///
+/// Returns the pages written **and every link whose target was not in the set**
+/// ([`ExportReport`]). The set was always in scope here and was never consulted;
+/// a `site:` target belonging to another domain resolved to a path under *this*
+/// peer and shipped as a 404. The caller decides what to do with the list —
+/// this function still writes the tree either way, because refusing here would
+/// break the per-domain builds that are shipping today.
 pub fn export_site_set(
     out_dir: &Path,
     sites: &[ExportSite],
     prefix: &str,
     live_base: Option<&str>,
-) -> std::io::Result<usize> {
+) -> std::io::Result<ExportReport> {
+    let audit = LinkAudit::new(sites);
+    let ctx = LinkCtx { layout: Layout::Projection, prefix, audit: Some(&audit) };
     let mut written = 0;
     for site in sites {
         let page_slugs: Vec<String> = site.pages.iter().map(|(s, _)| s.to_string()).collect();
         for (slug, page) in site.pages {
-            let html = render_page(site, slug, page, Layout::Projection, prefix, live_base);
+            let html = render_page(site, slug, page, ctx, live_base);
             let path = page_file_path(out_dir, site.peer_id, site.site_id, slug, prefix);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -102,7 +248,7 @@ pub fn export_site_set(
                 continue;
             }
             let idx = super::resolver::section_index_page(&dir, &children);
-            let html = render_page(site, &dir, &idx, Layout::Projection, prefix, live_base);
+            let html = render_page(site, &dir, &idx, ctx, live_base);
             let path = page_file_path(out_dir, site.peer_id, site.site_id, &dir, prefix);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -136,7 +282,7 @@ pub fn export_site_set(
     // Land `/` somewhere sensible for a bare-dir preview (and clear any stale
     // origin SW); a no-op when a live SPA already owns `{out}/index.html`.
     write_landing_redirect(out_dir, prefix)?;
-    Ok(written)
+    Ok(ExportReport { pages: written, dangling: audit.into_dangling() })
 }
 
 /// Export sites read off the **live tree** ([`super::read::OwnedSite`]) to
@@ -150,7 +296,7 @@ pub fn export_owned_sites(
     sites: &[OwnedSite],
     prefix: &str,
     live_base: Option<&str>,
-) -> std::io::Result<usize> {
+) -> std::io::Result<ExportReport> {
     // Materialize borrowed `(slug, page)` views first; `page_vecs` must
     // outlive the `ExportSite`s that borrow it (hence the separate binding).
     let page_vecs: Vec<Vec<(&str, SitePage)>> = sites
@@ -191,9 +337,14 @@ pub fn export_bare_root(
         assets: &site.assets,
     };
     let mut written = 0;
+    // No audit: a single site has no set to be outside of, and its cross-site
+    // links are deliberately namespaced outbound hrefs (see [`Layout::BareRoot`]).
+    // Auditing here would report every one of them as dangling, which is the
+    // cry-wolf failure — the guard would be routed around within a day.
+    let ctx = LinkCtx { layout: Layout::BareRoot, prefix: "", audit: None };
     for (slug, page) in es.pages {
         // Bare-root is the domain root itself — no hosting prefix applies.
-        let html = render_page(&es, slug, page, Layout::BareRoot, "", live_base);
+        let html = render_page(&es, slug, page, ctx, live_base);
         let path = out_dir.join(format!("{slug}.html"));
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -263,8 +414,7 @@ fn render_page(
     site: &ExportSite,
     slug: &str,
     page: &SitePage,
-    layout: Layout,
-    prefix: &str,
+    ctx: LinkCtx,
     live_base: Option<&str>,
 ) -> String {
     let current = location::Location {
@@ -277,21 +427,21 @@ fn render_page(
         super::render::PageRender::Document(doc) => return doc,
         super::render::PageRender::Markup(markup) => markup,
     };
-    let body = rewrite_hrefs(&body, &current, layout, prefix);
+    let body = rewrite_hrefs(&body, &current, ctx);
     // Images need their own pass — rewrite_hrefs only touches href=". Site-relative
     // `src="assets/…"` becomes a root-absolute static URL (depth-safe).
-    let body = rewrite_img_srcs(&body, site.peer_id, site.site_id, layout, prefix);
-    let nav = render_nav(&site.manifest.nav, &current, slug, layout, prefix);
+    let body = rewrite_img_srcs(&body, site.peer_id, site.site_id, ctx.layout, ctx.prefix);
+    let nav = render_nav(&site.manifest.nav, &current, slug, ctx);
     let banner = live_base.map(|base| render_live_banner(base, site.peer_id, site.site_id, slug)).unwrap_or_default();
     let page_title = page.title();
     let site_title = &site.manifest.title;
     // The site-title link goes to the site root. Resolve it through the same
     // href logic (an empty-page in-site link) so it is correct per layout AND
     // from a nested page — a hardcoded "./" is wrong for `guide/intro.html`.
-    let home_href = static_href(&LinkTarget::InSite { page: String::new() }, &current, layout, prefix);
+    let home_href = static_href(&LinkTarget::InSite { page: String::new() }, &current, ctx);
     // Bare-root carries no entity branding (the "just a site generator" pitch);
     // the projection surface names what it is.
-    let footer = match layout {
+    let footer = match ctx.layout {
         Layout::Projection => {
             "<footer class=\"site-footer\">Static export · entity content-site projection</footer>"
                 .to_string()
@@ -367,14 +517,13 @@ fn render_nav(
     nav: &[NavItem],
     current: &location::Location,
     current_slug: &str,
-    layout: Layout,
-    prefix: &str,
+    ctx: LinkCtx,
 ) -> String {
     if nav.is_empty() {
         return String::new();
     }
     let mut out = String::from("<nav class=\"site-nav\">");
-    render_nav_items(nav, current, current_slug, &mut out, 0, layout, prefix);
+    render_nav_items(nav, current, current_slug, &mut out, 0, ctx);
     out.push_str("</nav>");
     out
 }
@@ -385,8 +534,7 @@ fn render_nav_items(
     current_slug: &str,
     out: &mut String,
     depth: usize,
-    layout: Layout,
-    prefix: &str,
+    ctx: LinkCtx,
 ) {
     // Cycle/depth safety (SITE §4.1: recommend max depth 32).
     if depth > 32 {
@@ -400,13 +548,19 @@ fn render_nav_items(
             out.push_str(&format!("<span class=\"nav-section\">{}</span>", esc(&item.label)));
         } else {
             let target = location::classify_link(&item.target, current);
-            let href = static_href(&target, current, layout, prefix);
+            let href = static_href(&target, current, ctx);
+            // Nav is audited too: the portal-index generator emits cross-site
+            // nav links, so a domain router is exactly where an out-of-set
+            // target shows up — and it would be invisible to a body-only check.
+            if let Some(audit) = ctx.audit {
+                audit.note(&target, current, &item.target, &href);
+            }
             let active = matches!(&target, LinkTarget::InSite { page } if page == current_slug);
             let cls = if active { " class=\"active\"" } else { "" };
             out.push_str(&format!("<a href=\"{}\"{cls}>{}</a>", esc(&href), esc(&item.label)));
         }
         if !item.children.is_empty() {
-            render_nav_items(&item.children, current, current_slug, out, depth + 1, layout, prefix);
+            render_nav_items(&item.children, current, current_slug, out, depth + 1, ctx);
         }
         out.push_str("</li>");
     }
@@ -416,7 +570,7 @@ fn render_nav_items(
 /// Rewrite every `href="…"` in a rendered HTML body from its entity-native
 /// form to a static projection href, via the link classifier. External
 /// links pass through untouched.
-fn rewrite_hrefs(html: &str, current: &location::Location, layout: Layout, prefix: &str) -> String {
+fn rewrite_hrefs(html: &str, current: &location::Location, ctx: LinkCtx) -> String {
     const NEEDLE: &str = "href=\"";
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
@@ -427,7 +581,11 @@ fn rewrite_hrefs(html: &str, current: &location::Location, layout: Layout, prefi
             Some(end) => {
                 let raw = &after[..end];
                 let target = location::classify_link(raw, current);
-                out.push_str(&esc(&static_href(&target, current, layout, prefix)));
+                let href = static_href(&target, current, ctx);
+                if let Some(audit) = ctx.audit {
+                    audit.note(&target, current, raw, &href);
+                }
+                out.push_str(&esc(&href));
                 rest = &after[end..]; // leaves the closing quote for the next push
             }
             None => {
@@ -508,10 +666,16 @@ fn asset_file_path(
 /// links pass through verbatim. Only the **in-site** href depends on layout:
 /// projection keeps the prefixed path; bare-root drops to a root-relative
 /// `/{page}.html` (the site IS the root).
-fn static_href(target: &LinkTarget, current: &location::Location, layout: Layout, prefix: &str) -> String {
+/// **Both cross-* arms emit a host-less, root-absolute path**, so neither can
+/// express a link to another *domain*. That is not an oversight to patch here:
+/// there is no `peer_id → origin` input in scope, and inventing one per call
+/// site is how two answers to one question ship. [`LinkAudit`] reports what
+/// this cannot resolve; backlog **B-4** is where the input would come from.
+fn static_href(target: &LinkTarget, current: &location::Location, ctx: LinkCtx) -> String {
     let cur_peer = current.peer_id.as_deref().unwrap_or("");
+    let prefix = ctx.prefix;
     match target {
-        LinkTarget::InSite { page } => match layout {
+        LinkTarget::InSite { page } => match ctx.layout {
             Layout::Projection => projection_href(cur_peer, &current.site_id, page, prefix),
             Layout::BareRoot => bare_href(page),
         },
@@ -825,7 +989,7 @@ mod tests {
         let dir = Path::new("dist/static-demo");
         let _ = fs::remove_dir_all(dir);
         let n = export_owned_sites(dir, &sites, "", None).expect("live-tree export");
-        eprintln!("emitted {n} static pages → {} (peer {pid})", dir.display());
+        eprintln!("emitted {} static pages → {} (peer {pid})", n.pages, dir.display());
     }
 
     #[test]
@@ -839,7 +1003,10 @@ mod tests {
         let dir = std::env::temp_dir().join("entity-browser-static-export-test");
         let _ = fs::remove_dir_all(&dir);
         let n = export_site_set(&dir, &sites, "", None).expect("export writes");
-        assert_eq!(n, 3, "two demo pages + one info page");
+        assert_eq!(n.pages, 3, "two demo pages + one info page");
+        // Both sites are in the set, so every cross-site link resolves — this
+        // is the in-set control for `an_out_of_set_site_link_is_reported`.
+        assert!(n.dangling.is_empty(), "a complete set has no out-of-set links: {:?}", n.dangling);
 
         // Projection file layout.
         let demo_index = dir.join("sites/PEER1/demo/index.html");
@@ -1165,6 +1332,110 @@ mod tests {
         // …and the target it points at actually exists (no dangling projection).
         assert!(dir.join("sites/PEER/beta/index.html").exists());
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// **The case that ships, and had no test.** Measured on production
+    /// 2026-08-21: `entitychurchfoundation.org` served `site:` links to sites
+    /// living on *other* domains, rewritten under foundation's own peer, 404.
+    ///
+    /// The sibling test above exports both sites, so resolving against the
+    /// current peer *is* right there — which is exactly why it stayed green
+    /// through the whole defect. The untested precondition was the one the
+    /// deployment model deliberately violates: **each domain carries only its
+    /// own sites** (operator decision `cgid-10-235`), so a `site:` target can
+    /// be absent from the set.
+    ///
+    /// Two properties, and the second is the one that makes this a gate rather
+    /// than a restatement: the out-of-set target is **reported**, and the
+    /// in-set one beside it is **not**. A detector that flagged everything
+    /// would satisfy the first assertion alone and be useless — the same
+    /// cry-wolf shape that gets a guard routed around with `|| true`.
+    #[test]
+    fn an_out_of_set_site_link_is_reported_and_an_in_set_one_is_not() {
+        let a = SiteManifest::new("alpha", "Alpha", "index", vec![]);
+        let b = SiteManifest::new("beta", "Beta", "index", vec![]);
+        let a_pages = vec![(
+            "index",
+            SitePage::markdown(
+                "A",
+                // One sibling (in the set) and one on another domain (not).
+                "See [Beta](site:beta/index) and [Far](site:other-domain-main/papers/07).",
+            ),
+        )];
+        let b_pages = vec![("index", SitePage::markdown("B", "# Beta"))];
+        let sites = [
+            ExportSite { peer_id: "PEER", site_id: "alpha", manifest: &a, pages: &a_pages, assets: &[] },
+            ExportSite { peer_id: "PEER", site_id: "beta", manifest: &b, pages: &b_pages, assets: &[] },
+        ];
+        let dir = std::env::temp_dir().join("entity-browser-static-export-outofset-test");
+        let _ = fs::remove_dir_all(&dir);
+        let report = export_site_set(&dir, &sites, "", None).unwrap();
+
+        assert_eq!(report.dangling.len(), 1, "exactly the out-of-set link: {:?}", report.dangling);
+        let d = &report.dangling[0];
+        assert_eq!(d.target, "site:other-domain-main/papers/07");
+        assert_eq!(d.from_site, "alpha");
+        // The href is the evidence: it names the peer the link was resolved
+        // AGAINST, which is the whole defect — `PEER` never hosts that site.
+        assert_eq!(d.href, "/sites/PEER/other-domain-main/papers/07.html");
+        // …and that file genuinely is not there, so this is a real 404 and not
+        // a bookkeeping complaint about a path that happens to resolve.
+        assert!(!dir.join("sites/PEER/other-domain-main/papers/07.html").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A cross-**peer** link is affected identically, which the production
+    /// finding did not say and which matters for what a fix would have to be:
+    /// [`projection_href`] emits a host-less root-absolute path, so naming the
+    /// other peer explicitly still lands on the *current* domain. The exporter
+    /// cannot express a cross-domain link at all — there is no host input.
+    ///
+    /// Kept separate from the `site:` case so that if a future change fixes one
+    /// arm and not the other, exactly one test goes red.
+    #[test]
+    fn a_cross_peer_link_to_a_peer_outside_the_set_is_reported_too() {
+        let a = SiteManifest::new("alpha", "Alpha", "index", vec![]);
+        let a_pages = vec![(
+            "index",
+            SitePage::markdown("A", "See [Elsewhere](entity://OTHERPEER/sites/far/pages/index)."),
+        )];
+        let sites =
+            [ExportSite { peer_id: "PEER", site_id: "alpha", manifest: &a, pages: &a_pages, assets: &[] }];
+        let dir = std::env::temp_dir().join("entity-browser-static-export-xpeer-test");
+        let _ = fs::remove_dir_all(&dir);
+        let report = export_site_set(&dir, &sites, "", None).unwrap();
+
+        assert_eq!(report.dangling.len(), 1, "the cross-peer target is out of set: {:?}", report.dangling);
+        assert!(
+            report.dangling[0].href.starts_with("/sites/OTHERPEER/"),
+            "root-absolute on THIS domain — no host component exists to point elsewhere: {}",
+            report.dangling[0].href
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Bare-root exports one site, so a cross-site link there is a deliberate
+    /// namespaced outbound href, not a defect ([`Layout::BareRoot`]). Auditing
+    /// it would report every such link and train an operator to ignore the
+    /// warning — so the audit is `None` on that path, and this pins it.
+    #[test]
+    fn bare_root_does_not_audit_links_it_is_not_the_authority_on() {
+        let a = SiteManifest::new("solo", "Solo", "index", vec![]);
+        let site = OwnedSite {
+            peer_id: "PEER".into(),
+            site_id: "solo".into(),
+            manifest: a,
+            pages: vec![("index".into(), SitePage::markdown("A", "[X](site:elsewhere/index)"))],
+            assets: vec![],
+        };
+        let dir = std::env::temp_dir().join("entity-browser-static-export-bareroot-audit-test");
+        let _ = fs::remove_dir_all(&dir);
+        // Returns a plain count — there is no set, so there is nothing to report.
+        let n = export_bare_root(&dir, &site, None).unwrap();
+        assert_eq!(n, 1);
         let _ = fs::remove_dir_all(&dir);
     }
 

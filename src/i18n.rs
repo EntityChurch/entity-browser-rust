@@ -314,6 +314,11 @@ pub const EN: &[(&str, Message)] = &[
     ("btn.clear", Message::Simple("Clear")),
     ("btn.expand", Message::Simple("Expand")),
     ("btn.collapse", Message::Simple("Collapse")),
+    // "Expand" fills the WINDOW; these fill the SCREEN. Two controls sit next
+    // to each other in the app player, so the labels carry the distinction —
+    // the glyphs alone (⤢ / ⛶) do not.
+    ("btn.full_screen", Message::Simple("Full screen")),
+    ("btn.exit_full_screen", Message::Simple("Exit full screen")),
     // Field/section labels — common nouns shared across windows.
     ("label.status", Message::Simple("Status")),
     ("label.title", Message::Simple("Title")),
@@ -473,6 +478,8 @@ pub const EN: &[(&str, Message)] = &[
     ("tooltip.open_windows", Message::Simple("Open windows")),
     ("tooltip.fill_window", Message::Simple("Fill the window")),
     ("tooltip.restore_size", Message::Simple("Back to normal size")),
+    ("tooltip.fill_screen", Message::Simple("Fill the whole screen")),
+    ("tooltip.leave_full_screen", Message::Simple("Back to the window")),
     ("tooltip.maximize_window", Message::Simple("Maximize window")),
     ("tooltip.restore_window", Message::Simple("Restore window")),
     ("tooltip.menu", Message::Simple("Menu")),

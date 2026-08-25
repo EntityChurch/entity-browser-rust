@@ -29,6 +29,11 @@
 //! one window a bare id can name two different apps with two different saves.
 //! It travels through the DOM event as `"{set}/{id}"` ([`parse_selection`]).
 
+/// The player bar's size affordances (expand-in-window / fill-the-screen) as
+/// rules, so the labels and what is offered are covered by `make test` rather
+/// than living inside `create_element` calls.
+pub mod stage;
+
 #[allow(unused_imports)]
 use crate::action::Action;
 #[allow(unused_imports)]

@@ -75,6 +75,22 @@ fn note_save_written() {
 /// wins (an inline declaration would outrank the stylesheet). When an axis is a
 /// definite size (`--gm-h`), `--gm-align:flex-start` keeps the top reachable so
 /// a too-tall app **scrolls** instead of clipping its head off-screen.
+///
+/// Two more states ride on top, both driven by `views::games::stage`:
+/// `.gm-expanded` on the area (the stage fills the window) and `.gm-fs` on the
+/// player (we are on the physical screen, so Expand is withdrawn — it could
+/// only be "on").
+///
+/// **There is deliberately no `:fullscreen` rule here, and this note is why.**
+/// The obvious one — `.gm-player:fullscreen{width:100%;height:100%;background:…}`
+/// — is dead code: measured in Firefox 149, a fullscreen element already
+/// computes `position:fixed` at the full viewport with the wrapper's own inline
+/// background intact, and the UA sizing is `!important`, so an author rule could
+/// not change it even if it wanted to. If you add one anyway, note that
+/// `:fullscreen` and `:-webkit-full-screen` must be **separate rules**:
+/// `CSS.supports('selector(:-webkit-full-screen)')` is **false** in Firefox, and
+/// one unknown selector drops the whole list — measured, a list of the two
+/// parsed to **zero** rules while the standalone `:fullscreen` rule survived.
 const GAMES_PLAYER_CSS: &str = "\
 .gm-stage-area{flex:1;min-height:560px;display:flex;justify-content:center;\
 align-items:stretch;padding:16px;overflow:auto;background:var(--bg, #101018);}\
@@ -85,13 +101,15 @@ overflow:hidden;border:1px solid var(--border, #2a2a3e);\
 border-radius:10px;background:var(--surface, #15151a);}\
 .gm-frame{flex:1;width:100%;min-height:0;display:block;border:0;\
 background:var(--surface, #15151a);}\
-.gm-expand-btn{margin-inline-start:auto;flex-shrink:0;cursor:pointer;\
+.gm-bar-actions{margin-inline-start:auto;flex-shrink:0;display:flex;gap:8px;}\
+.gm-bar-btn{cursor:pointer;\
 background:var(--surface-hover, #22223a);color:var(--text, #e2e2ea);\
 border:1px solid var(--border, #2a2a3e);border-radius:6px;padding:5px 12px;\
 font-size:13px;font-family:inherit;white-space:nowrap;}\
 .gm-stage-area.gm-expanded{padding:0;}\
 .gm-stage-area.gm-expanded>.gm-stage{max-width:none;max-height:none;\
 height:auto;align-self:stretch;border:0;border-radius:0;}\
+.gm-player.gm-fs .gm-expand-btn{display:none;}\
 @media (max-width:640px){\
 .gm-stage-area{padding:0;min-height:70vh;}\
 .gm-stage{max-width:none;max-height:none;height:auto;align-self:stretch;\
@@ -528,7 +546,9 @@ pub fn render_player(
     util::set_text(&style, GAMES_PLAYER_CSS);
     util::append(container, &style);
 
-    let wrapper = util::create_element("div");
+    // The player. Classed (not just inline-styled) because it is the element
+    // that goes fullscreen, and the `:fullscreen` / `.gm-fs` rules need a hook.
+    let wrapper = util::create_element_with_class("div", "gm-player");
     util::set_attr(
         &wrapper,
         "style",
@@ -563,15 +583,33 @@ pub fn render_player(
     util::set_text(&name, &cfg.game_name);
     util::append(&bar, &name);
 
-    // Expand / collapse the stage between its normal capped+centered size and
-    // full-bleed (fills the window). A pure CSS-class flip on the stage area —
-    // NO action / dirty-mark / rebuild, so the running iframe (and the game's
-    // in-memory state) is never torn down. Wired after `stage_area` exists.
-    let expand_btn = util::create_element_with_class("button", "gm-expand-btn");
-    util::set_text(&expand_btn, &format!("⤢ {}", crate::i18n::t("btn.expand", &[])));
+    // The two size controls. Both are pure CSS-class flips / a Fullscreen API
+    // call — NO action / dirty-mark / rebuild, so the running iframe (and the
+    // app's in-memory state) is never torn down. Labelled and wired below, once
+    // `stage_area` exists; created here so they land in the bar in order.
+    //
+    //   ⤢ Expand      — the stage fills the WINDOW.
+    //   ⛶ Full screen — the player fills the SCREEN, dropping the window header
+    //                   and the browser's own chrome with it. On a laptop that
+    //                   is most of the vertical space a game was missing.
+    let actions = util::create_element_with_class("div", "gm-bar-actions");
+
+    let expand_btn = util::create_element_with_class("button", "gm-bar-btn gm-expand-btn");
     util::set_attr(&expand_btn, "type", "button");
-    util::set_attr(&expand_btn, "title", &crate::i18n::t("tooltip.fill_window", &[]));
-    util::append(&bar, &expand_btn);
+    util::append(&actions, &expand_btn);
+
+    // Offered only where the engine will grant it. A WebView built without the
+    // Fullscreen API would otherwise carry a button whose entire behaviour is
+    // to press in silence — the operator-surface failure this repo keeps
+    // meeting, and the reason `readiness` grades by measured consequence.
+    let fullscreen_available = util::fullscreen_supported();
+    let full_btn = util::create_element_with_class("button", "gm-bar-btn gm-full-btn");
+    util::set_attr(&full_btn, "type", "button");
+    if fullscreen_available {
+        util::append(&actions, &full_btn);
+    }
+
+    util::append(&bar, &actions);
     util::append(&wrapper, &bar);
 
     // Scrollable, centering stage area (so a short window scrolls instead of
@@ -595,11 +633,61 @@ pub fn render_player(
     //    code and its inner peer is memory-only (opens no IndexedDB). When L5
     //    hosts *untrusted* apps, this returns to opaque origin behind the
     //    sub-peer capability model (D21).
+    //
+    // There is deliberately **no `allow="fullscreen"`**, and the player's own
+    // ⛶ button is why nobody needs one: the HOST takes the whole player to the
+    // screen, and the frame comes along as a descendant. That is unrelated to
+    // this permission, which governs the *app* calling `requestFullscreen`
+    // itself. Granting it would let any published bundle cover the screen at a
+    // moment of its own choosing, with our chrome gone — a spoofing surface
+    // bought for nothing, since the affordance already exists on our side of
+    // the wall. Adding the token is a trust-tier change, not plumbing.
     let sandbox = match &cfg.delivery {
         AppDelivery::Srcdoc => "allow-scripts",
         AppDelivery::Src(_) => "allow-scripts allow-same-origin",
     };
     util::set_attr(&frame, "sandbox", sandbox);
+    // Permissions Policy — a DIFFERENT mechanism from `sandbox`, and the one
+    // thing an app cannot grant itself. `screen-wake-lock` is denied in a frame
+    // by default and only the embedder can delegate it; without this, an app
+    // that keeps the screen awake (an idle-watchable game, a long AI turn)
+    // runs perfectly, holds no lock, and the screen blanks — **with nothing to
+    // report anywhere**, while the same bundle opened standalone works. That is
+    // the shape that gets diagnosed as "the app".
+    //
+    // **The trailing `*` is load-bearing and the obvious spelling is inert.**
+    // `allow="screen-wake-lock"` defaults its allowlist to `'src'` — the
+    // origin of the frame's `src`. A sandboxed `srcdoc` frame has an **opaque**
+    // origin and no `src` at all, so that allowlist matches nothing and the
+    // request fails `NotAllowedError: A permissions policy does not allow
+    // screen-wake-lock for the requesting document`. Measured across our two
+    // tiers in Firefox 149:
+    //
+    //   sandbox                          allow                     granted
+    //   allow-scripts                    (none)                    no
+    //   allow-scripts                    screen-wake-lock          NO  ← the trap
+    //   allow-scripts                    screen-wake-lock *        yes
+    //   allow-scripts allow-same-origin  (none)                    yes
+    //   allow-scripts allow-same-origin  screen-wake-lock          yes
+    //
+    // So `*` is not "grant it to everybody" here — **it is the only spelling
+    // that names an opaque origin at all**; there is no token for one. The
+    // delegation reaches this frame and its descendants (all inside the same
+    // sandbox) and reaches nothing of the host page.
+    //
+    // Granted to **every** app rather than to a declared few: the manifest has
+    // no machine-readable way to say it needs one, the failure is silent, and
+    // the platform already bounds the grant — a screen wake lock is released
+    // automatically when the document becomes hidden, so a backgrounded app
+    // cannot hold your screen on. (That release is also why an app must re-take
+    // it on `visibilitychange`; that half is the app's, and entity-apps' SDK
+    // does it.) Contract: `entity-apps/docs/EMBEDDING.md` §5–§6.
+    //
+    // Nothing here works off a secure origin: measured on a plain-http LAN
+    // address, `navigator.wakeLock` is **undefined** at every tier above and
+    // this attribute is inert. That is the `pair-serve` / desktop-app-server
+    // path, and only https (or localhost) fixes it.
+    util::set_attr(&frame, "allow", "screen-wake-lock *"); // i18n-ignore — Permissions Policy
     util::set_attr(&frame, "title", &cfg.game_id);
     util::set_attr(&frame, "class", "gm-frame");
     // Delivery: srcdoc keeps a self-contained bundle same-document (no fetch);
@@ -612,25 +700,81 @@ pub fn render_player(
     util::append(&stage, &frame);
     util::append(&stage_area, &stage);
 
-    // Wire the expand/collapse toggle now that `stage_area` exists. Flip the
-    // `gm-expanded` class directly (no rebuild → iframe untouched) and swap the
-    // button label. State is DOM-side: a fresh render starts collapsed.
-    {
+    // Wire the size controls now that `stage_area` exists.
+    //
+    // One `paint` renders both buttons and the stage from the two facts that
+    // decide them — is the engine showing us fullscreen *right now*, and what
+    // did the user last choose for the windowed case. Everything else derives
+    // (`views::games::stage::stage_chrome`, native-tested). State is DOM-side:
+    // a fresh render starts collapsed and windowed.
+    let expanded_in_window = Rc::new(Cell::new(false));
+    let paint: Rc<dyn Fn()> = {
+        let wrapper = wrapper.clone();
         let area = stage_area.clone();
-        let btn = expand_btn.clone();
-        ctx.listen(&expand_btn, "click", move |_| {
-            let expanded = area.class_name().contains("gm-expanded");
-            if expanded {
-                area.set_class_name("gm-stage-area");
-                util::set_text(&btn, &format!("⤢ {}", crate::i18n::t("btn.expand", &[])));
-                util::set_attr(&btn, "title", &crate::i18n::t("tooltip.fill_window", &[]));
+        let expand_btn = expand_btn.clone();
+        let full_btn = full_btn.clone();
+        let expanded_in_window = expanded_in_window.clone();
+        Rc::new(move || {
+            // Asked of the engine, never remembered from our own click: a
+            // refused request and an Esc both have to land here truthfully.
+            let chrome = crate::views::games::stage::stage_chrome(
+                util::is_fullscreen(&wrapper),
+                expanded_in_window.get(),
+            );
+            area.set_class_name(if chrome.expanded {
+                "gm-stage-area gm-expanded" // i18n-ignore — CSS class names
             } else {
-                area.set_class_name("gm-stage-area gm-expanded");
-                util::set_text(&btn, &format!("⤡ {}", crate::i18n::t("btn.collapse", &[])));
-                util::set_attr(&btn, "title", &crate::i18n::t("tooltip.restore_size", &[]));
-            }
+                "gm-stage-area" // i18n-ignore — CSS class names
+            });
+            wrapper.set_class_name(if chrome.expand_offered {
+                "gm-player" // i18n-ignore — CSS class names
+            } else {
+                "gm-player gm-fs" // i18n-ignore — CSS class names
+            });
+            let label = |glyph: &str, key: &str| format!("{glyph} {}", crate::i18n::t(key, &[]));
+            let expand_glyph = if chrome.expand_label_key == "btn.collapse" { "⤡" } else { "⤢" };
+            util::set_text(&expand_btn, &label(expand_glyph, chrome.expand_label_key));
+            util::set_attr(&expand_btn, "title", &crate::i18n::t(chrome.expand_title_key, &[]));
+            // ⛶ both ways — the label says which direction, and swapping the
+            // glyph for an "exit" one would collide with Expand's ⤡.
+            util::set_text(&full_btn, &label("\u{26f6}", chrome.full_label_key));
+            util::set_attr(&full_btn, "title", &crate::i18n::t(chrome.full_title_key, &[]));
+        })
+    };
+
+    {
+        let expanded_in_window = expanded_in_window.clone();
+        let paint = paint.clone();
+        ctx.listen(&expand_btn, "click", move |_| {
+            expanded_in_window.set(!expanded_in_window.get());
+            paint();
         });
     }
+
+    if fullscreen_available {
+        {
+            let wrapper = wrapper.clone();
+            ctx.listen(&full_btn, "click", move |_| {
+                if util::is_fullscreen(&wrapper) {
+                    util::exit_fullscreen();
+                } else {
+                    util::request_fullscreen(&wrapper);
+                }
+            });
+        }
+        // The press does NOT repaint — this does. `fullscreenchange` fires at
+        // the element that entered or left, so the wrapper hears the grant, the
+        // refusal (nothing fires) and the Esc the app never sees. Relabelling
+        // on the click instead would leave the button lying about a request the
+        // engine declined. Both spellings registered for a WebKitGTK old enough
+        // to want the prefixed one; only whichever exists ever fires.
+        for event in ["fullscreenchange", "webkitfullscreenchange"] {
+            let paint = paint.clone();
+            ctx.listen(&wrapper, event, move |_| paint());
+        }
+    }
+
+    paint();
 
     util::append(&wrapper, &stage_area);
     util::append(container, &wrapper);
