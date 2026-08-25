@@ -53,8 +53,22 @@ pub struct FileTransferOutput {
     /// content. The window renders one Pull button either way, and knows
     /// nothing about which kind of peer it is talking to.
     pub selected_pull: Option<crate::action::PullPlan>,
-    /// Last browse error, surfaced loudly (D13).
+    /// Last **real** browse error, surfaced loudly (D13). A peer that serves no
+    /// share is not one — see [`share_absent`](Self::share_absent).
     pub browse_error: Option<String>,
+    /// This peer serves no share at all — it answered `handler_not_found`, which
+    /// is what **every** browser peer answers (`entity-local-files` is
+    /// native-only). Not a failure; see `browse::ShareState`.
+    ///
+    /// Two things read it, and they read it differently:
+    ///
+    /// - the **note** explaining an empty pane, shown only when there is nothing
+    ///   else on screen — beside a peer's offered files the absence of a share
+    ///   needs no sentence, and commentary next to a working transfer is how the
+    ///   next real message gets ignored;
+    /// - the **Send card**, which is withheld outright, because pushing into a
+    ///   share that does not exist can only fail the way the browse just did.
+    pub share_absent: bool,
     /// True when at least one remote peer is **remembered** — drives the
     /// role-aware hint ("connect a backend peer first" vs. the controls). Same
     /// correction as [`target_options`]: the registry is an ever-connected set,

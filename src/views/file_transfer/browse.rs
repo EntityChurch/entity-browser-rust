@@ -46,6 +46,58 @@ pub struct FsChild {
     pub offer_blob: Option<String>,
 }
 
+/// Why the **share** half of this pane produced no rows.
+///
+/// **A peer having no share is a fact, not an error**, and until now the two
+/// arrived as the same `Option<String>`. A browser peer has no `local/files`
+/// handler and cannot have one (`entity-local-files` is
+/// `#![cfg(not(target_arch = "wasm32"))]`), so selecting one auto-listed a
+/// share that does not exist, got a protocol error back, and rendered it
+/// **loudly beside a transfer that was working perfectly** through the offers
+/// half. Reported from a real two-device run as a protocol error next to a
+/// file that transferred — which is its own kind of harm, because the next
+/// real error is now indistinguishable from the noise.
+///
+/// The two outcomes get different variants rather than one nullable string:
+/// the same move as `SignedFetchError::IncompleteWalk` against `Transport`,
+/// and for the same reason — *absent* and *broken* keep arriving as one value.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum ShareState {
+    /// Listed, in flight, or not asked yet.
+    #[default]
+    Fine,
+    /// This peer serves no share at all. Expected for every browser peer, and
+    /// **not** something to render as a failure.
+    Absent,
+    /// The peer has a share and the listing genuinely failed — a denial, a
+    /// transport fault, a broken directory. Loud (D13).
+    Failed(String),
+}
+
+/// Classify a non-OK answer to a share `list`.
+///
+/// **Structural, not a string match.** A missing handler is a `404` carrying a
+/// `system/protocol/error` entity whose code is `handler_not_found` — produced
+/// identically by local dispatch and by wire dispatch (`core/peer`), so this
+/// holds for the remote peers this window actually talks to.
+///
+/// A pure function over plain arguments rather than over `HandlerResult`,
+/// which is neither `Debug` nor `Clone` and so cannot be built in a native
+/// test — the same native-shadow split as `AppServerView::grade`. The caller
+/// decodes; this decides.
+///
+/// **Only `handler_not_found` means absent.** A `403` is a peer that has a
+/// share and will not show it to you, which is a different sentence and a
+/// different remedy; anything unrecognised stays loud, because failing quiet is
+/// how a real fault becomes invisible.
+pub fn classify_share_failure(status: u32, code: Option<&str>, summary: &str) -> ShareState {
+    if status == 404 && code == Some("handler_not_found") {
+        ShareState::Absent
+    } else {
+        ShareState::Failed(summary.to_string())
+    }
+}
+
 #[derive(Default, Debug)]
 struct Inner {
     /// The target these listings belong to; a change resets the cache.
@@ -60,8 +112,8 @@ struct Inner {
     nodes: BTreeMap<String, FsChild>,
     /// Selected file relpath (for the Pull button).
     selected: Option<String>,
-    /// Last browse error (surfaced loudly; D13).
-    error: Option<String>,
+    /// Why the share half produced no rows — absent, failed, or fine.
+    share: ShareState,
     /// Whether the one-shot auto-load of the root has been claimed for the
     /// current target. Reset (with the rest of `Inner`) on a target switch, so
     /// each target auto-loads exactly once.
@@ -137,7 +189,7 @@ impl FsBrowseCache {
             inner.listed.remove(relpath);
         }
         inner.loading.insert(relpath.to_string());
-        inner.error = None;
+        inner.share = ShareState::Fine;
         true
     }
 
@@ -218,11 +270,14 @@ impl FsBrowseCache {
         true
     }
 
-    /// Record a load failure (clears loading, surfaces the error).
-    pub fn fail_load(&self, relpath: &str, err: &str) {
+    /// Record a load failure, already classified by
+    /// [`classify_share_failure`]. Clears the loading flag either way — an
+    /// absent share is still an answer, and leaving the row spinning would
+    /// make "this peer has no share" look like "still asking".
+    pub fn fail_load(&self, relpath: &str, state: ShareState) {
         let mut inner = self.inner.lock().unwrap();
         inner.loading.remove(relpath);
-        inner.error = Some(err.to_string());
+        inner.share = state;
     }
 
     /// Select a file by relpath.
@@ -270,8 +325,29 @@ impl FsBrowseCache {
         self.inner.lock().unwrap().loading.contains("")
     }
 
+    /// A **real** share failure, for loud rendering (D13). An absent share is
+    /// deliberately not one — see [`share_absent`](Self::share_absent).
     pub fn error(&self) -> Option<String> {
-        self.inner.lock().unwrap().error.clone()
+        match &self.inner.lock().unwrap().share {
+            ShareState::Failed(msg) => Some(msg.clone()),
+            ShareState::Fine | ShareState::Absent => None,
+        }
+    }
+
+    /// Does this peer serve no share at all?
+    ///
+    /// Two consumers, deliberately reading it differently: the note explaining
+    /// an empty pane is suppressed once there is anything else on screen, while
+    /// the Send card is withheld outright — an upload is `local/files:write`,
+    /// so against a peer with no such handler it can only reproduce the error
+    /// the browse half stopped showing.
+    pub fn share_absent(&self) -> bool {
+        matches!(self.inner.lock().unwrap().share, ShareState::Absent)
+    }
+
+    /// Does the current listing hold any rows at all (share or offered)?
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().nodes.is_empty()
     }
 
     /// Build the flattened tree rows for rendering. Reuses the shared
@@ -425,7 +501,7 @@ mod tests {
         assert!(c.begin_load("", true), "force → refetch");
     }
 
-    fn offer(name: &str, bytes: &[u8]) -> crate::file_offer::FileOffer {
+    pub(super) fn offer(name: &str, bytes: &[u8]) -> crate::file_offer::FileOffer {
         let (blob, _) = crate::file_offer::chunk_bytes(bytes).unwrap();
         crate::file_offer::FileOffer {
             name: name.to_string(),
@@ -538,5 +614,93 @@ mod tests {
         assert_eq!(crate::file_offer::hash_from_id(&off.id()).unwrap(), off.blob);
         assert!(crate::file_offer::hash_from_id("not-hex").is_err());
         assert!(crate::file_offer::hash_from_id("abc").is_err(), "odd length is not hex");
+    }
+}
+
+#[cfg(test)]
+mod share_state_tests {
+    use super::tests::offer;
+    use super::*;
+
+    /// **The bug, in one assertion.** A browser peer has no `local/files`
+    /// handler and cannot have one, so selecting one auto-lists a share that
+    /// does not exist and gets `404 handler_not_found` back. That is an ANSWER.
+    /// Rendering it as a failure put a red protocol error beside a file that
+    /// was transferring perfectly through the offers half — observed on the
+    /// first real two-device run.
+    #[test]
+    fn a_peer_with_no_share_is_absent_and_never_an_error() {
+        let state = classify_share_failure(404, Some("handler_not_found"), "protocol error");
+        assert_eq!(state, ShareState::Absent);
+
+        let cache = FsBrowseCache::new();
+        assert!(cache.begin_load("", false));
+        cache.fail_load("", state);
+        assert_eq!(cache.error(), None, "an absent share is not a loud error");
+        assert!(cache.share_absent());
+        assert!(!cache.root_loading(), "an answer clears the spinner");
+    }
+
+    /// The other direction, and it is the one that matters for not failing
+    /// quiet: **only `handler_not_found` means absent.** A 403 is a peer that
+    /// HAS a share and will not show it to you — a different sentence with a
+    /// different remedy — and anything unrecognised stays loud, because a fault
+    /// classified as "no share" is a fault nobody ever sees.
+    #[test]
+    fn every_other_refusal_stays_loud() {
+        for (status, code) in [
+            (403u32, Some("capability_denied")),
+            (500, Some("internal")),
+            (404, Some("not_found")),
+            (404, None),
+            (503, None),
+        ] {
+            let state = classify_share_failure(status, code, "boom");
+            assert_eq!(
+                state,
+                ShareState::Failed("boom".into()),
+                "status {status} code {code:?} must not be silently absent",
+            );
+            let cache = FsBrowseCache::new();
+            assert!(cache.begin_load("", false));
+            cache.fail_load("", state);
+            assert_eq!(cache.error().as_deref(), Some("boom"));
+            assert!(!cache.share_absent());
+        }
+    }
+
+    /// A retry clears the verdict, so a peer that grows a share (or a transient
+    /// fault that passes) is not stuck reporting the old answer.
+    #[test]
+    fn re_listing_clears_a_previous_verdict() {
+        let cache = FsBrowseCache::new();
+        assert!(cache.begin_load("", false));
+        cache.fail_load("", ShareState::Absent);
+        assert!(cache.share_absent());
+
+        assert!(cache.begin_load("", true), "Refresh forces a re-list");
+        assert!(!cache.share_absent(), "the verdict is not sticky across a retry");
+        assert_eq!(cache.error(), None);
+    }
+
+    /// **The note is suppressed by content; the verdict is not.** Offered files
+    /// arriving must not retract "this peer serves no share" — the Send card
+    /// stays withheld either way, because an upload is `local/files:write` and
+    /// the handler still is not there. What changes is only whether the
+    /// sentence is worth printing, and that is the renderer's `&&`.
+    ///
+    /// Both halves asserted, because collapsing them is the tempting bug: a
+    /// verdict that cleared itself when offers landed would put a Send button
+    /// back on a peer that cannot receive.
+    #[test]
+    fn offers_suppress_the_note_without_retracting_the_verdict() {
+        let cache = FsBrowseCache::new();
+        assert!(cache.begin_load("", false));
+        cache.fail_load("", ShareState::Absent);
+        assert!(cache.share_absent() && cache.is_empty(), "nothing else to show: say so");
+
+        cache.apply_offers(vec![offer("shared.bin", b"payload")]);
+        assert!(cache.share_absent(), "the verdict itself is unchanged");
+        assert!(!cache.is_empty(), "…but there is content now, so the note is suppressed");
     }
 }

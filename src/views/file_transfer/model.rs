@@ -281,6 +281,7 @@ impl FileTransferModel {
             selected_full_path: self.browse.selected_full_path(),
             selected_pull: self.browse.selected_pull(),
             browse_error: self.browse.error(),
+            share_absent: self.browse.share_absent(),
             events,
             // What we serve, read from our OWN tree (not `list_offers`, which is
             // the remote shape and would retry against ourselves). The window

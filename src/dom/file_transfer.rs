@@ -86,10 +86,17 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
         render_file_browser(&get_group, output, ctx);
         util::append(&wrapper, &get_group);
 
-        // Send: push a file up.
-        let send_group = components::card(&crate::i18n::t("filetransfer.send_file", &[]));
-        render_upload_controls(&send_group, output, ctx);
-        util::append(&wrapper, &send_group);
+        // Send: push a file up — but only into a share that exists. Upload is
+        // `local/files:write`, so against a peer that just answered
+        // `handler_not_found` it is a card whose button can only reproduce the
+        // error the browse half stopped showing. The way to send a file to a
+        // browser peer is the Serve card below, which is why withholding this
+        // one is not withholding the capability.
+        if !output.share_absent {
+            let send_group = components::card(&crate::i18n::t("filetransfer.send_file", &[]));
+            render_upload_controls(&send_group, output, ctx);
+            util::append(&wrapper, &send_group);
+        }
     }
 
     // Serve: publish a file for the other side to pull. Outside the `denied`
@@ -220,9 +227,19 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
         util::append(parent, &header);
     }
 
-    // Error state (S5) — loud, specific.
+    // Error state (S5) — loud, specific. A peer that serves no share never
+    // reaches here: that is an answer, not a fault, and it used to render a red
+    // protocol error beside a transfer that was working through the offers half.
     if let Some(err) = &output.browse_error {
         util::append(parent, &components::error(err));
+    }
+    // …and the quiet counterpart, shown only when it is the reason the pane is
+    // empty. Beside a peer's offered files an absent share needs no sentence.
+    if output.share_absent && output.tree_rows.is_empty() {
+        util::append(
+            parent,
+            &components::empty(&crate::i18n::t("filetransfer.no_share", &[])),
+        );
     }
 
     if !output.root_listed {
