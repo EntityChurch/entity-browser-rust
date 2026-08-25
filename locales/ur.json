@@ -605,5 +605,7 @@
   "programs.status_running": "چل رہا ہے",
   "programs.status_faulted": "خراب",
   "programs.status_line": "{status} · ٹک {ticks} · {rate}/سیکنڈ",
-  "programs.display_waiting": "پہلے فریم کا انتظار"
+  "programs.display_waiting": "پہلے فریم کا انتظار",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

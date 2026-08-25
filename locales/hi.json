@@ -605,5 +605,7 @@
   "programs.status_running": "चल रहा है",
   "programs.status_faulted": "विफल",
   "programs.status_line": "{status} · टिक {ticks} · {rate}/से",
-  "programs.display_waiting": "पहले फ़्रेम की प्रतीक्षा"
+  "programs.display_waiting": "पहले फ़्रेम की प्रतीक्षा",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

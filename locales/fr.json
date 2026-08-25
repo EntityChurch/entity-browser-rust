@@ -605,5 +605,7 @@
   "programs.status_running": "en cours",
   "programs.status_faulted": "en défaut",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "en attente de la première image"
+  "programs.display_waiting": "en attente de la première image",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

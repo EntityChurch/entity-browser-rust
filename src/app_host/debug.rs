@@ -5,6 +5,12 @@
 //! loop already holds) and never crosses ③α — the outer host still only ever
 //! sees `state` emissions (P1 untouched).
 //!
+//! i18n-ignore-file — a developer diagnostic overlay, not user-facing UI: its
+//! role labels (STATE/OUT/IN), captions, and value dumps are debugging prose
+//! kept verbatim (D19's dev-diagnostic class, `AUDIT-L5-COMPUTE-HOST-
+//! FOUNDATION-2026-08-01` #12). The Programs launcher + the payload's own
+//! failure surfaces (mod.rs) ARE translated.
+//!
 //! v2: one merged "wiring" view instead of a static topology `<pre>` +
 //! a separately-refreshed tree-dump `<pre>` you had to cross-reference by
 //! path — a row per wired thing (state, each output port, each input port),
@@ -36,6 +42,7 @@ use crate::dom::util;
 use crate::peers::Peers;
 use crate::program_host::descriptor::ProgramDescriptor;
 use crate::program_host::host;
+use crate::program_host::sexpr::{self, HashResolver};
 
 /// Debug-panel styling, appended alongside [`super::onscreen::CONTROLS_CSS`].
 /// `.ah-debug` is hidden by default (`data-mode="hidden"`, same show/hide
@@ -232,184 +239,42 @@ fn build_hash_index(peers: &Peers, peer_id: &str, ns: &str) -> BTreeMap<String, 
         .collect()
 }
 
-fn cbor_text(v: &ciborium::Value) -> Option<&str> {
-    match v {
-        ciborium::Value::Text(t) => Some(t.as_str()),
-        _ => None,
-    }
+// The pure compute-IR → s-expression renderer, the CBOR pretty-printer, and
+// the CBOR helpers moved to `crate::program_host::sexpr` so `make test` can
+// cover the node→Lisp mapping natively (this module is wasm-only). This file
+// keeps only the `Peers`-backed glue: the hash index, the resolver, and the
+// DOM panel. See that module + `AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01` #3.
+
+/// [`HashResolver`] over the live peer: a child compute node referenced by
+/// content-hash hex is looked up in the `by_hash` index (built once from the
+/// namespace's `tree_listing`) and fetched via `get_entity`. Direct-arm only
+/// (`app_host` runs `Peers::new_direct()`), so these are synchronous in-memory
+/// reads.
+struct PeersResolver<'a> {
+    peers: &'a Peers,
+    peer_id: &'a str,
+    by_hash: &'a BTreeMap<String, String>,
 }
-fn cbor_bytes(v: &ciborium::Value) -> Option<&[u8]> {
-    match v {
-        ciborium::Value::Bytes(b) => Some(b.as_slice()),
-        _ => None,
+impl HashResolver for PeersResolver<'_> {
+    fn resolve(&self, hex: &str) -> Option<(String, Vec<u8>)> {
+        let path = self.by_hash.get(hex)?;
+        let entity = self.peers.get_entity(self.peer_id, path)?;
+        Some((entity.entity_type.clone(), entity.data.clone()))
     }
-}
-fn cbor_array(v: &ciborium::Value) -> Option<&[ciborium::Value]> {
-    match v {
-        ciborium::Value::Array(a) => Some(a.as_slice()),
-        _ => None,
-    }
-}
-fn cbor_map(v: &ciborium::Value) -> Option<&[(ciborium::Value, ciborium::Value)]> {
-    match v {
-        ciborium::Value::Map(m) => Some(m.as_slice()),
-        _ => None,
-    }
-}
-fn map_get<'a>(map: &'a [(ciborium::Value, ciborium::Value)], key: &str) -> Option<&'a ciborium::Value> {
-    map.iter().find(|(k, _)| cbor_text(k) == Some(key)).map(|(_, v)| v)
 }
 
-/// Node-visit budget for one root expression's render — a cheap circuit
-/// breaker against a pathological/self-referential graph, independent of
-/// [`MAX_EXPR_DEPTH`] (a wide-but-shallow DAG with heavily shared
-/// sub-expressions could otherwise blow up the output without ever hitting
-/// the depth cap, since a shared node is re-rendered at every place it's
-/// referenced — a Lisp-style flattened expansion, same as writing it out by
-/// hand). Generous for any real authored program; not reachable in practice.
-const MAX_EXPR_NODES: usize = 800;
-const MAX_EXPR_DEPTH: usize = 40;
-
-/// Render one decoded compute-expression node — and everything its hash-refs
-/// point at, recursively — as a Lisp-style s-expression. Field names/shapes
-/// per node type are `EXTENSION-COMPUTE` §2.1–2.2 (mirrored 1:1 in
-/// `entity-core-rust/extensions/compute/src/eval/*.rs`, the evaluator that
-/// is the actual runtime authority): `(op left right)` for
-/// arithmetic/compare/logic (the `op` field IS the natural Lisp head symbol),
-/// `(let ((name val) …) body)`, `(if cond then else)`, `(lambda (params…)
-/// body)`, `(tree-ref "path")` / a bare `name` for the two lookup forms,
-/// `(call "path" :op (arg val) …)` / `(apply fn (arg val) …)` for the two
-/// `compute/apply` modes. Anything not in that list (a value type like
-/// `compute/result`, or a genuinely unknown type) falls back to
-/// `({type} {single-level pretty fields})` rather than vanishing — D13.
-fn sexpr(
-    peers: &Peers,
-    peer_id: &str,
-    by_hash: &BTreeMap<String, String>,
-    budget: &Cell<usize>,
-    entity_type: &str,
-    data: &[u8],
-    depth: usize,
-) -> String {
-    if depth > MAX_EXPR_DEPTH {
-        return "\u{2026}(depth limit)".to_string();
-    }
-    if budget.get() == 0 {
-        return "\u{2026}(expr too large)".to_string();
-    }
-    budget.set(budget.get() - 1);
-
-    let Ok(v) = ciborium::from_reader::<ciborium::Value, _>(data) else {
-        return format!("<{} raw bytes, not CBOR>", data.len());
-    };
-    let Some(map) = cbor_map(&v) else {
-        return pretty_cbor(&v, depth);
-    };
-
-    let resolve = |field: &ciborium::Value| -> String {
-        match cbor_bytes(field) {
-            Some(bytes) if bytes.len() > 1 => {
-                let hex: String = bytes[1..].iter().map(|b| format!("{b:02x}")).collect();
-                match by_hash.get(&hex).and_then(|p| peers.get_entity(peer_id, p)) {
-                    Some(entity) => sexpr(peers, peer_id, by_hash, budget, &entity.entity_type, &entity.data, depth + 1),
-                    None => format!("#unresolved:{}", hex.get(..10).unwrap_or(&hex)),
-                }
-            }
-            _ => pretty_cbor(field, depth), // an inline (non-ref) field value
-        }
-    };
-    let pad = "  ".repeat(depth + 1);
-    let field = |key: &str| map_get(map, key);
-    let field_str = |key: &str| field(key).map(resolve).unwrap_or_else(|| "?".to_string());
-    let field_text = |key: &str| field(key).and_then(cbor_text).unwrap_or("?");
-
-    match entity_type {
-        "compute/literal" => field("value").map(|v| pretty_cbor(v, depth)).unwrap_or_default(),
-        "compute/lookup/scope" => field_text("name").to_string(),
-        "compute/lookup/tree" => {
-            let path = field_text("path");
-            if field("relative").is_some_and(|v| matches!(v, ciborium::Value::Bool(true))) {
-                format!("(tree-ref {path:?} :relative)")
-            } else {
-                format!("(tree-ref {path:?})")
-            }
-        }
-        "compute/lookup/hash" => match field("hash") {
-            Some(h) => format!("(deref {})", resolve(h)),
-            None => "(deref ?)".to_string(),
-        },
-        "compute/if" => {
-            let (c, t) = (field_str("condition"), field_str("then"));
-            match field("else") {
-                Some(e) => format!("(if {c}\n{pad}{t}\n{pad}{})", resolve(e)),
-                None => format!("(if {c}\n{pad}{t})"),
-            }
-        }
-        "compute/let" => {
-            let mut bindings = String::new();
-            for entry in field("bindings").and_then(cbor_array).unwrap_or(&[]) {
-                let Some(bm) = cbor_map(entry) else { continue };
-                let name = map_get(bm, "name").and_then(cbor_text).unwrap_or("?");
-                let val = map_get(bm, "value").map(resolve).unwrap_or_else(|| "?".to_string());
-                bindings.push_str(&format!("\n{pad}  ({name} {val})"));
-            }
-            format!("(let ({bindings}\n{pad})\n{pad}{})", field_str("body"))
-        }
-        "compute/lambda" => {
-            let params: Vec<&str> = field("params")
-                .and_then(cbor_array)
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(cbor_text)
-                .collect();
-            format!("(lambda ({}) {})", params.join(" "), field_str("body"))
-        }
-        "compute/arithmetic" | "compute/compare" | "compute/logic" => {
-            let op = field_text("op");
-            match field("right") {
-                Some(_) => format!("({op} {} {})", field_str("left"), field_str("right")),
-                None => format!("({op} {})", field_str("left")), // `logic:not` — unary
-            }
-        }
-        "compute/field" => format!("(field {} {:?})", field_str("entity"), field_text("name")),
-        "compute/construct" => {
-            let mut fields = String::new();
-            for (k, val) in field("fields").and_then(cbor_map).unwrap_or(&[]) {
-                fields.push_str(&format!("\n{pad}  ({} {})", cbor_text(k).unwrap_or("?"), resolve(val)));
-            }
-            format!("(construct {:?}{fields}\n{pad})", field_text("entity_type"))
-        }
-        "compute/index" => format!("(index {} {})", field_str("array"), field_str("index")),
-        "compute/length" => format!("(length {})", field_str("array")),
-        "compute/numeric-cast" => format!("(cast {} {:?})", field_str("value"), field_text("to_type")),
-        "compute/apply" => {
-            let head = if let Some(path) = field("path").and_then(cbor_text) {
-                format!("(call {path:?} :{}", field_text("operation"))
-            } else if let Some(f) = field("fn") {
-                format!("(apply {}", resolve(f))
-            } else {
-                "(apply ?".to_string()
-            };
-            let mut args = String::new();
-            for (k, val) in field("args").and_then(cbor_map).unwrap_or(&[]) {
-                args.push_str(&format!("\n{pad}  ({} {})", cbor_text(k).unwrap_or("?"), resolve(val)));
-            }
-            format!("{head}{args}\n{pad})")
-        }
-        other => format!("({other} {})", pretty_cbor(&v, depth)),
-    }
-}
 
 /// Resolve `path` (a `step`/`source`/seed reference) to its entity and render
-/// it — recursively, via [`sexpr`] — as a Lisp-style s-expression. Static
-/// (expressions don't change at runtime), so [`build`] calls this once per
-/// row and never again; `by_hash` (from [`build_hash_index`]) is built once
-/// for the whole panel and threaded through every row's call.
+/// it — recursively, via [`sexpr::render_expr`] — as a Lisp-style
+/// s-expression. Static (expressions don't change at runtime), so [`build`]
+/// calls this once per row and never again; `by_hash` (from
+/// [`build_hash_index`]) is built once for the whole panel and threaded
+/// through every row's call.
 fn expr_sexpr(peers: &Peers, peer_id: &str, by_hash: &BTreeMap<String, String>, path: &str) -> (String, String) {
     match peers.get_entity(peer_id, path) {
         Some(entity) => {
-            let budget = Cell::new(MAX_EXPR_NODES);
-            let body = sexpr(peers, peer_id, by_hash, &budget, &entity.entity_type, &entity.data, 0);
+            let resolver = PeersResolver { peers, peer_id, by_hash };
+            let body = sexpr::render_expr(&resolver, &entity.entity_type, &entity.data);
             (entity.entity_type.clone(), body)
         }
         None => ("?".to_string(), format!("<unresolved: {path}>")),
@@ -578,105 +443,6 @@ pub fn build(
     )
 }
 
-fn is_cbor_scalar(v: &ciborium::Value) -> bool {
-    !matches!(v, ciborium::Value::Array(_) | ciborium::Value::Map(_))
-}
-
-/// A pretty, indented rendering of a decoded CBOR value — JSON-ish, not the
-/// single-line `Map([(Text("x"), Integer(3))])` `Debug` dump, which reads as
-/// a wall of Rust syntax rather than a value you can eyeball at a glance.
-/// Best-effort: no per-type inspector, no click-to-expand (`app_host` has no
-/// `DomCtx` to wire that with) — just legible enough to watch a number or a
-/// small struct change tick to tick.
-fn pretty_cbor(v: &ciborium::Value, depth: usize) -> String {
-    use ciborium::Value as V;
-    let pad = "  ".repeat(depth + 1);
-    let close = "  ".repeat(depth);
-    match v {
-        V::Map(m) if !m.is_empty() => {
-            let mut s = String::from("{\n");
-            for (k, val) in m {
-                let key = match k {
-                    V::Text(t) => t.clone(),
-                    other => format!("{other:?}"),
-                };
-                s.push_str(&format!("{pad}{key}: {}\n", pretty_cbor(val, depth + 1)));
-            }
-            s.push_str(&format!("{close}}}"));
-            s
-        }
-        V::Map(_) => "{}".to_string(),
-        // Capped, and INLINE (one line, comma-separated) when every element
-        // is a scalar — the common case for a literal data array (e.g. a
-        // display expression's coordinate ramps, which run to hundreds of
-        // entries: one-line-per-number there would bury everything else on
-        // the panel). Nested arrays/maps keep the one-per-line form below,
-        // where a line break earns its keep.
-        V::Array(a) if !a.is_empty() && a.iter().all(is_cbor_scalar) => {
-            const MAX_ITEMS: usize = 16;
-            let show = a.len().min(MAX_ITEMS);
-            let mut items: Vec<String> = a[..show].iter().map(|x| pretty_cbor(x, depth)).collect();
-            if a.len() > show {
-                items.push(format!("\u{2026} ({} more)", a.len() - show));
-            }
-            format!("[{}]", items.join(", "))
-        }
-        V::Array(a) if !a.is_empty() => {
-            const MAX_ITEMS: usize = 16;
-            let show = a.len().min(MAX_ITEMS);
-            let mut s = String::from("[\n");
-            for val in &a[..show] {
-                s.push_str(&format!("{pad}{}\n", pretty_cbor(val, depth + 1)));
-            }
-            if a.len() > show {
-                s.push_str(&format!("{pad}\u{2026} ({} more)\n", a.len() - show));
-            }
-            s.push_str(&format!("{close}]"));
-            s
-        }
-        V::Array(_) => "[]".to_string(),
-        V::Text(t) => format!("{t:?}"),
-        // Hex, not just a length — expression-IR nodes reference child nodes
-        // by content hash (`_expr/<hex>` sibling paths in the static bundle);
-        // [`sexpr`] resolves and recurses into those, but any byte value NOT
-        // resolved that way (e.g. inside an opaque literal) at least shows a
-        // hash you can go cross-reference by hand.
-        V::Bytes(b) => {
-            let hex: String = b.iter().take(32).map(|byte| format!("{byte:02x}")).collect();
-            if b.len() > 32 {
-                format!("0x{hex}\u{2026} ({} bytes)", b.len())
-            } else {
-                format!("0x{hex} ({} bytes)", b.len())
-            }
-        }
-        V::Bool(b) => b.to_string(),
-        V::Null => "null".to_string(),
-        V::Integer(i) => i128::from(*i).to_string(),
-        V::Float(f) => format!("{f}"),
-        V::Tag(_, inner) => pretty_cbor(inner, depth),
-        other => format!("{other:?}"),
-    }
-}
-
-/// Best-effort decode + pretty-print of one entity's raw data, truncated by
-/// CHAR count (not byte count — the pretty text can carry multi-byte UTF-8
-/// from string values, so a byte slice could split mid-character).
-fn decode_preview(data: &[u8]) -> String {
-    const MAX_CHARS: usize = 500;
-    match ciborium::from_reader::<ciborium::Value, _>(data) {
-        Ok(v) => {
-            let s = pretty_cbor(&v, 0);
-            if s.chars().count() > MAX_CHARS {
-                let truncated: String = s.chars().take(MAX_CHARS).collect();
-                format!("{truncated}\u{2026}")
-            } else {
-                s
-            }
-        }
-        Err(_) => format!("<{} raw bytes, not CBOR>", data.len()),
-    }
-}
-
 /// Refresh every wiring row's live value (only the ones whose content hash
 /// actually changed get touched + flashed) plus the summary line and the
 /// static-bundle `<details>`. Direct-arm only (`app_host` always runs
@@ -711,7 +477,7 @@ pub fn refresh(panel: &DebugPanel, peers: &Peers, peer_id: &str, ns: &str) {
                     &row.value_summary_el,
                     &format!("value \u{2014} {}  [{}B, {short_hash}]", entity.entity_type, entity.data.len()),
                 );
-                util::set_text(&row.value_el, &decode_preview(&entity.data));
+                util::set_text(&row.value_el, &sexpr::decode_preview(&entity.data));
             }
             None => {
                 util::set_text(&row.value_summary_el, "value \u{2014} unreadable");

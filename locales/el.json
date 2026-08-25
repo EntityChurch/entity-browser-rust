@@ -605,5 +605,7 @@
   "programs.status_running": "εκτελείται",
   "programs.status_faulted": "σφάλμα",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "αναμονή για το πρώτο καρέ"
+  "programs.display_waiting": "αναμονή για το πρώτο καρέ",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

@@ -86,7 +86,6 @@ pub struct ControlBinding {
     /// [`effective_glyph`](Self::effective_glyph).
     pub glyph: String,
     /// `momentary` (default) or `toggle`.
-    #[allow(dead_code)] // parsed + validated from the manifest; the browser treats all actions as momentary today (toggle handling is the arch follow-up)
     pub behavior: String,
 }
 
@@ -105,6 +104,13 @@ impl ControlBinding {
     /// This bit's held-mask contribution.
     pub fn bit_value(&self) -> u64 {
         1u64 << self.bit
+    }
+
+    /// `toggle` — the bit FLIPS on each press and ignores release (a latch),
+    /// vs. the default `momentary` (held only while pressed). Program-declared
+    /// per binding (`scene.keymap`); the host stays program-blind.
+    pub fn is_toggle(&self) -> bool {
+        self.behavior == BEHAVIOR_TOGGLE
     }
 
     /// The glyph to render, falling back to the standard-action default. `None`
@@ -260,6 +266,18 @@ pub fn action_bit_map(bindings: &[ControlBinding]) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// The OR of every `toggle`-behaviour bit — the mask [`InputTarget`] flips on
+/// press (a latch) instead of holding. A program with only momentary bindings
+/// (the default, and every bundled program today) yields `0`, so the target's
+/// behaviour is unchanged. Program-blind: the host reads the declared behaviour,
+/// it never decides which controls latch.
+pub fn toggle_bit_mask(bindings: &[ControlBinding]) -> u64 {
+    bindings
+        .iter()
+        .filter(|b| b.is_toggle())
+        .fold(0, |mask, b| mask | b.bit_value())
+}
+
 /// Title-case the first character — a default label from an action name
 /// (`fire` → `Fire`). Presentation only; the emitted action is the raw name.
 pub fn title_case(s: &str) -> String {
@@ -328,6 +346,40 @@ mod tests {
         let m = action_bit_map(&b);
         assert_eq!(m[1], ("right".to_string(), 2));
         assert_eq!(m[3], ("fire".to_string(), 8));
+    }
+
+    /// `behavior: toggle` parses and projects into the toggle bit-mask;
+    /// momentary (declared or defaulted) does not. No bundled program declares a
+    /// toggle yet — this is the exerciser for the ABI field's handling.
+    #[test]
+    fn toggle_behavior_parses_and_projects_to_the_mask() {
+        let toggle_action = |action: &str| {
+            Value::Map(vec![
+                (Value::Text("role".into()), Value::Text("action".into())),
+                (Value::Text("action".into()), Value::Text(action.into())),
+                (Value::Text("behavior".into()), Value::Text("toggle".into())),
+            ])
+        };
+        let s = scene(vec![
+            ("0", roled_axis("left")),          // axis → momentary by nature
+            ("3", roled_action("fire", "\u{1F525}")), // explicit momentary
+            ("4", toggle_action("shield")),     // toggle (bit 4 → mask 16)
+        ]);
+        let b = parse_keymap(Some(&s)).unwrap();
+        assert!(!b[0].is_toggle(), "an axis is momentary");
+        assert!(!b[1].is_toggle(), "explicit momentary action");
+        assert!(b[2].is_toggle(), "shield declared toggle");
+        // Only the shield bit (1<<4 = 16) is in the toggle mask.
+        assert_eq!(toggle_bit_mask(&b), 16);
+    }
+
+    /// A program with no toggle bindings (every bundled program today) yields a
+    /// zero toggle mask — so `InputTarget` behaves exactly as before.
+    #[test]
+    fn no_toggle_bindings_yields_zero_mask() {
+        let s = scene(vec![("1", roled_axis("right")), ("3", roled_action("fire", "\u{1F525}"))]);
+        let b = parse_keymap(Some(&s)).unwrap();
+        assert_eq!(toggle_bit_mask(&b), 0);
     }
 
     /// Legacy `{bit: "name"}` still parses — as a momentary action — so an

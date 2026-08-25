@@ -598,5 +598,7 @@
   "programs.status_running": "运行中",
   "programs.status_faulted": "已故障",
   "programs.status_line": "{status} · 节拍 {ticks} · {rate}/秒",
-  "programs.display_waiting": "等待第一帧"
+  "programs.display_waiting": "等待第一帧",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

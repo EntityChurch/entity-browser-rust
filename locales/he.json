@@ -612,5 +612,7 @@
   "programs.status_running": "פועלת",
   "programs.status_faulted": "תקולה",
   "programs.status_line": "{status} · טיק {ticks} · {rate}/שנ׳",
-  "programs.display_waiting": "ממתין לפריים הראשון"
+  "programs.display_waiting": "ממתין לפריים הראשון",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

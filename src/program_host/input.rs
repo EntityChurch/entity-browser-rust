@@ -35,6 +35,11 @@ enum Mode {
         /// action name → its bit value (`1 << bit_index`), from the program's
         /// `scene.keymap`. Program-declared; the host never invents a bit.
         action_bit: Vec<(String, u64)>,
+        /// The OR of the bits whose binding declared `behavior: toggle` — those
+        /// FLIP on press and ignore release (a latch), instead of holding while
+        /// pressed. `0` for every all-momentary program (the default, and every
+        /// bundled program today), so the behaviour is unchanged there.
+        toggle_bits: u64,
         /// The live held-key mask, shared across every source driving this port
         /// (share the target as `Rc<InputTarget>` so a keyboard key and an
         /// on-screen button contribute to ONE mask, never two racing copies).
@@ -72,6 +77,7 @@ impl InputTarget {
         type_ref: String,
         field: String,
         action_bit: Vec<(String, u64)>,
+        toggle_bits: u64,
         deliver: Box<dyn Fn(u64, Entity)>,
     ) -> Self {
         Self {
@@ -79,6 +85,7 @@ impl InputTarget {
             field,
             mode: Mode::KeySet {
                 action_bit,
+                toggle_bits,
                 mask: Cell::new(0),
             },
             deliver,
@@ -92,40 +99,56 @@ impl InputTarget {
         }
     }
 
-    /// `key-set`: press a named action (set its bit). No-op if the target isn't
-    /// key-set or the program didn't declare the action.
+    /// `key-set`: press a named action. A **momentary** action sets its bit
+    /// (held while pressed); a **toggle** action FLIPS its bit (a latch). No-op
+    /// if the target isn't key-set or the program didn't declare the action.
+    /// Sources must debounce auto-repeat (a held key must not re-press) so a
+    /// toggle flips exactly once per physical press — see `app_host::input`.
     pub fn press(&self, action: &str) {
         self.set_action(action, true);
     }
 
-    /// `key-set`: release a named action (clear its bit).
+    /// `key-set`: release a named action. A **momentary** action clears its bit;
+    /// a **toggle** action ignores release (the latch persists until re-pressed).
     pub fn release(&self, action: &str) {
         self.set_action(action, false);
     }
 
-    /// Clear ALL held actions (mask → 0) and emit the empty snapshot. The
-    /// stuck-key guard: a source calls this when it can no longer observe
-    /// releases (window `blur`, document hidden, a cancelled pointer) so a key
-    /// held at that moment doesn't stay latched forever. No-op on a `direction`
-    /// target (it holds no accumulated state — latest-wins).
+    /// Clear held **momentary** actions and emit the snapshot. The stuck-key
+    /// guard: a source calls this when it can no longer observe releases (window
+    /// `blur`, document hidden, a cancelled pointer) so a key held at that moment
+    /// doesn't stay latched forever. **Latched toggles are preserved** — a toggle
+    /// is intentionally on (like caps lock), not a key stuck down, so it survives
+    /// focus loss. For an all-momentary program (`toggle_bits == 0`) this clears
+    /// the whole mask exactly as before. No-op on a `direction` target
+    /// (latest-wins holds no accumulated state).
     pub fn release_all(&self) {
-        if let Mode::KeySet { mask, .. } = &self.mode {
-            if mask.get() != 0 {
-                mask.set(0);
-                self.emit(0);
+        if let Mode::KeySet { mask, toggle_bits, .. } = &self.mode {
+            let next = mask.get() & toggle_bits; // keep toggles, drop held momentary
+            if next != mask.get() {
+                mask.set(next);
+                self.emit(next);
             }
         }
     }
 
     fn set_action(&self, action: &str, on: bool) {
-        let Mode::KeySet { action_bit, mask } = &self.mode else {
+        let Mode::KeySet { action_bit, toggle_bits, mask } = &self.mode else {
             return;
         };
         let Some((_, bit)) = action_bit.iter().find(|(a, _)| a == action) else {
             return;
         };
         let cur = mask.get();
-        let next = if on { cur | bit } else { cur & !bit };
+        let next = if toggle_bits & bit != 0 {
+            // Toggle: flip on press; release is a no-op (the latch holds until
+            // the next press). The source debounces auto-repeat, so a held key
+            // flips exactly once.
+            if on { cur ^ bit } else { cur }
+        } else {
+            // Momentary: held while pressed.
+            if on { cur | bit } else { cur & !bit }
+        };
         if next != cur {
             mask.set(next);
             self.emit(next);
@@ -181,6 +204,7 @@ mod tests {
             KEY_SET_TYPE.into(),
             "keys".into(),
             action_bit,
+            0, // all momentary
             deliver,
         ));
         let a = t.clone();
@@ -196,7 +220,7 @@ mod tests {
     fn release_all_clears_held_mask_once() {
         let (deliver, log) = recorder();
         let action_bit = vec![("thrust".to_string(), 4u64), ("fire".to_string(), 8u64)];
-        let t = InputTarget::key_set(KEY_SET_TYPE.into(), "keys".into(), action_bit, deliver);
+        let t = InputTarget::key_set(KEY_SET_TYPE.into(), "keys".into(), action_bit, 0, deliver);
         t.press("thrust"); // 4
         t.press("fire"); // 4|8 = 12
         t.release_all(); // 0 — the stuck-key guard (blur/hidden)
@@ -216,8 +240,33 @@ mod tests {
     #[test]
     fn key_set_ignores_undeclared_action() {
         let (deliver, log) = recorder();
-        let t = InputTarget::key_set(KEY_SET_TYPE.into(), "keys".into(), vec![], deliver);
+        let t = InputTarget::key_set(KEY_SET_TYPE.into(), "keys".into(), vec![], 0, deliver);
         t.press("fire"); // program declared no bit → no-op
         assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn toggle_flips_on_press_and_ignores_release() {
+        let (deliver, log) = recorder();
+        // fire = bit3 (8) momentary; shield = bit4 (16) toggle.
+        let action_bit = vec![("fire".to_string(), 8u64), ("shield".to_string(), 16u64)];
+        let t = InputTarget::key_set(KEY_SET_TYPE.into(), "keys".into(), action_bit, 16, deliver);
+        t.press("shield"); // flip on → 16
+        t.release("shield"); // toggle: release is a no-op → still 16 (no emit)
+        t.press("shield"); // flip off → 0
+        t.press("fire"); // momentary, coexists → 8
+        t.release("fire"); // momentary clears → 0
+        assert_eq!(*log.borrow(), vec![16, 0, 8, 0]);
+    }
+
+    #[test]
+    fn release_all_preserves_latched_toggles_clears_momentary() {
+        let (deliver, log) = recorder();
+        let action_bit = vec![("fire".to_string(), 8u64), ("shield".to_string(), 16u64)];
+        let t = InputTarget::key_set(KEY_SET_TYPE.into(), "keys".into(), action_bit, 16, deliver);
+        t.press("shield"); // latch on → 16
+        t.press("fire"); // + momentary → 24
+        t.release_all(); // blur: drop momentary (8), KEEP the toggle latch (16) → 16
+        assert_eq!(*log.borrow(), vec![16, 24, 16]);
     }
 }

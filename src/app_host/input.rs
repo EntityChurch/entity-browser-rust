@@ -160,10 +160,14 @@ pub fn install(
                 return Installed::empty();
             }
             let action_bit = controls::action_bit_map(&bindings);
+            // Program-declared per-binding: which bits latch (flip-on-press) vs
+            // hold. `0` for every all-momentary program (all bundled ones today).
+            let toggle_bits = controls::toggle_bit_mask(&bindings);
             let target = Rc::new(InputTarget::key_set(
                 port.type_ref.clone(),
                 field,
                 action_bit,
+                toggle_bits,
                 deliver,
             ));
             let closures = install_key_set(target.clone(), &bindings, min_hold_ms);
@@ -270,6 +274,13 @@ fn install_key_set(
             let Ok(ev) = e.dyn_into::<KeyboardEvent>() else {
                 return;
             };
+            // Ignore auto-repeat keydowns: a held key must count as ONE press so
+            // a `toggle` action flips exactly once (a momentary action is
+            // unaffected — re-pressing a set bit was already a no-op). `keyup`
+            // (`set == false`) never repeats, so only guard the down path.
+            if set && ev.repeat() {
+                return;
+            }
             let key = ev.key();
             let Some((_, name)) = key_name.iter().find(|(k, _)| *k == key) else {
                 return;
@@ -367,7 +378,7 @@ fn axis_keys(axis: &str) -> &'static [&'static str] {
 /// "Space = fire" — Space is simply action[0]'s position, whatever that action
 /// is. Actions past the row's length are keyboard-unbound (on-screen only).
 const ACTION_KEY_ROW: &[&[&str]] = &[
-    &[" ", "Spacebar"],
+    &[" ", "Spacebar"], // i18n-ignore — keyboard key name, not prose
     &["z", "Z"],
     &["x", "X"],
     &["c", "C"],

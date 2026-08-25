@@ -605,5 +605,7 @@
   "programs.status_running": "em execução",
   "programs.status_faulted": "com falha",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "aguardando o primeiro quadro"
+  "programs.display_waiting": "aguardando o primeiro quadro",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

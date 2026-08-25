@@ -318,10 +318,18 @@ impl MomentaryGuard {
             self.target.release(&self.name);
             return;
         };
-        let this = self.clone();
+        // Capture a WEAK ref, not a strong `self.clone()` — a strong clone
+        // stored (transitively) in `self.timer_cb` is a self-referential `Rc`
+        // cycle that pins every guard for the document's life (D12(c);
+        // AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01 #9). With `Weak`, a guard
+        // whose owners drop can be reclaimed — and `Drop` (below) cancels the
+        // pending browser timeout so a freed closure is never fired into.
+        let weak = Rc::downgrade(self);
         let cb = Closure::wrap(Box::new(move || {
-            this.timer_id.set(None);
-            this.target.release(&this.name);
+            if let Some(this) = weak.upgrade() {
+                this.timer_id.set(None);
+                this.target.release(&this.name);
+            }
         }) as Box<dyn FnMut()>);
         if let Ok(id) =
             win.set_timeout_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), delay_ms)
@@ -329,6 +337,18 @@ impl MomentaryGuard {
             self.timer_id.set(Some(id));
         }
         *self.timer_cb.borrow_mut() = Some(cb);
+    }
+}
+
+impl Drop for MomentaryGuard {
+    /// Cancel any pending delayed-release timeout so the browser never fires it
+    /// into this guard's (now-freed) closure. Load-bearing ONLY because the
+    /// release closure holds a `Weak` (above): without the cycle pinning the
+    /// guard alive, a reclaimed guard with a live timer would be a use-after-
+    /// free. In today's usage guards live for the document's lifetime, so this
+    /// is belt-and-braces — the correct pairing for the `Weak` capture.
+    fn drop(&mut self) {
+        self.cancel_pending();
     }
 }
 
@@ -341,6 +361,13 @@ impl MomentaryGuard {
 /// axis position like `right`, or an action name like `fire`); `face` is what
 /// the button shows; `extra_class` places a d-pad button on the cross (`""`
 /// for a free-flowing action button).
+///
+/// A `toggle`-behaviour action drives the same press/release verbs (the
+/// [`InputTarget`] flips the latch), so on-screen toggle works for free — but
+/// the button shows no *latched* state after pointerup (consistent with the
+/// keyboard, which has none either). A persistent pressed-class for a held
+/// toggle is a follow-up for when a toggle-declaring program actually lands
+/// (no exerciser today; AUDIT-…-2026-08-01 forward work review).
 fn momentary_button(
     name: &str,
     face: &str,
@@ -431,7 +458,7 @@ fn swap_chip(pad: &Element) -> (Element, Closure<dyn FnMut(JsValue)>) {
     util::set_attr(&chip, "type", "button");
     util::set_attr(&chip, "class", "ah-chip");
     util::set_attr(&chip, "data-controls-swap", "");
-    util::set_attr(&chip, "aria-label", "swap control sides");
+    util::set_attr(&chip, "aria-label", "swap control sides"); // i18n-ignore — aria label (chrome a11y batch, cf. reset/pause)
     util::set_text(&chip, "\u{21C4}"); // ⇄
 
     let pad = pad.clone();

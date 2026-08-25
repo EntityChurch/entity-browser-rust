@@ -605,5 +605,7 @@
   "programs.status_running": "käynnissä",
   "programs.status_faulted": "virhetilassa",
   "programs.status_line": "{status} · tick {ticks} · {rate}/s",
-  "programs.display_waiting": "odotetaan ensimmäistä ruutua"
+  "programs.display_waiting": "odotetaan ensimmäistä ruutua",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

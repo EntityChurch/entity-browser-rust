@@ -605,5 +605,7 @@
   "programs.status_running": "در حال اجرا",
   "programs.status_faulted": "خراب",
   "programs.status_line": "{status} · تیک {ticks} · {rate}/ثانیه",
-  "programs.display_waiting": "در انتظار نخستین فریم"
+  "programs.display_waiting": "در انتظار نخستین فریم",
+  "apphost.cannot_run": "{program} can't run here — {reason}",
+  "apphost.stopped": "{program} stopped — {reason}"
 }

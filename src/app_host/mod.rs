@@ -82,13 +82,27 @@ thread_local! {
 pub async fn run(program: &str) -> Result<(), JsValue> {
     tracing::info!(program, "app-host: stripped boot");
 
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("app-host: no window"))?;
+    // Localize the payload from FRAME ONE. An L5 app-host runs same-origin
+    // (D21 — `allow-same-origin`), so it shares the parent's `localStorage`:
+    // `boot_choice()` reads the same persisted locale the outer app uses (else
+    // `navigator.language`), and `apply` drives `lang`/`dir` onto this
+    // document's `<html>` (RTL flips) + sets the active catalog that `t()`
+    // resolves against. Previously the payload dropped the host's `init`
+    // locale/dir entirely, so it always rendered `en`/`ltr`
+    // (`AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01` #4). The host still sends
+    // `init{locale,dir}` over ③α; honoring an explicit host override on top of
+    // the shared-storage default is a noted follow-up.
+    crate::i18n::apply(&crate::i18n::boot_choice());
+
+    // Internal `JsValue` errors below bubble to the console, never rendered as
+    // UI prose (the "no window/document" impossible-boot class) — hence i18n-ignore.
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("app-host: no window"))?; // i18n-ignore
     let document = window
         .document()
-        .ok_or_else(|| JsValue::from_str("app-host: no document"))?;
+        .ok_or_else(|| JsValue::from_str("app-host: no document"))?; // i18n-ignore
     let body = document
         .body()
-        .ok_or_else(|| JsValue::from_str("app-host: no body"))?;
+        .ok_or_else(|| JsValue::from_str("app-host: no body"))?; // i18n-ignore
 
     // Minimal payload UI. Colors reference theme tokens by `var(--token, #lit)`
     // so they resolve from the CSS fallbacks even though this stripped mode never
@@ -112,11 +126,43 @@ pub async fn run(program: &str) -> Result<(), JsValue> {
         // generic host behind the boundary and emits its state.
         key if EMBEDDED_PROGRAMS.iter().any(|p| p.key == key) => run_program(&root, key).await?,
         other => {
-            root.set_text_content(Some(&format!("app-host: unknown program '{other}'")));
+            root.set_text_content(Some(&crate::i18n::t(
+                "apphost.cannot_run",
+                &[("program", other), ("reason", "unknown program")], // i18n-ignore — diagnostic {reason} slot
+            )));
             tracing::warn!(program = other, "app-host: unknown program");
         }
     }
     Ok(())
+}
+
+/// Render a visible boot-failure caption into the payload root, then return the
+/// error. A pre-run failure (bundle parse/verify, materialize, descriptor
+/// decode, seed) must never leave a **blank** iframe — every failure has a
+/// surface (D13, `AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01` #6). Reachable
+/// only before the UI rebuild below, so the caption replaces the boot splash;
+/// `reason` is the diagnostic stage detail, the frame is what's translated.
+/// Read one `?key=value` query parameter from the document URL (the manual
+/// `location().search()` parse the rest of the app uses — `main.rs`'s
+/// `log_level_from_url` shape — so no new `web-sys` feature).
+fn query_param(key: &str) -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    for pair in search.trim_start_matches('?').split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if parts.next() == Some(key) {
+            return Some(parts.next().unwrap_or("").to_string());
+        }
+    }
+    None
+}
+
+fn boot_fail(root: &web_sys::Element, program_key: &str, reason: String) -> JsValue {
+    root.set_text_content(Some(&crate::i18n::t(
+        "apphost.cannot_run",
+        &[("program", program_key), ("reason", &reason)],
+    )));
+    tracing::error!(program = program_key, "app-host: boot failed — {reason}");
+    JsValue::from_str(&reason)
 }
 
 /// Boot a compute program as an L5 payload: build a **lean ephemeral peer**
@@ -133,14 +179,14 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     let embedded = EMBEDDED_PROGRAMS
         .iter()
         .find(|p| p.key == program_key)
-        .ok_or_else(|| JsValue::from_str("app-host: program not embedded"))?;
+        .ok_or_else(|| JsValue::from_str("app-host: program not embedded"))?; // i18n-ignore — internal invariant
     let bundle = Bundle::parse(embedded.json)
-        .map_err(|e| JsValue::from_str(&format!("app-host: bundle parse: {e}")))?;
+        .map_err(|e| boot_fail(root, program_key, format!("bundle parse: {e}")))?;
     // Cross-impl hash gate (same as the oracle/window): refuse a bundle whose
     // entities don't recompute identically under the Rust encoder.
     let entities = bundle
         .verified_entities()
-        .map_err(|e| JsValue::from_str(&format!("app-host: bundle verify: {e}")))?;
+        .map_err(|e| boot_fail(root, program_key, format!("bundle verify: {e}")))?;
 
     // Shared: the tick loop (moved into the 'static future) and the input
     // driver closures (held for the document's lifetime) both hold the peer.
@@ -150,14 +196,25 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     // under its authoring namespace in the local store (host::qualify).
     let ns = bundle.origin_peer.clone();
 
-    host::materialize_future(&peers, &peer_id, &ns, entities, |_, _| {})
-        .await
-        .map_err(|e| JsValue::from_str(&format!("app-host: materialize: {e}")))?;
+    // D13: a long materialize (Asteroids is ~441 entities, ~15 s on the Worker
+    // arm) shows a live count instead of a blank pad — the `on_progress`
+    // callback the host exposes was previously discarded (`|_, _| {}`). Reuses
+    // the Programs window's `status_materializing` string. Replaced by the real
+    // UI once materialize completes (the `set_inner_html("")` below).
+    let progress_root = root.clone();
+    host::materialize_future(&peers, &peer_id, &ns, entities, move |done, total| {
+        progress_root.set_text_content(Some(&crate::i18n::t(
+            "programs.status_materializing",
+            &[("done", &done.to_string()), ("total", &total.to_string())],
+        )));
+    })
+    .await
+    .map_err(|e| boot_fail(root, program_key, format!("materialize: {e}")))?;
     let desc_ent = peers
         .get_entity(&peer_id, &host::qualify(&ns, &bundle.descriptor_path))
-        .ok_or_else(|| JsValue::from_str("app-host: descriptor unreadable after materialize"))?;
+        .ok_or_else(|| boot_fail(root, program_key, "descriptor unreadable after materialize".to_string()))?; // i18n-ignore — diagnostic {reason} slot
     let desc = ProgramDescriptor::decode(&desc_ent)
-        .map_err(|e| JsValue::from_str(&format!("app-host: descriptor: {e}")))?;
+        .map_err(|e| boot_fail(root, program_key, format!("descriptor: {e}")))?;
     // Admit by shape capability — the union of the display and input shapes this
     // host drives (the same fail-closed check the Programs window applies).
     let supported: Vec<&str> = SUPPORTED_DISPLAY_SHAPES
@@ -171,14 +228,19 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     // a surface). The Programs launcher shows all built-in programs; the honest
     // "cannot run here" lives here, at the boundary, where admission is enforced.
     if let Err(e) = desc.admit(&supported) {
-        let reason = format!("app-host: {program_key} cannot run here — {e}");
-        root.set_text_content(Some(&reason));
+        // Expected for a program binding a shape this host doesn't drive — a
+        // visible refusal, not a blank iframe (D13). `warn`, not `error`: an
+        // unsupported program is a legitimate outcome, not a host fault.
+        root.set_text_content(Some(&crate::i18n::t(
+            "apphost.cannot_run",
+            &[("program", program_key), ("reason", &e.to_string())],
+        )));
         tracing::warn!(program = program_key, "app-host: admission refused: {e}");
-        return Err(JsValue::from_str(&reason));
+        return Err(JsValue::from_str(&e.to_string()));
     }
     host::seed_future(&peers, &peer_id, &ns, &desc)
         .await
-        .map_err(|e| JsValue::from_str(&format!("app-host: seed: {e}")))?;
+        .map_err(|e| boot_fail(root, program_key, format!("seed: {e}")))?;
 
     // Rebuild the payload as one centred column: [meta-chrome bar] → [board] →
     // [status caption], with the thumb pad (input only) overlaid on top. The
@@ -186,7 +248,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     root.set_inner_html("");
     let document = web_sys::window()
         .and_then(|w| w.document())
-        .ok_or_else(|| JsValue::from_str("app-host: no document"))?;
+        .ok_or_else(|| JsValue::from_str("app-host: no document"))?; // i18n-ignore — internal invariant
 
     // Inject the shared control stylesheet ONCE. It styles the chrome bar, the
     // board centring, the status caption, AND (when a program has input) the
@@ -307,6 +369,19 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
     // from its initial state, and the host persists what we emit.
     post_to_host("ready-for-init", None);
 
+    // Test seam (query-param gated, e2e only): `&app-host-fault-tick=N` injects
+    // a recoverable fault at tick N so the e2e can assert the VISIBLE fault
+    // surface under its dev build — where a REAL panic would abort the wasm
+    // (`catch_unwind` is release-only). The true panic→Err containment is
+    // covered by the native `program_host::host::guarded` unit test. `None` in
+    // any normal boot (the param is absent).
+    let fault_after: Option<u64> = query_param("app-host-fault-tick")
+        .and_then(|v| v.parse::<u64>().ok());
+    // Owned handle to the stable payload root, moved into the 'static tick
+    // future (the `root` param is a borrow) — the fault D13 surface lands here,
+    // the same element the input surface uses (persists across display churn).
+    let fault_root = root.clone();
+
     // Drive the clock off-loop. Each tick: advance the program, re-render the
     // display, and — when the state actually changed — emit it to the host.
     // `program_key` is owned into the 'static future.
@@ -415,11 +490,34 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
             // or it starves the outer UI (paint + input). We hit the rate when we
             // can and yield a fixed floor when we can't — never spin at 0.
             let tick_start = now_ms();
-            if let Err(e) =
-                with_timeout(host::tick_future(&peers, &peer_id, &ns, &desc), 4000).await
-            {
-                tracing::error!(program = program_key, "app-host: tick faulted: {e}");
-                display.set_text_content(Some(&format!("app-host: {program_key} faulted — {e}")));
+            // A faulting tick DEGRADES to a visible caption + a stopped clock,
+            // never a silent frozen board (D13/AP3, finding #1):
+            // - `host::guarded` contains a PANIC in the evaluator (release
+            //   profile; the native test covers the catch) → `Err`;
+            // - `with_timeout` turns a HUNG tick → `Err`;
+            // - the `fault_after` seam injects a recoverable `Err` for the e2e.
+            // All three land here, on the one loud-log + visible-surface + break.
+            let outcome = if fault_after == Some(ticks + 1) {
+                host::guarded(Box::pin(async {
+                    Err("injected fault (e2e test seam)".to_string()) // i18n-ignore — test seam
+                }))
+                .await
+            } else {
+                host::guarded(Box::pin(with_timeout(
+                    host::tick_future(&peers, &peer_id, &ns, &desc),
+                    4000,
+                )))
+                .await
+            };
+            if let Err(e) = outcome {
+                tracing::error!(program = %program_key, "app-host: tick faulted: {e}");
+                display.set_text_content(Some(&crate::i18n::t(
+                    "apphost.stopped",
+                    &[("program", &program_key), ("reason", &e)],
+                )));
+                // D13 observable for the e2e / operator: the fault reason, on the
+                // stable payload element (not the per-tick-replaced display body).
+                let _ = fault_root.set_attribute("data-app-host-fault", &e);
                 break;
             }
             // Split the per-tick budget: COMPUTE (the synchronous evaluator — the
@@ -472,6 +570,16 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
 /// defence in depth (a loud marker, never a silent blank). The status port is
 /// always `text` — the same `<pre>` driver Life/Snake used before the display-list
 /// rebind, now a one-line readout.
+///
+/// **Direct-arm assumption (undocumented before AUDIT-…-2026-08-01 #10):** the
+/// drivers read the tree SYNCHRONOUSLY (`peers.get_entity`, no subscription).
+/// That is correct ONLY because `app_host` always runs `Peers::new_direct()`
+/// (an in-process store). If the inner peer is ever Worker-hosted (the module's
+/// stated future direction), these unsubscribed reads hit the main-thread cache
+/// mirror — seeded only for subscribed prefixes — and return empty, silently
+/// blanking the board. A Worker-host move MUST first `WindowWatch`/`observe`
+/// the program namespace here (and in `debug::refresh`) or switch to the async
+/// round-trip reads.
 fn render_frame(
     peers: &Peers,
     peer_id: &str,
@@ -486,9 +594,13 @@ fn render_frame(
             SHAPE_TEXT => text_driver(peers, peer_id, ns, port_path),
             SHAPE_DISPLAY_LIST => display_list_driver(peers, peer_id, ns, port_path, *bounds, *fill),
             other => {
+                // Defence in depth — admission (`desc.admit`) already gated the
+                // display shape to the supported set, so this is unreachable in
+                // practice; a loud diagnostic marker, never a silent blank (D13).
                 let el = crate::dom::util::create_element("div");
                 crate::dom::util::set_text(
                     &el,
+                    // i18n-ignore — diagnostic; unreachable past admission.
                     &format!("app-host: no driver for display shape {other:?}"),
                 );
                 el
@@ -573,7 +685,7 @@ fn build_host_controls() -> HostControls {
     // Step (⏭ — debug: advance exactly one tick while paused). Always
     // present (consistent chrome), only meaningful while paused — the tick
     // loop ignores a step request while running.
-    let step_btn = chip("\u{23ED}", "step one tick (while paused)", "data-host-step");
+    let step_btn = chip("\u{23ED}", "step one tick (while paused)", "data-host-step"); // i18n-ignore — aria label (chrome a11y batch)
     let step_cb = {
         let step = step.clone();
         Closure::wrap(Box::new(move |e: JsValue| {
@@ -613,7 +725,9 @@ fn chip(glyph: &str, aria: &str, data_attr: &str) -> web_sys::Element {
 /// `init` begin emitting an incrementing `state` on a slow interval so the host's
 /// debounce+persist path is exercised through the real iframe boundary.
 fn run_ping(root: &web_sys::Element) -> Result<(), JsValue> {
-    root.set_text_content(Some("app-host: ping — booted, awaiting init…"));
+    // i18n-ignore — `?app-host=ping` is a developer delivery-smoke payload, not
+    // a shipped program; its markers stay verbatim.
+    root.set_text_content(Some("app-host: ping — booted, awaiting init…")); // i18n-ignore
 
     // A tick counter emitted as state. Shared with the interval callback the
     // `init` handler installs.
@@ -623,7 +737,7 @@ fn run_ping(root: &web_sys::Element) -> Result<(), JsValue> {
 
     // On `init`, flip to "running" and start the emitter.
     let on_init = move || {
-        root_for_init.set_text_content(Some("app-host: ping — running"));
+        root_for_init.set_text_content(Some("app-host: ping — running")); // i18n-ignore (dev smoke)
         start_emitter(root_for_init.clone(), ticks_for_init.clone());
     };
 
@@ -643,7 +757,7 @@ fn start_emitter(root: web_sys::Element, ticks: std::rc::Rc<std::cell::Cell<u32>
     let cb = Closure::wrap(Box::new(move |_: JsValue| {
         let n = ticks.get().wrapping_add(1);
         ticks.set(n);
-        root.set_text_content(Some(&format!("app-host: ping — running (tick {n})")));
+        root.set_text_content(Some(&format!("app-host: ping — running (tick {n})"))); // i18n-ignore (dev smoke)
         let state = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&state, &JsValue::from_str("ticks"), &JsValue::from_f64(n as f64));
         post_to_host("state", Some(&state));
