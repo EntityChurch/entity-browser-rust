@@ -231,6 +231,21 @@ impl SessionConfig {
         matches!(self.boot_surface, BootSurface::Site)
     }
 
+    /// Whether the chrome-side status-bar site toggle should be exposed. It is
+    /// the [`SiteModePosture::exposes_toggle`] predicate, further **suppressed
+    /// when boot landed in a `Window` surface**: a maximized Site Browser window
+    /// is a window in the WM, not an overlay host, so the "View Site" toggle has
+    /// no coherent target there — and exposing it drops a fresh peer into the
+    /// overlay pointed at `home_site` (the stray-toggle → missing-home footgun,
+    /// fbdc0822). This is defense-in-depth at the render seam: it holds even if a
+    /// deployment mis-emits `show_toggle=true` alongside `surface=window`, so a
+    /// bad config can't strand a Window deployment with a broken toggle. (The
+    /// operator `?chrome=1` escape forces the Chrome surface for the per-frame
+    /// read, so it is unaffected.)
+    pub fn status_toggle_visible(&self) -> bool {
+        self.site_mode.exposes_toggle() && !matches!(self.boot_surface, BootSurface::Window { .. })
+    }
+
     pub fn from_entity(entity: &Entity) -> Self {
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
@@ -658,6 +673,35 @@ mod tests {
         // no site available ⇒ no inert toggle into an empty surface.
         let disabled = SiteModePosture { enabled: false, show_toggle: true, locked: false };
         assert!(!disabled.exposes_toggle());
+    }
+
+    /// Config/deploy hardening: the status-bar site toggle is suppressed when
+    /// boot landed in a `Window` surface, EVEN IF the posture would otherwise
+    /// expose it — a bad deployment (`show_toggle=true` + `surface=window`)
+    /// can't strand a Site Browser window with a stray "View Site" toggle
+    /// (fbdc0822). The overlay-side `exposes_toggle` is unchanged (a Window boot
+    /// isn't in the overlay, so its Exit control is moot).
+    #[test]
+    fn window_surface_suppresses_status_toggle_even_if_posture_exposes_it() {
+        let exposing = SiteModePosture { enabled: true, show_toggle: true, locked: false };
+        assert!(exposing.exposes_toggle(), "posture alone would expose the toggle");
+
+        // Chrome / Site boots honor the posture predicate…
+        let chrome = SessionConfig { boot_surface: BootSurface::Chrome, site_mode: exposing.clone(), ..SessionConfig::default() };
+        assert!(chrome.status_toggle_visible(), "chrome boot exposes the toggle");
+        let site = SessionConfig { boot_surface: BootSurface::Site, site_mode: exposing.clone(), ..SessionConfig::default() };
+        assert!(site.status_toggle_visible(), "site boot exposes the toggle");
+
+        // …a Window boot suppresses it regardless of the (mis-emitted) posture.
+        let window = SessionConfig {
+            boot_surface: BootSurface::Window { peer_id: String::new(), window_type: SITE_BROWSER_WINDOW.into() },
+            site_mode: exposing,
+            ..SessionConfig::default()
+        };
+        assert!(
+            !window.status_toggle_visible(),
+            "a Window deployment must NOT expose the status-bar site toggle"
+        );
     }
 
     #[test]

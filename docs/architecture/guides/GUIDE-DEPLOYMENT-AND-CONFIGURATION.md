@@ -356,6 +356,25 @@ make publish-bare SITE=<site-id> OUT_BARE=dist-bare
 This is the "Entity Browser is also just a site generator" output. No
 `entity-deployment.json`, no peer-id in the path, no apps.
 
+**The `.html` path never touches the content store.** The static export writes
+self-contained `.html` (+ `assets/` files) with links rewritten to plain URLs —
+there is **no `content/{hash}` blob store, no two-hop, no duplication**. The
+content-addressed store (`content/{aa}/{bb}/{hex}` + the `{peer}/…​.bin`
+pointers) is emitted **only** by the entity-native `.bin` form, which exists so a
+live WASM peer can ingest + hash-verify the site. Consequences worth knowing:
+
+- **The default `make publish` writes the site TWICE** — `.html` *and* `.bin`
+  (the two representations serve different consumers: dumb CDN vs. live peer).
+  That double-write is inherent to the default, not a bug. For a pure static
+  site, `HTML_ONLY=1` (or bare-root, always HTML-only) skips the `.bin` entirely
+  — half the output, zero content store.
+- **The content store dedups identical bytes across sites** within the `.bin`
+  form, so the `.bin` itself isn't wasteful — but a *republish* re-emits it
+  (the in-place clean wipes `content/` first), which is the re-upload cost the
+  blue-green **append-only content store** design targets (see
+  `docs/architecture/reviews/DESIGN-REPUBLISH-BLUE-GREEN-AND-CONTENT-STORE-SPLIT.md`),
+  **not** anything the static `.html` path does.
+
 ---
 
 ## 6. The `make publish` command surface
@@ -453,6 +472,64 @@ dist/
 > **Subdirectory caveat:** portability is guaranteed at the domain **root**
 > only. A subdirectory deploy (`host/sub/`) is known, deliberate debt — see
 > [`ANALYSIS-PUBLISH-PORTABILITY-AND-ORIGIN-MODEL`](#10-where-to-go-deeper).
+
+### 8.1 Bundling content into the Tauri desktop app
+
+**The same static publish works for the desktop app — no separate server.** Tauri
+does **not** run an HTTP server for content; `tauri::generate_context!()`
+(`src-tauri/src/lib.rs`) **embeds `../dist` into the app binary** at compile time,
+and the WebView serves it as the app's **same-origin** (a `tauri://localhost`
+custom protocol). Root-relative fetches — `/{peer}/sites/{site}/manifest.bin`,
+`/content/{xx}/{yy}/{hash}`, `/entity-deployment.json` — resolve against that
+origin and are served straight from the embedded bundle. So a same-origin publish
+(empty `LIVE`) into `dist/` is delivered by Tauri exactly as a CDN would deliver
+it, just embedded and offline.
+
+The three ways content reaches the desktop app:
+
+1. **Author in-app** — create/edit a site in the Site Creator; it persists to
+   IndexedDB and renders from the local tree with **no fetch at all**. (This is
+   what a `make tauri-run` user sees for the seeded demo, and for anything they
+   make; IDB durability across restart is verified on WebKitGTK — 2026-07-02.)
+2. **Bake published content into the bundle** — use **`make tauri-bundle`**, which
+   sequences the publish into the build:
+   ```bash
+   # sites + apps baked in, boots into <site-id>; INGEST/APPS_DIST may be ANY path.
+   make tauri-bundle-run CONFIG_SITE=<site-id> INGEST=<sites-dir> APPS_DIST=<entity-apps/dist>
+   ```
+   The app boots the SPA, reads the embedded `entity-deployment.json`, and
+   resolves `/{peer}/sites/…` + `/{peer}/apps/…` **same-origin** from the bundle.
+   Verified end-to-end on WebKitGTK/Tauri (2026-07-02): sites render and apps
+   launch, all served offline from the embedded bundle.
+   - **Do NOT use plain `make tauri` for this** — its `wasm-release` step re-runs
+     trunk, which **wipes `dist/`** and drops the published content. `tauri-bundle`
+     exists precisely to order it right: wasm-release → publish INTO dist/ → embed.
+   - `INGEST` / `APPS_DIST` can point **anywhere**; the recipe stages them into the
+     repo first (the publish container only mounts this repo) — no hand-copying.
+     Omit `INGEST` and the built-in demo set is baked; omit `APPS_DIST` and no apps
+     ship.
+3. **Point at a remote origin** — publish to a CDN with a concrete `LIVE=https://…`
+   (or set `origins[peer]` in the config), and the desktop app HTTP-polls the
+   remote (the CSP allows `connect-src … http: https:`). Content lives on the
+   server, not in the binary — an updatable-without-reinstall deployment.
+
+> **Two load-bearing desktop gotchas (learned the hard way, 2026-07-02):**
+>
+> - **A returning app keeps its durable config, which WINS over the baked
+>   `entity-deployment.json`** (`persisted > fetched > build-time`, `app.rs`
+>   `boot_load`). So a fresh install boots into the baked content, but if you've
+>   run the app before (or created any site), it ignores a newly-baked bundle and
+>   keeps the old posture. To re-test a bundle, clear the profile first:
+>   `rm -rf ~/.local/share/systems.entity.browser` (the app identifier).
+> - **Apps are sandboxed `srcdoc` iframes of inline-script HTML**, and a srcdoc
+>   frame inherits the embedder's CSP — so the Tauri CSP (`src-tauri/tauri.conf.json`)
+>   must allow the frames' inline scripts or every app is a **blank white iframe**.
+>   The CSP now carries `script-src … 'unsafe-inline' 'unsafe-eval'` **and**
+>   `"script-src"` in `dangerousDisableAssetCspModification` (without the latter,
+>   Tauri injects a nonce that nullifies `'unsafe-inline'` — the same trap as the
+>   `style-src` grayscale bug). The sandbox (opaque origin, `allow-scripts` only)
+>   remains the real isolation boundary. The browser deployment has no CSP, so
+>   apps always ran there — this was Tauri-only.
 
 ---
 

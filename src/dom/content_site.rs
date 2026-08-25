@@ -307,9 +307,14 @@ fn render_nav_bar(wrapper: &Element, output: &SiteRenderOutput, ctx: &DomCtx, ho
         util::append(&left, &back);
     }
 
-    // The site title doubles as the Home button — clicking it navigates to the
-    // site root (`"/"` resolves to the manifest home page). A "⌂" glyph signals
-    // the affordance; it ellipsizes rather than overflow a narrow bar.
+    // The site title doubles as the Home button. In a **window** it navigates
+    // to the current site's root (`"/"` → the manifest home page) — per-site, as
+    // you browse many. In the **overlay** it navigates to the deployment's
+    // configured home site (`output.home_target`, a `site:`/`entity://` link)
+    // so it ALWAYS resets to the real site — even when the current location is
+    // unresolvable ("No site manifest…"), where `/` would just reload the error
+    // and strand a locked deployment. Falls back to `/` when no home is carried.
+    // A "⌂" glyph signals the affordance; it ellipsizes rather than overflow.
     let home = util::create_element("a");
     util::set_text(&home, &format!("\u{2302}  {}", output.site_title));
     util::set_attr(&home, "href", "#");
@@ -321,7 +326,11 @@ fn render_nav_bar(wrapper: &Element, output: &SiteRenderOutput, ctx: &DomCtx, ho
          text-decoration:none;white-space:nowrap;cursor:pointer;overflow:hidden;\
          text-overflow:ellipsis;",
     );
-    wire_nav(ctx, &home, "/".to_string(), host);
+    let home_target = match host {
+        SiteNavHost::Overlay { .. } if !output.home_target.is_empty() => output.home_target.clone(),
+        _ => "/".to_string(),
+    };
+    wire_nav(ctx, &home, home_target, host);
     util::append(&left, &home);
     util::append(&bar, &left);
 

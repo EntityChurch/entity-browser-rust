@@ -1806,6 +1806,10 @@ impl EntityApp {
             cfg.active = false;
             cfg.site_mode.enabled = true;
             cfg.site_mode.show_toggle = true;
+            // The escape forces the CHROME surface for this per-frame read, so
+            // the toggle-visibility gate below re-exposes the toggle even for a
+            // Window/Site deployment (the operator explicitly asked for chrome).
+            cfg.boot_surface = crate::session_config::BootSurface::Chrome;
         }
         if self.last_site_state.as_ref() == Some(&cfg) {
             return;
@@ -1823,7 +1827,7 @@ impl EntityApp {
         // (no site configured ⇒ inert, so it can't drop you into an empty
         // surface).
         crate::dom::util::set_status_bar_visible(!cfg.active);
-        crate::dom::util::set_site_toggle(cfg.site_mode.exposes_toggle(), cfg.active);
+        crate::dom::util::set_site_toggle(cfg.status_toggle_visible(), cfg.active);
         self.last_site_state = Some(cfg);
     }
 

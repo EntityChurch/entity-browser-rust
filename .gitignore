@@ -5,6 +5,11 @@
 # tauri-run without clobbering dist/ + target/ (Makefile DIST/TARGET_DIR).
 /dist-publish
 /target-publish
+# Transient staging dirs for `make tauri-bundle` — the recipe copies an external
+# APPS_DIST / INGEST here so the publish container (which mounts only this repo)
+# can see them, then removes them. Never committed.
+/.apps-stage
+/.ingest-stage
 # Durable publisher identity (Makefile PUBLISH_DATA_DIR / ENTITY_DATA_DIR) — a
 # private keypair; NEVER commit it.
 /.entity-publish
