@@ -48,6 +48,7 @@ mod event_log_writer;
 // its consumers, so the offer/pull entry points have no caller yet.
 #[allow(dead_code)]
 mod file_offer;
+mod share;
 mod format;
 #[cfg(feature = "measurement")]
 mod frame_counters;

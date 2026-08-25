@@ -1,6 +1,6 @@
 # entity-browser-rust — status
 
-_Updated: 2026-08-15 · public: v0.8.0 (master) · working branch `dev`_
+_Updated: 2026-08-16 · public: v0.8.0 (master) · working branch `dev`_
 
 ## Where it is
 
@@ -31,7 +31,8 @@ blocks the product.
 | `make e2e-webrtc-chat` | the §6.5 mechanism | ✅ |
 
 `traverse` + `nat` together are what separate *"ICE is configured"* from *"ICE works"*; neither
-alone is enough. Re-verified at HEAD 2026-08-15 alongside `make test` **1001/0**, lint, wasm.
+alone is enough. Re-verified at HEAD 2026-08-16 alongside `make test` **1026/0** (the total across every test
+binary — the bin's own unit tests are 944 of those), lint, wasm.
 
 **The load-bearing changes, in the order they mattered:**
 
@@ -68,6 +69,39 @@ NAT is untested and needs TURN; the `…/transport/websocket` profile type is mi
 write `tcp` for `ws://` and it works because the resolver returns the scheme); transport-profile
 staleness is unmanaged (a saved LAN address dies when the machine changes networks, and
 "offline" is not "wrong address").
+
+## File-transfer arc (2026-08-16) — two browsers, two devices, one file
+
+The connectivity thread's payload. **A browser peer can now SERVE a file**, not just consume one:
+`src/file_offer.rs` chunks locally, ingests blob+chunks into its own `system/content`, and
+publishes a manifest that gives the hash a filename. The receiver walks the closure. No transport
+is named anywhere in it — the same code path rides a WebRTC data channel or a WebSocket.
+
+| gate | proves | status |
+|---|---|---|
+| `make e2e-webrtc-file` | two browsers meet at a name, one offers, the other pulls — **18 checks**, incl. the window making the offer and a withdrawal seen on the far side | ✅ |
+| `MODE=worker make e2e-webrtc-file` | the same, on the **Worker arm**, and asserts the arm itself (**19 checks**) | ✅ |
+| `e2e_worker` Phase 14b | the **desktop path**: browser ↔ Tauri backend over `local/files`, ending in a byte-for-byte read of the uploaded file **off the backend's disk** | ✅ |
+| `e2e_worker` Phase 14.2 | offer / withdraw on the Worker arm, no display, no peer | ✅ |
+| `a_lone_file_transfer_window_lists_what_it_offers` | the window's own subscription — with only that window open, because the monolith cannot see subscriptions (below) | ✅ |
+
+**Presence is the idea worth carrying.** A browser peer has no listener: it cannot be connected
+*to* passively, so being reachable is an **activity it performs** — `reach_keeper` holds a
+standing intent and probes while the kernel says a peer is not connected. It is
+exchange-agnostic; chat had been getting the same thing for free from its 5 Hz delivery poll, by
+accident.
+
+**Known holes, stated rather than implied.** An offer is **permanent** — `system/content` has
+`get` and `ingest` and no forget, and `handle_get` serves by hash without consulting the §6.4.2
+binding, so withdrawal removes discovery, not access (measured: 5 bound entities for a 4-chunk
+offer, 0 reclaimed; routed as buildout item 21). Offers are **open-posture only** — no grant
+profile covers them and a browser peer cannot author policy on its own tree, so
+`ENTITY_BROWSER_ENFORCE` fails them closed with no way to open them (buildout item 22, and now
+§9 of `PLAN-OF-RECORD-capability-enforcement`). One file is capped at **16 MiB**, an offer-side
+memory bound that wants a streaming ingest rather than a bigger number. And **a green
+`e2e_worker` is not evidence that a surface subscribes what it reads**: every window is open
+there, two of them subscribe the whole peer tree, and the Worker proxy's cache is a union over
+all mirrors.
 
 ## Release arc (2026-07-02) — post-release: surfaces, republish, desktop content-baking
 
@@ -187,6 +221,16 @@ a pre-ship QA checklist.
    persistence path was already sound in source (persist request + honest durability
    banner + OPFS-gap detection); this closes the runtime question.
 
+3. **Two real devices on two real networks — the file-transfer arc's one untested claim.**
+   Every P2P gate is one host plus a container rig: `traverse` models two NATs with two
+   external addresses and self-hosted STUN, which is a fair model and still a model. What no
+   test on this box can produce: a phone on cellular and a laptop on home wifi, a captive
+   portal, an ISP CGNAT, a symmetric NAT (which the rig deliberately does **not** model and
+   which needs TURN we cannot yet carry credentials for). **The check:** open the SPA on two
+   real devices on two real networks, `meet tag <label>` on both, offer a file from one and
+   pull it from the other. Report what actually happens — a failure here is data, not a
+   regression, and it is the next thing that would change the roadmap.
+
 ## Backlog
 
 **Quick wins / cleanup**
@@ -288,16 +332,14 @@ Pull into roadmap when scoped.
 
 **Connectivity thread (current):**
 
-1. **P0 — `reflection_endpoints` in `entity-core-rust`'s signaling advertisement**
-   (`extensions/signaling/src/{core,data}.rs`). The **only** item on our critical path. It is
-   the *automatic* half of ICE provisioning: a node telling browsers which STUN to use, which
-   fills in `Connector.ice`. Routed to us as P0 by arch's cohort packet
-   (`ROUTING-2026-08-15-cohort-packet-service-advertisement-and-reflection-endpoints`) with
-   `entity-browser-rust` named as the blocked consumer — we consume rust's client decoder
-   directly, so the field must exist there before it can exist for us. **One optional field,
-   both surfaces** (§2.2 makes the unwrapped §9.2 response a MUST too, and it is the easy half
-   to skip). The `endpoint`-as-URI-string fork that blocked this is **settled** — arch ruled it
-   2026-08-15 (`EXTENSION-REGISTRY` §3b.0, RFC 7064 `stun:`), so this is no longer upstream-blocked.
+1. ~~**P0 — `reflection_endpoints` in `entity-core-rust`'s signaling advertisement**~~
+   **CLOSED 2026-08-15/16.** All three implementations carry it (rust `0b4e0cd`, bytes pinned
+   against the Go node); a connector now *learns* what its node serves, and
+   `make e2e-webrtc-advertised` is the gate — the node publishes a reflector and the browsers
+   type nothing. Two things that cost a red gate and are worth keeping: the learning has to ride
+   a path the user already walks (recording only on the Check button is the automatic half
+   wearing a manual hat), and typed vs advertised are separate fields merged at read.
+
 2. **`entity-workbench-go` app tier.** Its kernel is ready — core-go has `ext/signaling`
    (punch, pool, coordinator, node), the §10.3 seam with single-flight, and srflx — but the app
    tier has none of it (no `MaintainPeer`, `peer/status`, `connector`, or `meet`). It needs the
@@ -313,6 +355,49 @@ Pull into roadmap when scoped.
 4. **Awaiting an arch ruling, blocking nothing:** §10.3 obligation 6 (the consultation bound) —
    proposal at `entity-core-rust/docs/PROPOSAL-ESTABLISH-CONSULTATION-BACKOFF.md`, routed
    `ROUTING-2026-08-15-b-item-6-is-remedied-and-three-things-we-told-you-were-wrong`.
+
+**File-transfer thread (new, 2026-08-16):**
+
+- **Two real devices on two real networks** — the arc's one untested claim, and the only item
+  here an agent cannot do. Details in the pre-ship QA checklist above. Nothing further on this
+  box shrinks it.
+- **Capability management for the serving side.** The browser is a resource holder now and the
+  enforcement plan has no row for it: no grant profile covers the offer path, and a browser peer
+  cannot author policy on its own tree, so an enforced deployment loses browser↔browser transfer
+  entirely. Sharing is also all-or-nothing — *"share this file with THIS peer"* is not
+  expressible. Recorded as §9 of `PLAN-OF-RECORD-capability-enforcement.md` (which is where the
+  cutover decision lives) and buildout item 22. **Deliberate:** the arc's goal was to prove the
+  technology; refinement follows.
+- **Retention / streaming ingest.** An offer is permanent (nothing can reclaim ingested content
+  — buildout item 21, routed) and one file is capped at 16 MiB by an offer-side memory bound.
+  Both are the same piece of work: ingest in batches the way the pull already fetches, and give
+  "unshare" something to actually delete.
+
+**Network / content-sharing thread (new, 2026-08-16) — the layer above connectivity:**
+
+Design of record: **`reviews/DESIGN-THE-CONTENT-NETWORK-AND-THE-USER-MODEL.md`**. The audit
+behind it found three partial naming systems and **no** use of `EXTENSION-REGISTRY` (which is
+implemented upstream and in `entity-peer`'s default features — we opt out), and **four
+hand-rolled implementations of one idea** (chat follow+poll, offer closure walk, site HTTP
+poll, boot warm-up) while `entity-sdk`'s `follow` packages exactly that and has one consumer
+on one arm. The missing pieces are two nouns — a **Share** (a thing published, with an
+audience) and a **Follow** (a prefix mirrored, with a budget) — and the missing user model is
+four rings: this device / my devices / my people & groups / the open network. Ring 1 (my
+devices) does not exist at all.
+
+- **A → E in §7 of that doc.** Near-term: generalize `offers/` → `shares/` with a `kind`;
+  make a **site a share pulled over the peer connection** (its mirror destination
+  `site-cache/{peer}/sites/{id}/` already exists and the resolver already reads it) with a new
+  `make e2e-webrtc-site` gate; a first Network window. `Follow` as a real record is the deeper
+  one and pays off on every later app.
+- **Routed to arch:** `ROUTING-2026-08-16-g` — five questions, of which Q1 is the big one
+  (**is `REGISTRY` §8.2 aggregator federation still blocked on RELAY Mode A**, given that
+  `follow`-continuation materializes a remote prefix into a local tree and is proven
+  cross-peer?) and Q2 is the one with an interop deadline (who owns "what is this peer
+  offering" — `published-root` is singular and audience-free).
+- **Do not** retire the chat poll, build a DHT/gossip, or ship enforcement expecting shares to
+  work. Retention (buildout item 21) must be **sequenced with** prefix sharing, not after it —
+  sharing a site ingests every page and nothing reclaims it.
 
 **Product thread (carried, unchanged):**
 

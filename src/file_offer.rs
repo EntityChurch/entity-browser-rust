@@ -711,6 +711,34 @@ mod tests {
         }
     }
 
+    /// A user can pick a 0-byte file, so the chunker has to have an answer for
+    /// one. Whatever it is, it must be an answer and not a panic — and the
+    /// count we *state* before the work starts has to agree with it.
+    #[test]
+    fn an_empty_file_chunks_without_panicking() {
+        match chunk_bytes(b"") {
+            Ok((blob, chunks)) => {
+                // Round-trips to nothing, which is the honest result.
+                let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+                store.put(blob.clone()).unwrap();
+                for c in &chunks {
+                    store.put(c.clone()).unwrap();
+                }
+                assert_eq!(reassemble(&store, &blob.content_hash).unwrap(), Vec::<u8>::new());
+                assert!(
+                    chunks.len() as u64 <= chunk_count(0),
+                    "an empty file must not claim more chunks than the count the \
+                     window prints ({} stated, {} produced)",
+                    chunk_count(0),
+                    chunks.len()
+                );
+            }
+            // A refusal is equally acceptable — it reaches the user as
+            // "offer failed: …" rather than as a frozen tab.
+            Err(e) => assert!(!e.is_empty(), "a refusal must say something"),
+        }
+    }
+
     #[test]
     fn get_params_encode_hashes_as_bstr_records() {
         let (blob, _) = chunk_bytes(b"x").unwrap();
