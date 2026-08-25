@@ -1,0 +1,19 @@
+# .release-removals — files this release deliberately removes from the published tree.
+#
+# One path or path-prefix per line; `#` comments allowed. A removal is not forbidden,
+# but it must be intended, and this file is the record that it was. Where something
+# moved rather than went away, the entry says where to, so a reader can follow it.
+#
+# A comment-only or blank file declares nothing.
+
+# ── STATUS.md moved up one directory ──────────────────────────────────────────
+# 2026-08-24. The rolling status document was at `docs/status/STATUS.md`. Everything
+# else in `docs/status/` is dated, session-scoped material that is not part of the
+# published documentation set, so the one durable file in there was the exception —
+# and an exception inside a directory whose whole point is that it is ephemeral is a
+# shape that eventually goes wrong.
+#
+# It is now **`docs/STATUS.md`**, which is also where the other repos in this
+# ecosystem keep theirs. Nothing is withdrawn from a reader: the same document ships,
+# one directory up.
+docs/status/STATUS.md

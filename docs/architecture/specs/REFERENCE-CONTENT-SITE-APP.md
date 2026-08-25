@@ -158,7 +158,7 @@ broken, was 5,797).
 A link within one domain (same peer, different site) is written
 **`site:{target_site_id}/{page}`**. A relative path like `../../other-site/x`
 does **not** cross a boundary — the resolver clamps `..` at the site root and
-silently lands wrong. The papers team's one-line ask: emit `site:` for
+silently lands wrong. The renderer's one-line ask: emit `site:` for
 cross-site links. URL projection is `{base}/sites/{peer}/{site}/{page}`.
 
 ### 3.3 Click wiring (`dom/content_site.rs`)
