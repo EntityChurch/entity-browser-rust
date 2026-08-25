@@ -253,8 +253,12 @@ fn main() {
              (peer='{node_peer}', addr='{node_addr}')"
         );
     }
-    if !node_addr.is_empty() && !(node_addr.starts_with("ws://") || node_addr.starts_with("wss://"))
-    {
+    // Empty is legal here — the half-config case is already refused above, so an
+    // empty addr at this point means "no node was asked for at all".
+    let addr_scheme_ok = node_addr.is_empty()
+        || node_addr.starts_with("ws://")
+        || node_addr.starts_with("wss://");
+    if !addr_scheme_ok {
         panic!(
             "ENTITY_WEBRTC_NODE_ADDR='{node_addr}' must be a ws:// or wss:// \
              address — a node is dialed, not fetched, and a wrong scheme fails \

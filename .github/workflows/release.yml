@@ -45,50 +45,38 @@ env:
   #
   # PIN THIS BEFORE CUTTING A RELEASE. There is no cross-repo lockfile: a
   # floating `master` means the same tag of this repo can produce two different
-  # binaries. Set it to the exact entity-core-rust commit the release was
-  # tested against; `master` is the convenience default for dry runs.
-  # Re-pinned 2026-08-22 to `7528a9f`: the exact entity-core-rust commit this
-  # line is gated green against (make test 1259/0/8 · make test-tauri 55/0 ·
-  # make lint · make wasm · unfiltered e2e).
+  # binaries.
   #
-  # **The previous pin (`302b7f4`) would have failed the matrix on every leg,
-  # and this is the second time in a row that check has caught a dead pin.**
-  # `src/reachability.rs` implements `IceObserver::negotiation_finished(…,
-  # NegotiationReport)`, and `NegotiationReport` is introduced by core-rust
-  # `daee149` — FIVE commits after the pin. `git grep NegotiationReport 302b7f4
-  # -- bindings/` returns nothing. That is a compile failure on all five
-  # platforms, invisible until CI runs, and it arrived exactly the way the
-  # `683a4f0` one did: the pin was correct when it was set and the call site
-  # moved underneath it. **Re-run both checks below at every tag — a pin does
-  # not stay true just because it was true.**
+  # **PIN A PUBLIC TAG, NOT A DEV SHA — and this was learned the hard way twice.**
+  # Published commits are authored fresh at the release boundary (ADR-0027), so
+  # a commit that exists on entity-core-rust's `dev` NEVER lands on its public
+  # `master` under the same SHA. No dev SHA is ever resolvable by
+  # `actions/checkout`, however correct it was locally. **A tag is the only
+  # identifier that is both knowable in advance and publicly resolvable**, which
+  # is also why this line can carry `v0.8.2` before entity-core-rust has tagged
+  # it. Re-pinned 2026-08-23 to `v0.8.2` (ROUTING-2026-08-23-j §2).
   #
-  # Re-pinned 2026-08-19 to `302b7f4` (superseded): the published-root fix that
-  # makes a tampered interior node a ContentHashMismatch instead of an absence.
+  # **ORDERING, UNAVOIDABLE: entity-core-rust publishes and tags `v0.8.2` FIRST.**
+  # Every leg — including a `workflow_dispatch` dry run — checks it out from
+  # GitHub, so until that tag exists every run fails at checkout, before
+  # anything compiles. Failing at checkout is the *good* failure mode; the two
+  # superseded pins below failed five times at compile instead.
   #
-  # Note that core-rust's own `master` is still the pre-v0.8.0 docs commit —
-  # leaving this on `master` would build the flagship against a two-month-old
-  # kernel and silently ship a release containing none of the connectivity,
-  # transfer or sharing work. Re-pin at each release; a floating
-  # ref is how one tag builds twice into two different binaries.
-  #
-  # It must be REACHABLE IN `CORE_RUST_REPO` when the tag is cut — the checkout
-  # is `actions/checkout` against that GitHub repo, so a commit that exists only
-  # on a private remote fails the checkout before anything builds.
-  #
-  # **AS OF 2026-08-22 THIS REF IS NOT ON GITHUB, AND NEITHER WAS THE LAST ONE.**
-  # `git branch -r --contains 7528a9f` matches nothing under `github/`, `pub/`
-  # or `codeberg/`; core-rust's public `master` is still `5508481`, a docs
-  # commit, with ~300 commits unpushed on a private remote. **Pushing
-  # entity-core-rust to GitHub is a prerequisite of the first v0.8.2 tag and it
-  # belongs to that repo's seat, not this one.** Pinning a ref that will not
-  # compile is strictly worse than pinning one that is not yet pushed: the
-  # second fails loudly at checkout, the first fails five times at compile.
+  # Superseded, kept because the shape recurs. `7528a9f` (2026-08-22) and
+  # `302b7f4` (2026-08-19) were both dev SHAs, and `302b7f4` was additionally
+  # DEAD: `src/reachability.rs` calls `IceObserver::negotiation_finished(…,
+  # NegotiationReport)`, and `NegotiationReport` arrives in core-rust `daee149`,
+  # five commits later — `git grep NegotiationReport 302b7f4 -- bindings/`
+  # returns nothing. **A pin does not stay true just because it was true**: the
+  # pin was correct when set and the call site moved underneath it. That is the
+  # second half of this check and a tag does not retire it — a tag cut before
+  # the symbols land is just as dead as a stale SHA.
   #
   # The two checks, both of which must pass at tag time:
   #   git -C ../entity-core-rust merge-base --is-ancestor $REF <github-branch>
   #   git -C ../entity-core-rust grep <symbol-we-call> $REF -- bindings/
-  # The §2 step-5 `workflow_dispatch` dry run exercises both.
-  CORE_RUST_REF: 7528a9f
+  # A `workflow_dispatch` dry run exercises both.
+  CORE_RUST_REF: v0.8.2
   CORE_RUST_REPO: EntityChurch/entity-core-rust
 
   # Publish each artifact a second time without the version in its name, so

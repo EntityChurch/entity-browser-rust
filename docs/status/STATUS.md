@@ -16,7 +16,7 @@ measurements rather than commit SHAs, which do not resolve for a reader outside 
 | Deferred work with the reason | `docs/plans/BACKLOG.md` |
 | Connectivity open items (canonical table) | `docs/architecture/reviews/BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md` §8 |
 | What changed for a user | `CHANGELOG.md` |
-| Where the last session left off | `docs/status/HANDOFF-2026-08-23-b-full-screen-and-a-concession-spent.md` |
+| Where the last session left off | `docs/status/HANDOFF-2026-08-23-c-full-screen-wake-lock-and-a-concession-spent.md` |
 
 Spot-check a row before acting on it. That table has carried stale rows, and they survived by
 being read instead of run.
@@ -39,9 +39,26 @@ Re-measured 2026-08-23 rather than quoted:
 | Gate | Result |
 |---|---|
 | `make test` | **1283 / 0 / 8-ignored** across 15 test binaries |
-| `make test-tauri` | **55 / 0** across 4 binaries (2026-08-21 — *not* re-run today; `src-tauri` is workspace-excluded, so it is not in the number above) |
-| `make lint` | clean — clippy, ui-lint, i18n-lint, 30 locales × 701 keys, tree-hygiene |
-| `make e2e-worker` | **23 passed / 0 failed, 371.80 s** — unfiltered, on a quiet box with the display passed through |
+| `make test-tauri` | **55 / 0** across 4 binaries — re-run today; `src-tauri` is workspace-excluded, so it is not in the number above |
+| `make lint` | clean — clippy, ui-lint, i18n-lint, i18n-locale-check, i18n-callsite-check, i18n-untranslated, tree-hygiene |
+| `make e2e-worker` | **25 passed / 0 failed, 374.28 s** — unfiltered, end of session (+1 test: the R1 milestone-trace gate). An earlier unfiltered run the same afternoon was 23/1, the failure being blocker 5; it did not reproduce across 13 subsequent runs |
+
+**Read the two i18n gates as the different things they are.** `i18n-locale-check`'s *30 locales ×
+701 keys clean* is **structural** — parity, slots, plural categories, homoglyphs — and says nothing
+about whether a value was ever translated. That second question is `i18n-untranslated`'s, and as of
+2026-08-23 it is **an explicit key allowlist at target 0, not a baseline count**: the backlog it was
+built to measure (51 keys verbatim English across every locale — the Registry Browser, Chat's
+empty/prompt text, the site-directory verification sublines, the app-host failure messages) **is
+translated in all 30 locales**, the baseline file is deleted, and the six survivors each carry their
+reason in `ALLOWLIST` (three palette proper nouns, OPFS, IndexedDB, one format name).
+
+It **cannot check the 17 Latin-script locales and says so in its own pass line** — correct German
+often looks like English, so no mechanical signal separates a cognate from a skipped string. Those
+were translated in the same pass and graded by eye; 17 values out of 1,470 remain identical to their
+English source because the correct word is the same word (*Chat* in de/nl/it/cs/da/no/ro, French
+*Source* and *Message…*, *byte* as a unit). **The two 17s are a coincidence** — 17 languages, 17
+strings — and conflating them is what made the first write-up unreadable. Record:
+`docs/status/STATUS-2026-08-23-b-the-i18n-backlog-is-translated-and-the-ratchet-is-an-allowlist.md`.
 
 **Say which suite you mean, and re-run before quoting.** These numbers have gone stale in hours,
 repeatedly. The 8 ignores are 4 `crossimpl_go_live` (needs core-go's live publisher), 3 fixture
@@ -73,19 +90,39 @@ pitch — download Tori, run the signaling node yourself, connect your machines 
 been executed end to end by a person on real hardware over a real network. That is not a
 regression; it is the class of thing that has to be found by running it.
 
+## Release prep — what this repo did, and where the line is
+
+**The GitHub Actions half is not this repo's to finish.** The workflow gets tweaked and proven on
+a branch by whoever owns the release pipeline; the local build is unaffected either way and works
+today (`make dist`, `make dist-web`, host needs only `make` + `podman`). What is owed *here* is
+that the tree be correct and honest before it is promoted. Done 2026-08-23:
+
+- **`CORE_RUST_REF` is `v0.8.2`** — a public tag, not a dev SHA. Published commits are authored
+  fresh at the release boundary (ADR-0027), so an entity-core-rust `dev` SHA never resolves for
+  anyone else and no push of theirs would have rescued the old pin. The tag is anticipated: it can
+  sit in the file before it exists.
+- **`release/0.8.2` carries a reduced `release.yml`** — `web` + `assemble` — because `.github/`
+  does not exist on the public `master` at all, so a tag today would trigger nothing. `dev` keeps
+  the full platform matrix as the one home of the platform list (ADR-0023).
+  **`assemble` is kept, trimmed to `needs: [web]`, and that part is not optional:**
+  `upload-artifact` produces a *workflow artifact* (90-day expiry, attached to nothing) and
+  `gh release create` lives in `assemble` — so a `web`-only workflow with no assemble yields no
+  GitHub Release and no downloadable file, which is the bare tag the reduction exists to avoid.
+- **The notes footer and the CHANGELOG no longer advertise five installers this release does not
+  carry**, and the footer no longer links a doc the publish pipeline scrubs.
+
 ## Release blockers
 
-1. **`CORE_RUST_REF` is not publicly resolvable, and a tag will not fix it by itself.**
-   The workflow pins a core-rust commit that exists only on a private branch. Two independent
-   properties: the *identifier* should be a *public tag* (published commits are authored fresh at
-   the release boundary per ADR-0027, so a dev SHA never resolves for anyone else) — and
-   separately the *content* has to be published at all. Measured against
-   `github/EntityChurch/entity-core-rust` on 2026-08-23: the public repo carries exactly two
-   usable refs — `refs/heads/master` (`5508481`) and `refs/tags/v0.8.0` (`5c74fab`) — **neither
-   carries the symbols we call** (`NegotiationReport`, `IceObserver`, `with_ice_observer` grep to
-   0 files on both), and `7528a9f` is reachable only from the private `origin/dev`. **This is
-   entity-core-rust's push to make**, but no tag here can succeed until it happens. Detail:
-   `docs/RELEASE-READINESS.md`.
+1. **`CORE_RUST_REF: v0.8.2` is anticipated — the tag is cut as part of the release, not before
+   it.** Nothing to chase; noted here only so the *second* half of the pin check is not forgotten.
+   The ref has to be publicly resolvable **and** carry the symbols we call — `NegotiationReport`,
+   `IceObserver`, `with_ice_observer`. Both superseded pins failed one of those: `7528a9f` and
+   `302b7f4` were dev SHAs (unresolvable), and `302b7f4` additionally predated `NegotiationReport`
+   by five commits, so it would have failed at compile on five platforms rather than loudly at
+   checkout. **A tag cut before those symbols land is exactly as dead as the SHA it replaced** —
+   `git grep <symbol> $REF -- bindings/` is the check, and it is not retired by using a tag.
+   This affects **CI only**; the local build resolves the sibling checkout on disk and is
+   unaffected. Detail: `docs/RELEASE-READINESS.md`.
 2. **Icons are a placeholder upscale.** The Windows build is unblocked (the set is generated and
    wired into `src-tauri/tauri.conf.json`), but the icon a user actually sees is not done. Replace
    `src-tauri/icons/icon.png` with real 1024×1024 art and re-run `cargo tauri icon`.
@@ -94,20 +131,36 @@ regression; it is the class of thing that has to be found by running it.
    before the first tag that depends on them. Windows NSIS **is** proven, cross-built here.
 4. **linux-arm64 is unproven** — the binaryen pin is arch-resolved but has not run on an aarch64
    host.
-5. **R1 — the display-gated Tauri WebView phase. NOT REPRODUCED on 2026-08-23, and its leading
-   theory is refuted.** It passed **4/4** today — once inside an unfiltered 23/23 run and three
-   times in isolation — with the Wayland socket passed through, so the phase ran for real rather
-   than self-skipping (`tauri webview booted: true`).
-   The phase now **prints its margin on success**, which is what makes this measurable at all:
-   listener ready **197–303 ms**, WebView boot **1162–1242 ms**, against the fixed **60 000 ms** budget —
-   a **48× margin**. That kills the recorded candidate cause: if non-streaming instantiation of
-   the 29.5 MB debug bundle were costing anything near the budget, the healthy path could not be
-   1.2 s. **Do not go chase `application/wasm` MIME types on the strength of that theory.**
-   What is *not* claimed: that it is fixed. Nothing in this session touches the Tauri boot path,
-   and the 2026-08-22 measurement was control-verified against a stashed tree. Four greens on a
-   quiet box do not overturn a reproducible red on a loaded one — but a 48× margin means whatever
-   fails is failing to start, not failing to finish, and the next red run's printed margin will
-   say which. Re-measure before treating this as a blocker or as closed.
+5. **R1 — the display-gated Tauri WebView phase. Red 3/3 then green 13/13 on one unchanged tree,
+   2026-08-23. Open, not reproducible, and the trigger is unidentified.** Full record:
+   `docs/status/FINDING-2026-08-23-r1-is-a-stall-in-wasm-instantiate-not-a-slow-one.md`. The
+   session ended on a full unfiltered **25 / 0 in 374.28 s** with the phase green at 1088 ms.
+   - **Two candidate causes are DEAD, both killed by controls.** *Host load* — wrong: the figures
+     quoted for it were a load average not divided by 32 threads and `free` rather than
+     `available` (77 GB). *The container memory cap* — wrong: raising it looked decisive until the
+     plain-defaults control went green, then six more at defaults. **A fix a control reproduces
+     without the fix is not a fix.**
+   - **It is not the i18n round** — bisected against a pre-translation build, which fails
+     identically (+27 KB of catalogs, +78 KB of wasm, 0.27 %).
+   - **What is established is WHERE it stops, not why.** On every red the child's stdout ends at
+     the `instantiateStreaming` fallback and goes silent for 60 s, and **zero of the five boot
+     milestones the module logs from its own entry point arrive** — while the console bridge is
+     demonstrably forwarding other WebView output. So the module never begins executing: a stall
+     in `WebAssembly.instantiate`, not slow app boot and not a panic. That now rests on a
+     **positive control** — a green run reports `5/5` — rather than on reasoning from absence.
+   - **What was fixed is the diagnostic, not the product.** The phase now prints the milestone
+     trace on failure (`✓ step @ N ms` / `✗ step — never seen`, with an explicit *never started*
+     case) **and the count on success**, so the next red is readable in one line instead of a
+     session. Gate: `the_boot_milestone_trace_distinguishes_never_started_from_hung_midway`,
+     mutation-checked both ways.
+   - **The `application/wasm` question is live but not urgent.** Tauri's asset protocol serves
+     `frontendDist` without the type, which forces the non-streaming path;
+     `src-tauri/src/app_server.rs` already gets this right and has a test pinning it. The earlier
+     ruling that a 48× margin refutes it was wrong **in kind** — a margin bounds *slowness* and
+     says nothing about a path that never completes — but "plausible mechanism" is not "found".
+   - **Scope:** this is the **debug** bundle at 29.5 MB; `make dist` ships `opt-level=z` + LTO +
+     `wasm-opt -Oz` and has never been measured on this path. The desktop is not shown broken for
+     users by a rig failure against a debug artifact — nor shown fine.
 
 ## Pre-ship QA — human device verification, not agent-doable
 

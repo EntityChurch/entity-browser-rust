@@ -68,5 +68,12 @@ build provenance above, both of which tie the file to a public, logged build.
 ## Building it yourself
 
 Nothing here needs our CI. A release build is `make dist` on the machine you
-want to build for — the same recipe this workflow runs. See
-[docs/RELEASE-READINESS.md](https://github.com/EntityChurch/entity-browser-rust/blob/master/docs/RELEASE-READINESS.md).
+want to build for — the same recipe this workflow runs; `make dist-web` for the
+browser bundle. The host needs only `make` and `podman`. See the
+[Developer Guide](https://github.com/EntityChurch/entity-browser-rust/blob/master/docs/architecture/guides/DEVELOPER-GUIDE.md).
+
+<!-- Do NOT link docs/RELEASE-READINESS.md here: it is on the publish pipeline's
+     scrub list and does not exist on the public tree, so the link 404s for
+     exactly the reader this section is written for. Every link in this file must
+     resolve against the PUBLISHED master, which carries 26 docs files, not ours. -->
+

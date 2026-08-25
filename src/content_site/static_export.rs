@@ -543,6 +543,30 @@ fn render_nav_items(
     out.push_str("<ul>");
     for item in items {
         out.push_str("<li>");
+        // A group renders as a native `<details>` disclosure — collapsible with
+        // **no JavaScript**, which is the constraint this whole export exists
+        // to satisfy, and still fully crawlable because the children stay in
+        // the DOM whether or not the group is open.
+        //
+        // **Closed by default, and "you are here" is a HIGHLIGHT, not an open
+        // panel.** The tempting move is to ship the current page's group `open`
+        // — a static exporter knows the current page at render time, which the
+        // live app does not. It is wrong here: the panel is absolutely
+        // positioned so it does not shove the page down, which means an
+        // auto-opened group would cover the article on every load, and without
+        // JS a `<details>` cannot close on an outside click — so the reader
+        // would have to dismiss a panel by hand on arrival at every page. The
+        // render-time knowledge is still used; it just marks the group instead
+        // of opening it.
+        let group = !item.children.is_empty();
+        if group {
+            let here = if subtree_holds_active(&item.children, current, current_slug, ctx) {
+                " class=\"here\""
+            } else {
+                ""
+            };
+            out.push_str(&format!("<details class=\"nav-group\"><summary{here}>"));
+        }
         if item.target.is_empty() {
             // A section header — no link.
             out.push_str(&format!("<span class=\"nav-section\">{}</span>", esc(&item.label)));
@@ -559,12 +583,42 @@ fn render_nav_items(
             let cls = if active { " class=\"active\"" } else { "" };
             out.push_str(&format!("<a href=\"{}\"{cls}>{}</a>", esc(&href), esc(&item.label)));
         }
-        if !item.children.is_empty() {
+        if group {
+            out.push_str("</summary>");
+        }
+        if group {
             render_nav_items(&item.children, current, current_slug, out, depth + 1, ctx);
+            out.push_str("</details>");
         }
         out.push_str("</li>");
     }
     out.push_str("</ul>");
+}
+
+/// Does the page being rendered live anywhere inside this subtree?
+///
+/// Decides whether a group ships `open`. Recursive because a group's active
+/// page may be several levels down, and a group that folds away the section the
+/// reader is *currently in* is worse than not folding at all.
+///
+/// Deliberately does **not** call `ctx.audit` — this is a second pass over
+/// targets the render pass already notes, and double-noting would report every
+/// out-of-set nav link twice.
+fn subtree_holds_active(
+    items: &[NavItem],
+    current: &location::Location,
+    current_slug: &str,
+    ctx: LinkCtx,
+) -> bool {
+    items.iter().any(|item| {
+        if !item.target.is_empty() {
+            let target = location::classify_link(&item.target, current);
+            if matches!(&target, LinkTarget::InSite { page } if page == current_slug) {
+                return true;
+            }
+        }
+        subtree_holds_active(&item.children, current, current_slug, ctx)
+    })
 }
 
 /// Rewrite every `href="…"` in a rendered HTML body from its entity-native
@@ -873,8 +927,25 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
          .site-header{{display:flex;flex-wrap:wrap;align-items:baseline;gap:16px;\
          padding:14px 20px;background:{nav_bg};border-bottom:1px solid {border}}}\
          .site-title{{font-size:18px;font-weight:700;color:{text}}}\
-         .site-nav ul{{list-style:none;display:flex;flex-wrap:wrap;gap:12px;margin:0;padding:0}}\
-         .site-nav li{{display:flex;gap:12px;align-items:baseline}}\
+         .site-nav>ul{{list-style:none;display:flex;flex-wrap:wrap;align-items:flex-start;\
+         gap:6px 22px;margin:0;padding:0}}\
+         .site-nav li{{display:flex;flex-direction:column;align-items:flex-start;gap:3px}}\
+         .site-nav ul ul{{list-style:none;display:flex;flex-direction:column;\
+         align-items:flex-start;gap:3px;margin:3px 0 0;padding:0}}\
+         .site-nav ul ul a{{font-size:13px;color:{muted2}}}\
+         .site-nav ul ul a:hover{{color:{link}}}\
+         .site-nav details.nav-group>summary{{cursor:pointer;list-style:none;\
+         display:flex;align-items:baseline;gap:5px}}\
+         .site-nav details.nav-group>summary::-webkit-details-marker{{display:none}}\
+         .site-nav details.nav-group>summary::after{{content:\"\\25B8\";color:{muted2};\
+         font-size:10px;line-height:1;transition:transform .12s ease}}\
+         .site-nav details.nav-group[open]>summary::after{{transform:rotate(90deg)}}\
+         .site-nav details.nav-group>summary.here{{color:{accent};font-weight:600}}\
+         .site-nav details.nav-group>summary.here>a{{color:{accent}}}\
+         .site-nav details.nav-group>ul{{position:absolute;z-index:20;margin-top:6px;\
+         padding:8px 12px;background:{nav_bg};border:1px solid {border};border-radius:8px;\
+         box-shadow:0 10px 28px rgba(0,0,0,.45);min-width:150px}}\
+         .site-nav li{{position:relative}}\
          .site-nav a.active{{color:{accent};font-weight:600}}\
          .nav-section{{color:{muted2};font-size:12px;text-transform:uppercase;letter-spacing:.05em}}\
          main.page{{max-width:760px;margin:0 auto;padding:28px 20px}}\
@@ -902,6 +973,138 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
         faint2 = frozen("--site-text-faint-2"),
         doc = doc_css("main.page", PaletteMode::Frozen(theme)),
     )
+}
+
+#[cfg(test)]
+mod nav_layout_tests {
+    use super::*;
+
+    /// A nested nav must render as a **tree**, and the stylesheet must lay that
+    /// tree out as columns rather than flattening it into one row.
+    ///
+    /// **The bug this pins, reported from the outside as "the menu items just
+    /// shoot off across the top".** The markup was always correct — a child
+    /// `<ul>` nested inside its parent's `<li>`. The stylesheet was not: both
+    /// `.site-nav ul` and `.site-nav li` were `display:flex` **unscoped by
+    /// depth**, so a nested `<ul>` became a flex item laid out *beside* its
+    /// parent label. Every descendant collapsed onto one line and a group
+    /// header was indistinguishable from its own children.
+    ///
+    /// Measured in Firefox on a generated site, before and after, with only the
+    /// stylesheet varying — a 4-item / 2-group nav went from **8 links on one
+    /// 27px row** (and not even baseline-aligned: y=17 for leaves, y=20 for
+    /// parents) to three rows with children x-aligned under their parent at a
+    /// smaller muted size.
+    ///
+    /// **This is a spelling check standing in for a layout property**, and it is
+    /// worth being honest that the real property is only observable in a
+    /// browser: nothing here proves the page *renders* correctly. What it does
+    /// prove is that the two rules whose absence caused the bug are still
+    /// present and still scoped — a later edit that re-broadens `.site-nav ul`
+    /// back to every depth fails here, which is exactly how the bug was
+    /// introduced.
+    #[test]
+    fn a_nested_nav_renders_as_a_tree_and_the_css_lays_it_out_as_columns() {
+        let nav = vec![
+            NavItem::new("Home", "/index"),
+            NavItem::section(
+                "Research",
+                "/research",
+                vec![NavItem::new("Glossary", "/research/glossary")],
+            ),
+        ];
+        let loc = location::Location::site_root("demo");
+        let ctx = LinkCtx { layout: Layout::BareRoot, prefix: "", audit: None };
+        let html = render_nav(&nav, &loc, "index", ctx);
+
+        // The child list is INSIDE its parent's <li> — the tree, not a sibling.
+        let research = html.find("Research").expect("parent rendered");
+        let child_ul = html[research..].find("<ul>").expect("child <ul> rendered");
+        let parent_li_end = html[research..].find("</li>").expect("parent <li> closes");
+        assert!(
+            child_ul < parent_li_end,
+            "the child <ul> must nest inside its parent <li>, not follow it: {html}"
+        );
+
+        // A group is a native `<details>` — collapsible with NO JavaScript,
+        // which is the property the whole static export exists for.
+        assert!(
+            html.contains("<details class=\"nav-group\"><summary"),
+            "a group must render as a <details> disclosure: {html}"
+        );
+        // ...and it must ship CLOSED. The panel is absolutely positioned, so an
+        // `open` group would cover the article on arrival, and without JS the
+        // reader cannot dismiss it by clicking away. Mutating this to `open` is
+        // the regression this line exists to catch.
+        assert!(
+            !html.contains("<details class=\"nav-group\" open"),
+            "groups must ship closed — an open floating panel covers the page: {html}"
+        );
+        // The leaf with no children is NOT wrapped in a disclosure.
+        let home = html.find("Home").expect("leaf rendered");
+        assert!(
+            html[..home].rfind("<details").is_none(),
+            "a childless nav item must not become a group: {html}"
+        );
+
+        let css = page_css(None);
+        // The horizontal row is scoped to the TOP level. Unscoped is the bug.
+        assert!(
+            css.contains(".site-nav>ul{list-style:none;display:flex"),
+            "top-level nav row must be scoped with `>`: {css}"
+        );
+        // ...and every nested level stacks.
+        assert!(
+            css.contains(".site-nav ul ul{") && css.contains("flex-direction:column"),
+            "nested nav lists must stack in a column: {css}"
+        );
+        // A bare `.site-nav ul{...display:flex` with no `>` is the regression.
+        assert!(
+            !css.contains(".site-nav ul{list-style:none;display:flex"),
+            "an unscoped `.site-nav ul` flex rule reintroduces the flattening: {css}"
+        );
+    }
+
+    /// The group holding the page being rendered is **marked**, not opened.
+    ///
+    /// This is the one thing a static exporter can do that the live app cannot
+    /// — the current page is known at render time — and the whole value of it
+    /// is lost if the marking is silently dropped, because then every group
+    /// looks identical and the reader has to open three of them to find where
+    /// they already are. Asserted on a page that is a **child** of the group,
+    /// since that is the case the recursion exists for.
+    #[test]
+    fn the_group_holding_the_current_page_is_marked_but_not_opened() {
+        let nav = vec![
+            NavItem::new("Home", "/index"),
+            NavItem::section(
+                "Guides",
+                "/guides",
+                vec![NavItem::new("Start", "/guides/start")],
+            ),
+            NavItem::section(
+                "Reference",
+                "/reference",
+                vec![NavItem::new("Tree", "/reference/tree")],
+            ),
+        ];
+        let loc = location::Location::site_root("demo");
+        let ctx = LinkCtx { layout: Layout::BareRoot, prefix: "", audit: None };
+        let html = render_nav(&nav, &loc, "guides/start", ctx);
+
+        assert!(
+            html.contains("<summary class=\"here\"><a href=\"/guides.html\">Guides</a>"),
+            "the group containing the current page must be marked: {html}"
+        );
+        // Exactly one — marking every group is the same as marking none.
+        assert_eq!(
+            html.matches("class=\"here\"").count(),
+            1,
+            "only the group holding the current page is marked: {html}"
+        );
+        // Marked, still closed.
+        assert!(!html.contains(" open>") && !html.contains(" open "), "must stay closed: {html}");
+    }
 }
 
 #[cfg(test)]
