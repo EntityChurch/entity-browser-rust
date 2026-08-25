@@ -174,6 +174,70 @@ impl SiteModePosture {
     }
 }
 
+/// v11 WebRTC provisioning — the app-side **native shadow** of the worker
+/// protocol's `WireWebRtcConfig`, which is `#![cfg(target_arch = "wasm32")]`
+/// and so cannot be named in this natively-compiled module. `app.rs` converts
+/// this to the wire type at the `InitParams` boundary (the same "decoupled
+/// serializable shadow, convert at the boundary" split the wire type itself
+/// documents). This is the *capability* — which signaling node the §6.5
+/// establisher rendezvouses through — and is deployment-wide; whether a given
+/// peer actually installs the establisher is a **separate, explicit** per-peer
+/// decision ([`webrtc_enable_primary_default`]), never inferred from this being
+/// present (the v6 Subscribe lesson: a worker-wide "config present" must not
+/// silently enable every peer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebRtcProvisioning {
+    /// The signaling node's peer-id. Required alongside `node_addr` — the
+    /// carrier authenticates the node, so an address without its id is an
+    /// unauthenticated rendezvous (rust's provisioning-payload ruling).
+    pub node_peer_id: String,
+    /// The node's browser-reachable address (`ws://` / `wss://`). A browser
+    /// cannot open a raw TCP socket, so a TCP-only node is unreachable here.
+    pub node_addr: String,
+    /// ICE servers for the browser's own ICE agent. **Empty is legal and means
+    /// host-candidates-only** — a LAN-only deployment (rung-1) — never "use a
+    /// public default", which would enrol a third party invisibly. Carried so
+    /// the harness / a real-NAT (rung-2) deployment can populate it; the
+    /// build-knob default leaves it empty.
+    pub ice_servers: Vec<IceServer>,
+    /// §6.5 negotiation tunables. `None` = the worker impl's defaults.
+    pub poll_interval_ms: Option<u64>,
+    pub max_deadline_ms: Option<u64>,
+}
+
+/// One ICE server for the browser's ICE agent (native shadow of the protocol's
+/// `WireIceServer`). A `stun:` entry carries no credentials; a `turn:`/`turns:`
+/// entry carries both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    pub username: Option<String>,
+    pub credential: Option<String>,
+}
+
+/// Resolve WebRTC provisioning from a `(node_peer_id, node_addr)` pair. **Both
+/// are required** — a lone address is an unauthenticated rendezvous and a lone
+/// peer-id has nowhere to dial — so any missing/blank half yields `None` (fails
+/// closed, D3). Pure and native-testable; [`webrtc_provisioning_default`] feeds
+/// it the build-time knobs. `ice_servers` / tunables are left at their inert
+/// defaults here (rung-1 host-only); a richer source sets them.
+pub fn resolve_webrtc_provisioning(
+    node_peer_id: Option<&str>,
+    node_addr: Option<&str>,
+) -> Option<WebRtcProvisioning> {
+    let clean = |o: Option<&str>| o.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    match (clean(node_peer_id), clean(node_addr)) {
+        (Some(node_peer_id), Some(node_addr)) => Some(WebRtcProvisioning {
+            node_peer_id,
+            node_addr,
+            ice_servers: Vec::new(),
+            poll_interval_ms: None,
+            max_deadline_ms: None,
+        }),
+        _ => None,
+    }
+}
+
 /// The session configuration entity — the spine (§4-A).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionConfig {
@@ -425,6 +489,86 @@ pub fn home_origin_default() -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// The build-time WebRTC provisioning *capability* — the §6.5 signaling node,
+/// from `ENTITY_WEBRTC_NODE_PEER` + `ENTITY_WEBRTC_NODE_ADDR` (both required,
+/// [`resolve_webrtc_provisioning`]). `None` on a default build → no establisher
+/// is provisioned on any worker (exact v10 behaviour). This is the **build-knob
+/// layer** — available *before* the boot worker spawns (`InitParams.webrtc` is
+/// Init-only upstream, so a post-boot deployment-config fetch cannot reach it),
+/// and per this module's convention (see [`boot_default`]) the build knob is
+/// the **testing / dev** path. The production per-domain mechanism is
+/// `/entity-deployment.json`; carrying the node there is a later, additive
+/// layer (it needs a pre-spawn fetch) and is deliberately not wired yet.
+pub fn webrtc_provisioning_default() -> Option<WebRtcProvisioning> {
+    resolve_webrtc_provisioning(
+        option_env!("ENTITY_WEBRTC_NODE_PEER"),
+        option_env!("ENTITY_WEBRTC_NODE_ADDR"),
+    )
+}
+
+/// Whether the **primary** peer installs the establisher — the explicit
+/// per-peer *decision*, distinct from the capability above and defaulting to
+/// **false**. Set by `ENTITY_WEBRTC_ENABLE_PRIMARY=1`. Never inferred from
+/// [`webrtc_provisioning_default`] being `Some` (the v6 lesson: capability
+/// present must not silently enable a peer). Inert if no capability is
+/// provisioned — the worker-host rejects an enable with no config.
+pub fn webrtc_enable_primary_default() -> bool {
+    option_env!("ENTITY_WEBRTC_ENABLE_PRIMARY")
+        .map(str::trim)
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+/// Extract a URL query-param value from a raw `location.search` string
+/// (`"?a=1&b=2"` or `"a=1&b=2"`). Returns the first match's raw value. No
+/// percent-decoding — callers use it for `ws://host:port` values, whose chars
+/// (`:` `/`) are query-legal unencoded; a value containing `&`/`=`/`#` is not
+/// supported here (none of ours do). Mirrors the `main.rs` `?worker=` idiom.
+fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.trim_start_matches('?').split('&').find_map(|pair| {
+        let mut parts = pair.splitn(2, '=');
+        (parts.next() == Some(key)).then(|| parts.next().unwrap_or(""))
+    })
+}
+
+/// Runtime WebRTC provisioning from a URL query — the dev/showcase / e2e
+/// injection channel, **higher precedence than the build knob** and never
+/// persisted (`deployment_config.rs` precedence). Reads `webrtc_node_peer` +
+/// `webrtc_node`; both required (via [`resolve_webrtc_provisioning`]). Its
+/// reason for existing: a per-test signaling node has a **dynamic** address the
+/// compile-time knob cannot carry.
+pub fn webrtc_provisioning_from_query(query: &str) -> Option<WebRtcProvisioning> {
+    resolve_webrtc_provisioning(
+        query_param(query, "webrtc_node_peer"),
+        query_param(query, "webrtc_node"),
+    )
+}
+
+/// The primary-enable *decision* from a URL query (`?webrtc_enable=1`|`true`,
+/// or bare `?webrtc_enable`). `None` = not named (defer to the build knob).
+/// Kept a separate axis from the node config above even in the URL — the v6
+/// capability-vs-decision split does not relax just because it's a query param.
+pub fn webrtc_enable_from_query(query: &str) -> Option<bool> {
+    query_param(query, "webrtc_enable").map(|v| {
+        let v = v.trim();
+        v.is_empty() || v == "1" || v.eq_ignore_ascii_case("true")
+    })
+}
+
+/// The install shortfall (v12) — peer-ids we asked to `webrtc_enabled` that the
+/// worker's `WireCaps.webrtc_peers` report says did NOT get a §6.5 establisher.
+/// Empty = every enabled peer installed one. The worker-host refuses Init rather
+/// than installing nothing, so today this is always empty — computing it anyway
+/// is what keeps "the establisher installed" a **verified** property rather than
+/// a remembered one (D13; the report is per-peer precisely so it can be diffed
+/// against the per-peer request — never collapsed to one worker-wide bool).
+pub fn webrtc_install_shortfall(requested: &[String], installed: &[String]) -> Vec<String> {
+    requested
+        .iter()
+        .filter(|p| !installed.iter().any(|i| i == *p))
+        .cloned()
+        .collect()
 }
 
 /// The cold-boot default session config — the build-time startup **surface**
@@ -980,5 +1124,79 @@ mod tests {
         assert!(!toggle_fast_paint(&peers, &pid), "returns the new value (off)");
         assert!(!read(&peers, &pid).fast_paint, "persisted off");
         assert!(toggle_fast_paint(&peers, &pid), "back on");
+    }
+
+    #[test]
+    fn webrtc_provisioning_requires_both_node_fields() {
+        // Both present → provisioned, trimmed.
+        let p = resolve_webrtc_provisioning(Some(" node-1 "), Some(" ws://n:9000 "))
+            .expect("both fields present");
+        assert_eq!(p.node_peer_id, "node-1");
+        assert_eq!(p.node_addr, "ws://n:9000");
+        assert!(p.ice_servers.is_empty(), "rung-1 default is host-only");
+        assert_eq!(p.poll_interval_ms, None);
+
+        // A lone half is an unauthenticated rendezvous / a peer with nowhere to
+        // dial — fails closed to None, never a half-config on the wire.
+        assert!(resolve_webrtc_provisioning(Some("node-1"), None).is_none(), "addr missing");
+        assert!(resolve_webrtc_provisioning(None, Some("ws://n")).is_none(), "peer-id missing");
+        // Blank counts as absent (a build knob left as "").
+        assert!(resolve_webrtc_provisioning(Some("node-1"), Some("   ")).is_none(), "blank addr");
+        assert!(resolve_webrtc_provisioning(Some(""), Some("ws://n")).is_none(), "blank peer-id");
+        assert!(resolve_webrtc_provisioning(None, None).is_none(), "neither → v10 inert");
+    }
+
+    #[test]
+    fn webrtc_provisioning_from_query_reads_both_node_fields() {
+        // A dynamic ws addr (unencoded `:` `/` are query-legal) + peer-id.
+        let q = "?worker=1&webrtc_node=ws://127.0.0.1:4041&webrtc_node_peer=node-x&log=debug";
+        let p = webrtc_provisioning_from_query(q).expect("both present");
+        assert_eq!(p.node_addr, "ws://127.0.0.1:4041");
+        assert_eq!(p.node_peer_id, "node-x");
+        // Leading '?' optional; only one half present → None (fail closed).
+        assert!(webrtc_provisioning_from_query("webrtc_node=ws://x").is_none());
+        assert!(webrtc_provisioning_from_query("a=1&b=2").is_none(), "absent → None");
+    }
+
+    #[test]
+    fn webrtc_enable_from_query_is_a_tri_state() {
+        assert_eq!(webrtc_enable_from_query("?webrtc_enable=1"), Some(true));
+        assert_eq!(webrtc_enable_from_query("?webrtc_enable=true"), Some(true));
+        assert_eq!(webrtc_enable_from_query("?webrtc_enable"), Some(true), "bare = on");
+        assert_eq!(webrtc_enable_from_query("?webrtc_enable=0"), Some(false));
+        assert_eq!(webrtc_enable_from_query("?webrtc_enable=no"), Some(false));
+        assert_eq!(webrtc_enable_from_query("?worker=1"), None, "absent → defer to knob");
+    }
+
+    #[test]
+    fn webrtc_install_shortfall_diffs_requested_against_installed() {
+        let p = |s: &str| s.to_string();
+        // Everything we enabled installed → no shortfall.
+        assert!(webrtc_install_shortfall(&[p("a"), p("b")], &[p("a"), p("b")]).is_empty());
+        // An enabled peer absent from the report is the shortfall (the D13 case).
+        assert_eq!(
+            webrtc_install_shortfall(&[p("a"), p("b")], &[p("a")]),
+            vec![p("b")]
+        );
+        // Extra installed peers we didn't ask about are not a shortfall.
+        assert!(webrtc_install_shortfall(&[p("a")], &[p("a"), p("b")]).is_empty());
+        // Nothing requested → never a shortfall, regardless of the report.
+        assert!(webrtc_install_shortfall(&[], &[p("a")]).is_empty());
+    }
+
+    #[test]
+    fn webrtc_defaults_are_inert_on_a_plain_build() {
+        // This suite builds with none of the ENTITY_WEBRTC_* knobs set, so the
+        // default provisioning is absent and the primary does not opt in —
+        // exactly v10. (A knobbed build is exercised by resolve_* above; the
+        // env path is a thin `option_env!` feed with no branching to test.)
+        assert!(
+            webrtc_provisioning_default().is_none(),
+            "no ENTITY_WEBRTC_NODE_* baked → no capability (v10)"
+        );
+        assert!(
+            !webrtc_enable_primary_default(),
+            "enable is an explicit decision, never on by default"
+        );
     }
 }
