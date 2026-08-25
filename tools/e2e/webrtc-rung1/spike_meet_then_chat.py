@@ -83,7 +83,7 @@ re-render takes — the shape AGENTS names as the systemic source of load-depend
 flake, and the reason the suite prefers `poll_json` over `sleep(fixed)`. This file
 is that lesson applied to a WebDriver harness.
 """
-import json, os, re, sys, time, urllib.request
+import json, os, re, subprocess, sys, time, urllib.request
 
 MODE = os.environ.get("MODE", "direct").strip().lower()
 if MODE not in ("direct", "worker"):
@@ -99,6 +99,23 @@ TAG = os.environ.get("MEET_TAG", "rung1-chess").strip()
 # gate: rendezvous must still work, delivery must not. See the block at the end
 # of `main` for exactly what it asserts and why passing means a real limit.
 EXPECT_NO_MEDIA = os.environ.get("EXPECT_NO_MEDIA", "") == "1"
+
+# ── the `survives idle` phase (EXTENSION-NETWORK Amendment 14) ───────────────
+# Amendment 14 puts a MUST on the connection the §10.3 seam returns: it "MUST run
+# keepalive (§5), because a punched NAT mapping expires on silence and an idle
+# punched connection dies in a way no same-host test reproduces." §11.5's gate
+# says the same in one phrase — "a direct punched transport that SURVIVES IDLE".
+#
+# IDLE_SECS>0 turns the phase on; it is off by default because it costs its own
+# duration and the traversal gate does not need it. It is only meaningful on
+# TOPOLOGY=nat with a conntrack UDP timeout BELOW the quiet window — otherwise
+# the mapping was never at risk and a green result means nothing. That is
+# asserted, not documented: see `idle_preconditions`.
+IDLE_SECS = int(os.environ.get("IDLE_SECS", "0") or 0)
+TOPOLOGY = os.environ.get("TOPOLOGY", "shared").strip().lower()
+# What the routers were told, so the run can check the mapping was really at risk
+# (nat_topology.sh applies it; it is echoed here rather than re-read per router).
+UDP_TIMEOUT = int(os.environ.get("UDP_TIMEOUT", "180") or 180)
 
 A_BASE, B_BASE = "http://localhost:4446", "http://localhost:4447"
 APP = "http://host.containers.internal:8092"
@@ -347,6 +364,98 @@ def provision(base, sid, node_peer, label):
 # `met <short>  <full-id>` is what pump_meet pushes per discovered peer.
 MET_RE = re.compile(r"met\s+\S+\s+([1-9A-HJ-NP-Za-km-z]{40,})")
 
+def _router(name, *args):
+    """Run an iptables command in one of the rig's routers. Returns stdout, or
+    None if the router is absent or the command failed — a measurement that
+    cannot be taken must read as ABSENT, never as zero. A silent 0 here would
+    be indistinguishable from "the link went completely quiet", which is one of
+    the answers this phase exists to report."""
+    try:
+        out = subprocess.run(["podman", "exec", name, *args],
+                             capture_output=True, text=True, timeout=20)
+    except Exception:
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def idle_counters_arm():
+    """Install a UDP packet counter on each router's FORWARD path and zero it.
+
+    A user chain used purely as a counter: the jump is non-terminating (an empty
+    chain returns and traversal continues), so this observes the path without
+    changing it — the DROP rules below still see every packet they saw before.
+    Read back by CHAIN NAME, never by rule position: position moves the moment
+    anything else is inserted, and a mis-parsed row would be reported as a
+    cadence, which is the one number this phase turns on.
+
+    Deliberately counts ALL forwarded UDP rather than splitting by direction.
+    Splitting needs the router's LAN subnet, and deriving it from `ip route`
+    picks between two link routes — one of which is the transit side. A wrong
+    subnet yields a plausible small number instead of an error, and the whole
+    point here is that an unmeasurable mechanism must read as ABSENT."""
+    for s in ("a", "b"):
+        rtr = f"rtc-router-{s}"
+        _router(rtr, "iptables", "-N", "IDLEUDP")
+        _router(rtr, "iptables", "-F", "IDLEUDP")
+        # -C first so a re-run cannot stack duplicate counters on one path.
+        if _router(rtr, "iptables", "-C", "FORWARD", "-p", "udp",
+                   "-j", "IDLEUDP") is None:
+            if _router(rtr, "iptables", "-I", "FORWARD", "1", "-p", "udp",
+                       "-j", "IDLEUDP") is None:
+                return None
+        if _router(rtr, "iptables", "-Z", "FORWARD") is None:
+            return None
+    return True
+
+
+def idle_counters_read():
+    """{router: packets forwarded as UDP} — or None if unmeasurable."""
+    res = {}
+    for s in ("a", "b"):
+        rtr = f"rtc-router-{s}"
+        txt = _router(rtr, "iptables", "-L", "FORWARD", "-v", "-x", "-n")
+        if txt is None:
+            return None
+        hit = None
+        for line in txt.splitlines():
+            f = line.split()
+            if len(f) >= 3 and f[2] == "IDLEUDP":
+                try:
+                    hit = int(f[0])
+                except ValueError:
+                    return None
+        if hit is None:
+            return None
+        res[s] = hit
+    return res
+
+
+def idle_preconditions():
+    """Why this run is or is not allowed to claim anything about idle survival.
+
+    Returns (ok, reason). The mapping must have been genuinely at risk: a quiet
+    window shorter than the NAT's UDP timeout tests nothing, and would report a
+    confident green for a peer that runs no keepalive at all — §11.5.1's whole
+    warning, one substrate along."""
+    if TOPOLOGY != "nat":
+        return False, (f"TOPOLOGY={TOPOLOGY} — there is no NAT in path, so no "
+                       "mapping can expire and idle proves nothing (§11.5.1)")
+    if IDLE_SECS <= UDP_TIMEOUT:
+        return False, (f"quiet window {IDLE_SECS}s <= conntrack UDP timeout "
+                       f"{UDP_TIMEOUT}s — the mapping was never at risk; raise "
+                       "IDLE_SECS or lower UDP_TIMEOUT")
+    return True, (f"quiet window {IDLE_SECS}s vs conntrack UDP timeout "
+                  f"{UDP_TIMEOUT}s ({IDLE_SECS / UDP_TIMEOUT:.1f}x)")
+
+
+def channel_opens(base, sid):
+    """How many times a data channel has opened. A re-establishment during the
+    quiet window would deliver the post-idle message just fine — and would mean
+    the transport did NOT survive idle, it was rebuilt. This is the difference
+    the gate turns on, and delivery alone cannot see it."""
+    return sum(1 for l in log_lines(base, sid) if "data channel is OPEN" in l)
+
+
 def met_ids(base, sid):
     return MET_RE.findall(ex(base, sid, SHELL_TEXT) or "")
 
@@ -379,6 +488,10 @@ def main():
     sa = new_session(A_BASE); sb = new_session(B_BASE)
     print(f"A={sa}\nB={sb}")
     checks = {}
+    # Kept apart from `checks` on purpose — these decide whether the idle result
+    # MEANS anything, not whether it passed. Mixing them makes a run that could
+    # not test idle survival indistinguishable from one where it broke.
+    idle_inconclusive = {}
     try:
         if not (wait_boot(A_BASE, sa, "A") and wait_boot(B_BASE, sb, "B")): return 1
 
@@ -541,6 +654,97 @@ def main():
                 "can’t be reached back" not in reach
             )
 
+        # ── 7. survives idle — EXTENSION-NETWORK Amdt 14 / §11.5 ─────────────
+        # Establishment and carriage are the easy halves. The gate's own phrase
+        # is "a direct punched transport that SURVIVES IDLE", and a punched
+        # mapping dies on silence — so the only way to test it is to actually be
+        # silent for longer than the mapping lives, then speak again.
+        #
+        # Three things are measured, and the third is the one that keeps this
+        # honest. (a) does a message cross after the quiet window; (b) did the
+        # channel stay up or was it rebuilt (delivery cannot tell you which);
+        # (c) WHAT CROSSED THE ROUTER while the app was "idle" — because if the
+        # application itself chatters through the quiet window, the mapping was
+        # refreshed by traffic and the run has tested nothing. Arch asked for
+        # exactly this line: record which mechanism held the mapping open.
+        if IDLE_SECS:
+            print(f"\n── 7. survives idle ({IDLE_SECS}s quiet) ──────────")
+            ok_pre, why = idle_preconditions()
+            print(f"  precondition: {'✓' if ok_pre else '✗'} {why}")
+
+            opens_before = {l: channel_opens(b, s)
+                            for b, s, l in ((A_BASE, sa, "A"), (B_BASE, sb, "B"))}
+            armed = idle_counters_arm()
+            t0 = time.time()
+            # Sleep in chunks purely so a long quiet window reports progress; no
+            # WebDriver call is made inside it, because every `execute` pumps the
+            # page and this window must be as quiet as the app can be.
+            while time.time() - t0 < IDLE_SECS:
+                left = IDLE_SECS - (time.time() - t0)
+                time.sleep(min(15, max(0.5, left)))
+                print(f"     quiet … {int(time.time() - t0)}s/{IDLE_SECS}s", flush=True)
+            elapsed = time.time() - t0
+
+            counts = idle_counters_read() if armed else None
+            mechanism = "UNMEASURED — router counters unavailable"
+            app_chatty = False
+            if counts:
+                tot = sum(counts.values())
+                rate = tot / elapsed if elapsed else 0.0
+                per_side = {s: n / elapsed for s, n in counts.items()}
+                print("  UDP packets forwarded during the quiet window: " +
+                      ", ".join(f"router-{s}={counts[s]}" for s in sorted(counts)) +
+                      f"  ({rate:.2f} pkt/s total, "
+                      + ", ".join(f"{s}={per_side[s]:.2f}/s" for s in sorted(counts))
+                      + ")")
+                # Classification, with the numbers that separate the cases. ICE
+                # consent freshness (RFC 7675) re-checks the selected pair on a
+                # low single-digit-second period, so it lands near 0.2-0.5 pkt/s
+                # per direction and nowhere near an application poll.
+                if rate < 0.02:
+                    mechanism = ("NOTHING — no packet crossed. If the message "
+                                 "below still lands, the mapping outlived the "
+                                 "quiet window on its own or was rebuilt.")
+                elif max(per_side.values()) > 2.0:
+                    mechanism = (f"APPLICATION TRAFFIC ({rate:.1f} pkt/s) — the "
+                                 "app was not quiet, so this run does NOT test "
+                                 "idle survival")
+                    app_chatty = True
+                else:
+                    mechanism = (f"PERIODIC KEEPALIVE at {rate:.2f} pkt/s "
+                                 f"(~{1/max(rate,1e-9):.1f}s period) — consistent "
+                                 "with the browser's own ICE consent freshness "
+                                 "(RFC 7675), NOT with an application-tier §5 "
+                                 "keepalive, which this peer does not run on the "
+                                 "WebRTC path")
+            print(f"  mechanism that held the mapping open: {mechanism}")
+
+            msg_a2 = "after the quiet window, from A"
+            msg_b2 = "after the quiet window, from B"
+            got_b2 = send_and_wait(A_BASE, sa, B_BASE, sb, msg_a2, "A->B post-idle")
+            got_a2 = send_and_wait(B_BASE, sb, A_BASE, sa, msg_b2, "B->A post-idle")
+            opens_after = {l: channel_opens(b, s)
+                           for b, s, l in ((A_BASE, sa, "A"), (B_BASE, sb, "B"))}
+            rebuilt = {l: opens_after[l] - opens_before[l] for l in opens_before}
+            print(f"  data-channel opens during idle: {rebuilt} "
+                  f"(0 = survived; >0 = re-established, which is NOT surviving)")
+
+            checks["post-idle A->B delivered"] = got_b2
+            checks["post-idle B->A delivered"] = got_a2
+            checks["the channel survived rather than re-establishing"] = \
+                all(v == 0 for v in rebuilt.values())
+            # A run that cannot claim anything must NOT report PASS — a vacuous
+            # green would retire an open item in arch's spec on the strength of
+            # a test that could not have failed. But it must not report FAIL
+            # either: "the transport died on idle" and "we could not hold the
+            # link quiet long enough to find out" are opposite findings, and a
+            # shared red would make the first invisible behind the second. So
+            # the preconditions are tracked SEPARATELY and exit 2.
+            idle_inconclusive.update({
+                "the quiet window could have expired the mapping": ok_pre,
+                "the app was actually quiet": not app_chatty,
+            })
+
         # The establishment diagnostic, printed on EVERY run rather than only in
         # the negative control. `WebRtcError::Timeout` carries the two facts a
         # bare failure cannot — did we offer/answer, and did trickled candidates
@@ -645,6 +849,20 @@ def main():
 
         ok = all(checks.values())
         print(f"\nRESULT: {'PASS ✅ name -> id -> connection -> message' if ok else 'FAIL ❌'}")
+        if ok and IDLE_SECS and not all(idle_inconclusive.values()):
+            # Everything asserted passed; what failed is this run's standing to
+            # assert anything about idle. Exit 2 so a caller can tell the three
+            # states apart — and say plainly which claim is void, because
+            # "survives idle" is the one an open spec item is waiting on.
+            print("\nRESULT: INCONCLUSIVE ⚠  the transport behaved correctly, but "
+                  "this run cannot claim `survives idle`:")
+            for k, v in idle_inconclusive.items():
+                if not v:
+                    print(f"   ⚠  {k}")
+            print("   The delivery and no-rebuild results above stand on their own;"
+                  "\n   what is NOT established is that they were obtained across a"
+                  "\n   silence long enough for the NAT mapping to have died.")
+            return 2
         return 0 if ok else 1
     finally:
         rq(A_BASE, "DELETE", f"/session/{sa}"); rq(B_BASE, "DELETE", f"/session/{sb}")

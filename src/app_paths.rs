@@ -183,6 +183,27 @@ pub fn connector_selection_path(app_id: &str, peer_id: &str) -> String {
     settings_path(app_id, peer_id, "connector-selection")
 }
 
+/// Prefix for the **file offers** this peer is serving — one manifest entity
+/// per offered file (`crate::file_offer`). A counterpart *lists this prefix on
+/// our tree*, so unlike most app-tier state it is read by strangers: it is the
+/// browser's answer to the native peer's `local/files` share, and the reason a
+/// browser can be the serving side of a transfer at all.
+///
+/// The bytes themselves live in `system/content` (hash-addressed, chunked);
+/// these entities are what give a hash a filename.
+///
+/// e.g. `offers_prefix(APP_ID, me)` → `"/{me}/app/entity-browser/offers/"`
+pub fn offers_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/offers/", peer_id, app_id)
+}
+
+/// Path for one offer, keyed by the **hex of its blob hash** — already a safe
+/// single segment, and content-derived, so re-offering identical bytes is an
+/// idempotent overwrite rather than a duplicate row for one file.
+pub fn offer_path(app_id: &str, peer_id: &str, offer_id: &str) -> String {
+    format!("{}{}", offers_prefix(app_id, peer_id), offer_id)
+}
+
 /// Build a per-window results path.
 pub fn window_results_path(app_id: &str, peer_id: &str, window_id: WindowId) -> String {
     workspace_path(app_id, peer_id, &format!("windows/{}/results", window_id))

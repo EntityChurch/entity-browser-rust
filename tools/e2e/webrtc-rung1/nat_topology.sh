@@ -39,6 +39,13 @@ LAN_B=entity-rtc-lan-b
 ROUTER_IMG=localhost/entity-rtc-router
 FF_IMG=localhost/entity-rtc-firefox
 STUN_PORT="${STUN_PORT:-3478}"
+# How long a UDP mapping lives on the routers with no traffic. 180s is the
+# ordinary run's value (generous — nothing should expire mid-establishment).
+# The `survives idle` gate LOWERS it, because a quiet window shorter than the
+# mapping lifetime tests nothing: the mapping was never at risk and a peer that
+# runs no keepalive at all would pass. Real home routers commonly sit at 30-120s
+# for UDP, so a low value here is not an unfair substrate, it is the honest one.
+UDP_TIMEOUT="${UDP_TIMEOUT:-180}"
 
 down() {
   podman rm -f rtc-a rtc-b rtc-router-a rtc-router-b rtc-stun >/dev/null 2>&1 || true
@@ -74,8 +81,8 @@ up() {
       --network "$TRANSIT" --network "${!lan_var}" \
       --cap-add NET_ADMIN \
       --sysctl net.ipv4.ip_forward=1 \
-      --sysctl net.netfilter.nf_conntrack_udp_timeout=180 \
-      --sysctl net.netfilter.nf_conntrack_udp_timeout_stream=180 \
+      --sysctl net.netfilter.nf_conntrack_udp_timeout="$UDP_TIMEOUT" \
+      --sysctl net.netfilter.nf_conntrack_udp_timeout_stream="$UDP_TIMEOUT" \
       "$ROUTER_IMG" >/dev/null
   done
 
@@ -103,6 +110,13 @@ up() {
 
   for s in a b; do
     lan_var="LAN_${s^^}"; lan="${!lan_var}"
+    # Re-apply at exec time, not only at create: `up` reuses a router that is
+    # already running, so a run that lowered UDP_TIMEOUT would silently inherit
+    # the previous run's value and its idle window would test nothing.
+    podman exec "rtc-router-$s" sysctl -qw \
+      net.netfilter.nf_conntrack_udp_timeout="$UDP_TIMEOUT" \
+      net.netfilter.nf_conntrack_udp_timeout_stream="$UDP_TIMEOUT" >/dev/null 2>&1 || \
+      echo "   ! router-$s: could not set conntrack UDP timeout to ${UDP_TIMEOUT}s"
     r_lan_ip=$(podman inspect "rtc-router-$s" \
       --format "{{(index .NetworkSettings.Networks \"$lan\").IPAddress}}")
     r_transit_ip=$(podman inspect "rtc-router-$s" \
@@ -143,7 +157,7 @@ up() {
     # into a no-op that still looks like a NAT.
     podman exec "rtc-router-$s" iptables -t nat -C POSTROUTING -s "$lan_subnet" -j MASQUERADE 2>/dev/null || \
       podman exec "rtc-router-$s" iptables -t nat -A POSTROUTING -s "$lan_subnet" -j MASQUERADE
-    echo "   router-$s: lan $r_lan_ip  external $r_transit_ip  (masquerading $lan_subnet)"
+    echo "   router-$s: lan $r_lan_ip  external $r_transit_ip  (masquerading $lan_subnet, udp mapping ${UDP_TIMEOUT}s)"
     # Point the browser's default route at its router. Everything the peer path
     # needs — node, dist, STUN, the other peer — is beyond it; the LAN subnet
     # itself keeps its on-link route, so the harness still gets its replies.

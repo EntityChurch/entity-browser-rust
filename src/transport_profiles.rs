@@ -56,6 +56,17 @@
 //!   and the outbound dispatcher routes on that scheme (`MultiConnector`,
 //!   D4) — but the missing websocket profile type is a real upstream gap worth
 //!   routing, and if it lands this module should publish under it.
+//!   **Re-verified 2026-08-16 against `core/peer/src/remote.rs`, because a
+//!   handoff had recorded this paragraph as stale.** It is not. The *spec*
+//!   landed — `NETWORK` §6.5.2b defines `system/peer/transport/websocket` — and
+//!   `entity-core-rust` exports a `TRANSPORT_WEBSOCKET` constant, which is the
+//!   `transport_type` field's **name**, nothing more: there is no
+//!   `TYPE_PEER_TRANSPORT_WEBSOCKET`, no `WebsocketProfileData`, and
+//!   `resolve_transport_address` still matches exactly `{tcp, http}`, dropping
+//!   anything else as *"entity_type … not a supported live profile"* (upstream
+//!   even pins a test that a websocket-typed entity must NOT decode as tcp).
+//!   Publishing the "correct" type here would therefore **break rung 2**. The
+//!   gap is in `core/peer` — the kernel, not ours.
 //! - **Staleness is not managed here.** A profile outlives the address that
 //!   produced it (a backend on a dynamic port moves). A repeat connect
 //!   overwrites `primary` in place, so the last address that *worked* wins;

@@ -37,8 +37,17 @@ mod peer_auth;
 mod backend_auth;
 #[cfg(target_arch = "wasm32")]
 mod dom;
+// Owned, arm-agnostic dispatch handle for spawned multi-step L1 flows (the
+// awaited twin of `writer_handle`). Staged with its first consumer.
+#[allow(dead_code)]
+mod dispatch_handle;
 mod event_log_cache;
 mod event_log_writer;
+// The browser's serving side of a file transfer (`system/content` + an offer
+// manifest). Staged: the native proof and the window wiring land together with
+// its consumers, so the offer/pull entry points have no caller yet.
+#[allow(dead_code)]
+mod file_offer;
 mod format;
 #[cfg(feature = "measurement")]
 mod frame_counters;

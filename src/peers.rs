@@ -701,6 +701,25 @@ impl Sdk {
     /// write in the PRIMARY SDK's store; on the Worker arm a backend peer has
     /// its OWN store, so a `/{me}/...`-keyed read then misses what the primary
     /// store holds (the "No sites yet" divergence).
+    /// Per-peer dispatch handle — the awaited, read-capable counterpart to
+    /// [`writer_handle_for`](Self::writer_handle_for). Direct hands out the
+    /// peer's own `Arc<PeerContext>` (whose L1 methods already return owning
+    /// futures); Worker hands out the proxy plus the peer id, the same pair
+    /// `WorkerPeerStore` dispatches through.
+    fn dispatch_handle(&self, peer_id: &str) -> Option<crate::dispatch_handle::DispatchHandle> {
+        match self {
+            Sdk::Direct(pm) => pm
+                .sdk()
+                .peer_arc(peer_id)
+                .map(crate::dispatch_handle::DispatchHandle::Direct),
+            #[cfg(target_arch = "wasm32")]
+            Sdk::Worker(w) => Some(crate::dispatch_handle::DispatchHandle::Worker {
+                proxy: w.proxy_handle(),
+                peer_id: peer_id.to_string(),
+            }),
+        }
+    }
+
     fn writer_handle_for(&self, peer_id: &str) -> Option<crate::writer_handle::WriterHandle> {
         match self {
             Sdk::Direct(pm) => pm
@@ -2539,6 +2558,23 @@ impl Peers {
         self.sdk_for(peer_id).ok()?.writer_handle_for(peer_id)
     }
 
+    /// A cloneable **dispatch** handle bound to `peer_id` — the awaited
+    /// counterpart to [`writer_handle_for`](Self::writer_handle_for), for a
+    /// flow that must keep dispatching *after* its first `.await`
+    /// (`crate::file_offer`'s list-then-read and blob-then-chunks walks).
+    /// `None` on an unrouted peer, never silently the primary's.
+    ///
+    /// See [`crate::dispatch_handle::DispatchHandle`] for why an owned handle
+    /// is needed at all — in short, every L1 future here already owns itself,
+    /// but making the *second* call needs a `&Peers` the spawned task no
+    /// longer has.
+    pub fn dispatch_handle(
+        &self,
+        peer_id: &str,
+    ) -> Option<crate::dispatch_handle::DispatchHandle> {
+        self.sdk_for(peer_id).ok()?.dispatch_handle(peer_id)
+    }
+
     /// Peer-scoped worker proxy — the proxy owning `peer_id`'s SDK, or
     /// `None` if that peer is Direct-backed or unknown. Use this for
     /// per-peer wire ops (e.g. connecting from a non-primary Peer window).
@@ -3591,6 +3627,103 @@ mod memory_transport_tests {
              {dials_before} → {dials_after}. The extension is still \
              reconnecting a conversation no window binds any more."
         );
+    }
+
+    /// **THE TRANSFER PROOF** — one peer offers a file, another pulls it back
+    /// byte for byte over a real connection, with **no `local/files` anywhere**.
+    ///
+    /// This is the claim `file_offer` exists to make: the serving side of a
+    /// transfer is not native-only. Until now every transfer op targeted
+    /// `entity://{peer}/local/files`, whose handler is
+    /// `#![cfg(not(target_arch = "wasm32"))]` and mounted by the Tauri backend —
+    /// so two browsers had nobody to receive. The counterpart here is
+    /// `system/content` + an offer manifest in our own app namespace, both of
+    /// which a browser peer has.
+    ///
+    /// What it asserts, in the order that matters:
+    ///
+    /// 1. **A can serve.** `offer_file` ingests and publishes with only
+    ///    dispatched (L1) calls — no `PeerContext`, no `ContentStore` off the
+    ///    peer — which is what makes the same path work on the Worker arm.
+    /// 2. **B can discover.** `list_offers` reads A's offers prefix across the
+    ///    connection and decodes a name and a size for a hash.
+    /// 3. **B can pull, across the frame budget.** The payload is deliberately
+    ///    **multi-chunk**, so `pull_offer` must walk the closure — blob first,
+    ///    then its chunks — rather than getting lucky with a single self-
+    ///    contained response. That walk is the piece `ops::download` names as
+    ///    its follow-up and the reason a "small file only" transfer is not the
+    ///    goal.
+    /// 4. **The bytes are the bytes.** Compared in full, not by length: content
+    ///    addressing means a wrong chunk cannot reassemble, and asserting the
+    ///    length alone would not notice if it could.
+    ///
+    /// **Mutation check:** cap `pull_offer` at the first `fetch_into` (skip the
+    /// chunk loop) and step 4 fails with the blob present and no chunks; point
+    /// `list_offers` at our own prefix instead of the remote's and step 2 goes
+    /// empty. Both were run.
+    ///
+    /// **Not covered here:** wasm (both arms are Direct in this harness), a
+    /// WebRTC data channel (the transport is deliberately immaterial — nothing
+    /// in `file_offer` names one, and the two-browser gate is what proves that
+    /// claim), grants (`debug_open_grants` posture, so this says nothing about
+    /// what a *stranger* may pull), and the UI.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_file_offered_by_one_peer_is_pulled_byte_for_byte_by_another() {
+        use crate::file_offer;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        // B dials A — the puller holds the connection, mirroring a receiver who
+        // was handed an id by a `meet`.
+        let connect = peers_b.connect_peer(&pid_b, format!("memory://{pid_a}"));
+        tokio::time::timeout(Duration::from_secs(2), connect)
+            .await
+            .expect("connect timed out")
+            .expect("B connects to A");
+
+        // Two full chunks and a tail: enough that the closure walk is exercised
+        // and a single-response shortcut cannot pass.
+        let raw: Vec<u8> = (0..(file_offer::CHUNK_SIZE * 2 + 129))
+            .map(|i| (i.wrapping_mul(31) % 251) as u8)
+            .collect();
+
+        // The handles are what a spawned UI action would hold: owned, so the
+        // flows keep dispatching after their first await.
+        let dispatch_a = peers_a.dispatch_handle(&pid_a).expect("A dispatch handle");
+        let dispatch_b = peers_b.dispatch_handle(&pid_b).expect("B dispatch handle");
+
+        let offer = file_offer::offer_file(&dispatch_a, "report.bin", &raw)
+            .await
+            .expect("A must be able to offer a file with no local/files handler");
+
+        let listed = file_offer::list_offers(&dispatch_b, &pid_a)
+            .await
+            .expect("B lists A's offers over the connection");
+        assert_eq!(listed, vec![offer.clone()], "exactly what A offered");
+        assert_eq!(listed[0].name, "report.bin", "a hash gets a filename");
+        assert_eq!(listed[0].size, raw.len() as u64);
+        assert_eq!(listed[0].from, pid_a, "the manifest remembers its source");
+
+        let pulled = file_offer::pull_offer(&dispatch_b, &pid_a, &listed[0].blob)
+            .await
+            .expect("B pulls the closure");
+        assert_eq!(pulled, raw, "the file must arrive byte for byte");
+
+        // A blob nobody offered must fail loudly rather than returning short
+        // bytes — the receiver's only defence against a stale listing.
+        let (ghost, _) = file_offer::chunk_bytes(b"never offered").unwrap();
+        assert!(
+            file_offer::pull_offer(&dispatch_b, &pid_a, &ghost.content_hash)
+                .await
+                .is_err(),
+            "pulling content the peer does not hold must error, not truncate"
+        );
+
+        handle_a.abort();
+        handle_b.abort();
     }
 
     /// THE DELIVERY PROOF: a signed chat message authored by peer A crosses a

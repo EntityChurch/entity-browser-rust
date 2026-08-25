@@ -1,0 +1,588 @@
+//! `file_offer` — a browser peer as the **serving** side of a file transfer.
+//!
+//! Everything else in the transfer path already exists and is transport-
+//! agnostic: upload (`dom/file_transfer.rs` → `Action::UploadFile` → op
+//! `write`), browse (`list`), download-to-device (`ops::download`). What a
+//! browser could not do is *be the counterpart* — all three target
+//! `entity://{peer}/local/files`, and `entity-local-files` is
+//! `#![cfg(not(target_arch = "wasm32"))]`, mounted by the Tauri backend. Two
+//! browsers had nobody to receive.
+//!
+//! The receiving surface is a different handler, not new code: `system/content`
+//! (`ingest` §6.3 / `get` §6.2) is registered on **every** peer — it rides the
+//! `content` feature, which we enable for the native peer and the wasm SDK
+//! alike. It is chunked, hash-addressed and frame-budgeted. So this module is a
+//! swap and a name:
+//!
+//! - **Offer (sender).** Chunk the bytes locally (`entity_content`, §3.2 fixed),
+//!   `ingest` the blob + chunks into our own `system/content` namespace, then
+//!   publish a small **manifest** entity in *our* app namespace
+//!   (`app/entity-browser/offers/{blob-hex}`) carrying name/size/blob/from.
+//!   Content is hash-addressed; the manifest is what gives a hash a filename.
+//! - **Pull (receiver).** List the sender's offers over `system/tree`, then walk
+//!   the blob's closure with `system/content:get` and `reassemble` the bytes.
+//!
+//! **Pull, not push** (`PLAN-2026-08-16` §2b decision 1): the sender ingests
+//! into its *own* store and advertises; the receiver fetches. It needs only a
+//! **read** grant rather than letting a stranger write into your tree, reuses
+//! the reassembly `ops::download` already does, and the accept/decline moment
+//! comes for free.
+//!
+//! **Transport-immaterial by construction.** Every call here goes through
+//! `Peers::execute`, which dispatches over whatever pooled connection reaches
+//! the target — a WebRTC data channel exactly as readily as a WebSocket. There
+//! is no branch on transport in this file, and there must never be one.
+//!
+//! **Arm-agnostic by construction.** Every call goes through
+//! [`DispatchHandle`], which branches on the arm exactly once, in one file —
+//! there is no `store()`, no `PeerContext`, no `ContentStore` off the peer
+//! here, so a Worker-arm peer offers files the same way a Direct-arm one does.
+//! The only `ContentStore` in this module is a private in-memory scratch store
+//! used to chunk and to reassemble. The handle is also what makes these flows
+//! *spawnable*: they are sequential (list → read each, blob → its chunks), so
+//! they keep dispatching after their first `.await`, which a borrowed `&Peers`
+//! cannot survive.
+//!
+//! ## The closure walk (why `pull` is two round-trips, not one)
+//!
+//! `system/content:get` returns exactly the hashes you ask for. The blob
+//! manifest names its chunks, so the receiver must fetch the blob first, decode
+//! its chunk list, then fetch the chunks — in batches, because the response has
+//! a frame budget (16 MiB default) and the handler moves the overflow to
+//! `missing` for the requester to re-ask. Upstream has this sequencer
+//! (`entity_content::ensure_closure`), but it takes a `&dyn Dispatcher`, which
+//! only the Direct arm can produce; [`pull_offer`] is the same walk over
+//! `Peers::execute` so both arms are served. `ops::download`'s "chunks may not
+//! be inlined — the follow-up is a `system/content:get` round-trip" note names
+//! exactly this loop.
+
+use std::sync::Arc;
+
+use entity_capability::ResourceTarget;
+use entity_content::{blob_chunk_hashes, create_blob_fixed, reassemble, GET_BATCH_SIZE};
+use entity_ecf::{bytes as ecf_bytes, integer, text, to_ecf, Value, ValueExt};
+use entity_entity::Entity;
+use entity_handler::ExecuteOptions;
+use entity_hash::Hash;
+use entity_store::{ContentStore, MemoryContentStore};
+
+use crate::app_paths::{offer_path, offers_prefix, APP_ID};
+use crate::dispatch_handle::DispatchHandle;
+
+/// Entity type of an offer manifest — our namespace, our shape
+/// (`AGENTS.md`: path namespaces stay app-tier, not SDK).
+pub const OFFER_TYPE: &str = "app/entity-browser/file-offer";
+
+/// The `system/content` namespace offered files are ingested into. One
+/// namespace for all offers: the manifest, not the namespace, is what
+/// distinguishes files.
+pub const NAMESPACE: &str = "files";
+
+/// Fixed chunk size (§3.2). 256 KiB keeps a small file to one or two chunks
+/// while leaving ~60 chunks per `get` batch inside the 16 MiB frame budget.
+pub const CHUNK_SIZE: usize = 256 * 1024;
+
+/// One advertised file. `blob` is the content hash of its `system/content/blob`
+/// manifest — the id under which the offer is published, so re-offering the
+/// same bytes is an idempotent overwrite rather than a second row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileOffer {
+    pub name: String,
+    pub size: u64,
+    pub blob: Hash,
+    /// The peer that offered it — carried in the manifest so a pulled file
+    /// remembers where it came from even after the listing is gone.
+    pub from: String,
+}
+
+impl FileOffer {
+    /// The path segment this offer is published under (hex of the blob hash,
+    /// which is already a safe single segment).
+    pub fn id(&self) -> String {
+        self.blob.to_hex()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Manifest codec
+// ---------------------------------------------------------------------------
+
+/// Encode an offer as its manifest entity.
+pub fn manifest_entity(offer: &FileOffer) -> Result<Entity, String> {
+    let data = to_ecf(&Value::Map(vec![
+        (text("name"), text(offer.name.clone())),
+        (text("size"), integer(offer.size as i64)),
+        (text("blob"), ecf_bytes(offer.blob.to_bytes())),
+        (text("from"), text(offer.from.clone())),
+    ]));
+    Entity::new(OFFER_TYPE, data).map_err(|e| format!("offer manifest: {e}"))
+}
+
+/// Decode a manifest entity. `None` for a wrong type or any malformed body —
+/// a stranger's tree is untrusted input, so this never panics and never
+/// half-fills an offer.
+pub fn decode_manifest(entity: &Entity) -> Option<FileOffer> {
+    if entity.entity_type != OFFER_TYPE {
+        return None;
+    }
+    let value: Value = ciborium::from_reader(entity.data.as_slice()).ok()?;
+    let map = value.as_map()?;
+    let (mut name, mut size, mut blob, mut from) = (None, None, None, None);
+    for (k, v) in map {
+        match k.as_text() {
+            Some("name") => name = v.as_text().map(str::to_string),
+            Some("size") => size = v.as_integer().and_then(|i| u64::try_from(i128::from(i)).ok()),
+            Some("blob") => blob = v.as_bytes().and_then(|b| Hash::from_bytes(b).ok()),
+            Some("from") => from = v.as_text().map(str::to_string),
+            _ => {}
+        }
+    }
+    Some(FileOffer {
+        name: name?,
+        size: size?,
+        blob: blob?,
+        from: from.unwrap_or_default(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Wire shapes (`system/content` §6.2 / §6.3)
+// ---------------------------------------------------------------------------
+
+/// The namespace path both ops name in their `resource`. Fully qualified,
+/// because the handler writes the §6.4.2 presence binding at
+/// `{namespace}/{hex(H)}` — a bare `system/content/files` would bind outside
+/// any peer's tree.
+pub fn namespace_resource(peer_id: &str) -> String {
+    format!("/{peer_id}/system/content/{NAMESPACE}")
+}
+
+/// `ExecuteOptions` naming one path/prefix in the resource. Both content ops
+/// **require** it (v3.5 tightening: no resource ⇒ 400 `path_required`).
+fn resource_opts(target: &str) -> ExecuteOptions {
+    ExecuteOptions {
+        resource: Some(ResourceTarget {
+            targets: vec![target.to_string()],
+            exclude: vec![],
+        }),
+        ..Default::default()
+    }
+}
+
+fn empty_params() -> Entity {
+    Entity::new("system/empty", to_ecf(&Value::Null)).expect("system/empty Null is well-formed")
+}
+
+/// How many times a **remote** dispatch is retried while a path is still being
+/// established, and how long to wait between tries. See [`remote_execute`].
+const ESTABLISH_TRIES: usize = 10;
+const ESTABLISH_GAP_MS: u32 = 1_000;
+
+/// One remote dispatch, retried while the transport error looks like "there is
+/// no path *yet*".
+///
+/// **This is not defensive padding — it is the caller's half of §7.2.1.** The
+/// §6.5 establisher runs exactly ONE negotiation per consultation and never
+/// retries it (`caller_owns_retry`, structural in `main_thread_establish.rs`),
+/// so a first cross-peer dispatch between two peers that have only ever met by
+/// name reliably arrives before any channel exists: the ladder consults, the
+/// negotiation loses the race (`no live path … sdp_exchange=INCOMPLETE`), and a
+/// one-shot caller reports "no transport profile for peer" — which reads like
+/// the peer is unreachable when the truth is "ask again in a second".
+///
+/// Chat never had to think about this because its 5 Hz delivery poll *is* the
+/// retry (the A3 finding: the poll is load-bearing). The transfer verbs were
+/// the first genuinely one-shot §10.3 caller here, and they failed on exactly
+/// that — measured, in `e2e-webrtc-file`, before this existed.
+///
+/// Bounded on purpose, and bounded *here* rather than by adding app-tier "how
+/// many times has §6.5 failed" state: the per-peer consultation backoff lives
+/// one layer down in `core/peer` and is keyed correctly; a second counter in
+/// the app is how `connection_health` happened. Ten tries at a second apart is
+/// well inside the free-consultation window a healthy meet uses.
+///
+/// A returned `HandlerResult` — including a 403 or 404 — is an **answer** and
+/// is never retried; only a transport `Err` is.
+async fn remote_execute(
+    dispatch: &DispatchHandle,
+    handler_uri: String,
+    operation: String,
+    params: Entity,
+    opts: ExecuteOptions,
+) -> Result<entity_handler::HandlerResult, String> {
+    let mut last = String::new();
+    for attempt in 0..ESTABLISH_TRIES {
+        if attempt > 0 {
+            crate::dispatch_handle::delay_ms(ESTABLISH_GAP_MS).await;
+        }
+        match dispatch
+            .execute(handler_uri.clone(), operation.clone(), params.clone(), opts.clone())
+            .await
+        {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                tracing::debug!(
+                    "transfer: {handler_uri} {operation} attempt {} failed: {e}",
+                    attempt + 1
+                );
+                last = e;
+            }
+        }
+    }
+    Err(format!(
+        "{last} (gave up after {ESTABLISH_TRIES} attempts — no path to the peer was \
+         established; if you met by name, check both sides installed an establisher)"
+    ))
+}
+
+/// An entity in the inline `core/entity` shape the content handler decodes
+/// (`{type, data}`). The handler re-encodes `data` through ECF and re-hashes,
+/// so the value we hand it must be the entity's own canonical body decoded —
+/// not a re-serialization of something else.
+fn inline_entity(entity: &Entity) -> Result<Value, String> {
+    let data: Value = ciborium::from_reader(entity.data.as_slice())
+        .map_err(|e| format!("entity body is not CBOR: {e}"))?;
+    Ok(Value::Map(vec![
+        (text("type"), text(entity.entity_type.clone())),
+        (text("data"), data),
+    ]))
+}
+
+/// `ingest` params in **envelope** mode: `root` is the blob manifest, `included`
+/// carries every chunk keyed by its own content hash (the handler validates
+/// `content_hash(entity) == key` and rejects a mismatch).
+pub fn ingest_params(blob: &Entity, chunks: &[Entity]) -> Result<Entity, String> {
+    let included: Vec<(Value, Value)> = chunks
+        .iter()
+        .map(|c| Ok((ecf_bytes(c.content_hash.to_bytes()), inline_entity(c)?)))
+        .collect::<Result<_, String>>()?;
+    let envelope = Value::Map(vec![
+        (text("root"), inline_entity(blob)?),
+        (text("included"), Value::Map(included)),
+    ]);
+    let data = to_ecf(&Value::Map(vec![(text("envelope"), envelope)]));
+    Entity::new("system/content/ingest-request", data).map_err(|e| format!("ingest params: {e}"))
+}
+
+/// `get` params: the hashes to fetch, each as a bstr hash record.
+pub fn get_params(hashes: &[Hash]) -> Result<Entity, String> {
+    let data = to_ecf(&Value::Map(vec![(
+        text("hashes"),
+        Value::Array(hashes.iter().map(|h| ecf_bytes(h.to_bytes())).collect()),
+    )]));
+    Entity::new("system/content/get-request", data).map_err(|e| format!("get params: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Chunking
+// ---------------------------------------------------------------------------
+
+/// Chunk `raw` into the §3.2 fixed-size entity shape. Returns the blob manifest
+/// entity plus its chunk entities, in blob-declared order.
+///
+/// The scratch store is local and private: chunking is a pure function of the
+/// bytes, and routing it through the peer would need a `ContentStore` the
+/// Worker arm cannot hand out.
+pub fn chunk_bytes(raw: &[u8]) -> Result<(Entity, Vec<Entity>), String> {
+    let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+    let blob_hash =
+        create_blob_fixed(&store, raw, CHUNK_SIZE).map_err(|e| format!("chunking failed: {e}"))?;
+    let blob = store
+        .get(&blob_hash)
+        .ok_or_else(|| "chunker did not store its own blob".to_string())?;
+    let (_total, chunk_hashes) =
+        blob_chunk_hashes(&store, &blob_hash).map_err(|e| format!("blob decode: {e}"))?;
+    let chunks = chunk_hashes
+        .into_iter()
+        .map(|h| {
+            store
+                .get(&h)
+                .ok_or_else(|| format!("chunker did not store chunk {}", h.to_hex()))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((blob, chunks))
+}
+
+// ---------------------------------------------------------------------------
+// Offer (sender side)
+// ---------------------------------------------------------------------------
+
+/// Ingest `raw` into our own content namespace and publish its manifest.
+///
+/// Both halves are dispatched (L1), so this is one code path on both arms. The
+/// manifest write is awaited rather than fire-and-forget: an offer whose bytes
+/// are ingested but whose manifest never lands is a file nobody can name.
+pub async fn offer_file(
+    dispatch: &DispatchHandle,
+    name: &str,
+    raw: &[u8],
+) -> Result<FileOffer, String> {
+    let local_pid = dispatch.local_peer_id();
+    let (blob, chunks) = chunk_bytes(raw)?;
+    let params = ingest_params(&blob, &chunks)?;
+    let result = dispatch
+        .execute(
+            "system/content".to_string(),
+            "ingest".to_string(),
+            params,
+            resource_opts(&namespace_resource(&local_pid)),
+        )
+        .await?;
+    if result.status != 200 {
+        return Err(format!("ingest refused: status {}", result.status));
+    }
+
+    let offer = FileOffer {
+        name: name.to_string(),
+        size: raw.len() as u64,
+        blob: blob.content_hash,
+        from: local_pid.clone(),
+    };
+    dispatch
+        .put(
+            offer_path(APP_ID, &local_pid, &offer.id()),
+            manifest_entity(&offer)?,
+        )
+        .await?;
+    Ok(offer)
+}
+
+// ---------------------------------------------------------------------------
+// Pull (receiver side)
+// ---------------------------------------------------------------------------
+
+/// List what `remote_pid` is offering, newest-listing-order irrelevant (the
+/// caller sorts). One `system/tree` listing plus one read per manifest — the
+/// same cross-peer read shape chat's delivery uses, so it works over any
+/// transport and on either arm.
+///
+/// A manifest that fails to decode is **skipped, not fatal**: one bad row in a
+/// stranger's tree must not hide the rest of their offers.
+pub async fn list_offers(
+    dispatch: &DispatchHandle,
+    remote_pid: &str,
+) -> Result<Vec<FileOffer>, String> {
+    let prefix = offers_prefix(APP_ID, remote_pid);
+    let listing = remote_execute(
+        dispatch,
+        format!("entity://{remote_pid}/system/tree"),
+        "get".to_string(),
+        empty_params(),
+        resource_opts(&prefix),
+    )
+    .await?;
+    if listing.status == 404 {
+        return Ok(Vec::new()); // nothing offered yet — not an error
+    }
+    if listing.status != 200 {
+        return Err(format!("offer listing refused: status {}", listing.status));
+    }
+
+    let mut out = Vec::new();
+    for id in crate::backend_auth::parse_listing_keys(&listing.result) {
+        let leaf = remote_execute(
+            dispatch,
+            format!("entity://{remote_pid}/system/tree"),
+            "get".to_string(),
+            empty_params(),
+            resource_opts(&format!("{prefix}{id}")),
+        )
+        .await?;
+        if leaf.status == 200 {
+            if let Some(offer) = decode_manifest(&leaf.result) {
+                out.push(offer);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Pull an offered file's bytes from `remote_pid` — the closure walk.
+///
+/// Blob first, then its chunks in `GET_BATCH_SIZE` batches, each response's
+/// `included` map folded into a local scratch store until `reassemble` can
+/// resolve the whole blob. A batch that returns **nothing new** is fatal rather
+/// than an infinite loop: the two ways that happens (the peer does not hold the
+/// chunk, or the frame budget cannot fit even one) are both the caller's
+/// problem to see, and a silent spin would present as a hang.
+///
+/// The bytes are verified by construction — `reassemble` walks content hashes,
+/// so a corrupted or substituted chunk cannot reassemble into the named blob.
+pub async fn pull_offer(
+    dispatch: &DispatchHandle,
+    remote_pid: &str,
+    blob: &Hash,
+) -> Result<Vec<u8>, String> {
+    let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+    let namespace = namespace_resource(remote_pid);
+
+    fetch_into(dispatch, remote_pid, &namespace, &store, &[*blob]).await?;
+    if store.get(blob).is_none() {
+        return Err(format!(
+            "peer {remote_pid} did not return the offered blob {} — the offer is stale",
+            blob.to_hex()
+        ));
+    }
+
+    let (_total, chunk_hashes) =
+        blob_chunk_hashes(&store, blob).map_err(|e| format!("blob decode: {e}"))?;
+    let mut missing: Vec<Hash> = chunk_hashes
+        .iter()
+        .filter(|h| store.get(h).is_none())
+        .copied()
+        .collect();
+    while !missing.is_empty() {
+        let batch: Vec<Hash> = missing.iter().take(GET_BATCH_SIZE).copied().collect();
+        let before = missing.len();
+        fetch_into(dispatch, remote_pid, &namespace, &store, &batch).await?;
+        missing.retain(|h| store.get(h).is_none());
+        if missing.len() == before {
+            return Err(format!(
+                "closure stalled: {} chunk(s) still missing after a full batch \
+                 (the peer no longer holds them, or one chunk exceeds the frame budget)",
+                missing.len()
+            ));
+        }
+    }
+
+    reassemble(&store, blob).map_err(|e| format!("reassemble failed: {e}"))
+}
+
+/// One `system/content:get` against `remote_pid`, folding every returned entity
+/// into `store`. Hash-keyed, so an entity the peer sent that we did not ask for
+/// is harmless — and one it withheld shows up as a still-missing hash rather
+/// than as a partial file.
+async fn fetch_into(
+    dispatch: &DispatchHandle,
+    remote_pid: &str,
+    namespace: &str,
+    store: &Arc<dyn ContentStore>,
+    hashes: &[Hash],
+) -> Result<(), String> {
+    let result = remote_execute(
+        dispatch,
+        format!("entity://{remote_pid}/system/content"),
+        "get".to_string(),
+        get_params(hashes)?,
+        resource_opts(namespace),
+    )
+    .await?;
+    if result.status != 200 {
+        return Err(format!("content get refused: status {}", result.status));
+    }
+    for entity in result.included.values() {
+        // A put that fails (hash mismatch, encoding) simply leaves that hash
+        // missing, which the caller's loop reports — never a partial file.
+        let _ = store.put(entity.clone());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_manifest_round_trips() {
+        let (blob, _) = chunk_bytes(b"hello").unwrap();
+        let offer = FileOffer {
+            name: "notes.txt".into(),
+            size: 5,
+            blob: blob.content_hash,
+            from: "PEER_A".into(),
+        };
+        let decoded = decode_manifest(&manifest_entity(&offer).unwrap()).unwrap();
+        assert_eq!(decoded, offer);
+        assert_eq!(decoded.id(), blob.content_hash.to_hex());
+    }
+
+    #[test]
+    fn a_foreign_or_malformed_manifest_decodes_to_none() {
+        // Wrong type: a stranger's tree holds whatever they put there.
+        let wrong = Entity::new("app/other/thing", to_ecf(&Value::Null)).unwrap();
+        assert!(decode_manifest(&wrong).is_none());
+        // Right type, missing fields → None rather than a half-filled offer.
+        let partial = Entity::new(OFFER_TYPE, to_ecf(&Value::Map(vec![(text("name"), text("x"))])))
+            .unwrap();
+        assert!(decode_manifest(&partial).is_none());
+    }
+
+    #[test]
+    fn chunking_is_content_addressed_and_complete() {
+        // Two chunks' worth plus a tail, so the blob really lists several.
+        let raw: Vec<u8> = (0..(CHUNK_SIZE * 2 + 7)).map(|i| (i % 251) as u8).collect();
+        let (blob, chunks) = chunk_bytes(&raw).unwrap();
+        assert_eq!(chunks.len(), 3, "two full chunks and a tail");
+
+        // The blob names exactly these chunks, in order — and reassembling
+        // from them alone returns the original bytes.
+        let store: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+        store.put(blob.clone()).unwrap();
+        for c in &chunks {
+            store.put(c.clone()).unwrap();
+        }
+        let (total, listed) = blob_chunk_hashes(&store, &blob.content_hash).unwrap();
+        assert_eq!(total, raw.len() as u64);
+        assert_eq!(
+            listed,
+            chunks.iter().map(|c| c.content_hash).collect::<Vec<_>>()
+        );
+        assert_eq!(reassemble(&store, &blob.content_hash).unwrap(), raw);
+
+        // Identical bytes chunk to an identical blob — this is what makes the
+        // blob hash usable as the offer id (re-offering overwrites one row).
+        let (again, _) = chunk_bytes(&raw).unwrap();
+        assert_eq!(again.content_hash, blob.content_hash);
+    }
+
+    #[test]
+    fn ingest_params_carry_the_blob_as_root_and_chunks_keyed_by_hash() {
+        let raw: Vec<u8> = (0..(CHUNK_SIZE + 1)).map(|i| (i % 97) as u8).collect();
+        let (blob, chunks) = chunk_bytes(&raw).unwrap();
+        let params = ingest_params(&blob, &chunks).unwrap();
+        let value: Value = ciborium::from_reader(params.data.as_slice()).unwrap();
+        let envelope = value.get("envelope").expect("envelope mode");
+
+        // Root is the blob, in the `{type, data}` shape the handler decodes.
+        let root = envelope.get("root").unwrap();
+        assert_eq!(root.get("type").unwrap().as_text(), Some("system/content/blob"));
+
+        // Every included key is its entity's own content hash — the handler
+        // rejects a mismatch, so getting this wrong is a 400 at the far end.
+        let included = envelope.get("included").unwrap().as_map().unwrap().clone();
+        assert_eq!(included.len(), chunks.len());
+        for (key, ent) in &included {
+            let h = Hash::from_bytes(key.as_bytes().unwrap()).unwrap();
+            let round = Entity::new(
+                ent.get("type").unwrap().as_text().unwrap(),
+                to_ecf(ent.get("data").unwrap()),
+            )
+            .unwrap();
+            assert_eq!(round.content_hash, h, "included entity must hash to its key");
+        }
+    }
+
+    #[test]
+    fn get_params_encode_hashes_as_bstr_records() {
+        let (blob, _) = chunk_bytes(b"x").unwrap();
+        let params = get_params(&[blob.content_hash]).unwrap();
+        let value: Value = ciborium::from_reader(params.data.as_slice()).unwrap();
+        let arr = value.get("hashes").unwrap().as_array().unwrap().clone();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            Hash::from_bytes(arr[0].as_bytes().unwrap()).unwrap(),
+            blob.content_hash
+        );
+    }
+
+    #[test]
+    fn the_namespace_resource_is_peer_qualified() {
+        // The handler writes the §6.4.2 presence binding at
+        // `{resource}/{hex(H)}`; an unqualified namespace would bind outside
+        // any peer's tree.
+        assert_eq!(
+            namespace_resource("PEER_A"),
+            "/PEER_A/system/content/files"
+        );
+    }
+}
