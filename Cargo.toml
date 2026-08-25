@@ -292,6 +292,37 @@ opt-level = 2
 [profile.dev.package.block-buffer]
 opt-level = 2
 
+# Optimize the COMPUTE hot path in debug builds. The mount contract evaluates a
+# program's `step` (and every projection port's `source`) on EVERY tick — a
+# tree-walking evaluator over the IR, plus canonical-CBOR encode/decode and a
+# content hash per produced entity. At opt-level 0 that interpreter runs
+# ~10–30× slower, which a clock-driven game (Asteroids at 12 Hz, many actors)
+# feels directly as a sluggish sim. These are dependency crates (compiled once,
+# then cached), so the app crate stays debug for fast iteration while the L5
+# app-host / Programs window get a fast evaluator on the plain `make wasm` /
+# `serve-demo` / `tauri-run` (all debug) paths — `wasm-release` was already fast.
+# Same lever the crypto crates above use, extended to the eval/serialization path.
+[profile.dev.package.entity-compute]
+opt-level = 3
+
+[profile.dev.package.entity-ecf]
+opt-level = 2
+
+[profile.dev.package.ciborium]
+opt-level = 2
+
+[profile.dev.package.entity-entity]
+opt-level = 2
+
+[profile.dev.package.entity-hash]
+opt-level = 2
+
+[profile.dev.package.entity-tree]
+opt-level = 2
+
+[profile.dev.package.entity-store]
+opt-level = 2
+
 # Size-optimized SHIPPING profile (C8). This is the real
 # browser deployment artifact — produced by `trunk build --release` /
 # `make wasm-release` / `make build-serve`. Optimized for download size

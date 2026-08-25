@@ -44,7 +44,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::MessageEvent;
 
-use crate::dom::programs::{display_list_driver, sleep_ms, text_driver, with_timeout};
+use crate::dom::programs::{display_list_driver, now_ms, sleep_ms, text_driver, with_timeout};
 use crate::peers::Peers;
 use crate::program_host::bundle::{digest_hex, Bundle, EMBEDDED_PROGRAMS};
 use crate::program_host::descriptor::{scene_u64, ProgramDescriptor, SHAPE_DISPLAY_LIST, SHAPE_TEXT};
@@ -231,7 +231,23 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         let interval_ms = (1000 / desc.tick.rate_hint.max(1)).clamp(16, 1000) as i32;
         let mut last_hash = String::new();
         let mut ticks: u64 = 0;
+        // D13: the clock loop's health has a surface. Rolling mean of the whole
+        // per-tick work (eval + render + emit), stamped every 16 ticks — if it
+        // ever approaches `interval_ms` the sim is falling behind its rate, and
+        // this is where you'd see it (and the e2e/operator can read it).
+        let mut work_ms_accum = 0.0f64;
         loop {
+            // Fixed-RATE scheduling: measure the tick's own work and sleep only
+            // the REMAINDER of the interval, not a full interval on top of it.
+            // Otherwise the real period is (compute + render + interval), so a
+            // heavy tick silently halves the effective rate (Asteroids was
+            // running ~7 Hz against a 12 Hz clock before this). The `MIN_YIELD_MS`
+            // floor below is load-bearing: the compute evaluator is SYNCHRONOUS
+            // and a same-origin iframe shares the PARENT's main thread, so a tick
+            // that overruns its budget must still hand the thread back each round
+            // or it starves the outer UI (paint + input). We hit the rate when we
+            // can and yield a fixed floor when we can't — never spin at 0.
+            let tick_start = now_ms();
             if let Err(e) =
                 with_timeout(host::tick_future(&peers, &peer_id, &ns, &desc), 4000).await
             {
@@ -279,7 +295,17 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
                 }
             }
 
-            sleep_ms(interval_ms).await;
+            let elapsed = now_ms() - tick_start;
+            work_ms_accum += elapsed;
+            if ticks.is_multiple_of(16) {
+                let avg = work_ms_accum / 16.0;
+                work_ms_accum = 0.0;
+                let _ = display.set_attribute("data-app-host-tick-ms", &format!("{avg:.1}"));
+            }
+            // Fairness floor for the shared main thread (see the loop-head note).
+            const MIN_YIELD_MS: f64 = 8.0;
+            let remaining = (interval_ms as f64 - elapsed).max(MIN_YIELD_MS) as i32;
+            sleep_ms(remaining).await;
         }
     });
     Ok(())
