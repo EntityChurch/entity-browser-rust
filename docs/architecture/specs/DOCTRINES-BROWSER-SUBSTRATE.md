@@ -159,6 +159,10 @@ Run all nine from the charter §4 **before writing code**. They are short:
 5. **Accounting?** Every `Closure`/listener/`Rc`/cache → drop path at the same
    change; every persisted entity → writer / reader-at-boot / GC story; every
    per-peer cache → eviction at close (D9, D12).
+5b. **What did this change make redundant, and did I delete it?** An
+   authoritative source that leaves its mirror standing has *increased*
+   duplication (AP17). Retire it now, or record the fallback's removal
+   condition now.
 6. **Does the test cross the real loops?** Cross-reload, real-store, the right
    **arm** and the right **runtime** (D10) — expanded in F2-arm.
 7. **Which arm?** Is any Direct-only API (`sdk()`, `peer_shared`, sync
@@ -167,7 +171,8 @@ Run all nine from the charter §4 **before writing code**. They are short:
 8. **Can this panic in a frame?** If so it kills the rAF loop and freezes the
    app (D13, AP3). Reschedule before the fallible section.
 9. **What persists, where, with what fallback and cold-return story?** (D16 —
-   "I leave, I come back three weeks later, did it save my shit?")
+   the cold-return test: leave, come back three weeks later, is the work
+   still there?)
 
 **Output of this step is a one-paragraph design note** (commit body or scratch
 file) naming: the layer, the kernel surface, the **arm(s)** it runs on, the
@@ -264,6 +269,30 @@ self-review stop:
 - **Regression assertion is the artifact.** The test that would have caught the
   bug ships in the *same commit* as the surface.
 
+### Step F5.5 — UI close-check (any change that adds or modifies a window/view surface)
+
+Run the **S1–S8 checklist** (`REFERENCE-UI-DESIGN.md` §2 — the rules are
+phrased yes/no; don't duplicate them here) against every surface the change
+touched, **before** F6. This step exists because it was skipped twice
+(`AUDIT-UI-STANDARDIZATION-2026-07-14` §2: *"we have the standard; we built
+without re-checking against it"*) — a standard without a gate is a suggestion.
+
+- **The checklist, by number:** S1 spacing from the scale · S2 one job, 2–4
+  bounded groups, nothing floats between them · S3 exactly one primary per
+  group · S4 status through the shared chips, one vocabulary, one home · S5
+  write-refresh + all four states (loading/empty/error/content) · S6 the
+  user's terms · S7 repeated records are tables · S8 recurring affordances
+  consumed from `dom/components.rs` — the atoms included (`button` /
+  `button_action` / `text_input` (draft-tracked) / `select` / `field`), never
+  a hand-rolled twin.
+- **The mechanical gate:** `make lint` runs `tools/ui-lint.sh` — per-file
+  counts of raw atom `create_element`s, inline style literals, and
+  untokenized hex must match `tools/ui-lint-baseline.txt`. New drift fails
+  the build; a migration ratchets the baseline **down in the same commit**
+  (`./tools/ui-lint.sh --update-baseline`). The checklist covers what a grep
+  can't (grouping, hierarchy, vocabulary, feedback); the gate covers what a
+  reviewer forgets.
+
 ### Step F6 — Verify through the real delivery path
 
 "Done" is not "it compiles" and not "I ran `make wasm`." For Dom it means:
@@ -277,7 +306,7 @@ self-review stop:
   == fresh `dist/` hash** before claiming it ships.
 - **The right WebView runtime** for runtime-sensitive work:
   Firefox-green ≠ WebKitGTK-green (`make tauri-run`; the grayscale-CSP bug,
-  `2f5851f`, only showed in WebKitGTK).
+  only showed in WebKitGTK).
 - **Trace the live build** for any "frozen / timing / connect" symptom and grep
   `panicked at` *before* blaming the substrate
   (`feedback_frozen_app_is_a_frame_panic`).
@@ -527,6 +556,9 @@ audit resumes and verifies the fix on top of it.
 | Doctrine | Change | Reason |
 |---|---|---|
 | Both | Initial codification | After the multi-peer boot / site-robustness audit reset. Skeleton ported from Godot `DOCTRINES.md`; substrate steps (F1.5 handoff-chain, F2-arm matrix, F3 worker-cache twist, A1 trace-before-theorize, F6 delivery-path verify) authored from our own §0.5 failure pattern. |
+| Feature | Added F5.5 — UI close-check (S1–S8) + the `tools/ui-lint.sh` baseline gate | `AUDIT-UI-STANDARDIZATION-2026-07-14`: the S1–S8 standard existed and was skipped twice (same shape as the connection audit — "standard exists, nobody ran it"). The check becomes a doctrine step, the drift becomes a lint failure. |
+
+| Audit | A5 discipline audit now explicitly includes the **operator surface** — the CLI/make/help layer, not only the runtime — and A12's checklist accepts a **consolidation audit** (no failing symptom) as a legitimate framing, named at A0 | `AUDIT-NAMING-AND-PUBLISHING-ARC-2026-08-18`: the arc's interior was well gated; ten defects sat on its edges, where a first-time operator, a foreign registry or a hostile origin arrives. Nothing in the doctrine pointed there, so nothing prompted anyone to *run* `make registry` and find it did not exist. **Four of the ten were found by using the tooling, not reading it** — so A1's "trace, don't theorize" gains a sibling: *run the command a user would run*. |
 
 When a step is added/removed/modified, log it here with the reason.
 

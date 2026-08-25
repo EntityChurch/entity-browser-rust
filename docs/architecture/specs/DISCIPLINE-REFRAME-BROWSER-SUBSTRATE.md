@@ -229,6 +229,14 @@ entries (observation / spec-reading / hypothesis / what-we-did-meanwhile /
 ask); **don't stall** — record a working position and proceed. Cite the
 canonical source with file:line and a *type* (`[[feedback_cross_repo_citations_need_type]]`).
 Its failure mode is AP6 (borrowed framing).
+*Amended 2026-08-18:* **"surface" includes the OPERATOR surface**, not only the
+wire. A usage string, a `--flag` spelling, a refusal message, a make-verb name and
+a default output path each state a contract, and each can drift out of agreement
+with the code behind it — three of one audit's ten findings were exactly that, and
+one of them meant *following the printed help could not succeed*. Its failure mode
+here is **AP25**. Corollary earned in the same pass: a *stale doc comment* is
+surface drift too — twice we found a **refuted** finding still asserted in a module
+whose sibling already carried the correction.
 
 **D9 — Accounting: nothing accumulates that we didn't choose.**
 *Why:* Godot shipped 28 phantom resources at 104/104 green; the user's frame:
@@ -337,8 +345,9 @@ per-store and per-engine and **fails silently**: WebKitGTK ≤2.52 lacks
 Direct, `[[project_tauri_webview_strategy]]`); a hard refresh while the server
 is unreachable currently *wipes* local state (`[[project_persistence_offline_wipe_bug]]`,
 AP8); browser-mode tree persistence is in-memory only today (localStorage
-holds keypairs only). The user's acceptance test: *"I leave, I come back three
-weeks later, did it save my shit?"* *How:* for every store we touch, document
+holds keypairs only). The operator's acceptance test is the **cold return**:
+leave, come back three weeks later, and find the work still
+there. *How:* for every store we touch, document
 durability + fallback + the cold-return story (the MODEL doc §persistence
 pass); never gate work on a false "WASM has no filesystem" claim — OPFS/
 IndexedDB *are* filesystems (`[[feedback_wasm_has_filesystem]]`); persistence-
@@ -346,6 +355,235 @@ sensitive code is tested in **each** WebView runtime (D10).
 
 **Pending:** D17 (Application Knowledge — the model→output→renderer/T3
 discipline as a first-class rule once we re-confirm where it pays off).
+D18 (**candidate** — *One owner of truth per runtime resource; surfaces project
+it, never mirror it.* A runtime resource's authoritative state — connection
+liveness = the pool / the kernel `system/peer/status` entity — has exactly one
+home; UI and app state *derive* from it, never keep a parallel event-sourced copy
+that can disagree. Generalizes "state lives in the tree, not parallel structures"
++ D9-router from persisted to **runtime** resources. First incident:
+`AUDIT-CONNECT-PEER-FILETRANSFER-2026-07-14`; ratify on a 2nd, different-shape
+incident).
+D22 (**candidate** — *Frame-loop panic resilience is per-loop, not just the rAF
+loop.* D13/AP3 were written for `main.rs`'s single rAF loop; the `app_host` tick
+clock is a **second** long-lived rendering loop — a `spawn_local` future — whose
+panic (a debug-build overflow in the synchronous evaluator) unwound the task and
+froze the board with no marker, the AP3 shape the discipline's letter didn't
+name. Rule: *every* long-lived driving loop (rAF, tick, any repeated-render
+`spawn_local`) owns a `catch_unwind` + visible-fault + recover/stop contract, not
+only the one in `main.rs`. First incident:
+`AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01` #1 — fixed via
+`program_host::host::guarded`; ratify on a 2nd loop repeating the shape).
+
+**D19 — Every user-facing string goes through `t(key)`.** The string twin of
+"theme via tokens" (raw English → a message key → the catalog, just as raw hex →
+`var(--token)`). *Source:* `DESIGN-I18N-L10N.md` §9. *Why:* a hardcoded literal
+is un-translatable and invisible to the locale switch — the exact shape colors
+had before the token layer. *How / enforcement:* `crate::i18n::t()` is the one
+string surface; `tools/i18n-lint.sh` (baseline-ratcheted, in `make lint`) gates
+new raw literals in **anchored UI-emitting positions** (component label/title
+args, `set_text_content`) — opt-in-anchored, not opt-out (most `format!`s are
+URIs/CSS/diagnostics, not prose). **Gate is LIVE as of i18n P1**; the invariant
+is *realized* incrementally as the P4 extraction ratchets the baseline to 0 —
+so this stays **Pending→active** until the surface is fully migrated.
+
+**D20 — Layout uses logical properties, not physical `left`/`right`.** The
+direction twin of D19. *Source:* `DESIGN-I18N-L10N.md` §3.3, §9. *Why:* `dir`
+has exactly two values (`ltr`/`rtl`, the non-string primitive — twin of a
+theme's `scheme`); physical CSS (`margin-left`, `text-align:left`, `float`)
+silently breaks RTL, and the app renders into a shadow root where `dir` must sit
+on the host (finding 2). *How / enforcement:* `margin-inline-start` / `-end`,
+`padding-inline-*`, `border-inline-*`, `text-align:start`/`end`; `dir` driven
+onto the shadow host + `<html>` by `i18n::install_lang_dir`. **ACTIVE as of
+i18n P3** — the atom layer + all 47 physical-direction sites are swept to
+logical, and `tools/i18n-lint.sh`'s `phys` metric (in `make lint`) holds every
+file at 0 (a new physical prop fails the gate). *Residual, NOT yet gated:* bare
+`left:`/`right:` absolute-position insets are ambiguous (symmetric
+`left:8px;right:8px` is dir-neutral) — the pseudo-locale (`en-XA`) visual pass
+catches the directional ones (e2e asserts the shadow tree computes
+`direction:rtl` under it). A full visual RTL sweep across every window is the
+remaining manual check (`make tauri-run` with `en-XA`).
+
+**D21 — L5 app compute runs behind the iframe boundary, in its own ephemeral
+peer — never on the system peer.** *Source:*
+`EXPLORATION-L5-APP-HOSTING-UNIFICATION` (P1/P2),
+`REVIEW-L5-APP-HOSTING-BROWSER-2026-07-23`. *Why:* an "app" is a choice of
+payload × isolation × contract; a WASM-entity-peer payload must be *isolated*
+(P2) so a mount can't reach the system peer's tree or keys. The compute POC's
+generic host first ran in the primary peer (a named scope gap); the L5 path
+relocates that *same validated host* into a sandboxed inner peer, and the host
+stays **blind to the payload** — it boots an app, the app emits state, the host
+persists it (P1). *How / enforcement:* the payload boots via
+`?app-host=<program>` (`app_host::run` — a lean ephemeral `Peers::new_direct()`,
+no roster, no durable storage, branched in `main::start` before any
+window-manager), hosted through the entity-apps ③α iframe (`dom::games`
+`AppDelivery::Src`); e2e Phase 2h.2c asserts Life advances *inside the iframe-peer*
+and the outer host persists its evolving state. **The sandbox is trust-tiered
+(`dom::games::render_player`):** a **third-party JS app bundle** stays
+`sandbox="allow-scripts"` (opaque origin — no reach into our origin/storage); an
+**L5 app** is OUR own stripped browser-rust and gets `allow-scripts
+allow-same-origin`, because the trusted payload must load its own multi-MB wasm and
+an opaque origin fights that on **both** substrates — the browser CORS-gates the
+`Origin: null` fetch, and Tauri's `default-src 'self'` never matches an opaque
+origin (so the wasm glue is CSP-refused). Same-origin is safe *here*: the payload is
+our code and its inner peer is memory-only (opens no IndexedDB). When L5 hosts an
+**untrusted** app, this returns to opaque origin behind the sub-peer capability
+model (`PROPOSAL-SUB-PEER-ISOLATION-MODEL`, DRAFT) — and *then* the opaque-origin
+facts re-apply (already smoked, so they are on record): a `src`-served bundle carries
+`Origin: null` and needs `Access-Control-Allow-Origin` on the browser dev/CDN server,
+and under Tauri needs a custom ACAO-adding asset protocol **plus** the serving origin
+in `script-src` (Tauri's `security.headers` refuses `Access-Control-Allow-Origin`, and
+`'self'` never matches an opaque origin). **Two facts that stay true regardless:**
+(1) `srcdoc` cannot carry a multi-MB wasm — L5 apps load by **`src`** (G1); (2) the
+inner peer MUST be ephemeral — its state round-trips to the host (P1), so persistence
+lives with the host, not behind the boundary. **Input is captured IN the iframe, never
+across ③α:** the L5 payload is a focusable document running its own inner peer, so a
+shape-bound keyboard driver (`app_host::input`) captures keydown/keyup on the payload
+window and writes the input-port entity straight to the inner peer
+(`host::input_future`) — the host still sees only `state` emissions and stays blind (P1).
+The driver is the input mirror of the display driver — **program-blind, shape-bound**: the
+entity's field name comes from the program's SEED (`shapes::input_field_name`), and the
+value mapping is per shape (`direction`: arrows→`DIR_*`; `key-set`: a held-key bitmask,
+its key→bit table composed from the program's OWN `scene.keymap` bit↔action map — never a
+hardcoded binding). Display is likewise multi-shape: `display-list` (inline **SVG**
+`<polygon>`s in a world-sized `viewBox` — DOM-native vector, not a canvas path; `scene.wrap`
+seam-tiling is a noted follow-up) and `text` (a `<pre>` grid — kept in the vocabulary/driver
+set but with **no current program exemplar**). Display presentation is DECLARED, not guessed,
+the same lesson as the input roles (`RESPONSE-DISPLAY-RENDERING-AND-TEXT-REBIND`): a
+`display-list` port declares **`scene.render`** ∈ `fill|stroke` (default `stroke`, so vector
+games are unchanged) and reserves **`kind 0` as background the host MUST NOT draw**
+(`build_display_list_svg` reads the render intent → filled coloured cells vs coloured
+wireframe, and skips kind 0). **ACTIVE (browser + Tauri), three programs:** Life
+(`display-list` `fill`, no input), Snake (`display-list` `fill` + `direction`) and Asteroids
+(`display-list` `stroke` + `key-set`) — all pure-builtin (declare no `imports`, so they run on
+wasm; the `compute/apply` stub gates only import-bearing programs). **Life/Snake were rebound
+`text` → `display-list`** — a `<pre>` is a terminal in a GUI host, so the fix was the *shape*
+(a filled grid of cell quads, Snake's head its own kind), not a glyph pass; the projections
+are *dense* (a quad per cell, empties as kind 0), which is exactly why skipping kind 0 is a
+required part of the contract, not an optimisation. e2e Phases 2h.2c/2h.2d/2h.2e assert each
+advances behind the boundary (2h.2c also asserts Life paints a *filled* grid with kind-0
+skipped), and 2h.2d/2h.2e deliver a real keydown into the same-origin sandbox and read the
+payload's `data-app-host-input` D13 surface back (the boundary-crossing capture path the
+native oracle test cannot exercise).
+**The clock loop shares the parent's main thread.** A same-origin L5 iframe runs on the
+*same* main thread as the outer app, and the compute evaluator is **synchronous** — so a tick
+that overruns its budget blocks the outer UI (paint + input), and a build with an unoptimized
+evaluator makes it visible (Asteroids felt sluggish until `entity-compute` was opt-level'd in
+the dev profile, matching the crypto crates). The tick loop therefore (a) schedules by
+*rate*, not by sleeping a full interval on top of the work, and (b) always yields a fixed
+`MIN_YIELD_MS` floor so a heavy/slow tick can never starve the shared thread. Per-tick work is
+surfaced as `data-app-host-tick-ms` (D13). The structural fix for heavier programs is a
+Worker-hosted inner peer (the app's own Worker arm), still parallel.
+**The named scope gap is now CLOSED — there is one honest "run a program" path.** The
+Programs window (`views::programs`) was the last surface still mounting the generic host on
+the *primary/system* peer (`text`-only, the original POC). It is now a **launcher**: it
+lists the built-in `EMBEDDED_PROGRAMS` and, on select, runs the chosen program behind the
+L5 boundary via the *same* `dom::games::render_player` + `AppDelivery::Src(?app-host=<key>)`
+delivery — no compute on the system peer, and all three programs (not just `text`-shaped
+Life) are reachable in production, not only under the e2e-only `demo-apps` fixture. The
+window is **kept, not retired** — it is the "entity native programs" top-level surface where
+user / entity-native programs running in local peers will later live — but its run action
+never touches the system peer. Admission is enforced at the boundary: `app_host::run_program`
+renders a **visible** refusal into the payload for a program binding a shape the host doesn't
+drive (D13 — no blank iframe). e2e Phase 2h.3 now asserts the redirect (tile click →
+sandboxed `app-host=<key>` iframe, no Install/Start/tick surface, Back → grid); the program
+*running* behind the boundary stays covered by 2h.2c/d/e. The system-peer mount machinery
+(`Mount`/`MountStatus`/install/start/tick loop) and the dead card renderer are gone; only the
+shape drivers (`dom::programs::{text_driver,display_list_driver}`) survive, shared with the
+app-host.
+**Input is MULTI-SOURCE now — one target, many sources.** The write side of the `(role, shape)`
+input ABI is a source-/boundary-agnostic `program_host::input::InputTarget` (owns a port's
+encode context + its per-shape live state — the held-key mask for `key-set`), driven by
+modality-neutral verbs (`set_direction`, `press`/`release`) and delivering via a
+context-injected closure. A **source** translates its events into those verbs; the target stays
+program-blind (action↔bit is the program's `scene.keymap`). Two sources ship today, both behind
+the L5 boundary and both sharing ONE `Rc<InputTarget>` per port (so a keyboard key and an
+on-screen button feed one mask, never two racing copies): the **keyboard** source
+(`app_host::input` — keydown/keyup on the payload window) and the **on-screen pointer** source
+(`app_host::onscreen` — a D-pad for `direction`, a button per program-declared action for
+`key-set`, program-blind and shape-bound like the drivers). The on-screen pad is a
+**corner-anchored virtual-gamepad HUD** (`position:fixed`, `vmin`-clamped touch targets with a
+≥44px floor, movement/actions in opposite bottom corners, a ⇄ handedness swap). Its **default
+visibility follows the device** — shown on touch, hidden on a precise-pointer+hover desktop
+(`@media (hover:hover) and (pointer:fine)` on `data-mode="auto"`) — but an **always-present 🎮
+chip** overrides either way, so a wrong device guess costs one tap (the reason a media query is
+acceptable here where a whole-feature device *sniff* would not be). The earlier "show on every
+surface" default was a workaround for the headless-`pointer:none` e2e trap (a green-≠-works F6
+risk); the e2e now **force-shows via the chip** instead of assuming a default, so the real
+default can follow the device without the test papering over it. **Stuck-key guard**
+(`InputTarget::release_all` on window `blur` / document `visibilitychange`, the design §200 guard)
+clears the held mask when focus leaves so a held key can't latch forever. e2e 2h.2d/2h.2e drive
+BOTH sources into the same target across ③α (keyboard `right`=2 **+** on-screen `fire`=8 → one
+shared mask `keys:10`) and assert the blur guard clears it (`keys:0`). The host now presents ONE
+**standard controller**, not app-shaped chrome: a `key-set` port's manifest-declared control ROLES
+(`program_host::controls`, the Rust mirror of workbench-go `ParseKeymap`) split into *directional
+axes* (rendered on the one d-pad, momentary press/release — simultaneous presses OK, so Asteroids'
+rotate+thrust work) and *discrete actions* (glyphed buttons, label/glyph from the manifest). So
+Asteroids, re-declared, is a d-pad (left/right/thrust) + one 🔥 Fire button — the same controller as
+Snake's `direction` d-pad, not four bespoke buttons (e2e 2h.2e asserts axes-on-d-pad + glyphed
+action). The last host-owned guess `KEY_ACTIONS` (physical key → *semantic action*) is **retired**
+for a program-blind **keyboard-position convention** (arrows/WASD → axis positions, a fixed key row
+→ actions in bit order — the host names no app control). This was a cross-implementer contract
+(`PROPOSAL-GENERIC-HOST-INPUT-DEVICE-MODEL.md`), **accepted** by workbench-go
+(`RESPONSE-GENERIC-HOST-INPUT-DEVICE-MODEL-2026-07-24.md`: role hints + Asteroids re-declaration
+landed, and the browser regenerated its bundled manifests from that). Three items stay open for
+**arch** to ratify into the shape spec (RESPONSE §5): the standard action vocabulary + default
+glyphs, the keyboard-position default (so every host agrees — the browser's is provisional), and
+the action-button overflow policy.
+The Life/Snake/Asteroids `demo-apps` tokens were dropped (they duplicated the production
+`EMBEDDED_PROGRAMS`); the Programs launcher is the single "run a program" surface, and e2e
+2h.2c/d/e launch through it.
+**Program chrome splits program-owned STATE from generic host CONTROLS** (the operator's
+"game modes are broken — every restart I have to leave the app; need a menu/reset and a
+score"; RESPONSE-PROGRAM-CHROME-STATUS-AND-RESET). The diagnosis was that nothing was broken —
+`Host.Restart` (reseed-to-state₀) always worked; the program view just had no chrome, so the
+only reseed was leave-and-re-mount, and the program's score never reached a renderer. The fix
+is one clean split, and it is the SAME "declare it, don't infer it" lesson as the input roles
+and the render intent:
+- **Score/state is PROGRAM-OWNED.** A program that wants a readout declares a SECOND output
+  port, `status` (shape `text`, formatted in its OWN compute projection — `LEN 003 ▶` /
+  `SCORE 00000 ▶` / `POP 0042 ▶`); the host relays it blind via the same `text_driver`, exactly
+  as it relays the display board. The host never learns what a "score" is; because the bytes are
+  formatted in the tree, every renderer (browser, Avalonia) shows byte-identical output —
+  consistency by construction. This also gives the `text` shape its real exemplar back (a status
+  line, not a game board) after Life/Snake moved their DISPLAY to display-list. The status port
+  shares the `display` role with the board, so `descriptor::{display_port,status_port}` tell them
+  apart by NAME, not order. Every program's oracle now carries a per-tick `status` hash, so the
+  cross-impl gate verifies the projection tick-for-tick (`oracle_tests`).
+- **Reset (↻) and pause (⏸) are GENERIC host controls**, not program inputs: reseed-to-state₀
+  and clock-gating need zero program knowledge, so `app_host` presents the same two for EVERY
+  program (even input-less Life). The tick loop owns the peer, so the buttons only set shared
+  flags (`paused`/`reset`); the loop performs the reseed (re-rendering AND re-emitting state₀ so
+  the host observes the reset across ③α) and gates the clock. A reset is now a button, not a
+  re-mount.
+The host stays generic: it iterates the output ports and captions the one named `status`; it
+never computes a score, and `run_program` mounts the controls before any input port. e2e 2h.2c
+proves all three (status caption renders `POP … ▶`; pause freezes `data-app-state-seq`; reset
+while paused bumps the seq past the frozen baseline — nothing else can advance a paused sim).
+**Meta-chrome sits AROUND the board, not over it** (the operator's "un-crowd the layout" —
+settings floating over the play area is noise). Only the **thumb pad** overlays the board (the
+mobile gameplay convention). The *settings-y* chrome — the reset/pause `.ah-hostbar` **and** the
+🎮/⇄ input chips — moved out of `position:fixed` corners into ONE slim normal-flow bar
+(`.ah-chrome`, `space-between`: host controls at the leading end, input chips at the trailing
+end) ABOVE the board. The chrome bar and the board (`[data-app-host-display]`) share
+`max-width:420px; margin:0 auto`, so they align as one centred column. The 🎮 chip still drives
+the pad by a held `Element` reference, so relocating it out of the pad's subtree changes nothing
+functional — the e2e's attribute selectors (`[data-controls-toggle]`, `[data-host-reset/pause]`)
+are unaffected. `onscreen::build` now returns the pad and chips as two separately-mountable
+elements (`OnscreenControls`) rather than one combined wrapper.
+**Owed upstream (workbench-go/arch):** the same chrome in the Avalonia frontend (the bridge
+already emits every port, so the status port reaches it for free) — the browser half is the
+consumer landed here.
+**Foundation audit (`AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01`) — the ratchet the debug-panel
+v2 rework skipped, run retroactively.** The surface was found **largely sound** (arm,
+heap, namespace, kernel-reuse all clean) with drift in **failure observability + i18n reach**: the
+tick loop wasn't panic-resilient (→ **D22 candidate**, `guarded`); the s-expr renderer had zero
+tests (→ extracted to native `program_host::sexpr`, 14 tests); the payload's failure/refusal prose
+was hardcoded English and dropped the host locale (→ `t()` + `i18n::apply(boot_choice())`, and
+`src/app_host/` is now inside the i18n/UI gate globs so this can't recur silently); a
+`MomentaryGuard` `Rc` self-cycle (→ `Weak` + `Drop`). **The one durable substrate fact:** the e2e
+dist is a **dev/abort** build, so a REAL tick panic aborts the module there — the panic→`Err`
+containment is gated by a **native** `guarded` test, the visible-fault **surface** by an e2e
+query-param seam (`&app-host-fault-tick=N`); do not "upgrade" the e2e to a real panic.
 
 ---
 
@@ -366,6 +604,11 @@ inherited, three substrate-native.
    path identified at the same change; every persisted entity → writer /
    reader-at-boot / GC story; every per-peer cache → eviction at close
    (D9, D12).
+5b. **What did this change make redundant, and did I delete it?** If it
+   introduced an authoritative source for a fact something else already stored,
+   the mirror goes in the same arc — or the remaining read is a dated,
+   written-nowhere migration fallback with its removal condition recorded
+   (D9, AP17). "We demote it later" is the tell; there is no later.
 6. **Does the test cross the real loops?** Cross-reload, real-store, the right
    **mode** (Direct *and* Worker), the right **runtime** (WebKitGTK too) (D10).
 7. **Which arm?** Is any Direct-only API reached without guarding via the
@@ -431,6 +674,236 @@ these shipped in this repo.
 - **AP11 — Defensive code that lies.** Unconditional error-log on a failure you
   have a fallback for — masks real errors. Decode-fallbacks are handled, not
   error-level. [D8]
+- **AP12 — Mirror-first architecture: reinventing an unbuilt kernel extension
+  with app-tier mirrors.** `connections` + `connection_health` substituted
+  hand-rolled, event-sourced mirrors for the *spec'd-but-unbuilt* connection
+  owner (`EXTENSION-NETWORK` / `system/peer/status`) instead of consuming the
+  kernel model or routing the gap upstream — so the app must later *unwind* the
+  mirrors rather than converge. The tell: a subsystem grows across sessions while
+  every diff passes the nine questions locally, because per-diff review never
+  asks "does a core extension already own this?" [D1, D8,
+  `AUDIT-CONNECT-PEER-FILETRANSFER-2026-07-14 §8b-§8d`]
+- **AP13 — Compensate a stale mirror with a second mirror.** A derived copy
+  drifts (the add-only `connections` registry, stale-forever), so a *second*
+  derived copy (`connection_health`) is added and read "instead" — both drift the
+  same direction; now two lie. The fix for a drifting projection is to reconcile
+  to the source, never to add another projection. [D9]
+- **AP14 — Auto-heal keyed to the wrong error class.** `execute_reauth` retries
+  only on `Ok(status==403)`; the real failure is a transport `Err` ("closed
+  connection"), so the recovery path compiles, tests green on the class it
+  handles, and **silently never fires** on the class that actually happens.
+  Recovery must key on the failure that occurs, proven by trace. [D7, D13]
+- **AP15 — Arm-split: a capability installed on only one arm.** The second
+  instance of AP4's family, one level up. The §6.5 WebRTC establisher was wired
+  into the Worker arm only — not from a platform constraint (`with_live_establish`
+  is arm-neutral and already present on Direct; `RTCPeerConnection` is main-thread
+  on *both* arms) but because the Worker path was built first for S5. Result: a
+  whole capability unreachable in the **shipped Direct/IDB** deployment, invisible
+  because native + Worker-e2e were green (AP7). The tell: an arm-neutral seam that
+  is *present* on both arms but *called* on only one. Fix: install on the shipped
+  arm first; the A-series moved it to Direct and proved it (`make e2e-webrtc-chat`
+  default mode). [D15, `[[project_peer_sdk_arm_model]]`,
+  `HANDOFF-2026-08-06-direct-arm-webrtc-PROVEN`]
+- **AP16 — Demoting a "hack" without testing the shipped arm with it off.** The
+  chat delivery poll was assumed a worker-era crutch, to be demoted once the
+  Direct arm had subscribe + WebRTC. Demoting it to a slow reconcile **regressed
+  delivery asymmetrically** (B→A reactive-OK, A→B missed) — the fast poll was
+  silently *retrying §6.5 establishment* (hundreds of offer deposits, not one) and
+  *covering the direction subscribe misses over WebRTC*. A "redundant" mechanism
+  is only redundant once the thing it silently backstops is proven to stand alone.
+  Test the shipped arm with the mechanism removed **before** calling it a hack.
+  [D10, D13, `HANDOFF-2026-08-06-direct-arm-webrtc-PROVEN`]
+- **AP17 — Half-converged migration: introduce the authoritative source, keep the
+  mirror.** The correct fix for AP12/AP13 is to consume the kernel model — but
+  landing the kernel source *without retiring the app-tier copy in the same arc*
+  leaves **more** duplication than before, not less, and with no rule about which
+  copy wins. *Incident (2026-08-11 → 08-13):* publishing `system/peer/transport`
+  routes closed the "app is the address book" inversion, and `connections.addr`
+  stayed. For two days a remote peer's address lived in **three** durable places
+  (`connections.addr`, `system/connection.address`, the route) across **two key
+  spaces** (Base58 vs identity-hash hex), while the retirement sat on a
+  "remainder" list and was deprioritized twice — each time for a defensible
+  local reason. The tell is the phrase itself: *"and later we demote X"*. There
+  is no later; the mirror is load-bearing until something stops reading it.
+  **Rule: the arc that introduces an authoritative source is not done until the
+  mirror's last reader is gone or the remaining read is a dated, written-nowhere
+  migration fallback.** A read-only compatibility shim is acceptable *only* with
+  its removal condition recorded at the same change (D16 cold-return is the
+  usual reason one is needed). Its own forcing question, now question 5b below:
+  **"what did this change make redundant, and did I delete it?"**
+  [D1, D9, `MODEL-REMOTE-PEER-FACTS` §2]
+- **AP18 — A render input with no dirty signal of its own.** The render reads an
+  in-memory structure — a `thread_local!`/`static` registry, a derived cache —
+  that can change *without* dirtying the surfaces that read it, so its
+  invalidation is borrowed from some *other* subscriber's watch. Whenever the
+  render wins that race the correction is never painted, and because the borrowed
+  signal was consumed, **nothing ever repaints it**. The surface is permanently
+  wrong, which reads as "flaky" but no amount of re-polling touches it.
+  *Incident (2026-08-13):* the Settings theme dropdown is a pure read of
+  `theme_tokens::USER_THEMES`; `register_user_theme` / `unregister_user_theme`
+  mutate it while touching no `DirtyFlag`; `frame()` reconciled the registry
+  *after* `dom.render`. A theme deleted from the tree stayed in the dropdown
+  forever — 15s of polling with forced layout flushes changed nothing, which is
+  the signature. **Rule: anything the render reads must be invalidatable.** Give
+  the structure its own `DirtyFlag`, or reconcile it before the render and treat
+  that order as load-bearing (and say so at the call site). Note the diagnostic
+  trap this creates: `peer_registry.sync` sits under the *same* line order and is
+  **fine**, because it writes to the tree and tree writes dirty their watchers —
+  so **check the mechanism, not the position in the frame.**
+  [D4, D13, `AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13` §8 F1]
+- **AP19 — The optimistic update as test crutch.** A handler mutates local state
+  *and* dispatches the durable write, and the test cannot tell which one
+  satisfied it — so the test passes on the optimistic path while the reconcile
+  path underneath is broken, and reports green over it.
+  *Incident (2026-08-13):* e2e Phase 26.8 exercised delete-a-theme for a session
+  while the projection was broken, because `delete_theme` unregisters
+  synchronously *before* dispatching the remove; the reconcile it nominally
+  tested was a no-op (`removed=[]` in the trace). **Rule: drive the change from
+  the far side** — make it happen where only the reconcile can carry it (Phase
+  26.9 deletes straight from the tree via the Shell's `rm`) — **and verify the
+  gate red before the fix.** A gate never seen red is not a gate.
+  [D10, `AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13` §10]
+- **AP20 — Invalidation narrower than the read.** A cache is *read* across one
+  scope and *invalidated* across a smaller one. Every read sees the whole shared
+  surface; each change wakes only the one participant it was addressed to. A
+  reader whose own event arrives before the others' observes a half-updated
+  shared state and is never woken again — the events that finish the update
+  belong to somebody else. Permanently stale, and **which** reader loses is
+  decided by delivery order, so it presents as flake and is immune to polling.
+  *Incident (2026-08-13):* `WorkerProxy::cache_get`/`cache_list` answer from the
+  **union of every subscription's mirror**, while each `Change` poked only the
+  addressed `sub_id`'s `notify_tx`. Four subscriptions held the themes prefix; a
+  delete arrived as four events; the reader owning the second reconciled against
+  a union the other two hadn't cleaned, and never reconciled again. **Rule: any
+  shared read surface must be invalidated across the same scope it is read
+  across.** The tell is a per-item/per-subscriber notification sitting next to an
+  aggregate read — if you merge N sources on read, you must wake all N on write.
+  [D4, D14, `AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13` §8 F3]
+- **AP21 — Detecting change by diffing around your own pump.** A frame-pumped
+  component reports "did anything change?" by snapshotting its state before and
+  after calling its own `pump`. But a pump's job is to *start* asynchronous work;
+  the results land **between** frames. So the two snapshots are equal precisely
+  when something did change a moment earlier, the caller reports no change,
+  nothing repaints, and the surface freezes on a stale state forever. The tell is
+  a comparison whose two sides are taken microseconds apart around a call that
+  spawns.
+  *Incident (2026-08-13):* `PeerConnectionsModel::pump_meet` diffed
+  `MeetSession::status()` around `session.pump()`. A meet whose dial had already
+  **failed** kept rendering "Searching…" indefinitely — in a section written
+  specifically to never leave a search unresolved. **Rule: the component owns a
+  change flag set at every mutation site — including inside its spawned landings
+  — and the surface consumes it (`take_changed`).** This is AP18 in a component
+  that has no tree write to ride: same rule ("anything the render reads must be
+  invalidatable"), different carrier. And note what it cost to find: three native
+  tests and a native poll-until-true loop all passed over it, because a loop that
+  re-reads until it sees the change cannot notice that nobody was *told*.
+  [D4, D13, `STATUS-2026-08-13-naming-modes-meet-at-a-name`]
+
+- **AP22 — A capability whose decision has no surface.** A feature is split into
+  a *capability* (may we?) and a *decision* (do we?), which is right — until the
+  capability becomes user-reachable and the decision does not. Then every build a
+  user actually runs satisfies half the condition and silently does nothing. It
+  passes every gate, because the harness sets the decision by URL or build knob,
+  which is exactly what a user cannot do. The tell: a decision knob readable only
+  from `option_env!` or a query param, guarding a capability that a *UI surface*
+  can now supply.
+  *Incident (2026-08-13/14):* the §6.5 establisher needed `ENTITY_WEBRTC_ENABLE_
+  PRIMARY=1` **as well as** a signaling node. When the connector registry landed,
+  the node became something a user selects in the window — but nothing ever
+  granted the second half, so adding a connector and meeting at a name produced a
+  peer-id that could never be connected to. Inert in every shipped build; green in
+  `e2e-webrtc-chat`, which passes `?webrtc_enable=1`. **Rule: when a capability
+  becomes user-supplied, the user's act IS the decision — collapse the axes and
+  keep only the fail-closed half.** Ask of any two-part gate: *which surface
+  performs each half, and can the same person reach both?*
+  [D3, D13, `HANDOFF-2026-08-14-webrtc-install-decision-and-the-meet-gate`]
+
+- **AP23 — Asserting a dispatch instead of an effect.** A UI harness performs an
+  action (click, keystroke, synthetic event) and then asserts on the outcome
+  after a fixed sleep — treating "I dispatched it" as "it happened." When the
+  action silently does not apply, the harness reports the *application* as broken,
+  and every subsequent theory is about the app. The tell: a test step whose only
+  evidence that it acted is that the call returned.
+  *Incident (2026-08-14):* the meet-then-chat harness clicked "+ Shell" and typed
+  in the same instant. A spawn click only **queues** an action — the window is
+  created on the next frame — so there was no input element and nothing was
+  typed. It presented as a post-reload Shell freeze and cost most of a session:
+  five app-side causes (frame panic, reload loop, write storm, dead frame loop,
+  dropped action) were investigated and refuted before the harness was suspected.
+  **Rule: confirm the action from the app's own output before proceeding, and
+  retry until it does; never assert on the echo of your own input** (the Shell
+  echoes the line it is given, so asserting on scrollback growth after a
+  `connector` verb passes whether or not the verb ran). This is the e2e's
+  `poll_json`-not-`sleep(fixed)` rule extended from *waiting* to *acting*.
+  [D13, `HANDOFF-2026-08-14-webrtc-install-decision-and-the-meet-gate`]
+
+- **AP24 — Trusting a rig to have the property it was built to model.** A harness
+  is constructed to reproduce an environment (a NAT, an offline origin, a slow
+  link, a storage-denied context), and from then on that property is *asserted by
+  construction* rather than measured. When the rig is subtly wrong, every symptom
+  it produces is read as an application defect — and the symptoms are real, so the
+  investigation is well-evidenced and entirely misdirected. This is AP23 one layer
+  out: AP23 is a harness that did not do what it claimed, AP24 is an environment
+  that is not what it claimed. The tell: the rig's defining property appears in its
+  *setup script* but in no assertion, and no probe smaller than the application
+  ever exercises the path.
+  *Incident (2026-08-14):* the two-NAT traversal rig was red for most of a session
+  and two app-level blockers were reported upstream — `429 bucket_full` and
+  `addIceCandidate: Unknown ufrag`. **Both were symptoms of a defect in the rig's
+  own NAT.** The routers accepted *unsolicited inbound* UDP, which means a
+  conntrack entry was holding the exact reply tuple each peer's outbound punch
+  needed; the outbound then lost its advertised port and was remapped, so both
+  sides sent from ports the other had never heard of and the punch could never
+  converge (measured: A advertised `10.89.3.2:60449`, sent from `:32941`). A real
+  NAT drops that packet and keeps no state. Both "app bugs" vanished when the punch
+  started landing, and the green run logs zero negotiation failures. What found it,
+  after an afternoon of theorising about window sizes and candidate counts, was a
+  **thirty-line bare UDP hole punch** between the same two containers — one socket,
+  STUN, punch — whose `NO-PACKETS` moved the investigation out of the application
+  in a single step.
+  **Rule: prove the environment's path with the smallest probe that can carry it,
+  before attributing a failure to the application** — the probe must share the
+  rig's topology but none of its code. **And a rig must *measure* the property it
+  models, as a control that fails the run.** Ours now probes its own controls (no
+  direct path; two DISTINCT external addresses; host reachable through each NAT),
+  because a rig that silently degrades does not merely stop testing — it "proves"
+  the opposite of the truth (here: that host candidates traverse NATs). Note the
+  second-order trap that let the bad rig look good: the first mapping test varied
+  only the destination **address**, both observers on port 3478, and so called a
+  symmetric NAT endpoint-independent. **Vary every axis of the property you claim
+  to be measuring.** Corollary kept: an unjustified constant is worse than none —
+  the negotiation window was widened 15s → 45s on a guess, changed nothing, and was
+  reverted rather than left in as a talisman.
+  [D13, `HANDOFF-2026-08-14-nat-traversal-works-and-what-it-cost-to-learn`]
+
+- **AP25 — The operator surface is a surface, and no gate reads it.** Usage
+  strings, flag spellings, refusal messages, make-verb names and default output
+  paths are as much a contract as a wire format — and they drift *faster*, because
+  nothing in the suite constructs them. Every test reaches the feature through its
+  Rust API, so the printed help can teach a form the parser rejects and the suite
+  stays green forever. The tell: a surface a human types or reads, with no test
+  that types or reads it.
+  *Incidents (2026-08-18, two shapes, which is what ratified it):* **(a)** the
+  `registry` help printed `--bind NAME=PEER_ID`; the parser matched only
+  `--bind=`, so the flag was silently dropped and the refusal read *"at least one
+  --bind is required"* — **to someone who had just passed one** — while also
+  omitting the `@ORIGIN` arch D10 had made mandatory. Following the printed help
+  could not succeed. **(b)** nothing validated that a binding's target *is* a
+  peer-id, so a directory slug typed where the id belonged emitted a fully
+  **signed** binding, reported as success, whose only symptom surfaced on a
+  *consumer's* machine as "the named peer-id carries no public key". Adjacent:
+  `make federation` defaulted its output inside the directory `trunk` wipes, and
+  publishing a registry had no `make` verb at all on a podman-only host.
+  **Rule: a refusal must be assertable as a value, not merely as an exit code.**
+  The fix is not a better string — both the right refusal and the wrong refusal
+  exited 1, which is exactly how (a) survived. Parsing moved into
+  `parse_registry_args`, which returns `Result<_, String>`, and four tests assert
+  on the **message**. Any new operator-facing refusal owes the same. Corollary:
+  **a fixture that could not exist in production hides the check that would have
+  caught it** — the registry fixtures said `"2PEERTARGET"`, itself not a peer-id
+  in any form. And: four of that audit's ten findings were found by *running* the
+  tooling rather than reading it.
+  [D8, D10, `AUDIT-NAMING-AND-PUBLISHING-ARC-2026-08-18`]
 
 ---
 
@@ -482,10 +955,12 @@ what/where stay (`[[feedback_reuse_before_abstraction]]`):
 
 **What we are explicitly NOT deciding now** (prevents scope creep): WebRTC and
 peer discovery (unbuilt — *correctly* absent, not a gap); the *default*
-deployment profile for the lead release (the profiles — strict-site /
-tutorial / full — ARE the E1 config mechanism, not a v1 architecture fork:
-the system peer always exists; profiles differ in what's exposed and whether
-the overlay is forced);
+deployment posture for the lead release (the startup **surface** —
+chrome / window / site — plus the granular `site_mode`/`peer_creation_enabled`
+ARE the E1 config mechanism, not a v1 architecture fork: the system peer always
+exists; the surface + posture differ in what's exposed and whether the overlay
+is forced. The old opaque `full`/`site`/`strict-site` *profile* presets were
+removed — set the surface directly);
 Site Mode P2 overlay (deferred until stable ground); wholesale L5-signal →
 kernel-subscription migration (in-process coordination stays as-is; only
 tree-derived reactivity is already migrated).
