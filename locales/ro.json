@@ -570,6 +570,9 @@
   "peerconn.this_peer": "Acest peer {pid} · {kind}",
   "peerconn.listening": " · ascultă pe {addr}",
   "peerconn.qr_failed": "Generarea codului QR a eșuat",
+  "peerconn.connect_dialing": "Se conectează la {addr}…",
+  "peerconn.connect_failed": "Nu s-a putut conecta la {addr} — {reason}",
+  "peerconn.connect_ok": "Conectat la {peer}",
   "filetransfer.no_results": "Listează sau descarcă un fișier pentru a vedea rezultatele.",
   "contentsite.more": "Mai multe ▾ ({n})",
 

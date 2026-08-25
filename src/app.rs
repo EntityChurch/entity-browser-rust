@@ -125,6 +125,16 @@ struct SystemBackendConnect {
     /// A `maintain-peer` execute is in flight this frame — don't fire a second
     /// (the execute is async; without this the frame loop would spam it).
     establishing: bool,
+    /// B's peer id, remembered for the life of the session — **deliberately not
+    /// cleared when `target` disarms**.
+    ///
+    /// The network extension keys its sessions by remote peer id, so on the
+    /// shipped single-local-peer desktop a chat bound to B shares B's session
+    /// with this drain. Releasing that pair when the chat window closes would
+    /// tear down the *backend's* reconnect graph — silently undoing Piece C.
+    /// `sync_maintained_peers` needs to recognise B to refuse that, long after
+    /// `target` is gone.
+    identity: Option<String>,
 }
 
 /// Per-(local, remote) state for the window-bound `maintain-peer` sweep
@@ -173,6 +183,10 @@ pub struct EntityApp {
     /// the tree. Cloned into the render context so the display models project
     /// them (`crate::dial_markers`). The kernel read-model stays authoritative.
     dial_markers: crate::dial_markers::DialMarkers,
+    /// Outcome of the last manual Connect press (`crate::connect_attempt`).
+    /// Read at render by the Peer Connections window so that action reports
+    /// itself instead of completing in silence.
+    connect_attempt: crate::connect_attempt::ConnectAttempt,
     /// Tree-backed publisher for the WS listener's bound address.
     /// Cloned into the listener-bind spawned task; only used on native.
     #[cfg(feature = "native-ws")]
@@ -1300,6 +1314,7 @@ impl EntityApp {
         let connections_writer = ConnectionsWriter::new(&peer_manager);
         let backend_auth_writer = crate::backend_auth::BackendAuthWriter::new(&peer_manager);
         let dial_markers = crate::dial_markers::DialMarkers::new();
+        let connect_attempt = crate::connect_attempt::ConnectAttempt::new();
         let mut peer_registry = PeerRegistry::new(&peer_manager);
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
@@ -1357,6 +1372,10 @@ impl EntityApp {
                             q.push(info.clone());
                         }
                         if let Ok(mut c) = connect.lock() {
+                            // `identity` outlives `target` (which clears on
+                            // disarm) — it is how the maintain sweep knows never
+                            // to release B out from under this drain.
+                            c.identity = Some(info.peer_id.clone());
                             c.target = Some(info);
                         }
                     }
@@ -1493,6 +1512,7 @@ impl EntityApp {
             connections_writer,
             backend_auth_writer,
             dial_markers,
+            connect_attempt,
             peer_registry,
             user_themes,
             access_log_sink,
@@ -2311,7 +2331,7 @@ impl EntityApp {
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
-            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers);
+            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt);
         }
         if !actions.is_empty() {
             self.process_actions(actions);
@@ -2620,6 +2640,13 @@ impl EntityApp {
                     // the known-devices list; the kernel liveness surface deletes
                     // on its own convergence (the read-model needs no app write).
                     self.connections_writer.remove(remote_pid);
+                    // Drop the published route too, or Forget doesn't forget:
+                    // the registry row goes while a durable transport profile
+                    // keeps telling the ladder how to dial the peer the user
+                    // just dismissed. Swept across every local peer, since any
+                    // of them may have published one.
+                    let swept = self.peer_manager.forget_routes_to(remote_pid);
+                    tracing::debug!(remote_pid = %remote_pid, local_peers = swept, "forgetting published routes");
                     // Drop any in-memory dial transient — a forgotten peer must
                     // not linger as "Connecting…"/Offline in the link chip.
                     self.dial_markers.clear(remote_pid);
@@ -2945,6 +2972,38 @@ impl EntityApp {
         let pid = peer_id;
         let log = self.event_log_writer.clone();
         let connections = self.connections_writer.clone();
+        // The window-visible outcome of THIS press. Previously the only report
+        // was the Event Log line below plus a `tracing::error!` on failure —
+        // neither of which the Peer Connections window shows, so pressing
+        // Connect cleared the box and said nothing whether it failed OR
+        // succeeded (D13). Armed before the dial so the in-flight state is
+        // visible too.
+        let attempt = self.connect_attempt.clone();
+        // Waking the window is NOT optional here. Rebuilds are subscription-
+        // driven (`WindowWatch`), and this outcome lives in memory precisely so
+        // it never becomes a tree entity — so no write fires, no subscription
+        // fires, and the window would keep rendering the pre-press view with
+        // the result sitting unread in the slot. The e2e caught exactly that:
+        // the address survived the failed dial (that fix worked) while the
+        // error line never appeared.
+        //
+        // Flags are taken from the *currently open* Peer Connections windows
+        // before the dial and marked as the outcome changes. A window opened
+        // later needs no flag — it renders from scratch and reads the slot.
+        let watchers: Vec<crate::window_watch::DirtyFlag> = self
+            .window_manager
+            .windows
+            .iter()
+            .filter(|w| w.open && w.view.type_name() == "Peer Connections") // i18n-ignore — stable type identifier, not UI text
+            .map(|w| w.view.watch().flag())
+            .collect();
+        let wake = move |flags: &[crate::window_watch::DirtyFlag]| {
+            for f in flags {
+                f.mark();
+            }
+        };
+        attempt.set_dialing(&addr);
+        wake(&watchers);
 
         log.log(format!("Connecting to {}...", addr));
 
@@ -2994,6 +3053,11 @@ impl EntityApp {
                 Ok(p) => p,
                 Err(msg) => {
                     tracing::error!("{}", msg);
+                    // Surface it where the user pressed the button, carrying the
+                    // reason verbatim — the Event Log line alone left the Peer
+                    // Connections window showing nothing at all.
+                    attempt.set_failed(&addr, &msg);
+                    wake(&watchers);
                     log.log(msg);
                     return;
                 }
@@ -3017,6 +3081,13 @@ impl EntityApp {
             // `system/peer/status = connected` for this handshake, which the
             // subscribed read-model surfaces — no app-side mirror write.
             log.log(format!("Connected to {}", remote_pid));
+            // Report the success in the window too. This is the case that read
+            // as "the button did nothing": the connect worked, and the row it
+            // produced was filtered out of Known devices as infrastructure. The
+            // filter is gone, but a connect must still name who answered — an
+            // address can resolve to a peer whose row the user isn't watching.
+            attempt.set_connected(&addr, &remote_pid);
+            wake(&watchers);
 
             let uri = format!("entity://{}/system/tree", remote_pid);
             log.log(format!("Fetching types from {}...", remote_pid));
@@ -3929,10 +4000,14 @@ impl EntityApp {
     /// chat to a remembered-but-currently-offline peer now also *establishes*
     /// the connection rather than sitting inert.
     ///
-    /// **Not released on unbind.** Closing the window leaves the relationship
-    /// maintained — dropping it needs the extension's `release-peer` (which
-    /// writes `disconnected`), never a bare pool eviction (AGENTS.md
-    /// "evict ≠ release"). Wiring that teardown is deliberately a separate step.
+    /// **Released on unbind** by the release pass below ([`Self::release_unbound_peers`]):
+    /// closing the last window that binds a pair EXECUTEs the extension's
+    /// `release-peer` with reason `idle` — never a bare pool eviction (AGENTS.md
+    /// "evict ≠ release"), and never `shutdown`, which would hang up a peer the
+    /// user may still be using elsewhere. Proven end to end by
+    /// `releasing_a_conversation_stops_the_retries_but_leaves_the_connection_up`
+    /// (peers.rs): after the release the connection still carries traffic, and a
+    /// subsequent drop draws no dials at all.
     #[cfg(target_arch = "wasm32")]
     fn sync_maintained_peers(&mut self) {
         // A burst of ~1s-spaced tries (covers a peer that is up but momentarily
@@ -3953,6 +4028,19 @@ impl EntityApp {
             .map(|w| (w.view.peer_id().to_string(), w.view.maintained_remotes()))
             .filter(|(_, remotes)| !remotes.is_empty())
             .collect();
+
+        // --- Release pass: relationships whose window is gone ---------------
+        //
+        // Runs BEFORE the no-bindings early return, because closing the *last*
+        // chat window is precisely when this must fire. Built from the raw
+        // bindings, not the engine-gated ones, so a pair is only ever released
+        // when genuinely no window binds it.
+        let bound_now: std::collections::HashSet<(String, String)> = bindings
+            .iter()
+            .flat_map(|(l, rs)| rs.iter().map(move |r| (l.clone(), r.clone())))
+            .collect();
+        self.release_unbound_peers(&bound_now);
+
         if bindings.is_empty() {
             return;
         }
@@ -4040,15 +4128,7 @@ impl EntityApp {
                 continue;
             };
 
-            let handler_uri = format!("/{local}/system/network");
-            let params = maintain_request_entity(&remote, &addr);
-            let fut = self.peer_manager.execute(
-                &local,
-                handler_uri,
-                "maintain-peer".to_string(),
-                params,
-                entity_handler::ExecuteOptions::default(),
-            );
+            let fut = self.peer_manager.maintain_peer(&local, &remote, &addr);
 
             {
                 let Ok(mut m) = self.maintained_peers.lock() else {
@@ -4075,6 +4155,76 @@ impl EntityApp {
                         entry.warned = false;
                         tracing::info!(local = %l, remote = %r, "maintain-peer: the network extension now keeps this conversation connected");
                     }
+                }
+            });
+        }
+    }
+
+    /// Stop maintaining relationships whose window is gone — the teardown half
+    /// of [`sync_maintained_peers`].
+    ///
+    /// **Why `reason = "idle"` and not `"shutdown"`.** The two are different
+    /// operations in the extension (§4.2): `shutdown` drops the session AND
+    /// evicts the connection AND writes the terminal `released` status;
+    /// anything else drops the maintain machinery but **leaves the connection
+    /// up for resumption**. Closing a chat window means "stop auto-reconnecting
+    /// this forever", not "hang up on a peer the user may still be using from
+    /// Peer Connections or File Transfer" — so `idle` is the honest one. It
+    /// also cannot strand the read-model: the connection really is still up, so
+    /// `connected` remains true rather than stale.
+    ///
+    /// **The backend is refused.** The extension keys sessions by *remote* peer
+    /// id, so on the shipped single-local-peer desktop a chat bound to B shares
+    /// B's session with `drain_system_backend_connect`. Releasing that pair
+    /// would tear down the backend's reconnect graph while everything still
+    /// looked connected — Piece C undone, invisibly. Hence
+    /// `SystemBackendConnect::identity`, which outlives the drain's own disarm.
+    ///
+    /// Anything that ever wants a true hang-up (a "Disconnect" affordance) must
+    /// use `shutdown`, never a bare pool eviction — AGENTS.md "evict ≠ release".
+    #[cfg(target_arch = "wasm32")]
+    fn release_unbound_peers(&mut self, bound_now: &std::collections::HashSet<(String, String)>) {
+        let backend = self
+            .system_backend_connect
+            .lock()
+            .ok()
+            .and_then(|c| c.identity.clone());
+
+        let to_release = {
+            let Ok(m) = self.maintained_peers.lock() else {
+                return;
+            };
+            if m.is_empty() {
+                return; // the common case — nothing has ever been maintained
+            }
+            release_candidates(
+                m.iter().map(|(k, e)| (k.clone(), e.done, e.in_flight)),
+                bound_now,
+                backend.as_deref(),
+            )
+        };
+
+        for (local, remote) in to_release {
+            // Drop the bookkeeping first: this is a fire-and-forget teardown, and
+            // leaving the entry would re-release it every frame.
+            if let Ok(mut m) = self.maintained_peers.lock() {
+                m.remove(&(local.clone(), remote.clone()));
+            }
+            let params = release_request_entity(&remote, "idle");
+            let fut = self.peer_manager.execute(
+                &local,
+                format!("/{local}/system/network"),
+                "release-peer".to_string(),
+                params,
+                entity_handler::ExecuteOptions::default(),
+            );
+            tracing::info!(local = %local, remote = %remote, "release-peer: no window binds this conversation any more — stopping maintain (connection left up)");
+            wasm_bindgen_futures::spawn_local(async move {
+                if !matches!(fut.await, Ok(r) if r.status == 200) {
+                    // Not fatal: the worst case is we keep maintaining a
+                    // relationship nobody asked for, which is what we did before
+                    // this existed. Worth seeing, not worth retrying forever.
+                    tracing::warn!("release-peer did not return 200 — the relationship stays maintained");
                 }
             });
         }
@@ -4269,15 +4419,9 @@ impl EntityApp {
         // peer_id + address. A local execute on S's own `system/network` handler
         // — no connection pool, no self-heal.
         let system_pid = self.peer_manager.system_peer_id().to_string();
-        let handler_uri = format!("/{system_pid}/system/network");
-        let params = maintain_request_entity(&target.peer_id, &ws_addr);
-        let fut = self.peer_manager.execute(
-            &system_pid,
-            handler_uri,
-            "maintain-peer".to_string(),
-            params,
-            entity_handler::ExecuteOptions::default(),
-        );
+        let fut = self
+            .peer_manager
+            .maintain_peer(&system_pid, &target.peer_id, &ws_addr);
 
         {
             let Ok(mut c) = self.system_backend_connect.lock() else {
@@ -4522,18 +4666,43 @@ fn maintain_candidates(
     out
 }
 
-/// Build the `maintain-peer` request entity (EXTENSION-NETWORK §2.1
-/// `system/network/maintain-request`) carrying the target's `peer_id` + dial
-/// `address`. `reconnect`/`resubscribe` default true in the handler, so they're
-/// omitted — the app wants the full maintain (connect + keep reconnecting).
+/// Which maintained pairs should stop being maintained. Pure, because every
+/// rule here is a way to break something that currently works:
+///
+/// 1. **Only pairs we actually established** (`done`). A pair still mid-flight
+///    is not ours to tear down yet.
+/// 2. **Only when no window binds it.** A second window on the same
+///    conversation keeps it alive — this is why the caller passes the *raw*
+///    window bindings rather than the engine-gated ones.
+/// 3. **Never the system backend.** The extension keys sessions by remote peer
+///    id, so on a single-local-peer desktop a chat bound to B shares B's
+///    session with the backend drain; releasing it would kill the backend's
+///    reconnect graph while everything still looked connected.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn release_candidates(
+    maintained: impl Iterator<Item = ((String, String), bool, bool)>,
+    bound_now: &std::collections::HashSet<(String, String)>,
+    system_backend: Option<&str>,
+) -> Vec<(String, String)> {
+    maintained
+        .filter(|(_, done, in_flight)| *done && !*in_flight)
+        .map(|(pair, _, _)| pair)
+        .filter(|pair| !bound_now.contains(pair))
+        .filter(|(_, remote)| Some(remote.as_str()) != system_backend)
+        .collect()
+}
+
+/// Build the `release-peer` request entity (EXTENSION-NETWORK §4.2). `reason`
+/// is load-bearing, not a label: `"shutdown"` evicts the connection and writes
+/// the terminal status, anything else keeps the connection for resumption.
 #[cfg(target_arch = "wasm32")]
-fn maintain_request_entity(peer_id: &str, address: &str) -> entity_entity::Entity {
+fn release_request_entity(peer_id: &str, reason: &str) -> entity_entity::Entity {
     let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![
         (entity_ecf::text("peer_id"), entity_ecf::text(peer_id)),
-        (entity_ecf::text("address"), entity_ecf::text(address)),
+        (entity_ecf::text("reason"), entity_ecf::text(reason)),
     ]));
-    entity_entity::Entity::new(entity_network::TYPE_MAINTAIN_REQUEST, data)
-        .expect("maintain-request entity construction is infallible")
+    entity_entity::Entity::new(entity_network::TYPE_RELEASE_REQUEST, data)
+        .expect("release-request entity construction is infallible")
 }
 
 /// Compose the always-on status-bar summary (`N windows · M peers · Saved`).
@@ -4645,6 +4814,86 @@ mod maintain_candidates_tests {
             ]),
         );
         assert_eq!(out.len(), 2, "per-peer pool ⇒ per-peer maintain");
+    }
+}
+
+#[cfg(test)]
+mod release_candidates_tests {
+    use super::release_candidates;
+    use std::collections::HashSet;
+
+    fn pair(l: &str, r: &str) -> (String, String) {
+        (l.to_string(), r.to_string())
+    }
+
+    fn bound(pairs: &[(&str, &str)]) -> HashSet<(String, String)> {
+        pairs.iter().map(|(l, r)| pair(l, r)).collect()
+    }
+
+    #[test]
+    fn a_maintained_pair_with_no_window_left_is_released() {
+        let out = release_candidates(
+            [(pair("local", "remote"), true, false)].into_iter(),
+            &bound(&[]),
+            None,
+        );
+        assert_eq!(out, vec![pair("local", "remote")]);
+    }
+
+    #[test]
+    fn a_pair_a_window_still_binds_is_kept() {
+        let out = release_candidates(
+            [(pair("local", "remote"), true, false)].into_iter(),
+            &bound(&[("local", "remote")]),
+            None,
+        );
+        assert!(out.is_empty(), "a bound conversation must stay maintained");
+    }
+
+    /// A second window on the same conversation keeps it alive — closing one of
+    /// two chats with the same peer must not stop maintaining it.
+    #[test]
+    fn one_of_two_windows_closing_keeps_the_relationship() {
+        // Both windows collapse to the same pair, so the pair is still bound.
+        let out = release_candidates(
+            [(pair("local", "remote"), true, false)].into_iter(),
+            &bound(&[("local", "remote")]),
+            None,
+        );
+        assert!(out.is_empty());
+    }
+
+    /// THE TRAP: the extension keys sessions by remote peer id, so on the
+    /// shipped single-local-peer desktop a chat bound to the backend shares the
+    /// backend's session. Releasing it would tear down the backend's reconnect
+    /// graph while everything still looked connected — Piece C undone.
+    #[test]
+    fn the_system_backend_is_never_released() {
+        let out = release_candidates(
+            [(pair("local", "backend"), true, false)].into_iter(),
+            &bound(&[]),
+            Some("backend"),
+        );
+        assert!(
+            out.is_empty(),
+            "releasing B would kill the backend's reconnect graph"
+        );
+    }
+
+    /// Not established yet, or an execute still in flight — not ours to tear
+    /// down on this frame.
+    #[test]
+    fn unestablished_or_in_flight_pairs_are_left_alone() {
+        let out = release_candidates(
+            [
+                (pair("local", "pending"), false, false),
+                (pair("local", "inflight"), true, true),
+            ]
+            .into_iter(),
+            &bound(&[]),
+            None,
+        );
+        assert!(out.is_empty());
     }
 }
 

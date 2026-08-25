@@ -558,6 +558,9 @@
   "peerconn.this_peer": "이 피어 {pid} · {kind}",
   "peerconn.listening": " · {addr} 에서 수신 대기",
   "peerconn.qr_failed": "QR 코드를 생성하지 못했습니다",
+  "peerconn.connect_dialing": "{addr}에 연결하는 중…",
+  "peerconn.connect_failed": "{addr}에 연결할 수 없습니다 — {reason}",
+  "peerconn.connect_ok": "{peer}에 연결됨",
   "filetransfer.no_results": "파일을 나열하거나 가져오면 결과가 표시됩니다.",
   "contentsite.more": "더보기 ▾ ({n})",
 

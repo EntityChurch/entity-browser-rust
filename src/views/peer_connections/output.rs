@@ -20,6 +20,12 @@ pub struct PeerConnectionsOutput {
     pub backend_peers: Vec<BackendPeer>,
     /// Initial value for the manual address input.
     pub address_input_initial: String,
+    /// Outcome of the last manual Connect press — `(address, outcome)`, `None`
+    /// when nothing has been tried this session. Rendered in the Connect card so
+    /// the action reports itself; without this, both a failed dial and a
+    /// successful one that produced no visible row looked identical to "the
+    /// button did nothing" (`crate::connect_attempt`).
+    pub last_attempt: Option<(String, crate::connect_attempt::ConnectOutcome)>,
     /// QR pairing payload — `{ws_addr}|{peer_id}` for a peer that can
     /// actually be reached here (this process's native listener, or the
     /// system's Tauri-managed backend listener). `None` when nothing
@@ -69,4 +75,13 @@ pub struct KnownPeer {
     /// stale-"Connected" lie: a real mid-session drop the old mirror missed now
     /// surfaces as Offline/Reconnecting.
     pub status: crate::peer_liveness::ConnDisplay,
+    /// Whether "Forget" means anything for this row.
+    ///
+    /// `true` for a remembered-registry row — Forget drops the entry and the row
+    /// goes away. `false` for a row derived from live peer metadata (the
+    /// auto-provisioned system backend), where there is no registry entry to
+    /// drop: Forget would remove nothing, the row would stay, and the button
+    /// would be a visible no-op. A dead button is the same disease as the silent
+    /// Connect, so the renderer omits it rather than offering it.
+    pub forgettable: bool,
 }

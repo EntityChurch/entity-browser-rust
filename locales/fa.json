@@ -564,6 +564,9 @@
   "peerconn.this_peer": "این همتا {pid} · {kind}",
   "peerconn.listening": " · در حال گوش دادن روی {addr}",
   "peerconn.qr_failed": "ایجاد کد QR ناموفق بود",
+  "peerconn.connect_dialing": "در حال اتصال به {addr}…",
+  "peerconn.connect_failed": "اتصال به {addr} ممکن نشد — {reason}",
+  "peerconn.connect_ok": "متصل به {peer}",
   "filetransfer.no_results": "برای دیدن نتایج، فایلی را فهرست یا دریافت کنید.",
   "contentsite.more": "بیشتر ▾ ({n})",
 

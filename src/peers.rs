@@ -100,6 +100,35 @@ pub type ConnectPeerFuture<'a> = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<String, String>> + 'a>,
 >;
 
+/// Future yielding the `maintain-peer` handler result. Used by
+/// `Peers::maintain_peer`; the caller keeps its own retry judgement, so the
+/// raw result travels rather than a bool.
+#[cfg(not(target_arch = "wasm32"))]
+pub type MaintainPeerFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<entity_handler::HandlerResult, String>> + Send + 'a>,
+>;
+
+#[cfg(target_arch = "wasm32")]
+pub type MaintainPeerFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<entity_handler::HandlerResult, String>> + 'a>,
+>;
+
+/// The `maintain-peer` request body (EXTENSION-NETWORK §2.2): the peer to keep
+/// connected and the address to reach it at. `reconnect` / `resubscribe`
+/// default true, so the request carries only those two fields.
+///
+/// Lives here rather than in `app.rs` because `Peers::maintain_peer` is now the
+/// single place that issues the op — see its doc for why that consolidation is
+/// load-bearing.
+fn maintain_request_entity(peer_id: &str, address: &str) -> Entity {
+    let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![
+        (entity_ecf::text("peer_id"), entity_ecf::text(peer_id)),
+        (entity_ecf::text("address"), entity_ecf::text(address)),
+    ]));
+    Entity::new(entity_network::TYPE_MAINTAIN_REQUEST, data)
+        .expect("maintain-request entity construction is infallible")
+}
+
 /// Future for `Peers::disconnect_peer` / `reconnect_peer` — resolves to `()`
 /// on success (or the reconnected remote's id, for `reconnect_peer`, reusing
 /// `ConnectPeerFuture`).
@@ -2225,10 +2254,14 @@ impl Peers {
                 return Box::pin(async move { Err(m) });
             }
         };
-        match sdk {
-            Sdk::Direct(pm) => direct_connect_future(pm.peer_shared(peer_id), peer_id, address),
-            Sdk::Worker(w) => Box::pin(w.connect_peer(peer_id.to_string(), address)),
-        }
+        let writer = self.writer_handle_for(peer_id);
+        let inner = match sdk {
+            Sdk::Direct(pm) => {
+                direct_connect_future(pm.peer_shared(peer_id), peer_id, address.clone())
+            }
+            Sdk::Worker(w) => Box::pin(w.connect_peer(peer_id.to_string(), address.clone())),
+        };
+        publishing_transport_profile(inner, writer, peer_id.to_string(), address)
     }
 
     /// Native variant — Direct arm only.
@@ -2242,7 +2275,92 @@ impl Peers {
             }
         };
         let Sdk::Direct(pm) = sdk;
-        direct_connect_future(pm.peer_shared(peer_id), peer_id, address)
+        let writer = self.writer_handle_for(peer_id);
+        let inner = direct_connect_future(pm.peer_shared(peer_id), peer_id, address.clone());
+        publishing_transport_profile(inner, writer, peer_id.to_string(), address)
+    }
+
+    /// EXECUTE `maintain-peer` on `local_pid`'s own `/{local}/system/network`,
+    /// handing the network extension a peer and the address to reach it — and,
+    /// on the 200 that means "established, reconnect graph installed", publish
+    /// the transport profile for that address.
+    ///
+    /// **Why this exists as a seam.** `connect_peer` is not how peers actually
+    /// connect in the shipped app: the backend auto-connect drain and the
+    /// window-bound maintain sweep both go through `maintain-peer`, where the
+    /// extension dials *inside the kernel* and never touches `connect_peer`. So
+    /// publishing only at `connect_peer` covered the manual Connect button and
+    /// missed every automatic connection — which is most of them. Routing both
+    /// drains through one helper is deliberate: per-call-site publishing is how
+    /// half the roster silently ends up without a profile, the same disease as
+    /// per-creation-site `start_engines` calls.
+    ///
+    /// The 200 is what makes this honest. `maintain-peer` returning 200 means
+    /// the address *worked*; anything else (a 502 boot-readiness race, an
+    /// unreachable peer) publishes nothing, so a dead address never becomes a
+    /// route the ladder will spend a timeout on.
+    ///
+    /// Returns the raw `HandlerResult` so callers keep their own retry/backoff
+    /// judgement — this helper adds the publish, it does not interpret failure.
+    pub fn maintain_peer(
+        &self,
+        local_pid: &str,
+        remote_pid: &str,
+        address: &str,
+    ) -> MaintainPeerFuture<'static> {
+        let writer = self.writer_handle_for(local_pid);
+        let fut = self.execute(
+            local_pid,
+            format!("/{local_pid}/system/network"),
+            "maintain-peer".to_string(),
+            maintain_request_entity(remote_pid, address),
+            entity_handler::ExecuteOptions::default(),
+        );
+        let local = local_pid.to_string();
+        let remote = remote_pid.to_string();
+        let addr = address.to_string();
+        Box::pin(async move {
+            let res = fut.await?;
+            if res.status == 200 {
+                match writer {
+                    Some(w) => crate::transport_profiles::publish_dialed(
+                        &w,
+                        &local,
+                        &remote,
+                        &addr,
+                        crate::transport_profiles::now_epoch_ms(),
+                    ),
+                    None => tracing::debug!(
+                        local = %local,
+                        remote = %remote,
+                        "maintain-peer established, but no writer handle for the local peer — \
+                         transport profile not published"
+                    ),
+                }
+            }
+            Ok(res)
+        })
+    }
+
+    /// Drop every published route to `remote_pid`, across **all** local peers.
+    ///
+    /// The counterpart of the publish in [`maintain_peer`](Self::maintain_peer)
+    /// / [`connect_peer`](Self::connect_peer). It sweeps the whole local roster
+    /// rather than one peer because a profile is written by whichever local
+    /// peer dialed, and more than one may have: the system peer's backend
+    /// drain and a window-bound peer's maintain sweep publish under their own
+    /// roots. Forgetting from only the primary would leave a route behind on
+    /// exactly the multi-peer setups where it is hardest to notice.
+    ///
+    /// Returns the number of local peers swept, for the caller's log line.
+    pub fn forget_routes_to(&self, remote_pid: &str) -> usize {
+        let locals = self.peer_ids();
+        for local in &locals {
+            if let Some(w) = self.writer_handle_for(local) {
+                crate::transport_profiles::forget(&w, local, remote_pid);
+            }
+        }
+        locals.len()
     }
 
     /// Evict the pooled connection `peer_id → remote_peer_id` — **uniform
@@ -2486,6 +2604,51 @@ fn direct_connect_future(
     })
 }
 
+/// Wrap a connect future so a **successful** dial publishes the durable
+/// transport profile the kernel's dispatch ladder reads (rung 2,
+/// `resolve_transport_address`) — see `crate::transport_profiles`.
+///
+/// This wraps `connect_peer` rather than living inside `direct_connect_future`
+/// for two reasons. It is the **arm-uniform** seam: the Worker arm connects
+/// inside the worker and never touches `direct_connect_future`, so publishing
+/// there would have been a Direct-only fix that compiled clean — the
+/// silently-stubbed-worker-arm footgun `WriterHandle` exists to prevent. And it
+/// is the **address-dial** seam: `connect_peer` is reached only when a caller
+/// had an address to dial, which is what keeps traversal (WebRTC) connections
+/// from publishing a profile they must never publish.
+///
+/// A failed connect publishes nothing — an address that didn't work is not a
+/// route, and recording it would hand the ladder a dial that costs a timeout on
+/// every later dispatch.
+fn publishing_transport_profile(
+    inner: ConnectPeerFuture<'static>,
+    writer: Option<crate::writer_handle::WriterHandle>,
+    local_peer_id: String,
+    address: String,
+) -> ConnectPeerFuture<'static> {
+    Box::pin(async move {
+        let remote_peer_id = inner.await?;
+        match writer {
+            Some(w) => crate::transport_profiles::publish_dialed(
+                &w,
+                &local_peer_id,
+                &remote_peer_id,
+                &address,
+                crate::transport_profiles::now_epoch_ms(),
+            ),
+            // No handle means no route to this peer's tree at all — the connect
+            // itself came from somewhere else. Log rather than swallow: a
+            // missing profile is a rung-2 miss much later, far from the cause.
+            None => tracing::debug!(
+                local = %local_peer_id,
+                remote = %remote_peer_id,
+                "connected, but no writer handle for the local peer — transport profile not published"
+            ),
+        }
+        Ok(remote_peer_id)
+    })
+}
+
 // =====================================================================
 // In-process memory transport — consumer-side integration.
 //
@@ -2545,6 +2708,242 @@ mod memory_transport_tests {
 
         let shared_a = peers_a.direct_peer_shared(&pid_a).unwrap();
         assert!(shared_a.remote.get(&pid_b).is_some());
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// **THE PROFILE PROOF** — a dialed address becomes a route the *kernel*
+    /// owns, not one the app has to hand back.
+    ///
+    /// Rung 2 of the dispatch ladder (`resolve_transport_address`) reads
+    /// `/{local}/system/peer/transport/{remote_hex}/{profile-id}`. Nothing in
+    /// production ever wrote those entities, so the app carried the address book
+    /// instead and a dispatch that outlived its pooled connection died with
+    /// `no transport profile for peer` (`REVIEW-CONNECTIVITY-LAYER-COHERENCE`
+    /// §4). This asserts the two halves of the fix:
+    ///
+    /// 1. the profile lands, decodes through the **upstream** decoder, and
+    ///    carries the address that actually worked;
+    /// 2. — the load-bearing half — **losing the pooled connection is now
+    ///    survivable**. Evicting A→B is what a reload costs us: the in-memory
+    ///    pool is gone while the durable tree remains. A cross-peer fetch after
+    ///    the eviction must still reach B, and the dial counter must climb,
+    ///    proving the kernel re-dialed from the tree rather than the probe
+    ///    quietly reusing something still pooled.
+    ///
+    /// **Mutation check:** drop the `publish_dialed` call in
+    /// `publishing_transport_profile` and step (1) fails on the missing entity;
+    /// keep the write but corrupt the path (any prefix the resolver doesn't
+    /// list) and (1) still passes while (2) fails on the probe — which is
+    /// precisely the failure mode a path-only test would miss.
+    ///
+    /// Not covered: the wasm/Worker arm (the publish routes through the same
+    /// `WriterHandle`, but no harness drives it), and profile staleness — an
+    /// address that stops working is never pruned.
+    #[tokio::test]
+    async fn a_dialed_address_survives_losing_the_pooled_connection() {
+        use entity_peer::transport_profile::TcpProfileData;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (_peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        let addr_b = format!("memory://{pid_b}");
+        let connect_fut = peers_a.connect_peer(&pid_a, addr_b.clone());
+        let remote_pid = tokio::time::timeout(Duration::from_secs(2), connect_fut)
+            .await
+            .expect("connect_peer timed out")
+            .expect("connect_peer must succeed");
+        assert_eq!(remote_pid, pid_b);
+
+        // (1) The profile is where the resolver lists, in the shape it decodes.
+        let hex = crate::transport_profiles::remote_hex(&pid_b)
+            .expect("an identity-form PID derives its hex locally");
+        let path = crate::transport_profiles::profile_path(
+            &pid_a,
+            &hex,
+            crate::transport_profiles::PROFILE_ID_PRIMARY,
+        );
+        let entity = peers_a.get_entity(&pid_a, &path).unwrap_or_else(|| {
+            panic!(
+                "no transport profile at {path} — a successful dial must leave the \
+                 kernel a route, or the app stays the address book"
+            )
+        });
+        let profile =
+            TcpProfileData::from_entity(&entity).expect("upstream must decode what we published");
+        assert_eq!(profile.peer_id, pid_b);
+        assert_eq!(
+            profile.endpoint_url, addr_b,
+            "the profile must carry the address that actually worked"
+        );
+
+        // (2) Lose the pool — what a reload costs — and dispatch anyway.
+        let shared_a = peers_a.direct_peer_shared(&pid_a).expect("A shared");
+        assert!(shared_a.remote.get(&pid_b).is_some(), "connected first");
+        shared_a.remote.remove(&pid_b);
+        assert!(
+            shared_a.remote.get(&pid_b).is_none(),
+            "the eviction must actually empty the pool — otherwise the probe \
+             below proves nothing about rung 2"
+        );
+
+        let dials_before = registry.dial_count();
+        assert!(
+            cross_peer_probe(&peers_a, &pid_a, &pid_b).await,
+            "a dispatch that outlives its pooled connection must resolve the \
+             published profile and re-dial — this is the `no transport profile \
+             for peer` symptom, in miniature"
+        );
+        assert!(
+            registry.dial_count() > dials_before,
+            "the probe must have caused a real dial (rung 2 → connector); an \
+             unchanged count would mean it answered from something still pooled"
+        );
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// **The auto-connect half of the profile proof.**
+    ///
+    /// `connect_peer` is the manual Connect button. It is NOT how peers connect
+    /// in the shipped app: the backend drain and the window-bound maintain
+    /// sweep both go through `maintain-peer`, where the extension dials inside
+    /// the kernel. So the sibling proof
+    /// (`a_dialed_address_survives_losing_the_pooled_connection`) covered a path
+    /// a desktop boot never takes, and every automatic connection published
+    /// nothing. This asserts the seam that closed that: a `maintain-peer` 200
+    /// leaves the same route behind.
+    ///
+    /// The **200 gate** is the other half, and it is the one worth protecting:
+    /// a `maintain-peer` against an address nothing answers must publish
+    /// nothing, or a dead address becomes a route the ladder spends a timeout
+    /// on at every later dispatch. Asserted here against an unregistered
+    /// endpoint on the same registry.
+    ///
+    /// **Mutation check:** publish unconditionally instead of on 200 and the
+    /// second half fails; route `sync_maintained_peers` back through a bare
+    /// `execute` and the first half fails.
+    #[tokio::test]
+    async fn maintaining_a_peer_publishes_the_route_but_only_when_it_worked() {
+        use entity_peer::transport_profile::TcpProfileData;
+
+        let registry = MemoryTransportRegistry::new();
+        let peers_a =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry.clone())));
+        let pid_a = peers_a.primary_peer_id().to_string();
+        let shared_a = peers_a.direct_peer_shared(&pid_a).expect("A shared");
+        assert_eq!(
+            peers_a.start_engines(&pid_a),
+            EnginesStart::Started,
+            "the network handler's PeerLink binds here — without it maintain-peer 500s"
+        );
+        let _srv_a = serve_peer(&pid_a, shared_a.clone(), registry.clone());
+
+        let peers_b =
+            Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(registry.clone())));
+        let pid_b = peers_b.primary_peer_id().to_string();
+        let shared_b = peers_b.direct_peer_shared(&pid_b).expect("B shared");
+        assert_eq!(peers_b.start_engines(&pid_b), EnginesStart::Started);
+        let _srv_b = serve_peer(&pid_b, shared_b.clone(), registry.clone());
+        tokio::task::yield_now().await;
+
+        let profile_path = |remote: &str| {
+            crate::transport_profiles::profile_path(
+                &pid_a,
+                &crate::transport_profiles::remote_hex(remote).expect("identity-form hex"),
+                crate::transport_profiles::PROFILE_ID_PRIMARY,
+            )
+        };
+
+        // (1) A reachable peer: maintain-peer 200 ⇒ the route is published.
+        let addr_b = format!("memory://{pid_b}");
+        let res = peers_a
+            .maintain_peer(&pid_a, &pid_b, &addr_b)
+            .await
+            .expect("maintain-peer dispatch");
+        assert_eq!(res.status, 200, "maintain-peer must establish");
+        let entity = peers_a
+            .get_entity(&pid_a, &profile_path(&pid_b))
+            .expect("a maintained peer must leave a route — this is how the app actually connects");
+        let profile = TcpProfileData::from_entity(&entity).expect("upstream must decode it");
+        assert_eq!(profile.endpoint_url, addr_b);
+
+        // (2) An address nothing answers publishes nothing. `ghost` is a valid
+        // identity-form PeerID that was never bound on this registry, so the
+        // dial cannot succeed and `maintain-peer` cannot return 200.
+        let ghost = entity_crypto::Keypair::generate().peer_id().to_string();
+        let ghost_addr = format!("memory://{ghost}");
+        let res = peers_a.maintain_peer(&pid_a, &ghost, &ghost_addr).await;
+        let status = res.as_ref().map(|r| r.status).unwrap_or(0);
+        assert_ne!(
+            status, 200,
+            "the premise of this half is that an unreachable peer does not \
+             return 200 — if it does, the gate below proves nothing"
+        );
+        assert!(
+            peers_a.get_entity(&pid_a, &profile_path(&ghost)).is_none(),
+            "an address that never connected must NOT become a route — the \
+             ladder would spend a dial timeout on it at every later dispatch"
+        );
+    }
+
+    /// **Forget must forget the route, not just the row.**
+    ///
+    /// Publishing profiles created this hazard: before it, forgetting a peer
+    /// dropped a registry row and a dial marker and nothing durable survived.
+    /// Now a forgotten peer would keep a durable address inside the kernel's
+    /// own tree, and the ladder would go on dialing someone the user
+    /// dismissed — a surface saying "gone" over a durable store saying "here",
+    /// which is the `connection_health` disease wearing new clothes.
+    ///
+    /// Asserted at the level that matters. Not "the entity is absent" — that
+    /// is a path assertion, and the sibling proof already showed a path
+    /// assertion can pass while the behaviour is broken. Instead: after
+    /// forgetting, **losing the pool must once again cost reachability**. The
+    /// same probe that succeeds while the route exists must fail once it is
+    /// gone, which is the only statement a user would recognise.
+    ///
+    /// **Mutation check:** drop the `forget_routes_to` call and the final probe
+    /// succeeds — the route outlived the forget.
+    #[tokio::test]
+    async fn forgetting_a_peer_drops_the_route_the_ladder_would_have_dialed() {
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (_peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        let addr_b = format!("memory://{pid_b}");
+        peers_a
+            .connect_peer(&pid_a, addr_b.clone())
+            .await
+            .expect("connect_peer must succeed");
+
+        let shared_a = peers_a.direct_peer_shared(&pid_a).expect("A shared");
+
+        // Baseline: with the route published, losing the pool is survivable.
+        // Without this the final assertion could pass for the wrong reason —
+        // a probe that never worked proves nothing about forgetting.
+        shared_a.remote.remove(&pid_b);
+        assert!(
+            cross_peer_probe(&peers_a, &pid_a, &pid_b).await,
+            "the published route must carry a dispatch across a lost pool — \
+             otherwise this test's premise is false"
+        );
+
+        // Forget, then lose the pool again. Now there is nothing to resolve.
+        let swept = peers_a.forget_routes_to(&pid_b);
+        assert!(swept >= 1, "the sweep must cover at least the local peer");
+        shared_a.remote.remove(&pid_b);
+        assert!(
+            !cross_peer_probe(&peers_a, &pid_a, &pid_b).await,
+            "a forgotten peer must not still be reachable from a durable route \
+             — Forget dropped the row the user sees while the kernel kept the \
+             address it dials"
+        );
 
         handle_a.abort();
         handle_b.abort();
@@ -2963,6 +3362,171 @@ mod memory_transport_tests {
         );
 
         srv_b.abort();
+    }
+
+    /// Build a `release-peer` request. `reason` is load-bearing, not a label
+    /// (EXTENSION-NETWORK §4.2): `"shutdown"` evicts the connection and writes
+    /// the terminal status; anything else drops the maintain machinery and
+    /// leaves the connection up. The app closes a window with `"idle"`, so
+    /// that is what this test drives.
+    fn release_request(peer_id: &str, reason: &str) -> Entity {
+        let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![
+            (entity_ecf::text("peer_id"), entity_ecf::text(peer_id)),
+            (entity_ecf::text("reason"), entity_ecf::text(reason)),
+        ]));
+        Entity::new(entity_network::TYPE_RELEASE_REQUEST, data)
+            .expect("release-request entity construction is infallible")
+    }
+
+    /// **THE RELEASE PROOF** — the counterpart to the reconnect proof above,
+    /// and the gap the Piece C handoff called "the weakest point in the arc":
+    /// `release_candidates` (which pairs to drop) was unit-tested, but nothing
+    /// had ever observed an actual `release-peer` round-trip. Both halves of
+    /// the decision that carries the teardown rested on having *read* the
+    /// handler. This asserts them.
+    ///
+    ///   1. A maintains B → connected, reconnect graph installed.
+    ///   2. A releases B with reason **`idle`** — what closing a chat window
+    ///      sends. The connection **stays up**: the cross-peer fetch a
+    ///      conversation depends on still works, and the read-model still says
+    ///      `connected` (truthfully — nothing was evicted). This is why the app
+    ///      uses `idle` and not `shutdown`: closing a chat means "stop
+    ///      auto-reconnecting", not "hang up on a peer the user may still be
+    ///      using from Peer Connections or File Transfer".
+    ///   3. B then disappears — and **no dials follow**. The retry loop the
+    ///      reconnect proof watched climb is genuinely gone, not merely
+    ///      answered with a 200.
+    ///
+    /// Step 3 is what makes this mutation-checkable: delete the release and
+    /// this becomes exactly the reconnect proof's sequence, where dials *do*
+    /// climb — so the assertion fails. Keep it that way.
+    ///
+    /// What this does NOT cover: the wasm frame sweep that decides to release
+    /// (`release_unbound_peers`, unit-tested via `release_candidates`) and a
+    /// real WebSocket.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn releasing_a_conversation_stops_the_retries_but_leaves_the_connection_up() {
+        use crate::peer_liveness::{liveness_of, LiveStatus};
+
+        let registry = MemoryTransportRegistry::new();
+
+        // A — the maintaining, then releasing, side.
+        let peers_a = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let pid_a = peers_a.primary_peer_id().to_string();
+        let shared_a = peers_a.direct_peer_shared(&pid_a).expect("A shared");
+        assert_eq!(
+            peers_a.start_engines(&pid_a),
+            EnginesStart::Started,
+            "the network handler's PeerLink binds here — without it both \
+             maintain-peer and release-peer 500 with 'not bound'"
+        );
+        let _srv_a = serve_peer(&pid_a, shared_a.clone(), registry.clone());
+
+        // B — the conversation partner, released and then vanished.
+        let peers_b = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let pid_b = peers_b.primary_peer_id().to_string();
+        let shared_b = peers_b.direct_peer_shared(&pid_b).expect("B shared");
+        assert_eq!(peers_b.start_engines(&pid_b), EnginesStart::Started);
+        // Not reassigned (unlike the reconnect proof, B never comes back here —
+        // the point is that nothing re-dials it).
+        let srv_b = serve_peer(&pid_b, shared_b.clone(), registry.clone());
+        tokio::task::yield_now().await;
+
+        let addr_b = format!("memory://{pid_b}");
+
+        // (1) Bind the conversation: exactly what `sync_maintained_peers`
+        // EXECUTEs for a window that binds B.
+        let res = peers_a
+            .execute(
+                &pid_a,
+                format!("/{pid_a}/system/network"),
+                "maintain-peer".to_string(),
+                fast_maintain_request(&pid_b, &addr_b),
+                entity_handler::ExecuteOptions::default(),
+            )
+            .await
+            .expect("maintain-peer dispatch");
+        assert_eq!(res.status, 200, "maintain-peer must install the reconnect graph");
+        assert!(
+            eventually(Duration::from_secs(3), || liveness_of(&peers_a, &pid_b)
+                == LiveStatus::Connected)
+                .await,
+            "the app read-model must show B connected after maintain-peer"
+        );
+
+        // (2) The window closes. `release_unbound_peers` EXECUTEs this on A's
+        // OWN system/network — reason `idle`, never `shutdown`.
+        let res = peers_a
+            .execute(
+                &pid_a,
+                format!("/{pid_a}/system/network"),
+                "release-peer".to_string(),
+                release_request(&pid_b, "idle"),
+                entity_handler::ExecuteOptions::default(),
+            )
+            .await
+            .expect("release-peer dispatch");
+        assert_eq!(
+            res.status, 200,
+            "release-peer must succeed — on anything else the app deliberately \
+             leaves the relationship maintained rather than half-torn-down"
+        );
+
+        // The connection SURVIVES. If `idle` were ever treated like `shutdown`
+        // upstream, closing one chat window would hang up a peer the user is
+        // still using elsewhere — and this is the assertion that would catch
+        // it. Asserted on the traffic, not just the chip: a status entity that
+        // still says `connected` would be worth nothing if the fetches a
+        // conversation makes had started failing.
+        assert!(
+            cross_peer_probe(&peers_a, &pid_a, &pid_b).await,
+            "release-peer(idle) must LEAVE the connection up — the cross-peer \
+             fetch must still reach B after the release"
+        );
+        assert_eq!(
+            liveness_of(&peers_a, &pid_b),
+            LiveStatus::Connected,
+            "release-peer(idle) writes no terminal status and evicts nothing, \
+             so the read-model must still (truthfully) say connected"
+        );
+
+        // (3) Now B disappears — the same way the reconnect proof kills it.
+        srv_b.abort();
+        let endpoints_before = registry.len();
+        assert!(
+            eventually(Duration::from_secs(2), || registry.len() < endpoints_before).await,
+            "B's endpoint must leave the registry once its server is aborted \
+             (it was {endpoints_before}) — otherwise the 'remote is gone' \
+             premise of this test is false and the rest proves nothing"
+        );
+
+        // Provoke drop detection with one dispatch over the dead connection —
+        // the same probe the reconnect proof uses. This is load-bearing for the
+        // mutation check: without it nothing would dial even in the
+        // still-maintained case, and the assertion below could not tell the two
+        // apart.
+        assert!(
+            !cross_peer_probe(&peers_a, &pid_a, &pid_b).await,
+            "a fetch to a vanished peer cannot succeed — the outage is not real"
+        );
+
+        // THE RELEASE: no retry loop follows. In the reconnect proof this same
+        // window showed dials climbing; here it must be flat, because
+        // `release-peer` dropped the session that owned them.
+        tokio::time::sleep(Duration::from_millis(300)).await; // let anything in flight settle
+        let dials_before = registry.dial_count();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let dials_after = registry.dial_count();
+        assert_eq!(
+            dials_after, dials_before,
+            "a RELEASED relationship must not be retried — dials went \
+             {dials_before} → {dials_after}. The extension is still \
+             reconnecting a conversation no window binds any more."
+        );
     }
 
     /// THE DELIVERY PROOF: a signed chat message authored by peer A crosses a

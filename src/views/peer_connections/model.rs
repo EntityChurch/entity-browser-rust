@@ -148,6 +148,7 @@ impl PeerConnectionsModel {
         &self,
         peers: &Peers,
         dials: &crate::dial_markers::DialMarkers,
+        attempt: &crate::connect_attempt::ConnectAttempt,
     ) -> PeerConnectionsOutput {
         let kind = PeerDisplay::classify(peers, &self.peer_id);
         let ws_addr = crate::listener_state::read_address(peers);
@@ -159,17 +160,20 @@ impl PeerConnectionsModel {
         };
 
         // Known peers = the remembered-peer registry, enriched with a
-        // reconnect address (§13.2). Display name resolved per entry. The
-        // canonical system-backend is excluded — it's infrastructure managed in
-        // the System Backend window (auto-connected), not an outbound "reach a
-        // device" target, so a "Reconnect to your own backend" row here is just
-        // confusing (Direction A).
-        let known_peers: Vec<KnownPeer> = crate::connections::read_connections(peers)
+        // reconnect address (§13.2). Display name resolved per entry.
+        //
+        // The system backend is **shown here like any other device**. It used
+        // to be filtered out as "infrastructure managed elsewhere", which was
+        // wrong in two independent ways. (a) Being auto-connected is not a
+        // reason to be invisible — the user still needs to see whether the link
+        // is actually up, and still needs a way to re-dial it when it isn't.
+        // (b) Worse, the filter silently swallowed the *result of the user's own
+        // action*: a manual connect to the backend's address succeeds, writes
+        // its registry row here, and the row was then filtered straight back
+        // out — a connect that fully worked was indistinguishable from one that
+        // did nothing at all (D13; the reported bug).
+        let mut known_peers: Vec<KnownPeer> = crate::connections::read_connections(peers)
             .into_iter()
-            .filter(|r| {
-                peers.peer_metadata(&r.remote_pid).and_then(|m| m.label).as_deref()
-                    != Some(crate::views::system_overview::model::SYSTEM_BACKEND_LABEL)
-            })
             .map(|r| KnownPeer {
                 display: crate::views::display_name(peers, &r.remote_pid),
                 // Kernel read-model is authoritative for real liveness; the
@@ -183,6 +187,8 @@ impl PeerConnectionsModel {
                 remote_pid: r.remote_pid,
                 addr: r.addr,
                 last_seen: r.last_seen,
+                // A real registry entry — Forget drops it and the row goes.
+                forgettable: true,
             })
             .collect();
 
@@ -209,6 +215,39 @@ impl PeerConnectionsModel {
                 peer_id: (*p).to_string(),
                 display,
                 connect_addresses,
+            });
+        }
+
+        // Surface every reachable backend (the auto-connected system backend
+        // included) as a device row, even when it has no remembered-registry
+        // entry. It usually has none: `connections::add` runs only on a MANUAL
+        // connect (`handle_connect_peer`) or the shell verb, while the boot
+        // auto-connect goes through `maintain-peer`, which writes no registry
+        // row. So the registry alone renders an empty list on a machine whose
+        // backend is up and connected — the user sees nothing while the link is
+        // fine. Metadata + the kernel liveness read-model is what actually knows.
+        //
+        // Deduped by peer id, registry row wins: it carries the address the user
+        // actually dialed and a real `last_seen`.
+        for bp in &backend_peers {
+            if known_peers.iter().any(|k| k.remote_pid == bp.peer_id) {
+                continue;
+            }
+            known_peers.push(KnownPeer {
+                remote_pid: bp.peer_id.clone(),
+                display: bp.display.clone(),
+                addr: bp.connect_addresses.first().cloned().unwrap_or_default(),
+                // No successful *manual* connect is recorded for an
+                // auto-connected peer, and inventing a timestamp would be a
+                // lie in a field named `last_seen`.
+                last_seen: 0,
+                status: crate::peer_liveness::conn_display(
+                    crate::peer_liveness::liveness_of(peers, &bp.peer_id),
+                    dials.hint(&bp.peer_id),
+                ),
+                // Derived from live metadata, not the registry: there is nothing
+                // for Forget to remove, and the row would survive the click.
+                forgettable: false,
             });
         }
 
@@ -241,6 +280,7 @@ impl PeerConnectionsModel {
             known_peers,
             backend_peers,
             address_input_initial: self.inner.lock().unwrap().address.clone(),
+            last_attempt: attempt.read(),
             qr_payload,
         }
     }
@@ -307,13 +347,140 @@ mod tests {
         ConnectionsWriter::new(&peers).add("REMOTE_B", "ws://10.0.0.9:4041");
 
         let model = PeerConnectionsModel::new(7, pid);
-        let out = model.render_output(&peers, &crate::dial_markers::DialMarkers::new());
+        let out = model.render_output(
+            &peers,
+            &crate::dial_markers::DialMarkers::new(),
+            &crate::connect_attempt::ConnectAttempt::new(),
+        );
 
         assert_eq!(out.known_peers.len(), 1, "the remembered peer surfaces");
         assert_eq!(out.known_peers[0].remote_pid, "REMOTE_B");
         assert_eq!(
             out.known_peers[0].addr, "ws://10.0.0.9:4041",
             "reconnect address carried through for one-tap reconnect"
+        );
+    }
+
+    /// The system backend must NOT be filtered out of the device list.
+    ///
+    /// It used to be, as "infrastructure managed elsewhere". The cost was that
+    /// a manual connect to the backend's address succeeded, wrote its registry
+    /// row, and had the row filtered straight back out — the user's own action
+    /// produced no visible change anywhere, which is indistinguishable from a
+    /// dead button. Being auto-connected is not a reason to be invisible.
+    #[test]
+    fn the_system_backend_is_shown_like_any_other_device() {
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        let backend = "REMOTE_SYSTEM_BACKEND";
+        ConnectionsWriter::new(&peers).add(backend, "ws://192.168.68.55:4041");
+
+        let model = PeerConnectionsModel::new(7, pid);
+        let out = model.render_output(
+            &peers,
+            &crate::dial_markers::DialMarkers::new(),
+            &crate::connect_attempt::ConnectAttempt::new(),
+        );
+
+        assert!(
+            out.known_peers.iter().any(|k| k.remote_pid == backend),
+            "the system backend must appear in the device list — it was filtered \
+             out before, which silently swallowed the result of a manual connect \
+             to it. Got: {:?}",
+            out.known_peers.iter().map(|k| &k.remote_pid).collect::<Vec<_>>()
+        );
+    }
+
+    /// A reachable backend shows up **without any remembered-registry row**.
+    ///
+    /// This is the path that actually matters on the desktop, and the one the
+    /// old code could not produce. `connections::add` runs only on a MANUAL
+    /// connect or the shell verb; the boot auto-connect goes through
+    /// `maintain-peer`, which writes no registry row. So on a machine whose
+    /// system backend is up and connected, the registry is empty and the device
+    /// list rendered nothing at all — the user sees an empty window while the
+    /// link is fine. Metadata + the kernel read-model is what knows.
+    #[test]
+    fn a_reachable_backend_appears_even_with_an_empty_registry() {
+        let mut peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        let backend = "2KBackendNoRegistryRow".to_string();
+        // A backend peer as the Tauri IPC path registers it: its own SDK (so it
+        // classifies Remote) and a listen address (so it is dialable).
+        peers.register_backend_peer_primary(
+            backend.clone(),
+            Some(crate::views::system_overview::model::SYSTEM_BACKEND_LABEL.to_string()),
+            vec!["ws://192.168.68.55:4041".to_string()],
+        );
+
+        let model = PeerConnectionsModel::new(7, pid);
+        let out = model.render_output(
+            &peers,
+            &crate::dial_markers::DialMarkers::new(),
+            &crate::connect_attempt::ConnectAttempt::new(),
+        );
+
+        let row = out
+            .known_peers
+            .iter()
+            .find(|k| k.remote_pid == backend)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the system backend is up and reachable but rendered NO device row \
+                     (the registry is empty because auto-connect writes none). Got: {:?}",
+                    out.known_peers.iter().map(|k| &k.remote_pid).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            row.addr, "ws://192.168.68.55:4041",
+            "the row must carry a dialable address, or its Reconnect button can't work"
+        );
+        assert!(
+            !row.forgettable,
+            "a metadata-derived row has no registry entry, so Forget would remove \
+             nothing and the row would survive the click — the renderer must not \
+             offer it. A visible no-op is the same disease as the silent Connect."
+        );
+    }
+
+    /// The connect outcome reaches the render output, so the window can report
+    /// what the button did. Without this the action is silent in BOTH
+    /// directions — the reported bug.
+    #[test]
+    fn the_last_connect_outcome_reaches_the_output() {
+        use crate::connect_attempt::{ConnectAttempt, ConnectOutcome};
+
+        let peers = Peers::new_direct();
+        let pid = peers.system_peer_id().to_string();
+        let model = PeerConnectionsModel::new(7, pid);
+        let dials = crate::dial_markers::DialMarkers::new();
+
+        // Nothing pressed yet ⇒ nothing claimed.
+        let attempt = ConnectAttempt::new();
+        assert_eq!(
+            model.render_output(&peers, &dials, &attempt).last_attempt,
+            None,
+            "an untouched window must not assert an outcome it never had"
+        );
+
+        // A failure carries its reason all the way to the renderer.
+        attempt.set_failed("ws://10.0.0.9:4041", "connection refused");
+        assert_eq!(
+            model.render_output(&peers, &dials, &attempt).last_attempt,
+            Some((
+                "ws://10.0.0.9:4041".to_string(),
+                ConnectOutcome::Failed("connection refused".to_string())
+            ))
+        );
+
+        // …and so does a success, which is the case that used to vanish.
+        attempt.set_connected("ws://192.168.68.55:4041", "system-backend");
+        assert_eq!(
+            model.render_output(&peers, &dials, &attempt).last_attempt,
+            Some((
+                "ws://192.168.68.55:4041".to_string(),
+                ConnectOutcome::Connected("system-backend".to_string())
+            ))
         );
     }
 

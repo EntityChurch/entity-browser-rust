@@ -570,6 +570,9 @@
   "peerconn.this_peer": "Tento peer {pid} · {kind}",
   "peerconn.listening": " · naslouchá na {addr}",
   "peerconn.qr_failed": "Nepodařilo se vygenerovat QR kód",
+  "peerconn.connect_dialing": "Připojování k {addr}…",
+  "peerconn.connect_failed": "Nepodařilo se připojit k {addr} — {reason}",
+  "peerconn.connect_ok": "Připojeno k {peer}",
   "filetransfer.no_results": "Vypište nebo stáhněte soubor, aby se zobrazily výsledky.",
   "contentsite.more": "Více ▾ ({n})",
 

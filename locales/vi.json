@@ -558,6 +558,9 @@
   "peerconn.this_peer": "Điểm ngang hàng này {pid} · {kind}",
   "peerconn.listening": " · đang lắng nghe tại {addr}",
   "peerconn.qr_failed": "Không tạo được mã QR",
+  "peerconn.connect_dialing": "Đang kết nối tới {addr}…",
+  "peerconn.connect_failed": "Không thể kết nối tới {addr} — {reason}",
+  "peerconn.connect_ok": "Đã kết nối tới {peer}",
   "filetransfer.no_results": "Hãy liệt kê hoặc kéo một tệp để xem kết quả.",
   "contentsite.more": "Thêm ▾ ({n})",
 

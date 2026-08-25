@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Tämä vertainen {pid} · {kind}",
   "peerconn.listening": " · kuuntelee osoitteessa {addr}",
   "peerconn.qr_failed": "QR-koodin luonti epäonnistui",
+  "peerconn.connect_dialing": "Yhdistetään osoitteeseen {addr}…",
+  "peerconn.connect_failed": "Yhteys osoitteeseen {addr} epäonnistui — {reason}",
+  "peerconn.connect_ok": "Yhdistetty kohteeseen {peer}",
   "filetransfer.no_results": "Listaa tai nouda tiedosto nähdäksesi tulokset.",
   "contentsite.more": "Lisää ▾ ({n})",
 

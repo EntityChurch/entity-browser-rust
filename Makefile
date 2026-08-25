@@ -379,6 +379,11 @@ E2E_DISPLAY_ARGS = $(shell \
 #   make e2e-worker SKIP_BUILD=1          # reuse dist/ — skip the trunk rebuild
 # `make e2e-phases` lists the phase labels UNTIL accepts.
 E2E_UNTIL_ENV = $(if $(strip $(UNTIL)),-e E2E_UNTIL=$(strip $(UNTIL)),)
+
+# Hard wall-clock cap on an e2e run (see the `timeout` note in e2e-worker).
+# A healthy full suite is ~285s; 15m is ~3x headroom for a loaded box, so it
+# only ever fires on a genuine hang. Override: `make e2e-worker E2E_TIMEOUT=25m`.
+E2E_TIMEOUT ?= 15m
 # Preflight: the suite's own connect error is good, but it only surfaces on the
 # far side of the trunk build — a minute burnt on the commonest mistake. Probe
 # :4444 first (in-container python3, so the host still needs only make+podman).
@@ -412,7 +417,16 @@ endif
 	# Selenium container on :4444 and Selenium reaches the test's :8092 server.
 	# $(T) is cargo's own substring filter over test names; UNTIL rides in as
 	# E2E_UNTIL and cuts the monolith short (see tests/e2e_worker.rs PHASE_ORDER).
-	$(call RUN,cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
+	#
+	# `timeout` is the OUTERMOST of three guards, and the only one that survives
+	# a wedge in the layers below it (cargo itself, the container, a hung
+	# socket). Inside it: the suite's stall watchdog (E2E_STALL_SECS, names the
+	# stuck phase — the diagnosis you actually want) and the WebDriver
+	# script/pageLoad timeouts. A healthy full run is ~285s, so E2E_TIMEOUT
+	# never fires on one; it exists so a hang FAILS instead of sitting silent
+	# forever in CI or an agent loop. --signal=KILL because a wedged podman
+	# child may not honour TERM.
+	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1,--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
 
 # List what `T=` and `UNTIL=` accept. Reads the test source, so it can never
 # drift from what actually runs — and needs neither the image nor Selenium.

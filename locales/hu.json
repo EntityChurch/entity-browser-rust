@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Ez a peer {pid} · {kind}",
   "peerconn.listening": " · figyel: {addr}",
   "peerconn.qr_failed": "A QR-kód létrehozása nem sikerült",
+  "peerconn.connect_dialing": "Csatlakozás ide: {addr}…",
+  "peerconn.connect_failed": "Nem sikerült csatlakozni ide: {addr} — {reason}",
+  "peerconn.connect_ok": "Csatlakozva ide: {peer}",
   "filetransfer.no_results": "Listázz vagy húzz le egy fájlt az eredményekhez.",
   "contentsite.more": "Több ▾ ({n})",
 

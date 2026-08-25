@@ -50,6 +50,12 @@ pub struct DomCtx {
     /// than from a tree store (`crate::dial_markers`). A cheap Arc-clone handle:
     /// one owner (the app), read here, never a per-window copy.
     pub dial_markers: crate::dial_markers::DialMarkers,
+    /// Outcome of the last manual Connect press (`crate::connect_attempt`) —
+    /// the surface that stops `Action::ConnectPeer` from completing silently.
+    /// Same ownership shape as `dial_markers`: one app-owned handle, read at
+    /// render. Distinct from it because a manual connect is keyed by the
+    /// *address* typed, which has no peer id until the handshake lands.
+    pub connect_attempt: crate::connect_attempt::ConnectAttempt,
 }
 
 impl DomCtx {

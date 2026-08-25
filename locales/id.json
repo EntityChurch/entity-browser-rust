@@ -558,6 +558,9 @@
   "peerconn.this_peer": "Peer ini {pid} · {kind}",
   "peerconn.listening": " · mendengarkan di {addr}",
   "peerconn.qr_failed": "Gagal membuat kode QR",
+  "peerconn.connect_dialing": "Menghubungkan ke {addr}…",
+  "peerconn.connect_failed": "Tidak dapat terhubung ke {addr} — {reason}",
+  "peerconn.connect_ok": "Terhubung ke {peer}",
   "filetransfer.no_results": "Daftar atau tarik berkas untuk melihat hasil.",
   "contentsite.more": "Lainnya ▾ ({n})",
 

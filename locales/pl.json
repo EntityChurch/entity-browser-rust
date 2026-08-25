@@ -570,6 +570,9 @@
   "peerconn.this_peer": "Ten peer {pid} · {kind}",
   "peerconn.listening": " · nasłuchuje na {addr}",
   "peerconn.qr_failed": "Nie udało się wygenerować kodu QR",
+  "peerconn.connect_dialing": "Łączenie z {addr}…",
+  "peerconn.connect_failed": "Nie można połączyć się z {addr} — {reason}",
+  "peerconn.connect_ok": "Połączono z {peer}",
   "filetransfer.no_results": "Wyświetl listę lub pobierz plik, aby zobaczyć wyniki.",
   "contentsite.more": "Więcej ▾ ({n})",
 

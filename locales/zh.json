@@ -558,6 +558,9 @@
   "peerconn.this_peer": "此对等节点 {pid} · {kind}",
   "peerconn.listening": " · 正在 {addr} 监听",
   "peerconn.qr_failed": "生成二维码失败",
+  "peerconn.connect_dialing": "正在连接到 {addr}…",
+  "peerconn.connect_failed": "无法连接到 {addr} — {reason}",
+  "peerconn.connect_ok": "已连接到 {peer}",
   "filetransfer.no_results": "列出或拉取文件即可查看结果。",
   "contentsite.more": "更多 ▾ ({n})",
 

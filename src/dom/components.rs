@@ -567,6 +567,25 @@ pub fn inspect_attach_warning() -> Element {
     pre
 }
 
+/// Success state — the mirror of [`error`], for an action that reported back
+/// well. Same shape and weight so a result line doesn't move or resize when it
+/// flips between the two. Exists because a *silent success* is its own bug: the
+/// Peer Connections connect had no success surface, so a working connect whose
+/// device row the user wasn't watching was indistinguishable from a no-op.
+pub fn success(msg: &str) -> Element {
+    let p = util::create_element("p");
+    p.set_attribute(
+        "style",
+        &format!(
+            "color:var(--status-ok,#6c6);font-size:12px;margin:{} 0",
+            theme::SP_1
+        ),
+    )
+    .ok();
+    util::set_text(&p, &format!("\u{2713} {msg}")); // ✓
+    p
+}
+
 /// Error state — loud, specific, actionable. Renders in the error color.
 pub fn error(msg: &str) -> Element {
     let p = util::create_element("p");

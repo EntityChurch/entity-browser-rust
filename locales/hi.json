@@ -564,6 +564,9 @@
   "peerconn.this_peer": "यह पीयर {pid} · {kind}",
   "peerconn.listening": " · {addr} पर सुन रहा है",
   "peerconn.qr_failed": "QR कोड बनाने में विफल",
+  "peerconn.connect_dialing": "{addr} से कनेक्ट हो रहा है…",
+  "peerconn.connect_failed": "{addr} से कनेक्ट नहीं हो सका — {reason}",
+  "peerconn.connect_ok": "{peer} से कनेक्ट किया गया",
   "filetransfer.no_results": "परिणाम देखने के लिए कोई फ़ाइल सूचीबद्ध करें या खींचें।",
   "contentsite.more": "और ▾ ({n})",
 
