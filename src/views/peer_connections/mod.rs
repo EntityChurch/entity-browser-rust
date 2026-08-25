@@ -151,11 +151,23 @@ impl PeerConnectionsWindow {
         let slot = self.model.connector_notice_handle();
         let dirty = self.watch.flag();
         let short = crate::views::short_pid(node_peer_id);
+        // §4.5.1's automatic half: a `Check` is exactly the round trip that
+        // learns the node's own reflectors, so record them while we have them.
+        let writer = peers.writer_handle();
+        let sys_for_write = sys.clone();
         crate::views::peer_connections::spawn_check(async move {
             let outcome = match reach.await {
                 Ok(()) => fut.await,
                 Err(e) => Err(e),
             };
+            if let (Ok(ad), Some(w)) = (&outcome, writer.as_ref()) {
+                crate::connectors::record_advertised_reflectors(
+                    w,
+                    &sys_for_write,
+                    &row,
+                    &ad.reflection_endpoints,
+                );
+            }
             let notice = match outcome {
                 Ok(ad) => crate::views::peer_connections::output::ConnectorNotice {
                     text: crate::i18n::t(
@@ -243,11 +255,21 @@ impl WindowView for PeerConnectionsWindow {
                             node_addr: parts.next().unwrap_or("").to_string(),
                             label: parts.next().unwrap_or("").to_string(),
                             ice: parts.next().unwrap_or("").to_string(),
-                        };
+                            // Ignored by `add_connector` — a node's own advertisement is
+                                // learned, never typed.
+                                ice_advertised: String::new(),
+                            };
                         let sys = peers.system_peer_id().to_string();
                         self.set_connector_notice(
                             match crate::connectors::add_connector(peers, &sys, &c) {
-                                Ok(()) => None,
+                                Ok(()) => {
+                                    // Learn what this node serves (§4.5.1) —
+                                    // adding it is the moment to ask, and the
+                                    // user should not have to press Check to
+                                    // get the reflectors it publishes.
+                                    crate::connectors::learn_node_reflectors(peers, &sys, &c);
+                                    None
+                                }
                                 // A refusal (missing half, unsafe id) must be
                                 // sayable — otherwise Add is a dead button.
                                 Err(e) => Some((e, true)),

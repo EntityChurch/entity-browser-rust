@@ -476,6 +476,11 @@ fn webrtc_init_config() -> Option<entity_wasm_worker_protocol::WireWebRtcConfig>
         node_peer_id = %p.node_peer_id,
         node_addr = %p.node_addr,
         ice_servers = p.ice_servers.len(),
+        // The URL count, not just the entry count: `parse_ice_urls` packs every
+        // reflector into ONE IceServer, so `ice_servers` is 0-or-1 and cannot
+        // show whether §4.5.1's merge (typed ∪ node-advertised, byte-exact
+        // dedup) actually happened. This is the number that can.
+        ice_urls = p.ice_servers.iter().map(|s| s.urls.len()).sum::<usize>(),
         "webrtc: provisioning §6.5 establisher capability on this worker"
     );
     Some(provisioning_to_wire(&p))
@@ -569,6 +574,8 @@ fn build_direct_webrtc_establisher(
         node_peer_id = %p.node_peer_id,
         node_addr = %p.node_addr,
         ice_servers = p.ice_servers.len(),
+        // See the worker site above — this is the count that shows the merge.
+        ice_urls = p.ice_servers.iter().map(|s| s.urls.len()).sum::<usize>(),
         "webrtc: installing the Direct-arm §6.5 establisher on the primary"
     );
 

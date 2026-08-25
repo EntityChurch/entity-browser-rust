@@ -102,11 +102,78 @@ pub struct Connector {
     /// [`crate::session_config::parse_ice_urls`], and refused at
     /// [`add_connector`] so a malformed value never reaches the tree.
     ///
-    /// This is the field `EXTENSION-SIGNALING` §4.5.1's node-advertised
-    /// reflectors will eventually *fill in* automatically. Until then it is the
-    /// manual half — and it makes NAT traversal reachable today without waiting
-    /// for the advertisement shape to settle.
+    /// This is the **manual** half. The automatic half is [`Self::ice_advertised`],
+    /// and the two are merged by [`merge_reflectors`].
     pub ice: String,
+    /// The node's **own** reflectors as it advertised them (`EXTENSION-SIGNALING`
+    /// §4.5.1) — space-separated, **verbatim as published**, learned from
+    /// [`advertise`] and refreshed on every successful call.
+    ///
+    /// **Stored, not merely read, because provisioning is consumed at worker
+    /// `Init`** — before any node has been dialled. A value only obtainable by
+    /// asking the node could not reach the establisher that needs it, so the
+    /// answer is cached on the row that produced it and read at boot like the
+    /// typed half. §4.5.1 makes this sound explicitly: §9.3 forbids a reflector
+    /// requiring authentication, so **there is no credential here to expire**
+    /// and a read at connect time has no staleness problem. That is exactly why
+    /// the automatic half could ship while the TURN/rotation half waits on
+    /// `PROPOSAL-SIGNALING-ICE-PROVISIONING-LIFETIME`.
+    ///
+    /// **Kept separate from `ice` rather than folded into it.** They have
+    /// different owners: the user types one and a node publishes the other, so a
+    /// re-advertise must be able to refresh the node's half without touching
+    /// what the user chose, and a user editing their half must not silently
+    /// inherit authorship of the node's. Merging happens at read.
+    ///
+    /// **Never a directory.** §4.5.1 is the node describing *its own* §9.3
+    /// listener; a peer MUST NOT read it as a set of third-party STUN servers.
+    /// Storing it per-connector is what keeps that true — these reflectors are
+    /// scoped to the node that published them and die with its row.
+    pub ice_advertised: String,
+}
+
+/// Merge a node's advertised reflectors into the user's typed ones
+/// (`EXTENSION-SIGNALING` §4.5.1: *"a consumer merges rather than replaces"*).
+///
+/// Typed entries come first, then advertised, **deduplicated by endpoint bytes
+/// exactly as published** — no trimming into a different string, no case
+/// folding, no default-port canonicalization. The dedup is defined over the
+/// published bytes, so normalizing here would silently break it (and would break
+/// it *identically* for `EXTENSION-REGISTRY` §3b, whose set shares this form).
+///
+/// **Merging is safe, not merely permitted:** §9.3 already requires consulting
+/// several reflectors and requiring agreement, so more sources strictly improve
+/// the NAT-type conclusion. A single reflector is advisory and never trusted,
+/// whichever field it arrived in.
+///
+/// A malformed *advertised* entry is dropped individually and warned about — the
+/// node is not the user's to correct, and discarding the user's own working
+/// reflectors over a remote typo is the wrong failure. The typed half is passed
+/// through untouched because [`add_connector`] already refused it whole.
+pub fn merge_reflectors(typed: &str, advertised: &str) -> String {
+    let split = |s: &str| -> Vec<String> {
+        s.split(|c: char| c == ',' || c.is_whitespace())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let mut out: Vec<String> = split(typed);
+    for u in split(advertised) {
+        if let Err(e) = crate::session_config::validate_reflector_uri(&u) {
+            tracing::warn!(
+                error = %e,
+                "connector: dropping one malformed advertised reflector — the node published \
+                 an entry that is not the RFC 7064 form; the rest of the list still applies"
+            );
+            continue;
+        }
+        // Byte-exact dedup (§4.5.1) — `contains` over the published strings.
+        if !out.iter().any(|e| e == &u) {
+            out.push(u);
+        }
+    }
+    out.join(" ")
 }
 
 /// Reject a node peer-id that could not be a single safe path segment.
@@ -134,7 +201,8 @@ pub fn connector_to_entity(c: &Connector) -> Entity {
         "node_peer_id" => entity_ecf::text(&c.node_peer_id),
         "node_addr" => entity_ecf::text(&c.node_addr),
         "label" => entity_ecf::text(&c.label),
-        "ice" => entity_ecf::text(&c.ice)
+        "ice" => entity_ecf::text(&c.ice),
+        "ice_advertised" => entity_ecf::text(&c.ice_advertised)
     });
     Entity::new(CONNECTOR_TYPE, data).unwrap()
 }
@@ -163,6 +231,11 @@ pub fn connector_from_entity(entity: &Entity) -> Option<Connector> {
         // string is exactly what those deployments meant (host-only), so a
         // missing field is a default, never a malformed row.
         ice: field("ice").unwrap_or_default(),
+        // Absent on every row written before §4.5.1 landed, and on every row
+        // whose node has not been advertised-to yet. Empty means "this node has
+        // told us nothing", which is the same posture as a node that serves no
+        // reflection — so a missing field is a default, never a malformed row.
+        ice_advertised: field("ice_advertised").unwrap_or_default(),
     })
 }
 
@@ -243,15 +316,86 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<(), 
     // typed and can be corrected (D13). Downstream the same value only warns,
     // because by then there is no user to tell; that split is deliberate.
     crate::session_config::parse_ice_urls(&c.ice)?;
+    // `ice_advertised` is preserved from the existing row and the caller's value
+    // is IGNORED — `record_advertised_reflectors` is its only writer, and this
+    // is what makes that true structurally rather than by everyone remembering.
+    // Re-adding a node the user already knows (to fix a label or a moved
+    // address) is the common case, and clearing what that node told us would
+    // silently drop a provisioned session back to host-only until the next
+    // successful advertise — a NAT regression from editing a label.
+    let learned = read_connectors(peers, peer_id)
+        .into_iter()
+        .find(|e| e.node_peer_id == c.node_peer_id.trim())
+        .map(|e| e.ice_advertised)
+        .unwrap_or_default();
     let normalized = Connector {
         node_peer_id: c.node_peer_id.trim().to_string(),
         node_addr: c.node_addr.trim().to_string(),
         label: c.label.trim().to_string(),
         ice: c.ice.trim().to_string(),
+        ice_advertised: learned,
     };
     let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &normalized.node_peer_id);
     peers.dispatch_write(peer_id, path, connector_to_entity(&normalized));
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn<F: std::future::Future<Output = ()> + Send + 'static>(f: F) {
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        drop(rt.spawn(f));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn<F: std::future::Future<Output = ()> + 'static>(f: F) {
+    wasm_bindgen_futures::spawn_local(f);
+}
+
+/// Ask `row`'s node what it serves and record its §4.5.1 reflectors — dial
+/// first, because a connector nobody has called has no route.
+///
+/// **This is what makes the automatic half automatic.** Without it §4.5.1 is
+/// still a manual step wearing a different hat: the node publishes its reflector
+/// and nothing ever asks, so a user who adds a connector and meets by name gets
+/// host candidates only and no indication why. Adding a connector is the moment
+/// the app learns what that node is — the address, that it answers at all, and
+/// its reflectors.
+///
+/// Fire-and-forget by design: the caller (`add`, a `Check` press) has already
+/// succeeded at what the user asked for, and this is enrichment. A node that is
+/// down means no reflectors learned, which is exactly the pre-§4.5.1 posture and
+/// degrades to host-only rather than failing the add. It logs at debug, and the
+/// visible surfaces (`Check`, `connector check`) report the same round trip
+/// properly when a user asks for it explicitly.
+pub fn learn_node_reflectors(peers: &Peers, peer_id: &str, row: &Connector) {
+    let Some(writer) = peers.writer_handle() else {
+        return;
+    };
+    let reach = reach_node(peers, peer_id, row);
+    let fut = advertise(peers, peer_id, &row.node_peer_id);
+    let owner = peer_id.to_string();
+    let row = row.clone();
+    spawn(async move {
+        if let Err(e) = reach.await {
+            tracing::debug!(node = %row.node_peer_id, error = %e, "connector: could not reach the node to learn its reflectors");
+            return;
+        }
+        match fut.await {
+            Ok(ad) => {
+                if record_advertised_reflectors(&writer, &owner, &row, &ad.reflection_endpoints) {
+                    tracing::info!(
+                        node = %row.node_peer_id,
+                        reflectors = %ad.reflection_endpoints.join(" "),
+                        "connector: learned the node's own reflectors (§4.5.1)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::debug!(node = %row.node_peer_id, error = %e, "connector: the node did not advertise")
+            }
+        }
+    });
 }
 
 /// Remove a connector. Also clears the selection when it named this node — a
@@ -290,7 +434,56 @@ pub fn select_connector(peers: &Peers, peer_id: &str, node_peer_id: &str) -> Res
 /// rule lives in exactly one place.
 pub fn provisioning_from_registry(peers: &Peers, peer_id: &str) -> Option<WebRtcProvisioning> {
     let c = selected_connector(peers, peer_id)?;
-    resolve_webrtc_provisioning(Some(&c.node_peer_id), Some(&c.node_addr), Some(&c.ice))
+    // §4.5.1: what the node advertised is ADDITIONAL to what the user typed.
+    let ice = merge_reflectors(&c.ice, &c.ice_advertised);
+    resolve_webrtc_provisioning(Some(&c.node_peer_id), Some(&c.node_addr), Some(&ice))
+}
+
+/// What `row` should become once `node` has advertised `advertised` — or `None`
+/// when nothing changed.
+///
+/// Pure, so the decision is native-testable on both arms. **`None` when
+/// unchanged is the load-bearing half**, because every `meet` re-advertises: an
+/// unconditional write would put a tree write (and a subscription wake, and a
+/// re-render) on a repeating path for a value that almost never moves.
+///
+/// Stores the published bytes **joined and otherwise unaltered** — no
+/// per-entry validation here, because §4.5.1's dedup is defined over exactly
+/// those bytes and a value repaired on the way in would dedup against nothing.
+/// Malformed entries are dropped at [`merge_reflectors`], per entry, at read.
+pub fn advertised_update(row: &Connector, advertised: &[String]) -> Option<Connector> {
+    let joined = advertised.join(" ");
+    if row.ice_advertised == joined {
+        return None;
+    }
+    Some(Connector { ice_advertised: joined, ..row.clone() })
+}
+
+/// Record what a node advertised as its own §9.3 reflectors, on that node's
+/// connector row. The **only** writer of [`Connector::ice_advertised`].
+///
+/// Takes a [`WriterHandle`] and an already-resolved row rather than `&Peers`,
+/// because every caller lands in a **spawned future** — `advertise()` is async
+/// and its result arrives off-frame, where no `&Peers` can be held (and where
+/// the Worker arm needs the handle's own transport anyway). Both call sites
+/// already resolve the row before spawning, to dial it.
+///
+/// Returns `true` when it wrote. A node with no connector row is not this
+/// function's problem: advertising to a node the user never added is legitimate
+/// (a URL-param or build-knob session), there is no row to carry the answer, and
+/// the typed half still provisions that session.
+pub fn record_advertised_reflectors(
+    writer: &crate::writer_handle::WriterHandle,
+    peer_id: &str,
+    row: &Connector,
+    advertised: &[String],
+) -> bool {
+    let Some(updated) = advertised_update(row, advertised) else {
+        return false;
+    };
+    let path = app_paths::connector_path(app_paths::APP_ID, peer_id, &row.node_peer_id);
+    writer.put(path, connector_to_entity(&updated));
+    true
 }
 
 /// Pack a selection for the localStorage mirror. Separated from the write so it
@@ -609,7 +802,114 @@ pub(crate) mod tests {
             node_addr: addr.to_string(),
             label: String::new(),
             ice: String::new(),
+            ice_advertised: String::new(),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // §4.5.1 — the node-advertised half
+    // -----------------------------------------------------------------
+
+    /// The merge rule itself: advertised reflectors are ADDITIONAL, and the
+    /// dedup is over published bytes exactly.
+    #[test]
+    fn advertised_reflectors_are_additional_and_dedup_on_exact_bytes() {
+        // Union, typed first — a node's answer never displaces the user's.
+        assert_eq!(
+            merge_reflectors("stun:typed.example:3478", "stun:node.example:3478"),
+            "stun:typed.example:3478 stun:node.example:3478"
+        );
+        // Either side alone is the whole answer.
+        assert_eq!(merge_reflectors("", "stun:node.example:3478"), "stun:node.example:3478");
+        assert_eq!(merge_reflectors("stun:typed.example:3478", ""), "stun:typed.example:3478");
+        assert_eq!(merge_reflectors("", ""), "");
+        // Byte-identical entries collapse to one.
+        assert_eq!(merge_reflectors("stun:a.example:3478", "stun:a.example:3478"), "stun:a.example:3478");
+        // ...and NON-identical bytes do NOT, however equivalent they look.
+        // §4.5.1 pins dedup to the published bytes — no case folding, no
+        // default-port canonicalization — because normalizing here would break
+        // the same dedup for EXTENSION-REGISTRY §3b, which shares this form.
+        // These three are the same reflector to a DNS resolver and three
+        // distinct published strings to the rule.
+        assert_eq!(
+            merge_reflectors("stun:a.example:3478", "stun:A.example:3478 stun:a.example"),
+            "stun:a.example:3478 stun:A.example:3478 stun:a.example",
+            "normalizing to collapse these would silently break the pinned byte-exact dedup"
+        );
+    }
+
+    /// One bad entry from a remote node must not cost the user the reflectors
+    /// they configured themselves — the node is not theirs to correct.
+    #[test]
+    fn a_malformed_advertised_entry_is_dropped_alone_and_the_typed_half_survives() {
+        let merged = merge_reflectors(
+            "stun:mine.example:3478",
+            "stun://bad.example:3478 stun:good.example:3478 turn:relay.example:3478 nonsense",
+        );
+        assert_eq!(
+            merged, "stun:mine.example:3478 stun:good.example:3478",
+            "the two malformed entries and the credential-less TURN go; nothing else does"
+        );
+        // The whole-list refusal still applies where a human typed it.
+        assert!(
+            crate::session_config::parse_ice_urls("stun:ok.example:3478 stun://bad").is_err(),
+            "a TYPED list stays all-or-nothing — it is refused at add_connector, where it can be fixed"
+        );
+    }
+
+    /// The no-write property. Every `meet` re-advertises, so an unconditional
+    /// write would put a tree write + a wake + a re-render on a repeating path.
+    #[test]
+    fn recording_an_unchanged_advertisement_is_not_a_write() {
+        let mut row = conn("2KNode", "ws://node.example:4040");
+        row.ice_advertised = "stun:a.example:3478 stun:b.example:3478".to_string();
+
+        assert!(
+            advertised_update(&row, &[
+                "stun:a.example:3478".to_string(),
+                "stun:b.example:3478".to_string()
+            ])
+            .is_none(),
+            "same set, same order ⇒ no write"
+        );
+        // A node that stops serving reflection IS a change, and must be recorded
+        // — otherwise a session keeps offering a reflector that has gone away.
+        let cleared = advertised_update(&row, &[]).expect("dropping to none is a change");
+        assert_eq!(cleared.ice_advertised, "");
+        // And so is a reorder, because the stored value is the published bytes.
+        assert!(
+            advertised_update(&row, &[
+                "stun:b.example:3478".to_string(),
+                "stun:a.example:3478".to_string()
+            ])
+            .is_some()
+        );
+    }
+
+    /// A row written before §4.5.1 existed decodes as "this node has told us
+    /// nothing" — a default, never a malformed row.
+    #[test]
+    fn a_pre_4_5_1_row_decodes_as_no_advertisement_and_the_field_round_trips() {
+        let mut c = conn("2KNode", "ws://node.example:4040");
+        c.ice = "stun:typed.example:3478".to_string();
+        c.ice_advertised = "stun:node.example:3478".to_string();
+        let back = connector_from_entity(&connector_to_entity(&c)).expect("round trips");
+        assert_eq!(back, c);
+
+        // The pre-v1.1 shape: same entity, no `ice_advertised` key at all.
+        let legacy = Entity::new(
+            CONNECTOR_TYPE,
+            entity_ecf::to_ecf(&entity_ecf::cbor_map! {
+                "node_peer_id" => entity_ecf::text("2KNode"),
+                "node_addr" => entity_ecf::text("ws://node.example:4040"),
+                "label" => entity_ecf::text(""),
+                "ice" => entity_ecf::text("stun:typed.example:3478")
+            }),
+        )
+        .unwrap();
+        let decoded = connector_from_entity(&legacy).expect("a pre-4.5.1 row is not malformed");
+        assert_eq!(decoded.ice_advertised, "");
+        assert_eq!(decoded.ice, "stun:typed.example:3478", "and its typed half is untouched");
     }
 
     /// Wait until `done` holds. Writes here go through `dispatch_write` (L1,
@@ -637,6 +937,7 @@ pub(crate) mod tests {
             node_addr: "ws://10.0.0.4:9000".to_string(),
             label: "my box".to_string(),
             ice: "stun:stun.example.org:3478".to_string(),
+            ice_advertised: String::new(),
         };
         assert_eq!(connector_from_entity(&connector_to_entity(&c)), Some(c));
     }
@@ -671,6 +972,7 @@ pub(crate) mod tests {
             node_addr: "ws://n:9".to_string(),
             label: String::new(),
             ice: "turn:relay.example:3478".to_string(),
+            ice_advertised: String::new(),
         };
         let err = add_connector(&peers, &me, &bad).expect_err("turn has no credential carrier");
         assert!(err.contains("username"), "the reason must be sayable: {err}");
@@ -748,6 +1050,66 @@ pub(crate) mod tests {
         let me = peers.primary_peer_id().to_string();
         assert!(select_connector(&peers, &me, "2KGhost").is_err());
         assert!(selected_connector(&peers, &me).is_none());
+    }
+
+    /// Editing a label must not cost you NAT traversal.
+    ///
+    /// `add_connector` is the re-add path (keyed by peer-id, so fixing a label
+    /// or a moved address overwrites the row), and the caller's `ice_advertised`
+    /// is deliberately IGNORED in favour of what is already stored. Without
+    /// that, every re-add would blank the node's own reflectors and silently
+    /// drop the next session to host-candidates-only until something happened to
+    /// advertise again — a traversal regression with no visible cause.
+    ///
+    /// Mutation check: make `add_connector` take `c.ice_advertised` and the
+    /// final assertion fails (the surfaces all pass `String::new()`).
+    #[tokio::test]
+    async fn re_adding_a_connector_keeps_what_the_node_advertised() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        add_connector(&peers, &me, &conn("2KNode", "ws://node:1")).unwrap();
+        settle(|| !read_connectors(&peers, &me).is_empty()).await;
+
+        // The node tells us its reflector.
+        let row = read_connectors(&peers, &me).into_iter().next().unwrap();
+        let writer = peers.writer_handle().expect("a direct writer");
+        assert!(record_advertised_reflectors(
+            &writer,
+            &me,
+            &row,
+            &["stun:node.example:3478".to_string()]
+        ));
+        settle(|| {
+            read_connectors(&peers, &me)
+                .first()
+                .is_some_and(|c| c.ice_advertised == "stun:node.example:3478")
+        })
+        .await;
+
+        // Now the user edits the label — the surfaces build a fresh Connector
+        // with an empty `ice_advertised`, exactly as the UI does.
+        let mut edited = conn("2KNode", "ws://node:1");
+        edited.label = "my box".to_string();
+        edited.ice = "stun:mine.example:3478".to_string();
+        add_connector(&peers, &me, &edited).unwrap();
+        settle(|| read_connectors(&peers, &me).first().is_some_and(|c| c.label == "my box")).await;
+
+        let after = read_connectors(&peers, &me).into_iter().next().unwrap();
+        assert_eq!(after.label, "my box", "the edit applied");
+        assert_eq!(after.ice, "stun:mine.example:3478", "and the typed half is theirs");
+        assert_eq!(
+            after.ice_advertised, "stun:node.example:3478",
+            "and the node's own advertisement survived the edit"
+        );
+
+        // End to end: the provisioning a reload would use carries BOTH halves,
+        // merged, with the typed one first (§4.5.1).
+        select_connector(&peers, &me, "2KNode").unwrap();
+        settle(|| selected_connector(&peers, &me).is_some()).await;
+        let p = provisioning_from_registry(&peers, &me).expect("both halves of the node are set");
+        let urls: Vec<&str> =
+            p.ice_servers.iter().flat_map(|s| s.urls.iter()).map(String::as_str).collect();
+        assert_eq!(urls, vec!["stun:mine.example:3478", "stun:node.example:3478"]);
     }
 
     /// A selection left pointing at a node that vanished must resolve to
@@ -909,6 +1271,7 @@ pub(crate) mod tests {
             node_addr: format!("memory://{node_pid}"),
             label: "the node".to_string(),
             ice: String::new(),
+            ice_advertised: String::new(),
         };
 
         let no_route = advertise(&peers, &me, &node_pid).await;

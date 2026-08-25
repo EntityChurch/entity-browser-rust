@@ -141,7 +141,15 @@ sleep 0.5
 # `signaling collect` lines (with caller + rendezvous_key) are debug! under that
 # target — they are the ONLY vantage that sees both halves of a rendezvous, so a
 # bucket split vs an absent counterpart is told apart here, not in the peer.
-RUST_LOG=info,entity_signaling=debug,entity_peer=debug nohup "$SIG" --ws-listen 0.0.0.0:$WSPORT --open >/tmp/sig_repro.out 2>&1 &
+# §4.5.1's AUTOMATIC half: when E2E_NODE_REFLECTION is set the node publishes
+# that STUN URI in `advertise`, and the browsers are told NOTHING — they learn
+# it by asking. That is the whole difference from E2E_ICE, which the user types.
+NODE_REFLECT_ARGS=()
+if [ -n "${E2E_NODE_REFLECTION:-}" ]; then
+  NODE_REFLECT_ARGS=(--reflection-endpoint "$E2E_NODE_REFLECTION")
+  echo "   node advertises its own reflector: $E2E_NODE_REFLECTION (§4.5.1)"
+fi
+RUST_LOG=info,entity_signaling=debug,entity_peer=debug nohup "$SIG" --ws-listen 0.0.0.0:$WSPORT --open "${NODE_REFLECT_ARGS[@]}" >/tmp/sig_repro.out 2>&1 &
 sleep 2
 NODE=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | head -1 | awk '{print $2}')
 echo "   node peer: $NODE"
