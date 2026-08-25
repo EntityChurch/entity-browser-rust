@@ -20,7 +20,7 @@ pub fn render(container: &Element, output: &EventLogOutput, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", "margin:0").ok();
-    util::set_text(&h2, "Event Log");
+    util::set_text(&h2, &crate::i18n::t("window.event_log", &[]));
     util::append(&header, &h2);
 
     let clear_btn = crate::dom::components::button_action(

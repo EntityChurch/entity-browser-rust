@@ -53,7 +53,7 @@ pub fn render(container: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx) {
 fn render_list_view(parent: &Element, output: &KnowledgeBaseOutput, ctx: &DomCtx) {
     // Title on its own line.
     let h2 = util::create_element("h2");
-    util::set_text(&h2, "Knowledge Base");
+    util::set_text(&h2, &crate::i18n::t("window.knowledge_base", &[]));
     util::set_attr(&h2, "style", theme::HEADING);
     util::append(parent, &h2);
 
@@ -333,7 +333,7 @@ fn render_draft_form(parent: &Element, draft: &DraftInitial, ctx: &DomCtx) {
 
     // Content field block.
     let content_label = util::create_element("label");
-    util::set_text(&content_label, "Content");
+    util::set_text(&content_label, &crate::i18n::t("label.content", &[]));
     util::set_attr(&content_label, "style", theme::LABEL);
     util::append(parent, &content_label);
 

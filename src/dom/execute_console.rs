@@ -20,7 +20,7 @@ pub fn render(container: &Element, output: &ExecuteConsoleOutput, ctx: &DomCtx) 
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Execute Console");
+    util::set_text(&h2, &crate::i18n::t("window.execute_console", &[]));
     util::append(&wrapper, &h2);
 
     render_mode_toggle(&wrapper, output, ctx);
@@ -229,7 +229,7 @@ fn render_execute_button(parent: &Element, output: &ExecuteConsoleOutput, ctx: &
 fn render_results(parent: &Element, output: &ExecuteConsoleOutput) {
     let header = util::create_element("h3");
     header.set_attribute("style", "margin:12px 0 4px;font-size:14px").ok();
-    util::set_text(&header, "Results");
+    util::set_text(&header, &crate::i18n::t("label.results", &[]));
     util::append(parent, &header);
 
     let pre = util::create_element("pre");

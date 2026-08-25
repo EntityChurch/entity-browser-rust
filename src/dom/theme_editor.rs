@@ -33,7 +33,7 @@ pub fn render(container: &Element, output: &ThemeEditorOutput, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Theme Editor");
+    util::set_text(&h2, &crate::i18n::t("window.theme_editor", &[]));
     util::append(&wrapper, &h2);
 
     render_picker(&wrapper, output, ctx);
@@ -163,7 +163,13 @@ fn render_editor(parent: &Element, editing: &EditingTheme, output: &ThemeEditorO
         &components::field(&crate::i18n::t("label.label", &[]), "", &label),
     );
 
-    let scheme = components::select_el(&[("dark", "Dark"), ("light", "Light")], &editing.scheme);
+    let scheme = components::select_el(
+        &[
+            ("dark", &crate::i18n::t("theme.scheme_dark", &[])),
+            ("light", &crate::i18n::t("theme.scheme_light", &[])),
+        ],
+        &editing.scheme,
+    );
     scheme.set_attribute("data-field", "theme-scheme").ok();
     {
         let card_ref = card.clone();

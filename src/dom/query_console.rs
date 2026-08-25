@@ -25,7 +25,7 @@ pub fn render(container: &Element, output: &QueryConsoleOutput, ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Query Console");
+    util::set_text(&h2, &crate::i18n::t("window.query_console", &[]));
     util::append(&wrapper, &h2);
 
     text_field(
@@ -186,7 +186,7 @@ fn bind_query_click(
 fn render_results(parent: &Element, output: &QueryConsoleOutput) {
     let header = util::create_element("h3");
     header.set_attribute("style", "margin:12px 0 4px;font-size:14px").ok();
-    util::set_text(&header, "Results");
+    util::set_text(&header, &crate::i18n::t("label.results", &[]));
     util::append(parent, &header);
 
     let pre = util::create_element("pre");

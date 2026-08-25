@@ -120,6 +120,62 @@
   "siteeditor.delete_site": "Eliminar sitio",
   "siteeditor.save_page": "Guardar página",
   "siteeditor.delete_page": "Eliminar página",
+  "siteeditor.title_optional": "Título (opcional)",
+  "siteeditor.page_title_ph": "Título de la página",
+
+  "entitytree.source_none": "Ninguna (manual)",
+  "entitytree.source_app": "Agregado de la app (par: {peer})",
+
+  "settings.boot_into": "Arrancar en",
+  "settings.boot_chrome": "Escritorio",
+  "settings.boot_site": "Sitio",
+  "settings.boot_window": "Ventana",
+
+  "theme.scheme_dark": "Oscuro",
+  "theme.scheme_light": "Claro",
+
+  "sysoverview.profile_pull": "Solo descargar",
+  "sysoverview.profile_twoway": "Bidireccional",
+
+  "label.level": "Nivel",
+  "label.results": "Resultados",
+  "label.content": "Contenido",
+  "label.system": "Sistema",
+  "status.loading": "Cargando…",
+
+  "peers.scan_qr": "Escanear un código QR",
+  "peers.scan_hint": "Escanea esto desde otro dispositivo para conectarlo aquí.",
+  "peers.show_qr": "Mostrar código QR",
+
+  "sitedir.sites_menu": "Sitios ▾",
+  "sitedir.sites": "Sitios",
+
+  "contentsite.enter_peer": "Entrar al par",
+  "contentsite.contents_menu": "Contenido ▾",
+
+  "storage.origin_disk": "Disco de origen (IndexedDB + cachés — todo el origen)",
+  "storage.backend_native": "Backend del sistema — almacén nativo",
+  "storage.native_sqlite": "Nativo / SQLite",
+  "storage.by_path": "Por ruta de nivel superior:",
+
+  "chaintrace.chain_id": "ID de cadena:",
+  "chaintrace.continuations": "Continuaciones",
+  "chaintrace.error_markers": "Marcadores de error de cadena",
+
+  "siteeditor.move_rename": "Mover/renombrar a:",
+
+  "entitytree.up": "Subir",
+  "entitytree.selection_source": "Fuente de selección",
+  "entitytree.select_prompt": "Selecciona una entidad del árbol",
+  "entitytree.inspector": "Inspector",
+  "entitytree.none_selected": "Ninguna entidad seleccionada",
+  "entitytree.raw_hash": "Hash sin procesar",
+
+  "settings.lockdown_active": "El bloqueo está activo (establecido por la configuración de esta implementación).",
+
+  "windows.none_open": "No hay ventanas abiertas",
+  "windows.open_windows": "Ventanas abiertas",
+  "mod.learn_more": "Más información y participa en ",
 
   "scanner.scanned_codes": "Códigos escaneados",
   "scanner.scanned_codes_count": "Códigos escaneados ({n} únicos)",

@@ -35,7 +35,7 @@ pub fn render(
     header.set_attribute("style", theme::HEADER_ROW).ok();
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::TITLE_INLINE).ok();
-    util::set_text(&h2, "System Overview");
+    util::set_text(&h2, &crate::i18n::t("window.system_overview", &[]));
     util::append(&header, &h2);
     if output.tauri {
         // Right-aligned controls group: level selector + Clear.
@@ -48,7 +48,7 @@ pub fn render(
         lvl_label
             .set_attribute("style", "color:var(--text-dim, #888);font-size:12px")
             .ok();
-        util::set_text(&lvl_label, "Level");
+        util::set_text(&lvl_label, &crate::i18n::t("label.level", &[]));
         util::append(&controls, &lvl_label);
 
         let levels: Vec<(&str, &str)> = crate::views::system_overview::model::LEVELS
@@ -299,7 +299,10 @@ fn append_pending_row(body: &Element, auth: &AuthorizationsView, row: &AuthRow, 
     // change must NOT dispatch (a dispatch would rebuild the row and reset the
     // pick).
     let select = components::select_el(
-        &[("file-transfer", "Pull only"), ("file-transfer-rw", "Two-way")],
+        &[
+            ("file-transfer", &crate::i18n::t("sysoverview.profile_pull", &[])),
+            ("file-transfer-rw", &crate::i18n::t("sysoverview.profile_twoway", &[])),
+        ],
         "file-transfer",
     );
 

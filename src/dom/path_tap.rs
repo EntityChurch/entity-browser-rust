@@ -15,7 +15,7 @@ pub fn render(container: &Element, output: &PathTapOutput, _ctx: &DomCtx) {
 
     let h2 = util::create_element("h2");
     h2.set_attribute("style", theme::HEADING).ok();
-    util::set_text(&h2, "Path Tap");
+    util::set_text(&h2, &crate::i18n::t("window.path_tap", &[]));
     util::append(&wrapper, &h2);
 
     let hint = util::create_element("div");

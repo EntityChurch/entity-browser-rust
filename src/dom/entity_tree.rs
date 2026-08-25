@@ -44,14 +44,14 @@ fn render_tree_panel(container: &Element, output: &EntityTreeOutput, ctx: &DomCt
     util::clear_children(container);
 
     let h2 = util::create_element("h2");
-    util::set_text(&h2, "Entity Tree");
+    util::set_text(&h2, &crate::i18n::t("window.entity_tree", &[]));
     util::append(container, &h2);
 
     render_selection_source(container, output, ctx);
 
     if output.current_path.is_some() {
         let btn = util::create_element_with_class("button", "nav-up");
-        util::set_text(&btn, "Up");
+        util::set_text(&btn, &crate::i18n::t("entitytree.up", &[]));
         util::set_attr(&btn, "data-action", "navigate-up");
         util::append(container, &btn);
     }
@@ -130,7 +130,7 @@ fn render_tree_panel(container: &Element, output: &EntityTreeOutput, ctx: &DomCt
 /// `Action::SetSelectionSource(window_id, wire)`.
 fn render_selection_source(container: &Element, output: &EntityTreeOutput, ctx: &DomCtx) {
     let label = util::create_element_with_class("label", "selection-source-label");
-    util::set_text(&label, "Selection source");
+    util::set_text(&label, &crate::i18n::t("entitytree.selection_source", &[]));
     util::append(container, &label);
 
     // The "app" source is implicitly bound-peer-scoped — it resolves
@@ -140,9 +140,10 @@ fn render_selection_source(container: &Element, output: &EntityTreeOutput, ctx: 
     // scope visible in the label (the wire value stays "app" — it is
     // correctly resolved relative to the bound peer).
     let select = util::create_element_with_class("select", "selection-source");
-    let app_label = format!("App aggregate (peer: {})", output.peer_label);
+    let none_label = crate::i18n::t("entitytree.source_none", &[]);
+    let app_label = crate::i18n::t("entitytree.source_app", &[("peer", &output.peer_label)]);
     let options: [(&str, &str); 2] =
-        [("none", "None (manual)"), ("app", app_label.as_str())];
+        [("none", none_label.as_str()), ("app", app_label.as_str())];
     for (value, text) in options {
         let opt = util::create_element("option");
         util::set_attr(&opt, "value", value);
@@ -229,7 +230,7 @@ fn render_document_panel(container: &Element, view: &DocumentView) {
     match view {
         DocumentView::Empty => {
             let p = util::create_element_with_class("p", "placeholder");
-            util::set_text(&p, "Select an entity from the tree");
+            util::set_text(&p, &crate::i18n::t("entitytree.select_prompt", &[]));
             util::append(container, &p);
         }
         DocumentView::NotFound { path } => {
@@ -271,13 +272,13 @@ fn render_inspector_panel(container: &Element, view: &InspectorView) {
     util::clear_children(container);
 
     let h2 = util::create_element("h2");
-    util::set_text(&h2, "Inspector");
+    util::set_text(&h2, &crate::i18n::t("entitytree.inspector", &[]));
     util::append(container, &h2);
 
     match view {
         InspectorView::Empty => {
             let p = util::create_element("p");
-            util::set_text(&p, "No entity selected");
+            util::set_text(&p, &crate::i18n::t("entitytree.none_selected", &[]));
             util::append(container, &p);
         }
         InspectorView::NotFound { path } => {
@@ -305,7 +306,7 @@ fn render_inspector_panel(container: &Element, view: &InspectorView) {
             util::append(container, &dl);
 
             let h2_hash = util::create_element("h2");
-            util::set_text(&h2_hash, "Raw Hash");
+            util::set_text(&h2_hash, &crate::i18n::t("entitytree.raw_hash", &[]));
             util::append(container, &h2_hash);
 
             let pre = util::create_element_with_class("pre", "raw-hash");

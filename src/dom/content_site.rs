@@ -596,7 +596,7 @@ fn exit_button(parent: &Element, ctx: &DomCtx, block: bool) {
     // peer's own chrome (windows/app view) — you're not leaving, you're entering
     // the peer. Naming it after the destination is the obvious thing (the old
     // "Exit Site" read as "leave", which confused users who were still here).
-    util::set_text(&exit, "Enter Peer");
+    util::set_text(&exit, &crate::i18n::t("contentsite.enter_peer", &[]));
     let style = if block {
         "display:block;width:100%;text-align:start;\
          background:var(--site-exit-bg, #2a2a4e);color:var(--site-exit-text, #c0c0e0);\
@@ -674,7 +674,7 @@ fn render_sidebar(body_row: &Element, output: &SiteRenderOutput, ctx: &DomCtx, h
 
     let toggle = util::create_element_with_class("button", "cs-sidebar-toggle");
     util::set_attr(&toggle, "type", "button");
-    util::set_text(&toggle, "Contents \u{25be}");
+    util::set_text(&toggle, &crate::i18n::t("contentsite.contents_menu", &[]));
     // Toggle the `cs-open` class (the only mobile collapse state — desktop
     // ignores it; the media query shows the list regardless there). DOM-held
     // state: survives idle frames, resets on the next rebuild (a navigation).
@@ -751,7 +751,7 @@ fn render_content(
         util::append(&pane, &e);
     } else if output.loading {
         let l = util::create_element("div");
-        util::set_text(&l, "Loading…");
+        util::set_text(&l, &crate::i18n::t("status.loading", &[]));
         util::set_attr(&l, "style", "color:var(--site-text-muted, #9aa3b2);");
         util::append(&pane, &l);
     } else {

@@ -62,7 +62,7 @@ fn append_peer_facts(card: &Element, peer: &SystemPeerCard) {
 
     // System/User badge + runtime chip + storage chip (same classes as Peers).
     let badge = util::create_element_with_class("span", "peer-badge system");
-    util::set_text(&badge, "System");
+    util::set_text(&badge, &crate::i18n::t("label.system", &[]));
     util::append(&row, &badge);
 
     let runtime = util::create_element_with_class("span", "peer-chip");
