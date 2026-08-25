@@ -1,6 +1,27 @@
 # entity-browser-rust — status
 
-_Updated: 2026-08-16 · public: v0.8.0 (master) · working branch `dev`_
+_Updated: 2026-08-17 · public: v0.8.0 (master) · working branch `dev` @ `2449067`, **version 0.8.2**_
+
+> **Gates at the v0.8.2 runway, all unfiltered and green:** `make test` **1045/0/4** ·
+> `make lint` clean (30 locales × 571 keys) · `make wasm` check-dist consistent ·
+> `make e2e-worker` **17/17 in 306.57s** · `make e2e-webrtc-meet` **PASS** ·
+> `make e2e-webrtc-file` **PASS**. The last three were the debt the type-tag change created and
+> are **no longer owed**.
+
+> **Bearings first:** `HANDOFF-2026-08-17-b-bearings-three-threads-and-what-is-ours.md` — the three
+> threads (connectivity → file transfer → sharing), where each actually stands, what is blocked on
+> other seats, and what is ours and ready. Written because the arc had become hard to see from this
+> document alone. **Gate figures below marked `1035/0` are stale; the measured total at `eac2ad3` is
+> `1045/0`.** And **release packaging is on `dev`, not only in the release worktree** — buildout
+> item 18 is closed (see `AGENTS.md`).
+>
+> **Track B — the re-release arc** (publishing pipeline, app catalog, save slots, the release
+> itself, the user flow): `reviews/BUILDOUT-THE-RE-RELEASE-ARC-PUBLISHING-PRODUCT-AND-RELEASE.md`.
+> It runs in parallel with the connectivity/sharing thread and is entirely ours. Three measured
+> corrections live there: **the publish pipeline cannot read a live peer's tree** (so Site Editor
+> content has no publish path), **app save-state keeps one slot and no history** (`DEFAULT_RETAIN
+> = 5` is a GC window, not versions), and **`dev` is 524 commits ahead of `master`** with a
+> changelog that was never rolled over.
 
 ## Where it is
 
@@ -231,6 +252,51 @@ a pre-ship QA checklist.
    pull it from the other. Report what actually happens — a failure here is data, not a
    regression, and it is the next thing that would change the roadmap.
 
+## Grounding checkpoint (2026-08-17) — read this before continuing the share arc
+
+`CHECKPOINT-2026-08-17-grounding-and-the-cross-stack-convergence-map.md`. Three things in it
+change the plan:
+
+1. **There are two applications, not three.** `entity-core-py` has a **very complete handler
+   set** (registry, peer-issued registry, discovery + **mDNS**, signaling, network,
+   reachability, relay, route, content, local-files, encryption, substitute) and **no app
+   tier** — a single-file CLI. So app-tier vocabulary convergence is a **workbench-go**
+   conversation; python is the **interop** partner. And that makes python the cheapest route
+   to the thing every P2P gate we own lacks: all of them are rust-browser ↔ rust-browser,
+   *cohort-consistent, not independent convergence* (ADR-0012). A py peer as the far side of
+   an existing transfer gate needs **no app tier at all** — it already has `content`,
+   `local_files`, `tree`.
+2. **mDNS is implemented in all three kernels**, native-only. A browser cannot speak it — but
+   **a Tauri backend peer can**, and hands results over IPC. Ring 1 / LAN ring 2 are therefore
+   reachable on the desktop deployment; arch **Q3 narrows** to the plain-web, backend-less,
+   listener-less case.
+3. **`entity-workbench-go`'s own arc (compute) is dry and waiting on arch**, so a
+   sharing/connectivity thread there competes with nothing.
+
+**The arch package is written:**
+`ROUTING-2026-08-17-comprehensive-the-content-network-what-we-answer-and-what-blocks-us.md`.
+It supersedes the open half of `-16-g`, because reading arch's tree at HEAD changed it:
+
+- **Q1 is WITHDRAWN as posed.** `PROPOSAL-RELAY-COMPLETE-THE-MODE-SET` §2 (arch `95a2f13`,
+  opened the same day) already rules the Mode A blocker void — **and names our reasoning as
+  defective**: we inferred a substrate capability from an SDK module (`follow.rs`), which is
+  §11.1a's own error inverted. The real basis is that cross-peer subscription was always
+  permitted by the capability model. Accepted; it is the **fifth** instance this session of
+  concluding from an artifact rather than the thing itself, four of them ours.
+- **We are named as Mode C's driver** — listener-less, rendezvous-only. Arch's framing is that
+  Mode C's deferral, `data_relay` with no credential channel, and an unreachable browser peer
+  **are one gap**. We supply the measurements and keep the `turn:` refusal.
+- **Our retention finding is already cited** in that proposal's §2.1.2. And **§2.1.3
+  (verification through aggregation) is our Follow problem one layer up** — a materialized
+  remote subtree in a third party's tree is exactly what we build; `published-root` looks like
+  the answer and we asked.
+- **Q8 is the new blocker** (`meet` as a DISCOVERY backend), ahead of Q2/Q6.
+
+**Recommended order:** send the arch package → open the workbench-go conversation → python
+interop probe → *then* Step 2. Rationale: nothing should touch the share wire shape until
+Q2/Q6 return, because with no shares published anywhere yet a namespace/codec change is
+**free today** and needs a dated migration read afterwards.
+
 ## Backlog
 
 **Quick wins / cleanup**
@@ -352,9 +418,12 @@ Pull into roadmap when scoped.
 3. **TURN** — `parse_ice_urls` refuses `turn:` because there is nowhere to put a username and
    credential. Symmetric NAT, which the traverse rig deliberately does **not** model, needs it.
    The next real reachability increment after (1).
-4. **Awaiting an arch ruling, blocking nothing:** §10.3 obligation 6 (the consultation bound) —
-   proposal at `entity-core-rust/docs/PROPOSAL-ESTABLISH-CONSULTATION-BACKOFF.md`, routed
-   `ROUTING-2026-08-15-b-item-6-is-remedied-and-three-things-we-told-you-were-wrong`.
+4. ~~**Awaiting an arch ruling:** §10.3 obligation 6 (the consultation bound)~~ **RULED —
+   `NETWORK` v1.7** (arch `fe935be`, routed `ROUTING-2026-08-16-g-the-seam-consultation-bound-is-ruled`).
+   Closed on all three impls; go's dispatch bound green, rust confirmed charge-at-start, py
+   reports the seam binds vacuously (no §10.3 site). Our proposal
+   (`entity-core-rust/docs/PROPOSAL-ESTABLISH-CONSULTATION-BACKOFF.md`) is spent. *This line sat
+   stale for a day — caught in the 2026-08-17 grounding audit.*
 
 **File-transfer thread (new, 2026-08-16):**
 
@@ -385,6 +454,72 @@ audience) and a **Follow** (a prefix mirrored, with a budget) — and the missin
 four rings: this device / my devices / my people & groups / the open network. Ring 1 (my
 devices) does not exist at all.
 
+- **Initial design landed: `reviews/DESIGN-SHARE-FOLLOW-AND-THE-GRANT-AS-INTERFACE.md`.** The
+  alignment claim holds and the interface already existed: `GrantEntry{handlers, operations,
+  resources, peers}` — four axes, and the extension roster / peer management / the tree /
+  a share are four projections of it. So **a Share is a titled grant, not a second permission
+  system**. Convergence targets from `entity-workbench-go` (`mount`/`mounts`, `revision follow`
+  with an explicit bootstrap, a capability minted per `(remote, prefix)`, config in a *system*
+  namespace) — with one deliberate divergence: their Form 1 (`base=$notification.previous_hash`)
+  needs reliable delivery, and our WebRTC path is not that, so the browser must be Form-2-shaped.
+- **Three carried claims corrected, by compile check.** `entity-capability-handler`,
+  `entity-registry` and `entity-discovery` **all build clean for `wasm32`**, all are registered
+  behind feature gates in `core/peer/src/lib.rs`, and **none is in our main `entity-peer` dep**
+  (capability-handler is dev-dependencies-only). Enabling them does **not** flip enforcement —
+  `debug_open_grants` is a separate `PeerConfig` field. So buildout item 22's mechanism was
+  wrong: not structural, one Cargo line. Step 0 of the plan.
+- **Step 0 LANDED (`95c18dc`) — `system/capability` + `system/registry` are now registered on
+  the browser peer**, both arms (feature unification reaches the `entity-worker` bin; verified
+  in the built artifact, not inferred). It also closed a latent defect:
+  `default_connection_grants()` advertises `system/capability:request` unconditionally and its
+  own doc requires an advertised grant to name only registered handlers — we advertised it with
+  the handler absent, invisible only because `debug_open_grants` replaces those grants. It would
+  have surfaced exactly at the enforcement flip. Cost, measured: **release +221 KB per bundle**
+  (+3.32% browser, +6.17% worker). `discovery` deliberately left off — mDNS is its only v1
+  backend and a browser cannot speak it.
+- **Step 1a LANDED (`abc00ac`) — `src/share.rs`.** `Share::grant()` derives the 4-tuple; there
+  is no `is_visible_to` predicate anywhere, deliberately (that is how a second permission system
+  arrives by the back door). Nine tests; `a_prefix_share_does_not_authorize_a_sibling_prefix` is
+  **mutation-checked** (dropping the trailing-slash normalization → red on exactly that assert).
+  A `FileOffer` round-trips through a `Share` with the same id; a site share has no file-offer
+  form. **Namespace stayed app-tier** — inventing a `system/` convention unilaterally is what
+  AGENTS-STANDARD forbids, so it waits on Q2 behind one path helper. **No `Group` audience** —
+  Q7 decides whether leaving a group revokes access, and expansion would silently mean "whoever
+  was a member that day". This slice derives and encodes only: it does **not** author onto the
+  policy table, and no surface may read an audience as a control while `debug_open_grants` holds.
+  **Gates at this HEAD, all unfiltered:** `make test` **1035/0** (was 1026 — nine new), `make
+  lint` clean, `make wasm` + check-dist consistent, `make e2e-worker` **17/17 in 296.97s**
+  (baseline 296.46s). The webrtc gates were not re-run: `share.rs` has no callers yet, so
+  nothing it contains can reach a transport — re-run them at Step 1b, which does.
+- **Step 1b LANDED (`a104b7a`) — a share authors a grant on our OWN tree**, the half buildout
+  item 22 says is missing. The finding that shaped it, from reading `handle_configure` rather
+  than assuming: `configure` **replaces** the entry for a `peer_pattern`, so per-share authoring
+  is last-write-wins — sharing a second file with the same audience would silently revoke the
+  first. The entry is therefore the **union** of every share filed under that key, recomputed on
+  publish *and* withdrawal (mutation-checked). Withdrawal writes an **empty** grants array —
+  that is what revocation consists of, and omitting the write leaves a stale grant (the
+  `apply_offers` lesson again). Also separated two vocabularies that look identical: `peers: ["*"]`
+  inside a grant vs the policy path segment, where `*` is **illegal** and public files under
+  `default`.
+- **Step 1c LANDED — and the revert improved the design.** The first attempt fused *publishing*
+  (write a manifest) with *authoring* (compute a policy union from the complete set), and had to
+  be reverted because the union's precondition — a fully-seeded Worker mirror — cannot be met at
+  write time. Separating them removed the precondition from the write path altogether:
+  `publish_share`/`withdraw_share` need no `&Peers` and no share set (so the pending-queue the
+  first attempt required is **gone**), and `ShareSync` — an app-lifetime watch on the shares
+  prefix, the `user_themes` precedent — re-authors the policy whenever that prefix is dirty,
+  converging as the mirror seeds instead of racing it. Offering a file now publishes a
+  `kind: file` share; withdrawing drops it and the reconcile writes the empty entry that revokes.
+  **The general rule worth keeping: when a write needs a complete read to be correct, don't do
+  the read at the write — dirty something and let a reconcile converge.**
+- **Design flexibility is now audited, not assumed** — `DESIGN-SHARE-FOLLOW…` **§6b** is a
+  reversibility map: for each open arch question, exactly which functions change and whether it
+  is additive or breaking. Every share-path construction site is inside `share.rs` behind two
+  `app_paths` helpers (verified by grep), so Q2's namespace move is 2 fns + 1 const. **The one
+  window that closes:** with no shares published anywhere yet, a namespace/codec change is free
+  today and needs a dated migration read once users publish — so if a Q2/Q6 ruling is close, it
+  is cheaper to wait than to migrate. Also listed: what would *not* be cheap (a `Group` audience
+  shipped by expansion; enforcement flipped before Q6/Q7; any second permission system).
 - **A → E in §7 of that doc.** Near-term: generalize `offers/` → `shares/` with a `kind`;
   make a **site a share pulled over the peer connection** (its mirror destination
   `site-cache/{peer}/sites/{id}/` already exists and the resolver already reads it) with a new

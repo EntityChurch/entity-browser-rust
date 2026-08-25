@@ -201,6 +201,13 @@ pub struct EntityApp {
     /// `sync()` per frame is one atomic check unless the prefix changed
     /// (then it reconciles the runtime theme registry from the tree).
     user_themes: crate::user_themes::UserThemes,
+    /// Share-policy reconcile: app-lifetime watch on the shares prefix;
+    /// `sync()` per frame is one atomic check unless the prefix changed (then
+    /// it re-authors the `system/capability` policy entries the current share
+    /// set implies). A reconcile rather than a write-at-publish because the
+    /// union rule needs the COMPLETE set and the Worker mirror seeds
+    /// asynchronously — see `share::ShareSync`.
+    share_sync: crate::share::ShareSync,
     /// Connector-registry sync: app-lifetime watch on the connectors prefix +
     /// the selection. `sync()` per frame is one atomic check unless either
     /// changed (then it refreshes the pre-peer localStorage mirror the next
@@ -1366,6 +1373,10 @@ impl EntityApp {
         // the observe is what feeds the cache mirror) — the watch starts
         // dirty, so the first frame's sync performs the boot load.
         let user_themes = crate::user_themes::UserThemes::new(&peer_manager);
+        let share_sync = {
+            let pid = peer_manager.system_peer_id().to_string();
+            crate::share::ShareSync::new(&peer_manager, &pid)
+        };
         let connectors = crate::connectors::ConnectorRegistry::new(&peer_manager);
         // Capture what this session booted with, BEFORE any frame can run —
         // `ConnectorRegistry::sync` rewrites the mirror from the tree on its
@@ -1567,6 +1578,7 @@ impl EntityApp {
             connect_attempt,
             peer_registry,
             user_themes,
+            share_sync,
             connectors,
             #[cfg(target_arch = "wasm32")]
             webrtc_booted,
@@ -2412,6 +2424,12 @@ impl EntityApp {
         // With this call below the render it fails deterministically.
         // AUDIT-THEME-DELETE-STALE-DROPDOWN-2026-08-13 §8 F1.
         self.user_themes.sync(&self.peer_manager);
+        // Re-author share policy when the shares prefix changed. Unlike
+        // `user_themes.sync` above, its position is NOT load-bearing — it
+        // reads the tree and writes policy, and touches no render input — but
+        // it must run every frame so the Worker mirror's async seeding
+        // converges (each seed event re-dirties the watch).
+        self.share_sync.sync(&self.peer_manager);
         // **This order IS load-bearing now** — it was not when this call landed,
         // and the note that said so was true at the time: the mirror's only
         // consumer was the next reload's PRE-peer boot path, so nothing in a
@@ -3541,14 +3559,29 @@ impl EntityApp {
             crate::file_offer::human_bytes(len),
             crate::file_offer::chunk_count(len)
         ));
+        // The generalized row is a plain write, so it rides the same spawned
+        // task — no deferral needed. Its grant is authored by
+        // `share_sync`'s reconcile, which this write dirties.
+        let share_writer = self.peer_manager.writer_handle_for(&pid);
+        let share_pid = pid.clone();
         wasm_bindgen_futures::spawn_local(async move {
             match crate::file_offer::offer_file(&dispatch, &filename, &bytes).await {
-                Ok(offer) => log.log(format!(
-                    "✓ offering {} ({}) — id {}",
-                    offer.name,
-                    crate::file_offer::human_bytes(offer.size),
-                    offer.id()
-                )),
+                Ok(offer) => {
+                    log.log(format!(
+                        "✓ offering {} ({}) — id {}",
+                        offer.name,
+                        crate::file_offer::human_bytes(offer.size),
+                        offer.id()
+                    ));
+                    if let Some(writer) = share_writer {
+                        let share = crate::share::Share::from_file_offer(&offer);
+                        if let Err(e) =
+                            crate::share::publish_share(&writer, &share_pid, &share)
+                        {
+                            tracing::warn!(error = %e, "share publish failed");
+                        }
+                    }
+                }
                 Err(e) => log.log(format!("✗ offer {filename} → {e}")),
             }
         });
@@ -3566,6 +3599,11 @@ impl EntityApp {
             return;
         };
         crate::file_offer::withdraw_offer(&writer, &pid, &offer_id);
+        // Drop the generalized row too. The removal dirties the shares prefix,
+        // so the reconcile re-authors the policy without it — and writes an
+        // empty entry if this was the last share for that audience, which is
+        // what the revocation actually consists of.
+        crate::share::withdraw_share(&writer, &pid, &offer_id);
         log.log(format!(
             "✓ stopped offering {filename} (already-shared content ids still resolve)"
         ));

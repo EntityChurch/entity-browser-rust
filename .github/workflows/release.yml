@@ -47,7 +47,14 @@ env:
   # floating `master` means the same tag of this repo can produce two different
   # binaries. Set it to the exact entity-core-rust commit the release was
   # tested against; `master` is the convenience default for dry runs.
-  CORE_RUST_REF: master
+  # Pinned 2026-08-17 for the v0.8.2 runway: the exact entity-core-rust commit
+  # this line was developed and gated against (`origin/dev`, pushed). Note that
+  # core-rust's own `master` is still the pre-v0.8.0 docs commit — leaving this
+  # on `master` would build the flagship against a two-month-old kernel and
+  # silently ship a release containing none of the connectivity, transfer or
+  # sharing work. Re-pin at each release; a floating ref is how one tag builds
+  # twice into two different binaries.
+  CORE_RUST_REF: 683a4f0
   CORE_RUST_REPO: EntityChurch/entity-core-rust
 
   # Publish each artifact a second time without the version in its name, so
