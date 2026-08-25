@@ -588,6 +588,9 @@
   "peerconn.this_peer": "هذا النظير {pid} · {kind}",
   "peerconn.listening": " · يستمع على {addr}",
   "peerconn.qr_failed": "تعذّر إنشاء رمز QR",
+  "peerconn.connect_dialing": "جارٍ الاتصال بـ {addr}…",
+  "peerconn.connect_failed": "تعذّر الاتصال بـ {addr} — {reason}",
+  "peerconn.connect_ok": "متصل بـ {peer}",
   "filetransfer.no_results": "اعرض قائمة أو اسحب ملفًا لرؤية النتائج.",
   "contentsite.more": "المزيد ▾ ({n})",
 

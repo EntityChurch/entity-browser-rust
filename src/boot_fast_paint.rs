@@ -221,6 +221,8 @@ async fn paint(loc: Location, origin: String) {
         // Pre-peer boot paint renders only the site surface, never a
         // peer/system window — no dial transients to project.
         dial_markers: crate::dial_markers::DialMarkers::default(),
+        // No connect surface on this path — a default (empty) slot.
+        connect_attempt: crate::connect_attempt::ConnectAttempt::default(),
     };
     // `render` clears the container first; show the site surface now that we
     // have content (only on success — a failed fetch leaves chrome as-is).

@@ -35,6 +35,19 @@ pub const LABEL_CHOICE: &str = "display:block;margin:4px 0;cursor:pointer";
 /// Hint text below a form field.
 pub const HINT: &str = "font-size:11px;color:var(--text-dim,#888);margin:0 0 4px 0";
 
+/// Row holding a full identifier plus its Copy button (Peer Connections' bound
+/// peer id). Wraps rather than overflowing — a Base58 peer id is long, and the
+/// point of showing it in full is that all of it is readable and selectable.
+/// Spacing values are the SP_2/SP_3 steps, inlined because a `const` can't
+/// interpolate them.
+pub const ID_ROW: &str = "display:flex;align-items:center;gap:8px;margin:0 0 12px 0;flex-wrap:wrap";
+
+/// The identifier itself inside [`ID_ROW`]: dim, monospace-sized, breakable at
+/// any character, and `user-select:all` so one click selects the whole id (the
+/// thing people actually want to do with it).
+pub const ID_CODE: &str =
+    "font-size:11px;color:var(--text-dim,#888);word-break:break-all;user-select:all";
+
 /// Text input field.
 pub const INPUT: &str = "display:block;width:100%;background:var(--input-bg,#0e0e1e);\
     color:var(--text,#e0e0e0);border:1px solid var(--border-strong,#444);padding:4px 8px;\

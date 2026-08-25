@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Den här peeren {pid} · {kind}",
   "peerconn.listening": " · lyssnar på {addr}",
   "peerconn.qr_failed": "Det gick inte att generera QR-koden",
+  "peerconn.connect_dialing": "Ansluter till {addr}…",
+  "peerconn.connect_failed": "Det gick inte att ansluta till {addr} — {reason}",
+  "peerconn.connect_ok": "Ansluten till {peer}",
   "filetransfer.no_results": "Lista eller hämta en fil för att se resultat.",
   "contentsite.more": "Mer ▾ ({n})",
 

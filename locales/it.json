@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Questo peer {pid} · {kind}",
   "peerconn.listening": " · in ascolto su {addr}",
   "peerconn.qr_failed": "Impossibile generare il codice QR",
+  "peerconn.connect_dialing": "Connessione a {addr}…",
+  "peerconn.connect_failed": "Impossibile connettersi a {addr} — {reason}",
+  "peerconn.connect_ok": "Connesso a {peer}",
   "filetransfer.no_results": "Elenca o scarica un file per vedere i risultati.",
   "contentsite.more": "Altro ▾ ({n})",
 

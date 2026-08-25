@@ -214,6 +214,8 @@ impl SiteOverlay {
             // The site overlay renders content-site windows only — no
             // peer/system link chip, so no dial transients to project.
             dial_markers: crate::dial_markers::DialMarkers::default(),
+            // No connect surface on this path — a default (empty) slot.
+            connect_attempt: crate::connect_attempt::ConnectAttempt::default(),
         };
         let resolve_asset =
             crate::dom::content_site::make_asset_resolver(peers, &self.peer_id, &output);

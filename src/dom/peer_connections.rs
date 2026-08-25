@@ -31,7 +31,7 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
     util::set_text(&h2, &crate::i18n::t("window.peer_connections", &[]));
     util::append(&wrapper, &h2);
 
-    render_bound_header(&wrapper, output);
+    render_bound_header(&wrapper, output, ctx);
     render_known_devices(&wrapper, output, ctx);
     render_connect(&wrapper, output, ctx);
     render_pairing_qr(&wrapper, output, ctx);
@@ -41,7 +41,7 @@ pub fn render(container: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx)
 
 /// A slim "this is the peer you're acting as" line — not a card, just context
 /// under the title (S2: fold bound info into a header line).
-fn render_bound_header(parent: &Element, output: &PeerConnectionsOutput) {
+fn render_bound_header(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
     let line = util::create_element("p");
     line.set_attribute(
         "style",
@@ -80,6 +80,78 @@ fn render_bound_header(parent: &Element, output: &PeerConnectionsOutput) {
     }
     line.set_inner_html(&html);
     util::append(parent, &line);
+
+    // The FULL peer id, selectable and copyable. The line above shows the
+    // display name, which is the 8…6 truncation whenever the peer has no label
+    // — fine for recognizing a peer, useless for the thing people actually need
+    // an id for (pasting it into another device, a chat participant list, a bug
+    // report). The full value existed in the output all along
+    // (`BoundPeerInfo::peer_id`) and was simply never rendered.
+    let id_row = util::create_element("div");
+    id_row.set_attribute("style", theme::ID_ROW).ok();
+
+    let code = util::create_element("code");
+    code.set_attribute("style", theme::ID_CODE).ok();
+    util::set_text(&code, &output.bound_peer.peer_id);
+    util::append(&id_row, &code);
+
+    let copy = components::button_el(
+        &crate::i18n::t("btn.copy", &[]),
+        components::ButtonKind::Secondary,
+    );
+    {
+        let pid = output.bound_peer.peer_id.clone();
+        let el = copy.clone();
+        ctx.listen(&copy, "click", move |_| {
+            if let Some(win) = web_sys::window() {
+                let promise = win.navigator().clipboard().write_text(&pid);
+                // MUST consume the promise. Clipboard writes reject on denied
+                // permission / no focus / insecure context, and a DROPPED
+                // rejected promise hits index.html's `unhandledrejection`
+                // guard, which reloads the whole app (AGENTS.md).
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                });
+            }
+            // Confirm regardless — the write may be denied, but the click was
+            // still received, and a button that never acknowledges reads broken.
+            el.set_text_content(Some(&crate::i18n::t("status.copied", &[])));
+        });
+    }
+    util::append(&id_row, &copy);
+    util::append(parent, &id_row);
+}
+
+/// What became of the last Connect press — in-flight, failed (with the reason),
+/// or connected (naming who answered). Rendered inside the Connect card, next to
+/// the button that caused it.
+///
+/// This is the fix for the reported bug, and the failure it closes was silence
+/// in BOTH directions: a failed dial reported only to the Event Log window and
+/// a `tracing::error!`, and a *successful* dial reported nowhere the user was
+/// looking. Pressing Connect and being told nothing is indistinguishable from a
+/// dead button (D13).
+fn render_connect_outcome(card: &Element, output: &PeerConnectionsOutput) {
+    use crate::connect_attempt::ConnectOutcome;
+    let Some((addr, outcome)) = &output.last_attempt else {
+        return;
+    };
+    let line = match outcome {
+        ConnectOutcome::Dialing => {
+            components::loading(&crate::i18n::t("peerconn.connect_dialing", &[("addr", addr)]))
+        }
+        // The reason travels verbatim from the connect future — "couldn't
+        // connect" without a cause leaves the user exactly as stuck.
+        ConnectOutcome::Failed(reason) => components::error(&crate::i18n::t(
+            "peerconn.connect_failed",
+            &[("addr", addr), ("reason", reason)],
+        )),
+        ConnectOutcome::Connected(remote) => components::success(&crate::i18n::t(
+            "peerconn.connect_ok",
+            &[("peer", remote)],
+        )),
+    };
+    util::append(card, &line);
 }
 
 /// Outbound: devices we've reached before, each with its live status. A proper
@@ -131,11 +203,16 @@ fn render_known_devices(parent: &Element, output: &PeerConnectionsOutput, ctx: &
                 );
                 util::append(&wrap, &btn);
             }
-            // Forget on every row — a remembered link can read a stale
-            // "Connected" (no liveness probe for arbitrary peers), so the
+            // Forget on every REMEMBERED row — a remembered link can read a
+            // stale "Connected" (no liveness probe for arbitrary peers), so the
             // operator must be able to clear those too. Forget only drops the
             // remembered entry; it doesn't sever a live transport.
-            {
+            //
+            // Omitted on a metadata-derived row (the auto-provisioned system
+            // backend): there is no registry entry to drop, so the click would
+            // remove nothing and the row would stay — a visible no-op, which is
+            // the same disease as the silent Connect this window just fixed.
+            if kp.forgettable {
                 let btn = components::button_action(
                     ctx,
                     &crate::i18n::t("peers.forget", &[]),
@@ -187,7 +264,8 @@ fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();
-        let wid = ctx.window_id;
+        // (No `window_id` needed any more — the press no longer fires a
+        // `clear_address` WindowEvent; see the click handler.)
         let drafts = ctx.drafts.clone();
         let initial = output.address_input_initial.clone();
         let from_pid = output.bound_peer.peer_id.clone();
@@ -200,21 +278,24 @@ fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx
                 .cloned()
                 .unwrap_or_else(|| initial.clone());
             if !addr.is_empty() {
-                // Consume the draft so the repaint clears the field instead of
-                // resurrecting the just-dialed address.
-                drafts.borrow_mut().remove(ADDRESS_FIELD);
+                // The address STAYS in the box. It used to be consumed here, in
+                // the click handler — i.e. before the dial had produced any
+                // result — so a failed connect silently ate what the user had
+                // typed and left them retyping an address they could no longer
+                // see. The outcome line below reports what happened to it; the
+                // user clears the field when they're done with it, not us.
                 let mut acts = actions.borrow_mut();
                 acts.push(Action::ConnectPeer { peer_id: from_pid.clone(), addr });
-                acts.push(Action::WindowEvent {
-                    window_id: wid,
-                    event: "clear_address".into(),
-                    value: String::new(),
-                });
                 rp();
             }
         });
     }
     util::append(&card, &btn);
+
+    // What happened to the last press. Without this the action was silent in
+    // both directions — a failure showed nothing, and a success whose row the
+    // user wasn't watching also showed nothing (D13, the reported bug).
+    render_connect_outcome(&card, output);
 
     // Scan a device's QR to populate the address (outbound: I scan them).
     render_scan_qr(&card, ctx);

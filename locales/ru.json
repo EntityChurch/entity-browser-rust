@@ -570,6 +570,9 @@
   "peerconn.this_peer": "Этот пир {pid} · {kind}",
   "peerconn.listening": " · слушает на {addr}",
   "peerconn.qr_failed": "Не удалось создать QR-код",
+  "peerconn.connect_dialing": "Подключение к {addr}…",
+  "peerconn.connect_failed": "Не удалось подключиться к {addr} — {reason}",
+  "peerconn.connect_ok": "Подключено к {peer}",
   "filetransfer.no_results": "Получите список или загрузите файл, чтобы увидеть результаты.",
   "contentsite.more": "Ещё ▾ ({n})",
 

@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Bu peer {pid} · {kind}",
   "peerconn.listening": " · {addr} dinleniyor",
   "peerconn.qr_failed": "QR kodu oluşturulamadı",
+  "peerconn.connect_dialing": "{addr} adresine bağlanılıyor…",
+  "peerconn.connect_failed": "{addr} adresine bağlanılamadı — {reason}",
+  "peerconn.connect_ok": "{peer} bağlantısı kuruldu",
   "filetransfer.no_results": "Sonuçları görmek için bir dosyayı listeleyin veya çekin.",
   "contentsite.more": "Daha fazla ▾ ({n})",
 

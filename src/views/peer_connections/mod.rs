@@ -144,7 +144,7 @@ impl WindowView for PeerConnectionsWindow {
         peers: &Peers,
         ctx: &crate::dom::DomCtx,
     ) {
-        let output = self.model.render_output(peers, &ctx.dial_markers);
+        let output = self.model.render_output(peers, &ctx.dial_markers, &ctx.connect_attempt);
         crate::dom::peer_connections::render(container, &output, ctx);
     }
 }

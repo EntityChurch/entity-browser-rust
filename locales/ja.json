@@ -558,6 +558,9 @@
   "peerconn.this_peer": "このピア {pid} · {kind}",
   "peerconn.listening": " · {addr} で待ち受け中",
   "peerconn.qr_failed": "QR コードを生成できませんでした",
+  "peerconn.connect_dialing": "{addr} に接続しています…",
+  "peerconn.connect_failed": "{addr} に接続できませんでした — {reason}",
+  "peerconn.connect_ok": "{peer} に接続しました",
   "filetransfer.no_results": "ファイルを一覧表示または取得すると結果が表示されます。",
   "contentsite.more": "その他 ▾ ({n})",
 

@@ -1248,6 +1248,18 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.qr_failed",
         Message::Simple("Failed to generate QR code"),
     ),
+    // The outcome of a manual Connect press. All three states are reported —
+    // a success that named nobody was as opaque as the silent failure it sat
+    // beside (D13). `{reason}` carries the connect future's own message.
+    (
+        "peerconn.connect_dialing",
+        Message::Simple("Connecting to {addr}…"),
+    ),
+    (
+        "peerconn.connect_failed",
+        Message::Simple("Couldn't connect to {addr} — {reason}"),
+    ),
+    ("peerconn.connect_ok", Message::Simple("Connected to {peer}")),
     // The caret is part of the affordance, so it lives in the value — that
     // also lets an RTL locale put it on the correct side.
     ("contentsite.more", Message::Simple("More \u{25be} ({n})")),

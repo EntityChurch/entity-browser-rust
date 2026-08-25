@@ -570,6 +570,9 @@
   "peerconn.this_peer": "העמית הזה {pid} · {kind}",
   "peerconn.listening": " · מאזין ב-{addr}",
   "peerconn.qr_failed": "יצירת קוד ה-QR נכשלה",
+  "peerconn.connect_dialing": "מתחבר אל {addr}…",
+  "peerconn.connect_failed": "לא ניתן להתחבר אל {addr} — {reason}",
+  "peerconn.connect_ok": "מחובר אל {peer}",
   "filetransfer.no_results": "הצג רשימה או משוך קובץ כדי לראות תוצאות.",
   "contentsite.more": "עוד ▾ ({n})",
 

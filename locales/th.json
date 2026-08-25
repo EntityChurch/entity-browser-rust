@@ -558,6 +558,9 @@
   "peerconn.this_peer": "เพียร์นี้ {pid} · {kind}",
   "peerconn.listening": " · กำลังรับฟังที่ {addr}",
   "peerconn.qr_failed": "สร้างรหัส QR ไม่สำเร็จ",
+  "peerconn.connect_dialing": "กำลังเชื่อมต่อกับ {addr}…",
+  "peerconn.connect_failed": "เชื่อมต่อกับ {addr} ไม่ได้ — {reason}",
+  "peerconn.connect_ok": "เชื่อมต่อกับ {peer} แล้ว",
   "filetransfer.no_results": "แสดงรายการหรือดึงไฟล์เพื่อดูผลลัพธ์",
   "contentsite.more": "เพิ่มเติม ▾ ({n})",
 

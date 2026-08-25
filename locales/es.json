@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Este par {pid} · {kind}",
   "peerconn.listening": " · escuchando en {addr}",
   "peerconn.qr_failed": "No se pudo generar el código QR",
+  "peerconn.connect_dialing": "Conectando a {addr}…",
+  "peerconn.connect_failed": "No se pudo conectar a {addr} — {reason}",
+  "peerconn.connect_ok": "Conectado a {peer}",
   "filetransfer.no_results": "Lista o descarga un archivo para ver los resultados.",
   "contentsite.more": "Más ▾ ({n})",
 

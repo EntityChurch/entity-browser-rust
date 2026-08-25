@@ -564,6 +564,9 @@
   "peerconn.this_peer": "Αυτός ο ομότιμος {pid} · {kind}",
   "peerconn.listening": " · ακούει στο {addr}",
   "peerconn.qr_failed": "Αποτυχία δημιουργίας κωδικού QR",
+  "peerconn.connect_dialing": "Σύνδεση με {addr}…",
+  "peerconn.connect_failed": "Δεν ήταν δυνατή η σύνδεση με {addr} — {reason}",
+  "peerconn.connect_ok": "Συνδέθηκε με {peer}",
   "filetransfer.no_results": "Εμφανίστε ή τραβήξτε ένα αρχείο για να δείτε αποτελέσματα.",
   "contentsite.more": "Περισσότερα ▾ ({n})",
 
