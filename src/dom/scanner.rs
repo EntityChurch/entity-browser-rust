@@ -208,7 +208,7 @@ pub fn create_scanner(
         let stop_btn = util::create_element_with_class("button", "spawn-btn");
         util::set_text(&stop_btn, "Stop");
         stop_btn
-            .set_attribute("style", &format!("{};display:none;margin-left:4px", theme::BTN_DESTRUCTIVE))
+            .set_attribute("style", &format!("{};display:none;margin-inline-start:4px", theme::BTN_DESTRUCTIVE))
             .ok();
 
         // Stop handler.
@@ -244,7 +244,7 @@ pub fn create_scanner(
                 stop_ref
                     .set_attribute(
                         "style",
-                        &format!("{};display:inline-block;margin-left:4px", theme::BTN_DESTRUCTIVE),
+                        &format!("{};display:inline-block;margin-inline-start:4px", theme::BTN_DESTRUCTIVE),
                     )
                     .ok();
                 start_ref.set_attribute("style", "display:none").ok();

@@ -18,9 +18,9 @@ fn build_html(output: &KeyManagerOutput) -> String {
          <div style='overflow-x:auto'>\
          <table style='width:100%;border-collapse:collapse;font-size:13px'>\
          <tr style='border-bottom:1px solid var(--border, #333)'>\
-         <th style='text-align:left;padding:4px'>Label</th>\
-         <th style='text-align:left;padding:4px'>Peer ID</th>\
-         <th style='text-align:left;padding:4px'>Role</th></tr>",
+         <th style='text-align:start;padding:4px'>Label</th>\
+         <th style='text-align:start;padding:4px'>Peer ID</th>\
+         <th style='text-align:start;padding:4px'>Role</th></tr>",
     );
     for key in &output.keys {
         html.push_str(&format!(

@@ -364,7 +364,7 @@ fn render_node(list: &Element, node: &VisibleRow, sel: &SelectedSite, ctx: &DomC
         let dot = util::create_element("span");
         dot.set_attribute(
             "style",
-            &format!("color:{};font-weight:700;margin-left:5px", crate::theme_tokens::STATUS_ERR),
+            &format!("color:{};font-weight:700;margin-inline-start:5px", crate::theme_tokens::STATUS_ERR),
         )
         .ok();
         util::set_text(&dot, "\u{25cf}");

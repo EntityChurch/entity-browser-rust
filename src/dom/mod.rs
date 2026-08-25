@@ -134,6 +134,11 @@ pub struct DomRenderer {
     rebuild_count: u64,
     last_rebuild_log: f64,
     rebuilds_since_log: u64,
+    /// Last locale generation this renderer acted on. When
+    /// `i18n::locale_generation()` advances (a language switch), every open
+    /// window is force-rebuilt for one frame so `t()` strings re-resolve — the
+    /// "dirty all" the per-window `WindowWatch` can't express (i18n P1).
+    last_locale_generation: u64,
 }
 
 impl DomRenderer {
@@ -221,6 +226,9 @@ impl DomRenderer {
             rebuild_count: 0,
             last_rebuild_log: 0.0,
             rebuilds_since_log: 0,
+            // Seed from the current generation (boot already applied a locale),
+            // so the first frame doesn't spuriously force-rebuild everything.
+            last_locale_generation: crate::i18n::locale_generation(),
         })
     }
 
@@ -784,6 +792,14 @@ impl DomRenderer {
 
         let mut any_changed = false;
 
+        // Locale switch: when the global generation advances, force EVERY open
+        // window to rebuild this frame so its `t()` strings re-resolve — the
+        // per-window dirty flags don't fire because no tree write occurred
+        // (i18n P1, DESIGN §3.2 finding 1). Compared + consumed once per frame.
+        let locale_gen = crate::i18n::locale_generation();
+        let force_all = locale_gen != self.last_locale_generation;
+        self.last_locale_generation = locale_gen;
+
         // Determine which windows are currently open.
         let open_ids: HashSet<WindowId> = window_manager
             .windows
@@ -821,7 +837,10 @@ impl DomRenderer {
             // First-render seed: a brand-new section must build even if
             // the watch happened to be clean.
             let first = !self.window_sections.contains_key(&win.id);
-            if !watch.take_dirty() && !first {
+            // `take_dirty()` must run every iteration to clear the flag, even
+            // when `force_all` or `first` will rebuild anyway.
+            let dirty = watch.take_dirty();
+            if !dirty && !first && !force_all {
                 continue;
             }
             any_changed = true;
@@ -914,7 +933,7 @@ impl DomRenderer {
                     "style",
                     &format!(
                         "font-size: 0.65em; color: {}; border: 1px solid {}; \
-                         border-radius: 3px; padding: 1px 5px; margin-left: 8px; \
+                         border-radius: 3px; padding: 1px 5px; margin-inline-start: 8px; \
                          font-family: monospace; vertical-align: middle;",
                         color, color,
                     ),
@@ -1094,7 +1113,7 @@ fn build_empty_state() -> Element {
     util::set_attr(
         &legend,
         "style",
-        "display:flex;flex-direction:column;gap:6px;text-align:left;\
+        "display:flex;flex-direction:column;gap:6px;text-align:start;\
          font-size:12.5px;max-width:380px;",
     );
     for cat in crate::window::WindowCategory::all() {

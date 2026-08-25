@@ -22,7 +22,8 @@ use crate::peers::Peers;
 use crate::window::WindowId;
 
 use super::output::{
-    PeerOption, SessionSettings, SettingsOutput, SiteAppearanceOption, TargetOption, ThemeOption,
+    LanguageOption, PeerOption, SessionSettings, SettingsOutput, SiteAppearanceOption,
+    TargetOption, ThemeOption,
 };
 use crate::session_config::{self, BootSurface};
 
@@ -34,6 +35,11 @@ pub const SETTINGS_PATH: &str = "ui";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsState {
     pub theme: String,
+    /// The UI locale id (BCP-47, e.g. `"en"`). Drives `lang`/`dir` and (from
+    /// P1) which message catalog `t()` resolves against. Validated against the
+    /// locale roster on apply; an unknown id falls back to `en`
+    /// ([`crate::i18n::resolve`]).
+    pub language: String,
     /// How the Content Site overlay is colored, independent of `theme` (the
     /// chrome theme). One of: `"site"` (the overlay's own palette — default),
     /// `"system"` (follow the chrome theme), or a registered theme name (strict
@@ -52,6 +58,7 @@ impl Default for SettingsState {
     fn default() -> Self {
         Self {
             theme: "dark".into(),
+            language: crate::i18n::DEFAULT.into(),
             site_appearance: "site".into(),
             auto_connect: false,
             show_inspector: true,
@@ -77,6 +84,11 @@ impl SettingsState {
                 Some("theme") => {
                     if let Some(s) = v.as_text() {
                         state.theme = s.to_string();
+                    }
+                }
+                Some("language") => {
+                    if let Some(s) = v.as_text() {
+                        state.language = s.to_string();
                     }
                 }
                 Some("site_appearance") => {
@@ -108,6 +120,7 @@ impl SettingsState {
     pub fn to_entity(&self) -> Entity {
         let data = entity_ecf::to_ecf(&entity_ecf::cbor_map! {
             "theme" => entity_ecf::text(&self.theme),
+            "language" => entity_ecf::text(&self.language),
             "site_appearance" => entity_ecf::text(&self.site_appearance),
             "auto_connect" => entity_ecf::bool_val(self.auto_connect),
             "show_inspector" => entity_ecf::bool_val(self.show_inspector),
@@ -179,6 +192,16 @@ impl SettingsModel {
         // Recolor the live page + mirror the choice for next boot. The tree
         // write above is the durable record; this is the appearance side.
         crate::theme_tokens::apply_and_persist(value);
+    }
+
+    /// Set the UI locale. Mirrors [`set_theme`](Self::set_theme): the tree
+    /// write is the durable record, `i18n::apply` drives `lang`/`dir` live +
+    /// mirrors the choice for boot.
+    pub fn set_language(&self, value: &str, peers: &Peers) {
+        let mut state = self.read_state(peers);
+        state.language = value.to_string();
+        self.write_state(peers, &state);
+        crate::i18n::apply(value);
     }
 
     /// Set how the Content Site overlay is themed (`"site"` / `"system"` /
@@ -392,6 +415,18 @@ impl SettingsModel {
             })
             .collect();
 
+        // Language: registry-driven, one option per locale in the roster
+        // (`i18n::available_locales`) — real locales + the pseudo-locale. Adding
+        // a locale is one entry, exactly like a built-in theme.
+        let languages = crate::i18n::available_locales()
+            .iter()
+            .map(|l| LanguageOption {
+                value: l.id,
+                label: l.label,
+                selected: state.language == l.id,
+            })
+            .collect();
+
         // Site appearance: two fixed modes ("Site's theme" / "Match system
         // theme") + a strict override per registered theme. Registry-driven via
         // the catalog so adding a theme adds an "Always X" override.
@@ -480,6 +515,7 @@ impl SettingsModel {
             window_id: self.window_id,
             state_path,
             themes,
+            languages,
             site_appearance,
             show_inspector: state.show_inspector,
             auto_connect: state.auto_connect,
@@ -529,6 +565,7 @@ mod tests {
     fn state_round_trip() {
         let s = SettingsState {
             theme: "light".into(),
+            language: "es".into(),
             site_appearance: "light".into(),
             auto_connect: true,
             show_inspector: false,
@@ -561,6 +598,7 @@ mod tests {
         let pid = pm.primary_peer_id().to_string();
         let custom = SettingsState {
             theme: "light".into(),
+            language: "en".into(),
             site_appearance: "system".into(),
             auto_connect: true,
             show_inspector: false,
@@ -589,6 +627,25 @@ mod tests {
 
         let entity = pm.get_entity(&pid, &model.state_path(&pm)).unwrap();
         assert_eq!(SettingsState::from_entity(&entity).theme, "light");
+    }
+
+    #[test]
+    fn state_default_language_is_en() {
+        assert_eq!(SettingsState::default().language, "en");
+    }
+
+    #[tokio::test]
+    async fn set_language_persists() {
+        let pm = pm();
+        let pid = pm.primary_peer_id().to_string();
+        let model = SettingsModel::new(1, pid.clone());
+        model.ensure_state(&pm);
+
+        model.set_language("en-XA", &pm);
+        flush_writes().await;
+
+        let entity = pm.get_entity(&pid, &model.state_path(&pm)).unwrap();
+        assert_eq!(SettingsState::from_entity(&entity).language, "en-XA");
     }
 
     #[tokio::test]

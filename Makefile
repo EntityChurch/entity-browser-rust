@@ -257,9 +257,12 @@ test-tauri: image
 
 # Lint, in-container: clippy + the UI ratchet gate (raw atoms / inline style
 # literals / untokenized hex must match tools/ui-lint-baseline.txt — see
-# tools/ui-lint.sh; migrations ratchet the baseline down in the same commit).
+# tools/ui-lint.sh; migrations ratchet the baseline down in the same commit) +
+# the i18n ratchet gate (raw UI-text literals in anchored positions must match
+# tools/i18n-lint-baseline.txt — see tools/i18n-lint.sh; string migrations
+# ratchet it down in the same commit).
 lint: image
-	$(call RUN,cargo clippy && ./tools/ui-lint.sh)
+	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/i18n-lint.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image

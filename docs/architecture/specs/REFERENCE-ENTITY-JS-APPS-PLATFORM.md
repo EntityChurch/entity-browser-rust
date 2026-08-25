@@ -60,12 +60,23 @@ Authored in `entity-apps`; the contract we consume is `entity-apps/docs/EMBEDDIN
   | app→host | `ready-for-init` | mounted, wants saved state → host replies `init` |
   | app→host | `state` `{state}` | "persist this" (opaque, keyed by app id) |
   | app→host | `ready` / `closed` / `error` | running / torn down / `create()` threw |
-  | host→app | `init` `{state}` | the saved object, or `null` for a fresh start |
+  | host→app | `init` `{state, locale, dir}` | saved object (or `null`) **+ the host locale** (BCP-47 id, e.g. `en`/`en-XA`) and `dir` (`ltr`/`rtl`) |
   | host→app | `viewport` `{width,height,safe}` | iframe size + safe-area insets |
   | host→app | `request-state` / `destroy` | flush latest / tear down |
 
   **150 ms fallback:** if the host never answers `ready-for-init`, the app starts
   fresh — so even a dumb host yields a working (stateless) app.
+- **The app owns its own localization** (i18n P2). The sandboxed iframe is a
+  **separate document** — the host's `<html lang/dir>` does not cross into it —
+  so the app reads `locale`/`dir` from the `init` payload and applies them to its
+  own root (`<html lang dir>`) and message lookups. A host **locale switch**
+  re-inits the iframe (the host force-rebuilds on `mark_all_dirty`, yielding a
+  fresh `ready-for-init` → `init` with the new values); the app's save is
+  flushed first and restored on re-init, so a well-behaved app keeps its state
+  across the switch. (A live, no-reload `locale`-change push — mirroring
+  `viewport` — is a future refinement, added when a real app needs mid-session
+  switching without a re-init.) The host records the delivered locale on the
+  iframe as `data-host-locale` (debug + test observable).
 - **The app owns its own layout.** The SDK canvas (`sdk/canvas.js`,
   `.entity-canvas { flex:1; min-height:0 }`) fills whatever box the host gives it
   via a `ResizeObserver`; board games (`sdk/board.js`, `measureFit`) draw a

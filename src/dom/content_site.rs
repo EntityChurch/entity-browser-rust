@@ -123,7 +123,7 @@ const RESPONSIVE_CSS: &str = "\
 .cs-main{flex:1;min-width:0;overflow:auto;}\
 .cs-main,.cs-main *{box-sizing:border-box;}\
 .cs-sidebar{flex-shrink:0;width:210px;overflow:auto;padding:18px 12px;\
-border-right:1px solid var(--site-border, #20202e);\
+border-inline-end:1px solid var(--site-border, #20202e);\
 background:var(--site-sidebar-bg, #13131c);display:flex;\
 flex-direction:column;gap:2px;}\
 .cs-sidebar-toggle{display:none;}\
@@ -131,7 +131,7 @@ flex-direction:column;gap:2px;}\
 @media (max-width:768px){\
 .cs-nav-desktop{display:none;}\
 .cs-nav-burger{display:flex;align-items:center;justify-content:center;\
-margin-left:auto;flex-shrink:0;background:var(--site-control-bg, #22223a);\
+margin-inline-start:auto;flex-shrink:0;background:var(--site-control-bg, #22223a);\
 color:var(--site-control-text, #cfe3ff);\
 border:1px solid var(--site-control-border, #3a3a52);border-radius:6px;\
 padding:6px 12px;font-size:17px;line-height:1;cursor:pointer;}\
@@ -143,7 +143,7 @@ border-radius:8px;padding:8px;z-index:70;box-shadow:0 12px 32px rgba(0,0,0,0.55)
 max-height:75vh;overflow:auto;}\
 .cs-body{flex-direction:column;overflow:auto;}\
 .cs-main{overflow:visible;}\
-.cs-sidebar{width:auto;overflow:visible;padding:8px 12px;border-right:none;\
+.cs-sidebar{width:auto;overflow:visible;padding:8px 12px;border-inline-end:none;\
 border-bottom:1px solid var(--site-border, #20202e);gap:0;}\
 .cs-sidebar-toggle{display:flex;align-items:center;justify-content:space-between;\
 width:100%;background:var(--site-toggle-bg, #1a1a26);\
@@ -156,14 +156,14 @@ cursor:pointer;}\
 }\
 .cs-window-row{display:flex;height:100%;overflow:hidden;}\
 .cs-rail{flex-shrink:0;width:188px;overflow:auto;padding:14px 10px;\
-border-right:1px solid var(--site-border, #20202e);\
+border-inline-end:1px solid var(--site-border, #20202e);\
 background:var(--site-rail-bg, #0d0d14);display:flex;\
 flex-direction:column;gap:3px;}\
 .cs-rail-toggle{display:none;}\
 .cs-rail-list{display:flex;flex-direction:column;gap:3px;}\
 @media (max-width:768px){\
 .cs-window-row{flex-direction:column;overflow:auto;}\
-.cs-rail{width:auto;overflow:visible;padding:8px 10px;border-right:none;\
+.cs-rail{width:auto;overflow:visible;padding:8px 10px;border-inline-end:none;\
 border-bottom:1px solid var(--site-border, #20202e);gap:0;}\
 .cs-rail-toggle{display:flex;align-items:center;justify-content:space-between;\
 width:100%;background:var(--site-toggle-bg-rail, #14141f);\
@@ -257,7 +257,7 @@ const NAV_INLINE_MAX: usize = 4;
 ///
 /// - **Desktop** (`.cs-nav-desktop`): up to [`NAV_INLINE_MAX`] inline nav items,
 ///   surplus under a "More ▾" dropdown, then a right cluster (Share + overlay
-///   Exit) pinned via `margin-left:auto`.
+///   Exit) pinned via `margin-inline-start:auto`.
 /// - **Mobile** (≤768px): the desktop region is hidden; a **hamburger ☰**
 ///   opens a single vertical dropdown (`.cs-nav-menu`) with *every* nav link +
 ///   Share + Exit. The panel is viewport-anchored (`left:8px;right:8px`), so
@@ -337,7 +337,7 @@ fn render_nav_bar(wrapper: &Element, output: &SiteRenderOutput, ctx: &DomCtx, ho
     util::set_attr(
         &right,
         "style",
-        "display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:auto;",
+        "display:flex;align-items:center;gap:10px;flex-shrink:0;margin-inline-start:auto;",
     );
     render_share_button(&right, output, ctx, false);
     if can_exit {
@@ -476,7 +476,7 @@ fn render_more_dropdown(bar: &Element, overflow: &[&NavLink], ctx: &DomCtx, host
 
     let panel = util::create_element("div");
     // Base style shared by the open/closed variants; only `display` differs.
-    const PANEL_BASE: &str = "position:absolute;top:calc(100% + 6px);left:0;\
+    const PANEL_BASE: &str = "position:absolute;top:calc(100% + 6px);inset-inline-start:0;\
          min-width:180px;max-height:60vh;overflow-y:auto;\
          background:var(--site-panel-bg, #1b1b28);\
          border:1px solid var(--site-panel-border, #2f2f46);border-radius:6px;\
@@ -547,7 +547,7 @@ fn share_button(bar: &Element, ctx: &DomCtx, label: &str, title: &str, link: Str
     util::set_text(&btn, label);
     util::set_attr(&btn, "title", title);
     let style = if block {
-        "display:block;width:100%;text-align:left;\
+        "display:block;width:100%;text-align:start;\
          background:var(--site-control-bg, #22223a);\
          color:var(--site-control-text, #cfe3ff);\
          border:1px solid var(--site-control-border, #3a3a52);\
@@ -598,7 +598,7 @@ fn exit_button(parent: &Element, ctx: &DomCtx, block: bool) {
     // "Exit Site" read as "leave", which confused users who were still here).
     util::set_text(&exit, "Enter Peer");
     let style = if block {
-        "display:block;width:100%;text-align:left;\
+        "display:block;width:100%;text-align:start;\
          background:var(--site-exit-bg, #2a2a4e);color:var(--site-exit-text, #c0c0e0);\
          border:1px solid var(--site-exit-border, #555);border-radius:4px;\
          padding:8px 10px;font-size:13px;cursor:pointer;font-family:inherit;"
@@ -702,7 +702,7 @@ fn sidebar_link(ctx: &DomCtx, entry: &SectionLink, host: SiteNavHost) -> Element
     let a = util::create_element("a");
     util::set_text(&a, &entry.label);
     util::set_attr(&a, "href", "#");
-    let indent = if entry.depth >= 1 { "margin-left:12px;" } else { "" };
+    let indent = if entry.depth >= 1 { "margin-inline-start:12px;" } else { "" };
     let color = if entry.active {
         "color:var(--site-accent, #9fd0ff);"
     } else if entry.depth == 0 {
