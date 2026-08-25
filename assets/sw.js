@@ -120,9 +120,19 @@ async function cacheFirst(req) {
 // Network-first for the mutable app shell + non-hashed worker bundle:
 // always prefer the freshly-deployed bytes when online; fall back to the
 // last-cached copy offline so the peer still boots; else a readable 503.
+//
+// `cache: 'reload'` is load-bearing: a plain `fetch(req)` respects the
+// browser's HTTP cache, so a reload sends a CONDITIONAL request and the
+// server can answer 304 — at which point `fetch` resolves with the browser's
+// STALE cached copy and network-first silently serves the old shell (this is
+// exactly the "I refreshed but got the old build / a 304" symptom). Worse,
+// `publish-serve` snapshots with `cp -a` (preserves mtime), so even freshly
+// rebuilt bytes can keep an old mtime and 304. `reload` forces an
+// UNCONDITIONAL network fetch (no If-Modified-Since), so we always get the
+// true latest bytes on the first online reload — dev server or CDN alike.
 async function networkFirst(req) {
     const cache = await caches.open(CACHE_NAME);
-    const fresh = await fetch(req).then((resp) => {
+    const fresh = await fetch(req, { cache: 'reload' }).then((resp) => {
         if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});
         return resp;
     }).catch(() => null);

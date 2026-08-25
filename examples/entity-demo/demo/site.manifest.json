@@ -1,0 +1,16 @@
+{
+  "site_id": "demo",
+  "title": "Entity Demo Site",
+  "tagline": "A worked example of the ingest → publish pipeline",
+  "theme": "demo",
+  "nav": [
+    { "title": "Home", "path": "pages/index.md" },
+    { "title": "Guide", "path": "pages/guide/intro.md", "children": [
+      { "title": "Install", "path": "pages/guide/install.md" },
+      { "title": "Internals", "path": "pages/guide/advanced/internals.md" }
+    ] },
+    { "title": "About", "path": "pages/about.md" },
+    { "title": "Theory", "path": "pages/theory.md" },
+    { "title": "Showcase", "path": "pages/showcase.md" }
+  ]
+}

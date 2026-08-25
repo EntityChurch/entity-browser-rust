@@ -1,0 +1,9 @@
++++
+title = "Guide — Internals"
++++
+
+# Guide: Internals
+
+Three levels deep (`guide/advanced/internals`) and still resolving from the tree by path. The *Guide* section nav stays lit the whole way down.
+
+Back to the [Intro](../intro).

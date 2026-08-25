@@ -1,0 +1,17 @@
++++
+title = "About"
++++
+
+# About
+
+The Entity Demo Site is a tiny showcase of **Site Mode**: content-addressed static sites with reactivity, served from the entity system.
+
+```
+site/demo/
+  manifest
+  pages/{index,about,theory}
+  pages/guide/{intro,install}
+  pages/guide/advanced/internals
+```
+
+Back to [Home](./index).

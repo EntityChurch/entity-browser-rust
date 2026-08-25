@@ -163,8 +163,7 @@ the host down (see [Resource caps](#resource-caps)).
 
 The same `make wasm` / `make test` targets work directly if you provision the
 host toolchain (see [Prerequisites](#prerequisites)). The serve / demo targets
-always run on the host (they need host `python3`, and `publish-papers` also
-needs `go`):
+always run on the host (they need host `python3`):
 
 ```bash
 make serve         # serve dist/ on :8081 (plain browser, no Tauri)
