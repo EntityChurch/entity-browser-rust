@@ -8,7 +8,7 @@ use crate::dom::components::{self, AuthState, ConnState};
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::views::system_overview::output::{
-    AuthorizationsView, AuthRow, BackendStatusView, SystemOverviewOutput,
+    AuthorizationsView, AuthRow, BackendStatusView, PairScope, SystemOverviewOutput,
 };
 use crate::views::system_peers::output::SystemPeersOutput;
 
@@ -125,6 +125,9 @@ pub fn render(
             // running server infrastructure.
             render_rendezvous_row(&status, b, ctx);
             render_port_mapping_row(&status, b, ctx);
+            // Last, because it is composed from both rows above: the one line a
+            // person carries to the other machine.
+            render_pairing_row(&status, b, ctx);
         }
         None => {
             // Non-content states (S5): still loading vs genuinely absent.
@@ -275,6 +278,99 @@ fn render_rendezvous_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) 
     // Empty label: the control belongs to the row above, aligned under its
     // value rather than introducing a second key nobody needs to read.
     add_chip_row(parent, "", btn);
+}
+
+/// The **pairing** row: the exact line to type on the *other* machine.
+///
+/// # Why a command and not two facts
+///
+/// Everything needed to join this rendezvous is already on this card — the
+/// node's peer id in the identity row, its address in the rendezvous row, and
+/// the forwarded address in the port-mapping row. Every one of them is
+/// individually correct and the *composition* is left to the reader: they have
+/// to know that `connector add` wants exactly those two, in that order, from
+/// two different rows, and retype a Base58 peer id by hand across a room. That
+/// is where a real two-machine run actually stalls, and it is a transcription
+/// error rather than a connectivity one — which makes it look like a
+/// connectivity one.
+///
+/// So the row renders the command itself, copyable. It is the same string the
+/// Shell's `connector add` parses, so there is nothing new to keep in step:
+/// if the verb's grammar changes, this line is wrong in a way its own test
+/// catches.
+///
+/// # Two addresses, deliberately, and never silently one
+///
+/// The LAN address works for another machine on this network and nowhere else.
+/// A forwarded address (when the router opened one) works from anywhere,
+/// **including** from this network on most routers — but not all of them
+/// (hairpin NAT), which is why the LAN line stays and is listed first. Showing
+/// only one would either strand a friend on another network or send someone on
+/// the same Wi-Fi out through the internet and back.
+///
+/// Absent a rendezvous there is nothing to join, so the row does not render:
+/// a pairing command for a node that is off is an instruction that fails.
+fn render_pairing_row(parent: &Element, b: &BackendStatusView, ctx: &DomCtx) {
+    // The composition — which addresses, in what order, and the literal command
+    // text — lives in `views::system_overview::output::pairing_commands`, where
+    // native tests can read it. What is wrong here would be the argument order
+    // or a missing row, and neither is observable from inside `create_element`.
+    for (scope, command) in crate::views::system_overview::output::pairing_commands(b) {
+        let label = match scope {
+            PairScope::Lan => crate::i18n::t("sysoverview.pair_lan", &[]),
+            PairScope::Internet => crate::i18n::t("sysoverview.pair_wan", &[]),
+        };
+        add_command_row(parent, &label, &command, ctx);
+    }
+}
+
+/// One `label: <code>command</code> [Copy]` row.
+///
+/// Built from the card's own row helper plus the shared identity-code style, so
+/// it adds no raw styles to the `ui-lint` baseline and reads like the peer-id
+/// row in Peer Connections — which is the other place in the app that exists to
+/// get a long string onto another device.
+fn add_command_row(parent: &Element, label: &str, command: &str, ctx: &DomCtx) {
+    let holder = util::create_element("span");
+    holder.set_attribute("style", theme::ID_ROW).ok();
+
+    let code = util::create_element("code");
+    code.set_attribute("style", theme::ID_CODE).ok();
+    // What to DO with the line, on hover — the label names which address this
+    // is, and that is the half a reader cannot infer from the command itself.
+    // The reload is in there because the node is read once at boot: a paste
+    // that stops at "added connector" leaves a correct registry doing nothing.
+    code.set_attribute("title", &crate::i18n::t("sysoverview.pair_hint", &[])).ok();
+    util::set_text(&code, command);
+    util::append(&holder, &code);
+
+    let copy = components::button_el(
+        &crate::i18n::t("btn.copy", &[]),
+        components::ButtonKind::Secondary,
+    );
+    {
+        let cmd = command.to_string();
+        let el = copy.clone();
+        ctx.listen(&copy, "click", move |_| {
+            if let Some(win) = web_sys::window() {
+                let promise = win.navigator().clipboard().write_text(&cmd);
+                // MUST consume the promise: a dropped *rejecting* promise hits
+                // index.html's `unhandledrejection` guard, which reloads the
+                // whole app. Clipboard writes reject on denied permission, no
+                // focus, or an insecure context — all three of which are more
+                // likely on exactly the machine someone is pairing from.
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+                });
+            }
+            // Acknowledge regardless: the write may be denied, and a button
+            // that never responds reads as broken. The command is selectable
+            // either way, which is the fallback.
+            el.set_text_content(Some(&crate::i18n::t("status.copied", &[])));
+        });
+    }
+    util::append(&holder, &copy);
+    add_chip_row(parent, label, holder);
 }
 
 /// The port-mapping row: whether a router is forwarding this backend from the

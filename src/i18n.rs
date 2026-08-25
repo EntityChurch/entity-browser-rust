@@ -815,6 +815,16 @@ pub const EN: &[(&str, Message)] = &[
              so nobody has to run a server. Restarts the backend, which drops open connections.",
         ),
     ),
+    // Pairing. The composition of the two rows around it: the one line a person
+    // carries to the other machine, per address that works from where they are.
+    ("sysoverview.pair_lan", Message::Simple("Pair (same network)")),
+    ("sysoverview.pair_wan", Message::Simple("Pair (internet)")),
+    (
+        "sysoverview.pair_hint",
+        Message::Simple(
+            "Open the Shell on the other machine, paste this line, then reload that page.",
+        ),
+    ),
     // Port forwarding. Same shape as the rendezvous row above and for the same
     // reason: the ON string carries the ADDRESS, because "it's open" is not
     // something a person can act on and that address is exactly what someone
@@ -1689,6 +1699,15 @@ pub const EN: &[(&str, Message)] = &[
             "This app is already open in another tab, which owns your saved data. \
              Changes in THIS tab are not being saved. Close the other tab and \
              reload here to edit your saved tree.",
+        ),
+    ),
+    (
+        "readiness.insecure_origin",
+        Message::Simple(
+            "This page is not on a secure origin ({origin}). Background storage and \
+             the camera are unavailable here, so QR pairing will not work — paste \
+             the pairing line instead. Peer connections may still work; run `net` \
+             in the Shell for details. Production sites should use https://.",
         ),
     ),
     (

@@ -197,7 +197,7 @@ pub fn show_action_refused_banner(reason: &str) {
 /// Inject a dismissible boot-level banner with the given DOM `id`. Idempotent
 /// per id (never stacks the same banner) — distinct ids let, e.g., a secondary-
 /// tab "not saved" banner and a "create refused" banner coexist.
-fn inject_banner_with_id(id: &str, msg: &str, bg: &str, border: &str) {
+pub(crate) fn inject_banner_with_id(id: &str, msg: &str, bg: &str, border: &str) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };

@@ -270,7 +270,14 @@ impl WindowView for PeerConnectionsWindow {
                         let sys = peers.system_peer_id().to_string();
                         self.set_connector_notice(
                             match crate::connectors::add_connector(peers, &sys, &c) {
-                                Ok(()) => {
+                                // `AddOutcome.selected` needs no notice of its
+                                // own here: the row list marks the selection
+                                // with the same glyph it always has, and
+                                // selecting the first node is exactly what
+                                // makes `connector_reload_pending` fire — so
+                                // the one thing the user must now do is already
+                                // on screen, in a string that is translated.
+                                Ok(_) => {
                                     // Learn what this node serves (§4.5.1) —
                                     // adding it is the moment to ask, and the
                                     // user should not have to press Check to

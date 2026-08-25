@@ -105,3 +105,124 @@ pub struct AuthRow {
     /// mirror has no record.
     pub profile: Option<String>,
 }
+
+/// Which address a pairing line carries — the label the row renders, and the
+/// only thing that distinguishes two otherwise identical commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairScope {
+    /// The listener's own address. Works for another machine on this network.
+    Lan,
+    /// The address a router is forwarding right now. Works from anywhere —
+    /// including, on most but not all routers, from this network.
+    Internet,
+}
+
+/// The pairing lines this backend can offer: the literal command to run on the
+/// **other** machine, per address that works from where that machine is.
+///
+/// Pure, and separated from the renderer deliberately. What can be wrong here is
+/// the *composition* — the verb, the argument order, which address goes with
+/// which label, and whether a row appears at all — and none of that is
+/// observable from a native test while it lives inside `create_element` calls.
+/// The DOM half is then a loop over this.
+///
+/// Three rules, each of which is a way to publish an instruction that fails:
+///
+/// - **No rendezvous, no rows.** A pairing command for a node that is off tells
+///   someone to join something that will refuse them.
+/// - **No address, no rows.** A stopped listener has nothing to dial.
+/// - **The LAN line comes first, and the internet line only when a door is
+///   actually open.** `external_addr` is `Some` for exactly *a mapping is live*
+///   — never for "asked" and never for "refused" — so this cannot advertise a
+///   door that is not there. When the two addresses are identical there is one
+///   row, because two rows carrying the same command is not a choice.
+pub fn pairing_commands(b: &BackendStatusView) -> Vec<(PairScope, String)> {
+    if !b.signaling_node {
+        return Vec::new();
+    }
+    let Some(lan) = b.ws_addr.as_deref().filter(|a| !a.is_empty()) else {
+        return Vec::new();
+    };
+    // i18n-ignore — shell syntax, not prose: this is the literal line the
+    // `connector add` verb parses, and translating it produces a command that
+    // does not run.
+    let cmd = |addr: &str| format!("connector add {} {}", b.peer_id, addr); // i18n-ignore
+    let mut out = vec![(PairScope::Lan, cmd(lan))];
+    if let Some(ext) = b.external_addr.as_deref().filter(|a| !a.is_empty() && *a != lan) {
+        out.push((PairScope::Internet, cmd(ext)));
+    }
+    out
+}
+
+#[cfg(test)]
+mod pairing_tests {
+    use super::*;
+
+    fn backend() -> BackendStatusView {
+        BackendStatusView {
+            peer_id: "2KNodeSevenFullBase58Id".into(),
+            short_id: "2KNodeSevenF".into(),
+            status: "running".into(),
+            ws_addr: Some("ws://192.168.1.10:4041".into()),
+            signaling_node: true,
+            external_addr: None,
+            port_mapping: false,
+            port_mapping_note: None,
+        }
+    }
+
+    /// The line must be exactly what the verb parses. Asserted as a whole
+    /// string, not by `contains`: the argument ORDER is the part a reader cannot
+    /// check and the part that silently produces `no connector with peer-id
+    /// ws://…` on the other machine.
+    #[test]
+    fn the_lan_line_is_the_command_the_connector_verb_accepts() {
+        let rows = pairing_commands(&backend());
+        assert_eq!(rows.len(), 1, "no door is open, so there is one line");
+        assert_eq!(rows[0].0, PairScope::Lan);
+        assert_eq!(
+            rows[0].1,
+            "connector add 2KNodeSevenFullBase58Id ws://192.168.1.10:4041"
+        );
+    }
+
+    /// A forwarded address is an ADDITIONAL line, and the LAN one stays — a
+    /// mapped address is not guaranteed to hairpin back onto its own network,
+    /// so replacing the LAN line would strand the machine in the next room.
+    #[test]
+    fn an_open_door_adds_a_second_line_and_does_not_replace_the_first() {
+        let b = BackendStatusView {
+            external_addr: Some("ws://203.0.113.7:4041".into()),
+            ..backend()
+        };
+        let rows = pairing_commands(&b);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, PairScope::Lan);
+        assert_eq!(rows[1].0, PairScope::Internet);
+        assert!(rows[1].1.ends_with("ws://203.0.113.7:4041"), "{}", rows[1].1);
+
+        // Same address twice is one line: two rows carrying an identical
+        // command is not a choice, it is a rendering bug wearing one.
+        let same = BackendStatusView {
+            external_addr: Some("ws://192.168.1.10:4041".into()),
+            ..backend()
+        };
+        assert_eq!(pairing_commands(&same).len(), 1);
+    }
+
+    /// Nothing to join, nothing to print. Both halves, because they fail
+    /// differently: a stopped node refuses the caller, a stopped listener has no
+    /// address to give — and either way an instruction that cannot work is worse
+    /// than an absent row.
+    #[test]
+    fn a_node_that_is_off_or_not_listening_offers_no_pairing_line() {
+        let off = BackendStatusView { signaling_node: false, ..backend() };
+        assert!(pairing_commands(&off).is_empty(), "the rendezvous is off");
+
+        let silent = BackendStatusView { ws_addr: None, ..backend() };
+        assert!(pairing_commands(&silent).is_empty(), "nothing is listening");
+
+        let blank = BackendStatusView { ws_addr: Some(String::new()), ..backend() };
+        assert!(pairing_commands(&blank).is_empty(), "an empty address is not an address");
+    }
+}
