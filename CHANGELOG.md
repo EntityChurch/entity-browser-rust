@@ -493,6 +493,33 @@ and a profile from `0.9.0` comes back without a migration.
 
 New in this release, or newly stated:
 
+- **A tab can stop responding entirely, and nothing tells you it has.** Seen a
+  small number of times and not reproducible on demand: every control stops
+  answering — buttons, links, the in-app refresh — while the page still scrolls
+  and no message appears. Closing the tab and opening a new one recovers it
+  completely, and **nothing is lost**: your content lives in the browser's
+  durable storage, not in the page. What we can state is what it is *not* — the
+  program did not crash. The shell records a fault where one occurs, and in the
+  case we examined it correctly recorded none. The likely shape is the drawing
+  loop being blocked by work that never finishes, which raises no error and so
+  trips none of the three detectors this release ships. **The first fix is to
+  make it reportable rather than to guess at the cause:** the condition already
+  emits an internal signal many times a second and nothing yet reads it. Until
+  then, if a tab stops answering, close it and open a new one.
+- **System Recovery displays a pinned name registry as `[object Object]`.** One
+  field on the recovery screen's routing card shows a placeholder instead of the
+  registry a deployment has pinned. Display only, on that screen only — the pin
+  itself is read and honoured correctly, and every other field on the card is
+  right. It is recorded rather than fixed in place because the recovery screen
+  ships inside the application shell, and editing that at the release boundary
+  trades a verified artifact for an unverified one.
+- **A publisher who carries no feed can still be followed, and the refusal is
+  phrased for us rather than for you.** Following costs nothing and is
+  reversible, so it is not gated on checking first — which means the feed panel
+  is where you find out. It reports the failure accurately and in our own
+  vocabulary, naming the two internal lookups that came up empty instead of
+  saying plainly that this publisher does not publish a feed at their origin.
+  The state is correct; the sentence is not yet written for the reader.
 - **A post you can read is not necessarily a post you can find.** The feed lists
   publishers this deployment already routes to, and lets you paste a peer id for
   anyone else. There is no mechanism for learning that a publisher exists whom

@@ -300,6 +300,34 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   had read since it was written. **When a fix does not take, check what the mechanism it leans on
   is actually comparing** — `find_open`'s two operands were right there and one of them was a
   constant.
+- ⭐⭐ **THE BINDING SLOT TOOK AN ADDRESS, AND THE BOOT GUARD THEN BLAMED THE PEER — found in
+  production 2026-09-22, and it is the THIRD instance of subject-vs-binding.** Switching the startup
+  kind **site → window** in Settings carries the current peer over — and on a Site surface that peer
+  is `cfg.home_site.peer_id`, i.e. **the publisher** (`views/settings/model.rs:281`, written into
+  `BootSurface::Window { peer_id, … }` at `:341` with `target: None`). Boot then refuses it at
+  `app.rs:2421`, `!peer_manager.peer_ids().contains(target)` — **locally-hosted peers only** — and
+  falls back to chrome. A foreign publisher can never be in that list, so the guard is
+  **structurally unsatisfiable** for the value Settings just wrote. Measured: `peer_count = 1`,
+  `roster = 0`, sole peer `2KBppy6W…`, target `2KLoskzr…`.
+  ⇒ ***a window's bound peer is the store it READS; the subject is what it is AIMED at.***
+  `BootSurface::Window` already carries `target` from the `open_target` work and Settings sets it to
+  `None` while putting the address in the binding. `views/registry_browser/output.rs:open_target` is
+  the instance already written down (*"a real window, a plausible title, an empty rail"*); this one
+  is worse only because it is durable. **Carrying the peer across chrome↔site is correct** — there it
+  means *whose site*; into window it means *whose local store*, and the same variable has silently
+  changed referent.
+  ⚠ **The message is a second defect and it is the one that costs the diagnosis.** *"targets a peer
+  that no longer exists"* is a claim about **local hosting** dressed as a claim about **the peer** —
+  and `2KLoskzr…` had not gone anywhere: the same boot logs `registered deployment-config origin
+  target_peer = 2KLoskzr… outcome = Unchanged` and names it `home_peer`. Two sessions read that line
+  as a dead peer. ⇒ **when a guard refuses, its message must name the guard's own scope, not the
+  value's validity.** The refusal is also `tracing::warn!`-only, so a surface the user explicitly
+  chose is discarded with nothing on screen.
+  **Why no gate saw it:** the declared path writes `peer_id: String::new()`
+  (`deployment_config.rs:1215`, the system sentinel), so every fixture and every fresh profile takes
+  the arm that works; `"targets a peer that no longer exists"` has **zero hits in `tests/`**. Backlog
+  `B-19`. **Do not fix by widening the guard to accept foreign peers** — the window genuinely reads a
+  local store.
 
 ## State, subscriptions & change detection
 
@@ -6384,6 +6412,27 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   the tree on every boot, so the re-derivation path AP30 demands is "boot again". Keep both
   properties if you extend it. Anything added here is rendered verbatim with no redaction, so
   it must stay public routing information: peer ids, site ids, timestamps. **No secrets, ever.**
+- ⭐⭐ **A HANDLER THAT DEFERS TO ANOTHER HANDLER IS A CONTRACT NO COMPILER CHECKS, AND OURS WAS
+  FALSE FOR AS LONG AS BOTH HAVE EXISTED — measured 2026-09-22.** The WASM-load auto-retry
+  (`index.html:1374`) listens on **`unhandledrejection` only**. Trunk 0.21.14 emits
+  `const wasm = await init({ module_or_path: … })` — a **top-level await** — and the HTML spec reports
+  a TLA rejection through *report an exception*, i.e. the **`error`** event. Measured in Firefox 149
+  with a control: `tla.html` → `error 1 / rejection 0`; the same rejection without top-level await →
+  `error 0 / rejection 1`. **So the retry has never fired for a real WASM load failure**, on the
+  browser or on WebKitGTK, which is the runtime its own doc comment says it was written for.
+  ⛔ **The expensive part is the deferral, not the missed event.** The dead-instance detector *does*
+  catch it (`:1572`), classifies it `pre-start`, and returns — on the written grounds (`:1530-1535`)
+  that *"an error belongs to the WASM-LOAD auto-retry one block up, which **owns that failure and
+  already handles it**."* **The one handler that sees the event defers to the one that cannot see
+  it**, and the sentence asserting the hand-off is what stops anyone checking. The *"Try Again"*
+  button goes with it: `loading-retry` is unhidden only at `:1393`, inside the handler that never
+  runs. ⇒ ***when a comment says another handler owns a failure, go and read what that handler
+  LISTENS FOR*** — this repo already teaches *name the failure your reporter cannot report*; the new
+  shape is a reporter that names it correctly and hands it to a deaf sibling.
+  ⚠ **And the coupling is to a GENERATED artifact.** `module_or_path` appears nowhere in our source —
+  trunk writes that bootstrap — so the shape can change under us on a toolchain bump with nothing in
+  our tree moving and no gate anywhere: `entity_browser_wasm_retry`, `"WASM load failed"` and
+  `"Auto-retrying"` return **zero hits** in `tests/` and `tools/`. Backlog `B-20`.
 
 ## Localization, copy & the operator surface
 

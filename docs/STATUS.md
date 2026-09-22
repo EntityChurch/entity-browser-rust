@@ -197,6 +197,34 @@ The durable form is keystone's: cite **content**, not commits.
 Verified against the tree on 2026-08-23; items that had closed are struck rather than silently
 dropped, because a backlog that only grows is not being read.
 
+**Open field reports — found during release verification, 2026-09-22.** All three are recorded in
+the release notes under *Known limitations*; none is in the compiled application, and none changed
+what shipped.
+- **A tab that stops responding, with no report from anything.** Every control dead, the page still
+  scrolling, no message. Not reproducible on demand; recovered completely by closing the tab.
+  **Established:** the program did not crash — the shell's fault record is written only when one
+  occurs, is never cleared, and correctly held nothing for the affected profile, so the negative is
+  real rather than an artifact of the later reload. **Not established:** the cause. The shape that
+  fits is the drawing loop blocked on work that never completes, which raises nothing and is
+  invisible to all three detectors: the crash reporter needs a raised fault, the frozen-frame
+  watchdog takes its heartbeat *before* the frame runs and so keeps beating through the condition,
+  and the internal skip signal is emitted every frame and consumed by nothing. **Sequenced fix:
+  report it first, diagnose second** — make the skip signal durable and surface it on the same
+  plain banner the crash reporter already uses, then make the watchdog's heartbeat mean *a frame
+  rendered*, then hunt the blocking await. The first step is the only one that would have produced
+  evidence for the report that opened this item.
+- **The recovery screen shows a pinned name registry as a placeholder.** The deployment document
+  carries the pin as a structured value and the screen renders it as text. Display only, one field,
+  on the one screen designed to work when the application does not — which is why it is written
+  down rather than shrugged at. Fixing it edits the application shell, so it is a release-boundary
+  decision and not a free change.
+- **Following a publisher who carries no feed is not prevented, and the refusal reads as a
+  diagnostic.** The state reported is correct and the underlying limit is real; the sentence names
+  two internal lookups instead of telling the reader that this publisher publishes no feed at their
+  origin. Whether the offer should be checked before it is made is open — checking costs a request
+  per publisher, and following is cheap and reversible, so the honest answer may be to keep the
+  offer and fix the words.
+
 **Quick wins**
 - `inspect tap` shell verb — ~30 LOC shortcut for `open Path Tap`; the last open item in the
   inspect verb set (the other 7 sub-ops shipped).
