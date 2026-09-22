@@ -3311,8 +3311,23 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   **Invisible locally** (a fresh container has no cache) and not noticeable the day you set it —
   you notice the first time you need to correct something. Now: immutable **only** for `/content/`
   and for `name-<8+ hex>.wasm|.js` (trunk stamps the hash into the name, so a rebuild is a new
-  URL); everything else `no-store`. The same rule is duplicated deliberately in `named_site.rs`'s
-  test server so the config an operator copies and the server our tests trust cannot disagree.
+  URL); everything else `no-store`. The same rule is duplicated in `named_site.rs`'s test server
+  so the config an operator copies and the server our tests trust cannot disagree.
+  - **THEY DISAGREE. Audited 2026-08-25: the rule has FOUR expressions and no two are the same** —
+    `cors-serve.py` (`"/content/" in path`, on the raw target *including the query*),
+    `app_server.rs` (`starts_with("/content/")`, query stripped), `named_site.rs`
+    (`contains("content/")`, **no leading slash**), and the Cloudflare recipe in
+    `PUBLISHING-QUICKSTART.md` §6.2 (`starts_with`). The hash tests differ too: two require the hex
+    run to reach the extension, `named_site.rs` does not. **The sentence above was written as a
+    guarantee and was never an enforced one** — each implementation passes its own tests, which is
+    exactly why the drift is invisible. Live consequences both directions: a site with a `content/`
+    directory (Hugo, Zola and Lektor all name their source tree that) gets **mutable HTML pinned for
+    a year** under the substring rules, and a `--prefix` deployment's entire content store —
+    `/{prefix}/content/…`, which `make federation` really emits — is **under-cached** under the
+    prefix rules. Measured zero live instances of the first across every published tree on the box;
+    92 files of the second in `dist-federation`. Full audit:
+    `docs/status/REVIEW-2026-08-25-cache-classification-and-the-service-worker.md`.
+    **Two expressions of one rule that can disagree eventually do — and four of them already have.**
   **The general shape: when a policy enumerates the exceptions and defaults the rest to the unsafe
   value, every artifact added later inherits the unsafe value silently.** And note what could not
   catch it — every gate we own runs against a server with no cache in front of it.
