@@ -160,6 +160,24 @@ a stated recovery path rather than an implied one. Still a **research preview**.
 
 ### Fixed — content, publishers and caches
 
+- **Opening a publisher you had just looked up made them unreachable, for good.**
+  Look a name up in the Registry Browser, press *Open*, and — on a domain that
+  serves its own publisher, which is the ordinary arrangement — that publisher
+  vanished from the whole profile. Their feed reported that the deployment did
+  not know where they were hosted; the site list went from their sites to *"No
+  sites yet"*, on the same load that had just fetched every one of those sites'
+  manifests. The content was on your device the entire time; what was lost was
+  the record of **where** the publisher lives. Reloading did not help, and
+  nothing in the application would ever have repaired it: the record is treated
+  as a choice *you* made, so the deployment's own declaration is deliberately
+  not allowed to overwrite it.
+
+  The cause was one comparison. An empty origin means *the same place this
+  application is served from* — it is what a single-domain deployment publishes
+  — and one reader treated it as *no origin recorded at all*, so the record was
+  written and then could not be seen. Three distinct situations now stay
+  distinct: nothing recorded, something recorded we cannot read, and an origin
+  recorded as *here*.
 - **A republished app kept serving the old bytes, indefinitely.** Any copy of a
   publisher's content held on disk was treated as current merely because it was
   present, so no request was issued and no cache anywhere downstream got a

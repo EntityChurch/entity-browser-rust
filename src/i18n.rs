@@ -386,26 +386,6 @@ pub const EN: &[(&str, Message)] = &[
     ("status.granted", Message::Simple("granted")),
     // Status-bar durability label (capitalized, sentence position — distinct
     // from status.saved "saved" used as an inline chip).
-    // Status-bar gauges (DESIGN-2026-09-16). The braille itself is aria-hidden,
-    // so these labels are the ONLY thing a screen reader gets — they say the
-    // reading in words, never "graph".
-    ("statusbar.smoothness", Message::Simple("Smoothness: {ms} ms per second waiting")),
-    (
-        "statusbar.smoothness.tip",
-        Message::Simple(
-            "How much of each second this tab was held past one frame — the time taps and keys waited.",
-        ),
-    ),
-    ("statusbar.drawing", Message::Simple("Drawing: {ms} ms per second")),
-    (
-        "statusbar.drawing.tip",
-        Message::Simple("The part of the held time this app spent drawing its own windows."),
-    ),
-    ("statusbar.top_app", Message::Simple("{app}: {ms} ms per second, reported by the app")),
-    (
-        "statusbar.top_app.tip",
-        Message::Simple("The busiest app that reports its own work. Most apps report nothing."),
-    ),
     ("statusbar.saved", Message::Simple("Saved")),
     ("statusbar.not_saved", Message::Simple("Not saved")),
     // Inline on/off state words (system-peers posture line).
@@ -1228,13 +1208,6 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Show the site toggle in the status bar"),
     ),
     ("settings.show_inspector", Message::Simple("Show inspector panel")),
-    ("settings.status_gauges", Message::Simple("Show performance gauges in the status bar")),
-    (
-        "settings.status_gauges.hint",
-        Message::Simple(
-            "Turning these off stops the measuring, not just the drawing. The window and peer counts stay.",
-        ),
-    ),
     (
         "settings.auto_connect",
         Message::Simple("Auto-connect to known peers on startup"),
@@ -1359,7 +1332,7 @@ pub const EN: &[(&str, Message)] = &[
         "chat.reach_no_reflector",
         Message::Simple(
             "No reflector is set up, so this app can only reach devices on your local \
-             network. Add one on the rendezvous node you meet through.",
+             network. Add one on the connector you rendezvous through.",
         ),
     ),
     (
@@ -1373,7 +1346,7 @@ pub const EN: &[(&str, Message)] = &[
         "chat.reach_no_direct_path",
         Message::Simple(
             "This network needs a relay — neither device can be reached directly. \
-             Add a relay on the rendezvous node you meet through.",
+             Add a relay on the connector you rendezvous through.",
         ),
     ),
     ("window.chain_trace", Message::Simple("Chain Trace")),
@@ -1894,19 +1867,109 @@ pub const EN: &[(&str, Message)] = &[
         ),
     ),
     (
+        // The header over the follow-by-id box, the follow list and the
+        // gatherers — everything that CONFIGURES the feed rather than being it.
+        "feed.manage",
+        Message::Simple("Manage sources"),
+    ),
+    (
         "feed.hint",
+        // ⭐ **Both routes, and the browse one first.** This said *"Follow a
+        // publisher by peer id"*, which described the escape hatch as the way
+        // in — on a surface where a visitor who has just arrived at a domain has
+        // no peer id to paste. The second sentence is untouched and is the
+        // valuable half.
         Message::Simple(
-            "Follow a publisher by peer id. Every post is checked against that \
-             publisher's own key, and one that cannot be checked says so.",
+            "Read any publisher this deployment knows, or follow one by peer id. \
+             Every post is checked against that publisher's own key, and one that \
+             cannot be checked says so.",
         ),
     ),
+    ("feed.known", Message::Simple("Publishers you can reach")),
+    (
+        "feed.no_known",
+        // Never *"this deployment knows nobody"* — an empty origin registry is a
+        // fact about this profile's routing, not a claim about the world.
+        Message::Simple(
+            "This profile has no route to any publisher yet. Follow one by peer id below.",
+        ),
+    ),
+    ("feed.known.own", Message::Simple("you")),
+    (
+        // Translators: this filters the posts already on screen — it searches
+        // nothing and asks nobody. Prefer a word that means *narrow what is
+        // shown* over one that means *search*, which would promise a reach this
+        // control does not have.
+        "feed.filter_placeholder",
+        Message::Simple("Filter these posts"),
+    ),
+    (
+        // Shown in place of the posts when a filter matches none of them.
+        // Translators: it must not read as *"this publisher has posted
+        // nothing"* — the posts are there and the filter is hiding them, and
+        // those two sentences send a person to opposite conclusions.
+        "feed.filter_no_match",
+        Message::Simple("No post here matches that. Clear the filter to see them all."),
+    ),
+    // S7's header row. Reused wording where the catalog already has it would be
+    // wrong here — a column header is a noun naming a column, not the sentence
+    // a button carries.
+    ("feed.known.col.publisher", Message::Simple("Publisher")),
+    ("feed.known.col.relation", Message::Simple("Relation")),
+    ("feed.known.col.actions", Message::Simple("Actions")),
     ("feed.peer_placeholder", Message::Simple("peer id")),
     ("feed.follow", Message::Simple("Follow")),
     ("feed.unfollow", Message::Simple("Unfollow")),
+    // The browse row's Open control. It used to be captioned with the peer id
+    // itself — 45 characters of identifier as a button label, which could
+    // neither be read nor selected to copy.
+    ("feed.read", Message::Simple("Read")),
+    // ⭐ The panel heading, replacing a peer id used as a section title.
+    // Translators: these name *what this publisher is to the person reading*,
+    // because this system has no display name for a publisher and may not
+    // invent one. Keep them short — the full identifier is rendered immediately
+    // below, and these sit above it as the orienting line.
+    //
+    // ⛔ **There is no third key here and that is the catalog's own rule
+    // working.** The generic case reuses `feed.known.col.publisher`, because
+    // "Publisher" already has a key and one English word gets one key — a
+    // second is drift with a translator on the other end of it, which
+    // `i18n-locale-check` caught the moment it was minted (Hungarian rendered
+    // the two as `Kiadó` and `Közzétevő`). `feed.panel.you` is "You" rather than
+    // "Your feed" for the same reason pointed the other way: `feed.compose.heading`
+    // is already "Your feed", and the two would have sat on ONE screen naming
+    // different things — what is in your tree, versus whose feed you are
+    // reading over a road.
+    ("feed.panel.you", Message::Simple("You")),
+    // ⭐ **What following does, beside the button that does it.** Translators:
+    // the load-bearing half is the SECOND clause. The first says where the
+    // record goes; the second exists because every comparable product means
+    // something stronger by this word — a notification, a subscription, a
+    // background pull — and a person who assumes any of those has been misled
+    // by a button we drew. Keep the limit explicit; do not soften it into
+    // *"updates when you refresh"*, which reads as a promise about timing
+    // rather than a statement about who is told (nobody).
+    (
+        "feed.follow.meaning",
+        Message::Simple(
+            "Following saves them to your own device, so this feed reads them each time you \
+             refresh. Nobody is notified, and nothing is downloaded in the background.",
+        ),
+    ),
     ("feed.following", Message::Simple("Following")),
     (
         "feed.no_follows",
         Message::Simple("You are not following anyone yet."),
+    ),
+    // ⛔ **Two states, two sentences.** *Nobody has been chosen* and *there is
+    // nobody to choose* are different facts, and the first sentence is wrong
+    // advice in the second case: it says "above" on a screen where the list
+    // above is empty and has just said to follow somebody below. Translators:
+    // keep `nothing_to_read` free of any direction — the list immediately above
+    // it already says what to do, and a second instruction can only disagree.
+    (
+        "feed.nothing_to_read",
+        Message::Simple("Nothing to read yet."),
     ),
     (
         "feed.nobody_selected",
@@ -2031,6 +2094,58 @@ pub const EN: &[(&str, Message)] = &[
         "feed.attr.bad_signature",
         Message::Simple("unsigned — the signature does not verify"),
     ),
+    // ⛔ `FEED-R21` is a **MUST NOT**: a conformant application MUST NOT present
+    // removal as deletion. §7.5 also says where this belongs — *"at the moment
+    // of the action rather than in a help page"* — and supplies the wording,
+    // which is taken here almost verbatim because it is the honest sentence and
+    // because a paraphrase is where the promise creeps back in. Translators: the
+    // second clause is the load-bearing one. There is no global takedown and no
+    // protocol operation reaches into another peer's store, so any rendering
+    // that reads as *erased*, *deleted* or *destroyed* is non-conformant, not
+    // merely loose.
+    (
+        "feed.compose.removal_is_unpublication",
+        Message::Simple(
+            "Removed from your feed — people who already have it still have it.",
+        ),
+    ),
+    ("feed.compose.heading", Message::Simple("Your feed")),
+    ("feed.compose.post", Message::Simple("Post")),
+    ("feed.compose.placeholder", Message::Simple("Write something")),
+    ("feed.compose.remove", Message::Simple("Remove")),
+    // Translators: a confirmation, and only that. It said *"Posted. Anyone
+    // connected to you can read it."* — true, and a standing property of having
+    // a feed at all rather than news about this post, so it was being restated
+    // at the reader on every single press. Where a post reaches is said once, in
+    // `feed.hint`. Keep this to the acknowledgement.
+    ("feed.compose.posted", Message::Simple("Posted.")),
+    ("feed.compose.empty", Message::Simple("Nothing to post.")),
+    // Translators: this is not a failure the reader can retry or type their way
+    // out of — the profile does not hold the signing key for this peer, so it
+    // cannot author as them. Avoid wording that suggests trying again.
+    (
+        "feed.compose.not_our_peer",
+        Message::Simple("You cannot post as this peer — this profile does not hold its key."),
+    ),
+    // Translators: NOT a refusal — the composer is right below this sentence and
+    // works. The reader may post, the post is genuinely theirs and is signed,
+    // and the one thing they need to know first is that it lives in this tab
+    // only and goes when the tab closes. This browser tab is running on a
+    // throwaway identity because another tab already has this profile open, or
+    // because the browser is not storing anything; both causes are named because
+    // we cannot tell which it is. Do NOT translate this as a key problem, a
+    // permission problem, or anything that reads as "you cannot do this".
+    (
+        "feed.compose.session_identity",
+        Message::Simple(
+            "This tab is running on a temporary identity — another tab already has \
+             this profile open, or this browser is not storing anything. You can \
+             post, and it is yours and signed, but it lives in this tab only and \
+             goes when you close it.",
+        ),
+    ),
+    ("feed.compose.refused", Message::Simple("That post could not be written.")),
+    ("feed.compose.no_posts", Message::Simple("You have not posted anything yet.")),
     (
         "contentstream.hint",
         Message::Simple(
@@ -2099,12 +2214,6 @@ pub const EN: &[(&str, Message)] = &[
     // and the message names the reload, because the row takes effect for
     // *reaching* people only on the next load [AP22].
     ("connector.this_desktop", Message::Simple("This desktop")),
-    // The node a browser was handed by the page it loaded — the app server's
-    // `?webrtc_node_peer=…` redirect. A real row for the same reason the one
-    // above is: it is listed, selectable and removable, and until 2026-09-16 it
-    // was none of those. Named for what the user did ("I typed that machine's
-    // address"), not for a peer-id they have never seen.
-    ("connector.served_this_page", Message::Simple("The device serving this page")),
     (
         "connector.adopted_backend",
         Message::Simple(
@@ -2251,7 +2360,7 @@ pub const EN: &[(&str, Message)] = &[
              username and the credential are required.",
         ),
     ),
-    ("peerconn.connector_add", Message::Simple("Add rendezvous node")),
+    ("peerconn.connector_add", Message::Simple("Add connector")),
     ("peerconn.connector_use", Message::Simple("Use")),
     ("peerconn.connector_in_use", Message::Simple("In use")),
     ("peerconn.connector_check", Message::Simple("Check")),
@@ -2275,7 +2384,7 @@ pub const EN: &[(&str, Message)] = &[
     ),
     (
         "peerconn.meet_needs_connector",
-        Message::Simple("Choose a rendezvous node first — a meet happens at one."),
+        Message::Simple("Select a connector first — a meet happens at a signaling node."),
     ),
     // The meet runs, and the peers it finds are real — but they will not be able
     // to reach back, because this peer has no §6.5 establisher. Worth saying at
@@ -2332,7 +2441,7 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.meet_no_node",
         Message::Simple(
             "Heads up: peers you meet will find you but won't reach you — no \
-             rendezvous node is set up. Add one under Rendezvous nodes, then reload \
+             rendezvous node is set up. Add one under Connectors, then reload this \
              page to become reachable.",
         ),
     ),
@@ -2371,22 +2480,17 @@ pub const EN: &[(&str, Message)] = &[
     ),
     ("peerconn.meet_start", Message::Simple("Meet")),
     ("peerconn.meet_stop", Message::Simple("Stop")),
-    // No counter. The poll count used to be here, climbing toward its bound with
-    // nothing to say what the bound meant; what a person waiting for a friend to
-    // press a button needs is roughly how long this goes on for.
     (
         "peerconn.meet_searching",
-        Message::Simple("Searching at {mode} via {node} — {left}"),
+        Message::Simple("Searching at {mode} via {node} — {polls}/{max}"),
     ),
-    ("peerconn.meet_time_minutes", Message::Simple("about {n} min left")),
-    ("peerconn.meet_time_under_minute", Message::Simple("under a minute left")),
     // The honest empty result, with the two things that have to be true for a
     // meet to work — otherwise "nobody there" reads as "this is broken".
     (
         "peerconn.meet_none",
         Message::Simple(
             "Nobody else was there. Both sides have to be searching at the same name, \
-             through the same rendezvous node.",
+             through the same connector.",
         ),
     ),
     ("peerconn.meet_unverified", Message::Simple("unverified claim")),

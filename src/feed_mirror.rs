@@ -76,6 +76,33 @@
 //! `DX-C6` and it inspects what a plan binds.
 //! *A sentence true at the layer everyone is thinking about and false at the
 //! layer nobody is reviews clean forever.*
+//!
+//! ## ⛔ Where the third hop stops being a file path — read this before wiring a live mirror
+//!
+//! `SYSTEM-DATA-EXCHANGE` v0.3 §2.2.1 rules both halves and **we satisfy both
+//! today, on the static road**: [`plan_mirror`] binds the carried signature at
+//! `/{author}/system/signature/{hex}` — rooted at the **signer**, never at the
+//! republisher — and `feed_fetch::OriginMirrorSource::get` resolves it at the
+//! **gatherer's** origin under the **author's** path, which are two separate
+//! arguments to `tree_bin_url` and always have been.
+//!
+//! It is easy because a gatherer projects a **directory**: `{out}/{A}/system/
+//! signature/{hex}` is a file the origin serves, so "ask B about A's namespace"
+//! is just a URL. **The moment a mirror is read over a live transport that
+//! becomes a dispatch**, and `ENTITY-CORE-PROTOCOL` §1.4 is the shape:
+//!
+//! ```text
+//! EXECUTE entity://{B}/system/tree  operation:"get"
+//!   resource: {targets: ["/{A}/system/signature/{hex}"]}
+//! ```
+//!
+//! **The handler URI names who you ask; the resource target names what you ask
+//! about.** The one thing to not do is the class §1.4 calls *"the single
+//! most-recurring cross-impl bug class"*: re-qualifying an already-absolute path
+//! under the peer being read from, which yields `/{B}/{A}/…` and an `Absent`
+//! that reads as *this gatherer carries no evidence*. `entity-workbench-go` hit
+//! it in two functions at once. Arch's `ROUTING-2026-09-17-a` §1 is the ruling;
+//! nothing here is wrong today, and this is filed against the day it could be.
 
 // `publish --gather=<peer>@<dir>` reaches the plan half since 2026-09-12
 // (`publish_axes::MirrorAxis`) and `feed_fetch::OriginMirrorSource` reaches the
@@ -1418,6 +1445,175 @@ mod tests {
                 "a limited read returned an entry from the OLDEST page — the walk is \
                  ascending, so a reader asking for what is new gets what is oldest"
             );
+        }
+    }
+
+    // ── `FEED-13`'s two arms that were a doc claim ──────────────────────────
+    //
+    // Arch's `ROUTING-2026-09-17-c` §4 states the vector as three assertions:
+    // **(a)** the head's encoded size does not change with the member count ·
+    // **(b)** every sealed page is byte-identical before and after ·
+    // **(c)** a second reader fetches the head and one page and stops. Only
+    // **(b)** was gated — `a_later_gather_does_not_move_a_sealed_page`.
+    //
+    // ⭐ **(a) was a sentence in this module's own doc** (*"the head is
+    // fixed-size now whatever the size of the view it names"*) and **(c) was
+    // asserted on the number of ENTRIES returned**, which a reader that walked
+    // every page and then truncated satisfies exactly. *A claim in a doc comment
+    // and a claim a reader could be wrong about are the two places this repo
+    // keeps finding an unmeasured MUST.*
+
+    /// **`FEED-13` (a) — `FEED-R29` measured on the bytes.**
+    ///
+    /// Membership does not live on the head, so two views of one subject by one
+    /// gatherer at one instant have **byte-identical** heads however many
+    /// entries each names. The old shape carried `entries` on the head; under it
+    /// these two differ by the difference in their membership, which is the
+    /// whole of what `FEED-R29` forbids — a reader polling a popular view paying
+    /// for the view every time it asks whether it moved.
+    ///
+    /// **Anti-vacuity is the second half and it is not decoration:** a head that
+    /// is identical because the two views are identical measures nothing, so the
+    /// gate asserts the membership genuinely differs *and* that the bytes
+    /// carrying it are on the page, where they belong.
+    #[test]
+    fn the_heads_encoded_size_does_not_follow_the_member_count() {
+        let (rows, author, _) = gathered_rows(40);
+        let gatherer = "2GathererPeerIdForThePagingGates";
+        let subject = thread(&author, rows[0].hash);
+        // One instant for both, because `gathered_at` is the one head field that
+        // legitimately moves between rounds — holding it still is what leaves
+        // the member count as the only variable.
+        const CLOCK: u64 = 1_757_000_999;
+
+        // Four members and forty, each on a single page: the page COUNT is held
+        // equal so that `current` and `oldest` are equal too, and the only thing
+        // left that could move the head is membership.
+        let small = plan_mirror(gatherer, &subject, &rows[..4], &[], CLOCK, &[], 4).unwrap();
+        let large = plan_mirror(gatherer, &subject, &rows, &[], CLOCK, &[], 40).unwrap();
+        assert_eq!(small.pages.len(), 1, "the fixture must hold the page count equal");
+        assert_eq!(large.pages.len(), 1, "the fixture must hold the page count equal");
+        assert_eq!(small.entry_count(), 4);
+        assert_eq!(large.entry_count(), 40, "a ten-fold difference in membership");
+
+        let small_head = small.record.to_entity().unwrap();
+        let large_head = large.record.to_entity().unwrap();
+        assert_eq!(
+            small_head.data, large_head.data,
+            "`FEED-R29`: a head of a 4-member view and a head of a 40-member view \
+             are the same bytes, or membership is on the head"
+        );
+
+        // …and the membership IS somewhere. The page is what grows.
+        let small_page = small.pages[0].to_entity().unwrap();
+        let large_page = large.pages[0].to_entity().unwrap();
+        assert!(
+            large_page.data.len() > small_page.data.len() * 4,
+            "the pages did not grow with the membership, so the heads being equal \
+             says nothing: small {} bytes, large {} bytes",
+            small_page.data.len(),
+            large_page.data.len()
+        );
+
+        // Across page COUNTS the head may move, and only by the page ordinal's
+        // own width: 40 members one to a page is 40 pages, so `current` goes
+        // from `0` (one CBOR byte) to `39` (two). That is the whole of the
+        // growth a conformant head is allowed, and it is why the claim is
+        // *"does not follow the member count"* rather than *"is constant"*.
+        let paged = plan_mirror(gatherer, &subject, &rows, &[], CLOCK, &[], 1).unwrap();
+        assert_eq!(paged.pages.len(), 40);
+        let paged_head = paged.record.to_entity().unwrap();
+        assert!(
+            paged_head.data.len() <= large_head.data.len() + 2,
+            "the head grew by {} bytes across a 1-page → 40-page view; only the \
+             page ordinal's own encoding may move",
+            paged_head.data.len() as i64 - large_head.data.len() as i64
+        );
+    }
+
+    /// **`FEED-13` (c) — counted at the source, not inferred from the answer.**
+    ///
+    /// §6.0a's read-down-and-stop is a claim about *what a reader fetches*, and
+    /// the assertion one reaches for — *it came back with three entries* — is
+    /// satisfied by a reader that fetches every page and then truncates. That
+    /// reader is conformant in its output and is exactly the one §6.2's cost
+    /// argument is about, so the only place the property is visible is the
+    /// source.
+    ///
+    /// ⚠ **The counter is scoped to `mirror_prefix()`**: the entry bodies and
+    /// their detached signatures come through the same [`MirrorSource`], and
+    /// counting those would measure the membership rather than the walk.
+    #[test]
+    fn a_reader_fetches_the_head_and_one_page_and_stops() {
+        let (rows, author, tree) = gathered_rows(9);
+        let gatherer = "2GathererPeerIdForThePagingGates";
+        let subject = thread(&author, rows[0].hash);
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9, &[], 3).unwrap();
+        assert_eq!(plan.pages.len(), 3, "a one-page fixture cannot measure a stop");
+
+        let mut inner = Origin::default();
+        inner.absorb(&author, &tree);
+        inner.take(&plan, gatherer);
+        let src = Counting::over(inner);
+
+        // A reader asking for one page's worth.
+        let read = block_on(read_mirror(&src, gatherer, &subject, 3)).expect("the walk reads");
+        assert_eq!(read.len(), 3, "the reader returned a page's worth");
+        assert_eq!(
+            src.walked(),
+            vec![subject.key(), subject.page_key(2)],
+            "`FEED-13` (c): the head and ONE page. Anything longer is a reader \
+             that walked the archive and truncated the answer"
+        );
+
+        // The control, and it is what makes the count above mean something: the
+        // rig can see further fetches, and a reader that wants the whole view
+        // makes them.
+        let src = Counting::over(src.into_inner());
+        let all = block_on(read_mirror(&src, gatherer, &subject, 100)).expect("the walk reads");
+        assert_eq!(all.len(), 9);
+        assert_eq!(
+            src.walked(),
+            vec![
+                subject.key(),
+                subject.page_key(2),
+                subject.page_key(1),
+                subject.page_key(0)
+            ],
+            "the whole view is the head plus every page, descending"
+        );
+    }
+
+    /// A [`MirrorSource`] that records which **mirror** keys were asked for, in
+    /// order. Wraps rather than replaces [`Origin`], so the gate above measures
+    /// the walk against the same double every other mirror gate uses.
+    struct Counting {
+        inner: Origin,
+        walked: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Counting {
+        fn over(inner: Origin) -> Self {
+            Self { inner, walked: Default::default() }
+        }
+        fn walked(&self) -> Vec<String> {
+            self.walked.borrow().clone()
+        }
+        fn into_inner(self) -> Origin {
+            self.inner
+        }
+    }
+
+    impl MirrorSource for Counting {
+        fn get(
+            &self,
+            peer: String,
+            relative_key: String,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Entity>, String>>>> {
+            if relative_key.starts_with(crate::feed::mirror_prefix()) {
+                self.walked.borrow_mut().push(relative_key.clone());
+            }
+            self.inner.get(peer, relative_key)
         }
     }
 }

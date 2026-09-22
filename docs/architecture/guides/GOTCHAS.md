@@ -4985,6 +4985,62 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   never reached the other five (AP44). They are on OS-picked ports so the collision risk is low, but
   the *readiness* half is ungated.
 
+- ⭐⭐ **THE FIX FOR THAT HAD AN ESCAPE HATCH THAT DID NOT WORK, AND THE RIG NEXT DOOR DID NOT
+  REFUSE AT ALL — IT DEMOLISHED (2026-09-17, three defects, one family).** The entry above closed
+  `e2e-worker`'s port sharing with `refuse_if_port_is_already_served`. Verifying the WebRTC rig
+  against a **live** run of that suite turned up all three of these, and none was visible from
+  reading either file.
+  **(1) The refusal's way out was never wired.** `make e2e-worker E2E_HTTP_PORT=8490` sets a MAKE
+  variable; the suite runs via `$(call RUN,…)` and the Makefile forwarded `E2E_WEBDRIVER_URL` and
+  `E2E_UNTIL` into the container and **not the two port variables**, so the test binary read
+  `std::env::var("E2E_HTTP_PORT")`, found nothing, and took its 8092 default. Measured on another
+  seat's in-flight run: they had passed `E2E_HTTP_PORT=8490` and had a child
+  `python3 -m http.server 8092 --directory dist`. **They had done everything right.** ⇒ ***a guard
+  whose escape hatch does not work is not a guard, it is a dead end*** — you are refused, told how
+  to move the port, and the remedy is a no-op. AP37 pointed at a fix's own remedy: the invocation
+  was printed by the refusal itself and recorded in the entry above, and nobody had run it.
+  `E2E_PORT_ENV` forwards both; verified by `make -n` showing the `-e` flags appear with the
+  override and **not** without it, so the default path is unchanged.
+  **(2) The WebRTC rig did not share a port space, it DEMOLISHED one.** Every `make e2e-webrtc-*`
+  target opens with `rung1_repro.sh teardown`, and that teardown removed the containers by fixed
+  name (`rtc-a`/`rtc-b`), removed three fixed networks, swept the node and dist server by fixed
+  port, and deleted a shared node keypair at a fixed `/tmp` path. **Six worktrees on this box.** So
+  a second seat starting any WebRTC gate destroyed the first seat's in-flight run, and the victim
+  saw a spike failure — a rig collision wearing a product defect's clothes. Closed with `RTC_SLOT`
+  (one knob deriving every container, network, port and `/tmp` path — the `GRID_PORT` precedent,
+  where moving only the HTTP port left the ZeroMQ bus colliding) **plus** a pid lock that refuses.
+  **Both halves are needed: a knob nobody sets protects nobody, and a refusal with no slot to move
+  to is a stop sign.** Slot 0 is byte-identical to every prior invocation and
+  `tools/webrtc-slot-check.sh` (in `make lint`) pins that, so a later tidy cannot quietly move it.
+  **The lock carries a PID and not "are the containers up"**, because a FAILED run deliberately
+  leaves its containers running for inspection — refusing on leftovers would refuse every run
+  after a failure, which is how a guard gets switched off rather than fixed.
+  ⭐ **(3) AND FIXING (2) REPRODUCED IT ONE PORT OVER, AGAINST A DIFFERENT GATE.** Slotting the
+  *names* left the teardown's sweep matching on `http.server $DISTPORT` — and slot 0's dist port
+  **is 8092, `e2e-worker`'s default**. So this rig terminated that suite's staging server, measured
+  against the live run above. ⇒ ***the entry above says an "is it up?" probe cannot answer "is it
+  OURS?"; a pattern sweep is the same sentence with a destructive verb.*** Fixed by recording what
+  we start and stopping only that, re-checking the live `/proc/<pid>/cmdline` first because pids are
+  reused. **Order is the whole thing: clear YOUR OWN leftovers, then refuse whatever is left, because
+  whatever is left is by definition not yours.** And dropping a sweep has a consequence you must
+  close in the same change — without it python fails to bind and the rig serves **the stranger's
+  bytes to both browsers**, which is this entry's own contamination one gate over; hence the
+  refusal, hoisted to a preflight so a busy port costs **0.44 s instead of ~40 s of containers
+  built and discarded**.
+  ⚠ **Two method lessons, both from getting it wrong first.**
+  **A guard verified against a run that had already finished measures nothing** — the first
+  "demolition test" ran a teardown against slot 0 while a gate was *notionally* in flight; the gate
+  had completed seconds earlier and its own trailing teardown had cleaned up, so an empty slot was
+  torn down and the guard was never consulted. That is the third cause of a passing neuter (*the
+  condition was not present*), and the fix is to do the whole thing in one command that **asserts
+  the in-flight state** — lock pid alive AND containers up — before it acts.
+  **And a background `sleep &` inherits bash's EXIT trap**, so ending the sleeper ran `rm -rf
+  "$TMPD"` in the child and the check's stale-lock row went green on a lockfile that was never
+  written: *"a stale lock does not refuse"* was measuring *"no lock does not refuse"*. Caught by its
+  own anti-vacuity guard, which is the only reason it is in this entry rather than in the tree.
+  (`$(spawn_sleeper)` also hangs for the full sleep unless the child's stdout is redirected — a
+  command substitution waits on the pipe, not the pid.)
+
 - ⭐⭐ **`vocab-lint` READS A SIBLING SEAT'S WORKING COPY, SO "THE SIBLING MOVED" AND "THE SIBLING
   IS MID-EDIT" PRODUCE THE IDENTICAL RED — and one day apart it was each of them, on the same two
   rows (2026-09-15/16, `app/feed/mirror`, `app/feed/mirror-page`).** The gate resolves the other

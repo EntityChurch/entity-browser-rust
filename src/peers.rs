@@ -1078,10 +1078,10 @@ impl Sdk {
         Sdk::Direct(entity_sdk::PeerManager::new())
     }
 
-    /// Direct Sdk whose primary peer uses a caller-supplied keypair —
-    /// a **stable, reproducible** primary peer-id. Helper for
-    /// [`Peers::new_direct_with_keypair`].
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Direct Sdk whose primary peer uses a caller-supplied keypair — a primary
+    /// peer-id the **caller chose**, stable or fresh as it likes. Helper for
+    /// [`Peers::new_direct_with_keypair`], whose doc carries why the browser's
+    /// ephemeral arm needs this too.
     pub(crate) fn new_direct_sdk_with_keypair(keypair: entity_crypto::Keypair) -> Self {
         Sdk::Direct(entity_sdk::PeerManager::with_keypair(keypair))
     }
@@ -1186,11 +1186,24 @@ impl Peers {
     }
 
     /// Direct-mode constructor whose primary peer uses a **caller-supplied
-    /// keypair** instead of a freshly generated one — so the primary peer-id
-    /// is stable across runs. Used by the headless `content_site::publish`
-    /// path so a content publisher's static permalinks don't shift every run
-    /// (the publisher peer-id is the address). Native-only (publish is native).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// keypair** instead of a freshly generated one.
+    ///
+    /// Two callers, for two different reasons. The headless
+    /// `content_site::publish` path wants the primary peer-id **stable across
+    /// runs**, because a content publisher's static permalinks are addressed by
+    /// it. The browser's ephemeral arm ([`crate::app::EntityApp::new_wasm`])
+    /// wants the opposite — a fresh identity per session — and still has to mint
+    /// it here rather than let [`Self::new_direct`] generate one inside the SDK
+    /// constructor.
+    ///
+    /// ⭐ **An identity generated where the caller cannot see it is an identity
+    /// nobody holds.** `new_direct()`'s auto-generated primary is real, in
+    /// memory, and signing — and it is in neither durable drawer, so every
+    /// surface that asks *"may I author as this peer"* answers **no** about the
+    /// peer the session is definitionally running as. That is the 2026-09-16
+    /// composer defect one layer down (there the key was in the *other* drawer;
+    /// here it is in no drawer at all). Minting in the caller is what makes the
+    /// answer sayable: see [`crate::persistence::remember_ephemeral_identity`].
     pub fn new_direct_with_keypair(keypair: entity_crypto::Keypair) -> Self {
         Self::new_direct_with_sdk(Sdk::new_direct_sdk_with_keypair(keypair))
     }

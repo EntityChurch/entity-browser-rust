@@ -1543,4 +1543,143 @@ mod tests {
         }
         walk(&dir.join("content"), &want)
     }
+
+    /// The publisher this rig's name resolves to. Its own seed rather than a
+    /// sibling fixture's: two scenarios sharing a publisher identity makes a
+    /// failure in one ambiguous about which rig produced the tree on disk.
+    const REGISTRY_WALK_AUTHOR_SEED: [u8; 32] = *b"the-author-a-registry-names\0\0\0\0\0";
+
+    /// The registry that binds the NAME. Its own identity, because a registry
+    /// is a separate peer — and the pin a consumer holds is this peer's id,
+    /// never the publisher's.
+    const REGISTRY_WALK_SEED: [u8; 32] = *b"the-registry-that-names-a-peer\0\0";
+
+    /// The name the registry carries. A domain-shaped string because that is
+    /// what a real binding holds, and one nobody else's fixture emits.
+    const REGISTRY_WALK_NAME: &str = "author.example";
+
+    /// ⭐⭐ **THE SAME-ORIGIN DEPLOYMENT: one domain serving a registry, a
+    /// publisher's sites, and that publisher's feed — the shape that had no
+    /// browser rig anywhere, and the shape a production incident came out of.**
+    ///
+    /// This is [`emit_published_feed_fixture`]'s tree plus two things: a
+    /// `name_registry_pin` in the deployment document, and the registry's own
+    /// signed tree layered into the same out-dir (the registry emit is additive,
+    /// so it adds its peer's subtree and leaves the publisher's alone).
+    ///
+    /// **`@/` on the bind is the whole point.** It is what a single-domain
+    /// registry publish emits, and it is stored trimmed, so the origin the
+    /// binding carries is the empty string — this codebase's spelling of
+    /// *same-origin*. On 2026-09-17 that value made
+    /// `RegistryBrowserModel::open_in_site_browser` write an origin row that
+    /// `origins::decode_origin` read as **no row at all**, which un-named the
+    /// publisher for the whole profile, permanently, at `SOURCE_USER` priority
+    /// where boot deliberately refuses to repair it.
+    ///
+    /// ⇒ ***the one e2e gate that resolves a registry name is deliberately
+    /// CROSS-origin*** — `a_name_resolves_cross_origin_to_a_verified_page_in_a_browser`
+    /// carries a control specifically to stop its rig degrading into same-host,
+    /// which is the right design for what it measures and means its population
+    /// structurally excludes the ordinary deployment. A same-origin arm needed
+    /// its own rig; this is it.
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_registry_walk_fixture() {
+        let out = std::env::var("ENTITY_REGISTRY_WALK_OUT").unwrap_or_else(|_| "dist".to_string());
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-registry-walk-fixture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let posts = tmp.join("posts");
+        std::fs::create_dir_all(&posts).unwrap();
+        // Three posts, and the newest is the one the gate reads back by body.
+        // This rig's subject is the JOURNEY, not the walk — paging is
+        // `a_published_feed_reaches_…`'s job and duplicating 34 posts here would
+        // buy a slower gate and no new property.
+        for (i, body) in ["the oldest thing here", "a middle post", "THE-NEWEST-POST-MARKER"]
+            .iter()
+            .enumerate()
+        {
+            std::fs::write(
+                posts.join(format!("post-{i:02}.md")),
+                format!(
+                    "+++\ncreated_at = 2026-09-{:02}T09:00:00Z\ntitle = \"Post {i:02}\"\n+++\n{body}\n",
+                    10 + i
+                ),
+            )
+            .unwrap();
+        }
+
+        let author_hex = crate::vault_codec::seed_to_hex(&REGISTRY_WALK_AUTHOR_SEED);
+        let registry_peer =
+            entity_crypto::Keypair::from_seed(REGISTRY_WALK_SEED).peer_id().to_string();
+        let author_peer =
+            entity_crypto::Keypair::from_seed(REGISTRY_WALK_AUTHOR_SEED).peer_id().to_string();
+
+        // 1. The publisher: sites + feed + a deployment document that pins the
+        //    registry. The pin's origin half is omitted, which is same-origin —
+        //    the registry lives on this domain too.
+        assert_eq!(
+            crate::content_site::publish::run(&[
+                "publish".into(),
+                "--demo-sites".into(),
+                out.clone(),
+                format!("--identity-seed={author_hex}"),
+                format!("--ingest-feed={}", posts.display()),
+                "--deployment-config".into(),
+                "--set-home".into(),
+                "--surface=chrome".into(),
+                format!("--registry-pin={registry_peer}"),
+            ]),
+            std::process::ExitCode::SUCCESS,
+            "the publisher's publish failed, so there is nothing for a name to resolve to"
+        );
+
+        // 2. The registry, into the SAME out-dir. `@/` is the same-origin bind,
+        //    and it is the value this whole rig exists to put through the
+        //    product. `--issued-at` pins the clock so two cuts of this fixture
+        //    are byte-identical.
+        // **The registry verb is `run` here; the publish verb is named in
+        // full.** The two resolve different durable identities and parse
+        // different positionals, and handing one's argv to the other silently
+        // runs the wrong verb — caught the first time by publish's sites-axis
+        // refusal firing, which is that refusal earning its keep somewhere
+        // nobody designed it for.
+        //
+        // ⭐ **It lives HERE rather than beside the publish fixtures because
+        // `tools/publish-doc-check.py` scans `publish.rs` for every `"--flag`
+        // literal and holds it to the PUBLISH verb's documented flag table.**
+        // `--bind` and `--issued-at` are the registry's, so a registry fixture
+        // in that file reds the gate — correctly. The gate's subject is the
+        // publish verb's flag surface, so the fix is the factoring and not a
+        // row in somebody else's table.
+        let registry_hex = crate::vault_codec::seed_to_hex(&REGISTRY_WALK_SEED);
+        assert_eq!(
+            run(&[
+                "registry".into(),
+                out.clone(),
+                format!("--bind={REGISTRY_WALK_NAME}={author_peer}@/"),
+                format!("--identity-seed={registry_hex}"),
+                "--issued-at=1789000000000".into(),
+            ]),
+            std::process::ExitCode::SUCCESS,
+            "the registry publish failed, so the name cannot resolve"
+        );
+
+        // Every id comes out of the ARTIFACT side, not re-derived in the
+        // harness: the browser's belief comes from these bytes, so the gate's
+        // notion of who it is reading must come from the same place.
+        std::fs::write(
+            std::path::Path::new(&out).join("registry-walk-fixture.json"),
+            format!(
+                "{{\n  \"author\": \"{author_peer}\",\n  \
+                 \"registry\": \"{registry_peer}\",\n  \
+                 \"name\": \"{REGISTRY_WALK_NAME}\",\n  \
+                 \"newest_body\": \"THE-NEWEST-POST-MARKER\"\n}}\n"
+            ),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

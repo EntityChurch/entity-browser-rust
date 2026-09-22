@@ -554,6 +554,7 @@ mod wasm {
         seed
     }
 
+
     /// Every identity this profile holds the **authoring key** for.
     ///
     /// ⭐⭐ **THERE ARE TWO DRAWERS AND THE PROFILE'S OWN PEER IS IN THE SECOND
@@ -901,6 +902,94 @@ mod wasm {
             storage.set_item(IDB_TOMBSTONE_KEY, &remaining.join("\n")).ok();
         }
     }
+}
+
+thread_local! {
+    /// The **ephemeral primary** this session is running as, when it is
+    /// running as one — recorded by whoever mints it.
+    ///
+    /// ⭐⭐ **A THIRD IDENTITY, IN NO DRAWER, AND IT IS THE ONE A SECOND TAB
+    /// RUNS AS.** [`held_keypairs`] knows two drawers and both are
+    /// *durable*: the system seed and the `entity_peers` vault. The three
+    /// ephemeral `BootStorageStatus` arms — multi-tab secondary, IDB
+    /// unavailable, Worker→Direct downgrade — build their primary from a
+    /// keypair generated **inside the SDK constructor**, which is persisted
+    /// nowhere and returned to nobody. So the session holds that key in
+    /// memory and signs with it, while every storage-shaped lookup correctly
+    /// answers *"we do not hold it"* — and the composer told a person, in a
+    /// second tab, that their own profile did not hold its own key.
+    ///
+    /// It is deliberately **not** folded into `held_keypairs`, because that
+    /// function answers *"which identities did this profile save"* and the
+    /// honest answer for this one is *none*. It is a separate slot, not a
+    /// lesser one: what the separation buys is that a surface can say
+    /// **temporary** rather than **missing** (AP40), and that a durable key
+    /// still outranks it when both name one peer.
+    ///
+    /// ⭐⭐ **THE KEY, NOT ONLY THE ID — and the first cut of this slot held
+    /// the id on the reasoning that *"a slot holding a signing key is a slot
+    /// somebody eventually signs with"*.** True, and it is the wrong thing to
+    /// be protecting against: this session **is** that peer, signs every
+    /// message it sends with this key, and holds it in the SDK regardless. The
+    /// id-only slot bought no safety at all — the key is in the process either
+    /// way — and cost the one thing the identity is for. *Persistence is not
+    /// permission:* an ephemeral tree is still this peer's tree, and writing
+    /// an entry into it is the publish (see [`crate::feed_compose`]).
+    static SESSION_EPHEMERAL_PRIMARY: std::cell::RefCell<Option<Keypair>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Record the per-session primary identity — call this at the **mint**, not
+/// beside it.
+///
+/// A witness, not a notification (AP44): the one caller is the expression that
+/// generates the keypair, so a future ephemeral construction path cannot be
+/// added without going through it. There is no durable write — persisting this
+/// identity is exactly what the ephemeral arms must not do, and that is the
+/// whole of what *ephemeral* means here.
+pub fn remember_ephemeral_identity(keypair: &Keypair) {
+    let held = keypair.clone_inner();
+    SESSION_EPHEMERAL_PRIMARY.with(|c| *c.borrow_mut() = Some(held));
+}
+
+/// The per-session primary identity, or `None` when this session's primary is a
+/// durable one.
+///
+/// **Derived from the key**, never stored beside it — `roster::spawn_list_derived`'s
+/// rule, because an id read from anywhere but the key can drift from it.
+///
+/// `None` is the **common** answer and means *this session did not mint an
+/// identity* — never *we could not tell*, because the only thing that fills the
+/// slot is the mint itself.
+pub fn ephemeral_identity() -> Option<String> {
+    SESSION_EPHEMERAL_PRIMARY.with(|c| c.borrow().as_ref().map(|kp| kp.peer_id().to_string()))
+}
+
+/// The per-session primary's signing key.
+///
+/// Separate from [`ephemeral_identity`] so a caller that only needs to
+/// *recognise* the identity does not take a key it has no use for — but it is
+/// available, because the peer this session runs as may author in its own tree.
+pub fn ephemeral_keypair() -> Option<Keypair> {
+    SESSION_EPHEMERAL_PRIMARY.with(|c| c.borrow().as_ref().map(|kp| kp.clone_inner()))
+}
+
+/// Test-only: drive the witness directly.
+///
+/// The real filler is `EntityApp::ephemeral_primary`, which is
+/// `cfg(target_arch = "wasm32")` — so without this the `SessionOnly` arm of
+/// [`crate::feed_compose::authoring_key`] is reachable from no native test, and
+/// the lookup would be exactly the untested half that the pure decision was
+/// split out to protect. Clearing is part of it: a thread-local that only ever
+/// fills makes test order significant.
+///
+/// Takes the **keypair**, not an id, so a test cannot construct a session
+/// identity that could not have been minted — the arm authors, and an arm that
+/// authors needs a key to do it with.
+#[cfg(test)]
+pub fn set_ephemeral_identity_for_test(keypair: Option<&Keypair>) {
+    SESSION_EPHEMERAL_PRIMARY
+        .with(|c| *c.borrow_mut() = keypair.map(entity_crypto::Keypair::clone_inner));
 }
 
 // ---------------------------------------------------------------------------

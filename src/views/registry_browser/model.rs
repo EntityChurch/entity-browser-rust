@@ -665,4 +665,71 @@ mod tests {
              the click just resolved — the site will report as unreachable"
         );
     }
+
+    /// ⭐⭐ **THE SAME-ORIGIN BINDING — the shape every single-domain deployment
+    /// publishes, and the one this surface's tests did not contain.**
+    ///
+    /// Found in production on 2026-09-17: resolve a name, press *Open*, and the
+    /// publisher was **un-named for the whole profile, permanently**. The Feed
+    /// window said *"this deployment does not know where they are hosted"* and
+    /// the Site Browser rail said **"No sites yet"**, on the same boot that had
+    /// just cached all seven of that publisher's manifests. Two reloads did not
+    /// heal it, and nothing in the product could: the row this click writes is
+    /// marked [`SOURCE_USER`](crate::content_site::origins::SOURCE_USER), so
+    /// boot's adoption correctly refused to touch it —
+    /// `outcome = KeptUserOverride { theirs: "" }`, in the log, every time.
+    ///
+    /// The cause was one line in `origins::decode_origin`, which read a
+    /// **recorded** empty origin as *no record*. `""` is same-origin — this
+    /// codebase says so in four places and every URL builder already treats it
+    /// that way — so the write landed and its own reader could not see it.
+    ///
+    /// ⇒ ***the sibling above passes with the defect fully present, because its
+    /// fixture names a concrete host.*** `origin: Some("https://pub.example")`
+    /// is the one shape that cannot exhibit this, and it was the only shape
+    /// tested. *A test population you generated cannot contain the shape you are
+    /// missing* — and here the missing shape is not an encoding or another
+    /// implementation, it is **the ordinary deployment**: one domain serving its
+    /// own publisher, which is what `--bind=<name>=<peer>@/` emits and what
+    /// `/entity-deployment.json` means by `"origins": {"<peer>": ""}`.
+    ///
+    /// Asserted through `get_origin` **and** the roster, because the two
+    /// surfaces that went dark read different accessors: the Feed panel routes
+    /// through `get_origin` and both site rails enumerate `list_origins`.
+    #[test]
+    fn a_publisher_bound_same_origin_is_still_routable_after_the_open() {
+        let peers = Peers::new_direct();
+        let m = RegistryBrowserModel::new(1);
+        let target = ResolvedName {
+            name: "billslab.com".to_string(),
+            peer_id: "PUBPEER".to_string(),
+            // What a single-domain registry publish actually binds. `"/"` is
+            // the emitted spelling; it is stored trimmed, so this is the
+            // production value byte for byte.
+            origin: Some("/".to_string()),
+            association_committed: true,
+            name_checked: true,
+            revocation_checked: true,
+            expires_at_ms: 0,
+            clamped: None,
+        };
+
+        assert!(m.open_in_site_browser(&peers, &target).is_some(), "the open proceeds");
+        let bound_to = m.render_output(&peers).local_peer;
+
+        assert_eq!(
+            crate::content_site::origins::get_origin(&peers, &bound_to, "PUBPEER").as_deref(),
+            Some(""),
+            "a same-origin publisher was un-named by the click that opened them — \
+             the Feed window renders `no_route` about a publisher one relative URL away"
+        );
+        assert!(
+            crate::content_site::origins::list_origins(&peers, &bound_to)
+                .iter()
+                .any(|(p, _)| p == "PUBPEER"),
+            "the roster lost the publisher, so every surface that ENUMERATES rather \
+             than resolves goes dark too — this is the Site Browser's \"No sites yet\" \
+             over a store holding that publisher's manifests"
+        );
+    }
 }

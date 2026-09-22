@@ -162,6 +162,33 @@ pub const ROW_START: &str = "display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1
 /// [`ROW_START`] with vertical centring and no bottom margin.
 pub const ROW_INLINE: &str = "display:flex;flex-wrap:wrap;align-items:center;gap:8px";
 
+// --- Tab strip (`components::tabs`) ----------------------------------------
+// ⭐ **A window with several panes switches between them; it does not stack
+// them.** The Feed window stacked three — reading, composing, administering —
+// so a publisher with thirty posts put everything else a screen and a half
+// below the fold, and getting back to *your own feed* meant scrolling past
+// somebody else's. A strip of panes at the top is one click in and one click
+// back, from anywhere in the window.
+//
+// The look is deliberately the [`TOGGLE_ACTIVE`]/[`TOGGLE_INACTIVE`] pair's
+// vocabulary (the app's existing two-state control) with an underline instead
+// of a border, so a tab reads as *where you are* rather than as *a button you
+// pressed*.
+
+/// The row a [`TAB_ACTIVE`]/[`TAB_INACTIVE`] set sits in.
+pub const TAB_STRIP: &str = "display:flex;flex-wrap:wrap;gap:2px;\
+    border-bottom:1px solid var(--border,#2a2a4e);margin:0 0 12px 0";
+
+/// The pane you are looking at.
+pub const TAB_ACTIVE: &str = "background:transparent;color:var(--text,#e0e0e0);\
+    border:none;border-bottom:2px solid var(--accent,#3a6ea5);\
+    padding:6px 14px;margin-bottom:-1px;cursor:pointer;font-size:13px;font-weight:600";
+
+/// A pane one click away.
+pub const TAB_INACTIVE: &str = "background:transparent;color:var(--text-dim,#888);\
+    border:none;border-bottom:2px solid transparent;\
+    padding:6px 14px;margin-bottom:-1px;cursor:pointer;font-size:13px";
+
 /// A **full-bleed panel body** — the whole window content, scrolling, with its
 /// own background. The Apps launcher grid and the Saves panel share it, so the
 /// window does not change shape as you move between its views.

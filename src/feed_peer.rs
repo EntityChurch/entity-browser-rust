@@ -431,6 +431,149 @@ mod live_tests {
         }
     }
 
+    /// Every `resources.include` pattern in an echoed `capability:configure`
+    /// result, in order. Walks the map rather than matching on the wire bytes —
+    /// see the caller for why a substring check is not good enough here.
+    fn find_resource_patterns(v: &ciborium::Value) -> Vec<String> {
+        fn key<'a>(m: &'a [(ciborium::Value, ciborium::Value)], k: &str) -> Option<&'a ciborium::Value> {
+            m.iter().find(|(kk, _)| kk.as_text() == Some(k)).map(|(_, vv)| vv)
+        }
+        let Some(map) = v.as_map() else { return Vec::new() };
+        let Some(grants) = key(map, "grants").and_then(|g| g.as_array()) else { return Vec::new() };
+        let mut out = Vec::new();
+        for g in grants {
+            let Some(gm) = g.as_map() else { continue };
+            let Some(res) = key(gm, "resources").and_then(|r| r.as_map()) else { continue };
+            let Some(inc) = key(res, "include").and_then(|i| i.as_array()) else { continue };
+            out.extend(inc.iter().filter_map(|p| p.as_text().map(str::to_string)));
+        }
+        out
+    }
+
+    /// ⭐ **Arch's §6 experiment, run — a grant over ANOTHER peer's namespace is
+    /// accepted, and its peer-relative sibling is accepted too.**
+    ///
+    /// `ROUTING-2026-09-17-a` §1.3 settles `entity-workbench-go`'s report that
+    /// B's grant to C naming a signature path *"canonicalizes peer-locally to
+    /// B's own namespace"*: it does, correctly, because a bare pattern **is**
+    /// peer-relative — and `ENTITY-CORE-PROTOCOL` §5.2's table says the
+    /// universal form is the same pattern with a leading `/`. Arch asked both
+    /// seats to confirm a conformant peer accepts it, naming it *"the one
+    /// falsifier we could not run ourselves, because we do not run code"*.
+    ///
+    /// **It is accepted — five patterns, all 200, and each stored VERBATIM.**
+    /// `/{A}/system/signature/*` (a third peer's segment, not the granter's),
+    /// `/*/system/signature/*` (every author), the peer-relative sibling, a
+    /// foreign prefix, and the granter's own. Nothing is rewritten on the way
+    /// in, which is the half worth having: canonicalization happens at **check**
+    /// time, exactly as §1.3 reads it, so a stored grant means what it says.
+    ///
+    /// ⛔ **What this does NOT establish, and the bound is the whole value of
+    /// running it.** Acceptance is *the pattern is expressible and storable*,
+    /// never *a read under it resolves*: enforcement here is
+    /// `debug_open_grants: true` (see the posture gate below), so no read can
+    /// distinguish a grant that covers it from one that does not. The peer-
+    /// relative arm is carried beside it precisely so nobody reads the 2xx as
+    /// discrimination — **both** spellings configure, and what separates them is
+    /// resolution, which nothing here measures.
+    ///
+    /// ⚠⚠ **THE FIRST RUN CAME BACK 400 AND THE REFUSAL WAS THE RIG'S.**
+    /// `peer_pattern` was a hand-typed `"2KSOMEREADER"`, and `configure`
+    /// validates it — *"must be the literal `default`, a §3.5 invariant-pointer
+    /// peer hash, or a Base58 PeerID"* — so every arm was refused for a reason
+    /// that had nothing to do with the resource under test. One arm alone would
+    /// have been reported to arch as **"§1.3 is wrong, a conformant peer
+    /// refuses a foreign-namespace grant"**, into an open ruling, on a
+    /// measurement of my own typo. What caught it was running the controls in
+    /// the same loop: *the granter's own namespace* and *an ordinary feed
+    /// prefix* are patterns the shipped `share_feed_with` authors every day, and
+    /// they failed **identically**. ⇒ **when a probe refuses, put a pattern you
+    /// already know is accepted through the same call before you believe the
+    /// refusal is about your subject.** They are still in the loop.
+    ///
+    /// ⭐ **And it found an asymmetry nobody asked about: `peer_pattern` is
+    /// validated and the resource pattern is not.** `/2KTHIRDPARTYAUTHOR/…` is
+    /// not a peer id at all and is stored without complaint. That is defensible
+    /// — a resource pattern is a pattern, and `/*/…` has to be legal — but it
+    /// means a mistyped author in a grant is accepted and then matches nothing,
+    /// which is the *correct, complete, empty answer* shape: no error anywhere,
+    /// at either end. Routed rather than worked around.
+    #[tokio::test]
+    async fn a_grant_over_another_peers_namespace_is_accepted_by_configure() {
+        use entity_capability::{GrantEntry, IdScope, PathScope};
+
+        let registry = MemoryTransportRegistry::new();
+        let (granter, pid_granter, h) = spawn_peer_on_registry(registry.clone());
+        let (_reader, pid_reader, h2) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+
+        // Some third peer, neither the granter nor the grantee. Deliberately a
+        // literal: what is under test is the SHAPE of the pattern, and a real
+        // peer id would invite the reading that acceptance depended on the peer
+        // existing. It does not — a grant is a pattern, not a resolution.
+        let author = "2KTHIRDPARTYAUTHOR";
+
+        for pattern in [
+            // THE SUBJECT — §5.2's universal form over a third peer's segment.
+            format!("/{author}/system/signature/*"),
+            // Its peer-relative sibling, which is what `entity-workbench-go`
+            // reported canonicalizing locally. Also accepted; see the doc.
+            "system/signature/*".to_string(),
+            // Every author at once — the wider row in §1.3's table.
+            "/*/system/signature/*".to_string(),
+            // CONTROLS. Both are patterns the shipped `share_feed_with` writes,
+            // so a run in which these are refused is a run measuring the rig.
+            // Keeping them in the loop is what caught the `peer_pattern` typo.
+            format!("/{pid_granter}/system/signature/*"),
+            format!("/{author}/app/feed/"),
+        ] {
+            let grants = vec![GrantEntry {
+                handlers: PathScope::new(vec!["system/tree".to_string()]),
+                resources: PathScope::new(vec![pattern.clone()]),
+                operations: IdScope::new(vec!["get".to_string()]),
+                peers: None,
+                constraints: None,
+                allowances: None,
+            }];
+            let params = crate::share::build_configure_params(&pid_reader, &grants)
+                .expect("the configure params encode");
+            let result = granter
+                .execute(
+                    &pid_granter,
+                    "system/capability".to_string(),
+                    "configure".to_string(),
+                    params,
+                    Default::default(),
+                )
+                .await
+                .expect("configure dispatches");
+            assert!(
+                result.status < 300,
+                "a conformant peer refused the grant pattern {pattern:?} \
+                 (status {}) — arch's §1.3 rests on this being accepted",
+                result.status
+            );
+
+            // …and it is stored VERBATIM. The echoed entry is decoded rather
+            // than substring-matched: the peer-relative arm is a suffix of the
+            // universal one, so `contains` would pass for that arm even if the
+            // pattern had been rewritten under the granter — which is the one
+            // rewrite `entity-workbench-go` reported and the one this is here
+            // to look for.
+            let echoed: ciborium::Value = ciborium::from_reader(result.result.data.as_slice())
+                .expect("the echoed policy entry decodes");
+            let resources = find_resource_patterns(&echoed);
+            assert_eq!(
+                resources,
+                vec![pattern.clone()],
+                "the pattern was rewritten on the way in: {pattern:?} -> {resources:?}"
+            );
+        }
+
+        h.abort();
+        h2.abort();
+    }
+
     /// The share half, asserted for **what it establishes and nothing more**:
     /// the policy entry an author would write to share their feed with one named
     /// reader is accepted by `system/capability:configure`.

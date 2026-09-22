@@ -823,17 +823,66 @@ pub async fn unname_withdrawn_origins(
     report
 }
 
+/// Read the origin out of a registry record.
+///
+/// ⭐⭐ **A RECORDED EMPTY ORIGIN IS SAME-ORIGIN. It is not an absent record,
+/// and reading it as one made one click un-name a publisher permanently
+/// (found in production on 2026-09-17, by the operator, on the first real
+/// registry walk).**
+///
+/// `""` is this codebase's spelling of *"this SPA's own origin"* and says so in
+/// four places: [`PinnedPublisher::origin`](super::signed_fetch::PinnedPublisher)
+/// (*"`\"\"` = same-origin"*), `RegistryBrowserModel::pin` (*"an empty origin is
+/// legitimate — it means same-origin"*), the `registry_pin` handler (*"that is
+/// same-origin, a legitimate and common answer, not a missing one"*), and
+/// `deployment_config::expand_origin`, whose whole first arm it is. Every URL
+/// builder downstream already handles it — [`PublishLayout::conventional`] trims
+/// the origin and emits root-relative URLs, which is exactly right for a
+/// publisher hosted where the app is.
+///
+/// This function was the one place that read it as *nothing*, silently. The
+/// consequence, measured end to end against a live review deployment:
+///
+/// - `open_in_site_browser` is the only product caller of [`set_origin`] and it
+///   stores the binding's origin **verbatim**. A single-domain deployment binds
+///   its publisher same-origin, so the stored value is `""`.
+/// - So the write succeeded and the row was **invisible to its own reader**:
+///   [`list_origins`] dropped it, [`get_origin`] answered `None`.
+/// - And it **overwrote** the concrete origin boot had adopted — at
+///   [`SOURCE_USER`], which D25 deliberately refuses to overwrite. The product's
+///   own boot line said so every reload afterwards:
+///   `outcome = KeptUserOverride { theirs: "" }`. **Nothing in the product could
+///   repair it**: boot refuses by design, and `unname_withdrawn_origins` skips
+///   `user` rows by design.
+/// - Both surfaces that enumerate publishers went dark. The Feed window rendered
+///   *"this deployment does not know where they are hosted"* about a publisher
+///   one relative URL away, and the Site Browser rail rendered **"No sites
+///   yet"** on the same boot that logged
+///   `warm_peer_sites: cached 7 foreign site manifest(s)` — the bytes were in
+///   the store, the name was gone.
+///
+/// ⇒ ***the fix belongs at the reader, not at the writer.*** Expanding `""` in
+/// `open_in_site_browser` (which is what boot does, and boot's comment states
+/// the rule — *"the registry treats an empty origin as unregistered, so we store
+/// the concrete URL"*) would have repaired this one caller and left the rule as
+/// a thing the next writer has to know: AP44, *if the rule needs the word
+/// "every", the structure has to enforce it*. It would also have pinned a
+/// concrete host into a `user`-marked row that is never refreshed again, which
+/// is AP50's shape one field over — where storing `""` relocates itself if the
+/// domain moves.
+///
+/// **Three facts stay three facts (AP40).** No row at all → `None` (the
+/// resolver falls back to a local read, and `feed_gatherers`' *a gatherer we
+/// have no route to contributes no leg* still holds). An `origin` key that is
+/// absent or not text → `None`, because a record we cannot read is not a
+/// registration. A **recorded** `""` → `Some("")`, same-origin, because
+/// somebody wrote it down.
 fn decode_origin(entity: &Entity) -> Option<String> {
     let value: ciborium::Value = ciborium::from_reader(entity.data.as_slice()).ok()?;
-    let origin = value.as_map()?.iter().find_map(|(k, v)| match k.as_text() {
+    value.as_map()?.iter().find_map(|(k, v)| match k.as_text() {
         Some("origin") => v.as_text().map(str::to_string),
         _ => None,
-    })?;
-    if origin.is_empty() {
-        None
-    } else {
-        Some(origin)
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1270,6 +1319,76 @@ mod tests {
         assert_eq!(get_origin(&peers, &pid, "PEERC"), None);
         set_origin(&peers, &pid, "PEERC", "https://labs.example");
         assert_eq!(get_origin(&peers, &pid, "PEERC").as_deref(), Some("https://labs.example"));
+    }
+
+    /// ⭐⭐ **WHATEVER A WRITER STORES, THE READER READS BACK — and this is the
+    /// enforcement point the empty-origin defect got past.**
+    ///
+    /// `set_origin` is the origin registry's only product writer of
+    /// [`SOURCE_USER`] ( `RegistryBrowserModel::open_in_site_browser`, which
+    /// hands it the origin a signed binding named, **verbatim**). Before
+    /// 2026-09-17 a same-origin binding — `""`, which is what a single-domain
+    /// deployment publishes — made that write land and be **invisible to
+    /// `get_origin`**: the row existed, nothing could see it, and because it is
+    /// marked `user` D25's adoption then refused to repair it on every
+    /// subsequent boot. One click, permanently un-named publisher, on both the
+    /// Feed and the Site Browser surfaces.
+    ///
+    /// **A write that succeeds and cannot be read is the silent shape**, so the
+    /// property is asserted as a round trip over *every value a writer can
+    /// hand us*, not as a claim about one of them. A new spelling of "where a
+    /// peer is" is a row here, and it fails until somebody has checked that the
+    /// reader agrees.
+    ///
+    /// The three facts stay three (AP40), which is the half a bare round trip
+    /// would not measure: **no row** is still `None` — `feed_gatherers`' *a
+    /// gatherer we have no route to contributes no leg* rests on it — while a
+    /// **recorded** empty origin is `Some("")`, same-origin.
+    #[test]
+    fn every_origin_a_writer_can_store_is_one_the_reader_reads_back() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+
+        // What a binding or a deployment document can legitimately name, and
+        // what each is for. `expand_origin`'s three arms plus a hosting prefix.
+        let writable = [
+            ("", "same-origin — a single-domain deployment binds its own publisher this way"),
+            ("/", "root-relative same-origin, which is what `--bind=name=peer@/` emits"),
+            ("/prefix", "same-origin under a hosting prefix"),
+            ("https://cdn.example", "a concrete cross-origin host"),
+            ("https://cdn.example/prefix", "a concrete host under a hosting prefix"),
+        ];
+
+        for (i, (origin, why)) in writable.iter().enumerate() {
+            let target = format!("PEER{i}");
+            assert_eq!(
+                get_origin(&peers, &pid, &target),
+                None,
+                "no row at all must stay absent — {why}"
+            );
+            set_origin(&peers, &pid, &target, origin);
+            let read = get_origin(&peers, &pid, &target);
+            assert_eq!(
+                read.as_deref(),
+                Some(origin.trim_end_matches('/')),
+                "stored `{origin}` and the reader could not read it back ({why}) — \
+                 a write that lands and is invisible is the shape that un-named a \
+                 publisher in production"
+            );
+            assert!(
+                list_origins(&peers, &pid).iter().any(|(p, _)| p == &target),
+                "`{origin}` round-tripped through `get_origin` and is missing from \
+                 the roster — the two readers of one registry disagree ({why})"
+            );
+        }
+
+        // …and the count, so a row added above without a target of its own
+        // cannot quietly stop being measured.
+        assert_eq!(
+            list_origins(&peers, &pid).len(),
+            writable.len(),
+            "every writable origin should have produced exactly one visible row"
+        );
     }
 
     #[test]

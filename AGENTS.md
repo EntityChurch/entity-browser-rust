@@ -163,6 +163,31 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   imports, type inference, arm-split panics).
 - **`make test` compiles the e2e suite to NOTHING** — `tests/e2e_worker.rs` is
   `#![cfg(feature = "e2e")]`, so a green `make test` is no evidence that file even parses.
+
+## ⛔ The ratchet's landing site — 113 earned lessons filed under the wrong heading
+
+**Everything from here to the next `##` is 4,226 of this file's 4,611 lines — 92% — and none
+of it is about building or testing.** The two bullets above this heading are; these are not.
+
+It got here honestly. A lesson lands at the end of the section a bullet was nearest when it was
+written, and `## Build & test` was nearest for the first one, so it was nearest for the next
+hundred. **That is AP56 — *a fact filed under the exception is not filed under the rule* — which
+this file already teaches, about itself, from inside the section it describes.**
+
+**The entries are not the problem: they are earned, measured, and mostly load-bearing.** The
+problem is that 113 of them share one heading that does not describe any of them, so the only way
+to find one is to read 4,000 lines or already know it exists. `AGENTS-STANDARD` asks this file to
+*name the trigger and not carry the content*, and by volume it does the opposite.
+
+⚠ **Do not fix this by appending here.** A new lesson goes to the area file that matches it
+(`GOTCHAS.md`'s table two sections down), and if none fits, say so in the handoff rather than
+adding a 114th bullet to a heading that is already wrong.
+
+**The migration is planned, not guessed:** `docs/plans/PLAN-2026-09-16-THE-CHARTER-IS-ONE-SECTION.md`
+— which also records why it was not done in the session that measured it. A 113-entry scripted
+move is precisely the operation this file's own *"verify a scripted edit by reading back the
+ROW"* entry was written about, and the end of a long session is the worst moment to attempt one.
+
 - **Any network read on the boot path is bounded — D23, and it has three enforcement points.**
   `net::fetch_text_bounded` (`src/net.rs`) is the Rust chokepoint and `fetchWithDeadline` the
   `sw.js` one; `tools/net-lint.sh` (in `make lint`, baseline-ratcheted) gates new raw fetches;
@@ -653,6 +678,60 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   nothing, which is the state we are getting back to. **It is lossy and that is accepted** — it
   removes the offline shell — and it touches **no** peer data, the same scope line the console's
   program reset draws, for the same reason (no export path).
+- ⭐⭐ **A REPORTER THAT LIVES INSIDE THE THING THAT DIES IS NOT A REPORTER — the dead-instance
+  detector, `index.html`, 2026-09-15, and it is the WASM tier of the argument G8 already makes
+  about the recovery console.** Measured on a real session: the instance stopped resolving its own
+  closures and the page threw `RuntimeError: index out of bounds` from a wasm-bindgen closure shim
+  **388 times**, alternating between two shim signatures. Not a Rust panic —
+  `console_error_panic_hook` was installed and printed nothing; on a closure-invoke shim that
+  message is a `call_indirect` at a function-table index the table does not have. **After the first
+  one, not one more tracing line was emitted** — not even the 5-minute `build_update` interval that
+  had been ticking right up to it. That silence *is* the unresponsiveness.
+  **THREE DETECTORS, ALL SILENT, AND NONE OF THEM WAS BROKEN.** `diagnostics.rs` installs `window`
+  error/rejection capture whose module doc states its whole purpose is that "a browser-level failure
+  is captured and visible *in-app*" — **zero** lines against those 388 errors, because the handler is
+  itself a wasm closure. `watchdog.rs` does the hard part right (the watcher is off-thread in a
+  Worker) and then reports back through a main-thread wasm `onmsg` closure, so the watcher kept
+  ticking into a corpse. And it is installed `show_banner = false`, so even a correct detection drew
+  nothing. ⇒ **when you build a failure reporter, name the failure it cannot report, and check that
+  is not the one you built it for.** All three of ours had the same blind spot and it was the whole
+  subject.
+  **The detector is plain JS in the shell** — same tier as `__ENTITY_RECOVERY__` and
+  `__ENTITY_BUILD_SLOT__` — and it **reports and offers, never acts**: no auto-reload, because a
+  crash-loop reload is a brick generator and the WASM-load retry one block up already records what a
+  post-start auto-reload cost (it wiped live sessions on a denied `clipboard.writeText`). **A banner
+  rather than a modal, and that is F2's lease-not-deed instinct applied to a verdict** — if we are
+  wrong about the app being dead, a full-screen overlay is us bricking a working session on our own
+  false positive; hence the Dismiss beside the Reload and the Recovery link.
+  **Four outcomes (AP40) and the two collapses both cost something.** `pre-start` is not a weaker
+  `isolated`: before the module executes, an error belongs to the WASM-**load** auto-retry, which
+  owns that failure — counting it here puts *"the program stopped"* over a boot that never started,
+  a different fault with different advice. `isolated` is not a weaker `dead`: one freed closure is a
+  defect, not evidence the instance is over.
+  **The record names the FIRST trap and keeps its stack.** The 388th is an echo of a closure that
+  was already gone; the first is the only one whose stack names it. Written to `localStorage`
+  (`entity_last_trap`) under the routing mirror's rules — bounded, **nothing branches on it** — and
+  **System Recovery renders it**, because a record only a devtools console prints is one the stuck
+  person on a phone cannot read (the console's own founding argument, one screen over).
+  **Gate: `make e2e-worker T=a_dead_wasm_instance`, six rows, six neuters, each landing on a
+  distinct row** (no threshold · no trap classification · verdict with no banner · record follows
+  the latest trap · no durable record · no recovery exemption). **Scope, stated in the gate's own
+  doc comment so the name cannot be read wider than the measurement: it gates the DETECTOR, not a
+  trap.** The events are synthetic and dispatched at the real `window`, so everything above the trap
+  itself is the production path; producing a real trap needs a deliberately broken bundle and is a
+  different rig. `?deadinstance=<n>` lowers the threshold — a test affordance, same shape and same
+  reason as `?bootstall=`, and nothing in the product sets it.
+  ⛔ **WHAT KILLED THAT INSTANCE IS STILL OPEN.** The obvious candidate — a failed §6.5 negotiation
+  leaking a live `RTCPeerConnection` over freed handlers — is **covered**: `discard_session` runs on
+  the failure path and calls `pc.close()`, and `main_thread_establish.rs` states the rule in its own
+  header. Do not report it as the cause. Standing context from that session, none of it established
+  as causal: a 32 s frame gap (`wake_probe` `gap_ms = 32005`) immediately before the first trap; a
+  §6.5 channel that had opened and then died, followed by ~100 re-negotiations (the trailing numbers
+  on those log lines are Firefox console repeat counts) all `role=answerer, sdp_exchange=INCOMPLETE,
+  candidates posted=0/fed=0`; sustained `HIGH REBUILD RATE 11–14/sec`, 4438 rebuilds; and the alpine
+  VM mounted with ~172 MB of bundles. **The build was `-dirty`, so those two shim hashes are not
+  resolvable from any commit** — which is the build-pair entry's own subject arriving as a
+  diagnostic cost rather than a release one.
 - **The health checks live in System Overview's *Problems* card — not a window, and never called
   "Doctor" on screen.** `src/doctor.rs` is the pure verdict logic (checks 1–3 of the resilience
   design §7.2: domain identity, fetch-failure-by-peer, catalog completeness) and
@@ -935,6 +1014,64 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   **Order the assertions by the diagnosis they give**, not by the outcome: the subject assertion
   reads the routing mirror on the app page *before* the durability waits, because with
   `adopt_declared` unwired the waits would time out first and blame the probe.
+- **A MEET IS A HUMAN-TIME ACTIVITY AND ITS WINDOW WAS A POLL COUNT — the pacing change,
+  2026-09-16 (`rendezvous::poll_interval_ms`, `SEARCH_WINDOW`).** Reported by the operator as *"it
+  just starts shooting up to 60, it stresses me out, and I don't know what the duration is"*. **Both
+  halves were one defect:** the window was `MAX_POLLS = 60` at 30 frames apiece, so the only number
+  the surface had to show was **the counter itself**, climbing toward a bound that meant nothing to
+  the person watching it. ⇒ ***when a surface can only render a loop's internal counter, the bound is
+  in the wrong unit*** — a wall-clock window has a duration to report and a frame-counted one does not.
+  **120 s at ~29 round trips, against 30 s at 60** — four times the window for half the traffic, and
+  the cost is *gated rather than claimed* (`the_longer_window_costs_fewer_round_trips_than_the_old_one`,
+  falsified at `got 240`). Pacing out is what buys it, and the asymmetry is why it is nearly free:
+  **whoever presses second finds the first one on their FIRST poll**, because the request is already
+  in the bucket — so the interval bounds only *how long the person who pressed first waits to notice*.
+  8 s, not the TTL. **Answering stays unpaced**: a queued answer is a peer already waiting on us.
+  **THE INTERVAL MAY NEVER APPROACH THE NODE'S TTL, and the TTL is ADVERTISED.** An interval that
+  straddles a deposit and its expiry loses a peer with **nothing erroring anywhere** — §2.2's silent
+  never-meet, one mechanism over from the lobby constant. `Limits::ttl_seconds` (§4.5) rides back from
+  `resolve_key` on the one path that already had to ask (lobby), the default comes from the
+  extension's own `Limits::default()` rather than a `60` typed in here, and it **narrows only**: a
+  node advertising an hour does not license a slow surface, because the human's wait bounds the top
+  too. Falsified — drop the clamp and the gate reds with *"an interval of 8000ms at ttl 8s can outlive
+  a bucket entry"*.
+  **The display is COARSE so a renderer cannot put the number back.** `TimeLeft::{Minutes,
+  UnderAMinute, NotSearching}` — the seconds never reach the view, the phrase moves at most once a
+  minute (so it needs no repaint of its own; the poll marks the window far more often than the phrase
+  can move), and `NotSearching` is kept apart from a zero, because a settled meet has a result to
+  report and **no clock at all**.
+  **Browser evidence is OPPORTUNISTIC and the run says so.** Phase 14.7's node is unreachable by
+  construction, so catching the search mid-flight is a race; the `else` arm prints *"the mid-search
+  line went UNMEASURED this run"* rather than leaving a green suite to imply coverage. ***An
+  assertion that may not have executed must not be read as coverage, and the place to say so is the
+  RUN, not a doc.***
+- **"IS THERE AN ASSUMPTION OF ONE SIGNALING NODE?" — YES, AND THE PROTOCOL'S ANSWER IS SPECIFIED AND
+  DEFERRED COHORT-WIDE. Do not build it here (measured + operator-scoped 2026-09-16).**
+  `EXTENSION-REGISTRY` §3b defines a `service-advertisement` entity carrying a `signaling:
+  [{endpoint, priority}]` **pool**, and §3b.2 makes intra-pool selection a **`[cross-peer seam —
+  MUST]`**: both peers rendezvous-hash the §3b.3 weight (pinned to the byte) and independently select
+  the *same* member. Priority-order or a load balancer **splits the pair and the punch never
+  completes**.
+  **All of it is implemented and none of it is called.** `entity_signaling::pool::select` exists with
+  unit tests and a live-rendezvous test; **every caller in `entity-core-rust` is a test**, and
+  `entity-core-py` has the same module. §3b's own preamble records why: *implementations built
+  §3b.2's pool-selection rule and had no protocol way to learn a pool to select*. The registry
+  extension's status line marks §3b **folded v1.5, implementation deferred**.
+  **Our model is a conformant pool of size 1** — N rows in the connector registry, exactly one in
+  force (`connectors::node_in_force`) — so this is not a conformance gap. What it costs is that
+  *"both peers must meet at the same provider"* lands on **the user**: two people who each picked
+  their own node never meet and nothing errors. Making the node visible (2026-09-16) is the mitigation
+  that fits a manual pool.
+  **Two reasons the meet form defaults to `tag` and not `lobby`, and the second one is the operator's
+  and is about scale:** a lobby meet is a stranger, *and* the lobby key is a single constant, so under
+  §3b.2 **every lobby meet in the world hashes to one shard**. A named tag distributes. Recorded
+  because the code states only the first reason and the second is what will matter the day a pool
+  exists.
+  ⛔ **Scoped out by the operator 2026-09-15**, before this measurement: the live/rendezvous tier
+  (`T5`) is off the release path — *"a visitor who wants a live peer connection brings their own
+  rendezvous"* — and the hold's condition is **a release going out, not a date**. So the pool is
+  deferred work behind a deferred tier. **Do not route this to arch as news**: §3b's preamble already
+  says it, and reporting it would be *a landing reported as a discovery*.
 - **THE §6.5 ESTABLISHER WAS A BOOT-ONLY DECISION, SO EVERY FRESH PROFILE WAS FINDABLE AND
   UNREACHABLE — fixed 2026-09-07 (`src/late_establish.rs`).** Reported as *"they detect each other
   but chat doesn't work"*, in a private window and on the desktop, and read as a regression. Nothing
@@ -1090,6 +1227,24 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   reader ending after all. **Put a must-be-present control in any log-grep diagnostic panel**,
   and note the twin trap: **the instrumented run changed the mode**, so the probe was removed and
   the measurement repeated before anything was concluded.
+  ⭐ **SECOND INSTANCE 2026-09-17, in a different instrument, so the rule generalizes: A PROBE THAT
+  REFUSES MAY BE REFUSING YOUR RIG.** Arch asked both app seats for one falsifier they cannot run
+  (*"present a grant carrying `/{A}/system/signature/*` to a conformant peer and confirm it is
+  accepted"*, `ROUTING-2026-09-17-a` §6), with an open ruling resting on the answer. It came back
+  **400**. The refusal was `peer_pattern` — a hand-typed `"2KSOMEREADER"`, which `configure`
+  validates and rejects — and the resource under test was never reached. **Run with the subject
+  alone, that is a packet saying "your ruling is wrong" on a measurement of my own typo.** What
+  caught it: two **controls in the same loop** — patterns the shipped `share_feed_with` authors
+  every day — failing *identically*. ⇒ ***when a probe refuses, put a value you already know is
+  accepted through the same call before you believe the refusal is about your subject.*** The
+  needle version of this rule is about a zero; this is about a non-2xx, and both are *the
+  instrument answered and you read the wrong variable*. Leave the controls in the gate rather than
+  deleting them once green — they are what makes a future red legible.
+  **And the experiment found what it was not asked about, which is the usual return on running
+  one:** `peer_pattern` is validated and the **resource** pattern is not, so a grant naming a
+  mistyped author is stored without complaint and then matches nothing — no error at write, none at
+  check. Defensible (a resource pattern is a pattern, and `/*/…` has to be legal) and worth knowing
+  before any surface renders *"shared with N"* off a stored grant.
   **Landed RED on purpose, and the threshold was not tuned to make it green.** 40 s and 75 s were
   both tried; 75 s fails too, and a budget above 30 would only be measuring the request deadline —
   a gate satisfied by its fallback. **The gate is deterministic; the PRODUCT is what is
@@ -1355,6 +1510,48 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   falsifier, and was falsified against the real file. The better fix is one `reconcile` function
   doing both halves (AP44); not taken because the adopt loop's `expand_origin` is WASM-only and
   three e2e gates key on that loop's exact log lines. Design: §1.1f-b.
+- ⭐⭐ **A RECORDED EMPTY ORIGIN IS SAME-ORIGIN, AND READING IT AS ABSENCE UN-NAMED A PUBLISHER
+  PERMANENTLY — found in production 2026-09-17, by the operator, on the first real registry walk.**
+  Resolve a name, press *Open*, and that publisher is gone from the whole profile: the Feed window
+  says *"this deployment does not know where they are hosted"* and the Site Browser rail says **"No
+  sites yet"**, on the same boot that logs `warm_peer_sites: cached 7 foreign site manifest(s)`.
+  **The bytes were in the store; the name was gone.** `RegistryBrowserModel::open_in_site_browser`
+  is the only product caller of `set_origin` and stores the binding's origin **verbatim**; a
+  single-domain deployment binds same-origin (`--bind=<name>=<peer>@/`, `"origins": {"<peer>": ""}`),
+  so `origins::decode_origin`'s `if origin.is_empty() { None }` made the write **invisible to its
+  own reader**.
+  **The permanence is the other half, and it is D25 working correctly.** That row is marked
+  `SOURCE_USER`, so boot's adoption refused to repair it — `outcome = KeptUserOverride { theirs: "" }`
+  in the log on every subsequent boot, measured across two reloads — and `unname_withdrawn_origins`
+  skips `user` rows by design. **Nothing in the product could heal it.**
+  ⇒ ***fixed at the READER, not the writer.*** Expanding `""` in the one caller is what boot does,
+  and boot's comment states the rule (*"the registry treats an empty origin as unregistered, so we
+  store the concrete URL"*) — so repairing that caller would have left the rule as something the
+  next writer must know (AP44) and pinned a concrete host into a `user`-marked row that is never
+  refreshed again (AP50's shape one field over, where `""` relocates itself if the domain moves).
+  `""` is this codebase's spelling of same-origin in **four** places and every URL builder already
+  trims it. Three facts stay three (AP40): no row · an unreadable `origin` key · a **recorded** `""`.
+  ⚠ **THE MISSING POPULATION WAS NOT AN ENCODING OR ANOTHER IMPLEMENTATION — IT WAS THE ORDINARY
+  DEPLOYMENT.** `the_open_writes_into_the_same_store_the_spawned_window_reads` passes with the defect
+  fully present (**measured**), because its fixture names a concrete host; and the one e2e gate that
+  resolves a registry name is **deliberately cross-origin** and carries a control whose whole job is
+  to stop its rig degrading into same-host — right for what it measures, and it means one domain
+  serving its own publisher was in no browser population anywhere. ⇒ **when a gate's fixture picks
+  one arm of a value's domain, ask which deployment shape the other arm is.**
+  **Enforcement, three points.** `every_origin_a_writer_can_store_is_one_the_reader_reads_back`
+  (`origins.rs`) is the class: the round trip over **every** value a writer can hand us, through both
+  accessors, with the count — *a write that succeeds and cannot be read is the silent shape*.
+  `a_publisher_bound_same_origin_is_still_routable_after_the_open` is the journey's decision. And
+  **`make e2e-worker T=a_name_resolved_from_a_registry` is the browser gate the surface never had** —
+  `opens()`' own doc had said so since it was written (*"this repo has no gate that drives the
+  Registry Browser"*), which is the cost of a gap being a sentence. Its rig
+  (`emit_registry_walk_fixture`, in **`registry_publish.rs`** — `publish-doc-check` scans
+  `publish.rs` for every `"--flag` literal and `--bind`/`--issued-at` are the registry's) publishes a
+  registry, a publisher's sites and their feed into **one** origin. All three falsified; the browser
+  one reds at row 5 with the production sentence verbatim.
+  ⇒ **Standing check: when a surface stores a value somebody else authored, read the decoder for a
+  filter on it** — and if the decoder drops a legitimate value, the write lands, the surface looks
+  correct, and only the *next* reader is wrong.
 - **`/entity-deployment.json` is DOMAIN-managed and describes the whole domain — the publisher
   used to clobber it down to the last peer (fixed 2026-09-03).** `emit_deployment_config` built a
   fresh single-entry `origins` map and `fs::write`'d over the file, so publishing a second peer
@@ -1862,6 +2059,39 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   passed, and never shown that the tier's only divergent family had closed** — the single most
   important thing that run had to report, invisible to a number that moved in the right direction.
   *A ratchet that only counts cannot tell you what got better.*
+  ⭐⭐ **AND FOR TWO SESSIONS IT WAS READING THE KERNEL AND NAMING US — 2026-09-16, and both prior
+  explanations of the row were reasoned from source, agreed with themselves, and were wrong.**
+  `single-seat app/user` sat in the baseline with a long note deriving it as a doc-example false
+  positive. Instrumenting `scan_seat` says otherwise: our own occurrences
+  (`views/query_console/`) are classed **test-only, correctly**, and the row was produced by
+  `.core-pin/<kernel-sha>/extensions/compute/src/eval/tests.rs` — **`entity-core-rust`'s own test
+  file**, in five stale export directories *inside our seat*. Two independent misses compose into
+  it: the analyzer's skip patterns are anchored `/target/` and tested against a path **relative to
+  the seat root**, so a top-level `target/` never matches (**0 files skipped in this worktree, 1962
+  build-output files scanned as our source in the other — 85% of that scan**); and `_TEST_NAME`
+  matches a `tests/` *directory* or a `_test.rs` *suffix* but not a file named `tests.rs`, which is
+  Rust's third idiom.
+  ⛔ **THE RESIDUE OUTLIVED ITS WRITER, WHICH IS WHY EVERY INSTINCT SAID "WE FIXED THAT".**
+  `core-pin.sh` moved its output to `~/.cache/entity-browser-core-pin/` on 2026-09-15 *for this exact
+  reason*, and this file records the move. **The 64 MB already on disk stayed**, so the fix was true
+  of the code and false of the tree — and `.gitignore` then hid the residue from `git status` while
+  leaving it in plain sight of every tool that walks the directory. ⇒ ***ask what the previous
+  version of a tool LEFT BEHIND, not only where the current one writes*** — and when a gate names
+  you, **measure what it READ before you explain what you wrote**. Two sessions produced confident
+  accounts of a finding whose cause was in neither the source nor the corpus they were reading.
+  ⭐ **A LOUD SKIP IS STILL A CLASS GOING UNCHECKED, AND "RUN IT FROM THE OTHER TREE" IS NOT A
+  WORKAROUND IF NOBODY EVER DOES.** The gate skipped on any worktree — correctly, since the analyzer
+  resolves our seat by directory name and would otherwise report another tree's work against our
+  commit — and **every branch here is developed in a worktree**, so the application tier's only
+  oracle had run on **no branch work, ever**. It is CONSTRUCTED now: a scratch parent in which the
+  seat name resolves to *this* checkout, materialized from what git considers part of the repo. Same
+  move as `CORE_RUST_REF` one tool over, and the materialization is what closes the residue class for
+  good — *ignored is what residue means*, so it needs no exclusion list and cannot rot the way
+  `/target/` did when `target-pin-*` appeared. Both defects routed
+  (`ROUTING-2026-09-16-b-arch-…`), with the half of our own prior packet that measurement falsified
+  withdrawn as `C-3`: we had told arch a sample string was read as an emission, which is a claim
+  about a repository, where the analyzer reads a **directory**. *A sentence true of your repo and
+  false of the directory a tool walks is the shape this whole entry is about.*
 - **A JOINT FIXTURE'S COMPARAND IS CONVENTION-SPECIFIC, AND TWO OF OURS GIVE OPPOSITE ANSWERS ON THE
   SAME AXIS — do not copy `gpin4-joint`'s README onto the next one (2026-09-12).** That file says, in
   as many words, *"the peer id and the keypair do not matter"*, which is true of a site and **false of
@@ -2393,6 +2623,43 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   *lines you meant to change × files*, not a key total. The rule above said *append, never
   re-serialize*; what it did not say is that **the files look sorted and are not**, which is exactly
   what makes `sorted()` read as a normalization rather than a rewrite.
+  ⭐⭐ **THIRD INSTANCE 2026-09-16, AND IT IS THE HOLE ALL FOUR i18n GATES SHARED: A WORDING CHANGE
+  WITH UNCHANGED PLACEHOLDERS WAS CAUGHT BY NOTHING.** Measured, not reasoned — one deliberate edit
+  (`"Add connector"` → `"Add rendezvous node"`, no locale touched) and `i18n-locale-check`,
+  `i18n-callsite-check`, `i18n-untranslated` and `i18n-lint` were **all four green**. Each is correct
+  about its own subject: parity, slots, plurals, script, raw literals. **None of them is about a
+  translation still MEANING the English**, so the 30 overlays go stale silently and the app ships a
+  locale saying something the product no longer says. ⇒ ***that is strictly worse than a missing key***,
+  which `i18n-locale-check` refuses loudly, because **a wrong translation renders perfectly**.
+  Closed by `tools/i18n_drift_check.py` (in `make lint`): one row per key carrying a digest of *the
+  English the overlays were translated from*, so a moved English value fails asking the only question
+  that matters — **did you resweep, or are you taking the debt?** Falsified three ways, each landing on
+  its own arm (MOVED · ORPHANED · UNRECORDED), and the ORPHANED arm exists for `vocab-lint`'s reason: a
+  baseline outliving its subject re-admits debt, so the comparison must fail **both** ways.
+  **Taking the debt is a first-class answer and it PRINTS.** A row marked `stale` keeps the gate quiet
+  about that key and names it on every lint run — the `doctor.rs` lesson made structural: *a debt with
+  an instrument behind it gets paid; one that lives in a sentence does not.* The regenerate
+  (`--write`) **preserves `stale`**, deliberately: otherwise the escape hatch for *"the gate is
+  nagging"* would also be the escape hatch for *"the debt is gone"*. Six rows are stale as of
+  2026-09-16 — the connector→rendezvous-node vocabulary fix, English only, on the operator's call with
+  a release in flight.
+  ⚠ **The `git checkout` hazard bit TWICE in the hour this gate was built, in both directions, by a
+  session that had the rule in context.** The charter already says *commit the gate before you
+  falsify it*. Two additions, and the second is the expensive one.
+  **(a) On an UNTRACKED file, `git checkout <file>` is not a revert at all** — it errors, and a
+  trailing `|| true` swallows it. The neuter's `sed` on the brand-new baseline stayed applied. *Verify
+  a restore by reading the file, not by the command exiting 0.*
+  **(b) On a TRACKED file it is a revert of EVERYTHING, and that is what actually cost work:** a
+  `git checkout src/i18n.rs` reverting a one-line neuter silently took **six unrelated copy edits**
+  made twenty minutes earlier with it. The whole point of the rule is that a neuter is a destructive
+  experiment on the working tree — and the tell is not the checkout, it is that **`git status` after
+  it does not list a file you know you edited.** ⇒ ***read `git status --short` before `git add`, and
+  ask which of your own edits are missing from it***; the six were noticed only because the file was
+  absent from a four-line status listing.
+  ⭐ **And the recovery is the best evidence the gate works:** re-applying the six made
+  `i18n-drift` red with **6 MOVED rows**, against unswept locales, on a real change nobody was
+  testing it with. *A gate that catches your own accident is worth more than the neuter you wrote
+  for it.*
   **Three modelling decisions worth not re-deriving.** (1) **Who you follow is APP-scoped, not
   window-scoped** (`app_paths::feed_follows_prefix`): two Feed windows must agree and closing one must
   not unfollow anybody, so it is a property of the profile. That is also what keeps this surface clear
@@ -2456,15 +2723,28 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   `publication_probe` would answer *does this peer publish a feed* at **one signed-root walk per
   row**, i.e. O(list) round trips to decorate a list, and selecting a row already answers the same
   question through `FeedPanel`'s four honest states at the moment somebody asks it.
-  ⭐⭐ **A DEFAULT VIEW IS DERIVED, NEVER WRITTEN — and that is what keeps it out of D25.**
-  `effective_selection` is *explicit choice, else the home publisher*, computed per render. Writing
-  it into `self.selected` at open would have been the obvious shape and is wrong three ways: it
-  fights a person who then picks another row, it goes stale when a later boot declares a different
-  home, and a **stored** default starts to look like a deployment deciding something on a visitor's
-  behalf. Derived and session-only, it is a *view*, so the ownership census never engages. It can
-  land on a publisher with no feed and render `NoPosts` — **an honest empty state is not the invented
-  answer AP54 is about**; what that anti-pattern forbids is *guessing* which publisher was meant, and
-  with no home declared this surface selects nobody rather than picking one.
+  ⛔⭐⭐ **THE HOME FALLBACK IS RETIRED — 2026-09-17, on the operator's call — AND THE ARGUMENT THAT
+  DEFENDED IT IS THE LESSON. *A DEFAULT VIEW IS DERIVED, NEVER WRITTEN*** said: `effective_selection`
+  is *explicit choice, else the home publisher*, computed per render, so it fights nobody, cannot go
+  stale, and never becomes a durable record — *"derived and session-only, it is a view, so the
+  ownership census never engages."* **Every clause of that is true and it answers the wrong
+  question.** Deriving instead of storing settles the **persistence** objection — is this a value
+  D25 has to arbitrate — and leaves the **authority** one untouched: *may this surface decide, on a
+  visitor's behalf, whose posts they are reading?* ⇒ ***"it is not persisted" is not an answer to
+  "it was not yours to choose"*** — and a rendered default is a decision whether or not anything
+  writes it down.
+  The operator's correction is the premise: **the site's publisher is just another peer.** Knowing
+  where they are hosted is the same routing fact that puts their *sites* in reach, and it licenses
+  putting them in the list — nothing more. *The feed reader is not the feed publisher for my feed.*
+  What it produced on screen is the tell: a panel headed *"This site's publisher"*, their row sorted
+  first, their posts loading before anybody asked — **an injected following with a plausible name for
+  itself**, which is AP54's invention one step politer. It went through review, shipped with six
+  native gates, and the headline gate asserted it **by name** (AP45).
+  Gone: the fallback, the home-first sort, `feed.panel.home`, `feed.known.home`, `Selection::home`,
+  `KnownRow::home`. The row stays; the ways in are the browse list, the Registry Browser's *Open in
+  Feed*, and the peer-id box. The **rest of this entry stands** — the routed set, the no-probing
+  rule, the five watches and the anchor lesson are all unaffected, which is why it is corrected here
+  rather than replaced.
   **Two more `watch_prefix` calls, both load-bearing rather than tidy** (five now): the origin
   registry is filled by `boot_phase2`'s adoption, which lands **after** a startup window has been
   spawned, and the session config settles there too — so without them the list renders empty on the
@@ -2482,16 +2762,93 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   and the vacuity guard was the one place still reading words. It reads `[data-field="feed-peer"]`
   now. ⇒ ***"only the body draws it" is a reason to pick a structural marker, not a reason to pick a
   sentence***; copy is the thing most likely to change for reasons unrelated to the gate.
-  **Gates:** six native, headline
-  `arriving_at_a_deployment_reads_its_own_publisher_without_anybody_choosing` (falsified — drop the
-  fallback and it reds alone; make the list the *followed* set instead of the routed one and all six
-  red). Browser: the routed-set rule rides `a_gathered_feed_reaches`' step 3, which already
-  establishes a followed author with no origin, and the probe emits **`known_ids` rather than a
-  count** — the rule is a claim about *which* peers appear and a count cannot falsify it.
+  **Gates:** six native, headline **`the_deployments_own_publisher_is_offered_and_never_read_on_a
+  _visitors_behalf`** — the inversion of the one that used to stand here, asserting **both halves**
+  (the row IS offered, so a surface that simply lost the publisher cannot satisfy it, and nobody is
+  selected). Make the list the *followed* set instead of the routed one and all six red. Browser:
+  the routed-set rule rides `a_gathered_feed_reaches`' step 3, which already establishes a followed
+  author with no origin, and the probe emits **`known_ids` rather than a count** — the rule is a
+  claim about *which* peers appear and a count cannot falsify it.
   ⛔ **What this does NOT close: DISCOVERY.** The list is *what this profile can already reach*, which
   is a routing fact — how a reader learns a publisher exists at all is still `EXTENSION-DISCOVERY`'s
   question, FEED §9.5's open navigation half, and the reason `publication_probe`'s module doc ends
   where it does. Nothing here invents an answer to it.
+- ⭐⭐ **A FIELD ON AN OUTPUT TYPE IS NOT A FIELD ON A SCREEN, AND NO GATE HERE COULD TELL — the
+  missing dates, 2026-09-17.** `EntryRow::created_at` was populated from the day the type existed,
+  carried correctly through ingest, the trie, the two-hop walk and every one of the seven
+  attribution verdicts, and **reached no renderer**. A feed — a *timeline* — rendered body, hash and
+  verdict with no date anywhere, for as long as the surface has existed. Reported by the operator,
+  not by anything we own.
+  ⛔ **The population argument, in a new place: every gate on this surface reads the MODEL.** The
+  native tests assert `row.created_at == NOW_MS` and pass, correctly; `READ_FEED` collected
+  `entries`, `via`, `attributed`, `body_renders` — every fact the *model* decides — and nothing that
+  would notice a field the renderer never asked for. ⇒ ***a renderer-neutral output type makes the
+  model testable and makes "is it drawn" unaskable***; when you add a field to one, name what draws
+  it in the same commit, or the type is where the fact goes to be correct and invisible.
+  ⭐ **The date is rendered VERBATIM, by the platform.** `FEED-R8` forbids rejecting an entry for an
+  implausible timestamp, so special-casing an epoch-zero into *"no date"* is that refusal wearing a
+  formatter's clothes. `util::local_datetime` is the one expression (`app_saves::stamp_label` was
+  the second and delegates to it) — the browser's own locale and time zone, because a hand-rolled
+  `YYYY-MM-DD` is the app deciding what a date looks like for someone whose convention it does not
+  know.
+  ⚠⚠ **AND THE GATE LESSON IS THE FIFTH CAUSE OF A NEUTER THAT PASSES, MEASURED HERE: THE GATE READ
+  THE DECISION AND THE DEFECT WAS IN THE EFFECT.** The filter's browser row asserted `data-shown`,
+  an attribute `apply_filter` writes from its own count. Neuter the **hide** and leave the **count**
+  — one line — and the model's claim is perfect, nothing is hidden, and the gate goes **green**.
+  The four causes this file already records are *the gate does not measure it* · *the neuter did not
+  land* · *the thing you neutered does not do what you thought* · *the rig cannot produce the
+  condition*. This is none of them: the gate is sound about a real property, and that property is
+  the surface's **report of what it did** rather than what it did. It is `AP44`'s *witness, not a
+  notification* pointed at a test, and `--prune`'s *a value that is only printed is not a guard* one
+  layer out. ⇒ ***when a surface both acts and reports, a gate on the report is satisfied by half
+  the implementation*** — count the DOM, then assert the report **agrees** with it, so a lying
+  counter and a hide that never happens each red on their own.
+  Two smaller ones from the same probe. **`known_home`/`known_selected` had never been asserted by
+  anything** — collected every run, read by nobody, which is the same defect in a test file; they
+  are `known_selected_ids` now, which the new gate falsifies. And **a scripted edit anchored on a
+  script preamble landed 12,000 lines away**: `let script = format!(\n r#"\n const layer = …` is not
+  unique in a 27k-line test file. The charter's rule is *anchor on a row id unique in the whole
+  file*; the addition is that **in a test file the unique anchor is a function SIGNATURE**, because
+  script preambles are copied by the dozen and every one of them is a plausible match. Caught by
+  grepping for the marker afterwards; restored by inverse edit, not `git checkout`.
+- ⭐⭐ **A TAB IS *INSTEAD*; A DISCLOSURE IS *EXTRA* — and no ORDERING of a stack fixes a window
+  whose first pane holds an archive (2026-09-17, `components::tabs`).** The Feed window's three
+  surfaces — read somebody, write your own, administer the list — were stacked, and the two fixes
+  before this one both stayed inside the stack: put reading first (09-16), then collapse the other
+  two behind headers (09-17). Both were right about the *diagnosis* and reached for the wrong atom.
+  With a real feed on screen — **34 posts, and that is a small archive** — *Your feed* sat a screen
+  and a half below the fold, so posting something of your own meant scrolling past everything
+  somebody else had written. ⇒ ***whichever pane is second is under the first one's content, so if
+  the panes are alternatives the fix is not an order and not a collapse.*** The tell is in the
+  vocabulary: reach for `collapsible_header` when a section is **extra** (a create form, fields most
+  people never touch) and for `tabs` when it is **instead**.
+  ⭐ **The reading pane is TWO PAGES and the SELECTION decides which** — the list of publishers, or
+  one publisher's posts, with a Back control. That is the Knowledge Base's list/reader shape and the
+  Site Browser's navigation, both of which already existed here and neither of which this window
+  used: *"the site browser had it figured out, you navigate like a website."* **No second bit saying
+  which page** — a bit that can disagree with the selection eventually does, and *back* is exactly
+  *nobody is selected*.
+  ⚠⚠ **AND THE GATE LESSON IS THE ONE TO CARRY: A CONSISTENCY CHECK BETWEEN TWO PROBE FIELDS IS NOT
+  AN ANTI-VACUITY GUARD — BOTH FIELDS GO TO ZERO TOGETHER.** `READ_FEED` reads the whole window, so
+  every field in it is now scoped to **whichever pane is open**, and the gates that asserted facts
+  from two panes in one read had to start navigating like a person. The one that would have gone
+  quietly wrong is the gathered gate's routed-set rule: a **negative** (*this unreachable author must
+  not be offered*) guarded by `known_ids.len() == known` — which is `0 == 0` the moment the browse
+  list is on a pane nobody opened. It is a **floor** now (`!known_ids.is_empty()`, true because that
+  deployment's document registers an origin) and the read moved to before the follow, where the list
+  is actually drawn. ⇒ **when a surface becomes navigable, re-read every probe field for what it now
+  answers when the thing it counts is simply not on screen** — and prefer a floor a scenario
+  guarantees over an equality between two things the same defect silences.
+  Three smaller ones. **Follow is the one act that changes the selection without navigating** —
+  it is reachable from all three panes, and somebody working through a list of peer ids in the box
+  would be thrown out of it on the first press; *back* likewise does **not** forget the walk, which
+  is the opposite of `unfollow`'s rule and the difference between *show me the list again* and *stop
+  wanting them*. **A control that cannot help raises the question of what it is for**: the filter box
+  now appears only above `dom::feed::FILTER_FROM` posts, and the pair either side of it is gated (3
+  posts → none, 34 → one), so the line is a measurement rather than a taste. And **two `///` blocks
+  with a function between them fuse onto the second one** — the composer's doc had been attached to
+  `place_body` for as long as both existed, invisible to every gate here, because prose is not
+  checked and a slid doc block reads perfectly in the source.
 - **THE ORDINARY LEG HAD NO BROWSER GATE AND THE EXTRAORDINARY ONE DID — closed 2026-09-12,
   `make e2e-worker T=a_published_feed_reaches`.** A §6 mirror carrying an author a browser cannot
   reach had a gate; *follow a publisher and read what they published at their own origin* did not,
@@ -2578,6 +2935,28 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   authoring root carrying two sites *and* a feed, published in one run under one signed root, which
   is the shape the browser gate above then reads back. Two application-tier conventions, one
   identity, one wire.
+  ⛔⭐⭐ **THIRD INSTANCE, 2026-09-17 — AND IT IS NOT THE LESSON FAILING TO FIRE. THE EXEMPTION WAS
+  WRITTEN INTO THE SAME TABLE AS THE RULE THAT REFUTES IT.** `--gather` shipped 2026-09-12 with a
+  flag, a spec section, four gates, and a `make`-column cell reading *"— (no make variable: the value
+  is a `peer@dir` pair, and the dir is another publisher's out-tree rather than an authored source)"*
+  — i.e. the author **did** consult the deliverable list and wrote down a reason. **Three lines below
+  that cell, in the same section, is the sentence that answers it:** *"a source anywhere else on the
+  host is invisible to the publish … a raw `--ingest-feed=` therefore names a directory the container
+  cannot see."* Nothing about *whose* tree it is or *what shape the argument has* touches that; the
+  constraint is the bind mount. So the fourth axis was reachable by nobody on the supported host for
+  five days, **behind a stated exception rather than behind an omission** — which is strictly harder
+  to find, because the cell reads as considered. ⇒ ***an exemption's reason has to answer the rule's
+  reason, not the rule's subject*** — *"it is not an authored source"* is a fact about the argument
+  and the rule is about the container. Same shape as `A-30b` (*we stated a rule and proposed breaking
+  it in the same packet*), arriving in a reference table instead of a packet. **The cheap check: when
+  you write "N/A" in a column, re-read the paragraph that says why the column exists.**
+  `GATHER='<peer>@<dir> …'` is staged like its three siblings now, each source under the **author's**
+  peer id rather than an ordinal (`parse_gathers` already refuses one author twice, so the id is
+  unique by the rule that matters). **Run before it was written down** (AP37): 34 entries, 34
+  attributable, two pages, two cuts byte-identical but for the wall-clocked published-root.
+  ⇒ **the enforcement point this earns is the axis table itself** — `PublishAxis` is a closed list in
+  one file, so *"every axis has a `make` variable"* is a census somebody can write; it is not written
+  yet and that is the honest state.
   ⚠ **AP37, found on the way: `examples/demo-site/` does not exist and never has.** **Five** places
   named it across three documents — the Makefile's `INGEST=` row and its `site-serve` example,
   `PUBLISH-INGEST-FORMAT`'s KEPT list, and two rows of `TOOLS.md` — while the directory is
@@ -2778,6 +3157,103 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   flush and the row fails wearing the composer's costume — reporting *"the post was never in the
   tree"* about a post that was. It polls `durable_hash_for("app/feed/entries/")` and **asserts the
   probe found something**, because a probe that silently found nothing is a wait for nothing.
+- ⭐⭐ **A SECOND TAB WAS TOLD ITS OWN PROFILE DID NOT HOLD ITS OWN KEY — the same function, the same
+  gap, one day later (2026-09-17).** The entry above closed the *default profile* case and shipped
+  with `a_default_profile_can_post` green. The composer still refused for anyone with **two tabs open
+  on one origin**, which is how it was reported: *"we're back to getting this."*
+  **The mechanism is one line and it is not in the composer.** Two tabs at one origin contend for one
+  profile, and the Web-Lock election (`src/multitab.rs`) makes the loser **ephemeral on purpose** — it
+  must not open the shared IndexedDB database. That arm built its primary with `Peers::new_direct()`,
+  whose keypair is generated **inside the SDK constructor and returned to nobody**, so the tab ran as
+  a real, signing peer whose key was in neither durable drawer. `held_keypairs` answered *correctly*
+  that we do not hold it. ⇒ ***an identity generated where the caller cannot see it is an identity
+  nobody holds*** — and every *"do we hold this"* question then answers **no** about the thing the
+  process is definitionally running as. `EntityApp::ephemeral_primary` mints it in our own code and
+  records it — a witness at the mint, so a third ephemeral construction path cannot forget it.
+  **Recorded, never persisted:** an ephemeral arm writing an identity is the vault clobber the 1a
+  durability gate exists to refuse. (**The slot holds the KEY.** It held only the derived id for a
+  day, on *"a slot holding a signing key is a slot somebody eventually signs with"* — true, and
+  protecting against the wrong thing: this session **is** that peer and holds the key in the SDK
+  regardless, so id-only bought no safety and cost the one thing the identity is for.)
+  ⭐⭐ **THE SPLIT THAT MADE THE DECISION TESTABLE HAS NOW EATEN THE SAME FUNCTION TWICE, SO IT IS THE
+  ENTRY AND NOT A NOTE.** The 09-16 lesson — *when you split an impure lookup out to make a decision
+  testable, the lookup is now the untested half, and it is the half that fails in production* — was
+  written **about this function**, in its own doc comment, and the next defect landed in exactly that
+  gap. A pure `decide_author_key` is gated every way; *which drawers do we look in* was covered by
+  nothing, twice. ⇒ **the split is still right, and it owes a test of the LOOKUP** — here
+  `set_ephemeral_identity_for_test` exists solely so the `SessionOnly` arm, whose only real filler is
+  `cfg(wasm32)`, is reachable from a native gate at all.
+  ⛔⭐⭐ **THE SENTENCE WAS WRONG *AND SO WAS THE REFUSAL* — corrected 2026-09-17, one day later, and
+  the corrected claim is the entry. *PERSISTENCE IS NOT PERMISSION.*** What stood here said the
+  refusal was right: *a temporary identity genuinely may not author, the post would land in a tree
+  that evaporates, signed by a peer nobody can reach again.* The operator rejected it on sight and
+  reading the convention says they were right. **Both halves are false.** It **is** the profile's —
+  this session is that peer, holds its key and signs every message with it — and *kept* is a
+  different question from *allowed*: nothing in `APP-CONVENTION-FEED` conditions authorship on
+  durability, a peer writes entries into its own tree, and that write **is** the publish
+  (`REFERENCE-PUBLISHING-PIPELINE` §0.0, which this file already carries two entries about).
+  ⇒ ***a surface that withholds a control because the result is temporary has decided, on somebody's
+  behalf, that a temporary thing is not worth doing.*** Sibling to the browse-list correction three
+  entries down — *"it is not persisted" is not an answer to "it was not yours to choose"* — pointed
+  the other way: there a durability argument excused a decision we had made for someone, here it
+  removed a decision that was theirs to make.
+  **What survives is the AP40 half, and it is the smaller one.** *That peer is not yours* and *this
+  tab is running on a temporary identity* really are two facts with different remedies, and
+  `can_author: bool` → `AuthorKey` was the right move; what was wrong was putting both under
+  *withheld*. Now: **two arms author**, `SessionOnly` carries a **caveat beside a working composer**,
+  and exactly one arm refuses — for a reason about *whose peer it is* rather than about how long
+  anything lasts.
+  ⚠⚠ **AND THE GATE WRITTEN TO FIX THE WORDING PINNED THE REFUSAL BY NAME — AP45, in the place it is
+  hardest to see.** `a_second_tab_is_not_told_its_own_profile_lost_its_key` asserted, in its own doc
+  comment, *"a temporary identity genuinely may not author… this gate does NOT assert that tab 2 can
+  post"*, and the native gate said *"a refusal must not offer the composer"*. Both green, both
+  reading as considered decisions. ⇒ ***when you split a collapsed refusal into two, ask of each arm
+  whether it should have been a refusal at all*** — the split makes the arms legible and is exactly
+  what makes the surviving one look examined.
+  ⚠⚠ **THE FIFTH CAUSE OF A NEUTER THAT PASSES, MEASURED HERE: THE PREDICATE HAD NO CONSUMER.**
+  Falsifying the browser gate by restoring `AuthorKey::may_author` to `Held`-only came back **GREEN**.
+  Not the gate, not the neuter, not the rig: `render_composer` branched on *"is there a refusal
+  key"*, so `can_author()` was a predicate **the surface never read**, and the model and the DOM were
+  two expressions of one rule (C15) that could disagree with nothing to say so. The renderer asks
+  `can_author()` for **where** the note goes and `compose_note()` for **what** it says — two facts,
+  all four combinations expressible, only the model choosing. ⇒ ***when a neuter on a decision
+  passes, grep for the decision's consumers before doubting the gate*** — a model predicate a
+  renderer re-derives is a predicate the product is not using. Re-falsified after wiring, and the
+  dump is the whole argument: `can_author: false` under a rendered sentence reading *"You can post,
+  and it is yours and signed."*
+  ⚠ **The population's missing shape was A SECOND BROWSER TAB, and every gate here opens one.**
+  Fourth instance of *a test population you generated cannot contain the shape you are missing*, and
+  the newest axis: not an encoding, not another implementation, not a profile — a second *window onto
+  the same profile*. Two multi-tab gates existed (`second_tab_detects_secondary_and_warns` and its
+  Direct twin) and both assert the **banner**; nothing had ever asked a second tab to do anything.
+  `a_second_tab_may_post_as_the_temporary_identity_it_is_running_on` opens one, **presses Post**, and
+  **tab 1 is a control that runs first** — without it a run where *neither* tab can author passes
+  every row. It deliberately does **not** assert the post survives: an ephemeral tree goes with the
+  tab, which is what the caveat tells the person, and durability is
+  `a_default_profile_can_post_…_survives_a_reload`'s subject on the arm that has it.
+  ⚠ **And it was reported as a regression and was not one.** Nothing in the two commits before it
+  touched this path; what changed was the reporter's *environment*, not the code. This file already
+  says *"confirm which build the reporter is running before tracing code"*; the addition is
+  ⇒ ***when a report says "we're back to getting this", ask what changed around the build as well as
+  in it*** — and the cheapest instrument was the one that settled it in four minutes: **drive the
+  reported surface in a real browser and then drive it again in a second tab**, rather than reading
+  the diff.
+- ⭐ **A STANDING FACT IS SAID ONCE; ONLY NEWS IS SAID PER EVENT — and the tell is that the sentence
+  does not change (2026-09-17).** Two pieces of copy on this surface repeated themselves at somebody
+  who had already read them. *"Posted. Anyone connected to you can read it."* — true, and a property
+  of **having a feed at all** rather than of this post, so every press restated it; the reach belongs
+  once, in the pane hint, and a confirmation confirms and stops. The temporary-identity caveat was
+  drawn above the composer on **every render for the life of the tab**, when it is owed once, before
+  they type. ⇒ **ask of every sentence a surface emits: would this have been different if the act
+  had gone differently? If not, it is not a report of the act** — and a surface that narrates
+  standing conditions at each press trains people to stop reading the line that will one day matter.
+  ⛔ **The dismiss reaches the CAVEAT and never the REFUSAL**, which is the only structural part: a
+  refusal explains a control that is *absent*, so hiding it leaves a dead box with nothing beside
+  it. `compose_caveat()` is a third accessor rather than a third meaning loaded onto
+  `can_author`/`compose_note` — *there is something to tell you* is not *and therefore you may not*,
+  and *you have not read it yet* is a third fact. Session-scoped: a fresh tab is a fresh temporary
+  identity. Gate: `dismissing_reaches_the_caveat_and_never_the_refusal`, enumerated over every arm,
+  two neuters landing on two different assertions.
 - ⭐ **AN ENUMERATION OF WHAT A MODULE DOES *NOT* CONTAIN IS A CLAIM ABOUT CODE NOBODY HAS WRITTEN YET
   (2026-09-15).** `feed.rs`'s module doc opened *"four of the convention's six types… `collection` and
   `mirror` are deliberately not here"* — while `FEED_MIRROR_TYPE` was defined **twenty lines below that
@@ -2902,6 +3378,17 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   scans raw lines, so prose about a tag and an emission of one are the same bytes to it. Segments are
   spelled with a leading slash (`open_target::FEED_SEGMENT`) and **do not write a quoted `app/…` into
   a comment in this repo.**
+  ⭐ **FIFTH, 2026-09-17, in a TEST CONSTANT — pinning a cross-impl comparand as the whole key.**
+  `const MIRROR_KEY: &str = "app/feed/mirrors/{coordinate}"` reds `vocab-lint` with
+  **`implemented-undeclared`**, i.e. the analyzer's own costly false direction: accusing a conformant
+  seat of inventing vocabulary, over a tag nobody emits. ⇒ **pin the COORDINATE and take the prefix
+  from the module that owns it** — which is better test hygiene anyway (the coordinate is what the
+  other seat has to reproduce; §6.0.1's prefix is not the test's to restate). ⇒ ***the analyzer
+  cannot tell a tree path from a type tag in this corpus and the corpus is not going to change, so
+  the durable fix is on the EMITTING side — derive keys, never spell them*** — and note the four
+  before it were a trailing slash, a complete path, a parametric family and a comment, i.e. every
+  instance has been a different *kind* of line, which is why a rule phrased about any one of them
+  keeps not covering the next.
   ⇒ ⭐ **THE `sites` GUESS IS RETIRED — 2026-09-15, `src/publication_probe.rs`** — and not because a
   binding learned to say it. **The publisher can be asked.** Read `open_target::EntryPoint` before
   designing anything that browses, because its two arms are the answer to *"why is `sites` a
@@ -3287,6 +3774,37 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   about a publisher that changes between reads — and their own readback is **not** cross-impl
   evidence (one encoder, one decoder, both theirs), which their gate header says. Ours is the
   reader half.
+- ⭐⭐ **CORRIDOR ③ — OUR HALF OF `FEED-12`, AND THE FINDING IS ABOUT WHAT A CORRIDOR CANNOT MEASURE:
+  ANOTHER IMPLEMENTATION'S BYTES ARE A DIFFERENT POPULATION, NOT AUTOMATICALLY A DIVERGENT ONE
+  (2026-09-17, `src/crossimpl_feed.rs`).** We gathered corridor ①'s author through the shipped
+  gatherer, pinned §6.0.1's derived key as the cross-seat comparand, and wrote the closure gate's doc
+  comment claiming that — at last — §6.1's byte-preservation `MUST` was measured cross-impl, since
+  `feed_mirror`'s own A→B→C says against itself that every entry in it came from our encoder and
+  §6.1 names that hazard by hand (*"a round trip through bytes your own encoder produced proves
+  nothing"*).
+  ⛔ **Ran the neuter — carry `row.entry.to_entity()` instead of the obtained bytes — and it came
+  back GREEN.** It reds only the gate built on a **synthetic** entry carrying a field the reader does
+  not model. Our decoder round-trips every entry in their fixture losslessly **because both seats
+  model the same fields**, which is the corridor *working* and is exactly why it cannot falsify the
+  rule written for when they do not. ⇒ ***the property that repairs "my own encoder wrote the
+  fixture" is an UNKNOWN FIELD, not a foreign author*** — so a cross-impl fixture needs one authored
+  by *them*, one flag at cut time, the same shape as `FEED-14`'s two-cut ask. Routed; until it
+  exists, that `MUST` is measured by a synthetic entry and by nothing cross-implementation.
+  ⭐ **The transferable half is bigger than the fixture: "we ran it against another implementation"
+  reads as coverage of every cross-implementation property, and coverage is per-PROPERTY.** Ask what
+  the two populations differ in, not whether they have different authors — and the cheap instrument
+  is the one that caught it here: **neuter the rule you are claiming to measure, in the gate you just
+  wrote, before you write the sentence claiming it.** Same family as *if nothing you opened
+  contradicted you, you did not run a check*, applied to a gate's own passing.
+  **Also built, and both were doc claims until this session:** `FEED-13`'s (a) *the head's encoded
+  size does not follow the member count* — byte-identical heads for a 4- and a 40-member view of one
+  subject at one instant, with the membership asserted to differ and the pages asserted to carry it;
+  and (c) *a reader fetches the head and one page and stops*, which was asserted on **entries
+  returned** and is therefore satisfied exactly by a reader that fetches every page and truncates.
+  Counted at the source now (scoped to the mirror prefix, or it measures membership), with the
+  whole-view read beside it as the control — **a count that cannot go up measures nothing** — and the
+  pre-existing entry-count gate stays **green** under the neuter, which is how we know it was
+  unmeasured rather than redundantly measured.
 - ⭐⭐ **CORRIDOR ② IS THE *AUTHORING* BOUNDARY, AND A COUNTERPART'S GATE BEING LOUDER THAN THE
   AUTHORITY IT RESTATES IS A DEFECT IN THE AUTHORITY (2026-09-16, `entity-core-papers`).**
   Corridor ① is somebody else's *wire bytes* through our reader. This is somebody else's **authored
@@ -3534,6 +4052,18 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   in the opposite direction, one day later. **A named search finds packets; it does not find the file
   whose whole job is to say what they are waiting on** — and *"it did not exist last time we looked"* is
   not a reason not to look again. **Mirror their ids unrenumbered** so one fact cannot acquire two.
+  ⭐ **THIRD FACE, 2026-09-17, AND IT IS THE ONE THAT COSTS A SEAT WORK: A FOLD IS NOT A DELIVERY, SO
+  A ROW READING *"ROUTED, UNANSWERED"* IS A CLAIM ABOUT OUR INBOX AND NEVER ABOUT THEIR TREE.** Four
+  of our asks (`A-67`–`A-70`) were **ruled and folded into four documents on the day we filed them**
+  while our board carried them as awaiting an answer — and one of them said, in as many words, *"we
+  hold the type UNWIRED and will publish no profile bytes while this is open."* It was not open. Arch
+  named it against themselves as their own consumer-axis rule, and the half that is **ours** is the
+  read direction: the outbox rule above says the tracker cannot see what they did that was not
+  addressed to us, and *a ruling on our own ask* is the case where that is least intuitive, because
+  the ask was addressed to them. ⇒ **when an ask is rowed as routed and you are about to act on its
+  being open, `git log <their tip at filing>..HEAD` over the documents it names** — the same
+  instrument as the published-corpus grep, pointed at a counterpart. *A held decision on a stale
+  premise is more expensive than a late answer.*
 - **WHEN THE CLAIM IS ABOUT WHAT YOU *EMIT*, READ WHAT YOU *PUBLISHED* — `A-35` withdrawn 2026-09-10,
   after being escalated in three consecutive packets on a premise nobody had measured.** `REFERENCE`
   §4's `[MUST NOT]` binds *"a producer that emits the atom at all"* against emitting `entity://` **in a
@@ -4491,6 +5021,22 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   structurally rather than by an A/B:** the test opens the **System Monitor**, nothing anywhere
   compares `ResolvedPage` for a rebuild, and the diff touched no window chrome — *ask whether your
   change can REACH the failing surface before you spend half an hour bisecting it.*
+  ⚠ **CORRECTION 2026-09-17: "concurrent load" is NOT what the numbers say, and "4/4 green alone" is
+  true only of a CLEAN `dist/`.** Measured at `ed2cec40` on a private grid, unfiltered **87/1** with
+  this as the only red. It reds **in isolation too** — 6.65 s, nothing else on the grid — so load is
+  not the differentiator. What tracks it is whether `dist/` carries fixture publish output: **clean
+  dist 0 failures in 4 runs; polluted dist 2 failures in 3**, at the same load average (~4.9–5.1).
+  ⇒ **the suite pollutes its own rig**: `emit_deployment_config_fixture` and its siblings default
+  their out-dir to `"dist"` (`content_site/publish.rs`), so by the time this gate runs in an
+  unfiltered pass, `dist/` is serving a peer tree + `sites/` + `content/` + `transport-profile`, and
+  every later test boots against it. `SKIP_BUILD=1` is what makes that persist across runs; a bare
+  `make e2e-worker` rebuilds `dist/` and washes it out — which is why the gate looks clean when you
+  re-run it the obvious way, and why the isolation that "proves" it was load is the isolation that
+  also cleaned the rig. **Both arms are intermittent, so neither number is a threshold** — the
+  mechanism is NOT established (a populated tree plausibly costs extra boot work and extra window
+  rebuilds, but nothing here measured that). ⇒ ***when a gate is green alone and red in the suite,
+  check what the suite WROTE, not only what it was running*** — a shared out-dir is rig state the
+  same way a stale grid is, and it survives the run.
 - ⚠ **AND THE RUN BEFORE THOSE WAS INVALID BY MY OWN HAND: I falsified a lint WHILE the suite was in
   flight**, editing `src/content_site/resolver.rs` four times (two neuters, two `git checkout`s).
   This file already says *"do not edit `src/` while the suite is running — fixtures shell out to
@@ -4545,6 +5091,29 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   **The grid's `ready` flag means "a slot is free", not "the hub is up"** — measured: it reads
   `false` while a run holds the slot. That makes it right for `e2e-grid` (fresh container) and
   wrong as a hard preflight, which is why the two use it differently.
+  ⭐ **A FOURTH CAUSE, 2026-09-16, AND IT IS NOT THE BOX: A FIXED SETTLE IS A THRESHOLD NOBODY
+  EARNED.** A load excuse was written into a handoff — two runaway `make` processes from another
+  seat — and it did not survive being checked: **load average 3.2 on 32 cores**, and the same
+  invocation on a fresh grid came back **82/1** against the recorded 83/0, with one specific,
+  nameable failure instead of a moving set. ⇒ **"the box is busy" is a measurement, not an
+  adjective; take the load average before you write it down.**
+  The one real failure was `worker_boots_and_opens_all_windows`, and the diagnosis was in the
+  failure's own printout: the `put` scrollback it echoed was **the output of `help`**, so 800 ms
+  after dispatching Enter the shell had not echoed the command, let alone run it. `shell_submit`
+  dispatches and then `sleep`s a flat `settle_ms` — the shape this file already forbids for
+  `poll_json`, at 74 call sites. **Raising the number buys a quieter box and loses the next one**;
+  `shell_poll` re-issues the command until its own output satisfies a predicate or a deadline, which
+  is strictly stronger, since a mirror that never fills still reds. It **re-submits rather than
+  re-reads**: an `ls` renders its answer once, so re-reading its scrollback polls a photograph.
+  ⛔ **And the vacuity under it, which is the half worth carrying: `last_shell_output` falls back to
+  the WHOLE scrollback when the command never echoed — and the needle was in the part the fallback
+  added.** The assertion is that `ls app/e2e_deltest` contains `marker`, and the
+  `put app/e2e_deltest/marker marker …` echo three lines up contains it too. So a shell that never
+  ran the listing returned a haystack in which the needle was **guaranteed**, and the create half of
+  a delete-reflect gate could pass for the exact reason it should fail. ⇒ ***when a fallback widens
+  the haystack, ask whether the needle lives in the part it added*** — and keep *absent* apart from
+  *empty* (`last_shell_output_strict`) wherever PRESENCE is the claim. The absence half keeps the
+  lenient one on purpose: there the same fallback fails safe.
 - **A FAILING e2e test leaks its WebDriver session, and the next run then hangs wearing the
   costume of a product wedge.** An assertion panics *before* `client.close()`, so the session is
   never quit; the node is `maxSessions=1` and Selenium's `sessionTimeout` is **300 s**, so the

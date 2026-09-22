@@ -625,3 +625,30 @@ pub fn wire_site_toggle(
     );
 }
 
+
+/// ⭐ **A wall-clock millisecond as the person's own local date and time.**
+///
+/// Formatted by the **platform**, in their locale and time zone —
+/// `toLocaleString` rather than a hand-rolled `YYYY-MM-DD`, which would be one
+/// more place this app decides what a date looks like for someone whose
+/// convention it does not know.
+///
+/// ⛔ **It renders whatever it is given, including `0`.** A feed entry's
+/// `created_at` is the author's own claim and `FEED-R8` is explicit that a
+/// reader **MUST NOT** reject an entry for an implausible timestamp — so a
+/// surface that special-cased the epoch into *"no date"* would be judging one,
+/// which is the same refusal wearing a formatter's clothes. What a caller may
+/// legitimately do is not call this at all when it has no timestamp to show.
+///
+/// The fallback is the raw number: a locale implementation that answers with an
+/// empty string leaves the value on screen rather than a blank where a date was
+/// promised.
+pub fn local_datetime(stamp_ms: u64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(stamp_ms as f64));
+    let s: String = d.to_locale_string("default", &js_sys::Object::new()).into();
+    if s.is_empty() {
+        stamp_ms.to_string()
+    } else {
+        s
+    }
+}

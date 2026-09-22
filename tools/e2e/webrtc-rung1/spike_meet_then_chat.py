@@ -176,9 +176,15 @@ MAX_MISSED = int(os.environ.get("MAX_MISSED", "3") or 3)
 # one more grace period before `disconnected`.
 LIVENESS_DEATH = MAX_MISSED * (KEEPALIVE_INTERVAL + KEEPALIVE_TIMEOUT) + KEEPALIVE_TIMEOUT
 
-A_BASE, B_BASE = "http://localhost:4446", "http://localhost:4447"
-APP = "http://host.containers.internal:8092"
-NODE_WS = "ws://host.containers.internal:4071"
+# Slot-aware. `rung1_repro.sh` exports these so several copies of the whole rig
+# can run side by side on one box (RTC_SLOT — six worktrees share this machine,
+# and the rig's teardown used to demolish whichever run it found). The defaults
+# ARE slot 0's literals, i.e. what every invocation before RTC_SLOT existed
+# used, so a bare `python3 spike_*.py` against a hand-built rig still works.
+A_BASE = os.environ.get("RTC_A_BASE", "http://localhost:4446")
+B_BASE = os.environ.get("RTC_B_BASE", "http://localhost:4447")
+APP = os.environ.get("RTC_APP", "http://host.containers.internal:8092")
+NODE_WS = os.environ.get("RTC_NODE_WS", "ws://host.containers.internal:4071")
 
 def rq(base, method, path, body=None, timeout=60):
     data = json.dumps(body).encode() if body is not None else None
@@ -597,7 +603,7 @@ def provision(base, sid, node_peer, label):
 # directly. This is the ONLY place that sees both halves of a rendezvous — the
 # browsers can each say what they did, and neither can say whether the node
 # heard it.
-NODE_LOG = "/tmp/sig_repro.out"
+NODE_LOG = os.environ.get("RTC_NODE_LOG", "/tmp/sig_repro.out")
 
 def node_log_lines():
     """Current length of the node log, as a mark to measure activity AFTER."""

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Boot one browser (webrtc_enable=1) and dump every webrtc-related log line."""
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
 
-BASE = "http://localhost:4446"
-APP = "http://host.containers.internal:8092"
-NODE_WS = "ws://host.containers.internal:4071"
+# Slot-aware — see the note in spike_meet_then_chat.py. Defaults are slot 0's
+# literals, so a hand-driven run is unchanged.
+BASE = os.environ.get("RTC_A_BASE", "http://localhost:4446")
+APP = os.environ.get("RTC_APP", "http://host.containers.internal:8092")
+NODE_WS = os.environ.get("RTC_NODE_WS", "ws://host.containers.internal:4071")
 
 def rq(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None

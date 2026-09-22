@@ -674,7 +674,7 @@ federation-vectors:
 # type-checks surfaces its compile errors 11 minutes into a Selenium run, on the
 # box that happens to have a grid. It needs NO grid to compile.
 lint: image
-	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && python3 tools/publish-doc-check.py && ./tools/ecf-lint.sh && ./tools/vocab-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && python3 tools/i18n_drift_check.py && ./tools/tree-hygiene.sh)
+	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && python3 tools/publish-doc-check.py && ./tools/ecf-lint.sh && python3 tools/fidelity-lint.py && ./tools/vocab-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image
@@ -1227,121 +1227,6 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet-noreload: PASS"; else echo ">>> e2e-webrtc-meet-noreload: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
-.PHONY: e2e-webrtc-stall
-# ONE SIDE STALLS — the long-running-peer report, in a browser.
-#
-# Two browsers meet and chat, then A's main thread is blocked so its frames stop
-# the way a backgrounded tab's do, while B keeps its Chat open and keeps
-# offering. Then both send again. This is the configuration the report describes
-# and the one NO gate here has ever run: every other WebRTC gate drives both
-# browsers continuously.
-#
-# It is the browser evidence for H1/H2, which are fixed in `entity-core-rust` at
-# `c3f2b76` and — until this runs — only ever in THEIR unit tests. Both fixes
-# are present at `ad52ab0`: `find_counterpart_offer` takes the newest offer and
-# carries an `already_answered` guard, and `carrier::connection` re-dials when
-# the cached node connection's reader has ended.
-#
-# STALL_SECS has ONE validity bound and then CLASSIFIES — `stall_preconditions`
-# prints which case the run is testing, because they answer different questions:
-#   <= 30s   REFUSED — `wake_probe::decide` returns NoGap, so nothing re-checks
-#            anything and a green run would be satisfied by its fallback
-#    40s     stale-offers    gap noticed, offers still in the bucket, link UP
-#    90s     gap-only        offers expired, link still believed up
-#   150s     connection-dies past the 130s liveness deadline
-#            (max_missed 3 x (interval 30s + timeout 10s) + 10s grace) — the
-#            REPORTED shape, and the only one reaching the establishment path
-#
-# MEASURED 2026-09-15, kernel ad52ab0, and both results are worth knowing:
-#   40s  → PASS. gap 40013ms seen by A, none by B (control), channel SURVIVED
-#          (opens 1->1), delivery resumed on the first send.
-#   150s → INCONCLUSIVE (exit 2), and far more informative than a pass: A's gap
-#          was 150007ms, yet the channel STILL survived — so nothing had to
-#          re-establish — while B logged **9 §6.5 failures** at
-#          `role=answerer, sdp_exchange=INCOMPLETE, bucket 8->0 msg(s)`, which
-#          is a CORRELATION failure by `WebRtcError::Timeout`'s own definition.
-#          ⇒ B was rebuilding a path it still had. The reported END state is
-#          still not reproduced, because a one-sided freeze does not kill the
-#          existing data channel; that needs the node-restart variant.
-# Direct arm (it implies NO_RELOAD, like the other in-session gates).
-e2e-webrtc-stall:
-	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-stall SKIPPED: podman not found on host"; exit 0; }
-ifneq ($(strip $(BUILD)),)
-	@$(MAKE) wasm
-endif
-	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-stall BUILD=1')"; exit 1; }
-	@echo ">>> e2e-webrtc-stall: meet, chat, freeze ONE side $(or $(STALL_SECS),40)s, chat again"
-	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
-	@rc=0; NO_RELOAD=1 STALL_SECS=$(or $(STALL_SECS),40) SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
-	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
-	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-stall: PASS"; \
-	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-stall: INCONCLUSIVE (rc=2) — the run could not put the mechanism at risk; see the precondition line above"; \
-	 else echo ">>> e2e-webrtc-stall: FAIL (rc=$$rc)"; fi; \
-	 exit $$rc
-
-.PHONY: e2e-webrtc-node-restart
-# THE NODE GOES AWAY AND COMES BACK — H2's discriminator, in a browser.
-#
-# H2 is *"the WebRTC carrier holds a dead connection to the rendezvous node
-# forever"*. It was fixed upstream at `c3f2b76` (`carrier::connection` checks
-# `reader_ended()` and re-dials) and, until this target, only ever in THEIR unit
-# tests — no rig here had taken the node away, so nothing here had seen either
-# the defect or the fix.
-#
-# ⭐ THE DISCRIMINATING ACTION MUST NEED THE NODE. Two browsers with an open data
-# channel keep talking with the node in the bin, so a gate asserting delivery
-# passes with the carrier permanently wedged. The assertion is therefore a
-# SECOND MEET at a fresh tag — a round trip through the node by construction —
-# plus the un-assertion that the conversation they already had is untouched,
-# because a node is an introducer and not a relay (§1.3).
-#
-# The node returns at the SAME peer id (`--keypair`, a stable identity the rig
-# generates per run and removes on teardown). Ephemeral is the node's own
-# default and is right for a stateless introducer; here it would make a failure
-# to reconnect explained by the identity change, which is a different finding.
-# The restart subcommand asserts the identity did not move before returning.
-#
-# Three states, like its siblings: a restart that failed, or one that ran before
-# the peers had ever spoken, is INCONCLUSIVE and not a pass.
-e2e-webrtc-node-restart:
-	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-node-restart SKIPPED: podman not found on host"; exit 0; }
-ifneq ($(strip $(BUILD)),)
-	@$(MAKE) wasm
-endif
-	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-node-restart BUILD=1')"; exit 1; }
-	@echo ">>> e2e-webrtc-node-restart: meet, chat, KILL THE NODE, meet again"
-	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
-	@rc=0; NO_RELOAD=1 NODE_RESTART=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
-	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
-	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-node-restart: PASS"; \
-	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-node-restart: INCONCLUSIVE (rc=2) — the run could not put the mechanism at risk; see the panel above"; \
-	 else echo ">>> e2e-webrtc-node-restart: FAIL (rc=$$rc)"; fi; \
-	 exit $$rc
-
-.PHONY: e2e-webrtc-node-restart-control
-# THE CONTROL FOR THE GATE ABOVE, AND IT IS NOT OPTIONAL READING.
-#
-# Identical run with the node NOT restarted. It exists because two earlier cuts
-# of that gate's assertion measured nothing and this arm is what caught both:
-# `met_ids` scrapes a CUMULATIVE shell scrollback, so a membership test was
-# already true before the second meet; and read as a count it does not move in
-# EITHER arm, because a second meet never re-announces a peer the shell has
-# already introduced. A flat count would have been published as H2 reproduced.
-#
-# Run it whenever the restart gate's verdict changes. If this arm also reports
-# `node lines after the mark: A=0 B=0`, the observable is broken and the other
-# arm's red is a rig fault, not a finding.
-e2e-webrtc-node-restart-control:
-	@command -v podman >/dev/null 2>&1 || { echo ">>> SKIPPED: podman not found on host"; exit 0; }
-	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first"; exit 1; }
-	@echo ">>> e2e-webrtc-node-restart-control: the same run, node untouched"
-	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
-	@rc=0; NO_RELOAD=1 NODE_RESTART=1 NODE_RESTART_CONTROL=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
-	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
-	 echo; if [ $$rc -eq 0 ]; then echo ">>> control: PASS — the observable works, so a red on the restart arm is a finding"; \
-	 else echo ">>> control: rc=$$rc — the observable itself is in question; do NOT read the restart arm"; fi; \
-	 exit $$rc
-
 .PHONY: e2e-signaling-node
 # The rung-1 rig's signaling node, built INSIDE the image into this repo's own
 # target dir — the rig's own `cargo build` needs a host toolchain, which a
@@ -1818,6 +1703,24 @@ appimage: wasm-release
 APPS_STAGE   := .apps-stage
 INGEST_STAGE := .ingest-stage
 FEED_STAGE   := .feed-stage
+# The FOURTH axis, and it had no make variable at all until 2026-09-17 —
+# `--gather` shipped on 2026-09-12, five days after `FEED=` was added for
+# exactly this reason and recorded in AGENTS.md as *"an axis with a flag and no
+# staged make variable is an axis a person cannot publish."* The lesson was
+# written down one axis over and did not fire on the axis that landed next.
+#
+#   GATHER='<peer_id>@<dir> <peer_id>@<dir>'   → --gather=<peer>@<staged> …
+#
+# Space-separated because §6 lets one publish carry several authors, and the
+# spelling is the CLI's so a refusal naming `--gather` reads back here without
+# a lookup. Each source is staged under the AUTHOR's own peer id rather than an
+# ordinal: `parse_gathers` already refuses the same author twice (one subject,
+# one derived key), so the id is unique by the rule that matters and a stage
+# path cannot collide without the binary having already refused.
+GATHER_STAGE := .gather-stage
+# The author half and the directory half of one `peer@dir` spec.
+gather_peer = $(word 1,$(subst @, ,$(1)))
+gather_dir  = $(word 2,$(subst @, ,$(1)))
 # Stage an out-of-mount INGEST / APPS_DIST into repo-local dirs, so a path
 # ANYWHERE on the host works with a publish that runs in a container mounting
 # only the parent meta dir.
@@ -1840,26 +1743,54 @@ FEED_STAGE   := .feed-stage
 # without still having what produced it), so staging there would copy a
 # multi-hundred-megabyte corpus to look at none of it.
 define stage_publish_sources
-	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE))
+	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE) $(GATHER_STAGE))
 	$(if $(VERIFY),,$(if $(INGEST),@echo "==> staging INGEST=$(INGEST) → $(INGEST_STAGE)/ (the publish container mounts only this repo)"))
 	$(if $(VERIFY),,$(if $(INGEST),@cp -r $(INGEST) $(INGEST_STAGE)))
 	$(if $(VERIFY),,$(if $(APPS_DIST),@echo "==> staging APPS_DIST=$(APPS_DIST) → $(APPS_STAGE)/"))
 	$(if $(VERIFY),,$(if $(APPS_DIST),@cp -r $(APPS_DIST) $(APPS_STAGE)))
 	$(if $(VERIFY),,$(if $(FEED),@echo "==> staging FEED=$(FEED) → $(FEED_STAGE)/"))
 	$(if $(VERIFY),,$(if $(FEED),@cp -r $(FEED) $(FEED_STAGE)))
+	$(if $(VERIFY),,$(if $(GATHER),@mkdir -p $(GATHER_STAGE); for g in $(GATHER); do \
+	  peer=$${g%%@*}; dir=$${g#*@}; \
+	  if [ "$$peer" = "$$dir" ] || [ -z "$$peer" ] || [ -z "$$dir" ]; then \
+	    echo "make: GATHER spec '$$g' is not <peer_id>@<dir>" >&2; exit 1; fi; \
+	  echo "==> staging GATHER=$$g → $(GATHER_STAGE)/$$peer/"; \
+	  cp -r "$$dir" "$(GATHER_STAGE)/$$peer"; \
+	done))
 endef
 define unstage_publish_sources
-	@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE)
+	@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE) $(GATHER_STAGE)
 endef
 # The flags every staged publish passes — the staged paths, never the caller's.
-INGEST_STAGED_FLAG = $(if $(INGEST),--ingest=$(INGEST_STAGE),)
+#
+# ── THE SITE ARM HAS NO DEFAULT, HERE OR IN THE BINARY ────────────────────────
+# `publish` takes exactly one of `--ingest=` / `--demo-sites` / `--no-sites` and
+# REFUSES silence (`SiteSource`, src/content_site/publish.rs). The make spelling
+# is deliberately the same three words, so a refusal naming `--demo-sites` is
+# read back here as `DEMO_SITES=1` without having to look anything up:
+#
+#   INGEST=<dir>    a render/ emit           → --ingest=<staged>
+#   DEMO_SITES=1    the bundled demo set     → --demo-sites
+#   NO_SITES=1      a feed-only/apps-only    → --no-sites
+#
+# **Do NOT give this a default.** Defaulting to `--demo-sites` when INGEST is
+# empty reproduces, one layer up, exactly the defect that was fixed one layer
+# down: silence publishing content nobody asked for, over a domain's real sites,
+# exiting 0. `<coordination-tree>`'s `estate.conf` reached the same rule for the
+# same reason — *"all three are required and none of them defaults."*
+#
+# Nothing is emitted under VERIFY=1 and that is correct: `--verify` reads an
+# output tree and resolves no source, so the binary returns before the arm is
+# examined.
+SITE_ARM_FLAG = $(if $(VERIFY),,$(if $(INGEST),--ingest=$(INGEST_STAGE),$(if $(DEMO_SITES),--demo-sites,$(if $(NO_SITES),--no-sites,))))
 APPS_STAGED_FLAG   = $(if $(APPS_DIST),--ingest-apps=$(APPS_STAGE),)
 FEED_STAGED_FLAG   = $(if $(FEED),--ingest-feed=$(FEED_STAGE),)
+GATHER_STAGED_FLAG = $(foreach g,$(GATHER),--gather=$(call gather_peer,$(g))@$(GATHER_STAGE)/$(call gather_peer,$(g)))
 tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(SITE_ARM_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(GATHER_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(WINDOW_TARGET),--window-target=$(WINDOW_TARGET),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
@@ -2011,18 +1942,33 @@ pair-check:
 # (the default is repo-relative): publish runs in-container with only the parent
 # meta dir bind-mounted, so an absolute OUT like `/tmp/x` writes to the
 # container's throwaway /tmp and the result never reaches the host. Today the source is a fresh
-# peer seeded with the demo site set (a demo/SSG generator) — publishing a
+# peer seeded from whichever SITE ARM you name — publishing a
 # durable dedicated hosting peer's real tree is the deferred peer-source
 # seam (src/content_site/publish.rs). Serve the result with `make serve`
 # (open /static-demo/sites/<peer>/) or the printed python3 one-liner.
 # Emits BOTH forms into one dir: legacy-web `.html` (sites/{peer}/…, no-JS)
 # AND entity-native `.bin` content data (content/… + {peer}/sites/…, what a
 # live peer ingests). Sites-scoped — never the whole peer tree.
+#
+#   ⚠ THE SITE ARM IS REQUIRED — exactly one of INGEST= / DEMO_SITES=1 /
+#   NO_SITES=1, and `make site` with none of them REFUSES. Silence used to mean
+#   "publish the bundled demo set", which is the same command line as forgetting
+#   INGEST=, and the clean is wholesale — so the forgetful publish replaced a
+#   domain's real sites with demo ones under that domain's own identity and
+#   exited 0. The three are the same three words `publish` prints in its refusal.
+#
 #   INGEST=<dir>    source sites from an on-disk ingest directory (disk→tree) —
-#                   any generator's output OR a hand-authored folder — instead of
-#                   the bundled demo seed. One site dir, or a parent of many.
+#                   any generator's output OR a hand-authored folder. One site
+#                   dir, or a parent of many.
 #                   Format: docs/architecture/guides/PUBLISH-INGEST-FORMAT.md;
 #                   worked example: examples/entity-demo/ (make site INGEST=…).
+#   DEMO_SITES=1    publish the bundled demo + entity-info set, ON PURPOSE. The
+#                   dev loop, and the two estate domains that serve it.
+#   NO_SITES=1      publish NO sites: a domain whose content is a feed and/or
+#                   apps. Pair it with FEED= and/or APPS_DIST=; on its own the
+#                   publish carries nothing and is refused. A site-free
+#                   DEPLOY_CONFIG=1 emits no `home_site` and needs
+#                   SURFACE=chrome, or SURFACE=window with a WINDOW_TARGET.
 #   FEED=<dir>      source this peer's OWN FEED from a directory of authored
 #                   posts (`*.md`, each with a `+++` TOML block carrying
 #                   `created_at`) — the third publish axis, same staging and
@@ -2042,7 +1988,12 @@ pair-check:
 #                   bundle served from this origin boots into the published home
 #                   site — no per-domain WASM rebuild. SURFACE=<chrome|site|
 #                   window> (default window), WINDOW_TYPE=<name> (default
-#                   "Site Browser", used when SURFACE=window), LOCKED=1 (kiosk,
+#                   "Site Browser", used when SURFACE=window),
+#                   WINDOW_TARGET=<entity+ref://…> (WHAT that window opens at —
+#                   a window type says which viewer, this says what it is
+#                   looking at; refused unless SURFACE=window, and refused when
+#                   the address routes to a different viewer),
+#                   LOCKED=1 (kiosk,
 #                   SURFACE=site only), CONFIG_SITE=<id> (default demo). Origin =
 #                   LIVE if set, else same-origin. chrome = the workspace;
 #                   window = maximized window (default a Site Browser), escapable;
@@ -2152,7 +2103,7 @@ site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(SITE_ARM_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(GATHER_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(WINDOW_TARGET),--window-target=$(WINDOW_TARGET),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 
 # ============================================================================
@@ -2256,13 +2207,21 @@ site-dist:
 
 # Bare-root SSG: render ONE site at the domain root (no sites/{peer}/{site}/
 # prefix, no entity branding) — the "just a site generator" output. Pick the
-# site with `SITE=<id>` (default: the demo site). Output dir = OUT (default
-# `dist/static-bare`). Serve with `make serve`-style static server and open /.
+# site with `SITE=<id>`. Output dir = OUT (default `dist/static-bare`). Serve
+# with `make serve`-style static server and open /.
+#
+# It takes the SAME site arm as `site` (`INGEST=` / `DEMO_SITES=1`), which it
+# could not before — the arm brought staging with it, so `make site-bare
+# INGEST=<any host dir> SITE=<id>` now works where the only route used to be the
+# bundled demo set. `NO_SITES=1` is refused here by the binary, correctly: this
+# mode renders a site.
 OUT_BARE ?= dist/static-bare
 site-bare: image
 	$(check_build_pair)
 	$(call CHECK_IN_TREE,site-bare,$(OUT_BARE),OUT_BARE)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT_BARE) --bare-root $(if $(SITE),--site=$(SITE),) $(if $(LIVE),--live=$(LIVE),))
+	$(stage_publish_sources)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT_BARE) --bare-root $(SITE_ARM_FLAG) $(if $(SITE),--site=$(SITE),) $(if $(LIVE),--live=$(LIVE),))
+	$(unstage_publish_sources)
 
 # Publish a NAME REGISTRY — the second half of the naming chain, and until now
 # the only publish verb with no make target (audit F3): the sole route was a bare
@@ -2362,7 +2321,7 @@ site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(SITE_ARM_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(GATHER_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(WINDOW_TARGET),--window-target=$(WINDOW_TARGET),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
 	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="

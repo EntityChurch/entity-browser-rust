@@ -25,6 +25,8 @@
 # can see them, then removes them. Never committed.
 /.apps-stage
 /.ingest-stage
+/.feed-stage
+/.gather-stage
 # Durable publisher identity (Makefile PUBLISH_DATA_DIR / ENTITY_DATA_DIR) — a
 # private keypair; NEVER commit it. The glob matters: the registry emitter
 # resolves a SEPARATE durable identity (`{data-dir}-registry/`, so that a

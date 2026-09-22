@@ -574,6 +574,61 @@ pub fn collapsible_header(ctx: &util::DomCtx, label: &str, open: bool, event: &s
     h
 }
 
+// --- Tabs (S2/S8) ----------------------------------------------------------
+
+/// One pane in a [`tabs`] strip.
+pub struct Tab<'a> {
+    /// What a person reads. A catalog lookup at the call site, never a literal.
+    pub label: &'a str,
+    /// The value dispatched when it is pressed, and the `data-tab` a gate reads.
+    /// **Stable and machine-shaped** — never the label, which is translated.
+    pub value: &'a str,
+    pub selected: bool,
+}
+
+/// ⭐ **A tab strip — the one way a window offers several panes.**
+///
+/// Use it when a window has two or more surfaces that are *alternatives*: you
+/// are reading somebody's feed, **or** writing your own, **or** administering
+/// the list. [`collapsible_header`] is the wrong atom for that and the
+/// difference is not cosmetic — a disclosure stacks, so opening the third
+/// section puts it below the first two, and a section below a hundred rows is
+/// a section nobody reaches. That is exactly how the Feed window ended up with
+/// *Your feed* a screen and a half under a publisher's archive. Collapse a
+/// section when it is **extra**; tab it when it is **instead**.
+///
+/// The selected pane is the caller's (model-held) state, like `collapsible_header`'s
+/// `open` — so a repaint cannot move somebody to a different pane, and a text
+/// box inside one survives a rebuild.
+///
+/// `field` is the `data-field` every button carries, so a gate clicks a pane by
+/// **`data-tab` value** rather than by its translated caption — the anchor
+/// lesson this repo has now paid for three times on one window.
+pub fn tabs(ctx: &util::DomCtx, field: &str, items: &[Tab<'_>], event: &str) -> Element {
+    let strip = util::create_element("nav");
+    strip.set_attribute("style", theme::TAB_STRIP).ok();
+    strip.set_attribute("role", "tablist").ok();
+    for item in items {
+        let b = util::create_element("button");
+        b.set_attribute("type", "button").ok();
+        b.set_attribute(
+            "style",
+            if item.selected { theme::TAB_ACTIVE } else { theme::TAB_INACTIVE },
+        )
+        .ok();
+        b.set_attribute("role", "tab").ok();
+        // Which pane is open must be recoverable without reading a colour back
+        // out of an inline style — by assistive tech, and by the e2e.
+        b.set_attribute("aria-selected", if item.selected { "true" } else { "false" }).ok();
+        b.set_attribute("data-field", field).ok();
+        b.set_attribute("data-tab", item.value).ok();
+        util::set_text(&b, item.label);
+        ctx.on_window_event(&b, "click", event, item.value);
+        util::append(&strip, &b);
+    }
+    strip
+}
+
 /// A native `<details>` disclosure with the app's summary look — returns
 /// `(details, body)`. Append the section's content to `body`, then `details` to
 /// your card. Closed on first render.

@@ -29,7 +29,42 @@ img_for() { case "$1" in chrome) echo "$IMG_CHROME";; firefox) echo "$IMG";; *) 
 IMG_A="$(img_for "$ENGINE_A")"
 IMG_B="$(img_for "$ENGINE_B")"
 
-NET=entity-rtc-spike
+# --- RTC_SLOT: which parallel copy of this rig you are ------------------------
+# EVERY name and port below used to be a fixed literal, and this box has six
+# worktrees. That is not a collision hazard, it is a DEMOLITION one: each
+# `make e2e-webrtc-*` target opens with `rung1_repro.sh teardown`, which
+# `podman rm -f`s the containers by name, removes the networks by name, pkills
+# the node and the dist server, and `rm -f`s the node keypair. A second seat
+# starting any WebRTC gate therefore destroys the first seat's in-flight run —
+# and the victim sees a spike failure, i.e. it reads as a product defect.
+#
+# This is 487b100e's finding one rig over, in the worse direction: that commit
+# closed "two seats share one port space" for `make e2e-worker` with a REFUSAL.
+# The WebRTC rig is the entry point that fix did not enumerate, and it destroys
+# where the other refuses.
+#
+# SLOT 0 IS BYTE-IDENTICAL TO EVERY INVOCATION BEFORE THIS EXISTED — same
+# container names, same networks, same ports, same /tmp paths. Nothing that
+# worked yesterday moves, and no muscle memory breaks. A non-zero slot suffixes
+# every name and offsets every port by slot×10.
+#
+# ONE knob moves ALL of it, deliberately — the GRID_PORT precedent two hundred
+# lines up in the Makefile: moving only the HTTP port left the ZeroMQ bus
+# colliding and the container died with `Address already in use`, which reads as
+# "the image is broken". Five ports and nine names here have the same property.
+RTC_SLOT="${RTC_SLOT:-0}"
+case "$RTC_SLOT" in
+  ''|*[!0-9]*) echo "!! RTC_SLOT must be a non-negative integer (got '$RTC_SLOT')" >&2; exit 1 ;;
+esac
+# Bounded at 9 so the ×10 stride cannot walk a port into the next service's
+# space: slot 9 puts the browsers at 4536/4537 and the node at 4161, both still
+# clear of everything this repo binds.
+[ "$RTC_SLOT" -gt 9 ] && { echo "!! RTC_SLOT must be 0-9 (got $RTC_SLOT)" >&2; exit 1; }
+SFX=""
+[ "$RTC_SLOT" -ne 0 ] && SFX="-$RTC_SLOT"
+STRIDE=$(( RTC_SLOT * 10 ))
+
+NET=entity-rtc-spike$SFX
 # TOPOLOGY=shared (default) — both browsers on ONE bridge, so their host
 #   candidates are mutually routable. This is the positive rig: it proves the
 #   §6.5 mechanism and the shipped meet-then-chat path.
@@ -47,15 +82,34 @@ TOPOLOGY="${TOPOLOGY:-shared}"
 # The spike reads it too — `survives idle` is only meaningful with a NAT in path
 # and refuses to claim anything without one, so it has to know which rig it is in.
 export TOPOLOGY
-NET_A=entity-rtc-nat-a
-NET_B=entity-rtc-nat-b
+NET_A=entity-rtc-nat-a$SFX
+NET_B=entity-rtc-nat-b$SFX
+CTR_A=rtc-a$SFX
+CTR_B=rtc-b$SFX
 CORE=../entity-core-rust
 # Overridable. On a host with no `cargo` the build step below uses
 # `make e2e-signaling-node` (inside the image) and points this at its output.
 SIG="${SIG:-$CORE/target/debug/entity-signaling-node}"
-DISTPORT=8092
-WSPORT=4071
+DISTPORT=$(( 8092 + STRIDE ))
+WSPORT=$(( 4071 + STRIDE ))
+PORT_A=$(( 4446 + STRIDE ))
+PORT_B=$(( 4447 + STRIDE ))
 SCRATCH="$(dirname "$0")"
+# The node vantage and the dist server's log. Per-slot for the same reason the
+# containers are: two rigs appending to one file makes the deposit counting
+# below read another seat's negotiations as this run's.
+NODE_LOG=/tmp/sig_repro$SFX.out
+DIST_LOG=/tmp/dist_repro$SFX.log
+# nat_topology.sh builds its own containers and networks and must land in the
+# same slot, or a `TOPOLOGY=nat` run tears down the shared rig's peers by name.
+export RTC_SLOT SFX STRIDE CTR_A CTR_B
+# The spikes hardcoded these five literals. They read the environment now, with
+# today's values as the defaults, so a bare `python3 spike_*.py` still works.
+export RTC_A_BASE="http://localhost:$PORT_A"
+export RTC_B_BASE="http://localhost:$PORT_B"
+export RTC_APP="http://host.containers.internal:$DISTPORT"
+export RTC_NODE_WS="ws://host.containers.internal:$WSPORT"
+export RTC_NODE_LOG="$NODE_LOG"
 # A STABLE NODE IDENTITY, so a restart is a restart and not a different node.
 # Ephemeral is the node's default and is right for a stateless introducer (§1.3:
 # losing a node drops in-flight handshakes and loses nothing that mattered) —
@@ -64,19 +118,120 @@ SCRATCH="$(dirname "$0")"
 # exists, so a failure to reconnect is explained by the identity change and says
 # nothing about whether the carrier noticed its connection had died. Same file
 # across every invocation, including the separate `node-restart` one.
-NODE_KEYPAIR="${NODE_KEYPAIR:-/tmp/entity-rung1-node.key}"
+NODE_KEYPAIR="${NODE_KEYPAIR:-/tmp/entity-rung1-node$SFX.key}"
+
+# --- The occupancy lock -------------------------------------------------------
+# WHY A PID AND NOT "ARE THE CONTAINERS UP": a FAILED run deliberately leaves its
+# containers, node and dist server running for manual inspection (see the note at
+# the foot of this file). So "rtc-a exists" cannot mean "a run is in flight" —
+# refusing on leftovers would refuse every run after a failure, which is exactly
+# how a guard gets switched off. A live PID and a corpse are different facts and
+# the lock keeps them apart: live → refuse, dead → say so and take it over.
+# RTC_LOCK_DIR is a TEST AFFORDANCE and nothing in a gate sets it — same shape
+# and same reason as `?bootstall=`. It lets tools/webrtc-slot-check.sh falsify
+# the occupancy guard in a temp dir instead of writing a fake owner into a slot
+# somebody may be using, which would be this bug wearing the fix's clothes.
+LOCK="${RTC_LOCK_DIR:-/tmp}/entity-rung1-rig$SFX.lock"
+lock_owner_alive() {
+  [ -f "$LOCK" ] || return 1
+  local pid; pid=$(cat "$LOCK" 2>/dev/null)
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  # Our own PID never counts as an occupant — the `teardown` the make targets
+  # run *around* a gate is a different process, but a re-entrant call inside one
+  # run must not deadlock against itself.
+  [ "$pid" = "$$" ] && return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+# --- Whose process is that? ---------------------------------------------------
+# The two lines below used to be `pkill -f "http.server $DISTPORT"` and the same
+# for the node. A pattern sweep answers "is something on this port", never "is it
+# OURS" — and `make e2e-worker` defaults to :8092, the SAME port this rig serves
+# dist on at slot 0. So this rig's teardown terminated another seat's e2e-worker
+# staging server. Measured 2026-09-17: while verifying the slot fix, a live
+# `make e2e-worker` in the sibling worktree had a child
+# `python3 -m http.server 8092 --directory dist`, and `http.server 8092` matches
+# it exactly. The fix for cross-seat demolition reproduced cross-GATE demolition
+# one port over, which is the same sentence 487b100e was written about.
+#
+# So: record what we start, and stop only that — re-checking the live cmdline
+# first, because a pid is reused and a stale pidfile pointing at somebody else's
+# process is the same bug with a smaller window.
+PIDFILE="${RTC_LOCK_DIR:-/tmp}/entity-rung1-procs$SFX.pids"
+record_pid() { printf '%s %s\n' "$1" "$2" >> "$PIDFILE"; }
+stop_ours() {
+  local tag="$1" marker="$2" t pid cmd
+  [ -f "$PIDFILE" ] || return 0
+  while read -r t pid; do
+    [ "$t" = "$tag" ] || continue
+    [ -r "/proc/$pid/cmdline" ] || continue
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+    case "$cmd" in *"$marker"*) kill "$pid" 2>/dev/null || true ;; esac
+  done < "$PIDFILE"
+}
+# Report — never sweep — a stranger on our port. Refusing would block a rig whose
+# previous run predates the pidfile; sweeping is the bug. Naming it is what turns
+# "the gate is behaving strangely" into one line.
+warn_foreign_holder() {
+  local port="$1" what="$2"
+  command -v ss >/dev/null 2>&1 || return 0
+  ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN || return 0
+  echo "   ⓘ  :$port ($what) is held by a process this rig did not start."
+  echo "      Left alone on purpose — it may be another seat's gate. If it is a"
+  echo "      leftover of yours, stop it by hand, or use another slot: RTC_SLOT=1"
+}
 
 teardown() {
-  echo ">> teardown"
-  podman rm -f rtc-a rtc-b >/dev/null 2>&1 || true
+  echo ">> teardown (slot $RTC_SLOT)"
+  podman rm -f "$CTR_A" "$CTR_B" >/dev/null 2>&1 || true
   podman network rm "$NET" >/dev/null 2>&1 || true
   podman network rm "$NET_A" "$NET_B" >/dev/null 2>&1 || true
   bash "$(dirname "$0")/nat_topology.sh" down >/dev/null 2>&1 || true
-  pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
-  pkill -f "http.server $DISTPORT" 2>/dev/null || true
+  stop_ours node "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT"
+  stop_ours dist "http.server $DISTPORT"
+  rm -f "$PIDFILE"
+  sleep 0.3
+  warn_foreign_holder "$WSPORT" "signaling node"
+  warn_foreign_holder "$DISTPORT" "dist server"
   echo ">> done"
 }
-[ "${1:-}" = "teardown" ] && { teardown; rm -f "$NODE_KEYPAIR"; exit 0; }
+# `slot` — print everything this slot owns, and whether anyone is in it.
+# Two jobs: an operator asking "what is on 4456 / who holds slot 0", and the
+# lint-time check that slot N and slot M share nothing. That check reads THIS
+# output rather than re-deriving the names, so it cannot drift from the rig —
+# a second expression of the derivation is the thing it would be testing.
+if [ "${1:-}" = "slot" ]; then
+  echo "slot=$RTC_SLOT"
+  for kv in "net=$NET" "net_a=$NET_A" "net_b=$NET_B" \
+            "ctr_a=$CTR_A" "ctr_b=$CTR_B" \
+            "port_a=$PORT_A" "port_b=$PORT_B" "wsport=$WSPORT" "distport=$DISTPORT" \
+            "node_log=$NODE_LOG" "dist_log=$DIST_LOG" "keypair=$NODE_KEYPAIR" \
+            "lock=$LOCK"; do echo "$kv"; done
+  if lock_owner_alive; then
+    echo "occupied=yes pid=$(cat "$LOCK")"
+  elif [ -f "$LOCK" ]; then
+    echo "occupied=stale pid=$(cat "$LOCK")"
+  else
+    echo "occupied=no"
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "teardown" ]; then
+  # A teardown is as destructive as a run and gets the same guard. This is the
+  # line that mattered: every make target opens with one, so an unguarded
+  # teardown is the demolition even when the run that follows never starts.
+  if lock_owner_alive; then
+    echo "!! REFUSING to tear down slot $RTC_SLOT — pid $(cat "$LOCK") is running a gate there."
+    echo "   Tearing it down would destroy an in-flight run, and the victim would"
+    echo "   see a spike failure, i.e. it would read as a product defect."
+    echo "   Run your gate in another slot:  make <target> RTC_SLOT=1"
+    exit 1
+  fi
+  teardown
+  rm -f "$NODE_KEYPAIR" "$LOCK"
+  exit 0
+fi
 
 # Bring the signaling node up on :$WSPORT with a STABLE identity, appending to
 # the same log the diagnostics read. Shared by the main flow and `node-restart`.
@@ -87,7 +242,7 @@ start_node() {
 	# two-line string "0\n0", which `[` then refuses as a non-integer. The
 	# failure surfaced as "the node did not announce itself", i.e. as the
 	# condition this function exists to detect.
-	before=$(grep -c "peer_id:" /tmp/sig_repro.out 2>/dev/null)
+	before=$(grep -c "peer_id:" "$NODE_LOG" 2>/dev/null)
 	before=${before:-0}
 	local reflect=()
 	[ -n "${E2E_NODE_REFLECTION:-}" ] && reflect=(--reflection-endpoint "$E2E_NODE_REFLECTION")
@@ -97,13 +252,14 @@ start_node() {
 	# deposits the restart is supposed to be measured against.
 	RUST_LOG=info,entity_signaling=debug,entity_peer=debug nohup "$SIG" \
 		--ws-listen 0.0.0.0:$WSPORT --open --keypair "$NODE_KEYPAIR" "${reflect[@]}" \
-		>>/tmp/sig_repro.out 2>&1 &
+		>>"$NODE_LOG" 2>&1 &
+	record_pid node $!
 	# Wait for THIS start's banner rather than sleeping: a fixed sleep makes a
 	# slow start look like a node that never came up, and on the restart path
 	# that would be reported as the defect under test.
 	for _ in $(seq 1 40); do
 		local now
-		now=$(grep -c "peer_id:" /tmp/sig_repro.out 2>/dev/null)
+		now=$(grep -c "peer_id:" "$NODE_LOG" 2>/dev/null)
 		[ "${now:-0}" -gt "$before" ] && return 0
 		sleep 0.25
 	done
@@ -122,13 +278,15 @@ start_node() {
 # the wrong thing, and it is the one failure this subcommand can have that looks
 # exactly like the defect it exists to test.
 if [ "${1:-}" = "node-restart" ]; then
-	was=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | tail -1 | awk '{print $2}')
+	was=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" "$NODE_LOG" | tail -1 | awk '{print $2}')
 	[ -x "$SIG" ] || SIG="$PWD/target/e2e-node/debug/entity-signaling-node"
-	echo ">> node-restart: killing the node at :$WSPORT (was $was)"
-	pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
+	echo ">> node-restart: stopping the node at :$WSPORT (was $was)"
+	# Ours only — this runs mid-gate, invoked by the spike, and a pattern sweep
+	# here would reach a node another slot or another seat is depending on.
+	stop_ours node "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT"
 	sleep 1
 	start_node || exit 1
-	now=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | tail -1 | awk '{print $2}')
+	now=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" "$NODE_LOG" | tail -1 | awk '{print $2}')
 	if [ "$was" != "$now" ]; then
 		echo "!! node identity CHANGED across the restart ($was -> $now)."
 		echo "   Every assertion after this would be about a different node. Is"
@@ -138,6 +296,58 @@ if [ "${1:-}" = "node-restart" ]; then
 	echo ">> node-restart: back up, same identity ($now)"
 	exit 0
 fi
+
+# --- Claim the slot -----------------------------------------------------------
+# Below this line the script starts destroying and creating things, so this is
+# where occupancy stops being advisory. Note it sits AFTER the `node-restart`
+# subcommand, which is invoked BY THE SPIKE from inside a live run and must not
+# refuse itself out of its own gate.
+if lock_owner_alive; then
+  echo "!! RTC SLOT $RTC_SLOT IS OCCUPIED — pid $(cat "$LOCK") is running a gate there."
+  echo "   Starting here would tear down its containers, kill its node and its"
+  echo "   dist server mid-run. The victim would report a spike failure, which"
+  echo "   reads as a product defect rather than as a rig collision."
+  echo ""
+  echo "   Run in another slot:   make <target> RTC_SLOT=1"
+  echo "   (slots 0-9; each gets its own containers, networks, ports and /tmp)"
+  echo "   If you are certain that pid is gone:   rm -f $LOCK"
+  exit 1
+fi
+if [ -f "$LOCK" ]; then
+  echo ">> slot $RTC_SLOT: taking over a STALE lock (pid $(cat "$LOCK") is gone)"
+fi
+echo $$ > "$LOCK"
+# Release on ANY exit, including the `set -e` aborts and the FAIL path — a lock
+# that outlives its run turns the guard into a permanent refusal, and a guard
+# people have to clear by hand is one they learn to delete. The containers are
+# deliberately LEFT UP on failure for inspection; the lock is not part of that.
+trap 'rm -f "$LOCK"' EXIT
+
+# --- Port preflight: fail in 1s, not after 30s of containers ------------------
+# ORDER IS THE WHOLE THING. Clear OUR OWN leftovers first (a previous run of this
+# slot is deliberately left up for inspection, so its node and dist are normal
+# and must not be mistaken for a stranger), THEN refuse whatever is left, because
+# whatever is left is by definition not ours.
+#
+# Checked here rather than at the two start sites so a busy port costs a second
+# instead of two container pulls, a network and a node — the first cut refused at
+# the dist step, ~40s in, having already built everything it was about to discard.
+stop_ours node "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT"
+stop_ours dist "http.server $DISTPORT"
+sleep 0.4
+for probe in "$WSPORT:signaling node" "$DISTPORT:dist server"; do
+  pport=${probe%%:*}; pwhat=${probe#*:}
+  if ss -ltn "sport = :$pport" 2>/dev/null | grep -q LISTEN; then
+    echo "!! :$pport (slot $RTC_SLOT's $pwhat) is held by a process this rig did not start."
+    echo "   Refusing, rather than binding over it or sweeping it away — :8092 is"
+    echo "   also \`make e2e-worker\`'s default, so this is as often that suite as"
+    echo "   it is another WebRTC run, and sweeping the port is how this rig used"
+    echo "   to take other seats down."
+    echo ""
+    echo "   Run in another slot:   make <target> RTC_SLOT=1"
+    exit 1
+  fi
+done
 
 # --- Build-skew preflight (load-bearing since §6.5 raised to Require) ----------
 # core-rust flipped §6.5 to Require (007e078): the browser leg now REFUSES SDP
@@ -191,8 +401,8 @@ elif [ "$TOPOLOGY" = "split" ]; then
   echo ">> TOPOLOGY=split — one ISOLATED network per browser (the NAT negative control)"
   podman network exists "$NET_A" || podman network create --opt isolate=true "$NET_A" >/dev/null
   podman network exists "$NET_B" || podman network create --opt isolate=true "$NET_B" >/dev/null
-  podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET_A" -p 4446:4444 "$IMG_A" >/dev/null
-  podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET_B" -p 4447:4444 "$IMG_B" >/dev/null
+  podman container exists "$CTR_A" || podman run -d --rm --name "$CTR_A" --network "$NET_A" -p $PORT_A:4444 "$IMG_A" >/dev/null
+  podman container exists "$CTR_B" || podman run -d --rm --name "$CTR_B" --network "$NET_B" -p $PORT_B:4444 "$IMG_B" >/dev/null
 else
   echo ">> shared bridge network"
   podman network exists "$NET" || podman network create "$NET" >/dev/null
@@ -201,15 +411,15 @@ else
   # presents as a session that starts and then goes away mid-run. Harmless to
   # Firefox, so it is unconditional rather than a branch that only the mixed rig
   # exercises.
-  podman container exists rtc-a || podman run -d --rm --name rtc-a --shm-size=2g --network "$NET" -p 4446:4444 "$IMG_A" >/dev/null
-  podman container exists rtc-b || podman run -d --rm --name rtc-b --shm-size=2g --network "$NET" -p 4447:4444 "$IMG_B" >/dev/null
+  podman container exists "$CTR_A" || podman run -d --rm --name "$CTR_A" --shm-size=2g --network "$NET" -p $PORT_A:4444 "$IMG_A" >/dev/null
+  podman container exists "$CTR_B" || podman run -d --rm --name "$CTR_B" --shm-size=2g --network "$NET" -p $PORT_B:4444 "$IMG_B" >/dev/null
 fi
-for p in 4446 4447; do
+for p in $PORT_A $PORT_B; do
   for i in $(seq 1 30); do curl -s -m2 localhost:$p/status 2>/dev/null | grep -q '"ready": *true' && break; sleep 1; done
 done
-A_IP=$(podman inspect rtc-a --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-B_IP=$(podman inspect rtc-b --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-echo "   rtc-a=$A_IP   rtc-b=$B_IP"
+A_IP=$(podman inspect "$CTR_A" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+B_IP=$(podman inspect "$CTR_B" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+echo "   $CTR_A=$A_IP   $CTR_B=$B_IP   (slot $RTC_SLOT: grids $PORT_A/$PORT_B, node :$WSPORT, dist :$DISTPORT)"
 
 # --- The control has to be controlled ----------------------------------------
 # Assert the topology we THINK we built. A split rig whose isolation silently
@@ -218,7 +428,7 @@ echo "   rtc-a=$A_IP   rtc-b=$B_IP"
 # (Shared is probed too — if the bridge ever stopped being mutually routable,
 # every green run of the positive gate would have been measuring nothing.)
 probe_a_to_b() {
-  podman exec rtc-a timeout 8 curl -s -m 5 -o /dev/null -w '%{http_code}' \
+  podman exec "$CTR_A" timeout 8 curl -s -m 5 -o /dev/null -w '%{http_code}' \
     "http://$B_IP:4444/status" 2>/dev/null || true
 }
 echo ">> probing the A->B path (the rig's own control)"
@@ -227,7 +437,7 @@ if [ "$TOPOLOGY" = "nat" ]; then
   : # already probed above; probe_a_to_b is informational here
 elif [ "$TOPOLOGY" = "split" ]; then
   if [ "$PROBE" = "200" ]; then
-    echo "!! ISOLATION LEAKED: rtc-a reached rtc-b at $B_IP (HTTP 200)."
+    echo "!! ISOLATION LEAKED: $CTR_A reached $CTR_B at $B_IP (HTTP 200)."
     echo "   The split rig would measure nothing — a media path exists that a"
     echo "   NAT'd pair would not have. Check 'podman network inspect $NET_A'"
     echo "   for isolate=true, and that no other network joins both containers."
@@ -236,7 +446,7 @@ elif [ "$TOPOLOGY" = "split" ]; then
   echo "   A->B blocked (curl said '${PROBE:-timeout}') — no direct path, as required"
 else
   if [ "$PROBE" != "200" ]; then
-    echo "!! rtc-a could NOT reach rtc-b at $B_IP on the shared bridge (got '${PROBE:-timeout}')."
+    echo "!! $CTR_A could NOT reach $CTR_B at $B_IP on the shared bridge (got '${PROBE:-timeout}')."
     echo "   The positive rig assumes mutually routable host candidates; without"
     echo "   that this run proves nothing about the §6.5 mechanism."
     exit 1
@@ -245,7 +455,10 @@ else
 fi
 
 echo ">> signaling node (debug) on :$WSPORT"
-pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
+# Clear OUR previous run's node off the port, never a stranger's. If somebody
+# else holds it, `start_node` fails to bind and says so — which is the honest
+# outcome; sweeping the port is how this rig used to take other seats down.
+stop_ours node "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT"
 sleep 0.5
 # entity_signaling=debug is load-bearing: the per-bucket `signaling offer:` /
 # `signaling collect` lines (with caller + rendezvous_key) are debug! under that
@@ -257,16 +470,40 @@ sleep 0.5
 if [ -n "${E2E_NODE_REFLECTION:-}" ]; then
   echo "   node advertises its own reflector: $E2E_NODE_REFLECTION (§4.5.1)"
 fi
-: >/tmp/sig_repro.out
+: >"$NODE_LOG"
 start_node || exit 1
-NODE=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | head -1 | awk '{print $2}')
+NODE=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" "$NODE_LOG" | head -1 | awk '{print $2}')
 echo "   node peer: $NODE  (identity from $NODE_KEYPAIR — stable across a restart)"
 
 echo ">> dist server on :$DISTPORT"
-pkill -f "http.server $DISTPORT" 2>/dev/null || true
+# :8092 at slot 0 is ALSO `make e2e-worker`'s default. A pattern sweep here
+# terminated that suite's staging server — measured against a live run. Ours only.
+stop_ours dist "http.server $DISTPORT"
 sleep 0.5
-nohup python3 -m http.server $DISTPORT --directory dist >/tmp/dist_repro.log 2>&1 &
+# REFUSE a port we did not clear, rather than binding over it or failing quietly.
+# Dropping the pattern sweep means a stranger's server now survives — which is the
+# point — but it also means python would fail to bind and this rig would serve the
+# STRANGER'S bytes to both browsers. That is 487b100e's exact finding ("the loser's
+# browser fetches the winner's bytes"), and the only reason it was not reachable
+# here before is that the sweep was removing the evidence.
+if ss -ltn "sport = :$DISTPORT" 2>/dev/null | grep -q LISTEN; then
+  echo "!! :$DISTPORT is already served by a process this rig did not start."
+  echo "   Both browsers would load ITS bytes, and every assertion below would be"
+  echo "   about a build nobody here chose. Note :8092 is also \`make e2e-worker\`'s"
+  echo "   default, so this is often that suite rather than another WebRTC run."
+  echo ""
+  echo "   Run in another slot:   make <target> RTC_SLOT=1"
+  exit 1
+fi
+nohup python3 -m http.server $DISTPORT --directory dist >"$DIST_LOG" 2>&1 &
+record_pid dist $!
 sleep 1
+# And confirm it is actually up — `record_pid` records what we spawned, not what
+# survived (AP44's witness rule: assert the consequence, not the call).
+if ! curl -s -m 3 -o /dev/null "http://localhost:$DISTPORT/index.html"; then
+  echo "!! the dist server on :$DISTPORT did not come up — see $DIST_LOG"
+  exit 1
+fi
 
 if [ "$TOPOLOGY" = "nat" ]; then
   # The NAT control runs HERE, not at topology bring-up: one of its properties
@@ -279,12 +516,12 @@ if [ "$TOPOLOGY" = "nat" ]; then
     exit 1
   }
   # Hand the spike the reflector, through the SAME connector row a user types.
-  export E2E_ICE="stun:$(cat /tmp/entity-rtc-stun-addr)"
+  export E2E_ICE="stun:$(cat "/tmp/entity-rtc-stun-addr$SFX")"
   echo "   reflectors for the connector row: $E2E_ICE"
 fi
 
 echo ">> driving integration spike"
-BEFORE=$(wc -l < /tmp/sig_repro.out)
+BEFORE=$(wc -l < "$NODE_LOG")
 # The spike is the GATE: `main()` returns 0 only on a BIDIRECTIONAL pass (both
 # channels open AND both directions status=200), 1 otherwise. Capture that rc —
 # do NOT `|| true` it away, or the rig always exits 0 and can never fail a gate.
@@ -307,7 +544,7 @@ echo ">> NODE VANTAGE — signaling offer/collect by (caller, rendezvous_key) du
 echo "   (the discriminator, per ROUTING-2026-08-04-the-establisher-was-swallowing-...)"
 # The node logs via tracing's pretty formatter → ANSI colour codes AND a `k=v`
 # (not `k =v`) field style, so a naive grep misses everything. Strip ANSI first.
-NODELOG=$(tail -n +$((BEFORE+1)) /tmp/sig_repro.out | sed $'s/\x1b\\[[0-9;]*m//g')
+NODELOG=$(tail -n +$((BEFORE+1)) "$NODE_LOG" | sed $'s/\x1b\\[[0-9;]*m//g')
 echo "   -- OFFER deposits by (caller, key) --"
 echo "$NODELOG" | grep "signaling offer: deposit" \
   | grep -oE 'caller="[^"]+" rendezvous_key=RendezvousKey\([0-9a-f]+\)' | sort | uniq -c

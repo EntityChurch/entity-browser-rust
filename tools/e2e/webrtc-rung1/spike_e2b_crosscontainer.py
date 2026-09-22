@@ -7,7 +7,7 @@ iceServers:[] (host candidates only), mDNS obfuscation OFF (raw-IP host cands).
 Assert a DataChannel opens and a bidirectional message round-trips.
 Proves the rung-1 substrate: cross-browser-context WebRTC on one host.
 """
-import json, re, sys, time, urllib.request
+import json, os, re, sys, time, urllib.request
 
 def rq(base, method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
@@ -82,7 +82,9 @@ def cands(sdp):
     return [l.strip() for l in sdp.splitlines() if l.startswith("a=candidate")]
 
 def main():
-    A, B = "http://localhost:4446", "http://localhost:4447"  # shared-bridge pair
+    # shared-bridge pair; slot-aware (see spike_meet_then_chat.py)
+    A = os.environ.get("RTC_A_BASE", "http://localhost:4446")
+    B = os.environ.get("RTC_B_BASE", "http://localhost:4447")
     sa = rq(A, "POST", "/session", CAPS)["value"]["sessionId"]
     sb = rq(B, "POST", "/session", CAPS)["value"]["sessionId"]
     print(f"A(host-net :4444)={sa}\nB(bridge :4445)={sb}")

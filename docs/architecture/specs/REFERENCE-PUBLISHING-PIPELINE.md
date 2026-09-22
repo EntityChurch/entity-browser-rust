@@ -149,7 +149,7 @@ to write it down somewhere else, link here instead. It is one function:
 | sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` · `--demo-sites` · `--no-sites` (**exactly one, required**) | `INGEST=<dir>` · `DEMO_SITES=1` · `NO_SITES=1` | `examples/entity-demo/` |
 | apps | `apps/` | `apps::read::read_all_app_sets` | `--ingest-apps=<dir>` | `APPS_DIST=<dir>` | the `entity-apps` repo's `dist/` |
 | feed (`APP-CONVENTION-FEED`) | `app/feed/` | `feed_tree::read_owned_feed` | `--ingest-feed=<dir>` | `FEED=<dir>` | `examples/entity-demo/feed/` |
-| mirrors (`APP-CONVENTION-FEED` §6) | `app/feed/mirrors/` **+ each carried author's segment** | `feed_gather::gather_timeline` — somebody ELSE's tree, not ours | `--gather=<peer_id>@<dir>` | — (no make variable: the value is a `peer@dir` pair, and the dir is another publisher's out-tree rather than an authored source) | — |
+| mirrors (`APP-CONVENTION-FEED` §6) | `app/feed/mirrors/` **+ each carried author's segment** | `feed_gather::gather_timeline` — somebody ELSE's tree, not ours | `--gather=<peer_id>@<dir>` *(repeatable)* | `GATHER='<peer_id>@<dir> …'` | `tests/fixtures/crossimpl-go-feed/peer-root` |
 
 **The `make` column is the *authoring* entry point and it is not cosmetic.** Every
 containerized publish target bind-mounts only this repo, so a source anywhere else on the
@@ -171,6 +171,31 @@ flag, the `make` variable, and a worked example*** — not only for the `--inges
 what the `FEED=` lesson looked like when it had one instance. `WINDOW_TARGET=` is wired into all
 three deployment-config verbs; `site-bare` gained the site arm and staging in the same commit, for
 the same reason.
+
+⛔⭐⭐ **THIRD INSTANCE, 2026-09-17, AND IT WAS SITTING IN THIS TABLE AS A STATED EXEMPTION.** The
+mirrors row carried *"— (no make variable: the value is a `peer@dir` pair, and the dir is another
+publisher's out-tree rather than an authored source)"* from the day `--gather` shipped. **Both
+clauses of that reason are true and neither answers the paragraph three lines above it:** the
+constraint is the **bind mount**, not the provenance of the directory or the shape of the argument,
+and another publisher's out-tree outside this repo is exactly as invisible to the container as an
+authored source outside it. So the fourth axis was reachable by nobody on the supported host for five
+days **behind a reason rather than behind an omission**, which is harder to find because the cell
+reads as considered. ⇒ ***an exemption's reason must answer the rule's reason, not the rule's
+subject*** — and the cheap check is to re-read the paragraph explaining why a column exists before
+writing *N/A* into it. `GATHER=` is staged like its three siblings (each source under the **author's**
+peer id — `parse_gathers` already refuses one author twice, so that id is unique by the rule that
+matters), wired at all three staged-flag call sites, and run before being written down:
+
+```
+make site OUT=<dir> NO_SITES=1 \
+  GATHER='<their peer_id>@tests/fixtures/crossimpl-go-feed/peer-root' \
+  IDENTITY_SEED=<64 hex>
+```
+
+→ 34 entries, 34 attributable, one gathered view, two pages. ⚠ **Two cuts into different directories
+are byte-identical in the mirror head, both pages and every carried entity, and
+`system/peer/published-root` differs** — it carries a wall-clock `published_at` with no seam (`K-3`),
+which is why the trie root and not that head is the comparand.
 
 The fourth row is the only one whose reader points outside this peer and the
 only one with a non-empty `carried_peers`; §0.2a is what that costs.

@@ -260,3 +260,230 @@ fn the_index_is_what_answered_and_no_fallback_could_have_rescued_it() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// `FEED-12` — our half of the two-gatherer run
+// ---------------------------------------------------------------------------
+//
+// §6.0.1's coordinate is `[derive-to-meet]`: two gatherers of one author must
+// land on one key **with nothing failing loudly if they do not** — each simply
+// publishes into a slot the other never looks in, and every assertion either
+// seat can make alone stays green. That is why the vector exists and why the
+// comparand has to be a value, written down, that the other seat can check
+// without running our code.
+//
+// ⭐ **What is ours alone and what is not.** The key below and the readback are
+// a one-seat run and are done. `FEED-12` proper needs the second gatherer, each
+// carrying a different `via` hint, each finding the other's mirror by computing
+// this key — and `entity-workbench-go` has to emit their half before anyone can
+// assert the interesting direction. The protocol is in
+// `ROUTING-2026-09-17-a-entity-workbench-go-…`.
+
+/// **The `FEED-12` comparand: where a mirror of the corridor author lives.**
+///
+/// Derived independently of the code under test, by the method
+/// [`crate::feed::path_coordinate`]'s own pinned vector uses — `hashlib` over
+/// `EXTENSION-REVISION` §3.1's framing, `"00" || sha256(ecf_for_hash(
+/// "system/tree/path", to_ecf(text("/{author}/app/feed/index"))))` — and
+/// cross-checked by reproducing that vector's literal with the same script
+/// before computing this one. **It is also what a real `publish --gather` of
+/// their fixture emitted**, which is the third derivation and the only one that
+/// goes through the projector.
+///
+/// ⚠ **A wire value.** If it moves, a published mirror moved with it, and the
+/// question is which seat's derivation changed — never *"update the literal"*.
+///
+/// ⛔ **The COORDINATE alone, with the prefix taken from production — and that
+/// is not tidiness.** Writing the whole key as a literal is the fifth instance
+/// of `spec vocab` reading a tree path as a type tag (the first four: a trailing
+/// `app/share/records/`, `app/feed/index`, a parametric family, and a doc
+/// comment *about* the hazard). It reds `vocab-lint` with
+/// `implemented-undeclared`, naming a type tag no spec declares and we do not
+/// emit — the expensive false direction, accusing a conformant seat of inventing
+/// vocabulary. **The repair is the one `feed::index_head_key` already took:
+/// derive the key, never spell it**, which also means this pins the value that
+/// is genuinely the comparand and leaves §6.0.1's prefix to the module that owns
+/// it.
+const MIRROR_COORDINATE: &str =
+    "004245e92d8954b390b78dab80277cfb1220185f74d35935413235f0196ea2be51";
+
+/// Our gatherer, pinned so the emission is reproducible. The CLI spelling that
+/// produces the same bytes:
+///
+/// ```text
+/// make site OUT=<dir> NO_SITES=1 \
+///   GATHER='2KAoCfAP6ZZyLmS9wYz4rUmpehd4JMeek32NLN58R3ehpi@tests/fixtures/crossimpl-go-feed/peer-root' \
+///   IDENTITY_SEED=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+/// ```
+///
+/// Run, not written from memory (AP37). Two cuts into different directories are
+/// byte-identical in the mirror head, both pages and all 68 carried entities;
+/// **only `system/peer/published-root` differs**, because it carries
+/// `published_at` off a wall clock with no seam — the same `K-3` fact that makes
+/// the trie root and not that head the comparand for `G-PIN-4`.
+const GATHERER: &str = "2K7sRmfmtwghK8rqjkoXTM2d3EkCPNyX5XveTqZhQfs6v6";
+
+/// Everything one gather produced, served as an origin does: any peer's segment
+/// at one place. The gatherer's own record and pages under **its** id, every
+/// carried body under **its author's**.
+#[derive(Default)]
+struct Served(std::collections::BTreeMap<(String, String), entity_entity::Entity>);
+
+impl crate::feed_mirror::MirrorSource for Served {
+    fn get(
+        &self,
+        peer: String,
+        relative_key: String,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<entity_entity::Entity>, String>>>,
+    > {
+        Box::pin(std::future::ready(Ok(self.0.get(&(peer, relative_key)).cloned())))
+    }
+}
+
+/// Gather the corridor author through the **shipped** gatherer — the one
+/// `publish --gather` calls — and serve the result.
+fn gathered() -> (crate::feed_mirror::MirrorPlan, Served) {
+    let plan = block_on(crate::feed_gather::gather_timeline(
+        &cut("peer-root"),
+        PEER_ID,
+        GATHERER,
+        crate::feed_gather::DEFAULT_GATHER_LIMIT,
+    ))
+    .expect("their published tree gathers");
+
+    let subject = crate::feed::MirrorSubject::from_reference(&plan.record.subject);
+    let mut served = Served::default();
+    for c in &plan.carried {
+        served.0.insert((c.peer.clone(), c.key.clone()), c.entity.clone());
+    }
+    for page in &plan.pages {
+        served
+            .0
+            .insert((GATHERER.to_string(), subject.page_key(page.page)), page.to_entity().unwrap());
+    }
+    served
+        .0
+        .insert((GATHERER.to_string(), subject.key()), plan.record.to_entity().unwrap());
+    (plan, served)
+}
+
+/// **`FEED-12`, our half: the key.**
+///
+/// A mirror of *their* author, by *our* gatherer, is bound at the address the
+/// other seat derives from the author's peer id and nothing else — no hop to the
+/// author, no index, no prior contact. `entity-workbench-go` computes the same
+/// string from `revision.PrefixHash("/" + peer + "/app/feed/index")`.
+///
+/// ⚠ **Asserted through the SUBJECT the gather produced**, never through a
+/// `MirrorSubject::timeline(PEER_ID)` built here: the question is where the
+/// publisher actually put it, and re-deriving the subject in the test would be
+/// the test agreeing with itself about an address production disagrees with.
+#[test]
+fn a_mirror_of_their_author_is_bound_at_the_key_the_other_seat_derives() {
+    let (plan, _) = gathered();
+    let subject = crate::feed::MirrorSubject::from_reference(&plan.record.subject);
+
+    assert_eq!(
+        subject.coordinate(),
+        MIRROR_COORDINATE,
+        "`FEED-12`'s comparand moved — this is a WIRE event"
+    );
+    assert_eq!(
+        subject.key(),
+        format!("{}{MIRROR_COORDINATE}", crate::feed::mirror_prefix()),
+        "…and §6.0.1's prefix is what the coordinate hangs off"
+    );
+    assert_eq!(
+        subject,
+        crate::feed::MirrorSubject::Timeline {
+            peer: PEER_ID.to_string(),
+            path: "/app/feed/index".to_string()
+        },
+        "`FEED-R26`: the subject of a gather is the author's LIVE index path, \
+         never a pin to a head that moves when they post"
+    );
+}
+
+/// **The whole hop over bytes we did not author:** their 34 entries through our
+/// gatherer, paged, served, and back through `read_mirror` — the same
+/// `finish_entry` a direct feed read uses — with every one still attributed to
+/// **them** and every hash unmoved.
+///
+/// The hashes are asserted **against the direct read of the same fixture**, not
+/// against a literal: what is being measured is that the hop changed nothing, so
+/// the comparand is the same bytes read the other way.
+///
+/// ⛔⭐⭐ **What this does NOT measure, and the first draft of this comment
+/// claimed it did: §6.1's byte-preservation `MUST`.** The obvious falsifier —
+/// make `plan_mirror` carry `row.entry.to_entity()` instead of the obtained
+/// bytes — was run against this gate and came back **GREEN**, and reds only
+/// [`crate::feed_mirror::tests::a_gatherer_that_re_encodes_publishes_a_feed_nobody_wrote`],
+/// whose entry carries a field the reader does not model.
+///
+/// ⇒ ***another implementation's bytes are a different population, not
+/// automatically a divergent one.*** Our decoder round-trips every entry in
+/// their fixture losslessly because both seats model the same fields — which is
+/// the corridor working, and is exactly why it cannot falsify the rule that
+/// exists for the case where they do not. §6.1 names the hazard as *"a round
+/// trip through bytes your own encoder produced proves nothing"* and the
+/// property that repairs it is **an unknown field**, not a foreign author. A
+/// cross-implementation instance therefore needs one authored by *them*: a
+/// one-flag arm at cut time, the same shape as the two-cut ask `FEED-14` made.
+/// Routed; until it exists, the byte-preservation `MUST` is measured here by a
+/// synthetic entry and by nothing cross-implementation.
+#[test]
+fn their_entries_survive_our_gather_and_still_name_them() {
+    let direct = walk("peer-root");
+    let (plan, served) = gathered();
+    let subject = crate::feed::MirrorSubject::from_reference(&plan.record.subject);
+
+    let read = block_on(crate::feed_mirror::read_mirror(&served, GATHERER, &subject, 100))
+        .expect("our own mirror of their feed reads back");
+
+    assert_eq!(read.len(), ENTRIES, "an entry was lost crossing the gather");
+    assert_eq!(
+        read.iter().filter(|e| e.attribution.may_name_the_author()).count(),
+        ENTRIES,
+        "`FEED-R2` through a republication: every entry still names its author. \
+         Unattributed: {:?}",
+        read.iter()
+            .filter(|e| !e.attribution.may_name_the_author())
+            .map(|e| (e.hash.to_hex(), e.attribution.clone()))
+            .collect::<Vec<_>>()
+    );
+    for row in &read {
+        assert_eq!(row.entry.author, PEER_ID, "§6.1 rule 3: the gatherer is not the author");
+    }
+
+    let mut before: Vec<String> = direct.entries.iter().map(|e| e.hash.to_hex()).collect();
+    let mut after: Vec<String> = read.iter().map(|e| e.hash.to_hex()).collect();
+    before.sort();
+    after.sort();
+    assert_eq!(before, after, "a hash moved across the republication");
+}
+
+/// **`FEED-13`'s anti-vacuity arm, over a real foreign corpus.**
+///
+/// Their 34 entries against our default 32-entry page size is two pages, so the
+/// paging gates in `feed_mirror` — which run on fixtures we authored — have a
+/// cross-implementation instance: a reader asking for one page's worth stops
+/// after one page, and the view genuinely spans more than one.
+#[test]
+fn a_gathered_view_of_their_feed_spans_more_than_one_page() {
+    let (plan, served) = gathered();
+    let subject = crate::feed::MirrorSubject::from_reference(&plan.record.subject);
+
+    assert!(
+        plan.pages.len() > 1,
+        "34 entries at a {}-entry page size is not one page — a single-page view \
+         passes against a flat list and measures nothing",
+        crate::feed_publish::DEFAULT_PAGE_SIZE
+    );
+    assert_eq!(plan.record.current as usize, plan.pages.len() - 1, "the head names the top page");
+    assert_eq!(plan.record.oldest, 0, "nothing has been dropped");
+
+    let short = block_on(crate::feed_mirror::read_mirror(&served, GATHERER, &subject, 2))
+        .expect("the walk reads");
+    assert_eq!(short.len(), 2, "a reader asking for two got two");
+}
+

@@ -80,9 +80,12 @@ DEMOTE_BUDGET_S = float(os.environ.get("DEMOTE_BUDGET_S", "12"))
 # WHICH mechanism noticed rather than only whether one did.
 DEMOTE_TARGET_S = float(os.environ.get("DEMOTE_TARGET_S", "12"))
 
-A_BASE, B_BASE = "http://localhost:4446", "http://localhost:4447"
-APP = "http://host.containers.internal:8092"
-NODE_WS = "ws://host.containers.internal:4071"
+# Slot-aware — see the note in spike_meet_then_chat.py. Defaults are slot 0's
+# literals, so a hand-driven run is unchanged.
+A_BASE = os.environ.get("RTC_A_BASE", "http://localhost:4446")
+B_BASE = os.environ.get("RTC_B_BASE", "http://localhost:4447")
+APP = os.environ.get("RTC_APP", "http://host.containers.internal:8092")
+NODE_WS = os.environ.get("RTC_NODE_WS", "ws://host.containers.internal:4071")
 
 def rq(base, method, path, body=None, timeout=60):
     data = json.dumps(body).encode() if body is not None else None

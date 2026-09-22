@@ -14,7 +14,7 @@
 //!   engage. [`crate::feed_fetch`]'s module doc carries the three-way currency
 //!   analysis for when that changes.
 //! - ~~**It cannot post.**~~ **It can, as of 2026-09-15** —
-//!   [`crate::feed_compose`]'s four verbs, wired as the *Your feed* section.
+//!   [`crate::feed_compose`]'s four verbs, wired as the *Your feed* pane.
 //!   Writing `app/feed/entry` into your own tree **is** publishing on the live
 //!   road; the static emit is a separate operational act and is not this
 //!   window's business. What it still cannot do is author a **collection** —
@@ -112,12 +112,14 @@ impl FeedWindow {
                     peer_id,
                 );
                 pm.watch_prefix(&mut window.watch, peer_id, origins);
-                // ⭐ **The FIFTH — the session config**, which is where the home
-                // publisher lives (`FeedModel::home_publisher`). Same two
-                // reasons: the config is settled in phase 2, and on the Worker
-                // arm a sync `get_entity` on an unsubscribed prefix answers
-                // `None`, which would make the fallback selection unreachable on
-                // the arm that has it hardest.
+                // ⭐ **The FIFTH — the session config.** It carried the home
+                // publisher this window used to fall back to; that privilege is
+                // retired (see `FeedModel::effective_selection`) and the watch
+                // stays, because the same prefix carries the deployment posture
+                // the surface is rebuilt against and it is settled in phase 2 —
+                // after a startup window has already been spawned. On the Worker
+                // arm it does more again: a sync `get_entity` on an unsubscribed
+                // prefix answers `None` from the mirror.
                 let settings = crate::app_paths::settings_path(
                     crate::app_paths::APP_ID,
                     peer_id,
@@ -197,7 +199,14 @@ impl WindowView for FeedWindow {
             // shortened form is for a person to read and names no binding.
             "feed_post" => self.model.post(peers, &me, value, now_ms_u64()),
             "feed_remove_post" => self.model.remove_post(peers, &me, value),
-            "feed_toggle_manage" => self.model.toggle_manage(),
+            // The caveat above the composer has been read. Session-only, and it
+            // reaches the caveat alone — a refusal is not dismissible.
+            "feed_dismiss_caveat" => self.model.dismiss_caveat(),
+            // Which pane. `value` is the tab's stable wire value, never its
+            // translated caption — see `FeedTab::value`.
+            "feed_tab" => self.model.set_tab(value),
+            // Out of one publisher's archive, back to the list of publishers.
+            "feed_back" => self.model.back(),
             _ => return,
         }
         self.watch.mark_dirty();

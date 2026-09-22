@@ -11,8 +11,9 @@ use crate::dom::components;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
 use crate::feed_body::BodyRender;
-use crate::views::feed::output::{EntryRow, FeedOutput, FeedPanel, Via};
+use crate::views::feed::output::{EntryRow, FeedOutput, FeedPanel, FeedTab, Selection, Via};
 
+use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 /// The draft key for the peer-id box. One per window would be better if two
@@ -57,52 +58,131 @@ pub fn render(container: &Element, output: &FeedOutput, ctx: &DomCtx) {
     util::set_text(&h2, &crate::i18n::t("window.feed", &[]));
     util::append(&wrapper, &h2);
 
-    let hint = util::create_element("div");
-    hint.set_attribute("style", theme::HINT).ok();
-    util::set_text(&hint, &crate::i18n::t("feed.hint", &[]));
-    util::append(&wrapper, &hint);
-
-    // ⭐ **Reading first, administering last — the order IS the complaint.**
-    // Until 2026-09-16 this window rendered composer · browse · follow-form ·
-    // notice · follow-list · gatherers · **panel**, so the feed a person came to
-    // read was the seventh thing on screen, under three text inputs and two
-    // lists. *"One little single line is the feed."* The window's subject is
-    // what you are reading; everything that configures it is secondary and now
-    // sits behind one header.
+    // ⭐⭐ **THREE PANES, NOT THREE STACKED SECTIONS — and the difference is
+    // whether a publisher's archive is between you and the rest of the window.**
     //
-    // The notice stays at the top because it is the answer to the last thing
-    // pressed — inside a section that can be collapsed, a refusal would be
-    // reported into a box nobody has open.
+    // The 2026-09-16/17 reorder put *Your feed* and *Manage sources* behind
+    // collapsible headers, in that order, **below the reading surface**. That
+    // was the right diagnosis (reading first, administering last) and the wrong
+    // instrument: a disclosure stacks, so with a real feed on screen — 34 posts
+    // in the published rig, and that is a small one — both headers sat a screen
+    // and a half down, and getting to your own posts meant scrolling past
+    // everything somebody else had written. **No ordering of a stack fixes
+    // that**, because whichever pane is second is under the first one's content.
+    //
+    // A tab is *instead*; a disclosure is *extra*. These three are alternatives,
+    // so they are tabs, and every one of them is one click from every other one
+    // whatever is on screen.
+    // The captions are looked up first and held: `i18n::t` returns an owned
+    // `String` and a `Tab` borrows its label, so building both in one expression
+    // would borrow a temporary.
+    let labels: Vec<String> =
+        FeedTab::ALL.iter().map(|t| crate::i18n::t(t.label_key(), &[])).collect();
+    let tab_items: Vec<components::Tab<'_>> = FeedTab::ALL
+        .iter()
+        .zip(labels.iter())
+        .map(|(t, label)| components::Tab {
+            label,
+            value: t.value(),
+            selected: *t == output.tab,
+        })
+        .collect();
+    util::append(
+        &wrapper,
+        &components::tabs(ctx, "feed-tab", &tab_items, "feed_tab"),
+    );
+
+    // **The notice sits under the strip, above every pane.** It is the answer to
+    // the last thing pressed, and the press that produces it is reachable from
+    // all three — a refusal rendered inside one pane would be reported into a
+    // pane nobody is looking at.
     if let Some(notice) = output.notice {
         util::append(&wrapper, &components::notice(&crate::i18n::t(notice.0, &[])));
     }
-    render_known(&wrapper, output, ctx);
-    render_panel(&wrapper, output, ctx);
-    render_composer(&wrapper, output, ctx);
 
-    // The admin, behind one header. `collapsible_header` and NOT
-    // `components::disclosure`: a `<details>` re-renders closed on every
-    // repaint, and this section holds two inputs somebody types into — which
-    // that atom's own doc names as the case it is wrong for.
-    util::append(
-        &wrapper,
-        &components::collapsible_header(
-            ctx,
-            &crate::i18n::t("feed.manage", &[]),
-            output.manage_open,
-            "feed_toggle_manage",
-        ),
-    );
-    if output.manage_open {
-        let manage = util::create_element("div");
-        let _ = manage.set_attribute("data-field", "feed-manage");
-        render_follow_form(&manage, output, ctx);
-        render_follow_list(&manage, output, ctx);
-        render_gatherers(&manage, output, ctx);
-        util::append(&wrapper, &manage);
+    // Matched rather than `_`-ed, so a fourth pane is a compile error here.
+    match output.tab {
+        FeedTab::Read => render_read(&wrapper, output, ctx),
+        FeedTab::Yours => {
+            let compose = util::create_element("div");
+            let _ = compose.set_attribute("data-field", "feed-compose");
+            render_composer(&compose, output, ctx);
+            util::append(&wrapper, &compose);
+        }
+        FeedTab::Sources => {
+            let manage = util::create_element("div");
+            let _ = manage.set_attribute("data-field", "feed-manage");
+            render_follow_form(&manage, output, ctx);
+            render_follow_list(&manage, output, ctx);
+            render_gatherers(&manage, output, ctx);
+            util::append(&wrapper, &manage);
+        }
     }
 
     util::append(container, &wrapper);
+}
+
+/// ⭐⭐ **The reading pane, which is TWO PAGES — the list of publishers, or one
+/// publisher's posts.**
+///
+/// *"The site browser had it figured out: you navigate like a website."* It did,
+/// and so does the Knowledge Base one window over — a list, an item, and a way
+/// back — while this surface rendered the list and the archive stacked, so once
+/// a publisher was on screen their posts were under everything forever and
+/// picking a different one meant scrolling back up through them.
+///
+/// **The page is decided by the selection and by nothing else.** There is no
+/// second bit saying *which page* — a bit that could disagree with the selection
+/// is a bit that eventually does, and *back* is exactly *nobody is selected*
+/// ([`crate::views::feed::model::FeedModel::back`]).
+fn render_read(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
+    let pane = util::create_element("div");
+    // The pane's own marker, so a gate can wait on *the reading surface is on
+    // screen* without reading a caption or inferring it from what is inside.
+    let _ = pane.set_attribute("data-field", "feed-read");
+
+    match &output.selected {
+        None => {
+            // The list page. The hint describes **both** ways in and belongs
+            // here rather than over every pane: it is advice about choosing a
+            // publisher, which is the only thing this page is for.
+            let hint = util::create_element("div");
+            hint.set_attribute("style", theme::HINT).ok();
+            util::set_text(&hint, &crate::i18n::t("feed.hint", &[]));
+            util::append(&pane, &hint);
+            render_known(&pane, output, ctx);
+            render_nobody(&pane, output);
+        }
+        Some(selected) => render_panel(&pane, output, selected, ctx),
+    }
+
+    util::append(parent, &pane);
+}
+
+/// The nobody-selected line, under the list it is about.
+///
+/// ⛔ **Two states that pointed in opposite directions — TWO FACTS, not one.**
+/// With no routed publishers the list says *"follow one by peer id below"* and
+/// this used to say *"choose a publisher above"*, stacked one line apart on a
+/// screen where there is nothing above. Each sentence is correct alone and no
+/// test reads two of them together, which is why it took looking at the running
+/// build. *Nobody has chosen* and *there is nobody to choose* get two sentences.
+///
+/// The marker is an attribute, not the wording: a control reading this screen
+/// asserted `contains("Choose a publisher")` — an English copy string in a
+/// thirty-locale app — and went red on the first rewording.
+fn render_nobody(parent: &Element, output: &FeedOutput) {
+    let none_to_choose = output.known.is_empty();
+    let el = components::empty(&crate::i18n::t(
+        if none_to_choose { "feed.nothing_to_read" } else { "feed.nobody_selected" },
+        &[],
+    ));
+    let _ = el.set_attribute("data-field", "feed-nobody");
+    let _ = el.set_attribute(
+        "data-reason",
+        if none_to_choose { "no-publishers" } else { "none-chosen" },
+    );
+    util::append(parent, &el);
 }
 
 /// The draft key for the composer box. Its own field for `GATHERER_FIELD`'s
@@ -110,19 +190,6 @@ pub fn render(container: &Element, output: &FeedOutput, ctx: &DomCtx) {
 /// a different one.
 const POST_FIELD: &str = "feed_post";
 
-/// **The composer** — post into your own tree, and unpublish what is there.
-///
-/// ⭐ Rendered **above** the reading surface, which is the one layout decision
-/// here that is not arbitrary: this is the only part of the window that acts on
-/// *your* tree, and burying it under two lists of other people's peer ids reads
-/// as an afterthought on a surface whose whole other half is reading.
-///
-/// ⛔ **`FEED-R21` lives on the Remove button's own notice, at the moment of the
-/// action.** §7.5 is explicit that the honest sentence belongs there and not in
-/// a help page, and the model hands it back from the verb
-/// ([`crate::feed_compose::RemovalMeaning`]) so this renderer cannot forget to
-/// ask for it — it renders whatever key the model chose, and for a removal that
-/// key is the unpublication sentence.
 /// Place one entry body — EMBED §6's ladder, decided by
 /// [`crate::feed_body::decide`] and only *placed* here.
 ///
@@ -166,19 +233,102 @@ fn place_body(card: &Element, body: &BodyRender) {
     util::append(card, &el);
 }
 
+/// **The composer** — post into your own tree, and unpublish what is there.
+///
+/// ⛔ **Its own pane, and not the one the window opens on.** The note that used
+/// to sit here argued it belonged above the reading surface, because burying it
+/// *"reads as an afterthought on a surface whose whole other half is reading"*.
+/// The premise is what was wrong: this is not a window with two halves. Reading
+/// what somebody else published and writing your own are two acts on two trees,
+/// so they are two panes — and a pane, unlike the collapsed section this was
+/// for a day, is not underneath whatever the other one is showing.
+///
+/// ⚠ **This doc comment was fused onto `place_body`'s** for as long as both
+/// existed — two `///` blocks with the function between them lost, so `cargo
+/// doc` attributed all of it to the wrong function. Worth knowing because it is
+/// invisible to every gate here: prose is not checked, and a doc block that
+/// slides onto its neighbour reads perfectly in the source.
+///
+/// ⛔ **`FEED-R21` lives on the Remove button's own notice, at the moment of the
+/// action.** §7.5 is explicit that the honest sentence belongs there and not in
+/// a help page, and the model hands it back from the verb
+/// ([`crate::feed_compose::RemovalMeaning`]) so this renderer cannot forget to
+/// ask for it — it renders whatever key the model chose, and for a removal that
+/// key is the unpublication sentence.
 fn render_composer(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
-    let heading = components::subheading(&crate::i18n::t("feed.compose.heading", &[]));
-    util::append(parent, &heading);
-
-    if !output.can_author {
-        // **Says so rather than rendering a dead box.** This profile holds no
-        // authoring key for the bound peer, which is not something retrying or
-        // typing differently fixes, so offering the control would be offering
-        // an act that cannot succeed.
-        let note = components::empty(&crate::i18n::t("feed.compose.not_our_peer", &[]));
-        let _ = note.set_attribute("data-field", "feed-compose-unavailable");
-        util::append(parent, &note);
+    // No heading of its own — the tab that opens this pane already carries
+    // `feed.compose.heading`, and drawing it twice is the same word twice on
+    // one screen.
+    // ⭐⭐ **ONE DECISION, AND THE RENDERER ASKS FOR IT RATHER THAN INFERRING
+    // IT.** `can_author` says whether the control is offered; `compose_note`
+    // says what is written beside it. Two facts, so all four combinations are
+    // expressible and only the model picks one — which is what makes the caveat
+    // a caveat: *there is something to tell you* does not imply *and therefore
+    // you may not*.
+    //
+    // ⚠ This block used to branch on *"is there a refusal key"*, so
+    // `can_author()` had no consumer here at all and the surface re-derived the
+    // decision from the presence of a sentence. Measured, not reasoned: a neuter
+    // restoring the refusal to `AuthorKey::may_author` left the browser gate
+    // green, because nothing the browser draws was reading it.
+    let note = output.compose_note();
+    if !output.can_author() {
+        // **The one refusal, and it is about whose peer this is.** Not something
+        // retrying or typing differently fixes, so offering the control would be
+        // offering an act that cannot succeed.
+        //
+        // A dead box with nothing beside it is the thing to avoid on the way
+        // past: every non-authoring arm carries a note
+        // (`a_withheld_composer_always_says_why`), so the `None` arm here is
+        // unreachable rather than a silent fallback.
+        let el = components::empty(
+            &note.map(|n| crate::i18n::t(n.key, &[])).unwrap_or_default(),
+        );
+        let _ = el.set_attribute("data-field", "feed-compose-unavailable");
+        if let Some(n) = note {
+            let _ = el.set_attribute("data-reason", n.reason);
+        }
+        util::append(parent, &el);
         return;
+    }
+
+    // **A caveat sits above the box; it does not replace it.** The
+    // temporary-identity sentence was rendered by the refusal block for a day,
+    // which turned *"this will not be saved"* into *"you may not do this"* — a
+    // surface deciding, on somebody's behalf, that a thing which does not last
+    // is not worth doing. The write into this peer's own tree is the publish
+    // whatever happens to the tree afterwards; what is owed is the warning, and
+    // it is owed **before** they type, which is why it is here and not in
+    // `compose_notice` below.
+    // ⭐ **And it is dismissible, because it is a standing fact rather than
+    // news.** The sentence is owed once, before they type; drawing it over the
+    // box on every render for the life of the tab is the surface repeating
+    // itself at somebody who has already read it. Session-scoped, so a fresh
+    // tab — which is a fresh temporary identity — is told again.
+    if let Some(n) = output.compose_caveat() {
+        let el = components::notice(&crate::i18n::t(n.key, &[]));
+        let _ = el.set_attribute("data-field", "feed-compose-caveat");
+        let _ = el.set_attribute("data-reason", n.reason);
+        let dismiss = components::button_el(
+            &crate::i18n::t("btn.dismiss", &[]),
+            components::ButtonKind::Small,
+        );
+        let _ = dismiss.set_attribute("data-field", "feed-caveat-dismiss");
+        {
+            let actions = ctx.actions.clone();
+            let rp = ctx.repaint.clone();
+            let wid = output.window_id;
+            ctx.listen(&dismiss, "click", move |_| {
+                actions.borrow_mut().push(Action::WindowEvent {
+                    window_id: wid,
+                    event: "feed_dismiss_caveat".to_string(),
+                    value: String::new(),
+                });
+                rp();
+            });
+        }
+        util::append(&el, &dismiss);
+        util::append(parent, &el);
     }
 
     let row = util::create_element("div");
@@ -258,7 +408,17 @@ fn render_composer(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         let id = util::create_element("span");
         id.set_attribute("style", theme::HINT).ok();
         let _ = id.set_attribute("data-field", "feed-own-post-id");
-        util::set_text(&id, &post.id_short);
+        // The same date a reader of your feed sees, from the same expression —
+        // your own timeline is the one place you would notice it disagreeing.
+        let _ = id.set_attribute("data-created-at", &post.created_at.to_string());
+        util::set_text(
+            &id,
+            &format!(
+                "{} · {}",
+                util::local_datetime(post.created_at), // i18n-ignore — platform-formatted
+                post.id_short                          // i18n-ignore — a content hash
+            ),
+        );
         util::append(&line, &id);
 
         let drop = components::button_el(
@@ -279,11 +439,18 @@ fn render_composer(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
 
 /// ⭐ **The browse list — every publisher this profile can already reach.**
 ///
-/// This is the section that makes the window a reader instead of a text box. It
-/// is rendered **above** the Follow form deliberately: the form is the escape
-/// hatch for a publisher we have no route to, and a surface that leads with it
-/// tells an arriving visitor that the normal way in is to paste 45 characters
-/// they do not have.
+/// This is the section that makes the window a reader instead of a text box.
+/// The peer-id box is the **escape hatch** for a publisher we have no route to,
+/// and a surface that leads with it tells an arriving visitor that the normal
+/// way in is to paste 45 characters they do not have — so it lives under
+/// *Manage sources*, one pane over.
+///
+/// ⭐ **Except when this list is empty, where it is rendered right here.** On a
+/// profile with no routed publisher there is nothing on this page to choose
+/// from, and *"follow one by peer id"* is then the only thing left to do — so
+/// the box is put where the sentence saying that is, rather than on a pane the
+/// visitor has no reason to look at. Both drafts are the same `PEER_FIELD`, and
+/// only one of the two is ever on screen.
 ///
 /// Each row is two acts, kept apart for the reason `aim` already draws one
 /// button over: **Read** shows you somebody, **Follow** keeps them. *Naming a
@@ -298,6 +465,10 @@ fn render_known(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         // routing fact about the reader, not a claim about the world — and the
         // Follow box below is the answer, so the empty state points at it.
         util::append(parent, &components::empty(&crate::i18n::t("feed.no_known", &[])));
+        // …and the box that sentence points at. See this function's doc: the
+        // copy says *below*, so below is where it has to be when there is
+        // nothing else on the page.
+        render_follow_form(parent, output, ctx);
         return;
     }
 
@@ -351,23 +522,24 @@ fn render_known(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         // and this was the one field still doing it the other way.
         let _ = open.set_attribute("data-peer", &row.peer_id);
         // Attributes, never sentences — a gate reading a copy string is a gate
-        // that reds the day somebody rewords it. `home`/`own`/`followed` are the
-        // three facts a test needs and a person reads off the labels.
-        let _ = open.set_attribute("data-home", if row.home { "1" } else { "0" });
+        // that reds the day somebody rewords it. `own`/`followed` are the two
+        // facts a test needs and a person reads off the labels. **There was a
+        // third, `data-home`**, and it is gone with the privilege it described.
         let _ = open.set_attribute("data-own", if row.own { "1" } else { "0" });
         let _ = open.set_attribute("data-followed", if row.followed { "1" } else { "0" });
+        // **Which row the panel is reading, as a fact rather than a button
+        // colour.** It was carried only by `ButtonKind::Primary`, so *"nobody
+        // is being read"* — the property that replaced the home fallback — was
+        // assertable only by matching a style.
+        let _ = open.set_attribute("data-selected", if row.selected { "1" } else { "0" });
         ctx.on_window_event(&open, "click", "feed_select", &row.peer_id);
 
-        // What this peer IS to this profile, in its own column. Both can be
-        // true (a deployment publishing under the profile's own peer), so they
-        // are joined rather than treated as one enum — and an empty cell is the
-        // ordinary case, which a column makes readable and a trailing chip did
-        // not.
-        let relation: Vec<String> = [(row.home, "feed.known.home"), (row.own, "feed.known.own")]
-            .into_iter()
-            .filter(|(flag, _)| *flag)
-            .map(|(_, key)| crate::i18n::t(key, &[]))
-            .collect();
+        // What this peer IS to this profile, in its own column. **One fact
+        // now**, not two: the other was *this site's publisher*, which said
+        // where a peer is hosted while reading as a standing they hold. An
+        // empty cell is the ordinary case, which a column makes readable and a
+        // trailing chip did not.
+        let relation = if row.own { crate::i18n::t("feed.known.own", &[]) } else { String::new() };
 
         // **Follow is offered only where it would do something**, and *"where"*
         // is three-valued rather than two — see
@@ -408,7 +580,7 @@ fn render_known(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
             &body,
             &components::tr(vec![
                 components::td(&components::copy_code(ctx, &row.peer_id, None)),
-                components::td_text(&relation.join(" · ")),
+                components::td_text(&relation),
                 components::td(&{
                     // Open and Follow in one cell: the column header says
                     // *Actions*, and two of them is what this row can do.
@@ -480,8 +652,15 @@ fn render_follow_list(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
         let line = util::create_element("div");
         line.set_attribute("style", theme::ROW_INLINE).ok();
 
+        // ⭐ **The id is a VALUE, not a button caption** — the same fix the
+        // browse table got on 2026-09-16, which this list had been left out of:
+        // a 45-character identifier as a label cannot be read, and cannot be
+        // selected to copy either, because clicking it selects the publisher.
+        // `copy_code` carries it in full; the button says what pressing it does.
+        util::append(&line, &components::copy_code(ctx, &row.peer_id, None));
+
         let open = components::button_el(
-            &row.peer_id,
+            &crate::i18n::t("feed.read", &[]),
             if row.selected {
                 components::ButtonKind::Primary
             } else {
@@ -489,6 +668,10 @@ fn render_follow_list(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
             },
         );
         let _ = open.set_attribute("data-field", "feed-open");
+        let _ = open.set_attribute("data-peer", &row.peer_id);
+        // Pressing it moves to the reading pane — `FeedModel::select` owns that,
+        // because a press here that only changed a pane nobody is looking at is
+        // the dead-button disease.
         ctx.on_window_event(&open, "click", "feed_select", &row.peer_id);
         util::append(&line, &open);
 
@@ -598,43 +781,23 @@ fn render_gatherers(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
     util::append(parent, &list);
 }
 
-fn render_panel(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
-    let Some(selected) = &output.selected else {
-        // ⛔ **Two empty states that pointed in opposite directions — TWO
-        // FACTS, not one.** With no routed publishers the browse list says
-        // *"Follow one by peer id below"* and this said *"Choose a publisher
-        // above"*, stacked one line apart, on a screen where there is nothing
-        // above. Observed on the running build, which is the only place it is
-        // visible: each sentence is correct alone and no test reads two of them
-        // together.
-        //
-        // ⚠ **The first fix was to render nothing when the list is empty, and
-        // that was worse** — a silent panel is indistinguishable from one that
-        // is still loading or broken, which is the collapse this whole surface
-        // is written against. *Nobody has chosen* and *there is nobody to
-        // choose* are two states and they get two sentences.
-        //
-        // The marker is an attribute, not the wording: the control that reads
-        // this screen asserted `contains("Choose a publisher")` — an English
-        // copy string in a thirty-locale app — and went red on the first change
-        // to a sentence, which is the anchor mistake `feed-body-root` above
-        // already records twice.
-        let none_to_choose = output.known.is_empty();
-        let el = components::empty(&crate::i18n::t(
-            if none_to_choose { "feed.nothing_to_read" } else { "feed.nobody_selected" },
-            &[],
-        ));
-        let _ = el.set_attribute("data-field", "feed-nobody");
-        let _ = el.set_attribute(
-            "data-reason",
-            if none_to_choose { "no-publishers" } else { "none-chosen" },
-        );
-        util::append(parent, &el);
-        return;
-    };
-
+/// One publisher's posts — the reading pane's second page.
+fn render_panel(parent: &Element, output: &FeedOutput, selected: &Selection, ctx: &DomCtx) {
     let head = util::create_element("div");
     head.set_attribute("style", theme::ROW_INLINE).ok();
+
+    // ⭐ **The way out, and it leads the row.** Without it the only route back
+    // to the list of publishers was scrolling to the top of somebody's archive
+    // — which is the Knowledge Base's `back_to_list` and the Site Browser's
+    // navigation, both of which this window had and used to lack. `btn.back`
+    // rather than a `feed.*` key of its own: one English word, one key.
+    let back = components::button_el(
+        &crate::i18n::t("btn.back", &[]),
+        components::ButtonKind::Secondary,
+    );
+    let _ = back.set_attribute("data-field", "feed-back");
+    ctx.on_window_event(&back, "click", "feed_back", "");
+    util::append(&head, &back);
     // ⭐ **A heading that says something, and the id in full underneath.** This
     // was `subheading(&peer_id)` — a 45-character identifier as the section
     // title, which tells a person nothing and sets the width of the window.
@@ -721,7 +884,16 @@ fn render_panel(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
     // subscribes to nothing, and pulls nothing in the background — and a person
     // who assumes otherwise is owed the correction here, where they are about
     // to press it.
-    if !selected.own {
+    //
+    // ⭐ **Only where the button it explains says *Follow*.** It rendered above
+    // every publisher including the ones already followed, so a paragraph
+    // answering a question somebody asked once sat over their feed forever —
+    // three lines of prose between the heading and the posts, on the surface
+    // whose complaint was that the reading is buried. *An explanation belongs
+    // beside the decision, and after the decision it is clutter.*
+    if crate::views::feed::output::relation(selected.own, selected.followed)
+        == crate::views::feed::output::Relation::Stranger
+    {
         let what = util::create_element("div");
         what.set_attribute("style", theme::HINT).ok();
         let _ = what.set_attribute("data-field", "feed-follow-meaning");
@@ -752,11 +924,76 @@ fn render_panel(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
             util::set_text(&d, detail); // i18n-ignore — verbatim transport detail
             util::append(parent, &d);
         }
-        FeedPanel::Entries { via, rows } => render_entries(parent, via, rows),
+        FeedPanel::Entries { via, rows } => render_entries(parent, via, rows, ctx),
     }
 }
 
-fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow]) {
+/// The draft key for the filter box. Its own field, like the other three.
+const FILTER_FIELD: &str = "feed_filter";
+
+/// ⭐ **How many posts it takes before a filter is worth offering.**
+///
+/// *"What is this filter going to do — filter what?"* A bare text box above four
+/// cards that are all on screen at once cannot help with anything, so what it
+/// mostly does is raise that question. Above this many the list is longer than a
+/// screen and narrowing it is a real act.
+///
+/// **Not a magic number in a condition**: the pair either side of it is gated —
+/// the gathered rig carries three posts and must show no filter, the published
+/// one carries 34 and must — so moving it is a decision with two assertions on
+/// it rather than a taste.
+const FILTER_FROM: usize = 8;
+
+/// ⭐⭐ **Show only the posts that match, and do it in the DOM.**
+///
+/// The one thing this must not do is round-trip through the model. A filter
+/// that dispatched a `WindowEvent` per keystroke would rebuild the window under
+/// the caret on every letter, and the draft machinery that makes typing survive
+/// a rebuild restores the *value*, not the focus — so the box would empty itself
+/// of attention after one character. Hiding rows that are already on screen
+/// changes no state, marks nothing dirty and cannot race a landing walk.
+///
+/// It is called from **two** places and that is what makes it correct rather
+/// than a trick: from the input listener on every keystroke, and from
+/// [`render_entries`] with whatever the draft already holds — so a rebuild (a
+/// refresh landing, a follow, a repaint from anywhere) re-applies the filter
+/// instead of silently dropping it. One predicate, over the same `textContent`,
+/// both times; a render-time filter written in Rust over `EntryRow` would be a
+/// *second* predicate that could disagree with the live one about the same post.
+///
+/// ⛔ **A filter that hides everything says so.** An empty list under a box
+/// somebody has typed into is indistinguishable from a publisher who posted
+/// nothing — the collapse `FeedPanel::Loading`/`NoPosts` exists one layer down
+/// to prevent, arriving here by a different road.
+fn apply_filter(list: &Element, empty: &Element, needle: &str) {
+    let needle = needle.trim().to_lowercase();
+    let slots = list.query_selector_all("[data-field=\"feed-entry-slot\"]").ok();
+    let mut shown = 0u32;
+    if let Some(slots) = slots {
+        for i in 0..slots.length() {
+            let Some(slot) = slots.item(i).and_then(|n| n.dyn_into::<Element>().ok()) else {
+                continue;
+            };
+            let hit = needle.is_empty()
+                || slot
+                    .text_content()
+                    .map(|t| t.to_lowercase().contains(&needle))
+                    .unwrap_or(false);
+            // The slot exists so that hiding a card never touches the card's own
+            // `style` — `components::card` puts the whole look there, and an
+            // un-hide that wrote `display:block` over it would return a
+            // different-looking post than the one that went away.
+            let _ = slot.set_attribute("style", if hit { "" } else { "display:none" });
+            if hit {
+                shown += 1;
+            }
+        }
+    }
+    let _ = list.set_attribute("data-shown", &shown.to_string());
+    let _ = empty.set_attribute("style", if shown == 0 { theme::HINT } else { "display:none" });
+}
+
+fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow], ctx: &DomCtx) {
     // **Which leg served this, on screen rather than only in the log.** A live
     // read is as fresh as the author is; a published one is as fresh as their
     // last publish; a mirror is somebody else's reading, which §6.1 rule 2
@@ -779,6 +1016,26 @@ fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow]) {
     util::set_text(&src, &text);
     util::append(parent, &src);
 
+    // **The filter, beside the line that says where these came from** — and
+    // only on an archive long enough for narrowing to mean anything
+    // ([`FILTER_FROM`]). It sits above the posts because that is where a person
+    // looks for it, and because a control below a hundred cards is a control
+    // nobody finds.
+    let filter = (rows.len() > FILTER_FROM).then(|| {
+        let filter_row = util::create_element("div");
+        filter_row.set_attribute("style", theme::ROW_INLINE).ok();
+        let filter = components::text_input(
+            ctx,
+            FILTER_FIELD,
+            "",
+            &crate::i18n::t("feed.filter_placeholder", &[]),
+        );
+        let _ = filter.set_attribute("data-field", "feed-filter");
+        util::append(&filter_row, &filter);
+        util::append(parent, &filter_row);
+        filter
+    });
+
     let list = util::create_element("div");
     // ⭐ **A reading column.** These cards carry prose, and at the width of a
     // maximized window a paragraph is one line the eye cannot return from.
@@ -791,6 +1048,11 @@ fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow]) {
     let _ = list.set_attribute("data-count", &rows.len().to_string());
 
     for row in rows {
+        // The slot the filter hides. See `apply_filter` for why the card's own
+        // `style` is not the thing toggled.
+        let slot = util::create_element("div");
+        let _ = slot.set_attribute("data-field", "feed-entry-slot");
+
         let card = components::card("");
         let _ = card.set_attribute("data-field", "feed-entry");
 
@@ -803,20 +1065,66 @@ fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow]) {
             "data-attributed",
             if row.attributed { "true" } else { "false" },
         );
-        // **The verdict is rendered for every entry, including the good one.**
-        // A surface that showed a chip only when something was wrong would make
+        // ⭐ **WHEN IT WAS WRITTEN, AND IT LEADS.** `created_at` has been on
+        // `EntryRow` since the type existed and reached no screen — every post
+        // rendered as body plus a hash plus a verdict, with no date anywhere, on
+        // a surface whose whole subject is a timeline. It is the author's own
+        // claim, rendered verbatim by the platform: `FEED-R8` forbids rejecting
+        // an entry for an implausible timestamp, and quietly re-writing one we
+        // find unlikely is that refusal wearing a formatter's clothes.
+        //
+        // **The verdict is rendered for every entry, including the good one.** A
+        // surface that showed a chip only when something was wrong would make
         // *"this is verified"* indistinguishable from *"nobody looked"*.
+        let _ = meta.set_attribute("data-created-at", &row.created_at.to_string());
         util::set_text(
             &meta,
             &format!(
-                "{} · {}",
-                row.id_short, // i18n-ignore — a content hash
+                "{} · {} · {}",
+                util::local_datetime(row.created_at), // i18n-ignore — platform-formatted
+                row.id_short,                         // i18n-ignore — a content hash
                 crate::i18n::t(row.attribution_key, &[])
             ),
         );
         util::append(&card, &meta);
 
-        util::append(&list, &card);
+        util::append(&slot, &card);
+        util::append(&list, &slot);
     }
     util::append(parent, &list);
+
+    let empty = util::create_element("div");
+    let _ = empty.set_attribute("data-field", "feed-filter-empty");
+    util::set_text(&empty, &crate::i18n::t("feed.filter_no_match", &[]));
+    util::append(parent, &empty);
+
+    // Apply whatever is already typed, **before** wiring the listener: this is
+    // the rebuild path, and a filter that only ran on keystrokes would come back
+    // showing every post with its own box still full.
+    //
+    // ⚠ **And it runs even when no box was drawn**, which is the case a tidy
+    // version would put inside the `if`: the draft survives navigation, so
+    // somebody who filtered a long archive, went Back and opened a short one
+    // would otherwise be looking at a list narrowed by a word they can no longer
+    // see or clear. An empty needle shows everything, so the short archive comes
+    // back whole — and the *"nothing matches"* line, which this call also
+    // decides, is drawn either way.
+    let typed = match &filter {
+        Some(_) => ctx.drafts.borrow().get(FILTER_FIELD).cloned().unwrap_or_default(),
+        None => String::new(),
+    };
+    apply_filter(&list, &empty, &typed);
+
+    if let Some(filter) = filter {
+        let list = list.clone();
+        let empty = empty.clone();
+        ctx.listen(&filter, "input", move |evt: web_sys::Event| {
+            let value = evt
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                .map(|i| i.value())
+                .unwrap_or_default();
+            apply_filter(&list, &empty, &value);
+        });
+    }
 }

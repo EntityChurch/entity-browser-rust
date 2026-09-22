@@ -327,16 +327,9 @@ fn import_card(ctx: &DomCtx, view: &SavesView) -> Element {
 
 /// A backup's timestamp as a local date-time.
 ///
-/// Formatted by the **platform**, in the user's own locale and time zone —
-/// `toLocaleString` rather than a hand-rolled `YYYY-MM-DD`, which would be one
-/// more place the app decides what a date looks like for someone whose
-/// convention it does not know.
+/// **One expression, in [`util::local_datetime`]** — the Feed window needed the
+/// same answer for a post's `created_at`, and two surfaces formatting a time
+/// two ways is C15 with a person reading both on one screen.
 pub(crate) fn stamp_label(stamp_ms: u64) -> String {
-    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(stamp_ms as f64));
-    let s: String = d.to_locale_string("default", &js_sys::Object::new()).into();
-    if s.is_empty() {
-        stamp_ms.to_string()
-    } else {
-        s
-    }
+    util::local_datetime(stamp_ms)
 }

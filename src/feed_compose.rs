@@ -500,32 +500,110 @@ pub fn own_posts(peers: &crate::peers::Peers, peer: &str) -> Vec<OwnPost> {
     out
 }
 
-/// The authoring keypair for one of **this profile's own** peers.
+/// May this profile author as `peer` — and **whose situation is it** when the
+/// answer needs qualifying.
 ///
-/// `None` when the id names a peer this profile does not hold the key for —
-/// which is every foreign peer, and is the honest answer: you cannot author into
-/// somebody else's namespace, and [`plan_add_entry`] would refuse the entry
-/// anyway under `FEED-R1`.
+/// ⭐⭐ **TWO OF THE THREE ARMS AUTHOR, AND FOR A DAY ONLY ONE DID.**
+/// `SessionOnly` was a refusal on the reasoning that a post into a tree which
+/// evaporates is *"neither kept nor the profile's"*. **Both halves of that are
+/// wrong.** It **is** the profile's — this session is that peer, holds its key
+/// and signs with it — and *kept* is a separate question from *allowed*.
+/// Nothing in `APP-CONVENTION-FEED` conditions authorship on durability; a
+/// peer writes entries into its own tree and that write **is** the publish
+/// (`REFERENCE-PUBLISHING-PIPELINE` §0.0). ⇒ ***persistence is not permission***
+/// — a surface that withholds a control because the result is temporary has
+/// decided, on somebody's behalf, that a temporary thing is not worth doing.
 ///
-/// Derives the id from the key rather than trusting the stored `peer_id` field,
+/// So the arm carries a **caveat**, not a refusal: you may post, and you are
+/// told it lives for this tab. Exactly one arm refuses, and it refuses for a
+/// reason about *whose peer it is* rather than about how long anything lasts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorKey {
+    /// We hold this peer's durable key. Authors, with nothing to qualify.
+    Held,
+    /// This **is** the peer we are running as, and its identity was minted for
+    /// this session alone — nothing saved it and nothing can reach it again.
+    /// Authors: the tree is this peer's own, the signature is real, and our own
+    /// reader attributes the entry. What is true and worth saying is that it
+    /// goes when the tab does.
+    SessionOnly,
+    /// Some other peer entirely — every foreign publisher, and any window bound
+    /// to one. **The only refusal**, and [`plan_add_entry`] would refuse the
+    /// entry anyway under `FEED-R1`: the author of an entry is the namespace it
+    /// is read under, so authoring as somebody else is not a thing to permit.
+    NotOurs,
+}
+
+impl AuthorKey {
+    /// May a post be minted under this answer — the one positive predicate, so
+    /// no caller re-derives it by negating a refusal (`AppServerView::is_serving`'s
+    /// bug, one surface over) and a fourth arm has to say which side it is on.
+    pub fn may_author(&self) -> bool {
+        matches!(self, AuthorKey::Held | AuthorKey::SessionOnly)
+    }
+}
+
+/// The pure decision, so every combination is gated by `make test` on both
+/// arms — the lookups below read process-global storage and a browser-only
+/// session witness, neither of which a native test can furnish.
+///
+/// `held` wins over `session`: they are disjoint today (a minted ephemeral
+/// identity is written to neither drawer), and if a future arm ever recorded
+/// both, *durable* is the stronger claim and the one that authorizes a post.
+pub fn decide_author_key(peer: &str, held: &[String], session: Option<&str>) -> AuthorKey {
+    if held.iter().any(|id| id == peer) {
+        AuthorKey::Held
+    } else if session == Some(peer) {
+        AuthorKey::SessionOnly
+    } else {
+        AuthorKey::NotOurs
+    }
+}
+
+/// [`decide_author_key`] against this profile's real drawers.
+///
+/// ⭐⭐ **THE LOOKUP IS THE HALF THAT FAILS IN PRODUCTION, TWICE NOW.** Splitting
+/// the decision out is good design and it moves *which drawers do we look in* —
+/// the only untested thing here — outside everything that tests the composer.
+/// Both defects this function has had lived in that gap: until 2026-09-16 it
+/// read the `entity_peers` spawn-list alone, so a default profile's **system
+/// peer** (a second drawer, whose own constant documents the distinction) was
+/// invisible and the composer was unreachable for everybody; and until
+/// 2026-09-17 there was no third answer at all, so the *ephemeral primary* —
+/// minted per session by [`crate::persistence::remember_ephemeral_identity`],
+/// in no drawer by design — fell through to *"this profile does not hold its
+/// key"*. Both were reachable only from a surface, by a profile nobody had
+/// hand-fed a key to.
+///
+/// Derives every id from its key rather than trusting a stored `peer_id` field,
 /// which is `roster::spawn_list_derived`'s rule and exists because the two can
 /// drift.
+pub fn authoring_key(peer: &str) -> AuthorKey {
+    let held: Vec<String> = crate::persistence::held_keypairs()
+        .iter()
+        .map(|kp| kp.peer_id().to_string())
+        .collect();
+    let session = crate::persistence::ephemeral_identity();
+    decide_author_key(peer, &held, session.as_deref())
+}
+
+/// The authoring keypair for a peer **this profile is**, durable or not.
 ///
-/// ⭐⭐ **THIS READ THE SPAWN-LIST VAULT ALONE UNTIL 2026-09-16, SO IT ANSWERED
-/// `None` FOR THE PROFILE'S OWN PEER AND THE COMPOSER WAS UNREACHABLE FOR
-/// EVERYBODY.** A default profile's windows are bound to the **system peer**,
-/// whose seed lives under `entity_system_seed` — a drawer whose own constant is
-/// documented as *"distinct from the `entity_peers` spawn-list"* — so the one
-/// identity we are definitionally running as was the one identity this lookup
-/// could not see. The surface then said *"this profile does not hold its key"*
-/// about a key that was in localStorage, in memory, and signing that session's
-/// traffic. Enumerate through [`crate::persistence::held_keypairs`], which is
-/// the single answer to the question and knows about both drawers.
+/// `None` only for [`AuthorKey::NotOurs`] — there is one refusal and this is
+/// where it is enforced. The session identity's key is offered here **because
+/// that peer is us**: it signs this session's traffic already, its tree is its
+/// own, and withholding it from the authoring path would be withholding a peer's
+/// key from the peer.
 pub fn authoring_keypair(peer: &str) -> Option<entity_crypto::IdentityKeypair> {
-    crate::persistence::held_keypairs()
-        .into_iter()
-        .map(entity_crypto::IdentityKeypair::Ed25519)
-        .find(|kp| kp.peer_id().to_string() == peer)
+    match authoring_key(peer) {
+        AuthorKey::Held => crate::persistence::held_keypairs()
+            .into_iter()
+            .map(entity_crypto::IdentityKeypair::Ed25519)
+            .find(|kp| kp.peer_id().to_string() == peer),
+        AuthorKey::SessionOnly => crate::persistence::ephemeral_keypair()
+            .map(entity_crypto::IdentityKeypair::Ed25519),
+        AuthorKey::NotOurs => None,
+    }
 }
 
 #[cfg(test)]
@@ -549,6 +627,119 @@ mod tests {
 
     fn h(seed: &str) -> Hash {
         Hash::compute("test/note", seed.as_bytes())
+    }
+
+    // -- may I author as this peer -----------------------------------------
+
+    /// ⭐ **THE RULE THIS MODULE GOT WRONG: persistence is not permission.** A
+    /// peer whose identity was minted for this session alone still authors in
+    /// its own tree — the write is the publish, the signature is real, and our
+    /// own reader attributes it. What durability decides is how long the result
+    /// lasts, which is a thing to *say*, never a thing to withhold a control
+    /// over.
+    ///
+    /// Falsify by restoring `may_author` to `matches!(self, Held)`: this reds
+    /// naming the arm.
+    #[test]
+    fn a_temporary_identity_may_still_post_into_its_own_tree() {
+        assert!(
+            AuthorKey::SessionOnly.may_author(),
+            "a tree that goes when the tab does is still this peer's tree; \
+             nothing in FEED conditions authorship on durability"
+        );
+        assert!(AuthorKey::Held.may_author());
+        assert!(
+            !AuthorKey::NotOurs.may_author(),
+            "the one refusal, and it is about whose peer it is"
+        );
+    }
+
+    /// ⭐ **Three outcomes, the count asserted**, so a fourth reason to refuse
+    /// cannot quietly reuse one of these — which is precisely how the temporary
+    /// identity came to be reported as a missing key.
+    #[test]
+    fn a_peer_is_ours_or_this_sessions_or_a_strangers_and_never_two_of_them() {
+        let held = ["2KDURABLE".to_string()];
+        let all = [
+            decide_author_key("2KDURABLE", &held, Some("2KSESSION")),
+            decide_author_key("2KSESSION", &held, Some("2KSESSION")),
+            decide_author_key("2KSOMEBODY", &held, Some("2KSESSION")),
+        ];
+        assert_eq!(
+            all,
+            [AuthorKey::Held, AuthorKey::SessionOnly, AuthorKey::NotOurs]
+        );
+
+        let distinct: std::collections::BTreeSet<_> =
+            all.iter().map(|k| format!("{k:?}")).collect();
+        assert_eq!(distinct.len(), 3, "each answer needs its own arm");
+    }
+
+    /// ⛔ **THE DEFECT, AS A TEST.** A session running on a minted identity must
+    /// not be told it does not hold a key — that sentence describes somebody
+    /// else's peer, and it sent a person in a second tab looking for a key
+    /// problem that did not exist. Falsify by deleting the `SessionOnly` arm:
+    /// the peer falls through to `NotOurs` and this reds.
+    #[test]
+    fn the_identity_this_session_minted_is_not_reported_as_a_strangers_peer() {
+        let verdict = decide_author_key("2KEPHEMERAL", &[], Some("2KEPHEMERAL"));
+        assert_eq!(verdict, AuthorKey::SessionOnly);
+        assert_ne!(
+            verdict,
+            AuthorKey::NotOurs,
+            "the peer we are RUNNING AS is never a stranger's"
+        );
+    }
+
+    /// A session that minted nothing — the durable arms, which are the shipped
+    /// default — is unchanged: `None` is *this session did not mint an identity*,
+    /// not *we could not tell*.
+    #[test]
+    fn a_durable_session_has_no_temporary_identity_and_the_answer_is_unchanged() {
+        let held = ["2KDURABLE".to_string()];
+        assert_eq!(decide_author_key("2KDURABLE", &held, None), AuthorKey::Held);
+        assert_eq!(decide_author_key("2KOTHER", &held, None), AuthorKey::NotOurs);
+    }
+
+    /// **Durable outranks temporary.** They are disjoint today — a minted
+    /// identity is written to neither drawer — so this pins the precedence
+    /// rather than observing it: if some future arm ever recorded both, the
+    /// claim that authorizes a post is the durable one.
+    #[test]
+    fn a_durable_key_outranks_a_temporary_identity_for_the_same_peer() {
+        let held = ["2KBOTH".to_string()];
+        assert_eq!(decide_author_key("2KBOTH", &held, Some("2KBOTH")), AuthorKey::Held);
+    }
+
+    /// ⭐ **The lookup, which is the half that fails in production.** The pure
+    /// decision above is gated either way; what was never covered is *which
+    /// drawers do we look in*, and both of this function's defects lived exactly
+    /// there. Falsify by dropping the `ephemeral_identity()` read from
+    /// `authoring_key`: this reds with `NotOurs`.
+    ///
+    /// ⭐ **And it asserts the KEY comes back, not only the verdict** — the
+    /// third defect in this function was the slot holding an id where the arm
+    /// needed a key, which no assertion about `AuthorKey` alone can see. Falsify
+    /// by returning `None` from the `SessionOnly` arm of `authoring_keypair`:
+    /// the verdict rows stay green and this reds.
+    #[test]
+    fn the_lookup_consults_the_session_witness_and_hands_back_its_key() {
+        let kp = entity_crypto::Keypair::generate();
+        let id = kp.peer_id().to_string();
+        crate::persistence::set_ephemeral_identity_for_test(Some(&kp));
+        assert_eq!(authoring_key(&id), AuthorKey::SessionOnly);
+        let signer = authoring_keypair(&id).expect(
+            "the peer this session IS must be able to sign as itself — it already \
+             signs every message it sends with this key",
+        );
+        assert_eq!(
+            signer.peer_id().to_string(),
+            id,
+            "the key handed back must be the identity we are running as"
+        );
+        crate::persistence::set_ephemeral_identity_for_test(None);
+        assert_eq!(authoring_key(&id), AuthorKey::NotOurs);
+        assert!(authoring_keypair(&id).is_none());
     }
 
     // -- verb 1 ------------------------------------------------------------

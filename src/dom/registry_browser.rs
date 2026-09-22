@@ -34,6 +34,12 @@ pub fn render(
     // padding, so a container style here would be a second source for the same
     // spacing decision (and the ui-lint ratchet is what caught it).
     let root = util::create_element("div");
+    // ⭐ **The anti-vacuity anchor, and it is on the WRAPPER on purpose.** A
+    // vacuity guard needs an UNCONDITIONAL marker, not a unique one: three Feed
+    // gates reported VACUOUS against a window that had rendered fine, because
+    // their anchor was an input that a reorder put behind a collapsed header.
+    // This element exists for nothing else and is drawn on every pass.
+    let _ = root.set_attribute("data-field", "registry-body-root");
 
     render_pin(&root, output, ctx);
     render_names(&root, output, ctx);
@@ -185,6 +191,10 @@ fn render_names(root: &Element, output: &RegistryBrowserOutput, ctx: &DomCtx) {
         c::ButtonKind::Primary,
         "registry_browse",
     );
+    // A gate anchors on THIS, never on the caption — `registry.browse` is
+    // translated into thirty locales, and an anti-vacuity anchor that is a copy
+    // string goes red the day somebody rewords it (three Feed gates did).
+    let _ = browse.set_attribute("data-field", "registry-browse");
     if output.pinned.is_none() || output.browser_only {
         c::disable(&browse);
     }
@@ -244,6 +254,10 @@ fn render_listing(card: &Element, listing: &NameListing, ctx: &DomCtx) {
             "registry_resolve",
             name,
         );
+        // Marked with the NAME it resolves, so a gate can press the row it means
+        // rather than the first button whose caption matches.
+        let _ = resolve.set_attribute("data-field", "registry-resolve");
+        let _ = resolve.set_attribute("data-name", name);
         util::append(&tbody, &c::tr(vec![c::td_text(name), c::td(&resolve)]));
     }
     util::append(card, &t);
@@ -483,6 +497,12 @@ fn render_publications(
                     c::ButtonKind::Secondary,
                     "registry_open",
                 );
+                // The viewer's identity key, not its caption: `registry.open_in`
+                // interpolates a translated viewer name, and this is the control
+                // whose journey had no browser gate at all when a single click
+                // on it un-named a publisher in production (2026-09-17).
+                let _ = open.set_attribute("data-field", "registry-open");
+                let _ = open.set_attribute("data-viewer", to_open.window_type);
                 ctx.on_action(
                     &open,
                     "click",

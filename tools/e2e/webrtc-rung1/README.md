@@ -54,7 +54,34 @@ Or drive the rig directly (leaves containers up for inspection — the manual-de
 ```bash
 bash tools/e2e/webrtc-rung1/rung1_repro.sh            # set up everything + drive (exits non-zero on FAIL)
 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown   # remove containers + network + host procs
+bash tools/e2e/webrtc-rung1/rung1_repro.sh slot       # what does this slot own, and is anyone in it?
 ```
+
+### `RTC_SLOT` — running beside another seat
+
+This box has several worktrees and this rig used to name everything with a fixed
+literal, so a second seat starting any WebRTC gate did not collide with an
+in-flight run, it **demolished** it: every target opens with a `teardown` that
+removed `rtc-a`/`rtc-b` by name and swept the node and dist server off their
+ports. The victim then saw a spike failure, i.e. a rig collision read as a
+product defect.
+
+```bash
+make e2e-webrtc-meet RTC_SLOT=1   # own containers, networks, ports and /tmp
+```
+
+`RTC_SLOT` is 0–9. **Slot 0 is byte-identical to every invocation before this
+existed** — same names, same `:4446`/`:4447`/`:4071`/`:8092`, same `/tmp` paths —
+so nothing you have in a runbook moves. A non-zero slot suffixes every name and
+offsets every port by `slot × 10`. `tools/webrtc-slot-check.sh` (in `make lint`)
+pins both halves.
+
+The rig **refuses** an occupied slot rather than tearing it down, and refuses a
+port held by a process it did not start rather than sweeping it — note `:8092` at
+slot 0 is also `make e2e-worker`'s default, so the stranger is as often that
+suite as another WebRTC run. Both refusals name `RTC_SLOT` as the way out. A
+teardown only stops processes this rig recorded starting, so a run that crashed
+and left its containers up is still cleaned normally while a neighbour's is not.
 
 It runs a **build-skew preflight** (asserts `dist/`, rebuilds `entity-signaling-node` from the current
 `entity-core-rust` HEAD, prints that SHA), then creates the bridge network, two firefox containers
