@@ -43,6 +43,7 @@
   "apps.filter.music": "Μουσική",
   "apps.filter.other": "Άλλα",
   "apps.filter.tools": "Εργαλεία",
+  "apps.filter.vm_apps": "Εφαρμογές VM",
   "backend_auth.profile_file_transfer": "Μεταφορά αρχείων (μόνο λήψη)",
   "backend_auth.profile_file_transfer_rw": "Μεταφορά αρχείων (αμφίδρομη)",
   "backend_auth.profile_trusted": "Έμπιστο (πλήρης πρόσβαση)",

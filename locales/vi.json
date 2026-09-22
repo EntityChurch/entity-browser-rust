@@ -42,6 +42,7 @@
   "apps.filter.music": "Âm nhạc",
   "apps.filter.other": "Khác",
   "apps.filter.tools": "Công cụ",
+  "apps.filter.vm_apps": "Ứng dụng VM",
   "backend_auth.profile_file_transfer": "Truyền tệp (chỉ tải về)",
   "backend_auth.profile_file_transfer_rw": "Truyền tệp (hai chiều)",
   "backend_auth.profile_trusted": "Tin cậy (toàn quyền)",

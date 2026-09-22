@@ -430,3 +430,20 @@ internal = true
 [[living]]
 path     = "docs/architecture/guides/GUIDE-L5-APPLICATION-ABI.md"
 internal = true
+
+# The demo feed. Dated on purpose, because a feed's entries ARE dated — the date is
+# the content, not a filing convention, and a post called
+# `2026-09-04-what-a-post-actually-is.md` is the example being demonstrated.
+#
+# It PUBLISHES, and that records what is already true rather than deciding anything:
+# `examples/entity-demo/` is public today (`demo/pages/`, `info/pages/`, the manifests
+# and the README), because `examples/` is not a doc root and prose under it is never
+# eligible to be filtered out. The feed is payload of exactly that kind.
+#
+# The declaration is owed anyway: dated prose below the top-level doc roots is invisible
+# to the release filter, so without an [[area]] nothing states where it belongs and the
+# question is answered by accident.
+[[area]]
+path      = "examples/entity-demo/feed"
+kind      = "reference"
+publishes = true

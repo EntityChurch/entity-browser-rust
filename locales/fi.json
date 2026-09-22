@@ -43,6 +43,7 @@
   "apps.filter.music": "Musiikki",
   "apps.filter.other": "Muut",
   "apps.filter.tools": "Työkalut",
+  "apps.filter.vm_apps": "VM-sovellukset",
   "backend_auth.profile_file_transfer": "Tiedostonsiirto (vain nouto)",
   "backend_auth.profile_file_transfer_rw": "Tiedostonsiirto (kaksisuuntainen)",
   "backend_auth.profile_trusted": "Luotettu (täysi käyttöoikeus)",

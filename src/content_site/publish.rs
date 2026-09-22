@@ -488,7 +488,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // **Reachable from the CLI as of 2026-09-16 (`--no-sites`), and gated.**
     // It was written before the arm existed and said so — *"a branch nobody can
     // reach is not a branch anybody has checked"* — which is what made the arm's
-    // absence findable when `<coordination-tree>` went looking for it.
+    // absence findable when the release-coordination seat went looking for it.
     // [A2] Gather, **before anything is cleaned**. The carried bytes are held in
     // memory from here on, which is what makes `--gather=<author>@<this same
     // out-dir>` sound: the blobs behind that author's tree live in the SHARED
@@ -1108,9 +1108,9 @@ fn warn_out_of_set_links(dangling: &[static_export::DanglingLink], strict: bool)
 /// [`projected_site_ids`], [`projected_app_sets`] and [`projected_feed_posts`]
 /// all answer *what is already in `{out}`* — so on a build-fresh publisher they
 /// all read zero and `--plan` reports **"nothing would be removed"** on a
-/// publish that replaces everything an origin is serving. `<coordination-tree>`
-/// found this against their own pipeline, which does `rm -rf "$out"; mkdir -p
-/// "$out"` before every run (their `B-5`).
+/// publish that replaces everything an origin is serving. The release-
+/// coordination seat found this against their own pipeline, which does
+/// `rm -rf "$out"; mkdir -p "$out"` before every run (their `B-5`).
 ///
 /// ⭐ **The guards are not wrong; the sentence they produce was.** A comparison
 /// against the out dir is exactly right for *"this run is about to clobber what
@@ -2532,8 +2532,8 @@ fn run_plan(
     if removed.is_empty() && app_removed.is_empty() && feed_removed == 0 && mirrors_removed == 0
     {
         // ⭐ **The verdict, not just the counts.** A bare *"nothing would be
-        // removed"* is the sentence `<coordination-tree>`'s `B-5` is about: with
-        // no prior projection to compare against it is true of this directory
+        // removed"* is the sentence the release-coordination seat's `B-5` is
+        // about: with no prior projection to compare against it is true of this directory
         // and says nothing about the deploy, which is the question the operator
         // is actually asking. Two outcomes, two sentences (AP40) — and the exit
         // code stays `SUCCESS` for both, because *we cannot tell* is not a
@@ -3238,9 +3238,9 @@ pub(crate) struct PublishSource {
 /// exited `0`. **Silence is refused now** ([`parse_site_source`]): a publish
 /// states its site arm or does not run.
 ///
-/// The three arms are 1:1 with `<coordination-tree>`'s `estate.conf` axis
-/// vocabulary (`papers` / `builtin` / `none`), which is where the ask came from
-/// (`TRACKER-<coordination-tree>.md` `B-4`).
+/// The three arms are 1:1 with the release-coordination seat's estate-
+/// configuration axis vocabulary (`papers` / `builtin` / `none`), which is
+/// where the ask came from (our tracker for that seat, `B-4`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SiteSource {
     /// `--ingest=<dir>` — a content-team `render/` emit, disk → tree.
@@ -4356,7 +4356,7 @@ mod tests {
     }
 
     /// ⭐ **A plan against a freshly-created output directory says so, instead of
-    /// reporting a reassuring zero — `<coordination-tree>`'s `B-5`.**
+    /// reporting a reassuring zero — the release-coordination seat's `B-5`.**
     ///
     /// All three drop guards count what is already in `{out}`. Their pipeline
     /// does `rm -rf "$out"; mkdir -p "$out"` before every run, so all three read
@@ -4501,8 +4501,8 @@ mod tests {
     }
 
     /// **`B-4`'s shape: publish a feed and nothing else.** A real domain whose
-    /// whole purpose is a timeline — declarable in `<coordination-tree>`'s
-    /// `estate.conf` since 2026-09-15, and refused by their `publish.sh` until
+    /// whole purpose is a timeline — declarable in the release-coordination
+    /// seat's estate configuration since 2026-09-15, and refused by their `publish.sh` until
     /// this arm existed because the alternative was two demo sites nobody asked
     /// for.
     ///

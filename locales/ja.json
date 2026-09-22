@@ -42,6 +42,7 @@
   "apps.filter.music": "音楽",
   "apps.filter.other": "その他",
   "apps.filter.tools": "ツール",
+  "apps.filter.vm_apps": "VMアプリ",
   "backend_auth.profile_file_transfer": "ファイル転送（取得のみ）",
   "backend_auth.profile_file_transfer_rw": "ファイル転送（双方向）",
   "backend_auth.profile_trusted": "信頼済み（フルアクセス）",

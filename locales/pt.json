@@ -43,6 +43,7 @@
   "apps.filter.music": "Música",
   "apps.filter.other": "Outros",
   "apps.filter.tools": "Ferramentas",
+  "apps.filter.vm_apps": "Apps VM",
   "backend_auth.profile_file_transfer": "Transferência de arquivos (somente baixar)",
   "backend_auth.profile_file_transfer_rw": "Transferência de arquivos (bidirecional)",
   "backend_auth.profile_trusted": "Confiável (acesso total)",

@@ -44,6 +44,7 @@
   "apps.filter.music": "Музика",
   "apps.filter.other": "Інше",
   "apps.filter.tools": "Інструменти",
+  "apps.filter.vm_apps": "VM-застосунки",
   "backend_auth.profile_file_transfer": "Передавання файлів (лише завантаження)",
   "backend_auth.profile_file_transfer_rw": "Передавання файлів (двостороннє)",
   "backend_auth.profile_trusted": "Довірений (повний доступ)",

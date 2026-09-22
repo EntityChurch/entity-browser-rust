@@ -43,6 +43,7 @@
   "apps.filter.music": "संगीत",
   "apps.filter.other": "अन्य",
   "apps.filter.tools": "टूल",
+  "apps.filter.vm_apps": "VM ऐप्स",
   "backend_auth.profile_file_transfer": "फ़ाइल स्थानांतरण (केवल पुल)",
   "backend_auth.profile_file_transfer_rw": "फ़ाइल स्थानांतरण (द्विदिश)",
   "backend_auth.profile_trusted": "विश्वसनीय (पूर्ण पहुँच)",

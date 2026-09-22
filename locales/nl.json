@@ -43,6 +43,7 @@
   "apps.filter.music": "Muziek",
   "apps.filter.other": "Overig",
   "apps.filter.tools": "Hulpmiddelen",
+  "apps.filter.vm_apps": "VM-apps",
   "backend_auth.profile_file_transfer": "Bestandsoverdracht (alleen ophalen)",
   "backend_auth.profile_file_transfer_rw": "Bestandsoverdracht (tweerichting)",
   "backend_auth.profile_trusted": "Vertrouwd (volledige toegang)",

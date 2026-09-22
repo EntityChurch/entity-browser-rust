@@ -109,7 +109,7 @@ PODMAN_RUN_CAPS   := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) \
 # ---------------------------------------------------------------------------
 # SELinux: we neither RELABEL the shared tree nor DEPEND on its label.
 #
-# Our bind mount is the SHARED PARENT (`$(PARENT)` = <shared-parent>), because
+# Our bind mount is the SHARED PARENT (`$(PARENT)`, the directory this repo sits in), because
 # sibling path-deps resolve through it. At least one sibling repo's container
 # mounts the SAME parent with a private-relabel option, which stamps its own MCS
 # categories (`s0:cNNN,cMMM`) across the whole tree mid-run. A container whose
@@ -1931,7 +1931,7 @@ endef
 # **Do NOT give this a default.** Defaulting to `--demo-sites` when INGEST is
 # empty reproduces, one layer up, exactly the defect that was fixed one layer
 # down: silence publishing content nobody asked for, over a domain's real sites,
-# exiting 0. `<coordination-tree>`'s `estate.conf` reached the same rule for the
+# exiting 0. The release-coordination seat's estate configuration reached the same rule for the
 # same reason — *"all three are required and none of them defaults."*
 #
 # Nothing is emitted under VERIFY=1 and that is correct: `--verify` reads an

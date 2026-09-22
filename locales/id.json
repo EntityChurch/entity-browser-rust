@@ -42,6 +42,7 @@
   "apps.filter.music": "Musik",
   "apps.filter.other": "Lainnya",
   "apps.filter.tools": "Alat",
+  "apps.filter.vm_apps": "Aplikasi VM",
   "backend_auth.profile_file_transfer": "Transfer file (hanya tarik)",
   "backend_auth.profile_file_transfer_rw": "Transfer file (dua arah)",
   "backend_auth.profile_trusted": "Tepercaya (akses penuh)",

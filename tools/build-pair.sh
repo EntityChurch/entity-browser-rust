@@ -44,7 +44,7 @@ sibling="$(cd "$root/.." 2>/dev/null && pwd)/entity-core-rust"
 # INSTEAD OF `unknown` — measured 2026-09-09, and it is a confident wrong answer,
 # which is the one outcome the paragraph above promises this cannot be.**
 # `git -C <dir> rev-parse HEAD` searches ANCESTOR directories for a repository.
-# The parent meta dir `<shared-parent>` IS one, so a sibling path that is not
+# The shared parent directory IS one, so a sibling path that is not
 # itself a checkout resolves to the META repo's HEAD — `0bc11b3` where the answer
 # should have been `unknown`. Provenance that names the wrong repository's commit
 # is worse than provenance that admits it does not know: nothing downstream can

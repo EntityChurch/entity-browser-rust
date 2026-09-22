@@ -44,6 +44,7 @@
   "apps.filter.music": "מוזיקה",
   "apps.filter.other": "אחר",
   "apps.filter.tools": "כלים",
+  "apps.filter.vm_apps": "אפליקציות VM",
   "backend_auth.profile_file_transfer": "העברת קבצים (משיכה בלבד)",
   "backend_auth.profile_file_transfer_rw": "העברת קבצים (דו-כיוונית)",
   "backend_auth.profile_trusted": "מהימן (גישה מלאה)",

@@ -43,6 +43,7 @@
   "apps.filter.music": "Musikk",
   "apps.filter.other": "Annet",
   "apps.filter.tools": "Verktøy",
+  "apps.filter.vm_apps": "VM-apper",
   "backend_auth.profile_file_transfer": "Filoverføring (kun henting)",
   "backend_auth.profile_file_transfer_rw": "Filoverføring (toveis)",
   "backend_auth.profile_trusted": "Betrodd (full tilgang)",

@@ -43,6 +43,7 @@
   "apps.filter.music": "Zene",
   "apps.filter.other": "Egyéb",
   "apps.filter.tools": "Eszközök",
+  "apps.filter.vm_apps": "VM-alkalmazások",
   "backend_auth.profile_file_transfer": "Fájlátvitel (csak letöltés)",
   "backend_auth.profile_file_transfer_rw": "Fájlátvitel (kétirányú)",
   "backend_auth.profile_trusted": "Megbízható (teljes hozzáférés)",

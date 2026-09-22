@@ -42,6 +42,7 @@
   "apps.filter.music": "เพลง",
   "apps.filter.other": "อื่น ๆ",
   "apps.filter.tools": "เครื่องมือ",
+  "apps.filter.vm_apps": "แอป VM",
   "backend_auth.profile_file_transfer": "การถ่ายโอนไฟล์ (ดึงอย่างเดียว)",
   "backend_auth.profile_file_transfer_rw": "การถ่ายโอนไฟล์ (สองทาง)",
   "backend_auth.profile_trusted": "เชื่อถือได้ (เข้าถึงทั้งหมด)",

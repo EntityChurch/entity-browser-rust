@@ -49,6 +49,7 @@ apps.filter.games 57037c9c6cc82087 translated
 apps.filter.music 19f6b1124d47b0a8 translated
 apps.filter.other fc85ffef1dfe67e5 translated
 apps.filter.tools c5d03ffa97cb3ba2 translated
+apps.filter.vm_apps f30239a6f656b464 translated
 backend_auth.profile_file_transfer de7ba6e5373d131d translated
 backend_auth.profile_file_transfer_rw 53143c66e5032ed3 translated
 backend_auth.profile_trusted 25df62f3ad69123a translated

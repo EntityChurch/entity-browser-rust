@@ -447,7 +447,9 @@ reading from it.*
 - **The Registry Browser asks a publisher what they carry** instead of guessing
   and opening a window that may have nothing in it. The answer comes from the
   publisher's own signed tree, so *"they publish none"* is a verified negative
-  rather than a third party's claim about somebody else.
+  rather than a third party's claim about somebody else — and where it cannot
+  establish that within its budget it says so instead, which for a large
+  publisher is the usual answer (see Known limitations).
 - **Find peers here** — one button from an address to a meet, instead of
   composing the steps yourself.
 - **Waiting to meet someone is now a duration, not a counter.** The search runs
@@ -496,6 +498,29 @@ New in this release, or newly stated:
   anyone else. There is no mechanism for learning that a publisher exists whom
   you have no route to — that is a protocol question nobody has answered yet,
   and the window does not paper over it by guessing.
+- **Asking what a publisher carries costs one request per tree node, and a
+  verified *"no"* costs the whole tree.** Confirming a publisher *has* something
+  is usually quick — the first match ends the search. Confirming they have
+  *nothing* cannot stop early, because it is a claim about every part of the
+  tree you did not look at, and since the tree places keys by hash there is no
+  subtree a reader can skip. So against any publisher past a few hundred
+  entries, a reader working to a fixed budget reports *"could not finish
+  looking"* rather than *"they publish none"* — and the Registry Browser says
+  exactly that rather than presenting an absence it has not established. It
+  costs you a sentence, not a wrong door: nothing offers to open content it
+  could not confirm.
+
+  **We are researching a fix, and it is not simply a bigger budget** — a larger
+  one moves the threshold without removing it. The promising shape is for a
+  publisher to emit the structural skeleton of its tree once, at publish time,
+  as a single file a reader fetches in one request and checks against the signed
+  root it already trusts. Measured: that skeleton is **63 KiB** for a publisher
+  with a thousand entries, against roughly 164 requests to walk the same tree
+  today. It would need no signature of its own and grant the host no new trust,
+  which is what makes it worth investigating — and whether it is worth building
+  depends on what those requests actually cost over a real network, which we
+  have not yet measured. Nothing is promised here; it is recorded so that anyone
+  building against this tree format can see the question we are holding.
 - **Nothing in the app publishes a gathered feed.** You can read through a
   gatherer, and `publish --gather` builds one from the command line, but there
   is no in-app surface for gathering — the capability is complete and verified

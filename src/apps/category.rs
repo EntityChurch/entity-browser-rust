@@ -2,7 +2,8 @@
 //!
 //! The published catalog carries a **fine** per-entry label
 //! ([`super::format::AppEntry::category`] — `cards`, `strategy`, `audio`,
-//! `utility`, …: ten of them in the shipped corpus) plus the **set** an entry
+//! `utility`, …: eleven of them in the shipped corpus, measured 2026-09-21
+//! across 36 entries) plus the **set** an entry
 //! was ingested into (`games` / `apps`, decided by
 //! [`super::paths::set_for_type`]). Neither is what a person wants to see as a
 //! row of filter buttons: ten chips is a taxonomy, not a filter, and `utility`
@@ -17,6 +18,7 @@
 //! | `music`  | fine `audio`, `music` |
 //! | `art`    | fine `art` |
 //! | `tools`  | fine `utility`, `productivity` |
+//! | `vm_apps` | fine `virtual-machine` — rendered "VM-Apps" |
 //! | `other`  | anything else, including an entry with no category at all |
 //!
 //! **Set wins over category for games, deliberately.** A rhythm game published
@@ -41,6 +43,7 @@ pub const GAMES: &str = "games";
 pub const MUSIC: &str = "music";
 pub const ART: &str = "art";
 pub const TOOLS: &str = "tools";
+pub const VM_APPS: &str = "vm_apps";
 pub const OTHER: &str = "other";
 
 /// The pseudo-chip meaning "no filter". Never produced by [`coarse_for`] — it
@@ -49,7 +52,7 @@ pub const ALL: &str = "all";
 
 /// Display order of the coarse chips. `other` is last because it is a
 /// remainder, not a category.
-pub const COARSE_ORDER: &[&str] = &[GAMES, MUSIC, ART, TOOLS, OTHER];
+pub const COARSE_ORDER: &[&str] = &[GAMES, MUSIC, ART, TOOLS, VM_APPS, OTHER];
 
 /// Which coarse chip an entry falls under. See the module table.
 pub fn coarse_for(set: &str, category: Option<&str>) -> &'static str {
@@ -60,6 +63,7 @@ pub fn coarse_for(set: &str, category: Option<&str>) -> &'static str {
         "audio" | "music" => MUSIC,
         "art" => ART,
         "utility" | "productivity" => TOOLS,
+        "virtual-machine" => VM_APPS,
         _ => OTHER,
     }
 }
@@ -105,6 +109,29 @@ where
     }];
     out.extend(present);
     out
+}
+
+/// The selection to render with, given the chips that will actually be drawn.
+///
+/// [`passes`] degrades an **unknown** key to "show everything"; this covers the
+/// case one step to the left — a key that is still in [`COARSE_ORDER`] but has
+/// no entries in *this* catalog, so [`chips_for`] omitted its chip. Without
+/// this, such a selection filters to an empty grid with no highlighted chip to
+/// explain it, which is the same "is the filter broken?" failure the empty-chip
+/// suppression exists to prevent.
+///
+/// Reachable whenever a fine label is promoted out of `other`: adding the
+/// `virtual-machine` row emptied `other` in the shipped corpus (measured
+/// 2026-09-21 — the three VM entries were all of it), so a profile that had
+/// persisted `other` would have reopened the launcher to nothing.
+pub fn effective<'a>(chips: &[Chip], selected: &'a str) -> &'a str {
+    if selected.is_empty() || selected == ALL {
+        return ALL;
+    }
+    if chips.iter().any(|c| c.key == selected) {
+        return selected;
+    }
+    ALL
 }
 
 /// Whether an entry passes the currently-selected chip. [`ALL`] and any
@@ -154,12 +181,19 @@ mod tests {
         }
     }
 
-    /// The fold, checked against the ten fine labels the shipped corpus
-    /// actually publishes (measured 2026-08-19 across 33 apps) rather than
-    /// against an invented set — a mapping table is only worth anything if its
-    /// left column is real.
+    /// The fold, checked against the eleven fine labels the shipped corpus
+    /// actually publishes (re-measured 2026-09-21 across 36 apps; was ten
+    /// across 33 on 2026-08-19) rather than against an invented set — a mapping
+    /// table is only worth anything if its left column is real.
+    ///
+    /// ⚠ That left column is still a **hand-typed memory**, not a measurement:
+    /// the corpus lives in `entity-apps/dist/index.json`, another repo, so
+    /// nothing connects this list to what is actually published. The catalog
+    /// has now moved under it twice (`developer` → `virtual-machine`) with this
+    /// test green both times. A gate that reads the real catalog is the durable
+    /// fix and is not this test.
     #[test]
-    fn the_shipped_corpus_folds_into_the_four_chips() {
+    fn the_shipped_corpus_folds_into_the_coarse_chips() {
         // games set — every fine label there lands under Games.
         for c in ["cards", "strategy", "puzzle", "arcade", "word"] {
             assert_eq!(coarse_for(paths::GAMES_SET, Some(c)), GAMES, "games/{c}");
@@ -170,6 +204,47 @@ mod tests {
         assert_eq!(coarse_for(paths::APPS_SET, Some("art")), ART);
         assert_eq!(coarse_for(paths::APPS_SET, Some("utility")), TOOLS);
         assert_eq!(coarse_for(paths::APPS_SET, Some("productivity")), TOOLS);
+        assert_eq!(coarse_for(paths::APPS_SET, Some("virtual-machine")), VM_APPS);
+    }
+
+    /// The three VM entries publish `type: "tool"`, so they arrive in the apps
+    /// set and are folded by their fine label alone. Pinned with the real ids
+    /// because "it lands under VMs" is a claim about the shipped catalog, not
+    /// about the match arm.
+    #[test]
+    fn the_published_virtual_machines_land_under_their_own_chip() {
+        for id in ["alpine", "kolibri", "tinycore"] {
+            let e = entry(id, Some("virtual-machine"));
+            assert_eq!(
+                coarse_for(paths::APPS_SET, e.category.as_deref()),
+                VM_APPS,
+                "{id} must not fall to the catch-all"
+            );
+            assert!(passes(VM_APPS, paths::APPS_SET, e.category.as_deref()));
+            assert!(passes(ALL, paths::APPS_SET, e.category.as_deref()));
+            assert!(!passes(OTHER, paths::APPS_SET, e.category.as_deref()));
+        }
+    }
+
+    /// A selection whose chip is not rendered shows everything. Promoting a
+    /// fine label out of `other` empties it — which is exactly what the
+    /// `virtual-machine` row did to the shipped corpus — and a persisted
+    /// `other` must not become an unexplainable empty grid.
+    #[test]
+    fn a_selection_with_no_chip_degrades_to_showing_everything() {
+        let vm = entry("alpine", Some("virtual-machine"));
+        let tool = entry("notes", Some("utility"));
+        let chips = chips_for([(paths::APPS_SET, &vm), (paths::APPS_SET, &tool)]);
+        assert!(
+            !chips.iter().any(|c| c.key == OTHER),
+            "nothing feeds `other` here, so its chip is not drawn"
+        );
+        assert_eq!(effective(&chips, OTHER), ALL, "stale `other` shows all");
+        assert_eq!(effective(&chips, VM_APPS), VM_APPS, "a drawn chip is kept");
+        assert_eq!(effective(&chips, ""), ALL);
+        assert_eq!(effective(&chips, ALL), ALL);
+        // And with no chip row at all, every selection resolves to `all`.
+        assert_eq!(effective(&[], VM_APPS), ALL);
     }
 
     /// A game keeps its chip whatever its fine label says. This is the rule the

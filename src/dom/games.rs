@@ -195,6 +195,12 @@ pub fn render_grid(container: &Element, ctx: &DomCtx, view: &GridView) {
         title,
         empty_msg,
     } = *view;
+    // Resolve the persisted selection against the chips that will actually be
+    // drawn: a key whose chip is absent from this catalog shows everything
+    // rather than an empty grid nobody can explain
+    // ([`crate::apps::category::effective`]). Resolved once, here, so the
+    // control row's highlight and the grid's own filtering can never disagree.
+    let filter = crate::apps::category::effective(chips, filter);
     util::clear_children(container);
 
     let wrap = util::create_element("div");

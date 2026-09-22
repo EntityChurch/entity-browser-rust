@@ -201,7 +201,7 @@ The fourth row is the only one whose reader points outside this peer and the
 only one with a non-empty `carried_peers`; §0.2a is what that costs.
 
 ⭐ **THE FIRST ROW IS THE ONLY ONE THAT EVER HAD A DEFAULT, AND THE DEFAULT INVENTED
-CONTENT — closed 2026-09-16, on `<coordination-tree>`'s `B-4`.** Absent `--ingest`,
+CONTENT — closed 2026-09-16, on the release-coordination seat's `B-4`.** Absent `--ingest`,
 `resolve_publish_source` seeded `demo` + `entity-info`; apps and feed were both
 `if let Some(dir)` and genuinely optional. **The asymmetry was not a decision anybody
 made** — when the seeding was written, every publish had sites — and the argument against
@@ -215,7 +215,7 @@ domain's own identity, and exited `0`. *"You forgot `--ingest`"* and *"this doma
 sites"* were the same command line, so no guard at any layer could tell them apart.
 
 **Three arms, exactly one, and silence is refused** (`SiteSource` / `parse_site_source`).
-They are 1:1 with `<coordination-tree>`'s `estate.conf` axis vocabulary — `papers` →
+They are 1:1 with the release-coordination seat's estate-configuration axis vocabulary — `papers` →
 `--ingest`, `builtin` → `--demo-sites`, `none` → `--no-sites` — which is where the ask came
 from, and their board had already reached the same rule for the same reason: *"all three are
 required and none of them defaults."* **`--verify` is exempt and that ordering is

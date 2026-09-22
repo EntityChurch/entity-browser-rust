@@ -1419,6 +1419,10 @@ pub const EN: &[(&str, Message)] = &[
     ("apps.filter.music", Message::Simple("Music")),
     ("apps.filter.art", Message::Simple("Art")),
     ("apps.filter.tools", Message::Simple("Tools")),
+    // "VM-Apps" is the genre's name, not a description of it, and it is one
+    // label in every locale — `VM` is a technical initialism and the catalog
+    // owner named the genre. Allowlisted in `i18n_untranslated_check.py`.
+    ("apps.filter.vm_apps", Message::Simple("VM-Apps")),
     ("apps.filter.other", Message::Simple("Other")),
     // -- the Saves panel (back up / restore / hand to another peer) --
     ("saves.open", Message::Simple("Saves")),

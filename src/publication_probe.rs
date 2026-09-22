@@ -64,10 +64,34 @@ use crate::open_target::{EntryPoint, Viewer};
 /// that downloads a publisher's whole key set to answer a yes/no is a probe
 /// nobody can afford to run against a list of peers.
 ///
-/// **Not tuned to a measurement, and it is a ceiling rather than an
-/// expectation** — a walk that hits it answers [`Publishes::Partial`], which is
-/// a real answer, not a failure.
-pub const PROBE_BUDGET: EnumerationBudget = EnumerationBudget { max_nodes: 32, max_keys: 64 };
+/// It is a **ceiling, not an expectation** — a walk that hits it answers
+/// [`Publishes::Partial`], which is a real answer and not a failure.
+///
+/// ⭐ **`max_nodes` is derived from the trie's own branching factor, and that is
+/// the whole reason it is not a round number.** `entity_tree::trie::K` is 32
+/// (5 bits per level), so a node has up to 32 children — and a budget *equal to
+/// the arity is starved by construction*: one level of siblings consumes it
+/// exactly, before the walk can descend to where the keys are. That is not a
+/// hypothetical. Measured, at `max_keys: 64` throughout:
+///
+/// | keys published | interior nodes | `max_nodes: 32` | `max_nodes: 64` |
+/// |---|---|---|---|
+/// | 10,000 | 1,054 | read 32 → 30 keys | read **9** → 64 keys |
+/// | 20,000 | 1,159 | read 32 → **0 keys** | read **6** → 64 keys |
+/// | 50,000 | 3,261 | read 32 → **0 keys** | read **4** → 64 keys |
+///
+/// Two things to read off that. **The failure is about DEPTH, not size** — the
+/// 20,000-key tree has one more level than the 10,000-key one, and one more
+/// level is all it takes. And **once the budget clears the arity the walk needs
+/// almost none of it**: 4–9 reads, falling as trees get *bigger*, because a
+/// depth-first descent reaches a fat bucket sooner. So the ceiling is cheap to
+/// raise and expensive to leave at the branching factor.
+///
+/// `4 * K` = 128 is four levels' worth of headroom over a structure measured to
+/// need one or two. Derived rather than typed, so a kernel that changes
+/// `BIT_WIDTH` moves this with it instead of silently re-creating the starve.
+pub const PROBE_BUDGET: EnumerationBudget =
+    EnumerationBudget { max_nodes: 4 * entity_tree::trie::K as usize, max_keys: 64 };
 
 /// Why a probe learned nothing. **Five causes, three destinations** — which is
 /// the reason this is not one string: an unreachable origin sends a person to
@@ -460,6 +484,30 @@ mod tests {
         assert!(PROBE_BUDGET.max_nodes < DEFAULT_ENUMERATION_BUDGET.max_nodes);
         assert!(PROBE_BUDGET.max_keys < DEFAULT_ENUMERATION_BUDGET.max_keys);
     }
+
+    /// ⭐ **A node budget at or below the trie's branching factor is starved by
+    /// construction, so the floor is pinned against `K` rather than against a
+    /// number somebody remembers.**
+    ///
+    /// `entity_tree::trie::K` is the HAMT's arity: a node has up to `K`
+    /// children, so a budget of `K` is consumed by one level of siblings before
+    /// the walk can descend to a bucket. `PROBE_BUDGET` shipped at exactly `K`
+    /// and that is what withheld *Open in Site Browser* from a publisher with
+    /// 20,000 keys under the prefix.
+    ///
+    /// **Asserted as a multiple of `K`, not as `> 32`.** A kernel that widened
+    /// `BIT_WIDTH` would raise the arity and silently re-create the starve under
+    /// a literal that still looked generous.
+    #[test]
+    fn the_probe_budget_clears_the_tries_branching_factor() {
+        let k = entity_tree::trie::K as usize;
+        assert!(
+            PROBE_BUDGET.max_nodes >= 2 * k,
+            "a budget of {} against a branching factor of {k} cannot outlive one level of \
+             siblings — it is spent before the walk reaches a key",
+            PROBE_BUDGET.max_nodes
+        );
+    }
 }
 
 /// **The probe against a real published tree.**
@@ -507,6 +555,13 @@ mod published {
     /// **Both halves are asserted deliberately.** A gate checking only the
     /// `Yes` passes for a probe that answers `Yes` to everything, and a gate
     /// checking only the `No` passes for one that answers `No` to everything.
+    /// ⚠ **The fixture is three entries, and that is load-bearing** — see
+    /// [`a_verified_negative_needs_the_whole_trie_and_is_lost_above_the_budget`]
+    /// next door. The `No` below is real, and it is available *because this
+    /// publisher's whole trie fits inside `PROBE_BUDGET.max_nodes`*. Read this
+    /// gate's name as a claim about that publisher and not about the axis: a
+    /// feed-only publisher one order of magnitude larger reads `Partial`, and
+    /// the pair is what keeps the bound honest rather than implied.
     #[test]
     fn a_feed_only_publisher_reads_as_a_feed_and_a_verified_absence_of_sites() {
         let (dir, author) = crate::feed_publish::tests::published_dir(3);
@@ -523,6 +578,99 @@ mod published {
             &Publishes::No,
             "this root binds no `sites/` key, and that is a fact about the publisher — \
              not a fetch that missed"
+        );
+    }
+
+    /// ⭐⭐ **A VERIFIED NEGATIVE ON AN UNPINNED PREFIX COSTS THE WHOLE TRIE, SO
+    /// IT IS AVAILABLE ONLY TO PUBLISHERS SMALLER THAN THE BUDGET** — the bound
+    /// on this module's headline property, pinned rather than left implied.
+    ///
+    /// The module doc argues the probe's whole advantage over a registry field
+    /// is [`Publishes::No`]: *"you can only get a trustworthy no from the party
+    /// who would have had to say yes."* That is exact for a **keyed** entry
+    /// point — FEED §4.2 pins `app/feed/index`, one resolve answers, and
+    /// `Absent` is a fact. It is **bounded** for a **prefix** one, and the
+    /// arithmetic is not a sampling accident:
+    ///
+    /// `classify_prefix` answers `No` only on `keys.is_empty() && complete`,
+    /// and `complete` is `!truncated`. A walk truncates the moment `read`
+    /// reaches `max_nodes`. So a tree with **more interior nodes than the
+    /// budget and no matching key** must hit the cap before it drains the
+    /// queue — every interior node is enqueued — and can therefore *never*
+    /// report `No`. Proving an absence means exhausting the trie; there is no
+    /// early exit from a negative.
+    ///
+    /// Measured across feed-only publishers (`max_nodes` = `4 * K` = 128):
+    ///
+    /// | feed entries | interior nodes | sites arm |
+    /// |---|---|---|
+    /// | 3 | 1 | `publishes-none` |
+    /// | 200 | 34 | `publishes-none` |
+    /// | 1,000 | 169 | **`partial`** |
+    /// | 50,000 | 13,372 | **`partial`** |
+    ///
+    /// **This is not a regression and not a defect** — `Partial` is honest,
+    /// `opens()` filters on `is_offerable()` so no button appears either way,
+    /// and the copy says *"could not finish looking"* rather than claiming an
+    /// absence. It is the residue routed to arch as **`browser-rust A-71`**:
+    /// a pinned SITE entry point would buy a cheap **`No`** as well as a cheap
+    /// `Yes`, and *this* is the stronger half of that argument — the packet as
+    /// first written reasoned about the positive case and never stated that the
+    /// negative is the one structurally lost.
+    ///
+    /// **Raising the budget does not retire this, it only moves it**, which is
+    /// why the gate asserts against `PROBE_BUDGET.max_nodes` rather than a
+    /// literal: a larger constant must still red here with a larger fixture.
+    /// What retires it is A-71 being ruled, and then this gate inverts.
+    #[test]
+    fn a_verified_negative_needs_the_whole_trie_and_is_lost_above_the_budget() {
+        use crate::content_site::signed_root::RootProjector;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = RootProjector::new(crate::feed_publish::tests::identity()).unwrap();
+        let author = root.peer_id().to_string();
+        crate::feed_publish::publish_feed(
+            dir.path(),
+            &mut root,
+            &crate::feed_publish::tests::entries_for(&author, 1_000),
+            &[],
+            32,
+            crate::feed_publish::tests::NOW,
+        )
+        .expect("the feed half publishes");
+        let nodes = root.finish(dir.path()).expect("one root over a feed-only tree").trie_nodes;
+
+        // The fixture must exceed the budget or it measures the opposite claim.
+        assert!(
+            nodes > PROBE_BUDGET.max_nodes,
+            "a {nodes}-node trie fits inside a {}-node budget — this fixture would demonstrate \
+             that the negative IS available, which is the gate next door",
+            PROBE_BUDGET.max_nodes
+        );
+
+        let found = probe(dir.path(), &author);
+        // The keyed axis is unaffected by size, and asserting it here is what
+        // separates *"the prefix negative is bounded"* from *"this publisher
+        // could not be probed at all"*.
+        assert_eq!(
+            outcome(&found, crate::open_target::FEED),
+            &Publishes::Yes { units: None },
+            "a KEYED entry point answers in one resolve at any tree size — the asymmetry A-71 \
+             is about"
+        );
+        let sites = outcome(&found, crate::open_target::SITE_BROWSER);
+        assert!(
+            matches!(sites, Publishes::Partial { .. }),
+            "a {nodes}-node feed-only trie answered `{}` on the sites arm. If this is `{}`, the \
+             walk reported a verified absence without exhausting the trie — which it cannot have \
+             done — and the negative this module exists to provide is no longer trustworthy",
+            sites.word(),
+            Publishes::No.word()
+        );
+        // Not offerable either way: the bound costs a SENTENCE, never a button.
+        assert!(
+            !sites.is_offerable(),
+            "a `Partial` must never license an *Open* — a reader would arrive at an empty rail"
         );
     }
 
@@ -578,6 +726,161 @@ mod published {
             outcome(&found, crate::open_target::SITE_BROWSER),
             &Publishes::Yes { units: Some(2) },
             "two site manifests under the walked prefix is two sites"
+        );
+    }
+
+    /// Publish **one** site carrying `pages` pages — optionally beside a feed —
+    /// so the trie is bigger than a probe's node budget.
+    ///
+    /// Returns the directory, the author, and the node count the projector
+    /// actually built. **The count is returned so the caller can assert it**: a
+    /// fixture that quietly fits inside the budget makes these gates green for
+    /// the wrong reason, which is the trap the one-node fixture in
+    /// `signed_fetch` fell into and caught itself.
+    fn published_wide_site(pages: usize, with_feed: bool) -> (tempfile::TempDir, String, usize) {
+        use crate::content_site::format::{NavItem, SiteManifest, SitePage};
+        use crate::content_site::publish_fixture::emit_owned_sites;
+        use crate::content_site::read::OwnedSite;
+        use crate::content_site::signed_root::RootProjector;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = RootProjector::new(crate::feed_publish::tests::identity()).unwrap();
+        let author = root.peer_id().to_string();
+        if with_feed {
+            crate::feed_publish::publish_feed(
+                dir.path(),
+                &mut root,
+                &crate::feed_publish::tests::entries_for(&author, 2),
+                &[],
+                10,
+                crate::feed_publish::tests::NOW,
+            )
+            .expect("the feed half publishes");
+        }
+        let site = OwnedSite {
+            peer_id: author.clone(),
+            site_id: "papers".into(),
+            manifest: SiteManifest::new("papers", "Papers", "index", vec![NavItem::new("Home", "/index")]),
+            pages: (0..pages)
+                .map(|i| (format!("p{i}"), SitePage::markdown("Page", "# a page")))
+                .collect(),
+            assets: Vec::new(),
+            content: Vec::new(),
+        };
+        emit_owned_sites(dir.path(), std::slice::from_ref(&site), "", Some(&mut root)).unwrap();
+        let nodes = root.finish(dir.path()).expect("one root over one wide site").trie_nodes;
+        (dir, author, nodes)
+    }
+
+    /// ⭐⭐ **A publisher whose trie is bigger than the probe budget still reads
+    /// as publishing sites — the defect meta-devops measured on `billslab.com`.**
+    ///
+    /// Reported 2026-09-21: a reader who resolved that name was offered *Add to
+    /// my feed* and no *Open in Site Browser*, against a publisher whose signed
+    /// root binds **939 of 992 keys** under `sites/`. Nothing failed and nothing
+    /// 404'd — the walk saw 2.5% of a 1,303-node trie, found no `sites/` key in
+    /// it, and answered [`Publishes::Partial`], which is correctly not offerable.
+    ///
+    /// **Why no existing gate could see it.** Every other published-tree fixture
+    /// here carries one or two single-page sites, and
+    /// `a_bounded_enumeration_reports_that_it_was_bounded` says so in its own
+    /// body — *"this fixture's trie fits in ONE node"*. At one node, `max_nodes`
+    /// never binds and `complete` is always true. The one test that enumerates
+    /// `sites/` against a real tree does it at `DEFAULT_ENUMERATION_BUDGET`, the
+    /// **browse** budget, so the prefix walk was covered at the budget that works
+    /// and uncovered at the budget that ships. *A test population you generated
+    /// cannot contain the shape you are missing* — here the missing shape is an
+    /// ordinary publisher.
+    ///
+    /// The trie node count is **asserted, not assumed**: a fixture that quietly
+    /// fits inside the budget would make this gate green for the wrong reason,
+    /// which is the same trap the one-node fixture next door fell into.
+    #[test]
+    fn a_publisher_bigger_than_the_probe_budget_still_reads_as_publishing_sites() {
+        // **Both axes, which is the live shape.** `estate.conf` declares four
+        // apexes that publish papers sites as their whole purpose, and this is
+        // the first release in which any of them also publishes a feed — so the
+        // case had never been walked at any size.
+        let (dir, author, nodes) = published_wide_site(3_000, true);
+        assert!(
+            nodes > PROBE_BUDGET.max_nodes,
+            "the fixture must not fit inside the budget it exists to exceed: {nodes} nodes \
+             against a budget of {}",
+            PROBE_BUDGET.max_nodes
+        );
+
+        let found = probe(dir.path(), &author);
+        let sites = outcome(&found, crate::open_target::SITE_BROWSER);
+        assert!(
+            sites.is_offerable(),
+            "a publisher with 3,000 pages under `sites/` in a {nodes}-node trie read as `{}` — \
+             the Registry Browser withholds *Open in Site Browser* and a reader arriving by \
+             name cannot reach any of it",
+            sites.word()
+        );
+        // **Asserted beside it, not in a separate gate**: the reported symptom
+        // was that the feed was offered and the sites were not, so a fix that
+        // traded one for the other would satisfy a sites-only assertion.
+        assert!(
+            outcome(&found, crate::open_target::FEED).is_offerable(),
+            "the feed half must survive the fix — it was the half that worked"
+        );
+    }
+
+    /// **Sites and no feed is a Site Browser and a verified absence of feed** —
+    /// the `ecdeos.org` shape, and the control for the gate above.
+    ///
+    /// It is a control in the strict sense: it shares the wide-site fixture and
+    /// differs by one bit, so a probe that simply answered `Yes` to everything
+    /// passes the gate above and fails here on the feed arm.
+    #[test]
+    fn a_wide_site_publisher_with_no_feed_is_offered_sites_and_not_a_feed() {
+        let (dir, author, nodes) = published_wide_site(3_000, false);
+        assert!(nodes > PROBE_BUDGET.max_nodes, "{nodes} nodes must exceed the probe budget");
+
+        let found = probe(dir.path(), &author);
+        assert!(
+            outcome(&found, crate::open_target::SITE_BROWSER).is_offerable(),
+            "a publisher whose entire tree is sites must be offered a Site Browser"
+        );
+        assert_eq!(
+            outcome(&found, crate::open_target::FEED),
+            &Publishes::No,
+            "this root binds no feed head, and that is a verified fact about the publisher"
+        );
+    }
+
+    /// ⭐⭐ **A trie one level deeper is the case a budget the size of the
+    /// branching factor cannot answer** — and it is a *different* defect from
+    /// the miss-accounting one above, found by measuring the fix rather than by
+    /// trusting it.
+    ///
+    /// With the accounting repaired, publishers up to ~10,000 keys answered
+    /// `Yes`. At 20,000 the trie gains a level and `max_nodes: 32` went back to
+    /// reading 32 nodes and finding **zero** keys: `entity_tree::trie::K` is 32,
+    /// so one level of siblings consumes a 32-node budget exactly, and the walk
+    /// never descends to a bucket. See [`PROBE_BUDGET`] for the sweep.
+    ///
+    /// **This is the gate that would have caught the constant**, as distinct
+    /// from the gate that catches the accounting — neuter either fix alone and
+    /// one of the two reds.
+    #[test]
+    fn a_trie_one_level_deeper_is_not_starved_by_the_branching_factor() {
+        let (dir, author, nodes) = published_wide_site(20_000, false);
+        assert!(
+            nodes > PROBE_BUDGET.max_nodes,
+            "{nodes} interior nodes must exceed the budget for this to measure anything"
+        );
+
+        let found = probe(dir.path(), &author);
+        let got = outcome(&found, crate::open_target::SITE_BROWSER);
+        assert!(
+            got.is_offerable(),
+            "a {nodes}-node trie whose every key is under `sites/` read as `{}` — a budget of \
+             {} against a branching factor of {} is spent on one level of siblings",
+            got.word(),
+            PROBE_BUDGET.max_nodes,
+            entity_tree::trie::K
         );
     }
 

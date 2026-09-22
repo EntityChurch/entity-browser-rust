@@ -43,6 +43,7 @@
   "apps.filter.music": "موسیقی",
   "apps.filter.other": "سایر",
   "apps.filter.tools": "ابزارها",
+  "apps.filter.vm_apps": "برنامه‌های VM",
   "backend_auth.profile_file_transfer": "انتقال فایل (فقط دریافت)",
   "backend_auth.profile_file_transfer_rw": "انتقال فایل (دوطرفه)",
   "backend_auth.profile_trusted": "مورد اعتماد (دسترسی کامل)",

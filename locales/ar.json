@@ -47,6 +47,7 @@
   "apps.filter.music": "موسيقى",
   "apps.filter.other": "أخرى",
   "apps.filter.tools": "أدوات",
+  "apps.filter.vm_apps": "تطبيقات VM",
   "backend_auth.profile_file_transfer": "نقل الملفات (سحب فقط)",
   "backend_auth.profile_file_transfer_rw": "نقل الملفات (باتجاهين)",
   "backend_auth.profile_trusted": "موثوق (وصول كامل)",

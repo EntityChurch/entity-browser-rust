@@ -743,6 +743,12 @@ impl SignedSession {
         let mut seen: BTreeSet<Hash> = BTreeSet::new();
         let mut needs_fetch = false;
         let mut truncated = false;
+        // **Nodes actually DECODED this pass** — what `max_nodes` bounds, and
+        // deliberately not `seen.len()`. See the miss arm below.
+        let mut read = 0usize;
+        // Nodes this pass asked the pump for. Bounded separately so one round
+        // cannot queue the whole trie for fetching.
+        let mut wanted = 0usize;
 
         while let Some(h) = queue.pop() {
             // **Stop before the fetch, not after.** Checking the bound after
@@ -751,7 +757,7 @@ impl SignedSession {
             // must stop *asking*. `truncated` then rides out on the result and
             // the surface says so — a shorter list that does not announce itself
             // is the defect this whole module is built against.
-            if seen.len() >= budget.max_nodes || keys.len() >= budget.max_keys {
+            if read >= budget.max_nodes || keys.len() >= budget.max_keys {
                 truncated = true;
                 break;
             }
@@ -760,14 +766,42 @@ impl SignedSession {
             }
             let Some(bytes) = self.state.content.lock().ok().and_then(|c| c.get(&h).cloned())
             else {
-                // Record the miss the same way the client's fetcher would, so the
-                // pump has something to fetch on the next round.
-                if let Ok(mut m) = self.state.content_misses.lock() {
-                    m.insert(h);
+                // ⭐ **A miss is a fetch that has NOT happened yet, not a node we
+                // walked — and counting it against `max_nodes` is what broke the
+                // publication probe.**
+                //
+                // `seen` resets every round while the cache only grows, so the
+                // walk converges by re-descending and reading one more level
+                // each pass. Charging the read budget for a miss meant a cold
+                // round spent the entire budget on nodes it had not read: the
+                // root decodes, its ~32 children all miss, `seen` hits the cap,
+                // and `truncated` is set — which then **short-circuits
+                // `needs_fetch` below**, so the walk reports itself DONE having
+                // decoded exactly one node. Measured on a 46-node trie whose
+                // every key was under the prefix: `max_nodes: 32` returned
+                // `walked=32, keys=0`, while `max_nodes: 64` returned
+                // `walked=4, keys=64`. The budget was not too small; it was
+                // being spent on nodes nobody read.
+                //
+                // Bounding `wanted` separately is what keeps the fetch cost
+                // honest: the queue holds the children of nodes we read, so an
+                // unbounded miss log would be up to 32×`max_nodes` fetches to
+                // read `max_nodes` nodes. Hitting this cap is **not** truncation
+                // — it is *come back next round*, and `needs_fetch` carries that,
+                // so the walk never reports `complete` over a subtree it silently
+                // declined to ask about.
+                if wanted < budget.max_nodes {
+                    wanted += 1;
+                    // Record the miss the same way the client's fetcher would, so
+                    // the pump has something to fetch on the next round.
+                    if let Ok(mut m) = self.state.content_misses.lock() {
+                        m.insert(h);
+                    }
+                    needs_fetch = true;
                 }
-                needs_fetch = true;
                 continue;
             };
+            read += 1;
             // Already hash-verified on the way into the cache; decoding here is
             // about STRUCTURE.
             let entity = crate::content_site::http_poll::verify_and_decode(&bytes, &h)
@@ -831,7 +865,9 @@ impl SignedSession {
         Ok(WalkOutcome::Complete(Enumeration {
             keys,
             complete: !truncated,
-            nodes_walked: seen.len(),
+            // **Nodes read, not nodes touched.** A surface renders this as how
+            // much of the tree we saw; a miss is a node we did not see.
+            nodes_walked: read,
         }))
     }
 
@@ -1613,6 +1649,92 @@ mod tests {
                  would cry wolf on every small registry"
             );
         }
+    }
+
+    /// ⭐⭐ **A cold walk must not spend its node budget on cache misses** — the
+    /// defect that withheld *Open in Site Browser* from a live publisher,
+    /// pinned here at the walk rather than at the surface that noticed it.
+    ///
+    /// `walk_keys` converges by re-descending: `seen` resets every round while
+    /// the content cache only grows, so each pass reads one level deeper. The
+    /// bound was checked against `seen.len()`, which counts nodes **popped** —
+    /// including the ones that were not in the cache and had therefore not been
+    /// *read*. On a cold start that is fatal in one step: the root decodes, its
+    /// ~32 children all miss, `seen` hits the cap, `truncated` is set, and
+    /// `truncated` short-circuits `needs_fetch` — so the walk reports itself
+    /// **finished** having decoded exactly one node, with no keys and
+    /// `complete: false`. A prefix probe reads that as *"could not tell"* and a
+    /// browse surface renders an empty list for a publisher with thousands.
+    ///
+    /// **The budget is deliberately explicit and tight rather than
+    /// `PROBE_BUDGET`.** This is a property of the walk at *any* bound; tying it
+    /// to a constant that lives in another module would make this gate go quiet
+    /// the day that constant is raised for an unrelated reason — which is
+    /// exactly what happened to the first version of it.
+    ///
+    /// The fixture's node count is **asserted**, because a tree that fits inside
+    /// the budget cannot exhibit the bug and would pass for the wrong reason.
+    #[test]
+    fn a_cold_walk_does_not_spend_its_node_budget_on_cache_misses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = RootProjector::new(
+            entity_crypto::Keypair::from_seed([0x5e; 32]),
+        )
+        .unwrap();
+        let peer_id = root.peer_id().to_string();
+        let site = OwnedSite {
+            peer_id: peer_id.clone(),
+            site_id: "wide".into(),
+            manifest: SiteManifest::new("wide", "Wide", "index", vec![NavItem::new("Home", "/index")]),
+            pages: (0..900)
+                .map(|i| (format!("p{i}"), SitePage::markdown("Page", "# a page")))
+                .collect(),
+            assets: Vec::new(),
+            content: Vec::new(),
+        };
+        emit_owned_sites(dir.path(), std::slice::from_ref(&site), "", Some(&mut root)).unwrap();
+        let nodes = root.finish(dir.path()).unwrap().trie_nodes;
+
+        let budget = EnumerationBudget { max_nodes: 32, max_keys: 64 };
+        assert!(
+            nodes > budget.max_nodes,
+            "a {nodes}-node trie fits inside a {}-node budget and cannot exhibit the defect",
+            budget.max_nodes
+        );
+
+        let pin = PublishLayout::conventional("", &peer_id);
+        let kp = entity_crypto::Keypair::from_seed([0x5e; 32]);
+        let pin = PinnedPublisher {
+            origin: String::new(),
+            peer_id,
+            pubkey: kp.public_key_bytes().to_vec(),
+            key_type: kp.key_type(),
+            layout: pin,
+        };
+        let got = block_on(
+            SignedSession::new(pin).enumerate_bounded(&DirSource::new(dir.path()), "sites/", budget),
+        )
+        .expect("a clean tree enumerates");
+
+        assert!(
+            !got.keys.is_empty(),
+            "a {nodes}-node trie with 900 keys under `sites/` returned NOTHING at a {}-node \
+             budget after walking {} node(s) — the budget was spent on nodes that were never \
+             read, and the caller cannot tell this from a publisher who has none",
+            budget.max_nodes,
+            got.nodes_walked
+        );
+        // `nodes_walked` must mean *read*, not *touched*: a surface renders it
+        // as how much of the tree we saw. Finding 64 keys takes a handful of
+        // nodes, so a figure at the cap is the miss-accounting coming back.
+        assert!(
+            got.nodes_walked < budget.max_nodes,
+            "walked {} of a {}-node budget to find {} key(s) — reads should be far under the \
+             ceiling once misses stop consuming it",
+            got.nodes_walked,
+            budget.max_nodes,
+            got.keys.len()
+        );
     }
 
     fn walk(dir: &Path) -> Vec<PathBuf> {

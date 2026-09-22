@@ -2960,6 +2960,37 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   `Foundation.Example` would have published a key the resolver could never build. Both ends call
   the same upstream function now. Re-deriving "what normalization probably means" on one side is
   how the two ends drift apart silently.
+- ⭐⭐ **A BOUNDED SEARCH CAN ANSWER A POSITIVE CHEAPLY AND CAN NEVER ANSWER A NEGATIVE CHEAPLY —
+  read this before putting a budget on anything whose `No` you intend to trust (2026-09-21).**
+  A positive short-circuits: the first hit ends the search, so a bound costs you only the unlucky
+  tail. **A negative has no early exit** — *"it is not here"* is a claim about every place you did
+  not look, so it costs the whole space, and any budget below the space size converts it into
+  *"I could not tell"*. `publication_probe` rests its entire design on the verified negative
+  (*"you can only get a trustworthy no from the party who would have had to say yes"*) and its
+  prefix arm answers `No` only on `keys.is_empty() && complete`, where `complete` is `!truncated`
+  — so a publisher with more interior nodes than `PROBE_BUDGET.max_nodes` and no matching key
+  **can never** be given one. Measured: a feed-only publisher reads `publishes-none` at 34 nodes
+  and `partial` from 169 up. ⇒ **the headline property is available only to publishers smaller
+  than the budget**, which is every toy fixture and no real publisher.
+  ⚠ **This is not the same axis as "is the budget big enough".** The two B-8 defects were about
+  the budget being *spent wrong* and *set to the arity*; both are fixed and both are about the
+  **positive**. Raising a budget moves this bound and cannot retire it — only a pinned entry
+  point can, which is why `a_verified_negative_needs_the_whole_trie_and_is_lost_above_the_budget`
+  asserts against the constant rather than a literal, and inverts rather than being deleted if
+  `A-71` is ruled. FEED §4.2 pins its head and gets a cheap `No` at any size; SITE pins nothing
+  and gets none.
+  ⇒ **Standing check when you bound a search: ask what the bound does to the NEGATIVE, and
+  whether anything downstream renders that negative as a fact.** Here nothing does — `opens()`
+  filters on `is_offerable()` so `Partial` and `No` both withhold the button, and the copy says
+  *"could not finish looking"* rather than claiming an absence, which is the whole reason this is
+  a bound and not an incident. **A surface that rendered `Partial` as "publishes nothing" would
+  have turned an honest budget into a lie about a publisher.**
+  ⚠ **And the gate next door over-claimed in its NAME**, which is how the bound stayed invisible:
+  `a_feed_only_publisher_reads_as_a_feed_and_a_verified_absence_of_sites` is green on a
+  **three-entry** fixture, so it reads as a claim about the axis when it is a claim about that
+  publisher (AP45). Its doc now says so and points at the bound. ***When a gate's subject is a
+  property that degrades with size, its fixture size is part of its claim — put it in the name or
+  the doc, or the name is the thing people believe.***
 
 ## Content sites & documents
 
@@ -5103,7 +5134,7 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   names remain for one release as stubs that fail with a pointer. The **app CLI
   is a separate namespace and did NOT change**: `entity-browser publish <dir>`,
   `PUBLISH_DATA_DIR`, and `PUBLISH-INGEST-FORMAT.md` all still say publish.
-- **A WORKTREE MUST BE A DIRECT CHILD OF `<shared-parent>`, AND ITS `.git`
+- **A WORKTREE MUST BE A DIRECT CHILD OF THE SHARED PARENT DIRECTORY, AND ITS `.git`
   MUST HOLD A RELATIVE PATH — two separate traps, and the nested one makes the
   repo unbuildable rather than merely awkward (2026-09-15).** Every containerized
   verb bind-mounts `$(PARENT)` — `dirname $(CURDIR)` — at `/src/entity-systems`,
@@ -5115,7 +5146,7 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   lived there for four days; it had **no `target/` directory**, i.e. a
   containerized build had never once succeeded in it, and nobody noticed because
   that seat's gates were being run in the main worktree. Moved to
-  `<shared-parent>/entity-browser-rust-vm`, a sibling of the kernel like the
+  `<parent>/entity-browser-rust-vm`, a sibling of the kernel like the
   other five.
   ⛔ **A symlink does NOT fix it and makes the pin worse.** `.worktrees/entity-core-rust
   -> ../../entity-core-rust` resolves on the host and **escapes the mount** in the
@@ -5494,7 +5525,7 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   $ ls -ldZ dist/index.html
   … system_u:object_r:container_file_t:s0:c122,c874 …      # ← private MCS categories
   ```
-  **What happened.** Our Makefile bind-mounts the **shared parent** (`<shared-parent>` →
+  **What happened.** Our Makefile bind-mounts the **shared parent** (the directory this repo sits in →
   `/src/entity-systems`), and so does at least one sibling repo's container. A concurrent run
   from another repo on this box relabelled that whole parent with **its own** MCS category pair,
   and our container — which gets a different pair — lost read access **mid-run**. The culprit is

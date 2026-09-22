@@ -42,6 +42,7 @@
   "apps.filter.music": "음악",
   "apps.filter.other": "기타",
   "apps.filter.tools": "도구",
+  "apps.filter.vm_apps": "VM 앱",
   "backend_auth.profile_file_transfer": "파일 전송(가져오기 전용)",
   "backend_auth.profile_file_transfer_rw": "파일 전송(양방향)",
   "backend_auth.profile_trusted": "신뢰됨(전체 액세스)",

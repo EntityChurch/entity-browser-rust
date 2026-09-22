@@ -1094,10 +1094,10 @@ const FILTER_FROM: usize = 8;
 
 /// ⭐⭐ **How many posts a reading pane opens with.**
 ///
-/// The complaint this exists for: a reading pane that scrolled all the way to
-/// the end with no paging and no count -- a publisher's whole archive rendered
-/// as one unbroken column, with no number anywhere saying how much of it there
-/// was.
+/// The complaint this exists for: the pane just scrolls all the way down, with
+/// no paging and no indication of where you are — every single post. A publisher's
+/// whole archive rendered as one unbroken column, with no number anywhere
+/// saying how much of it there was.
 ///
 /// ⛔ **This is a READING cap and it is not the fetch's.** The two are different
 /// dimensions and conflating them is how *"show me more"* turns into a network

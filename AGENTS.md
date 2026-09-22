@@ -4768,7 +4768,7 @@ ROW"* entry was written about, and the end of a long session is the worst moment
   **(3) `git` WALKS UP, so "not a checkout" reported a NEIGHBOUR'S COMMIT, not `unknown`** — a
   latent defect in `build-pair.sh` predating this work and the exact outcome its own doc comment
   promises is impossible. `git -C <export> rev-parse HEAD` finds no `.git` and searches ancestors;
-  **`<shared-parent>` is itself a repo**, so the answer was its `0bc11b3`. Provenance naming the
+  **the shared parent directory is itself a repo**, so the answer was that repo's HEAD. Provenance naming the
   wrong repository's commit is worse than provenance admitting ignorance — nothing downstream can
   tell them apart and the number looks plausible. `read_ref` now confirms `--show-toplevel` **is**
   the directory asked about (`pwd -P` both sides). **Found by falsifying the env pass and reading
@@ -5124,7 +5124,7 @@ ROW"* entry was written about, and the end of a long session is the worst moment
   ports (HTTP + both ZeroMQ bus ports — moving only HTTP dies with `ZMQException: Address already
   in use`). `make e2e-grid-down` when you are finished.
   **(2) Our containers took part in an SELinux relabel war over the SHARED PARENT.** Our bind
-  mount is `<shared-parent>` (sibling path-deps resolve through it) and a sibling repo's
+  mount is the shared parent directory (sibling path-deps resolve through it) and a sibling repo's
   container mounts the same parent with a private relabel, stamping its MCS categories across the
   whole tree mid-run; a container whose categories do not match then gets **EPERM on every file**,
   which surfaces as *"something else is holding :8092 and answering"* — because the server could
@@ -5435,7 +5435,7 @@ ids, which is the worse failure.
 
 > **Where this convention is *not* written down, measured 2026-09-09.** Arch's instruction says it
 > is already in `AGENTS-STANDARD.md`. It is in **arch's copy** — the canonical
-> `<coordination-tree>/AGENTS-STANDARD.md` is 231 lines with **no** `## Routing packets` section,
+> master copy of `AGENTS-STANDARD.md` is 231 lines with **no** `## Routing packets` section,
 > **ours is byte-identical to canonical**, and 14 of 16 repos here carry no such section. The only
 > other holder is `entity-system-generator`, whose copy says so in its own provenance note (*"arch's
 > local edit of 2026-09-08 … not yet reconciled"*). The standard forbids editing our copy, so **this

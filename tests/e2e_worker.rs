@@ -30023,8 +30023,8 @@ async fn a_name_resolved_from_a_registry_opens_a_publisher_that_reads(
 
         // 5c — ⭐⭐ **PRESS IT AGAIN: STILL ONE WINDOW.**
         //
-        // The complaint: every aimed open spawned ANOTHER feed window, leaving
-        // a pile of them to close by hand. An aim is a
+        // The complaint: every "open in feed" opened ANOTHER feed window, which
+        // then had to be gone back into and closed one by one. An aim is a
         // NAVIGATION: the control carries an address and the window that already
         // shows that kind of thing is where it belongs. The condition is
         // `find_open`'s `(type, peer)` — open it if it is not already open —

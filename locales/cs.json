@@ -44,6 +44,7 @@
   "apps.filter.music": "Hudba",
   "apps.filter.other": "Ostatní",
   "apps.filter.tools": "Nástroje",
+  "apps.filter.vm_apps": "Aplikace VM",
   "backend_auth.profile_file_transfer": "Přenos souborů (jen stahování)",
   "backend_auth.profile_file_transfer_rw": "Přenos souborů (obousměrný)",
   "backend_auth.profile_trusted": "Důvěryhodné (plný přístup)",

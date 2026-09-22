@@ -43,6 +43,7 @@
   "apps.filter.music": "Musik",
   "apps.filter.other": "Övrigt",
   "apps.filter.tools": "Verktyg",
+  "apps.filter.vm_apps": "VM-appar",
   "backend_auth.profile_file_transfer": "Filöverföring (endast hämta)",
   "backend_auth.profile_file_transfer_rw": "Filöverföring (tvåvägs)",
   "backend_auth.profile_trusted": "Betrodd (fullständig åtkomst)",

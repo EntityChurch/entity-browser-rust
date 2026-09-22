@@ -43,6 +43,7 @@
   "apps.filter.music": "Müzik",
   "apps.filter.other": "Diğer",
   "apps.filter.tools": "Araçlar",
+  "apps.filter.vm_apps": "VM uygulamaları",
   "backend_auth.profile_file_transfer": "Dosya aktarımı (yalnızca çekme)",
   "backend_auth.profile_file_transfer_rw": "Dosya aktarımı (çift yönlü)",
   "backend_auth.profile_trusted": "Güvenilir (tam erişim)",

@@ -43,6 +43,7 @@
   "apps.filter.music": "موسیقی",
   "apps.filter.other": "دیگر",
   "apps.filter.tools": "ٹولز",
+  "apps.filter.vm_apps": "VM ایپس",
   "backend_auth.profile_file_transfer": "فائل منتقلی (صرف حاصل کرنا)",
   "backend_auth.profile_file_transfer_rw": "فائل منتقلی (دو طرفہ)",
   "backend_auth.profile_trusted": "قابلِ اعتماد (مکمل رسائی)",
