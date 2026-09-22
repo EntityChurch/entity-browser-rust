@@ -2969,9 +2969,23 @@ mod tests {
         );
     }
 
-    /// The locked-kiosk site surface — `ecdeos`-shaped.
+    /// The locked-kiosk overlay surface.
+    ///
+    /// **This is no longer "`ecdeos`-shaped", and the old label was stale** — measured
+    /// 2026-08-28, `ecdeos.org` serves `surface: chrome` with `site_mode.enabled: false`,
+    /// and so does every other production domain: overlays are **off everywhere**. Site
+    /// mode was turned off deliberately after the kiosk accumulated defects that were hard
+    /// to attribute (most of them the peer/persistence bugs this thread has been chasing,
+    /// not the overlay), and window mode replaced it because the Site Browser shows the
+    /// other sites and can be closed.
+    ///
+    /// It is kept because it is the **worst case** for anything that fails to resolve — the
+    /// overlay is the whole screen and the toggle is suppressed — so a repair proven here is
+    /// proven on the surface with the least room to report. Do not read a passing gate on it
+    /// as a statement about a shipped deployment.
     const REKEY_SURFACE_SITE: &[&str] = &["--surface=site", "--locked"];
-    /// The maximized Site Browser window — `entitychurchfoundation.org`-shaped.
+    /// The maximized Site Browser window — `entitychurchfoundation.org`- and
+    /// `entitychurchregistry.org`-shaped, and the surface production actually ships.
     const REKEY_SURFACE_WINDOW: &[&str] = &["--surface=window", "--window-type=Site Browser"];
 
     #[test]
@@ -2996,6 +3010,129 @@ mod tests {
     #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
     fn emit_rekey_fixture_after_window() {
         emit_rekey_fixture(REKEY_SEED_AFTER, REKEY_SURFACE_WINDOW);
+    }
+
+    // ── The demo-site PULL fixture (B-7) ──────────────────────────────────
+    //
+    // **Not a re-key, and the difference is the finding.** The publisher
+    // identity does not move, `/entity-deployment.json` is not touched, and the
+    // origin keeps serving. What changes is that the publisher's next publish
+    // ships a site set that no longer carries `demo` — which is the site every
+    // profile that was never told otherwise is pointed at, because
+    // `home_site_from` defaults the id to `DEMO_SITE_ID` ("the site id is never
+    // empty — the overlay always needs a site to point at") and the bundled
+    // offline fallback is gated behind a **local** home. A deployment that
+    // declares a REMOTE home named `demo` takes the thin-lens path and seeds
+    // nothing, so when the site leaves the publisher's tree there is no copy to
+    // fall back to.
+    //
+    // So pulling the demo id is a routing change, not a content edit, and it
+    // lands on exactly the profiles that never chose a home. Two live domains
+    // declare a remote home named `demo` today, which is why this is a gate and
+    // not a note.
+    //
+    // Devops measured the production shape: every tree publishes `demo` under
+    // its own peer, so there is **no overlap window** — the old one vanishes at
+    // the instant of the flip. A cliff, not a window.
+    //
+    // Emitted through the REAL publish path, never by deleting files out of the
+    // served tree, and that is load-bearing: `run_projection` cleans
+    // `{base}/{peer}/` wholesale and re-projects a fresh signed root over the
+    // new set, carrying the prior `seq`. A hand-deletion would leave a root that
+    // still claims `demo` exists, and the browser would then be measured against
+    // a broken-tree failure rather than an honestly-published one — a different
+    // bug wearing the same symptom.
+    //
+    // Deliberately NO `--deployment-config`: a document still naming a site that
+    // is gone is the whole point. Re-emitting it would silently re-home the
+    // deployment onto whatever survived and gate nothing.
+
+    /// The site the publisher ships INSTEAD of `demo`. Any id but `demo`; named
+    /// for what it is so a failure message reads.
+    const DEMO_PULL_SITE_ID: &str = "after-the-pull";
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_demo_pull_fixture() {
+        let out = std::env::var("ENTITY_REKEY_OUT").unwrap_or_else(|_| "dist".to_string());
+        let peer = entity_crypto::Keypair::from_seed(REKEY_SEED_BEFORE).peer_id().to_string();
+        let out_root = std::path::Path::new(&out);
+        let demo_dir = out_root.join(&peer).join("sites").join("demo");
+
+        // STAGING. This fixture only means anything as the SECOND publish under
+        // an identity that already shipped `demo`. Run first, it pulls nothing,
+        // and every assertion downstream would be about a site that was never
+        // there — the vacuous-pass shape that `--exact` and the `1 passed` check
+        // exist to prevent one layer up.
+        assert!(
+            demo_dir.is_dir(),
+            "demo-pull fixture: {} must already be published — run \
+             emit_rekey_fixture_before first, or this pulls nothing",
+            demo_dir.display()
+        );
+
+        // A minimal `render/` emit — one site, and it is not `demo`. This is the
+        // same disk→tree route a content team's publish takes (`--ingest`), so
+        // the resulting tree is the shape production actually serves.
+        let render = std::env::temp_dir().join("entity-demo-pull-render");
+        let _ = std::fs::remove_dir_all(&render);
+        let site = render.join(DEMO_PULL_SITE_ID);
+        std::fs::create_dir_all(site.join("pages")).expect("stage the render dir");
+        std::fs::write(
+            site.join("site.manifest.json"),
+            format!(r#"{{"site_id":"{DEMO_PULL_SITE_ID}","title":"After The Pull"}}"#),
+        )
+        .expect("write site.manifest.json");
+        std::fs::write(
+            site.join("pages").join("index.md"),
+            "# After The Pull\n\nThis publisher no longer carries the demo site.\n",
+        )
+        .expect("write the landing page");
+
+        let hex = crate::vault_codec::seed_to_hex(&REKEY_SEED_BEFORE);
+        let _ = run(&[
+            "publish".to_string(),
+            out.clone(),
+            format!("--identity-seed={hex}"),
+            format!("--ingest={}", render.display()),
+        ]);
+
+        // Asserted on the artifact, not on the exit code: what the browser meets
+        // is the served tree, and a publish that reported success while leaving
+        // `demo` standing would stage a scenario that proves nothing.
+        assert!(
+            !demo_dir.exists(),
+            "demo-pull fixture: {} survived the republish — the site was not pulled",
+            demo_dir.display()
+        );
+        assert!(
+            out_root
+                .join(&peer)
+                .join("sites")
+                .join(DEMO_PULL_SITE_ID)
+                .join("manifest.bin")
+                .is_file(),
+            "demo-pull fixture: the replacement site did not publish, so this is an EMPTY \
+             publisher rather than one that pulled a site — a different scenario"
+        );
+
+        // And the document must still name the site that is now gone. If a
+        // future change makes `publish` re-emit the config unasked, this fires
+        // here, at the cause, instead of as a confusing boot two steps later.
+        let raw = std::fs::read_to_string(out_root.join("entity-deployment.json"))
+            .expect("the BEFORE fixture's deployment config must still be in place");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        assert_eq!(
+            v["home_site"]["site"].as_str(),
+            Some(crate::views::content_site::DEMO_SITE_ID),
+            "demo-pull fixture: the deployment document must still declare the pulled site"
+        );
+        assert_eq!(
+            v["home_site"]["peer"].as_str(),
+            Some(peer.as_str()),
+            "demo-pull fixture: the publisher identity must NOT have moved — a moved identity \
+             is the re-key scenario, which heals by a different mechanism"
+        );
     }
 
     /// The fixtures must name two DIFFERENT publishers, and neither may collide

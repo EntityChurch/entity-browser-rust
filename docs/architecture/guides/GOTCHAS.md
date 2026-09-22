@@ -625,6 +625,56 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Connectivity — WebRTC, rendezvous, NAT & relays
 
+- **THE DATA CHANNEL HAS A PER-MESSAGE CEILING AND THE ENGINES DISAGREE ABOUT IT BY FOUR
+  ORDERS OF MAGNITUDE. Measured, both rigs, 2026-08-28: Firefox↔Firefox negotiates
+  `sctp.maxMessageSize` = **1073741823**; Firefox↔Chrome negotiates **262144**.** A pair takes
+  the smaller of the two advertised values, so the number is a property of the *pair*, never of
+  your browser. Chromium does not fragment past its 256 KiB; Firefox does, which is why a
+  Firefox-only rig cannot see any of this.
+  - **`bindings/wasm-worker-proxy/src/webrtc_session.rs` `PortPump` is the chokepoint and it
+    is transparent — do not push a size limit up into app code.** It splits every outbound
+    port message at `min(negotiated, PIECE_CEILING=64 KiB)`, paces on `bufferedAmount`
+    (1 MiB high / 256 KiB low — **Chromium closes the channel outright above 16 MiB
+    buffered**), and closes the channel on a failed send.
+  - **Splitting needs no header, no reassembler and no wire change, and the reason is worth
+    knowing before you design one.** What rides the channel is a **byte stream**, not
+    datagrams: `PortReader` (`core/peer/src/transport.rs`) feeds `entity-wire`'s 4-byte
+    length-prefixed framing and already carries a `leftover` for a delivery that does not land
+    on a frame boundary. Message boundaries on the carrier therefore have **no semantics** —
+    piece size is a pure performance knob. Check this property before reaching for a protocol
+    version on any similar problem.
+  - **The 16 MiB "frame budget" in `file_offer.rs` is the ENTITY PROTOCOL's, not the
+    transport's.** `GET_BATCH_SIZE` = 16 chunks ≈ 4 MiB per response was sized against it and
+    was 16× over what a Chrome pair will carry; `CHUNK_SIZE` = `256 * 1024` is *exactly*
+    Chromium's ceiling, so even one chunk plus its CBOR envelope was over. Two different
+    budgets, one word.
+  - *Incident:* a real Android(Chrome) → desktop(Firefox) 6.5 MB photo transfer logged
+    *"starting chunk 0 out of 26"* and then nothing, forever — the oversized `send()` threw
+    into a discarded `let _ =`, so the puller awaited a response that could not come. AP35.
+  - **Run `make e2e-webrtc-file-crossengine` for any change to the pump, the transfer batch
+    sizes, or `file_offer`.** A=firefox B=chrome, 6.5 MB, mutation-checked (red on the unfixed
+    pump, green on the fixed one, same rig). `make e2e-webrtc-file` alone cannot fail on any of
+    this — see the next entry.
+
+- **EVERY OTHER WEBRTC GATE HERE IS FIREFOX↔FIREFOX, AND THAT IS A POPULATION LIMIT, NOT A
+  DETAIL.** `ENGINE_A` / `ENGINE_B` (default `firefox`/`firefox`) pick each side's image in
+  `rung1_repro.sh`; `caps_for` in `spike_meet_then_chat.py` builds the matching capabilities
+  and **prints the engine the grid actually started** — a mixed run whose second container
+  quietly came up Firefox would otherwise report a cross-engine pass it never ran.
+  - **Cover the MIXED pair, not a second monoculture.** Two Chromes agree with each other
+    exactly as two Firefoxes do; the ceiling that bit us is the one two *different* engines
+    negotiate, and a phone talking to a laptop is neither monoculture.
+  - Chromium in this rig needs three things the Firefox path did not: `--shm-size=2g` (the
+    64 MiB default `/dev/shm` kills the renderer mid-run, which presents as a session that
+    simply goes away), `--disable-features=WebRtcHideLocalIpsWithMdns` as the counterpart of
+    Firefox's `media.peerconnection.ice.obfuscate_host_addresses` pref (**both sides must
+    agree or the rig stops being one topology**), and
+    `--unsafely-treat-insecure-origin-as-secure` in worker mode, where Firefox uses
+    `dom.securecontext.allowlist`.
+  - **The desktop WebView is a THIRD engine and is still uncovered.** WebKitGTK ships Tauri
+    here and has never been measured for any of this; `core-rust`'s `make probe-webkit` is the
+    instrument that exists. AP34.
+
 - **TWO BROWSERS CHATTED AND MOVED A FILE THROUGH A DESKTOP RENDEZVOUS (2026-08-21) — the
   first time the ACQUISITION path ran outside a rig, and it exposed six defects four of our
   gates structurally could not see.** Record:
@@ -1471,6 +1521,20 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Publishing, signed roots & names
 
+- **`--site=ID` IS BARE-ROOT ONLY — it does NOT reduce a projection publish's site set.**
+  `site_filter` reaches exactly one caller, `run_bare_root`. Passing it to an ordinary publish
+  is silently accepted and changes nothing, which reads as "the filter did not work" when it was
+  never wired to that mode. To publish a *reduced* set under the same identity — which is how you
+  stage a withdrawn site, and what a content team's real publish does — use **`--ingest=<dir>`**
+  with a `render/` emit containing only the sites you want; `run_projection` cleans
+  `{base}/{peer}/` wholesale, re-projects a fresh signed root over the survivors, and carries the
+  prior `seq` across. An ingest dir is just a directory with `site.manifest.json` + `pages/*.md`,
+  so a fixture can write one inline (`emit_demo_pull_fixture`).
+- **NEVER STAGE A "SITE WAS REMOVED" SCENARIO BY DELETING FILES OUT OF THE SERVED TREE.** The
+  signed root would still claim the site exists, so what you measure is a broken-tree failure —
+  a different bug wearing the same symptom — instead of an honestly-published withdrawal. Publish
+  the reduced set for real (above). The same rule is why the re-key fixtures re-publish rather
+  than edit.
 - **A RE-KEY BRICKS EVERY RETURNING VISITOR, AND THE SELF-HEAL YOU ALREADY WROTE MAY BE WHAT
   STOPS IT.** If a domain publishes under a new identity, a returning browser keeps asking the
   retired one forever: newest WASM, 404s, an app that reports healthy. Live incident
@@ -2274,6 +2338,41 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Content sites & documents
 
+- **A REMOTE HOME NAMED `demo` HAS NO BUNDLED FALLBACK — the offline copy is gated behind a
+  LOCAL home, and two production domains take the remote path.** `home_site_from` defaults the
+  site id to `DEMO_SITE_ID` by design ("the site id is never empty — the overlay always needs a
+  site to point at"), so *every* profile that was never told otherwise points at a site literally
+  named `demo`. The bundled copy is seeded only when `home_is_local && home_id == DEMO_SITE_ID`;
+  a deployment declaring `home_site = { peer: <publisher>, id: "demo" }` takes the thin-lens path,
+  seeds **nothing**, and resolves lazily over HTTP. So **pulling the demo id is a routing change,
+  not a content edit**, and it lands on exactly the profiles that never chose a home. Devops
+  measured the production shape as **a cliff, not a window**: every tree publishes `demo` under
+  its own peer, so the old one vanishes at the instant of a re-key flip — there is no overlap.
+  Availability survives it (**E1** — the next load resolves once the publisher carries the site
+  again, brick-matrix cell #17); what does not survive it is the report, below. Gate:
+  `a_pulled_demo_site_is_reported_not_blank` (+ `_window_surface`).
+- **BOTH "your home site is gone" REPORTS MISATTRIBUTE THE CAUSE — AP33, and the scope is
+  narrower than it first reads.** The *observation* half of each is true; it is the cause and
+  the remedy that are inherited from the case the string was written for.
+  `err_no_manifest_foreign` fires only on `ResolveError::ManifestMissing`, so it **cannot** fire
+  for a site that is published and looked up correctly — there is no lookup bug behind it.
+  Measured on four states (two surfaces × cached/uncached). A returning visitor gets
+  `contentsite.offline_source_unreachable` — *"this site's source is unreachable, showing its
+  cached outline"* — over a **fully navigable stale copy**, when the origin answered promptly
+  with a 404: the source is not unreachable, it is withdrawn, and the user is looking at a ghost
+  that behaves like a working site. A first-time visitor gets
+  `contentsite.err_no_manifest_foreign` — *"belongs to another peer … probably hosted on its own
+  domain, open it there"* — which is right for the case it was written for (a shared link to
+  somebody else's site, 2026-08-24) and here names **this deployment's own publisher, on the
+  origin the user is already on.** Neither can say the true thing, because nothing on the resolve
+  path knows the home came from a deployment document — **and because the resolve path collapses
+  withdrawn (origin answered, 404), unreachable (nothing answered) and retired (identity moved)
+  into one `ManifestMissing`.** That distinction is the prerequisite for both the wording and
+  every deployer-configurable policy on this path
+  (`docs/plans/DESIGN-CONTENT-AVAILABILITY-AND-DEPLOYER-POLICY.md` §5.1); **a rewording without
+  it just moves the guess.** If you are writing a gate here, assert that the surface *speaks*
+  and say in the gate that you are not asserting it is *right* — a green "it says something"
+  must never be read as "it says the right thing."
 - **A `format:html` PAGE IS A DOCUMENT IN A SANDBOX, NOT MARKUP — and "there is no sanitizer" no
   longer means "no HTML".** F-CONTENT-1 downgraded `format:html` to escaped text because the only
   mount we had was `set_inner_html`. It now renders in an `<iframe sandbox="">` — the **empty**
@@ -2685,6 +2784,48 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     this is a trade for whoever owns the release, not a bug — but price it at 7.6 MB.
 
 ## Apps & embedded programs
+
+- **A RETURNING PROFILE NEVER RE-FETCHES AN APP BUNDLE — OPEN, UNFIXED, and it is why a
+  verified publish reaches nobody who has visited before.** `src/views/games/mod.rs` refreshes
+  the **catalog** once per window-open but fetches a **bundle** only `if b.is_none()`. Found on
+  live production 2026-08-28 by devops, on two domains, immediately after two edge-verified
+  publishes; verified here against the code.
+  - **Nothing upstream can compensate, so do not try to fix this by publishing.** `AppEntry`
+    (`src/apps/format.rs`) carries **no content hash and no version** — `id, name, description,
+    saves, category, glyph, icon, size, app_type` — so two publishes whose app code differs
+    entirely produce **byte-identical catalogs** (measured). The 58-byte bundle pointer is the
+    only thing that moves, and it is the one thing never re-read.
+  - **It is silent, which is what makes it expensive.** The old blob still resolves (a content
+    hotfix deliberately does not prune), so nothing 404s: `boot_load: complete`, frame loop
+    armed, every `http_poll` `ok`, week-old app on screen.
+  - **We fixed this exact bug once already, on the line above.** The catalog refresh's own
+    comment says *"this used to fetch only when absent, so apps added after the first visit
+    NEVER appeared."* The repair landed on the file carrying metadata, not the one carrying the
+    app. AP30 incidents 2–3.
+  - **Fix shape (not applied — held for the hotfix):** give the selected app's bundle the same
+    once-per-open refresh, keyed in the existing `refreshed` set. It is a conditional GET of 58
+    bytes, not a payload re-download; the multi-MB blob behind it is content-addressed and
+    immutable and only moves when the hash moves. **Whether the trigger should be the bundle
+    pointer or `published-root` is our call, not devops'** — their constraint is only that
+    *something a returning profile re-reads has to move when app code moves*.
+  - **No gate anywhere boots a profile twice across a publish**, which is why this was
+    invisible to us and visible to them within minutes of a real deploy. That gate is the
+    enforcement point owed before AP30's rule can be ratified as a discipline.
+
+- **DO NOT TELL ANYONE TO CLEAR SITE DATA TO GET THE NEW BUILD — IT DESTROYS THEIR SAVED
+  GAMES, AND THERE IS NO EXPORT PATH.** Saves live under the **user's own peer**
+  (`app/entity-browser/apps/{set}/state/`) while bundles live under the **publisher's** prefix,
+  so a clear takes both. There is no export-to-file in the saves UI, and the cross-peer save
+  transfer needs WebRTC signaling the production domains do not provision. Recorded as
+  **unavailable**, not as the fallback — this was very nearly issued as user guidance.
+  - **What to say instead, both verified in code:** a **private window or second profile**
+    shows the current build and touches the original profile; and `sw.js` is network-first for
+    the mutable shell (cache-first only for content-hashed assets), so **a fixed client build
+    reaches every returning visitor on one reload**, saves intact, no user action.
+  - **Two workarounds are rejected on the record so nobody rediscovers them as missed
+    options:** renaming app ids (forces a re-fetch, but strands every save keyed by the old id
+    and pollutes the id namespace) and a re-key (works, and strands every visitor permanently —
+    the exact failure the release runbook exists to prevent).
 
 - **ONE Apps window over BOTH app-sets — `Games` is a retired type key, and a selection is now
   `(set, id)`.** The `games`/`apps` split is a **storage** partition (`/{peer}/apps/{set}/…`,

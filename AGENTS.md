@@ -121,6 +121,7 @@ make e2e-webrtc-lan        # SAME LAN as a real browser does it — mDNS `.local
 make e2e-webrtc-idle       # survives-idle across two NATs — exits 0/1/**2=INCONCLUSIVE**
 make e2e-webrtc-nat        # NEGATIVE control: rendezvous works, media must NOT cross
 make e2e-webrtc-file       # two browsers meet at a name, then one SERVES a file to the other
+make e2e-webrtc-file-crossengine  # the SAME transfer across TWO ENGINES (firefox↔chrome, 6.5 MB)
 make e2e-federation        # publisher, app origin and browser as three separate hosts
 make crossimpl-go          # OUR reader vs core-go's LIVE publisher, two hosts
 make dist          # RELEASE installers for THIS host → artifacts/ (ADR-0023 Mode 1)
@@ -150,6 +151,18 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   the behavioural gate is the black-hole pair below. **The rule bounds an await blocking a
   DEFINED ALTERNATIVE outcome, not every `fetch`** — two `sw.js` fetches are deliberately
   unbounded and the baseline carries them by name. Read the GOTCHAS entry before "fixing" one.
+- **ANY copy of someone else's bytes needs a re-read trigger, and `if absent` is not one —
+  AP30, and read `docs/architecture/reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-EVERY-COPY-OF-SOMEONE-ELSES-BYTES.md`
+  before you cache anything fetched from an origin.** The durable entity tree is the single
+  source of truth *for state we own*; the moment you write a foreign artifact into it under
+  `/{me}/{foreign}/…` it is **a cache**, and it is the one cache layer here with no freshness
+  model. `sw.js`, the browser HTTP cache (`Freshness::Mutable` → `no-store`) and the registry
+  TTL all get this right — and a presence check in the store **short-circuits all three,
+  because no request is issued at all**. Four incidents: the app bundle (wedged every returning
+  visitor), the warm-boot deployment config, the already-fixed catalog, and a provenance ledger
+  built expressly to answer *"is my cache stale?"* whose `pinned_root_hash` **nothing compares**.
+  Two rules from that audit: **the trigger belongs with the freshness model, not at the call
+  site**; and **building the instrument is not the work — making something branch on it is.**
 - **A durable record of a REMOTE assertion carries the path back to that assertion — AP30.**
   Anything written down because a deployment doc, registry or peer said so must be re-checked
   whenever the source is in hand, and dropped when the source contradicts it; a write path
@@ -159,6 +172,12 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   **no source this boot changes nothing** (a truncated doc must not be able to wipe good
   state — and D23's deadline makes that case *more* common), and **revalidate strictly after
   adopting**, or a legitimate second divergence reads as a stale record.
+- **`make e2e-worker T=pulled_demo` is the withdrawn-home gate — AP33.** A deployment's home
+  site leaving its publisher's tree while the identity stays put: not a re-key, so nothing
+  adopts and nothing heals. Availability survives it (E1, cell #17); **the reports do not** —
+  both surfaces name the wrong cause and the cold one gives wrong advice. Run it for any change
+  to home-site resolution, the deployment document, or either "site is missing" string. Note
+  what it asserts: the surface *speaks*, not that it speaks correctly.
 - **`make e2e-worker T=blackholed` is the boot-availability gate** —
   `tools/e2e/blackhole-serve.py` serves an origin that accepts a request and never answers it,
   which `python3 -m http.server` cannot do and which is why this whole failure class was
@@ -168,6 +187,18 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   worker peer routes register *asynchronously*, so a fresh peer can be invisible while
   compile and unit tests stay green. The default browser arm is Worker-or-IDB, never
   Direct; a Direct-only test proves nothing about the shipped surface.
+- **`make e2e-webrtc-file-crossengine` is the cross-engine gate, and it exists because its
+  absence hid a shipped defect — AP34/AP35.** Every other WebRTC gate here is Firefox↔Firefox,
+  which is the **one pair that cannot exhibit a data-channel message-size defect**: it
+  negotiates `sctp.maxMessageSize` = 1073741823 where Firefox↔Chrome negotiates **262144**
+  (both measured). A real Android(Chrome)→desktop(Firefox) transfer stalled silently while
+  `make e2e-webrtc-file` stayed green — not green by inheritance, green because the failing
+  configuration was **not in the test population**. `ENGINE_A`/`ENGINE_B` pick each side's
+  image; the spike prints the engine the grid actually started, because a mixed run that came
+  up same-engine would prove nothing. Run it for any change to the data-channel pump, the
+  transfer batch sizes, or `file_offer`. **Cover the MIXED pair — two Chromes agree with each
+  other exactly as two Firefoxes do.** WebKitGTK (the Tauri engine) is a third engine and is
+  still uncovered.
 - **Run the two WebRTC gates as a pair.** `e2e-webrtc-chat` is handed its connectivity and
   tests the transport; `e2e-webrtc-meet` makes the browsers earn it through the Shell and
   tests the product. When both are red, the pair tells you which layer moved.

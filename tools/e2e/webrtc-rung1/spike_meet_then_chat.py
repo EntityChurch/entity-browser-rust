@@ -150,10 +150,81 @@ _PREFS = {"media.peerconnection.ice.obfuscate_host_addresses": _MDNS}
 if MODE == "worker":
     _PREFS["dom.securecontext.allowlist"] = "host.containers.internal"
     _PREFS["dom.securecontext.whitelist"] = "host.containers.internal"
-CAPS = {"capabilities": {"alwaysMatch": {
-    "browserName": "firefox",
-    "moz:firefoxOptions": {"args": ["-headless"], "prefs": _PREFS},
-}}}
+
+# ── which ENGINE each side runs, and why that is a per-side knob ─────────────
+#
+# **Every WebRTC gate in this repo was Firefox↔Firefox until this existed**, and
+# that is not a neutral convenience — the two engines disagree about the data
+# channel's `maxMessageSize` by four orders of magnitude (Firefox advertises
+# ~1 GiB and fragments internally; Chromium advertises 262 144 and does not, and
+# a pair takes the smaller of the two). A same-engine Firefox rig is the one
+# population in which an oversized `send()` cannot happen, so a size defect on
+# the transport was not merely untested here, it was **unreachable** — the gates
+# were green because the failing configuration was excluded. Reported from a real
+# Android(Chrome) → desktop(Firefox) transfer that stalled after one progress
+# line while `make e2e-webrtc-file` stayed green.
+#
+# Per-side rather than one switch because the interesting configuration is the
+# MIXED one: the ceiling is negotiated between two engines, so Chrome↔Chrome
+# would agree on 256 KiB and Firefox↔Firefox on ~1 GiB, and neither exercises the
+# asymmetry a real pair has. `rung1_repro.sh` reads the same two variables to
+# pick each container's image; they must agree, which is why the spike prints
+# what it actually got from the browser rather than what it was told.
+ENGINE_A = (os.environ.get("ENGINE_A", "firefox").strip().lower() or "firefox")
+ENGINE_B = (os.environ.get("ENGINE_B", "firefox").strip().lower() or "firefox")
+
+
+def _firefox_caps():
+    return {
+        "browserName": "firefox",
+        # `prefs` is copied per side: `spike_file_over_webrtc` mutates the
+        # download prefs, and a shared dict would leak one side's edits into the
+        # other's session.
+        "moz:firefoxOptions": {"args": ["-headless"], "prefs": dict(_PREFS)},
+    }
+
+
+def _chrome_caps():
+    # `--headless=new` is the real renderer rather than the legacy shell, which
+    # matters here: the legacy headless mode has its own WebRTC quirks and would
+    # make a red result unattributable.
+    args = ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+            "--disable-gpu"]
+    if not _MDNS:
+        # The Firefox side turns obfuscation off via a pref; Chromium's switch is
+        # a feature flag. Both must agree or the two sides send different
+        # candidate shapes and the rig stops being one topology.
+        args.append("--disable-features=WebRtcHideLocalIpsWithMdns")
+    if MODE == "worker":
+        # The Chromium counterpart of `dom.securecontext.allowlist`: OPFS gates
+        # on a secure context, and the rig serves plain HTTP.
+        args.append(f"--unsafely-treat-insecure-origin-as-secure={APP}")
+        args.append("--user-data-dir=/tmp/entity-chrome-profile")
+    return {
+        "browserName": "chrome",
+        "goog:chromeOptions": {
+            "args": args,
+            "prefs": {
+                "download.default_directory": "/tmp",
+                "download.prompt_for_download": False,
+            },
+        },
+    }
+
+
+def caps_for(base):
+    """W3C capabilities for whichever side `base` addresses."""
+    engine = ENGINE_A if base == A_BASE else ENGINE_B
+    if engine == "chrome":
+        return {"capabilities": {"alwaysMatch": _chrome_caps()}}
+    if engine != "firefox":
+        raise SystemExit(f"unknown engine {engine!r} — expected 'firefox' or 'chrome'")
+    return {"capabilities": {"alwaysMatch": _firefox_caps()}}
+
+
+# Retained as the Firefox default so the spikes that reach for `meet.CAPS`
+# directly keep working. `caps_for` is what `new_session` uses.
+CAPS = {"capabilities": {"alwaysMatch": _firefox_caps()}}
 
 BOOT = ("const l=document.getElementById('dom-layer');const r=l&&(l.shadowRoot||l);"
         "return r&&r.querySelector('button.spawn-btn')?'booted':'no';")
@@ -267,7 +338,15 @@ def goto(base, sid):
     rq(base, "POST", f"/session/{sid}/url", {"url": f"{APP}/{worker}log=debug"})
 
 def new_session(base):
-    sid = rq(base, "POST", "/session", CAPS)["value"]["sessionId"]
+    reply = rq(base, "POST", "/session", caps_for(base))["value"]
+    sid = reply["sessionId"]
+    # Print what the grid actually started, not what we asked for. A mixed-engine
+    # run whose second container silently came up Firefox is a rig that reports a
+    # cross-engine pass it never ran — the exact shape of failure this whole
+    # per-side knob exists to end.
+    caps = reply.get("capabilities", {})
+    print(f"  {'A' if base == A_BASE else 'B'} engine: "
+          f"{caps.get('browserName', '?')} {caps.get('browserVersion', '?')}")
     rq(base, "POST", f"/session/{sid}/timeouts", {"script": 30000})
     goto(base, sid)
     return sid

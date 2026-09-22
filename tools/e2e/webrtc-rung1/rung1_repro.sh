@@ -9,6 +9,26 @@
 set -euo pipefail
 
 IMG=docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404
+IMG_CHROME=docker.io/selenium/standalone-chrome:latest
+
+# ENGINE_A / ENGINE_B — which browser engine each side runs. Default is the
+# historical firefox/firefox, so every existing gate is unchanged.
+#
+# This exists because Firefox↔Firefox is the ONE pair that cannot exhibit a
+# data-channel message-size defect: it negotiates a ~1 GiB `maxMessageSize` and
+# fragments internally, where Chromium advertises 262 144 and does not. A
+# transfer that stalled on a real Android(Chrome) → desktop(Firefox) pair was
+# invisible to every gate here, not because the gates were weak but because the
+# failing configuration was not in the population. The spike reads the same two
+# variables to build capabilities and PRINTS what the grid actually started, so
+# a mixed run that quietly came up same-engine cannot report a cross-engine pass.
+ENGINE_A="${ENGINE_A:-firefox}"
+ENGINE_B="${ENGINE_B:-firefox}"
+export ENGINE_A ENGINE_B
+img_for() { case "$1" in chrome) echo "$IMG_CHROME";; firefox) echo "$IMG";; *) echo "!! unknown engine '$1'" >&2; exit 1;; esac; }
+IMG_A="$(img_for "$ENGINE_A")"
+IMG_B="$(img_for "$ENGINE_B")"
+
 NET=entity-rtc-spike
 # TOPOLOGY=shared (default) — both browsers on ONE bridge, so their host
 #   candidates are mutually routable. This is the positive rig: it proves the
@@ -91,14 +111,18 @@ elif [ "$TOPOLOGY" = "split" ]; then
   echo ">> TOPOLOGY=split — one ISOLATED network per browser (the NAT negative control)"
   podman network exists "$NET_A" || podman network create --opt isolate=true "$NET_A" >/dev/null
   podman network exists "$NET_B" || podman network create --opt isolate=true "$NET_B" >/dev/null
-  podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET_A" -p 4446:4444 "$IMG" >/dev/null
-  podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET_B" -p 4447:4444 "$IMG" >/dev/null
+  podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET_A" -p 4446:4444 "$IMG_A" >/dev/null
+  podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET_B" -p 4447:4444 "$IMG_B" >/dev/null
 else
   echo ">> shared bridge network"
   podman network exists "$NET" || podman network create "$NET" >/dev/null
-  echo ">> two firefox containers on the bridge (distinct routable IPs)"
-  podman container exists rtc-a || podman run -d --rm --name rtc-a --network "$NET" -p 4446:4444 "$IMG" >/dev/null
-  podman container exists rtc-b || podman run -d --rm --name rtc-b --network "$NET" -p 4447:4444 "$IMG" >/dev/null
+  echo ">> two browser containers on the bridge (distinct routable IPs): A=$ENGINE_A B=$ENGINE_B"
+  # `--shm-size=2g`: Chromium's renderer dies on the 64 MiB default /dev/shm and
+  # presents as a session that starts and then goes away mid-run. Harmless to
+  # Firefox, so it is unconditional rather than a branch that only the mixed rig
+  # exercises.
+  podman container exists rtc-a || podman run -d --rm --name rtc-a --shm-size=2g --network "$NET" -p 4446:4444 "$IMG_A" >/dev/null
+  podman container exists rtc-b || podman run -d --rm --name rtc-b --shm-size=2g --network "$NET" -p 4447:4444 "$IMG_B" >/dev/null
 fi
 for p in 4446 4447; do
   for i in $(seq 1 30); do curl -s -m2 localhost:$p/status 2>/dev/null | grep -q '"ready": *true' && break; sleep 1; done

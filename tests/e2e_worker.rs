@@ -15128,8 +15128,14 @@ async fn rekey_scenario(
     Ok(())
 }
 
-/// The locked-kiosk **site** surface — `ecdeos.org`-shaped, and the surface the
-/// operator's own bricked profile was closest to.
+/// The locked-kiosk **site** surface — the WORST CASE, not a shipped shape.
+///
+/// The old label here said "`ecdeos.org`-shaped"; that was stale. Measured
+/// 2026-08-28: `ecdeos.org` serves `surface: chrome`, `site_mode.enabled:
+/// false`, and overlays are off on all four production domains. Keep this
+/// variant because a locked overlay is the whole screen with the toggle
+/// suppressed — the least room any surface has to report — so a repair proven
+/// here is proven where it is hardest. Do not read it as production.
 #[tokio::test(flavor = "current_thread")]
 async fn rekeyed_domain_heals_on_next_boot() -> Result<(), Box<dyn std::error::Error>> {
     rekey_scenario(
@@ -15161,6 +15167,332 @@ async fn rekeyed_domain_heals_on_next_boot_window_surface(
            const w=root.querySelector('section.window.maximized')||root.querySelector('section.window');
            return w?(w.textContent||'').trim():'';"#,
         "surface=window",
+    )
+    .await
+}
+
+/// **B-7 — the demo site pulled out from under a profile that never chose a home.**
+///
+/// *Raised by the operator as a caveat on the hotfix path we are relying on:*
+/// content changes under a stable identity reach existing users on one plain
+/// refresh — *"assuming someone didn't pull the demo ID beforehand."*
+///
+/// This is the other half of the re-key. There, the publisher **identity**
+/// moved and the site survived; here the identity is stable and the **site**
+/// under it disappears. The two look identical to a user and heal by completely
+/// different mechanisms — the re-key by R1 + the supersession record, this by
+/// nothing at all, because there is nothing to adopt: the deployment document
+/// still names the same publisher, so R1 finds no divergence and correctly does
+/// not fire.
+///
+/// Why it lands on the profiles it does: `home_site_from` defaults the site id
+/// to `DEMO_SITE_ID` by design, so every profile that was never told otherwise
+/// is pointed at a site literally named `demo`; and the bundled offline copy of
+/// that site is seeded only when the home is **local** (`home_is_local &&
+/// home_id == DEMO_SITE_ID`). A deployment declaring a REMOTE home named `demo`
+/// takes the thin-lens path, seeds nothing, and has no floor to land on. Two
+/// production domains declare exactly that today.
+///
+/// Devops' measurement of the production shape: every tree publishes `demo`
+/// under its own peer, so there is no overlap — the old one vanishes at the
+/// instant of the flip. **A cliff, not a window.**
+///
+/// *What this gate is for.* The mechanism was traced before it was measured, and
+/// the audit's open question was the honest one: **what does the user actually
+/// see?** There is an unresolvable-home surface, so it is *probably* a visible
+/// error rather than a blank page — and "probably" is not an exit. So the bar
+/// here is deliberately low and deliberately explicit: the app must still boot,
+/// and it must **say something**. It is not asserted that it heals, because it
+/// does not, and a gate that demanded a heal would be a feature request wearing
+/// a test's clothes.
+///
+/// `locked_kiosk` additionally probes the second open question — whether a
+/// locked overlay deployment has an exit when its home cannot resolve.
+async fn demo_pull_scenario(
+    before_fixture: &str,
+    read_js: &str,
+    label: &str,
+    locked_kiosk: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let read_site = read_js;
+
+    // Same isolation rule as `rekey_scenario`, for the same earned reason:
+    // publish into a COPY of the SPA on its own port, never into the shared
+    // `dist/`, or Phase 27's fixture fails with "publisher bound no signature"
+    // and the suite reads as flaky in a file that has nothing to do with this.
+    let root = format!("target/e2e-demopull-{}", label.replace(['=', ' '], "-"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let r = async {
+        // ── 1. The domain as the visitor first met it: publisher A, home = demo ──
+        run_rekey_fixture(before_fixture, &root);
+        let peer_a = deployment_home_peer(&root);
+        println!("  [{label}] demo-pull: published as A = {peer_a}, home = demo");
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let home_text = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let cold = capture_log(&client).await?;
+        if !home_text.contains("Welcome to the Entity Demo Site") {
+            print_log(&cold);
+        }
+        // STAGING — the site must genuinely have been there and genuinely have
+        // been reached over HTTP from A. Without this the "pull" below removes
+        // something the browser was never using, and the warm boot's failure
+        // would be about a scenario that never existed.
+        assert!(
+            cold.iter().any(|l| l.contains("deployment-config: applied")),
+            "demo-pull: cold boot did not apply the served /entity-deployment.json"
+        );
+        assert!(
+            home_text.contains("Welcome to the Entity Demo Site"),
+            "demo-pull: publisher A's demo home did not render on the cold boot; got: {home_text:?}"
+        );
+
+        // ── 2. The pull ──────────────────────────────────────────────────────
+        // Same identity, same document, different site set. Published for real,
+        // so the signed root is re-projected over the surviving set.
+        run_rekey_fixture("emit_demo_pull_fixture", &root);
+        let peer_after = deployment_home_peer(&root);
+        assert_eq!(
+            peer_a, peer_after,
+            "demo-pull: the publisher identity moved — that is the RE-KEY scenario, which \
+             heals by a mechanism this test is specifically not exercising"
+        );
+        assert!(
+            !std::path::Path::new(&format!("{root}/{peer_a}/sites/demo")).exists(),
+            "demo-pull: the demo site must be gone from the served tree"
+        );
+        println!("  [{label}] demo-pull: {peer_a} republished WITHOUT demo; document unchanged");
+
+        // ── 3. The returning visitor ─────────────────────────────────────────
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        // Poll for the report rather than for content: there is no success text
+        // to wait on here, so this rides out the resolve attempt and returns
+        // whatever the surface settled on.
+        let warm_text = poll_rendered(&client, read_site, "No site manifest").await?;
+        let warm = capture_log(&client).await?;
+
+        // The mechanism check, and the reason this is a separate test rather
+        // than a case of the re-key one: R1 must find NO divergence (the
+        // document names the same publisher it always did), so nothing is
+        // adopted and no supersession is recorded. If either fires, the fixture
+        // has drifted into being a re-key and the finding is untested.
+        assert!(
+            !warm.iter().any(|l| l.contains("DIFFERENT identity")),
+            "demo-pull: the boot detected a re-key — the fixture moved the publisher, so this \
+             run measures the healed path instead of the pulled one"
+        );
+        assert!(
+            !warm.iter().any(|l| l.contains("recorded a retired publisher")),
+            "demo-pull: a supersession was recorded — there is no retired publisher here"
+        );
+
+        // **The artifact this test exists to produce.** Printed on every run,
+        // pass or fail: the open question was what a user sees, and a gate that
+        // only speaks when it fails cannot answer that.
+        let tail: String = {
+            let t = warm_text.trim_end();
+            let n = t.chars().count();
+            t.chars().skip(n.saturating_sub(240)).collect()
+        };
+        println!(
+            "\n  ---- B-7: the demo site was pulled ----\n  \
+             publisher (unchanged):  {peer_a}\n  \
+             home the document names: demo   <- no longer published\n  \
+             surface characters:      {}\n  \
+             surface tail:            …{tail}\n",
+            warm_text.chars().count()
+        );
+
+        // ── 4. The bar: it boots, and it says something ──────────────────────
+        // `wait_for_boot` above already proves the frame loop reached the point
+        // it reports from. What is asserted here is D13: the state is REPORTED,
+        // not merely survived. Two strings qualify because two surfaces produce
+        // them, and both name the condition to a reader.
+        //
+        // **All three of these misdescribe THIS failure, and that is a finding
+        // this gate records rather than asserts away.** Each was written for a
+        // case it is correct about:
+        //
+        //  * `offline_source_unreachable` — "this site's source is unreachable"
+        //    is right for a dead network. Here the origin answered promptly with
+        //    a 404: the publisher deliberately stopped carrying the site.
+        //  * `err_no_manifest_foreign` — "belongs to another peer … probably
+        //    hosted on its own domain, open it there" is right for a shared link
+        //    to somebody else's site (measured 2026-08-24, which is why it
+        //    exists). Here the named peer is *this deployment's own publisher*,
+        //    served from the origin the user is already on, so the advice sends
+        //    them away from the only place it could ever have been.
+        //  * `err_no_manifest` — "no site manifest" is true but says nothing
+        //    about who could fix it.
+        //
+        // None of them can say the true thing — *the publisher of this
+        // deployment no longer carries this site* — because nothing on this path
+        // knows that the home came from a deployment document. The gate asserts
+        // the state is REPORTED (D13); it deliberately does not assert the
+        // report is right, because it is not.
+        const NO_MANIFEST: &str = "No site manifest";
+        const FOREIGN_MANIFEST: &str = "Nothing is published at";
+        const STALE_OUTLINE: &str = "This site's source is unreachable";
+        let says_something = warm_text.contains(NO_MANIFEST)
+            || warm_text.contains(FOREIGN_MANIFEST)
+            || warm_text.contains(STALE_OUTLINE);
+        if !says_something {
+            print_log(&warm);
+        }
+        assert!(
+            !warm_text.trim().is_empty(),
+            "demo-pull: the surface rendered EMPTY after the demo site was pulled — a blank \
+             page is the failure this gate exists to rule out"
+        );
+        assert!(
+            says_something,
+            "demo-pull: the surface rendered but never named the condition. It must say one of \
+             {NO_MANIFEST:?} / {FOREIGN_MANIFEST:?} / {STALE_OUTLINE:?}, because a profile \
+             pointed at a site its publisher no longer carries has no other way to learn \
+             that. Got: {warm_text:?}"
+        );
+
+        // ── 4b. The visitor who arrives AFTER the pull ───────────────────────
+        // The step above measures a profile that already held the site, so it
+        // has a cached outline to fall back on and the report it prints is the
+        // stale-content one. A first-time visitor has no cache at all, and that
+        // is both the more common case on a public domain and the one with less
+        // to render — so it is the one that could still be blank. Measured
+        // rather than reasoned about, because "it probably says the other
+        // string" is the same kind of "probably" this gate exists to retire.
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let fresh_text = poll_rendered(&client, read_site, FOREIGN_MANIFEST).await?;
+        let fresh = capture_log(&client).await?;
+        let fresh_tail: String = {
+            let t = fresh_text.trim_end();
+            let n = t.chars().count();
+            t.chars().skip(n.saturating_sub(240)).collect()
+        };
+        println!(
+            "  ---- B-7: a FIRST-TIME visitor, arriving after the pull (no cache) ----\n  \
+             surface characters:      {}\n  \
+             surface tail:            …{fresh_tail}\n",
+            fresh_text.chars().count()
+        );
+        // Measured: this path produces `err_no_manifest_foreign`, not the plain
+        // `err_no_manifest` the audit expected — the home peer is remote, so the
+        // "foreign" branch fires. It is the more informative of the two (it
+        // names the origin and the peer) and the more wrongly-advised: the peer
+        // it tells the user to go find elsewhere is this deployment's own
+        // publisher, on the origin they are already looking at.
+        let fresh_reports =
+            fresh_text.contains(FOREIGN_MANIFEST) || fresh_text.contains(NO_MANIFEST);
+        if fresh_text.trim().is_empty() || !fresh_reports {
+            print_log(&fresh);
+        }
+        assert!(
+            !fresh_text.trim().is_empty(),
+            "demo-pull: a first-time visitor arriving after the pull rendered EMPTY — with no \
+             cached outline to fall back on, this is the blank page the gate rules out"
+        );
+        assert!(
+            fresh_reports,
+            "demo-pull: a first-time visitor must be told the home site does not resolve. With \
+             no cache there is no outline to show, so one of {FOREIGN_MANIFEST:?} / \
+             {NO_MANIFEST:?} is the only report left, and its absence means the state is \
+             silent. Got: {fresh_text:?}"
+        );
+
+        // ── 5. Is there an exit? ─────────────────────────────────────────────
+        // The audit's second open question. `site_mode.locked` is documented as
+        // a held seam — stored and readable, with no behaviour gating on it yet
+        // — so the escape hatch is expected to work. Measured rather than
+        // assumed, because if `locked` ever starts gating, an unresolvable home
+        // on a locked deployment becomes an app with an error and no way out.
+        if locked_kiosk {
+            client.goto(&format!("http://localhost:{port}/?chrome=1&log=trace")).await?;
+            wait_for_boot(&client, 30_000).await?;
+            let escaped = poll_rendered(
+                &client,
+                r#"const l=document.getElementById('dom-layer');if(!l)return '';
+                   const r=l.shadowRoot||l;return (r.textContent||'').trim();"#,
+                "Entity",
+            )
+            .await?;
+            println!(
+                "  [{label}] locked-kiosk exit via ?chrome=1: {} characters of chrome",
+                escaped.chars().count()
+            );
+            assert!(
+                !escaped.trim().is_empty(),
+                "demo-pull: a LOCKED deployment whose home cannot resolve has no exit — \
+                 ?chrome=1 rendered nothing, so the user is left with an error and no way out"
+            );
+        }
+
+        let panics = count_panics(&warm);
+        assert!(panics.is_empty(), "panics across the demo-pull boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    println!("  demo_pull_scenario[{label}] OK");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// The locked-kiosk **site** surface. The worst case for B-7: the overlay is the
+/// whole screen, the toggle is suppressed, and the home it resolves is the site
+/// that was pulled.
+#[tokio::test(flavor = "current_thread")]
+async fn a_pulled_demo_site_is_reported_not_blank() -> Result<(), Box<dyn std::error::Error>> {
+    demo_pull_scenario(
+        "emit_rekey_fixture_before",
+        r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#,
+        "surface=site",
+        true,
+    )
+    .await
+}
+
+/// The maximized Site Browser **window** surface. Separately-persisted
+/// navigation state, and the surface the first version of the re-key fix missed
+/// — so it is gated here from the start rather than after it bites.
+#[tokio::test(flavor = "current_thread")]
+async fn a_pulled_demo_site_is_reported_not_blank_window_surface(
+) -> Result<(), Box<dyn std::error::Error>> {
+    demo_pull_scenario(
+        "emit_rekey_fixture_before_window",
+        r#"const layer=document.getElementById('dom-layer');if(!layer)return '';
+           const root=layer.shadowRoot||layer;
+           const w=root.querySelector('section.window.maximized')||root.querySelector('section.window');
+           return w?(w.textContent||'').trim():'';"#,
+        "surface=window",
+        false,
     )
     .await
 }

@@ -1174,6 +1174,66 @@ these shipped in this repo.
   document that declines to answer must change nothing, or a truncated file becomes a way to
   wipe good state; and **(b) revalidate strictly after adopting**, because a legitimate second
   divergence looks exactly like a stale record until the adoption path has written its half.
+  **Incidents 2 and 3 (2026-08-28, found on live production by devops, verified here) — the
+  same rule in the CACHE shape rather than the RECORD shape, and it is now the dominant form.**
+  AP30 was earned on a record *derived from* a remote assertion; these are durable *copies of*
+  a remote artifact, gated on `is_none()`, which is the identical "we already asked once"
+  defect one layer down:
+  - **The app bundle** (`src/views/games/mod.rs`): the catalog is refreshed once per
+    window-open, the **bundle is fetched only when absent**. A returning profile therefore runs
+    the app code it first downloaded, forever. Nothing upstream can compensate — `AppEntry`
+    (`src/apps/format.rs`) carries **no content hash and no version**, so two publishes with
+    entirely different app code produce byte-identical catalogs (measured), while the 58-byte
+    bundle pointer is the only thing that moves. The stale blob still resolves because a
+    content hotfix does not prune, so nothing 404s and the failure is **completely silent**:
+    `boot_load: complete`, frame loop armed, every fetch `ok`, week-old app on screen.
+  - **The deployment config** (`src/app.rs` ~1875): `deployment_config::fetch()` runs only when
+    `durable.is_none()`. A warm boot therefore never re-reads `/entity-deployment.json` and
+    **cannot report on its own routing document at any level** — no `applied`, no `unreachable`,
+    no `not served`. The precedence rule it implements (persisted > fetched > build-time) is
+    deliberate and defensible; *never looking again* is the part that is not.
+  - **And the catalog on the line above is the tell: we already fixed this exact bug once.**
+    Its comment reads *"this used to fetch only when absent, so apps added after the first
+    visit NEVER appeared."* The repair landed on the file carrying **metadata** and not on the
+    file carrying **the app**. A fix applied to one instance of a pattern, in a diff that
+    stared at the second instance, is the strongest argument in this catalog for promoting
+    this from an anti-pattern to a discipline.
+  **Incident 4, found by the audit these three triggered, and it is the one that indicts us.**
+  `content_site/cache.rs` exists *specifically* to answer "is my cache stale?" — its own doc
+  comment says so, and `manifest_hash_hex` is documented as *"what a later revalidation compares
+  the re-fetched manifest against to decide unchanged-vs-changed."* **There is no later
+  revalidation.** `read_provenance` has two non-test callers and both only render the value in
+  the UI; nothing compares `pinned_root_hash` to decide anything. The instrument was designed,
+  built, correctly documented, and wired to a **label**. That is the same failure as this
+  entry's original incident, where `snapshot()` existed with zero callers — **twice now we have
+  built the mechanism and not connected it to a decision.** Building the instrument is not the
+  work; *making something branch on it* is the work.
+  **ROOT CAUSE, established by full inventory (`reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-…`):
+  every cache we designed AS a cache has a freshness model; the one that became a cache by
+  accident has none, and it sits on top of the ones that are correct.** The durable entity store
+  is conceived of as *the tree, the single source of truth* — true for state we own, and it
+  quietly stopped being true when we began writing other people's artifacts into it under
+  `/{me}/{foreign}/…`. Three consequences, all observed: **(i)** the presence check
+  short-circuits the layers that are right — `Freshness::Mutable` → `no-store` is correct and
+  its comment names this exact symptom, but it never runs because no request is issued;
+  **(ii)** with no shared entry point owning the trigger, it is re-decided at every call site
+  and the six consumers disagree; **(iii)** the wrong answer is the natural one to write —
+  `if cached.is_none()` is correct for immutable content and the store gives no signal that this
+  path holds someone else's mutable artifact. **This is why it recurs per app, per site, per
+  feature, and why a reminder will not fix it: it is a missing abstraction, not carelessness.**
+  The fix is to move the trigger to the layer that already owns freshness, and give the
+  provenance ledger a reader.
+  **Promotion status: earned, not yet ratified.** Four incidents in two shapes clears the
+  ladder's bar — but a discipline with no enforcement point does not count, and none exists for
+  the cache shape. Two are named in the audit §3: a gate that **republishes and asserts a
+  returning profile sees the new bytes** (no gate anywhere currently boots a profile twice
+  across a publish, which is exactly why devops found this in minutes and we never had), and a
+  baseline-ratcheted **lint on the shape** — a durable read of a foreign-qualified path used as
+  the condition guarding a fetch. Ratify D24 in the same change that lands them; do not mint it
+  before.
+  [D16, `src/views/games/mod.rs`, `src/app.rs`, `src/apps/format.rs` `AppEntry`,
+  `src/content_site/cache.rs`, `reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-EVERY-COPY-OF-SOMEONE-ELSES-BYTES.md`,
+  meta `ROUTING-2026-08-28-THE-BUNDLE-IS-FETCHED-ONLY-WHEN-ABSENT.md`]
   *Closed 2026-08-27:* `peer_supersession::{forget, revalidate, stale_against}` +
   `Peers::remove_and_wait`, gated by `a_supersession_the_domain_contradicts_is_dropped` —
   observed red on the unfixed tree, and falsified a second time by neutering only the
@@ -1223,6 +1283,136 @@ these shipped in this repo.
   *Related:* the suite's standing rule that a cheap check must not shadow an expensive one.
   This is its read-side twin — a cheap check shadowed by the cache it was meant to inspect.
   [D7, D13, `index.html` recovery console, `the_recovery_console_survives_a_blackholed_origin`]
+
+- **AP33 — A report that is right for the case it was written for, reached by a case it
+  misdiagnoses.** A user-facing string is authored against one concrete incident, is
+  accurate and helpful for it, and then becomes the default answer for every *other* way of
+  arriving at the same code path. It satisfies D13 — the state is reported, the surface is
+  not blank, a gate asserting "it says something" goes green — while telling the user a
+  false cause and, worse, an actionable-sounding false remedy. **A wrong report is more
+  expensive than no report, because it is acted on.**
+  **Scope, narrowed 2026-08-28 after the operator pushed on it — the correction matters and
+  the rule survives it.** The challenge was *"if something's published, why is it saying that?
+  Your lookup isn't right or something."* Checked: `err_no_manifest_foreign` is reachable from
+  one place and only on `ResolveError::ManifestMissing`, so it **cannot fire for a site that is
+  published and looked up correctly** — there is no lookup bug behind it, and the *observation*
+  half of both strings was true in every state measured. **It is the cause-and-remedy half that
+  is inherited from the case the string was written for.** State the observation freely; it is
+  the diagnosis and the "go do X" that need the distinguishing fact in scope.
+  *Incidents (both measured 2026-08-28, `a_pulled_demo_site_is_reported_not_blank`):* a
+  publisher stops carrying the site a deployment names as its home — B-7, and a live shape,
+  since two production domains declare a remote home named `demo`. Both surfaces report, and
+  **both misattribute the cause.** A returning visitor gets
+  `contentsite.offline_source_unreachable` — *"this site's source is unreachable, showing its
+  cached outline"* — over a fully-navigable stale copy, when the origin in fact answered
+  promptly with a 404 and the source is not unreachable but *withdrawn*; the user sees a
+  working site that is a ghost. A first-time visitor gets
+  `contentsite.err_no_manifest_foreign` — *"this site belongs to another peer and is probably
+  hosted on its own domain — open it there"* — which was written for a shared link to
+  somebody else's site (measured 2026-08-24) and is right there, but here names **this
+  deployment's own publisher, on the origin the user is already looking at**, and so sends
+  them away from the only place the site could ever have been.
+  Neither can say the true thing — *the publisher of this deployment no longer carries this
+  site* — because the resolve path collapses **withdrawn** (the origin answered, 404),
+  **unreachable** (nothing answered) and **retired** (the identity moved) into one
+  `ResolveError::ManifestMissing`, and does not know the home came from a deployment document.
+  That is the tell: **the string is chosen by where the code failed, not by what the caller
+  was trying to do**, so a second caller inherits the first one's diagnosis. The fix is
+  therefore not a rewording — it is the missing distinction
+  (`DESIGN-CONTENT-AVAILABILITY-AND-DEPLOYER-POLICY` §5.1), which is also the prerequisite for
+  every deployer-configurable policy on the same path. A rewording without it just moves the
+  guess.
+  **Rule: when a report names a CAUSE or offers a REMEDY, the fact that distinguishes the
+  cases must be in scope at the point the string is chosen — otherwise report the observation
+  and not the diagnosis.** "Nothing is published at 'demo' on this origin" is always true;
+  "…so open it on its own domain" is not. And when a gate asserts only that a surface speaks,
+  say so in the gate — a green "it says something" must not be read as "it says the right
+  thing." Same family as AP32 (a diagnostic that reports agreement it cannot support), one
+  layer out: there the wrong answer came from the wrong source, here from the wrong case.
+  **Corollary, operator 2026-08-28, and it corrects how D13 was being applied here: reporting
+  the state does NOT mean reporting it to the user, on the surface, now.** *"Maybe the other ten
+  sites are working fine, but one is off. Does that need to rise to the occasion and harass the
+  user on every reload?"* A report has an **audience** and a **salience**, and both are part of
+  the design: the home site of the deployment you are standing on is high-salience to the user
+  (there is nothing else to look at); the eleventh entry of a directory listing is a log line
+  for the operator. A surface that cries wolf trains people to ignore it, and then the one
+  report that mattered is ignored too — **a report nobody reads costs more than no report.**
+  Same prerequisite as everything else in this entry: the two cases are one `ManifestMissing`
+  today, so nothing downstream can give them different salience even if it wanted to.
+  [D13, D19, `src/i18n.rs` `contentsite.err_no_manifest_foreign` /
+  `contentsite.offline_source_unreachable`, `a_pulled_demo_site_is_reported_not_blank`]
+  **Incident 2 (2026-08-28) — the same defect in a LOG line, and it cost a reader two round
+  trips.** `boot_load: remote home has no registered origin` (`src/app.rs` ~2384) fires
+  whenever there is no deployment-config entry and `ENTITY_HOME_ORIGIN` is unset — **including
+  on a completely healthy profile**, where the origin was persisted on an earlier boot and
+  every fetch succeeds. The warning *states its own escape hatch* (*"it will only resolve if
+  the origin is persisted/registered elsewhere"*), which is an admission that at the point the
+  string is chosen the code **cannot tell the healthy case from the broken one** — exactly this
+  entry's rule, one surface out from the user. A devops seat debugging a live production
+  staleness bug read it as the cause and reported it as such; the actual defect was elsewhere
+  (AP30 incidents 2–3), and the WARN was firing on the working path the whole time.
+  **The corollary above is not only about user-facing surfaces: a log line has an audience and
+  a salience too**, and its audience is the person debugging an incident at their least
+  skeptical. A warning that fires on the healthy path trains readers to ignore it — and the
+  cost is not the ignoring, it is the two hours spent chasing it the one time they don't.
+  Either establish the distinction (is the origin resolvable *now*?) before choosing the
+  string, or drop it to `debug!` and state the observation without the diagnosis.
+
+- **AP34 — A gate whose POPULATION excludes the failing configuration.** Not a weak
+  assertion and not a stale artifact: the assertions are right and the rig is clean, but the
+  one variable that decides the outcome is held at a single value across every run. The gate
+  is then green *by construction*, forever, and its greenness is evidence about the value
+  that was chosen and about nothing else.
+  *Incident (2026-08-28):* every WebRTC gate in this repo was Firefox↔Firefox —
+  `browserName: "firefox"` in all six `tools/e2e/webrtc-rung1/spike_*.py` and
+  `selenium/standalone-firefox` as the only image. Engines disagree about the data channel's
+  `maxMessageSize` by four orders of magnitude, and Firefox is the value at which the app's
+  oversized writes cannot fail. So when a real Android(Chrome) → desktop(Firefox) transfer of
+  a 6.5 MB photo stalled after one progress line, `make e2e-webrtc-file` was green — and had
+  never had the *ability* to be otherwise. **No WebRTC behaviour of this app had ever been
+  executed against a second engine.** Adding one (`ENGINE_A`/`ENGINE_B`, `img_for`) reproduced
+  the operator's stall on the first run, and the negotiated ceiling printed **262144 on both
+  sides** where Firefox↔Firefox prints ~1 GiB.
+  **Rule: when the substrate has more than one implementation, a gate that fixes the
+  implementation is a gate over one population — say so where it is defined, and cover the
+  MIXED pair, not a second monoculture.** Mixed is the load-bearing part: two Chromes agree
+  with each other exactly as two Firefoxes do, and a phone talking to a laptop is neither.
+  Distinct from AP31, which is green because of an artifact another target left behind — this
+  one is green on a clean run of its own target, which is why nothing in the AP31 rule catches
+  it. Same shape as D10's "green tests ≠ a working app" one level down: there the loop was
+  missing, here the *variable* was.
+  [D10, `Makefile` `e2e-webrtc-file-crossengine`, `tools/e2e/webrtc-rung1/rung1_repro.sh`
+  `img_for`, `spike_meet_then_chat.py` `caps_for` — which prints the engine the grid actually
+  started, because a mixed run that quietly came up same-engine would re-earn this entry]
+
+- **AP35 — An undeclared ceiling at a layer boundary, with the error thrown away.** A lower
+  layer has a hard limit the layer above cannot see, the caller is sized against a *different*
+  budget that happens to share the word "frame", and the write that violates it fails into a
+  discarded `Result`. Each of the three is survivable alone; together they convert a size
+  violation into an unbounded wait, which is the one failure with no report and no timeout.
+  *Incident (2026-08-28):* the broker's port→data-channel pump was
+  `if open { let _ = dc.send_with_u8_array(&bytes); }` — one `send()` per port message, no
+  size check, no `maxMessageSize` read anywhere in the codebase, no fragmentation. Above it,
+  `file_offer.rs` sizes a pull at `GET_BATCH_SIZE` = 16 chunks ≈ **4 MiB**, documented as
+  *"well inside the 16 MiB frame budget"* — the **entity protocol's** frame budget, not the
+  transport's, which a Firefox↔Chrome pair negotiates at **262144**. `CHUNK_SIZE` is
+  `256 * 1024`, so even one chunk plus its envelope was over. The throw was discarded, so the
+  puller waited on a response that could never come: *"starting chunk 0 out of 26"*, then
+  silence, forever.
+  **Rule: a transport either carries what it is handed or reports that it cannot — never
+  both-and-neither. Prefer making the limit invisible to the layer above (fragment) over
+  publishing it upward (a size the caller must respect), and NEVER discard the `Result` of a
+  platform write.** The fix here could be transparent precisely *because* the layer above is a
+  byte stream — `PortReader` feeds `entity-wire`'s 4-byte length prefix and already carries a
+  `leftover` — so message boundaries on the carrier had no semantics and splitting needed no
+  header, no reassembler and no wire change. **Check that before reaching for a protocol
+  version.** A failed send is not a lost message but a hole in a stream, so it closes the
+  channel: an unrecoverable transport error the layers above already report beats a hang they
+  cannot see. And the corollary the operator's report earned: *do not fix this by lowering a
+  constant* — a number that happens to work on one pair is how it comes back on the next.
+  [D9, D14, `bindings/wasm-worker-proxy/src/webrtc_session.rs` `PortPump` /
+  `outbound_piece_size`, `make e2e-webrtc-file-crossengine` (mutation-checked: red on the
+  unfixed pump, green on the fixed one, same rig)]
 
 ---
 

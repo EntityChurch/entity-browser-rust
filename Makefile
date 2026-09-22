@@ -887,6 +887,47 @@ endif
 	 else echo ">>> e2e-webrtc-file: FAIL (rc=$$rc) — read which phase failed: offer (serving), offers (the manifest crossing), or pull (the closure walk)"; fi; \
 	 exit $$rc
 
+# THE SAME FILE TRANSFER, ACROSS TWO DIFFERENT ENGINES — and the reason this
+# target exists is that its absence hid a shipped defect.
+#
+# Every WebRTC gate above is Firefox↔Firefox. That is the one pair which cannot
+# exhibit a data-channel message-size defect: Firefox negotiates a ~1 GiB
+# `maxMessageSize` and fragments internally, where Chromium advertises 262 144
+# and does not — and a pair takes the SMALLER of the two. So when a real
+# Android(Chrome) → desktop(Firefox) transfer of a 6.5 MB photo stalled after one
+# progress line, `make e2e-webrtc-file` was green and stayed green. Not green by
+# inheritance (AP31): green because **the failing configuration was not in the
+# test population at all**.
+#
+# Two deliberate differences from `e2e-webrtc-file`, both load-bearing:
+#
+#   · `ENGINE_B=chrome` — MIXED, not Chrome↔Chrome. A same-engine pair of either
+#     kind agrees with itself; the ceiling that bit us is the one two DIFFERENT
+#     engines negotiate, and it is also what a phone talking to a laptop is.
+#   · `FILE_SIZE` defaults to the operator's actual file (6.5 MB, 26 chunks),
+#     not the 700 000 the Firefox gate uses. That spans several `GET_BATCH_SIZE`
+#     batches, so it exercises repeated multi-megabyte responses rather than one.
+#
+# Slower and heavier than the Firefox gate (it pulls a second Selenium image and
+# moves 6.5 MB), so it is its own target rather than the default. Run it for ANY
+# change to the data-channel pump, the transfer batch sizes, or `file_offer`.
+CROSS_FILE_SIZE ?= 6500000
+e2e-webrtc-file-crossengine:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-file-crossengine SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-file-crossengine BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-file-crossengine: A=firefox B=chrome, $(CROSS_FILE_SIZE) bytes"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; ENGINE_A=firefox ENGINE_B=chrome FILE_SIZE="$(CROSS_FILE_SIZE)" \
+	   SPIKE=spike_file_over_webrtc.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-file-crossengine: PASS — a file crossed between two DIFFERENT engines"; \
+	 else echo ">>> e2e-webrtc-file-crossengine: FAIL (rc=$$rc) — check the engines the spike printed before reading anything else; a run where both came up firefox proves nothing"; fi; \
+	 exit $$rc
+
 # §4.5.1's AUTOMATIC half: the node is started serving a reflector and PUBLISHES
 # it in `advertise`; the browsers are handed nothing and type nothing. They add
 # the connector, ask the node what it serves, store the answer on the row, and

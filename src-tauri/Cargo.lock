@@ -1035,7 +1035,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "entity-attestation"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "entity-capability"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-crypto",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "entity-capability-handler"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "entity-clock"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "entity-compute"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "entity-conformance"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1171,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "entity-content"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1189,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "entity-continuation"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "entity-crypto"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "entity-discovery"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1247,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "entity-durability"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-ecf",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "entity-ecf"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "thiserror 2.0.19",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "entity-entity"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-ecf",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "entity-handler"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "entity-handler-ops"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "entity-hash"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-ecf",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "entity-history"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "entity-identity"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "entity-inbox"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "entity-local-files"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "entity-network"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "entity-peer"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "entity-protocol"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-capability",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "entity-query"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "entity-quorum"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "entity-registry"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "entity-relay"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "entity-revision"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "entity-role"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "entity-route"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-ecf",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "entity-signaling"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "entity-store"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "entity-entity",
  "entity-hash",
@@ -1678,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "entity-subscription"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "entity-tree"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "ciborium",
@@ -1717,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "entity-type-system"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "bs58",
@@ -1736,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "entity-types"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bs58",
  "ciborium",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "entity-wire"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "ciborium",
  "entity-ecf",

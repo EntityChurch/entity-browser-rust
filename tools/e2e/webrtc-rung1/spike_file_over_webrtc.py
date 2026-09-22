@@ -129,7 +129,13 @@ def click_field(base, sid, selector):
 # The Firefox profile must not stop on a save dialog: the Pull button hands the
 # bytes to the browser as a download, and a modal would leave the run hanging on
 # something that is not the app's behaviour.
-meet.CAPS["capabilities"]["alwaysMatch"]["moz:firefoxOptions"]["prefs"].update({
+#
+# Written into `meet._PREFS` rather than into `meet.CAPS`, because `caps_for`
+# builds each side's capabilities from `_PREFS` at session time — a mutation of
+# the assembled `CAPS` dict would silently miss both sessions. Chromium's
+# equivalent (`download.prompt_for_download`) is set in `_chrome_caps`, so a
+# mixed pair is covered on whichever side ends up pulling.
+meet._PREFS.update({
     "browser.download.folderList": 2,
     "browser.download.dir": "/tmp",
     "browser.download.useDownloadDir": True,
@@ -505,6 +511,24 @@ def main():
                   and meet.log_has(B_BASE, sb, "data channel is OPEN"))
         print(f"\n  a §6.5 data channel opened on both sides: {opened}")
         checks["it crossed a WebRTC data channel"] = opened
+
+        # ── 10b. what each side NEGOTIATED, printed ──────────────────────
+        # `webrtc_session.rs` logs `sctp.maxMessageSize` and the piece size it
+        # derived. Surfaced here rather than left in a console because it is the
+        # number the whole transport sizing turns on, it differs by four orders
+        # of magnitude between engines, and a run that does not print it cannot
+        # tell a genuine mixed-engine pass from two containers that both came up
+        # the same. Asserted only as "the line exists": requiring the two sides
+        # to DISAGREE would be correct for this cross-engine rig and wrong for
+        # the Firefox one that shares this spike.
+        print("  negotiated ceilings:")
+        for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+            said = [l for l in meet.log_lines(base, sid) if "sctp.maxMessageSize" in l]
+            print(f"    {lbl}: {said[0][:200] if said else '(never logged)'}")
+        checks["both sides reported the size they negotiated"] = all(
+            any("sctp.maxMessageSize" in l for l in meet.log_lines(base, sid))
+            for base, sid in ((A_BASE, sa), (B_BASE, sb))
+        )
 
         print("\n── file-over-webrtc gate ─────────────────────")
         for k, v in checks.items():
