@@ -64,6 +64,7 @@ btn.authorize c8856b1d9080a93a translated
 btn.back db281ffcbe50664b translated
 btn.cancel 744800e40dc26c74 translated
 btn.clear c4225d7e0374f4d5 translated
+btn.close cb3ef006e72aff39 translated
 btn.collapse 1fce9ff69d2925db translated
 btn.connect 8922c88e0401aa0f translated
 btn.copy 85edf283182f74dd translated
@@ -104,8 +105,8 @@ chat.leave ed8f197e3daf18b8 translated
 chat.no_establisher a8eac4732b7c3424 translated
 chat.placeholder 4a618ceab9cdae96 translated
 chat.reach_no_counterpart f6b2a2e8d19744ec translated
-chat.reach_no_direct_path cceff9dd69ed1497 stale
-chat.reach_no_reflector 4d6881c5c82cd520 stale
+chat.reach_no_direct_path cceff9dd69ed1497 translated
+chat.reach_no_reflector 4d6881c5c82cd520 translated
 chat.reach_reflector_unreachable 93a3d62b18d11644 translated
 chat.start_by_id_placeholder 5e7116c0a3629dbe translated
 chat.start_hint e48539dd279454aa translated
@@ -485,7 +486,7 @@ peer.count 556fe94d9db8c0e6 translated
 peerconn.connect_dialing 898fe3830bf701af translated
 peerconn.connect_failed 32693fc7c09b47be translated
 peerconn.connect_ok d7745d183093aa59 translated
-peerconn.connector_add 7ccf23dc95d96e17 stale
+peerconn.connector_add 7ccf23dc95d96e17 translated
 peerconn.connector_added daa72f93385d5de5 translated
 peerconn.connector_asking 8e5f122e409ce86f translated
 peerconn.connector_check f6d7755a5a6e8c3c translated
@@ -514,12 +515,12 @@ peerconn.meet_mode_note_lobby df49edfef03d7900 translated
 peerconn.meet_mode_note_tag 4d37ce31190303d0 translated
 peerconn.meet_mode_secret 440dbe7e265b8212 translated
 peerconn.meet_mode_tag 5f9f8bde25d73629 translated
-peerconn.meet_needs_connector c73ac894644697a0 stale
+peerconn.meet_needs_connector c73ac894644697a0 translated
 peerconn.meet_needs_reload ac95960b18c44e1a translated
 peerconn.meet_no_establisher cafbecfb00afb88b translated
-peerconn.meet_no_node df545c6aea780658 stale
+peerconn.meet_no_node b677eec272c49cea translated
 peerconn.meet_no_webrtc_api 4cde3b439a8c302a translated
-peerconn.meet_none daa11776f3f9ac01 stale
+peerconn.meet_none daa11776f3f9ac01 translated
 peerconn.meet_remember f7f578bfeca36947 translated
 peerconn.meet_remembered 2b92a8c893c64f45 translated
 peerconn.meet_searching 541f2e6b265f3f59 translated

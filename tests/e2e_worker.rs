@@ -10736,6 +10736,282 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         img.get("first_alt").and_then(|v| v.as_str()).unwrap_or("")
     );
 
+    // 19-zoom: a figure opens at full size — `entity-core-papers`' ask 2, live
+    // half. On a published page a figure is an anchor to its own asset; here
+    // the `src` is a `data:` URL and browsers refuse top-level `data:`
+    // navigation, so the same link would be a control that does nothing. The
+    // overlay is what this surface can offer, and nothing native can see it:
+    // `rewrite_images` takes a `web_sys::Element`.
+    //
+    // ⚠ **Scope, stated so the name is not read wider than the measurement.**
+    // The demo figure is 480px and the prose column is ~676px, so `width:auto`
+    // renders it at 480 whether or not the widening rule applies — **the
+    // WIDENING is not falsifiable here** and is measured instead on the static
+    // export, in a real browser, against papers' own 853/1578 views. What this
+    // gates is that the rule **matched this element** (a `max-width` wider than
+    // the prose column could only come from the pane-derived clamp) and that
+    // the overlay opens, closes, and releases the bytes.
+    let zoom = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const img = sl && sl.querySelector('.cs-doc p > img');
+            const ov  = sl && sl.querySelector('.cs-zoom');
+            if (!img || !ov) return { fatal: !img ? 'no figure' : 'no overlay element' };
+            const cs = getComputedStyle(img);
+            const out = {
+                // The rule matched: a figure announces itself and is a block.
+                cursor: cs.cursor,
+                display: cs.display,
+                max_width_px: parseFloat(cs.maxWidth),
+                column_px: img.closest('.cs-doc').clientWidth,
+                // Anti-vacuity: it must be CLOSED before we click, or "closed"
+                // and "there is no overlay" are the same observation.
+                open_before: ov.classList.contains('cs-open'),
+                src_before: ov.querySelector('img').getAttribute('src'),
+            };
+            img.click();
+            out.open_after_click = ov.classList.contains('cs-open');
+            out.zoom_src_is_data = (ov.querySelector('img').getAttribute('src') || '')
+                .startsWith('data:image/svg+xml');
+            // Escape must reach it — the listener is on the overlay, which is
+            // focused on open precisely so this works without a document-level
+            // handler outliving the render.
+            ov.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            out.open_after_escape = ov.classList.contains('cs-open');
+            // Closing releases the data: URL — it is the whole asset in an
+            // attribute, and a hidden element holding it is a live leak.
+            out.src_released = ov.querySelector('img').getAttribute('src') === null;
+            // Re-open, then dismiss by the backdrop (the third way out).
+            img.click();
+            out.reopened = ov.classList.contains('cs-open');
+            ov.click();
+            out.open_after_backdrop = ov.classList.contains('cs-open');
+            return out;
+            "#,
+            vec![],
+        )
+        .await?;
+    let zf = |k: &str| zoom.get(k).and_then(|v| v.as_bool());
+    assert!(
+        zoom.get("fatal").is_none(),
+        "Phase 19-zoom: the rig could not find its subject: {zoom:?}"
+    );
+    assert_eq!(
+        zoom.get("cursor").and_then(|v| v.as_str()),
+        Some("zoom-in"),
+        "Phase 19-zoom: the figure rule never matched this <img>, so nothing on \
+         this surface says it opens: {zoom:?}"
+    );
+    let max_w = zoom.get("max_width_px").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let column = zoom.get("column_px").and_then(|v| v.as_f64()).unwrap_or(f64::MAX);
+    assert!(
+        max_w > column,
+        "Phase 19-zoom: the figure's max-width ({max_w}) is no wider than the \
+         prose column ({column}) — the pane-derived clamp did not reach it, which \
+         is the inline-style regression returning: {zoom:?}"
+    );
+    assert_eq!(zf("open_before"), Some(false), "Phase 19-zoom: vacuous — the overlay was already open: {zoom:?}");
+    assert_eq!(zf("open_after_click"), Some(true), "Phase 19-zoom: clicking a figure did not open it: {zoom:?}");
+    assert_eq!(zf("zoom_src_is_data"), Some(true), "Phase 19-zoom: the overlay opened holding no image: {zoom:?}");
+    assert_eq!(zf("open_after_escape"), Some(false), "Phase 19-zoom: Escape did not close it — a reader can be stranded under a full-surface overlay: {zoom:?}");
+    assert_eq!(zf("src_released"), Some(true), "Phase 19-zoom: closing kept the data: URL — the whole asset held in a hidden attribute: {zoom:?}");
+    assert_eq!(zf("reopened"), Some(true), "Phase 19-zoom: it opened once and never again: {zoom:?}");
+    assert_eq!(zf("open_after_backdrop"), Some(false), "Phase 19-zoom: the backdrop did not dismiss it: {zoom:?}");
+    println!(
+        "  figure opens at full size (max-width {max_w:.0}px vs {column:.0}px column; \
+         click/Escape/backdrop all wired, bytes released on close)"
+    );
+
+    // 19-zoom-phone: WHAT THE READER CAN SEE, which the block above cannot ask.
+    //
+    // ⚠ Everything above reads the overlay's *state* — a class, an attribute —
+    // and a surface that both acts and reports is only half-measured by a gate
+    // on its report. The overlay shipped 2026-09-19 opening at NATURAL size;
+    // every assertion above passed, and on a phone the reader got the top-left
+    // CORNER of the drawing: measured at a 488x561 surface against
+    // `entity-core-papers`' own views, **2.6%** of `ssa-overlay-three-substrates`
+    // (4601x2060), 11% of `ssa-overlay-entity`, 22% of `entity-topology` — and
+    // the corner of a graphviz drawing is margin, so it read as *"it looks like
+    // we would display the image here, but we didn't"*.
+    //
+    // ⚠ **The viewport IS the gate.** At the suite's desktop size the demo
+    // figure (480px) is smaller than the pane, so fitted and natural render
+    // identically and this assertion passes with the defect fully present — a
+    // gate satisfied by its fallback. Narrowing until the figure genuinely
+    // overflows is the only configuration that can tell the two apart, and the
+    // anti-vacuity row below refuses to run if it does not.
+    //
+    // ⚠ **Stated bound, measured 2026-09-19: headless Firefox CLAMPS the
+    // viewport at 500px inner width** — 420, 380 and 320 all yield the same
+    // 500px — so the request below is intent and the pane that actually applies
+    // is **452px**. Against the 480px demo figure that leaves a **28px** spill
+    // to falsify on, where the reported case was ~4100px. So this gate measures
+    // the RULE — *nothing of the figure is off the pane on open* — and **not the
+    // magnitude**: the magnitude is on record in the probe that found it (2.6%,
+    // 11.1% and 22.0% of three real `entity-core-papers` views). The printed
+    // line reports the pane it MEASURED, never the width it asked for.
+    let (wx, wy, ww, wh) = client.get_window_rect().await?;
+    client.set_window_size(420, 720).await?;
+    // Poll for the narrowed layout rather than sleeping on it: the site re-lays
+    // out on the frame loop, and measuring before it lands reads the DESKTOP
+    // pane — which trips the anti-vacuity row above. That is the safe direction
+    // (loud, and it names itself) but it is still a flake, so wait for the
+    // condition instead of guessing a settle.
+    for _ in 0..20 {
+        let w = client
+            .execute(
+                "const d = document.querySelector('#site-layer .cs-doc');\
+                 return d ? d.clientWidth : 9999;",
+                vec![],
+            )
+            .await?
+            .as_f64()
+            .unwrap_or(9999.0);
+        if w < 500.0 {
+            break;
+        }
+        sleep(Duration::from_millis(150)).await;
+    }
+    let fit = client
+        .execute(
+            r#"
+            const sl = document.getElementById('site-layer');
+            const img = sl && sl.querySelector('.cs-doc p > img');
+            const ov  = sl && sl.querySelector('.cs-zoom');
+            if (!img || !ov) return { fatal: 'no figure or no overlay' };
+            img.click();
+            const pane = ov.querySelector('.cs-zoom-pane');
+            const zi   = ov.querySelector('.cs-zoom-pane img');
+            if (!pane || !zi) return { fatal: 'the overlay has no scroll pane' };
+            return new Promise(res => {
+              const done = () => setTimeout(() => {
+                const r = zi.getBoundingClientRect(), pr = pane.getBoundingClientRect();
+                const out = {
+                  natural_w: zi.naturalWidth, natural_h: zi.naturalHeight,
+                  pane_w: pane.clientWidth, pane_h: pane.clientHeight,
+                  fit_w: Math.round(r.width), fit_h: Math.round(r.height),
+                  // The whole claim: nothing of the figure is off the pane.
+                  spill_x: Math.max(0, pane.scrollWidth - pane.clientWidth),
+                  spill_y: Math.max(0, pane.scrollHeight - pane.clientHeight),
+                  fit_cursor: getComputedStyle(zi).cursor,
+                };
+                // Tap the CENTRE and go to natural size. A synthesized click
+                // carries clientX/Y, from which the browser derives the offsetX
+                // the handler anchors on — `img.click()` would carry 0,0 and
+                // could not tell an anchored zoom from a corner one.
+                zi.dispatchEvent(new MouseEvent('click', { bubbles: true,
+                  clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+                out.natural_after_tap = ov.classList.contains('cs-natural');
+                const nr = zi.getBoundingClientRect();
+                out.nat_w = Math.round(nr.width);
+                out.scrollable_x = Math.max(0, pane.scrollWidth - pane.clientWidth);
+                out.scroll_left = pane.scrollLeft;
+                out.nat_cursor = getComputedStyle(zi).cursor;
+                // And back.
+                zi.dispatchEvent(new MouseEvent('click', { bubbles: true,
+                  clientX: nr.left + 5, clientY: nr.top + 5 }));
+                out.fitted_again = !ov.classList.contains('cs-natural');
+                out.still_open = ov.classList.contains('cs-open');
+                ov.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                res(out);
+              }, 250);
+              if (zi.complete && zi.naturalWidth) done(); else zi.onload = done;
+            });
+            "#,
+            vec![],
+        )
+        .await?;
+    client.set_window_rect(wx as u32, wy as u32, ww as u32, wh as u32).await?;
+
+    let fnum = |k: &str| fit.get(k).and_then(|v| v.as_f64()).unwrap_or(-1.0);
+    assert!(fit.get("fatal").is_none(), "Phase 19-zoom-phone: {fit:?}");
+    // Anti-vacuity FIRST: if the figure fits this pane naturally, fitted and
+    // natural are the same render and nothing below can fail.
+    assert!(
+        fnum("natural_w") > fnum("pane_w"),
+        "Phase 19-zoom-phone: VACUOUS — the demo figure ({}px) already fits the \
+         narrowed pane ({}px), so opening fitted and opening at natural size are \
+         the same picture and this gate cannot see the difference. Narrow further \
+         or use a wider fixture figure: {fit:?}",
+        fnum("natural_w"),
+        fnum("pane_w"),
+    );
+    assert!(
+        fnum("spill_x") == 0.0 && fnum("spill_y") == 0.0,
+        "Phase 19-zoom-phone: THE READER CANNOT SEE THE WHOLE FIGURE. Opening it \
+         left {}x{}px of the drawing off the pane, so a phone reader lands in a \
+         corner — which is the reported defect, and with the shell no longer \
+         forbidding pinch there is still no reason to make them fight for it: {fit:?}",
+        fnum("spill_x"),
+        fnum("spill_y"),
+    );
+    assert!(
+        fnum("fit_w") <= fnum("natural_w"),
+        "Phase 19-zoom-phone: the fit UPSCALED a figure ({}px drawn at {}px). \
+         `max-width`/`max-height` must only ever clamp DOWN — blowing a small \
+         diagram up is the same defect as shrinking a large one: {fit:?}",
+        fnum("natural_w"),
+        fnum("fit_w"),
+    );
+    assert_eq!(
+        fit.get("fit_cursor").and_then(|v| v.as_str()),
+        Some("zoom-in"),
+        "Phase 19-zoom-phone: a fitted figure must say it can be opened further: {fit:?}"
+    );
+    assert_eq!(
+        fit.get("natural_after_tap").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-zoom-phone: tapping a fitted figure did not go to natural size, \
+         so the fit is a ceiling rather than an entry state and the detail the \
+         reader opened it for is unreachable: {fit:?}"
+    );
+    assert!(
+        (fnum("nat_w") - fnum("natural_w")).abs() < 2.0,
+        "Phase 19-zoom-phone: the natural state renders at {}px, not the figure's \
+         own {}px: {fit:?}",
+        fnum("nat_w"),
+        fnum("natural_w"),
+    );
+    // Anchoring. Tapping the centre must not land back at the corner — that is
+    // the defect this whole block is about, one control further in.
+    assert!(
+        fnum("scrollable_x") <= 0.0 || fnum("scroll_left") > 0.0,
+        "Phase 19-zoom-phone: zooming anchored at the top-left corner instead of \
+         the point that was tapped ({}px of scroll available, left at {}). A zoom \
+         that dumps the reader in the corner is the thing being fixed: {fit:?}",
+        fnum("scrollable_x"),
+        fnum("scroll_left"),
+    );
+    assert_eq!(
+        fit.get("nat_cursor").and_then(|v| v.as_str()),
+        Some("zoom-out"),
+        "Phase 19-zoom-phone: a natural-size figure must say it can be collapsed: {fit:?}"
+    );
+    assert_eq!(
+        fit.get("fitted_again").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-zoom-phone: the zoom is one-way — a reader who taps in cannot get \
+         back to the whole figure: {fit:?}"
+    );
+    assert_eq!(
+        fit.get("still_open").and_then(|v| v.as_bool()),
+        Some(true),
+        "Phase 19-zoom-phone: a tap on the image dismissed the overlay instead of \
+         zooming it — the gesture meant to look closer closed the thing: {fit:?}"
+    );
+    println!(
+        "  the whole figure is on screen in a {}px pane (drawn {}px, fitted to {}px, \
+         0 spill, {}px of overflow was available to get wrong); \
+         tap → natural {}px anchored at scroll {}, tap → fitted",
+        fnum("pane_w"),
+        fnum("natural_w"),
+        fnum("fit_w"),
+        fnum("natural_w") - fnum("pane_w"),
+        fnum("nat_w"),
+        fnum("scroll_left"),
+    );
+
     // A frame panic from the overlay render would freeze the loop (D13).
     let site_log = capture_log(&client).await?;
     let site_panics = count_panics(&site_log);
@@ -31037,6 +31313,206 @@ async fn the_status_bar_shows_segments_and_stays_readable_as_it_narrows(
     println!(
         "STATUS BAR OK — segments render, the gauge is live, the braille is hidden \
          from a screen reader and the row narrows without clipping."
+    );
+    Ok(())
+}
+
+/// **The worker's payload hex dump is TRACE detail, and the capture buffer has
+/// a ceiling that keeps the head.**
+///
+/// `entity-worker-loader.js` wrapped `self.postMessage` unconditionally and
+/// dumped the first 32 bytes of every outbound payload, under a comment saying
+/// it was there *"so we can inspect the CBOR tag bytes when the proxy reports
+/// 'failed to decode'"* — a question somebody asks deliberately, answered on
+/// every message forever. Measured on a Worker-arm boot: 180 of 291 buffered
+/// entries, **62% of the buffer**, for an instrument nothing in this tree greps
+/// (`[entity-worker]` has zero consumers in `tests/`, `tools/` and `src/`). It
+/// was reachable without `?worker=1` — any profile holding a backend peer goes
+/// through `spawn_worker_sdk_for_peer`, which loads the same file.
+///
+/// ⭐ **The gate asserts the DISCRIMINATION, not the absence.** A gate that only
+/// checked the dump is gone is satisfied by *deleting* it, which would answer
+/// the volume and lose the instrument — so row 2 requires it back under
+/// `?log=trace`. That param is not a new knob: `app.rs::worker_loader_url`
+/// already forwards the main thread's `?log=` into the loader's URL so
+/// worker-side `tracing::*` inherits the chosen verbosity, and the loader now
+/// reads the same param with the same vocabulary.
+///
+/// **Row 3 is the buffer's ceiling.** `window.__entity_browser_log` had none,
+/// and the desktop app runs for days. A plain drop-oldest ring would have been
+/// worse than none for this suite: almost every grep here is for a boot-phase
+/// marker, and those are the first lines there are. So the head is permanent,
+/// the tail rolls, order survives the join, and the count of what fell out of
+/// the middle is readable — a buffer that silently truncates reads as a
+/// complete record of a session that did more than it shows.
+///
+/// **Stated bound:** this gates the *loader's* gating and the *buffer's*
+/// ceiling. It does not produce a decode failure — that needs a deliberately
+/// malformed frame, which is a different rig.
+#[tokio::test]
+async fn the_worker_payload_dump_is_trace_detail_and_the_buffer_has_a_ceiling(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Read the buffer's own shape, plus how many lines came from the worker
+    // realm at all (the anti-vacuity subject) and how many are the dump.
+    const PROBE: &str = r#"
+        var log = window.__entity_browser_log || [];
+        var joined = log.map(function (e) { return (e.args || []).join(' '); });
+        return {
+            has_writer: typeof window.__entity_browser_log_push === 'function',
+            total: log.length,
+            worker_lines: log.filter(function (e) { return e.source === 'worker'; }).length,
+            post_lines: joined.filter(function (s) {
+                return s.indexOf('[entity-worker] postMessage:') === 0;
+            }).length,
+            hex_lines: joined.filter(function (s) {
+                return s.indexOf('[entity-worker] postMessage:') === 0 && s.indexOf('hex: ') !== -1;
+            }).length,
+            boot_lines: joined.filter(function (s) {
+                return s.indexOf('[entity-worker] loader script start') === 0
+                    || s.indexOf('[entity-worker] importScripts done') === 0
+                    || s.indexOf('[entity-worker] wasm_bindgen init resolved') === 0;
+            }).length
+        };
+    "#;
+
+    let (client, _server) = setup().await?;
+    let port = http_server_port();
+
+    let r = async {
+        // ── ROW 1 — the ordinary Worker profile: forwarding on, dump off ────
+        // `?worker=1` with NO `?log=` — which is what a shipped profile is,
+        // since nothing in the product appends one.
+        client.goto(&format!("http://localhost:{port}/?worker=1")).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+        // The dump would ride on tree traffic, so give the boot's writes a
+        // moment to drain before concluding there are none.
+        sleep(Duration::from_millis(1500)).await;
+        let plain: serde_json::Value = client.execute(PROBE, vec![]).await?;
+
+        assert!(
+            plain["has_writer"].as_bool().unwrap_or(false),
+            "VACUOUS: `__entity_browser_log_push` does not exist, so the capture \
+             block did not run and every count below is about nothing. Probe: {plain}"
+        );
+        // The anti-vacuity subject proper: worker lines reach the main buffer at
+        // all. Without this a loader that failed to load — forwarding nothing —
+        // would satisfy "no dump lines" perfectly.
+        assert!(
+            plain["boot_lines"].as_u64().unwrap_or(0) > 0,
+            "VACUOUS: not one `[entity-worker]` BOOT line reached the buffer, so \
+             the worker realm is not forwarding and 'no dump lines' is true for \
+             the wrong reason — the loader never ran, or the BroadcastChannel \
+             bridge is broken. Probe: {plain}"
+        );
+        assert_eq!(
+            plain["post_lines"].as_u64().unwrap_or(999),
+            0,
+            "RED — the per-message `postMessage:` narration is still being emitted \
+             on an ordinary Worker profile with no `?log=` set. That is the \
+             instrumentation this gate exists to keep out of a shipped boot. \
+             Probe: {plain}"
+        );
+        println!(
+            "  row 1: plain `?worker=1` — {} worker lines, {} boot lines, 0 dump lines ✓",
+            plain["worker_lines"], plain["boot_lines"]
+        );
+
+        // ── ROW 2 — the instrument is REACHABLE, not deleted ────────────────
+        client
+            .goto(&format!("http://localhost:{port}/?worker=1&log=trace"))
+            .await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+        sleep(Duration::from_millis(1500)).await;
+        let traced: serde_json::Value = client.execute(PROBE, vec![]).await?;
+        assert!(
+            traced["hex_lines"].as_u64().unwrap_or(0) > 0,
+            "RED — `?log=trace` produced no payload hex dump, so the diagnostic was \
+             REMOVED rather than gated. Row 1 would pass for a deleted instrument; \
+             this row is what tells the two apart, and somebody debugging a \
+             'failed to decode' has nothing to read. Probe: {traced}"
+        );
+        println!(
+            "  row 2: `?log=trace` — {} dump lines, {} carrying hex ✓",
+            traced["post_lines"], traced["hex_lines"]
+        );
+
+        // ── ROW 3 — the ceiling keeps the head, rolls the tail, counts the gap ─
+        // Driven through the real writer rather than a reimplementation of it:
+        // a cap tested against a copy of itself is C15 wearing a gate's clothes.
+        let cap: serde_json::Value = client
+            .execute(
+                r#"
+                var HEAD = 2000, TAIL = 8000, N = 25000;
+                // Start from a known floor so the arithmetic below is exact.
+                window.__entity_browser_log.length = 0;
+                window.__entity_browser_log_dropped = 0;
+                for (var i = 0; i < N; i++) {
+                    window.__entity_browser_log_push({ level: 'log', args: ['L' + i] });
+                }
+                var buf = window.__entity_browser_log;
+                var ordered = true;
+                for (var j = 1; j < buf.length; j++) {
+                    if (+buf[j].args[0].slice(1) <= +buf[j - 1].args[0].slice(1)) { ordered = false; break; }
+                }
+                return {
+                    len: buf.length,
+                    expected_len: HEAD + TAIL,
+                    dropped: window.__entity_browser_log_dropped,
+                    expected_dropped: N - (HEAD + TAIL),
+                    first: buf[0].args[0],
+                    head_last: buf[HEAD - 1].args[0],
+                    last: buf[buf.length - 1].args[0],
+                    ordered: ordered
+                };
+                "#,
+                vec![],
+            )
+            .await?;
+
+        assert_eq!(
+            cap["len"].as_u64(), cap["expected_len"].as_u64(),
+            "RED — the buffer did not stop at its ceiling after 25k pushes; it is \
+             unbounded, which is what a days-long desktop session grows without \
+             limit. Probe: {cap}"
+        );
+        assert_eq!(
+            cap["first"].as_str().unwrap_or(""), "L0",
+            "RED — the FIRST line was evicted. A plain drop-oldest ring throws away \
+             exactly what this suite greps for: nearly every assertion here is on a \
+             boot-phase marker, and those are the first lines there are. Probe: {cap}"
+        );
+        assert_eq!(
+            cap["last"].as_str().unwrap_or(""), "L24999",
+            "RED — the most recent line is not at the end, so the tail is not \
+             rolling and a reader sees a stale window. Probe: {cap}"
+        );
+        assert_eq!(
+            cap["dropped"].as_u64(), cap["expected_dropped"].as_u64(),
+            "RED — the dropped count does not match what fell out of the middle, so \
+             a truncated buffer cannot say how much it is missing and reads as a \
+             complete record. Probe: {cap}"
+        );
+        assert!(
+            cap["ordered"].as_bool().unwrap_or(false),
+            "RED — relative order did not survive the head/tail join, so an \
+             ordering assertion (`armed` before `complete`) can no longer be made \
+             against this buffer. Probe: {cap}"
+        );
+        println!(
+            "  row 3: ceiling {} entries, head {}..{} kept, tail ends {}, {} dropped, ordered ✓",
+            cap["len"], cap["first"], cap["head_last"], cap["last"], cap["dropped"]
+        );
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "WORKER DUMP / BUFFER OK — a shipped Worker boot carries the loader's \
+         boot attribution and not its per-message dump, `?log=trace` still \
+         answers 'failed to decode', and the capture buffer is bounded without \
+         losing its head."
     );
     Ok(())
 }

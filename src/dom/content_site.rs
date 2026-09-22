@@ -179,6 +179,23 @@ cursor:pointer;}\
 .cs-sidebar-list{display:none;padding-top:8px;max-height:50vh;overflow:auto;}\
 .cs-sidebar.cs-open .cs-sidebar-list{display:flex;}\
 }\
+@supports (container-type:inline-size){\
+.cs-main{container-type:inline-size;}\
+}\
+.cs-zoom{position:absolute;inset:0;z-index:90;display:none;\
+flex-direction:column;gap:10px;\
+background:rgba(0,0,0,0.86);padding:24px;}\
+.cs-zoom.cs-open{display:flex;}\
+.cs-zoom-bar{flex:0 0 auto;display:flex;justify-content:flex-end;}\
+.cs-zoom-pane{flex:1 1 auto;min-height:0;display:flex;overflow:auto;}\
+.cs-zoom-pane img{margin:auto;display:block;width:auto;height:auto;\
+max-width:100%;max-height:100%;cursor:zoom-in;}\
+.cs-zoom.cs-natural .cs-zoom-pane img{max-width:none;max-height:none;\
+cursor:zoom-out;}\
+.cs-zoom-close{\
+background:var(--site-control-bg, #22223a);color:var(--site-control-text, #cfe3ff);\
+border:1px solid var(--site-control-border, #3a3a52);border-radius:6px;\
+padding:6px 12px;font-family:inherit;font-size:13px;cursor:pointer;}\
 .cs-window-row{display:flex;height:100%;overflow:hidden;}\
 .cs-rail{flex-shrink:0;width:188px;overflow:auto;padding:14px 10px;\
 border-inline-end:1px solid var(--site-border, #20202e);\
@@ -218,11 +235,30 @@ pub fn render(
     static OVERLAY_CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let css = OVERLAY_CSS.get_or_init(|| {
         format!(
-            "{}{}",
+            "{}{}{}",
             RESPONSIVE_CSS,
             crate::content_site::doc_css::doc_css(
                 ".cs-doc",
                 crate::content_site::doc_css::PaletteMode::Live
+            ),
+            // A figure may exceed the prose column, bounded by the SCROLLING
+            // PANE (`.cs-main`) and never by the viewport: this surface renders
+            // inside an app window, so `100vw` is the screen and would put a
+            // figure far outside the window it lives in. `cqw` is the only unit
+            // that says "the box I am actually in", hence the container above.
+            //
+            // The whole block is `@supports`-guarded so a browser without
+            // container queries gets no rule at all and keeps today's behaviour
+            // — rather than a `max-width` that is invalid at computed-value
+            // time, which resolves to `none` and would let a figure overflow a
+            // narrow pane on exactly the browsers least able to cope.
+            //
+            // 94cqw leaves a gutter so the centred breakout cannot reach the
+            // pane's edges; the 1400px ceiling is where a diagram stops gaining
+            // from more room and starts being a wall.
+            format!(
+                "@supports (container-type:inline-size){{{}}}",
+                crate::content_site::doc_css::figure_css(".cs-doc", "min(1400px, 94cqw)")
             )
         )
     });
@@ -238,8 +274,15 @@ pub fn render(
     // untouched. The output field is already mode-gated and registry-
     // validated (see `SiteRenderOutput::site_theme_css`); dropped with the
     // wrapper on every rebuild, so site-switch/exit cleanup is structural.
+    // `position:relative` is load-bearing for the zoom overlay: it makes this
+    // wrapper the containing block, so the overlay covers **the site surface**
+    // and not the screen. `position:fixed` would be measured against the
+    // viewport, which in a Content Site *window* means a zoom escaping its own
+    // window and covering the whole desktop. The wrapper's `overflow:hidden`
+    // then clips it to the surface for free.
     let mut wrapper_style = String::from(
-        "display:flex;flex-direction:column;height:100%;overflow:hidden;\
+        "position:relative;\
+         display:flex;flex-direction:column;height:100%;overflow:hidden;\
          background:var(--site-bg, #101018);\
          font-family:system-ui,-apple-system,sans-serif;",
     );
@@ -247,6 +290,10 @@ pub fn render(
         wrapper_style.push_str(vars);
     }
     util::set_attr(&wrapper, "style", &wrapper_style);
+
+    // Built before the content so `render_content` can hand each figure a
+    // handle to it, and appended last so it sits above the page it covers.
+    let zoom = build_zoom_overlay(ctx);
 
     render_nav_bar(&wrapper, output, ctx, host);
 
@@ -263,11 +310,173 @@ pub fn render(
     // The main column (breadcrumbs + content pane) scrolls independently.
     let main = util::create_element_with_class("div", "cs-main");
     render_breadcrumbs(&main, output, ctx, host);
-    render_content(&main, output, ctx, host, resolve_asset);
+    render_content(&main, output, ctx, host, resolve_asset, &zoom);
     util::append(&body_row, &main);
 
     util::append(&wrapper, &body_row);
+    // Last, so it paints over the page. Dropped with the wrapper on every
+    // rebuild, so a zoom left open never survives a navigation.
+    util::append(&wrapper, &zoom);
     util::append(container, &wrapper);
+}
+
+/// The click-to-expand overlay — `entity-core-papers`' ask 2, live half.
+///
+/// **Why an overlay and not a link.** On a published page a figure is wrapped
+/// in an anchor to its own asset and that is the whole feature. Here the `src`
+/// is a `data:` URL built from bytes in the content store, and browsers refuse
+/// top-level navigation to `data:` — so the same link would be a control that
+/// looks right and does nothing, on the surface the report came from.
+///
+/// **It opens FITTED, and a tap goes to natural size.** The first cut opened at
+/// natural size and scrolled, reasoning that fitting "would reproduce the defect
+/// this whole arc exists to fix, one box smaller". That reasoning holds for a
+/// figure rendered *inline in prose* — scaled down with no recourse — and does
+/// not transfer to an overlay, where the reader has just asked to see the thing
+/// and can ask for more. On a desktop it was invisible, because a figure's
+/// natural size is about the size of the surface. **On a phone it is never**:
+/// measured 2026-09-19 at a 488x561 surface against `entity-core-papers`' own
+/// views, opening at natural size put the reader in the **top-left corner** of
+/// the drawing with **2.6%** of a 4601x2060 figure on screen (11% of
+/// `ssa-overlay-entity`, 22% of `entity-topology`) — and since the app shell
+/// also carried `user-scalable=no`, pinch could not get them out. That reads
+/// exactly as the report did: *"it looks like we would display the image here,
+/// but we didn't"*, because the corner of a graphviz drawing is margin.
+///
+/// So: fitted is the entry state and never upscales (`max-width`/`max-height`
+/// only ever clamp down, the same "do not scale a figure away from its own
+/// size" rule the inline figure keeps), and a tap on the image switches to
+/// natural size **anchored on the point that was tapped** — landing back at the
+/// top-left corner is the defect, not the fix.
+///
+/// Three ways out (a reader who cannot close a full-surface overlay is stuck):
+/// the backdrop, the close button, and Escape.
+fn build_zoom_overlay(ctx: &DomCtx) -> Element {
+    let zoom = util::create_element_with_class("div", "cs-zoom");
+    // Focusable so it can hear Escape without a document-level listener, which
+    // would outlive this render and fire for a surface that is no longer here.
+    util::set_attr(&zoom, "tabindex", "-1");
+    util::set_attr(&zoom, "role", "dialog");
+    util::set_attr(&zoom, "aria-modal", "true");
+
+    // The button sits OUTSIDE the scroll pane. It used to be `position:sticky`
+    // inside it, which both ate flow height the fit had to know about and put a
+    // control over the top-right of the figure.
+    let bar = util::create_element_with_class("div", "cs-zoom-bar");
+    let close = util::create_element_with_class("button", "cs-zoom-close");
+    util::set_text(&close, &crate::i18n::t("btn.close", &[]));
+    util::set_attr(&close, "type", "button");
+    util::append(&bar, &close);
+    util::append(&zoom, &bar);
+
+    // `margin:auto` on the image rather than `justify-content:center` on the
+    // pane: auto margins centre a figure that fits and are treated as zero when
+    // the free space is negative (flexbox §8.1), so a natural-size figure stays
+    // flush at the start and **every part of it is reachable by scrolling**.
+    // Centred overflow is the classic version of this that clips the left edge
+    // irrecoverably — the same trap `figure_css` documents for its breakout.
+    let pane = util::create_element_with_class("div", "cs-zoom-pane");
+    let img = util::create_element("img");
+    util::append(&pane, &img);
+    util::append(&zoom, &pane);
+
+    // The backdrop closes; the image does not, or a tap meant to zoom would
+    // dismiss the thing the reader just opened.
+    let z = zoom.clone();
+    ctx.listen(&zoom, "click", move |_| close_zoom(&z));
+    let z = zoom.clone();
+    ctx.listen(&close, "click", move |evt: web_sys::Event| {
+        evt.stop_propagation();
+        close_zoom(&z);
+    });
+    let z = zoom.clone();
+    ctx.listen(&img, "click", move |evt: web_sys::Event| {
+        evt.stop_propagation();
+        toggle_natural(&z, &evt);
+    });
+    let z = zoom.clone();
+    ctx.listen(&zoom, "keydown", move |evt: web_sys::Event| {
+        let Ok(k) = evt.dyn_into::<web_sys::KeyboardEvent>() else { return };
+        if k.key() == "Escape" {
+            close_zoom(&z);
+        }
+    });
+    zoom
+}
+
+/// Fitted ⇄ natural, **anchored on the point that was tapped**.
+///
+/// Going to natural size without an anchor drops the reader at the top-left
+/// corner, which for a 4601px-wide figure is the defect this function exists to
+/// fix wearing a control's clothes. So: take the tapped point as a fraction of
+/// the fitted image, switch, and scroll that fraction to the centre of the pane.
+/// Reading a layout property after the class change is what forces the new
+/// geometry to be current before we measure it.
+fn toggle_natural(zoom: &Element, evt: &web_sys::Event) {
+    let Ok(Some(pane)) = zoom.query_selector(".cs-zoom-pane") else { return };
+    let Ok(Some(img)) = zoom.query_selector(".cs-zoom-pane img") else { return };
+    let classes = zoom.class_list();
+
+    if classes.contains("cs-natural") {
+        let _ = classes.remove_1("cs-natural");
+        pane.set_scroll_left(0);
+        pane.set_scroll_top(0);
+        return;
+    }
+
+    // Where in the figure did they tap? `offsetX/Y` is already relative to the
+    // target, and the target IS the image, so this is the fraction directly.
+    // `0.5` is the honest fallback when the event carries no coordinates (a
+    // synthesized click, or a keyboard activation) — the centre, not a corner.
+    let (fit_w, fit_h) = (img.client_width(), img.client_height());
+    let (fx, fy) = match evt.dyn_ref::<web_sys::MouseEvent>() {
+        Some(m) if fit_w > 0 && fit_h > 0 => (
+            (f64::from(m.offset_x()) / f64::from(fit_w)).clamp(0.0, 1.0),
+            (f64::from(m.offset_y()) / f64::from(fit_h)).clamp(0.0, 1.0),
+        ),
+        _ => (0.5, 0.5),
+    };
+
+    let _ = classes.add_1("cs-natural");
+    // Forces layout, so the rect below is the natural-size one.
+    let full_w = f64::from(pane.scroll_width());
+    let full_h = f64::from(pane.scroll_height());
+    let view_w = f64::from(pane.client_width());
+    let view_h = f64::from(pane.client_height());
+    pane.set_scroll_left((fx * full_w - view_w / 2.0).max(0.0) as i32);
+    pane.set_scroll_top((fy * full_h - view_h / 2.0).max(0.0) as i32);
+}
+
+/// Show `src` in the overlay, fitted.
+fn open_zoom(zoom: &Element, src: &str, alt: &str) {
+    if let Ok(Some(img)) = zoom.query_selector(".cs-zoom-pane img") {
+        img.set_attribute("src", src).ok();
+        img.set_attribute("alt", alt).ok();
+    }
+    // Always FITTED on open, and scrolled to the start: the overlay element
+    // outlives one open/close cycle, so a zoom and a pan left behind by the
+    // last figure would otherwise greet the next one.
+    let _ = zoom.class_list().remove_1("cs-natural");
+    if let Ok(Some(pane)) = zoom.query_selector(".cs-zoom-pane") {
+        pane.set_scroll_left(0);
+        pane.set_scroll_top(0);
+    }
+    let _ = zoom.class_list().add_1("cs-open");
+    // Focus is what makes Escape reach the listener above.
+    if let Some(el) = zoom.dyn_ref::<web_sys::HtmlElement>() {
+        let _ = el.focus();
+    }
+}
+
+/// Hide the overlay and **release the bytes**. An inlined `data:` URL is the
+/// whole asset held in an attribute; leaving it on a hidden element keeps a
+/// multi-megabyte string alive for the life of the render.
+fn close_zoom(zoom: &Element) {
+    let _ = zoom.class_list().remove_1("cs-open");
+    let _ = zoom.class_list().remove_1("cs-natural");
+    if let Ok(Some(img)) = zoom.query_selector(".cs-zoom-pane img") {
+        img.remove_attribute("src").ok();
+    }
 }
 
 /// How many nav items render inline before the rest collapse into the
@@ -772,6 +981,7 @@ fn render_content(
     ctx: &DomCtx,
     host: SiteNavHost,
     resolve_asset: &AssetResolver,
+    zoom: &Element,
 ) {
     // A document is laid out differently from markup, and the difference is
     // not cosmetic. Our reading column caps content at 720px — right for
@@ -827,7 +1037,7 @@ fn render_content(
                 let body = util::create_element_with_class("div", "cs-doc");
                 body.set_inner_html(html);
                 rewrite_links(&body, output, ctx, host);
-                rewrite_images(&body, resolve_asset);
+                rewrite_images(&body, resolve_asset, ctx, zoom);
                 util::append(&pane, &body);
             }
             // An untrusted `format:html` document. It never touches our
@@ -1107,7 +1317,7 @@ fn rewrite_links(body: &Element, output: &SiteRenderOutput, ctx: &DomCtx, host: 
 /// browser never fetches an off-site/404 URL (the image degrades to its `alt`
 /// text). This is the image analogue of [`rewrite_links`]: the renderer emits a
 /// neutral ref, the DOM layer binds it to real content.
-fn rewrite_images(body: &Element, resolve_asset: &AssetResolver) {
+fn rewrite_images(body: &Element, resolve_asset: &AssetResolver, ctx: &DomCtx, zoom: &Element) {
     let imgs = match body.query_selector_all("img[src]") {
         Ok(n) => n,
         Err(_) => return,
@@ -1116,13 +1326,37 @@ fn rewrite_images(body: &Element, resolve_asset: &AssetResolver) {
         let Some(node) = imgs.item(i) else { continue };
         let Ok(img) = node.dyn_into::<Element>() else { continue };
         let reference = img.get_attribute("src").unwrap_or_default();
+        // Only a FIGURE opens — a standalone image, the same `p>img:only-child`
+        // the stylesheet widens. An image inside a sentence is not a figure and
+        // must not acquire a control the author never wrote (the static half
+        // draws the same line, in `link_figures_to_their_asset`).
+        let is_figure = img.matches("p>img:only-child").unwrap_or(false);
         match resolve_asset(&reference) {
             Some((media_type, bytes)) => {
                 img.set_attribute("src", &data_url(&media_type, &bytes)).ok();
-                // Keep images from blowing out the content column.
-                if img.get_attribute("style").is_none() {
-                    img.set_attribute("style", "max-width:100%;height:auto;").ok();
+                if is_figure {
+                    let z = zoom.clone();
+                    let target = img.clone();
+                    ctx.listen(&img, "click", move |_| {
+                        let src = target.get_attribute("src").unwrap_or_default();
+                        let alt = target.get_attribute("alt").unwrap_or_default();
+                        if !src.is_empty() {
+                            open_zoom(&z, &src, &alt);
+                        }
+                    });
                 }
+                // **No inline sizing style here, deliberately.** It used to set
+                // `max-width:100%;height:auto` "to keep images from blowing out
+                // the content column" — which `doc_css`'s own `img` rule
+                // already does, since this body is mounted as `.cs-doc`. So it
+                // was redundant the day it was written and became actively
+                // harmful the day a figure earned a wider rule: an inline style
+                // outranks every author stylesheet, so it silently pinned every
+                // figure to the prose measure on THIS surface while the
+                // identical rule worked on the static export. A fix that lands
+                // on one of two hosts and reports nothing on the other is the
+                // shape that costs a session — the sizing contract lives in one
+                // stylesheet (S-T1) and nothing may re-state it per element.
             }
             None => {
                 // Unresolved/external — never let the browser fetch it.

@@ -2963,6 +2963,61 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Content sites & documents
 
+- ⭐⭐ **A FIGURE IS NOT PROSE, AND THE FIX FOR IT LANDS ON HALF THE HOSTS BY DEFAULT — the
+  unreadable-figures arc, 2026-09-19.** `entity-core-papers` reported published figures the
+  operator could not read (*"I always have to open them in a new tab"*) and measured why:
+  eleven views against a 720 px column, **eight rendering their 11 px notes under 8 px**. A
+  diagram and a paragraph were sharing one measure. The rule is `doc_css::figure_css`, and
+  the whole of it is **`width:auto`** — the clamp can only shrink, so a figure never renders
+  below the size it was drawn at. Measured: `six-primitives` 720 → **853** (notes 9.3 →
+  **11.0 px**), `deos-band` 720 → **1400** (5.0 → **9.8 px**).
+  ⚠ **The clamp is the HOST's, and only one host is bounded by the viewport.** The exporter
+  uses `100vw`; the live overlay uses `cqw` against `.cs-main`, because that surface renders
+  **inside an app window** and `100vw` there is the screen — a figure clamped to it lands
+  outside the window it lives in. Measured: at a 1000 px window the pane is 790 px and the
+  figure renders **743 px (94 % of the pane), not 940 px**. The live block is
+  `@supports`-guarded so a browser without container queries gets *no rule* rather than a
+  `max-width` that is invalid at computed-value time — which resolves to `none` and would
+  overflow a narrow pane on exactly the browsers least able to cope. **Left overflow is not
+  reachable by scrolling**, so every clamp must stay inside its own scroll container.
+  ⛔ **The half that would have shipped silently: `rewrite_images` set
+  `style="max-width:100%"` inline, and an inline declaration outranks every author
+  stylesheet.** Redundant the day it was written (the body is mounted as `.cs-doc`, so
+  `doc_css` already said it) and load-bearing in the wrong direction the moment a figure
+  earned a wider rule. **The exported pages would have been fixed and the app would not, with
+  every test green** — the exporter's gate asserts the emitted CSS and passes either way, and
+  no native gate can mount a DOM. ⇒ ***when a rule has two hosts, ask what else writes to the
+  same property on each one*** — `tests/figure_sizing_census.rs` is the enforcement point.
+  ⚠ **The zoom is a DIFFERENT mechanism per host, and the obvious one only works on one.**
+  A published page is a plain file host with no JS, so the figure is wrapped in an anchor to
+  its own asset. Live, the `src` is a `data:` URL and **browsers refuse top-level `data:`
+  navigation** — the same link would be a control that looks right and does nothing on the
+  surface the report came from. Hence an in-page overlay, at **natural size** (fitting it to
+  the surface reproduces the original defect one box smaller), positioned against the site
+  wrapper and **not** `position:fixed`, which in a Content Site *window* means a zoom escaping
+  its window to cover the desktop.
+  ⇒ **And wrapping the image moved it one level down the tree, so `p>img:only-child` stopped
+  matching** — correct markup, rule still in the sheet, every published figure silently back
+  at the prose measure. `figure_css` carries both arms in one declaration block and
+  `the_wrapped_markup_is_still_matched_by_the_rule_that_widens_a_figure` asserts the emitted
+  markup against the emitted selector, because they are one contract living in two functions.
+  **Only a standalone image opens or widens**, both surfaces — an image inside a sentence is
+  not a figure and must not acquire a control the author never wrote.
+  ⭐ **Palette: we cannot reach inside an `<img>`, and that is measured, not assumed.**
+  `color-scheme` does **not** propagate into an SVG loaded through `<img>` — four variants
+  (none / light parent / dark parent / on the img) × both forced OS schemes, sampled through a
+  canvas: **all eight track the operating system**. So a figure carrying a
+  `prefers-color-scheme` block flips with the reader's OS and no arrangement of our bytes
+  changes it. **Nothing of papers' is transparent** — all twelve views carry an opaque
+  full-canvas `<rect class="paper">`; the reported "transparent background" was the flip
+  (white slab on a light OS; `#14171b` against the page's `#101018` on a dark one). Asking
+  them to "regenerate with a background" would have changed nothing. ⇒ ***a symptom reported
+  in terms of a cause is still a symptom.*** Open with papers:
+  `docs/outbox/ROUTING-2026-09-19-a-entity-core-papers-…` §3.
+  ⛔ **Do NOT reach for inlining the SVG into a shadow root** without pricing it: a shadow root
+  is an *encapsulation* boundary, not a *security* one, so inlining puts authored `<script>` in
+  our origin — which is exactly what `render.rs` asserts against by name.
+
 - **A WITHDRAWAL IS ASSERTED ONLY WHERE SOMETHING VOUCHES THAT THIS ORIGIN IS WHERE THAT PEER
   PUBLISHES — AP40.** "The origin answered 404" is *not* enough on its own: it cannot be told
   apart from **we asked a host that never had it**, which is the `?site=` deep-link case
@@ -3438,6 +3493,45 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     debug build this note was written beside: **3.9× smaller, and the debug figure overstated the
     trade by that factor.** Removing the preload would cost every real visitor cold-start time, so
     this is a trade for whoever owns the release, not a bug — but price it at 7.6 MB.
+
+- ⭐⭐ **"NATURAL SIZE" IS A DESKTOP DEFAULT WEARING A PRINCIPLE'S CLOTHES — ON A PHONE IT IS A
+  CORNER (2026-09-19, the figure overlay's live half).** The overlay shipped opening the figure at
+  its natural size and scrolling, on the stated reasoning that fitting it *"would reproduce the
+  defect this whole arc exists to fix, one box smaller."* That reasoning is sound for a figure
+  **inline in prose** — scaled down with no recourse — and does not transfer to **an overlay the
+  reader just asked for and can ask more of**. On a desktop the difference is invisible, because a
+  figure's natural size is about the size of the surface. Measured at a 488×561 surface against
+  `entity-core-papers`' own published views: **2.6%** of `ssa-overlay-three-substrates`
+  (4601×2060), **11.1%** of `ssa-overlay-entity`, **22.0%** of `entity-topology` — always the
+  top-left, which on a graphviz drawing is margin. Reported, accurately, as *"it looks like we
+  would display the image here, but we didn't."*
+  ⇒ ***when you choose a rendering default, name the surface you chose it for and then check the
+  smallest one*** — a rule that is right on the surface you developed on will read as a principle
+  and ship as a regression everywhere narrower. The fix is fitted-on-open (never upscaling: the
+  clamp still only ever shrinks, which is the inline figure's own rule) plus a tap to natural
+  size **anchored on the tapped point**, because dropping the reader back in the corner is the
+  defect with a control's name on it.
+- ⚠ **A DOCUMENT-WIDE `user-scalable=no` TAKES A CAPABILITY AWAY TWO SURFACES FROM WHERE IT IS
+  WRITTEN.** It sat in `index.html` from the initial public release as "feels-like-an-app"
+  boilerplate — never deliberated, no gate on it — and it is half of why the figure above could
+  not be escaped: the browser's own pinch was refused, so the fit defect had no user-side
+  remedy. It is also a WCAG 1.4.4 failure on every surface at once. **Every place in this app
+  that genuinely must swallow a gesture already says so for itself with `touch-action`** (the
+  window resize grips, the on-screen control pad, the game fixtures) — which is *scoped*, where
+  the meta is not. ⇒ **suppress a gesture at the element that needs it suppressed; a shell-level
+  lock is redundant with every one of those and reaches the surfaces you were not thinking
+  about.** Gated by `the_app_shell_never_takes_the_readers_own_zoom_away`, which also refuses
+  `maximum-scale` — the same lock by another spelling — and lives beside `figure_css` because it
+  is the other half of one contract: *a figure the reader can get a better look at.*
+- ⚠ **CENTRING AN OVERFLOWING IMAGE WITH `justify-content:center` CLIPS ITS LEADING EDGE
+  IRRECOVERABLY; `margin:auto` ON THE ITEM DOES NOT.** Same trap `figure_css` already documents
+  for its `margin-left:50%` breakout, one box in: content pushed past the *start* edge of a
+  scroll container is not reachable by scrolling. Flexbox §8.1 treats auto margins as zero when
+  free space is negative, so `margin:auto` centres a figure that fits **and** leaves an
+  oversized one flush at the start with every part of it scrollable. Measured: a 4601px figure
+  in a 440px pane yields a scroll range of exactly 4161. **And keep the close button OUT of the
+  scroll pane** — it was `position:sticky` inside it, which both ate flow height the fit would
+  have had to know about and parked a control on top of the figure.
 
 ## Apps & embedded programs
 
@@ -3935,6 +4029,29 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   a session in another subsystem.
   **Bound, stated:** `?worker=1` is opt-in and Direct/IDB is the default, so no shipped profile is
   affected today. Do **not** describe `an_app_republished` as green.
+  ⚠⚠ **IT IS INTERMITTENT AT ~44%, AND THE FAILURES CLUSTER — which is why three sessions have each
+  "established" a different determinant, mine included (measured 2026-09-19 at `811d415a`).**
+  Two arms, n=8 each, same `dist/`, same commit, nothing else on the grid:
+  **fresh `make e2e-grid` before EVERY run → 5 pass / 3 fail** (`pFpppFpF`);
+  **one container throughout → 4 pass / 4 fail** (`ppppFFFF`).
+  Indistinguishable: **7 failures in 16**. A pass is ~6 s and a failure is ~30 s, because the failure
+  is `poll_rendered` hitting its deadline with V1 still on screen — the defect above, not a slow box.
+  The Direct twin stayed green throughout (4/4 targeted, plus the unfiltered run), so the arm split
+  is real even though the determinant is not.
+  ⛔⭐⭐ **THE TRAP IS THE CLUSTERING, AND IT IS A GENERAL ONE.** `ppppFFFF` is what a ~44% process
+  with autocorrelated outcomes looks like, and **any n=3 window of it reads as deterministic** — in
+  whichever direction it happened to land. This session measured *fresh 3/3 pass* against *aged 3/3
+  fail*, concluded "the determinant is grid age, deterministic in both directions", **committed
+  that**, and then watched the unfiltered suite pass the gate on a container aged by 60+ tests
+  (90/0, 817 s) and a re-run give 3 pass / 1 fail on that same container. The n=8 arms above are the
+  retraction. ⇒ ***a clustered intermittent defeats the small-sample A/B that the charter's
+  fresh-grid rule otherwise makes valid*** — the rule stops the RIG drifting between arms, and it
+  does nothing about a subject whose own outcomes are correlated in time. **For a pass/fail gate,
+  n=3 per arm is not a measurement; count to at least 8 and write the sequence down, not just the
+  tally** — the shape `ppppFFFF` is the finding, and a bare "4/4" would have hidden it.
+  ⇒ **What this does NOT change: the RED above stands.** The gate fails often, and when it fails it
+  fails as documented. A green run is the ~56% case and is not evidence the defect is gone — so an
+  unfiltered pass that includes this gate must not be quoted as one.
 
 ## File transfer & chat
 
@@ -5035,6 +5152,69 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   provably that commit's bytes.
 
 ## Testing & the gates
+
+- ⭐⭐ **SECOND INSTANCE, ONE DAY LATER, OF *THE GATE READ THE REPORT AND THE DEFECT WAS IN THE
+  EFFECT* — and this time the gate was written by the session that had just catalogued the cause
+  (2026-09-19).** Phase 19-zoom asserted the figure overlay's **state**: a class is added, a `src`
+  attribute holds a `data:` URL, Escape/backdrop/button each clear the class, the bytes are
+  released. Every row correct, every row passing, over a reader who could see **2.6%** of the
+  figure. Nothing in it asked *is any of the image on screen*, because the class **is** the
+  surface's own report that it opened.
+  ⇒ ***when a surface both acts and reports, the state it exposes is the report*** — a class, a
+  data-attribute, an enum the model returns. All of them are satisfied by half the implementation.
+  Assert the rendered geometry (`getBoundingClientRect`, `scrollWidth - clientWidth`) and let the
+  report be a second, separate row that must AGREE with it.
+  ⚠ **The taxonomy has a numbering collision, noted rather than renumbered.** Two different causes
+  are both filed as *the fifth* in `AGENTS.md` — *the gate read the report, not the effect* (the
+  feed filter's `data-shown`) and *the predicate had no consumer* (`can_author`) — and `GOTCHAS`
+  then added *a sixth*. Renumbering would make one fact reachable by two ids, which is the worse
+  failure; cite these by **name**, never by ordinal.
+
+- ⭐⭐ **THE RIG SILENTLY CLAMPED THE ONE VARIABLE THE GATE VARIES, AND THE FIRST WRITE-UP PRINTED
+  THE NUMBER I ASKED FOR RATHER THAN THE ONE THAT APPLIED (2026-09-19).** The phone-geometry gate
+  narrows the window so the figure genuinely overflows — that narrowing *is* the gate, since at
+  desktop width fitted and natural render identically. `set_window_size(420, 720)` reports success
+  and **headless Firefox clamps the viewport at 500px inner width**: measured, 420 · 380 · 360 ·
+  340 · 320 all yield exactly 500. So the pane was 452px, not the ~372 intended, and the spill
+  available to falsify on was **28px** against ~4100px in the reported case. The gate still
+  falsifies — but it is far weaker than its own success line claimed, and that line read *"at a
+  420px viewport"*, **a number nothing had measured**.
+  ⇒ ***a setter that returns `Ok` is not a variable that moved.*** When a gate's discriminating
+  power comes from a rig knob, read the knob back through the browser and print **that**; and if
+  the rig floors it, say so in the gate's own doc comment so a green cannot be read as evidence
+  about the condition you were aiming at. Same family as *name the artifact your evidence came
+  from, in the sentence that makes the claim* — here the artifact was a viewport, and the
+  instrument was lying by rounding.
+  ⚠ **It fails in the safe direction and that is why it needs saying out loud.** If the clamp had
+  been total the anti-vacuity row would have fired loudly (*the figure already fits, this gate
+  cannot see the difference*). A **partial** clamp does not trip it: the gate stays green, stays
+  discriminating, and quietly measures a much smaller claim than its name.
+
+- ⭐⭐ **A SIXTH CAUSE OF A NEUTER THAT PASSES: THE CONSTANT YOU NEUTERED IS NOT THE ONE
+  ENFORCING THE PROPERTY — and chasing it found a shipped defect (2026-09-19).** The five
+  already on record are *the gate does not measure it* · *the neuter did not land* · *the
+  thing you neutered does not do what you thought* · *the rig cannot produce the condition* ·
+  *the predicate has no consumer*. This is the third one at a finer grain, and it is worth its
+  own row because the diagnosis is different: the code was **one function with two constants**,
+  and standalone-ness was enforced by `CLOSE` while I neutered `OPEN`. Widening `OPEN` could
+  not reach the property, so the gate stayed green and the gate was *sound*.
+  ⛔ **What made it expensive is that the honest answer was underneath.** Rather than reasoning
+  about why the neuter passed, I printed **what the neutered function actually emitted** — and
+  it showed a doubled `<p>` and an anchor crossing a paragraph boundary. That was not the
+  neuter's doing: `link_figures_to_their_asset` searched for `/></p>` across the **whole
+  remaining document**, so a paragraph that merely *began* with an image matched the closing of
+  the *next* figure, and the emitted anchor opened in one paragraph and closed in another,
+  swallowing everything between — including the real figure, which then lost its own link.
+  Corrupt markup from an ordinary authored shape, shipped an hour earlier.
+  ⇒ ***when a neuter passes, print what the neutered code EMITS before you conclude anything
+  about the gate.*** Guessing the cause is how the real defect underneath stays shipped.
+  ⚠ **And the population lesson at the smallest scale there is: two fixtures were written to
+  cover exactly this and both missed it.** One had a pure figure (`<p><img/></p>`), the other
+  an image *mid*-sentence. Neither had an image at the **start** of a paragraph with text after
+  it — the one place the opening pattern matches and the paragraph is not a figure. ⇒ **when a
+  predicate is "X is the whole of Y", enumerate the three shapes, not two: all of Y, none of Y,
+  and *the start of Y*.** The replacement gate asserts the property rather than the instance —
+  no anchor may ever span `</p>`.
 
 - ⭐⭐ **TWO SEATS ON ONE BOX SHARE A PORT SPACE, AND THE SUITE RAN A FULL UNFILTERED PASS AGAINST
   ANOTHER CHECKOUT'S `dist/` — 2026-09-16, and every unfiltered number from that session was

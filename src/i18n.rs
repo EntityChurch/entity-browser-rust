@@ -295,6 +295,10 @@ pub const EN: &[(&str, Message)] = &[
     // Buttons/verbs — reused across every window; translate once, extend per-app.
     ("btn.save", Message::Simple("Save")),
     ("btn.cancel", Message::Simple("Cancel")),
+    // Distinct from `btn.dismiss` on purpose: *dismiss* sends a notice away,
+    // *close* leaves a surface you opened. Several locales land on one word for
+    // both, which is the translator's call and not a reason to share a key.
+    ("btn.close", Message::Simple("Close")),
     ("btn.delete", Message::Simple("Delete")),
     ("btn.copy", Message::Simple("Copy")),
     ("btn.connect", Message::Simple("Connect")),
@@ -2516,7 +2520,7 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple(
             "Heads up: peers you meet will find you but won't reach you — no \
              rendezvous node is set up. Add one under Rendezvous nodes, then reload \
-             page to become reachable.",
+             this page to become reachable.",
         ),
     ),
     ("peerconn.meet_mode", Message::Simple("Meet by")),

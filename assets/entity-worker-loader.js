@@ -58,6 +58,34 @@
     }
 })();
 
+// Per-message diagnostics are TRACE detail and are off unless asked for.
+//
+// The boot diagnostics below are O(1) — three lines that attribute the spawn
+// delay — and always run. The per-message ones (`msg recv`, `postMessage`, and
+// the payload hex dump) are O(tree traffic): measured on a Worker-arm boot they
+// were 180 of 291 buffered entries, 62% of the buffer, for an instrument whose
+// stated job is to be read when the proxy reports "failed to decode". That is a
+// question somebody asks deliberately, so it is answered deliberately.
+//
+// The knob is the one that already reaches this file: `app.rs::worker_loader_url`
+// forwards the main thread's `?log=` so worker-side `tracing::*` inherits the
+// chosen verbosity (`entity-worker.rs::log_level_from_worker_url`). Read the same
+// param with the same vocabulary, and emit per-message lines only at `trace` —
+// the level a person debugging a decode failure sets, and the one no ordinary
+// profile is on. ABSENT means off: the Rust side defaults absent to DEBUG or INFO
+// by build profile, and a loader served as a static file cannot tell which, so
+// the only honest reading of silence here is "nobody asked".
+const TRACE = (function () {
+    try {
+        const q = self.location.search.replace(/^\?/, '');
+        for (const pair of q.split('&')) {
+            const [k, v] = pair.split(/=(.*)/);
+            if (k === 'log') return (v || '').toLowerCase() === 'trace';
+        }
+    } catch (_) { /* no location — treat as not asked */ }
+    return false;
+})();
+
 // `performance.now()` is the wall-clock time since navigation start
 // (worker contexts have their own clock origin per spec, but the delta
 // across `t0` is what we care about). Use to attribute the boot delay:
@@ -70,39 +98,45 @@ console.log('[entity-worker] loader script start (t=0ms)');
 let wasmReady = false;
 const msgBuffer = [];
 
+// The BUFFERING here is load-bearing and unconditional — it is the whole reason
+// this file exists (the init-message race above). Only the narration is gated.
 self.addEventListener('message', (evt) => {
+    if (!wasmReady) msgBuffer.push(evt);
+    if (!TRACE) return;
     const d = evt.data;
     const desc =
         d instanceof Uint8Array ? `Uint8Array(${d.byteLength})`
         : d instanceof ArrayBuffer ? `ArrayBuffer(${d.byteLength})`
         : typeof d;
-    if (!wasmReady) {
-        msgBuffer.push(evt);
-        console.log('[entity-worker] msg recv (buffered):', desc);
-    } else {
-        console.log('[entity-worker] msg recv:', desc);
-    }
+    console.log(`[entity-worker] msg recv${wasmReady ? '' : ' (buffered)'}:`, desc);
 });
 
-// postMessage diagnostic — wrap to log responses going back to main.
-// Also dumps the first 32 bytes (hex) of each outbound payload so we can
-// inspect the CBOR tag bytes when the proxy reports "failed to decode".
-const origPostMessage = self.postMessage.bind(self);
-self.postMessage = function (msg, ...rest) {
-    let desc, hex = '';
-    if (msg instanceof Uint8Array) {
-        desc = `Uint8Array(${msg.byteLength})`;
-        hex = Array.from(msg.slice(0, 32))
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join(' ');
-    } else if (msg instanceof ArrayBuffer) {
-        desc = `ArrayBuffer(${msg.byteLength})`;
-    } else {
-        desc = typeof msg;
-    }
-    console.log('[entity-worker] postMessage:', desc, hex ? `hex: ${hex}` : '');
-    return origPostMessage(msg, ...rest);
-};
+// postMessage diagnostic — wrap to log responses going back to main, dumping the
+// first 32 bytes (hex) of each outbound payload so the CBOR tag bytes are
+// readable when the proxy reports "failed to decode".
+//
+// Installed ONLY under `?log=trace`. Leaving the wrapper out entirely is what
+// makes the default arm free: the slice/map/join is per-message work on the hot
+// path, so a wrapper that merely declined to log would still pay for the hex it
+// then threw away.
+if (TRACE) {
+    const origPostMessage = self.postMessage.bind(self);
+    self.postMessage = function (msg, ...rest) {
+        let desc, hex = '';
+        if (msg instanceof Uint8Array) {
+            desc = `Uint8Array(${msg.byteLength})`;
+            hex = Array.from(msg.slice(0, 32))
+                .map((b) => b.toString(16).padStart(2, '0'))
+                .join(' ');
+        } else if (msg instanceof ArrayBuffer) {
+            desc = `ArrayBuffer(${msg.byteLength})`;
+        } else {
+            desc = typeof msg;
+        }
+        console.log('[entity-worker] postMessage:', desc, hex ? `hex: ${hex}` : '');
+        return origPostMessage(msg, ...rest);
+    };
+}
 
 try {
     importScripts('/entity-worker.js');

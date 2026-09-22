@@ -5037,6 +5037,42 @@ ROW"* entry was written about, and the end of a long session is the worst moment
   rebuilds, but nothing here measured that). ⇒ ***when a gate is green alone and red in the suite,
   check what the suite WROTE, not only what it was running*** — a shared out-dir is rig state the
   same way a stale grid is, and it survives the run.
+  ⚠⚠ **THIRD CORRECTION, 2026-09-19 at `811d415a`, AND IT RETIRES BOTH PRIOR CAUSES: THE GATE REDS ON
+  THE WRONG ONE OF ITS OWN TWO ASSERTIONS.** Measured with `dist/` verified clean (no `sites/`, no
+  `content/`), a private grid, load 7.45 on 32 cores: **3 failures in 18 runs**, and no named
+  variable tracks it — fresh container (3 pass / 1 fail), position in the session (it failed on
+  session **2**, not 1), dist pollution (clean throughout), build freshness, and load.
+  `HOLD_STALE_MS` is **30 s** against a 4.3 s drag, so the staleness arm is excluded too.
+  ⚠ **Read that rate as "it is intermittent", not as a number.** Its sibling
+  `an_app_republished_…_on_the_worker_arm` was measured the same afternoon and its failures turned
+  out to be **clustered** (`ppppFFFF` at n=8), which makes any small window read as deterministic —
+  see the GOTCHAS entry, where exactly that produced a wrong, committed determinant. 18 runs of a
+  clustered process bounds the rate loosely and settles nothing about a cause. **The mechanism below
+  is a direct observation and does not rest on the rate.**
+  ⭐ **What settled it was timestamping the swaps** (a probe in the test's own `MutationObserver`, run
+  and reverted). On a failing run: `press_at 1381` · held probe `t=3999`, `swaps 0`, `swap_times []`
+  · release probe `t=5895`, **`swap_times [5893]`**. The one swap is **2 ms before the probe read**,
+  ~4.5 s after the press — *outside* the 2.5 s hold and *outside* the 4.0–5.8 s move window. So no
+  mid-drag rebuild occurred, and `after["swaps"] == 0` is read immediately after
+  `perform_actions(…Up)` returns, where the release handler legitimately clears `grip-drag`, calls
+  `set_held(None)` and repaints — **replacing the grip is what a release is supposed to do.** That
+  assertion is structurally racy against its own teardown.
+  ⇒ **The real symptom is the NEXT assertion, which never runs.** In that same run the drag did not
+  land: height **617** against `h0` 619 and a wanted 494, grip 640 → **642.7**. Line 21404 (`swaps`)
+  fires before line 21407 (height), so every session that has looked at this gate has been reading a
+  message about *"a rebuild mid-drag"* for a run in which there was no rebuild mid-drag. ***When a
+  gate has two assertions and the first one is about a precondition, check which one is actually
+  failing before you believe its sentence*** — three sessions have now diagnosed the environment
+  because the louder assertion named it.
+  ⛔ **Cause still OPEN; the hypothesis is cheap and is NOT established.** `pointermove`'s own
+  *"no button down means the release happened where we did not hear it"* branch
+  (`p.buttons() & 1 == 0`, `build_size_grip`) would produce exactly this triple if a synthesized
+  WebDriver move ever reports `buttons = 0`: the drag ends at the first move so no move is applied
+  (height stays ~614), the shield comes down, and the resulting `rp()` lands its rebuild around
+  release time. Testable by probing `shield` *during* the move rather than only at the ends, which
+  means splitting the single blocking `perform_actions` call. Not attempted here — a subtle
+  input-synthesis question at the end of a session in another subsystem is the thing `76a8e960`'s
+  own note refuses.
 - ⚠ **AND THE RUN BEFORE THOSE WAS INVALID BY MY OWN HAND: I falsified a lint WHILE the suite was in
   flight**, editing `src/content_site/resolver.rs` four times (two neuters, two `git checkout`s).
   This file already says *"do not edit `src/` while the suite is running — fixtures shell out to

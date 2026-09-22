@@ -2,7 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <!-- NO `user-scalable=no`. It was here from the initial release as
+         "feels like a native app" boilerplate, and it costs a reader the
+         browser's own zoom on every surface — a WCAG 1.4.4 failure, and
+         measured 2026-09-19 as the reason a figure opened on a phone could
+         not be zoomed out of: the in-page overlay showed 2.6% of a
+         4601x2060 drawing and pinch was refused. The surfaces that genuinely
+         must swallow a gesture (window resize grips, the on-screen control
+         pad, the game fixtures) declare `touch-action` THEMSELVES, which is
+         the scoped mechanism; a document-wide lock is redundant with every
+         one of them and reaches the one surface that needs zoom most. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Entity Browser</title>
     <!-- The apex is a WASM SPA, so an agent that does not run JavaScript sees an
          empty body: no description, no links, nothing to index. A description
@@ -234,9 +244,36 @@
         // dev-tools — pure runtime mechanism, no WebDriver log-API
         // dependency. Negligible overhead, always-on; consumers who don't
         // need it can ignore the global.
+        //
+        // BOUNDED, and it keeps the HEAD as well as the tail. The buffer grows
+        // with log volume and the desktop app runs for days, so it needs a
+        // ceiling — but a plain drop-oldest ring would throw away exactly what
+        // is most read: almost every grep in tests/e2e_worker.rs is for a
+        // boot-phase marker ("Frame loop started", "phase 1 complete",
+        // "deployment-config: applied"), and those are the first lines there
+        // are. So the first HEAD entries are permanent and the remainder is a
+        // rolling tail of the most recent TAIL. Relative order is preserved
+        // across the join, so an ordering assertion still holds; what a
+        // consumer loses is a middle, and it is told how much:
+        // `__entity_browser_log_dropped`. A buffer that silently truncates
+        // reads as a complete record of a session that did less than it did.
         (function() {
+            const HEAD = 2000, TAIL = 8000;
             window.__entity_browser_log = [];
+            window.__entity_browser_log_dropped = 0;
             const cap = window.__entity_browser_log;
+            // The one writer. The BroadcastChannel drain below shares it rather
+            // than pushing to the array directly — two writers with one ceiling
+            // is a ceiling only one of them honours.
+            window.__entity_browser_log_push = function(entry) {
+                try {
+                    cap.push(entry);
+                    if (cap.length > HEAD + TAIL) {
+                        cap.splice(HEAD, 1);
+                        window.__entity_browser_log_dropped++;
+                    }
+                } catch (_) { /* swallow */ }
+            };
             const levels = ['log', 'info', 'warn', 'error', 'debug'];
             for (const lvl of levels) {
                 const orig = console[lvl].bind(console);
@@ -252,7 +289,7 @@
                             try { return JSON.stringify(a); }
                             catch { return String(a); }
                         });
-                        cap.push({ level: lvl, args: safe });
+                        window.__entity_browser_log_push({ level: lvl, args: safe });
                     } catch (_) { /* swallow */ }
                     orig(...args);
                 };
@@ -268,8 +305,10 @@
         // capture in the worker and posts each line over this BroadcastChannel;
         // drain it into the same buffer so the e2e / rung-1 spike (which greps
         // that buffer) sees worker lines. Entries keep `source:'worker'` so they
-        // stay distinguishable. We push straight to the buffer (NOT via console)
-        // to avoid a double-capture through the wrapper above.
+        // stay distinguishable. We go through `__entity_browser_log_push` (NOT
+        // via console) to avoid a double-capture through the wrapper above —
+        // through the shared writer rather than the array, so worker lines are
+        // under the same ceiling as main-thread ones.
         (function () {
             try {
                 const chan = new BroadcastChannel('entity-browser-log');
@@ -277,7 +316,7 @@
                     try {
                         const d = evt.data;
                         if (!d || d.source !== 'worker' || !Array.isArray(d.args)) return;
-                        window.__entity_browser_log.push({
+                        window.__entity_browser_log_push({
                             level: d.level || 'log', args: d.args, source: 'worker',
                         });
                     } catch (_) { /* swallow */ }

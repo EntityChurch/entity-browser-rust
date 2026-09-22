@@ -493,6 +493,10 @@ fn render_page(
     // Images need their own pass — rewrite_hrefs only touches href=". Site-relative
     // `src="assets/…"` becomes a root-absolute static URL (depth-safe).
     let body = rewrite_img_srcs(&body, site.peer_id, site.site_id, ctx.layout, ctx.prefix);
+    // …then give a standalone figure a way to be opened at full size. Runs
+    // AFTER the src rewrite on purpose: the href is the rewritten src, so the
+    // link can never name an address the image itself did not already resolve.
+    let body = link_figures_to_their_asset(&body);
     let nav = render_nav(&site.manifest.nav, &current, slug, ctx);
     let banner = live_base.map(|base| render_live_banner(base, site.peer_id, site.site_id, slug)).unwrap_or_default();
     let page_title = page.title();
@@ -796,6 +800,83 @@ fn rewrite_img_srcs(html: &str, peer_id: &str, site_id: &str, layout: Layout, pr
     out
 }
 
+/// Wrap a **standalone** figure — `<p><img …/></p>`, the shape pulldown_cmark
+/// emits for an embed directive on its own line — in a link to its own asset,
+/// so opening it at full size is one click instead of a context menu.
+///
+/// This is `entity-core-papers`' ask 2 (`FIGURE-PRESENTATION-HANDOFF` §4), and
+/// it is the **static** answer only: a published page is served by a plain file
+/// host with no JS, and a link is the whole of what such a page can offer. The
+/// live surface deliberately does something else — there the `src` is a `data:`
+/// URL and browsers refuse top-level `data:` navigation, so the same link would
+/// be a control that silently does nothing.
+///
+/// **Only the standalone shape.** An image inside a sentence is not a figure,
+/// and turning it into a link would invent a control the author did not write.
+///
+/// **No new untrusted data reaches the markup**: the `href` is byte-identical
+/// to the `src` this same page already emits, which the caller has already
+/// rewritten and escaped. A tag we do not recognise is left exactly as it was.
+fn link_figures_to_their_asset(html: &str) -> String {
+    const OPEN: &str = "<p><img ";
+    const P_END: &str = "</p>";
+    let class = super::doc_css::FIGURE_LINK_CLASS;
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(idx) = rest.find(OPEN) {
+        let (before, after) = rest.split_at(idx);
+        out.push_str(before);
+        // ⚠ **Every decision is bounded to THIS paragraph.** The first cut
+        // searched for `/></p>` across the whole remaining document, so a
+        // paragraph that merely *began* with an image — `<p><img/> then
+        // prose.</p>` — matched the closing of some *later* figure, and the
+        // emitted anchor opened in one paragraph and closed in another,
+        // swallowing everything between them. Corrupt markup from an ordinary
+        // authored shape; found by a neuter that passed.
+        let Some(p_end) = after.find(P_END) else {
+            out.push_str(after);
+            return out;
+        };
+        let consumed = p_end + P_END.len();
+        // A figure is an image that is the WHOLE paragraph, so the `<img …/>`
+        // must close exactly where the paragraph does. Anything left over is
+        // prose, and a paragraph with prose in it is not a figure.
+        let tag = after[OPEN.len()..p_end]
+            .trim_end()
+            .strip_suffix("/>")
+            // No markup of our own may ride along inside the anchor.
+            .filter(|t| !t.contains('<') && !t.contains('>'));
+        match tag.and_then(|t| attr_value(t, "src").map(|s| (t, s))) {
+            // The `src` is already escaped for an attribute slot by
+            // `rewrite_img_srcs`, and an href is the same slot.
+            Some((tag, src)) => {
+                out.push_str("<p><a class=\"");
+                out.push_str(class);
+                out.push_str("\" href=\"");
+                out.push_str(src);
+                out.push_str("\" target=\"_blank\" rel=\"noopener noreferrer\"><img ");
+                out.push_str(tag);
+                out.push_str("/></a></p>");
+            }
+            // Not a figure, or a figure with no `src` at all. Either way the
+            // paragraph goes out exactly as it came in — never a link to
+            // nowhere, and never a rewrite we do not fully understand.
+            None => out.push_str(&after[..consumed]),
+        }
+        rest = &after[consumed..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The value of `name="…"` in a tag's attribute text, if present.
+fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let end = tag[start..].find('"')? + start;
+    Some(&tag[start..end])
+}
+
 /// Root-absolute URL for a site asset, resolvable from any page depth:
 /// `/{prefix}/sites/{peer}/{site}/assets/{name}` (projection) or `/assets/{name}`
 /// (bare-root). Mirrors [`projection_href`]/[`bare_href`] for assets.
@@ -1096,6 +1177,7 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
          .nav-section{{color:{muted2};font-size:12px;text-transform:uppercase;letter-spacing:.05em}}\
          main.page{{max-width:760px;margin:0 auto;padding:28px 20px}}\
          {doc}\
+         {figure}\
          .site-list{{list-style:none;padding:0}}.site-list li{{margin:8px 0;font-size:17px}}\
          .muted{{color:{muted2};font-size:13px}}\
          .site-footer{{max-width:760px;margin:0 auto;padding:20px;color:{faint2};font-size:12px;\
@@ -1120,6 +1202,11 @@ fn page_css(theme: Option<&'static crate::theme_tokens::Theme>) -> String {
         panel = frozen("--site-panel-bg"),
         faint2 = frozen("--site-text-faint-2"),
         doc = doc_css("main.page", PaletteMode::Frozen(theme)),
+        // A published page's scroll container IS the viewport, so the clamp is
+        // `100vw` here where the live overlay must use `cqw` — same rule, two
+        // honest answers to "how much room is there". The 40px gutter covers a
+        // classic scrollbar, which `100vw` includes and `100%` does not.
+        figure = super::doc_css::figure_css("main.page", "min(1400px, calc(100vw - 40px))"),
     )
 }
 
@@ -1151,6 +1238,127 @@ mod nav_layout_tests {
     /// present and still scoped — a later edit that re-broadens `.site-nav ul`
     /// back to every depth fails here, which is exactly how the bug was
     /// introduced.
+    /// A published figure is bounded by the VIEWPORT, not by the prose column.
+    ///
+    /// This is the static half of the presentation fix `entity-core-papers`
+    /// asked for (`docs/FIGURE-PRESENTATION-HANDOFF.md` §4 ask 1). Its live
+    /// twin is in `dom::content_site`, and the two clamps differ on purpose —
+    /// what must not differ is that both exist, because a fix that lands on
+    /// one surface and not the other is how the operator ends up reporting
+    /// the same defect twice.
+    #[test]
+    fn a_published_figure_is_bounded_by_the_viewport_and_not_by_the_prose_column() {
+        let css = page_css(None);
+        assert!(
+            css.contains("main.page p>img:only-child"),
+            "the exported sheet carries no figure rule: {css}"
+        );
+        // The clamp must be viewport-derived. `100%` here would be the prose
+        // measure again — the rule present and the defect intact, which is the
+        // version of this that passes a shallower assertion.
+        assert!(css.contains("max-width:min(1400px, calc(100vw - 40px))"), "{css}");
+        // And the base clamp still governs every non-figure image.
+        assert!(css.contains("main.page img{max-width:100%;height:auto;}"), "{css}");
+    }
+
+    /// A standalone figure gets a link to its own asset; an inline image does not.
+    ///
+    /// `entity-core-papers`' ask 2, static half. The `href` must be the
+    /// **rewritten** `src`, which is why the wrap runs after `rewrite_img_srcs`
+    /// — a link built from the authored `assets/…` ref would 404 from any
+    /// nested page, which is the whole reason that rewrite exists.
+    #[test]
+    fn a_standalone_figure_links_to_its_asset_and_an_inline_image_does_not() {
+        let html = concat!(
+            "<p><img src=\"/sites/p/s/assets/figures/x.svg\" alt=\"a figure\" /></p>\n",
+            "<p>Text with <img src=\"/sites/p/s/assets/icon.svg\" alt=\"an icon\" /> inside.</p>\n"
+        );
+        let out = link_figures_to_their_asset(html);
+        assert!(
+            out.contains(concat!(
+                "<p><a class=\"figure-open\" href=\"/sites/p/s/assets/figures/x.svg\" ",
+                "target=\"_blank\" rel=\"noopener noreferrer\"><img "
+            )),
+            "the figure did not get its link: {out}"
+        );
+        // The inline image is untouched — no anchor anywhere near the icon.
+        let icon = out.find("an icon").expect("the inline image survived");
+        let para = out[..icon].rfind("<p>").expect("its paragraph");
+        assert!(
+            !out[para..icon].contains("<a "),
+            "an image inside a sentence must not become a link: {out}"
+        );
+        // Exactly one anchor in the whole document.
+        assert_eq!(out.matches("figure-open").count(), 1, "{out}");
+    }
+
+    /// The selector and the markup are ONE contract across two functions, and
+    /// nothing but this checks they still agree.
+    ///
+    /// Wrapping the image moves it one level down the tree. If `figure_css`
+    /// still only matched `p>img:only-child`, every published figure would
+    /// silently return to the prose measure — the rule present, the emitted
+    /// markup correct, and the defect fully restored. It is the exact shape of
+    /// the inline-style trap one surface over, which is why it gets a test
+    /// rather than a comment.
+    #[test]
+    fn the_wrapped_markup_is_still_matched_by_the_rule_that_widens_a_figure() {
+        let css = page_css(None);
+        let out = link_figures_to_their_asset("<p><img src=\"/a/b.svg\" alt=\"f\" /></p>");
+        // What the exporter actually emits…
+        assert!(out.contains("<p><a class=\"figure-open\""), "{out}");
+        assert!(out.contains("</a></p>"), "{out}");
+        // …and the arm of the rule that is the only thing able to match it.
+        assert!(
+            css.contains("main.page p>a.figure-open:only-child>img:only-child"),
+            "the wrapped shape has no rule to widen it: {css}"
+        );
+        // The anchor must be a block, or the figure lays out as inline text.
+        assert!(css.contains("main.page p>a.figure-open:only-child{display:block;}"), "{css}");
+    }
+
+    #[test]
+    fn a_figure_with_no_src_is_left_alone_rather_than_linked_to_nowhere() {
+        let html = "<p><img alt=\"broken\" /></p>";
+        assert_eq!(link_figures_to_their_asset(html), html);
+    }
+
+    /// A paragraph that merely BEGINS with an image is prose, not a figure —
+    /// and getting this wrong corrupts the document rather than mis-styling it.
+    ///
+    /// The first cut searched for `/></p>` across the whole remaining document,
+    /// so this shape matched the closing of the *next* figure: the anchor
+    /// opened in one paragraph and closed in another, swallowing everything
+    /// between them including a real figure. **Both of the fixtures that were
+    /// supposed to cover this missed it** — one had a pure figure, the other an
+    /// image mid-sentence, and neither had an image at the *start* of a
+    /// paragraph with text after it, which is the only place `<p><img ` matches
+    /// and the paragraph is not a figure. Found by a neuter that passed.
+    #[test]
+    fn a_paragraph_that_only_begins_with_an_image_is_left_whole() {
+        let html = concat!(
+            "<p><img src=\"/a/lead.svg\" alt=\"lead\" /> then some prose.</p>\n",
+            "<p><img src=\"/a/fig.svg\" alt=\"fig\" /></p>\n"
+        );
+        let out = link_figures_to_their_asset(html);
+        // The prose paragraph is untouched, byte for byte.
+        assert!(
+            out.contains("<p><img src=\"/a/lead.svg\" alt=\"lead\" /> then some prose.</p>"),
+            "the prose paragraph was rewritten: {out}"
+        );
+        // The real figure below it still gets its link — the bug ate this one.
+        assert!(out.contains("href=\"/a/fig.svg\""), "the real figure lost its link: {out}");
+        assert_eq!(out.matches("figure-open").count(), 1, "{out}");
+        // And no anchor ever spans a paragraph boundary.
+        for seg in out.split("<a ").skip(1) {
+            let close = seg.find("</a>").expect("every anchor closes");
+            assert!(
+                !seg[..close].contains("</p>"),
+                "an anchor spans a paragraph boundary — corrupt markup: {out}"
+            );
+        }
+    }
+
     #[test]
     fn a_nested_nav_renders_as_a_tree_and_the_css_lays_it_out_as_columns() {
         let nav = vec![
