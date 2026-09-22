@@ -64,6 +64,26 @@ mod crossimpl_go;
 /// C-7 / `COHORT-OPEN-ITEMS` §1b. Skips loudly without the rig; `make crossimpl-go`.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod crossimpl_go_live;
+/// **`G-PIN-4` — one fixture, two publishers, identical site root.** The other
+/// direction from [`crossimpl_go`]: not *can we read their bytes* but *do the
+/// two publishers produce the same root from the same content*. Runs against
+/// the same vendored `entity-core-go` emission, with no rig and no
+/// coordination. Tests only.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod crossimpl_reproducible_publish;
+/// **`G-PIN-4`'s vocabulary half — our side of the joint fixture.** The
+/// substrate gate above runs against `test/note` leaves; §9's cases are about
+/// `app/site-manifest` / `app/site-page`. This pins what we compute from
+/// `tests/fixtures/gpin4-joint/site.json` so `entity-workbench-go` can compare
+/// their publisher against it with no rig. Tests only.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod gpin4_joint_fixture;
+/// **C-2 — two devices, one key, one signed-root sequence.** A measurement of
+/// arch's open multi-device-publishing item, not a fix: the sequence is anchored
+/// in the output directory, so two out-dirs under one keypair are two
+/// independent sequences. Tests only; the fix is `core/peer`'s.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod multi_device_sequence;
 /// B15 — consume a signed published root over an async transport (both arches).
 pub mod session_cache;
 pub mod signed_fetch;

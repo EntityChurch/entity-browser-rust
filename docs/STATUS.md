@@ -1,10 +1,16 @@
 # entity-browser-rust — status
 
-_Updated: 2026-09-05 · version **0.9.0** in the manifests. **A site hotfix is being published
-from `dev` — build `ddd508b281925031` at `62c6d62`.** The build, the file set, the upload
-ordering and the live-fleet measurements are in
-`docs/status/RELEASE-2026-09-05-THE-SITE-HOTFIX-BUILD-AND-WHAT-DEVOPS-NEEDS.md`, which
-supersedes the 2026-09-03 closeout's gate table._
+_Updated: 2026-09-09 · version **0.9.0** in the manifests, with a substantial body of
+post-0.9.0 work on the development branch: deployment recovery, connection liveness after a
+device sleeps, and reproducible build identity. The gate table below was re-run in one pass
+at that tip — **every row, including the end-to-end suite**._
+
+_A build is identified by a **pair** — this application's commit and the `entity-core-rust`
+commit it was linked against — because the two are joined by path dependency with no
+cross-repo lockfile. Both halves are stamped into the shipped `index.html`
+(`entity-build`, `entity-build-id`, `entity-core-ref`), so the question is answerable from
+the artifact rather than from anyone's memory. `CORE_RUST_REF=<ref>` builds a named kernel
+commit rather than whatever is on disk._
 
 Where the product is, what is proven and on what, and what is open. It cites files, symbols and
 measurements rather than commit SHAs, which do not resolve for a reader outside this tree (see
@@ -28,17 +34,17 @@ and `make native` prints a deprecation redirect.
 
 ## Gate state
 
-Re-measured **2026-09-04/05 (the site hotfix cut)** rather than quoted — **all five rows re-run
-at `62c6d62` from a clean tree in one pass**, including the e2e, which the 2026-09-03 table
-deliberately did not re-run:
+Re-measured **2026-09-09** rather than quoted — **all six rows re-run at one development tip,
+from a clean tree**, including the end-to-end suite:
 
 | Gate | Result |
 |---|---|
-| `make test` | **1501 / 0 / 17-ignored** across **19** test binaries — re-measured 2026-09-04 at this tip. It has moved 1300 → 1484 → 1501; the two binaries added since 09-03 are the mirror byte-fidelity gate and the phase-2 barrier census. Re-run it; do not quote this line |
-| `make test-tauri` | **56 / 0** across 4 binaries — **re-measured 2026-09-04**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) |
-| `make lint` | **exit 0, re-measured 2026-09-04 — eleven checks**, not the seven this row carried through 0.9.0. The two added since: `cargo clippy --features e2e --tests`, which is the only thing in the tree that compiles `tests/e2e_worker.rs` at all, plus the cache-policy pair. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `net-lint` matches baseline · `foreign-cache-lint` matches baseline · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable) · `cache-policy-doc-check` ok · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **769** keys · `i18n-callsite-check` **699** call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
-| `make e2e-worker` | **65 passed / 0 failed, 694.84 s** — unfiltered, **re-run 2026-09-04 at this tip** on a fresh `make e2e-grid`. **The invocation is part of the number:** `env -u WAYLAND_DISPLAY -u DISPLAY make e2e-worker`. With a display on this host the Tauri WebView phase is a standing red (bisected 2026-09-03) and the same tree returns 65/1, so a bare "65/0" is not reproducible |
-| `make site-dist` | green — release build id **`ddd508b281925031`**, `check-dist` consistent, and `publish --verify` on the emitted tree reports **17 pointers / 17 verified / 0 broken; 19 blobs / 0 orphaned** |
+| `make test` | **1575 / 0 / 19-ignored** across **20** test binaries. It has moved 1300 → 1484 → 1501 → 1575. Re-run it; do not quote this line |
+| `make test-tauri` | **59 / 0** across 4 binaries. (`src-tauri` is workspace-excluded, so it is not in the number above.) **Run it serially** — it embeds `dist/`, so any concurrent build that rewrites that directory fails it on a stale asset name |
+| `make lint` | **exit 0 — twelve checks**, not the seven this row carried through 0.9.0. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `net-lint` matches baseline · `foreign-cache-lint` matches baseline · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable), which runs the doc check · `ecf-lint` matches baseline · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **774** keys · `i18n-callsite-check` **702** call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored. Note `cargo clippy --features e2e --tests` is the only thing in the tree that compiles the end-to-end suite at all |
+| `make e2e-worker` | **68 passed / 0 failed, 695.42 s** — unfiltered, on a fresh `make e2e-grid`. **The invocation is part of the number:** `env -u WAYLAND_DISPLAY -u DISPLAY make e2e-worker`. With a display attached, the Tauri WebView phase is a standing red on this host and the same tree returns 68/1, so a bare "68/0" is not reproducible without the invocation |
+| `make wasm` | exit 0 |
+| `make site-dist` | green — `check-dist` consistent, and `publish --verify` on the emitted tree reports **17 pointers / 17 verified / 0 broken; 19 blobs / 0 orphaned**. Built against a pinned kernel commit; the closing summary prints the pair it was made of |
 
 **`i18n-lint raw=0` — the baseline file is empty, which is the floor.** It read `raw=90` earlier on
 2026-09-03 (`doctor.rs` 66 + `content_site/mod.rs` 24) and both halves are closed, differently and
@@ -67,9 +73,12 @@ strings — and conflating them is what made the first write-up unreadable. Reco
 `docs/status/STATUS-2026-08-23-b-the-i18n-backlog-is-translated-and-the-ratchet-is-an-allowlist.md`.
 
 **Say which suite you mean, and re-run before quoting.** These numbers have gone stale in hours,
-repeatedly. The 17 ignores are 4 `crossimpl_go_live` (needs core-go's live publisher), **11 fixture
-emitters** the e2e drives with `--ignored`, 1 static-export demo emitter, and 1 live-backend upload —
-enumerated 2026-09-03, because "8 ignored" sat here while the fixture set nearly doubled behind it.
+repeatedly. The 19 ignores are 4 `crossimpl_go_live` (needs core-go's live publisher), **13 fixture
+emitters** the end-to-end suite drives with `--ignored`, 1 static-export demo emitter, and 1
+live-backend upload — re-enumerated 2026-09-09, because this very sentence said "17" while two
+succession fixtures had landed behind it, exactly as it said "8" before that. **Nothing keeps this
+breakdown honest but re-running it**, which is the argument for reading the count off the suite
+rather than off this file.
 Note that `make test` compiles `tests/e2e_worker.rs` to **nothing** (`#![cfg(feature = "e2e")]`), so
 a green `make test` is no evidence that file even parses — **`make lint` is what compiles it**, and
 only since 2026-09-02. Before that, ~25k lines were type-checked by nothing but a Selenium run.

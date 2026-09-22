@@ -1,0 +1,19 @@
+{
+  "_comment": "COMPUTED by entity-browser-rust from site.json. Not hand-editable — see the module doc on src/content_site/gpin4_joint_fixture.rs. `site_root` is the EXTENSION-TREE v4.0.2 trie root over `bindings`, keyed relative to the site subgraph root. It is NOT a published-root head: that entity carries `published_at` and is not comparable.",
+  "bindings": {
+    "manifest": "00350ae77c968a00ee14b8014c9fa753b98bffd4b565cb6cdae3b63fbc0a3015da",
+    "pages/about": "00b33ffdc74ad4ffe377fa18102deac9ad24f487aca891cea8ae13cb34877b8881",
+    "pages/glossary": "00af2c2fce4b1b6541490c273a073b45cfef3ccfa1d5f8085c155914b6e7e509b4",
+    "pages/guide/advanced/internals": "0020069a583d4d77efea92510e1dd291a84397fa567f2bc8e0bb0cf537f276bd85",
+    "pages/guide/install": "00967cdd5a9ae79049313f1ec69247931d0a8ddbd0ab0c0be19d14ba8c0d72f675",
+    "pages/guide/intro": "00ce887f67e113309dc094c056c4f7b47190bdffbad9bf3a0750edc69a4e77356b",
+    "pages/index": "008ea23abe5649b5892035dd7248dffd992750a8b01343f9d73bd9e88eec04bfad",
+    "pages/raw": "00110c123f8102f06b5e3e17e6eeb353d1f3f6b90ec117c9ae13aacdd83fcc0521"
+  },
+  "convention": "APP-CONVENTION-SEMANTIC-CONTENT-SITE §9 (G-PIN-4)",
+  "site_root": "002f2dec8e4e1251df64f9c8e50ae8a323d0027b3847d8063740d21c54d4175b2a",
+  "types": {
+    "manifest": "app/site-manifest",
+    "pages/*": "app/site-page"
+  }
+}

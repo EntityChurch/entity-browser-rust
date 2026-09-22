@@ -1,0 +1,65 @@
+{
+  "_comment": "G-PIN-4 joint fixture. Language-neutral AUTHORED INPUT, not bytes. Read README.md before changing anything here: every value below is load-bearing and a change invalidates EXPECTED.json on both sides at once.",
+  "site_id": "gpin4",
+  "title": "The joint reproducible-publish fixture",
+  "params": {
+    "root": "index"
+  },
+  "nav": [
+    { "label": "Home", "target": "index" },
+    {
+      "label": "Guide",
+      "target": "guide/intro",
+      "children": [
+        { "label": "Install", "target": "guide/install" },
+        { "label": "Deep", "target": "guide/advanced/internals" }
+      ]
+    },
+    { "label": "Reference", "children": [{ "label": "Glossary", "target": "glossary" }] },
+    { "label": "About", "target": "about" }
+  ],
+  "pages": [
+    {
+      "slug": "index",
+      "format": "markdown",
+      "frontmatter": { "title": "Home" },
+      "body": "# Home\n\nOne fixture, two publishers, one site root.\n"
+    },
+    {
+      "slug": "about",
+      "format": "markdown",
+      "frontmatter": { "title": "About", "summary": "two frontmatter keys, so map ordering is exercised" },
+      "body": "# About\n\nThe manifest and this page are the whole vocabulary under test.\n"
+    },
+    {
+      "slug": "guide/intro",
+      "format": "markdown",
+      "frontmatter": { "title": "Intro" },
+      "body": "# Intro\n\nNested one level.\n"
+    },
+    {
+      "slug": "guide/install",
+      "format": "markdown",
+      "frontmatter": { "title": "Install" },
+      "body": "# Install\n\nA sibling of intro.\n"
+    },
+    {
+      "slug": "guide/advanced/internals",
+      "format": "markdown",
+      "frontmatter": { "title": "Internals" },
+      "body": "# Internals\n\nNested two levels, so the trie has interior nodes.\n"
+    },
+    {
+      "slug": "glossary",
+      "format": "markdown",
+      "frontmatter": {},
+      "body": "# Glossary\n\nNo frontmatter at all: the optional key must be ABSENT, not empty.\n"
+    },
+    {
+      "slug": "raw",
+      "format": "html",
+      "frontmatter": { "title": "Raw" },
+      "body": "<p>A non-default format, so `format` is not a constant on either side.</p>\n"
+    }
+  ]
+}

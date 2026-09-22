@@ -522,6 +522,50 @@ the shells it manages, but a hand-run `--delete` sync does not know about it.
 `make builds-manifest DIST=<dir> NOTES="…" RELEASED_AT="…"` runs it on a tree you
 already have; `KEEP=N` sets how many shells to retain (default 3).
 
+> #### The second invariant — the manifest is CONTINUOUS, and a fresh out-dir is not
+>
+> **`builds.json` accumulates across releases. It is the origin's history, not
+> the build's output.**
+>
+> `builds` reads the manifest **from the output directory** and an *absent* one
+> is a first publish: `next_index()` returns 0 and the entry list starts empty.
+> That is correct for a genuinely first publish and it is the door this goes
+> through, because **`make site-dist` builds into a fresh directory every time**
+> — so the tree it hands you names exactly one build, at index 0, however many
+> the origin already names.
+>
+> Measured 2026-09-09: `entitychurch.org/builds.json` named **two** builds with
+> the live one at **index 1**; a same-day `make site-dist` produced a manifest
+> naming **one** build at **index 0**. Uploading that as-is un-names both
+> retained shells and walks the publish counter backwards — on the deploy where
+> a rollback target is worth the most.
+>
+> **It fails in the safe direction and that is the only reason it is a footnote
+> rather than an incident:** a shell nothing names is unreachable, never a 404,
+> which is the same asymmetry prune's *un-name before you remove* rests on. The
+> loss is the *capability* — after such a publish the domain has nothing named
+> to fall back to but itself.
+>
+> **So seed the manifest before you run `builds`**, from the origin you are about
+> to publish to:
+>
+> ```bash
+> curl -fsS https://<domain>/builds.json -o <dir>/builds.json   # or skip if 404 — that IS a first publish
+> make builds-manifest DIST=<dir>
+> ```
+>
+> `record()` then gives the new build `max+1` and `retained(KEEP)` keeps the
+> older shells named. Two conditions on that: the older shells must still be at
+> the origin (they are, unless something ran a `--delete` sync — §6.2a's other
+> rule), and the upload must be **additive**, since the seeded manifest names
+> shells that are not in your output directory.
+>
+> **The existing guard does not cover this.** `builds` hard-stops on a manifest
+> that is present and *malformed*, precisely so a publish cannot restart the
+> index — but an **absent** manifest is indistinguishable from a first publish
+> and cannot be refused without breaking the first publish. The continuity is
+> the uploader's to carry.
+
 ### 6.3 S3 / anything else
 
 ```bash

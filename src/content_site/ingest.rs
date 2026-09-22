@@ -110,8 +110,27 @@ fn find_site_dirs(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-/// Ingest a single site directory (one that contains `site.manifest.json`).
-fn ingest_site_dir(peers: &Peers, peer_id: &str, dir: &Path) -> Result<String, String> {
+/// One site directory, read into entities and **not yet written anywhere**.
+///
+/// The disk→entity half of an ingest, split out from [`ingest_site_dir`] so it
+/// can be measured without a `Peers`. That is not a testing convenience: it is
+/// the first of `G-PIN-4`'s three links (*source fixture → site entity*), the
+/// only one neither implementation had a fixture for, and the one both seats
+/// independently named as the whole remaining risk. A link you cannot evaluate
+/// without standing up a peer is a link nobody evaluates.
+///
+/// See `gpin4_joint_fixture.rs` and `tests/fixtures/gpin4-joint/source/`.
+pub(crate) struct IngestedSite {
+    pub site_id: String,
+    pub manifest: SiteManifest,
+    /// `(slug, page)`, slug-sorted by [`collect_pages`].
+    pub pages: Vec<(String, SitePage)>,
+    /// `(name, asset)` relative to `assets/`, name-sorted.
+    pub assets: Vec<(String, SiteAsset)>,
+}
+
+/// Read one site directory into entities. Pure: touches no tree and no peer.
+pub(crate) fn read_site_dir(dir: &Path) -> Result<IngestedSite, String> {
     let manifest_json = dir.join("site.manifest.json");
     let txt = std::fs::read_to_string(&manifest_json)
         .map_err(|e| format!("read {}: {e}", manifest_json.display()))?;
@@ -147,15 +166,31 @@ fn ingest_site_dir(peers: &Peers, peer_id: &str, dir: &Path) -> Result<String, S
     // store dedups identical bytes across sites.
     let assets = collect_assets(&dir.join("assets"))?;
 
-    peers.seed_write(peer_id, paths::manifest_path(peer_id, &site_id), manifest.to_entity());
-    for (name, asset) in &assets {
+    Ok(IngestedSite { site_id, manifest, pages, assets })
+}
+
+/// Ingest a single site directory (one that contains `site.manifest.json`)
+/// into `peer_id`'s tree. The read half is [`read_site_dir`]; this is the
+/// write half, and the split is deliberate — see that type's doc.
+fn ingest_site_dir(peers: &Peers, peer_id: &str, dir: &Path) -> Result<String, String> {
+    let site = read_site_dir(dir)?;
+    let site_id = site.site_id;
+
+    peers.seed_write(
+        peer_id,
+        paths::manifest_path(peer_id, &site_id),
+        site.manifest.to_entity(),
+    );
+    // Assets before pages, so a body's embed ref has its bytes present in the
+    // same ingest.
+    for (name, asset) in &site.assets {
         peers.seed_write(
             peer_id,
             paths::asset_path(peer_id, &site_id, name),
             asset.to_entity(),
         );
     }
-    for (slug, page) in &pages {
+    for (slug, page) in &site.pages {
         peers.seed_write(
             peer_id,
             paths::page_path(peer_id, &site_id, slug),

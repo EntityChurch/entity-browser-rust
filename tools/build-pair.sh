@@ -40,8 +40,28 @@ sibling="$(cd "$root/.." 2>/dev/null && pwd)/entity-core-rust"
 # ownership check. Every one of those is "we do not know", never a hard stop —
 # the DEFAULT mode must stay usable in a build image. `--check` is where a
 # release decides that "we do not know" is not good enough.
+# **`git` WALKS UP, AND THAT MADE "not a checkout" REPORT A NEIGHBOUR'S COMMIT
+# INSTEAD OF `unknown` — measured 2026-09-09, and it is a confident wrong answer,
+# which is the one outcome the paragraph above promises this cannot be.**
+# `git -C <dir> rev-parse HEAD` searches ANCESTOR directories for a repository.
+# The parent meta dir `<shared-parent>` IS one, so a sibling path that is not
+# itself a checkout resolves to the META repo's HEAD — `0bc11b3` where the answer
+# should have been `unknown`. Provenance that names the wrong repository's commit
+# is worse than provenance that admits it does not know: nothing downstream can
+# tell them apart, and the number looks plausible.
+#
+# So confirm the repository we found IS this directory, not something above it.
+# `--show-toplevel` is the discriminator; `pwd -P` on both sides so a symlinked
+# path cannot make an honest match read as a mismatch.
 read_ref() {
-    local dir="$1" ref
+    local dir="$1" ref top want
+    want=$(cd "$dir" 2>/dev/null && pwd -P) || { printf 'unknown'; return; }
+    top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)
+    [ -n "$top" ] && top=$(cd "$top" 2>/dev/null && pwd -P)
+    if [ -z "$top" ] || [ "$top" != "$want" ]; then
+        printf 'unknown'
+        return
+    fi
     ref=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo unknown)
     if [ "$ref" != "unknown" ] && ! git -C "$dir" diff --quiet HEAD 2>/dev/null; then
         ref="$ref-dirty"
@@ -50,7 +70,25 @@ read_ref() {
 }
 
 commit=$(read_ref "$root")
-core_ref=$(read_ref "$sibling")
+
+# THE PIN, WHEN ONE WAS CONSTRUCTED — `ENTITY_CORE_PIN` carries the full sha of
+# the commit `core-pin.sh` materialized, and the Makefile exports it into the
+# container alongside the mount that puts that tree at the sibling path.
+#
+# **Without this branch the stamp SILENTLY DEGRADES at exactly the moment we
+# pin.** `build-stamp.sh` runs INSIDE the build image and calls this script; a
+# materialized pin is a `git archive` export, which has no `.git`, so `read_ref`
+# would answer `unknown` and a pinned release would stamp WEAKER provenance than
+# an unpinned one. The strongest build we can make would have described itself as
+# the one we could not identify.
+#
+# It is never `-dirty`: an archive of a commit is that commit's bytes by
+# construction. There is no working tree here to be dirty.
+if [ -n "${ENTITY_CORE_PIN:-}" ]; then
+    core_ref="${ENTITY_CORE_PIN:0:7}"
+else
+    core_ref=$(read_ref "$sibling")
+fi
 
 if [ "${1:-}" != "--check" ]; then
     printf '%s %s\n' "$commit" "$core_ref"
@@ -94,7 +132,17 @@ done
 #     workflow express one intent one way. We VERIFY and never check out: a
 #     sibling repo's git is read-only from here, and a tool that moves another
 #     tree's HEAD is how a seat loses work that was never its own.
-if [ -n "${CORE_RUST_REF:-}" ]; then
+#
+#     CONSTRUCTION OUTRANKS VERIFICATION. When `core-pin.sh` has materialized the
+#     ref and the Makefile has mounted it over the sibling path, there is nothing
+#     left to verify: the build is not reading that checkout at all, so its state
+#     — clean, dirty, mid-rebase, on another branch entirely — cannot reach the
+#     artifact. This is the whole point of the pin, and re-running the on-disk
+#     comparison here would refuse a build that is STRICTLY more reproducible
+#     than any build this check was ever able to pass.
+if [ -n "${ENTITY_CORE_PIN:-}" ]; then
+    say "pinned by construction: entity-core-rust @ ${ENTITY_CORE_PIN:0:7} (built from an export, not the checkout)"
+elif [ -n "${CORE_RUST_REF:-}" ]; then
     want=$(git -C "$sibling" rev-parse --verify "${CORE_RUST_REF}^{commit}" 2>/dev/null || true)
     have=$(git -C "$sibling" rev-parse --verify HEAD 2>/dev/null || true)
     if [ -z "$want" ]; then

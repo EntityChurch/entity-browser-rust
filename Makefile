@@ -154,11 +154,98 @@ PODMAN_LABEL_OPT := --security-opt label=disable
 NATIVE ?=
 ifeq ($(NATIVE),1)
 DIST_IMAGE_DEP :=
-DIST_RUN = CARGO_TARGET_DIR=$(TARGET_DIR) sh -c '$(1)'
+DIST_RUN = CARGO_TARGET_DIR=$(CARGO_TARGET) sh -c '$(1)'
 else
 DIST_IMAGE_DEP := image
 DIST_RUN = $(call RUN,$(1))
 endif
+
+# ============================================================================
+# CORE_RUST_REF — PIN THE KERNEL HALF OF THE PAIR, BY CONSTRUCTION.
+#
+# A build of this crate is a PAIR: our commit plus whatever `entity-core-rust`
+# happens to be on disk, linked by thirty-three path deps with no cross-repo
+# lockfile between them. `tools/build-pair.sh` made that pair observable and
+# refusable. This makes it CHOOSABLE.
+#
+# `tools/core-pin.sh --ensure` exports the named commit with `git archive` into
+# a gitignored `.core-pin/<sha>/`, and the mount below overlays it onto the
+# sibling path INSIDE the container — so Cargo resolves the paths it always did
+# and finds the pinned bytes there. Nothing in `Cargo.toml` changes, nothing is
+# symlinked, and the sibling's git is never written to.
+#
+# **Unset is the default and the default is UNCHANGED: the live sibling.** That
+# is deliberate — always-live means always-latest, which is what you want while
+# two seats iterate together, and a pin you have to remember to move is a pin
+# that goes stale. Pinning is per-invocation, so neither mode is a standing
+# commitment.
+#
+# **NATIVE=1 CANNOT HONOUR A PIN AND MUST SAY SO.** The native runner does not
+# go through a container, so there is no mount to overlay and the build would
+# read the live checkout while the operator believed it was pinned. A guard that
+# silently does not apply is worse than no guard — it reads as covered. Refuse.
+#
+# `$(shell)` captures stdout only, so `core-pin.sh`'s diagnostics reach the
+# terminal; an empty result means it refused, and that MUST be fatal here rather
+# than falling through to an unpinned build with a pin on the command line.
+CORE_RUST_REF ?=
+CORE_PIN_MOUNT :=
+CORE_PIN_ENV :=
+CORE_PIN_SUFFIX :=
+ifneq ($(CORE_RUST_REF),)
+ifeq ($(NATIVE),1)
+$(error CORE_RUST_REF=$(CORE_RUST_REF) cannot be honoured with NATIVE=1 — the native runner builds on the host, where there is no container mount to pin. Drop NATIVE=1 to pin, or drop CORE_RUST_REF to build against the checkout on disk)
+endif
+# ONE call, not two. The pin directory is NAMED by the resolved commit, so the
+# sha is `$(notdir)` of the path — asking `--resolve` separately would be a
+# second expression of the same resolution (C15) and, on a bad ref, would print
+# the refusal twice.
+CORE_PIN_DIR := $(shell ./tools/core-pin.sh --ensure)
+ifeq ($(CORE_PIN_DIR),)
+$(error core-pin refused CORE_RUST_REF=$(CORE_RUST_REF) — see the message above)
+endif
+CORE_PIN_SHA := $(notdir $(CORE_PIN_DIR))
+# A PINNED BUILD GETS ITS OWN CARGO TARGET DIR, AND THIS IS A CORRECTNESS FIX,
+# NOT TIDINESS — it was measured, not reasoned about.
+#
+# `git archive` stamps every extracted file with the COMMIT's date, so pinning to
+# an older commit produces sources OLDER than build artifacts already sitting in
+# `target/` from a live build. Cargo fingerprints path deps by mtime: it would
+# compare an old source against a newer artifact, conclude "fresh", and relink
+# the artifact it built from the LIVE tree — silently serving exactly the bytes
+# the pin exists to exclude. Measured on this box: the pinned export of `e6213f1`
+# carries mtime 14:04 (its commit time) while the live working copy of the same
+# file reads 13:59.
+#
+# The mirrored hazard rules out the obvious cheap fix: `touch`ing the export to
+# "now" makes pin→live wrong instead of live→pin, because the live tree's own
+# mtimes are whenever the other seat last wrote them. Only separate target dirs
+# make the two builds independent of each other's clocks.
+CORE_PIN_SUFFIX := -pin-$(shell echo $(CORE_PIN_SHA) | cut -c1-7)
+# `:ro` is a real guarantee, not decoration: the pinned kernel is an artifact of
+# a commit and nothing in a build has any business writing into it. Our own
+# CARGO_TARGET_DIR is elsewhere, so cargo never wants to.
+CORE_PIN_MOUNT := -v $(CORE_PIN_DIR):/src/entity-systems/entity-core-rust:ro
+# Carried INTO the container because `build-stamp.sh` runs in there and reads the
+# pair through `build-pair.sh`, which would otherwise `rev-parse` an export that
+# has no `.git` and stamp `unknown` — weaker provenance from the stronger build.
+CORE_PIN_ENV := -e ENTITY_CORE_PIN=$(CORE_PIN_SHA)
+export ENTITY_CORE_PIN := $(CORE_PIN_SHA)
+endif
+
+# Cargo's build dir for the CURRENT invocation, pin-scoped when a pin is active.
+# RECURSIVE (`=`, not `:=`) on purpose: `TARGET_DIR` is overridden per-target
+# (`site-serve`) and per-recursive-make (`site-dist`), and the suffix has to be
+# applied at USE time so every one of those variants gets its own pinned dir
+# rather than the parse-time value being baked in.
+CARGO_TARGET = $(TARGET_DIR)$(CORE_PIN_SUFFIX)
+
+.PHONY: core-pin core-pin-clean
+core-pin:
+	@./tools/core-pin.sh
+
+core-pin-clean:
+	@./tools/core-pin.sh --prune
 
 .DEFAULT_GOAL := help
 
@@ -193,6 +280,16 @@ help:
 	@echo "                path on macOS/Windows). Cutting a release = tag it; CI fans"
 	@echo "                out the platform matrix. See docs/RELEASE-READINESS.md."
 	@echo "  content: site · site-bare · site-serve · tauri-bundle"
+	@echo "  the build PAIR (this crate links entity-core-rust by path dep):"
+	@echo "    build-pair           which two commits is this build made of?"
+	@echo "    CORE_RUST_REF=<ref>  BUILD that kernel commit — exported with git"
+	@echo "                         archive and mounted over the sibling path, so a"
+	@echo "                         seat working in entity-core-rust cannot reach it."
+	@echo "    core-pin[-clean]     what is materialized / drop it (~13 MB per commit)"
+	@echo "  cross-implementation (find divergences HERE, not in a packet round trip):"
+	@echo "    crossimpl-site       G-PIN-4: our joint fixture through entity-workbench-go's"
+	@echo "                         own site types + entity-core-go's trie; per-key report"
+	@echo "    crossimpl-go         our reader vs entity-core-go's LIVE publisher, two hosts"
 	@echo "  — see the Makefile header for the full target catalogue."
 
 # Build the toolchain image (rust 1.94.1 + wasm32 + trunk + binaryen + webkit2gtk).
@@ -207,9 +304,11 @@ define RUN
 	mkdir -p $(CARGO_CACHE) $(TRUNK_CACHE)
 	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) $(2) \
 		-v $(PARENT):/src/entity-systems \
+		$(CORE_PIN_MOUNT) \
 		-v $(CARGO_CACHE):/usr/local/cargo/registry \
 		-v $(TRUNK_CACHE):/root/.cache \
-		-e CARGO_TARGET_DIR=$(TARGET_DIR) \
+		-e CARGO_TARGET_DIR=$(CARGO_TARGET) \
+		$(CORE_PIN_ENV) \
 		$(EXTRA_RUN_ENV) \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
@@ -291,6 +390,7 @@ define RUN_SERVE
 	$(if $(TLS),$(call RUN_SERVE_NET,sh -c 'tools/dev-cert.sh $(CERT_SAN)'),)
 	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) --network host $(2) \
 		-v $(PARENT):/src/entity-systems \
+		$(CORE_PIN_MOUNT) \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		python3 tools/cors-serve.py $(1) $(PORT) \
@@ -303,6 +403,7 @@ endef
 define RUN_SERVE_NET
 	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) --network host \
 		-v $(PARENT):/src/entity-systems \
+		$(CORE_PIN_MOUNT) \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		$(1)
@@ -373,6 +474,7 @@ define RUN_GUI
 	    -e HOME=$(HOME) -e XDG_CACHE_HOME=$(HOME)/.cache -v $(HOME):$(HOME),\
 	    -e HOME=/tmp/tauri-home -e XDG_CACHE_HOME=/tmp/tauri-home/.cache -v $(CURDIR)/$(TAURI_HOME):/tmp/tauri-home $(if $(SHARE_DIR),-v $(abspath $(SHARE_DIR)):/tmp/tauri-home/.entity/tori-share,)) \
 	  -v $(PARENT):/src/entity-systems \
+	  $(CORE_PIN_MOUNT) \
 	  -w /src/entity-systems/$(notdir $(CURDIR)) \
 	  $(IMAGE) \
 	  $(1)
@@ -830,6 +932,44 @@ crossimpl-go: image
 # teardown. Without `GO_FED_ORIGIN` the gates skip loudly rather than passing.
 crossimpl-go-run:
 	$(call RUN,cargo test crossimpl_go_live -- --include-ignored --nocapture --test-threads=1,--network $(GO_FED_NET))
+
+# === crossimpl-site — G-PIN-4, run HERE instead of exchanged in packets =====
+# ============================================================================
+# `APP-CONVENTION-SEMANTIC-CONTENT-SITE` §9's reproducible-publish check —
+# one fixture, two publishers, identical site root — run as a COMMAND rather
+# than as a round trip. It drives `tests/fixtures/gpin4-joint/site.json`
+# through entity-workbench-go's own `entitysdk` site types and entity-core-go's
+# own `core/tree`, and reports every key where their answer differs from the
+# one this repo computed into `EXPECTED.json`.
+#
+# The same boundary `crossimpl-go` draws: we CONSUME the other seat's types, we
+# do not model them. Nothing is written into either sibling tree — the module's
+# `replace` directives are read-only paths.
+#
+# Scope is links 2 and 3 (entity bytes, trie root), which are what the
+# convention pins. Source-directory ingest is deliberately NOT compared: §9
+# specifies no authoring format, frontmatter is "optional local flavor not the
+# contract" and title-derivation is a MAY, so two conformant publishers may
+# lower one markdown file differently. See the module doc for the argument.
+#
+# Host dependency it does NOT hide: a `go` toolchain. Same call `crossimpl-go`
+# already makes for its leg — a cross-impl gate consumes the other side's
+# language, and putting Go into this repo's Rust image to avoid saying so would
+# be hiding it rather than removing it.
+GPIN4_DIR  = tools/crossimpl/gpin4
+WBG_REPO  ?= $(PARENT)/entity-workbench-go
+.PHONY: crossimpl-site
+
+crossimpl-site:
+	@command -v go >/dev/null || { \
+	  echo "FATAL: no 'go' on PATH. This gate runs the OTHER seat's publisher;"; \
+	  echo "       it does not reimplement one, so it needs their toolchain."; exit 1; }
+	@test -d $(WBG_REPO)/entitysdk || { \
+	  echo "FATAL: no $(WBG_REPO)/entitysdk — this gate consumes entity-workbench-go's"; \
+	  echo "       own site types. Clone it beside this repo."; exit 1; }
+	@test -d $(GO_REPO)/core || { \
+	  echo "FATAL: no $(GO_REPO)/core — their entitysdk builds over entity-core-go."; exit 1; }
+	@cd $(GPIN4_DIR) && GOWORK=off go run . -fixture $(CURDIR)/tests/fixtures/gpin4-joint
 
 # List what `T=` and `UNTIL=` accept. Reads the test source, so it can never
 # drift from what actually runs — and needs neither the image nor Selenium.
@@ -1780,6 +1920,7 @@ VERIFY ?=
 # repo-local dir, which is visible in-container via the existing parent mount.
 site: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 site: image
+	$(check_build_pair)
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
@@ -1827,18 +1968,47 @@ SITE_DIST_OUT ?= dist-site
 SITE_DIST_TARGET ?= target-publish
 SITE_DIST_DEPLOY_CONFIG ?= 1
 # WHICH TWO COMMITS IS THIS BUILD MADE OF? Runs on the host (plain git, no
-# image) — `make build-pair` to see it, and it is what `site-dist` refuses on.
+# image) — `make build-pair` to see it.
+#
+# **THE GUARD GOES ON EVERY TARGET THAT HANDS BYTES TO SOMEONE ELSE, and the
+# reason is a hole meta-devops found in the first cut (2026-09-09).** That cut
+# guarded `site-dist` only — the release target *we* run — while their
+# production pipeline calls `make site`. So the commit message said "the site
+# publish is built locally, where nothing pinned anything, which is the one path
+# that reaches a deployer", and then guarded the path it could see. **Guarding
+# the path you happen to run is the defect, not the fix** (AP44: if the rule
+# needs the word "every", the structure has to enforce it).
+#
+# COVERED — every verb that emits something a third party could serve or install:
+#   site · site-dist · site-bare · registry · dist · dist-web
+# DELIBERATELY NOT COVERED, and stated so the next reader does not re-derive it:
+#   federation      — a LOCAL multi-domain rig into dist-federation/, for testing
+#                     the chain on this box. Nobody serves it.
+#   builds-manifest — reads an ALREADY-BUILT shell whose pair is already stamped
+#                     in it. Checking the working tree there answers a question
+#                     about a build that has already happened, which is the wrong
+#                     question, and would red on a tree edited since the build.
+#
+# `site-dist` calls `site` twice, so a release run prints the pair three times.
+# That is a duplicated CALL SITE, not a duplicated rule — the extra check in
+# `site-dist` is a fail-fast, so a bad pair costs a second instead of a ten-minute
+# `wasm-release` first. Keep both.
+define check_build_pair
+	@./tools/build-pair.sh --check
+endef
+
 .PHONY: build-pair
 build-pair:
-	@./tools/build-pair.sh --check
+	$(check_build_pair)
 
 site-dist:
 	@echo "==> the build PAIR — a release artifact is (our commit, entity-core-rust commit)"
 	@echo "    We link the kernel by path dependency with no cross-repo lockfile, so a"
 	@echo "    local build takes whatever sibling checkout is on disk. CORE_RUST_REF=<ref>"
-	@echo "    pins it (verified, never checked out); ALLOW_DIRTY=1 waives a dirty tree"
-	@echo "    and deliberately does NOT waive a pin mismatch."
-	@./tools/build-pair.sh --check
+	@echo "    now BUILDS that commit — exported with git archive and mounted over the"
+	@echo "    sibling path, so the checkout's state cannot reach the artifact at all."
+	@echo "    ALLOW_DIRTY=1 waives a dirty tree of OURS; a pin needs no waiver."
+	$(check_build_pair)
 	$(MAKE) wasm-release DIST=$(SITE_DIST_OUT) TARGET_DIR=$(SITE_DIST_TARGET)
 	$(MAKE) site OUT=$(SITE_DIST_OUT) DEPLOY_CONFIG=$(SITE_DIST_DEPLOY_CONFIG)
 	@echo ""
@@ -1862,6 +2032,7 @@ site-dist:
 # `dist/static-bare`). Serve with `make serve`-style static server and open /.
 OUT_BARE ?= dist/static-bare
 site-bare: image
+	$(check_build_pair)
 	$(call CHECK_IN_TREE,site-bare,$(OUT_BARE),OUT_BARE)
 	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT_BARE) --bare-root $(if $(SITE),--site=$(SITE),) $(if $(LIVE),--live=$(LIVE),))
 
@@ -1887,6 +2058,7 @@ registry: image
 	@[ -n "$(BIND)" ] || { echo "make registry: BIND is required, e.g."; \
 	  echo "  make registry BIND='--bind=NAME=PEER_ID@ORIGIN'"; \
 	  echo "  (the @ORIGIN half is not optional — arch D10)"; exit 1; }
+	$(check_build_pair)
 	$(call CHECK_IN_TREE,registry,$(REGISTRY_OUT),REGISTRY_OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(call RUN,cargo run --quiet --bin entity-browser -- registry $(REGISTRY_OUT) $(BIND) $(if $(TTL_DAYS),--ttl-days=$(TTL_DAYS),) $(SEED))
@@ -2084,7 +2256,7 @@ endif
 
 # cargo puts a cross build under target/<triple>/, a host build directly under
 # target/ — the staging step has to be told which.
-DIST_BUNDLE_ROOT := src-tauri/$(TARGET_DIR)$(if $(DIST_TARGET),/$(DIST_TARGET),)/release/bundle
+DIST_BUNDLE_ROOT := src-tauri/$(CARGO_TARGET)$(if $(DIST_TARGET),/$(DIST_TARGET),)/release/bundle
 
 # cargo-xwin downloads Microsoft's CRT and Windows SDK headers, which is a
 # licence you accept, not one we can accept on your behalf in a committed file.
@@ -2147,6 +2319,7 @@ dist-preflight:
 	$(check_cross_supported)
 
 dist: dist-preflight $(DIST_IMAGE_DEP)
+	$(check_build_pair)
 	$(check_dist_version)
 	$(check_native_toolchain)
 	@echo "==> dist $(DIST_NAME) $(DIST_VERSION) — $(DIST_OS)/$(DIST_ARCH) [$(DIST_BUNDLES)]$(if $(DIST_TARGET), cross → $(DIST_TARGET),)$(if $(NATIVE), (native runner),)"
@@ -2158,6 +2331,7 @@ dist: dist-preflight $(DIST_IMAGE_DEP)
 # or any static origin. Host-independent (it is wasm), so CI builds it ONCE
 # rather than per matrix leg, and its filename carries no os/arch.
 dist-web: $(DIST_IMAGE_DEP)
+	$(check_build_pair)
 	$(check_dist_version)
 	$(check_native_toolchain)
 	@mkdir -p $(ARTIFACTS)

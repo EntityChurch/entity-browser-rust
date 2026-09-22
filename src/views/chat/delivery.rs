@@ -46,6 +46,22 @@
 //! cadence tweak. Until then the fast poll stays, now *supplemented* by the
 //! warm-up and the reactive subscribe rather than being the sole trigger.
 //!
+//! **The investigation was run 2026-09-09 and found two more prerequisites, one
+//! of which nothing had priced** (`docs/plans/PLAN-2026-09-09-b-RETIRING-THE-CHAT-POLL-WHAT-IT-ACTUALLY-COSTS.md`).
+//! (a) **§5 keepalive runs on only ONE side of a §6.5 link.**
+//! `adopt_transport_connection` early-returns into `serve_traversed_connection`
+//! for the §7.4.1 **Responder**, above the pool insert, and that path never
+//! calls `spawn_keepalive` — so the Initiator pings every 30 s and the Responder
+//! has nothing, and **which browser is which flips run to run** with peer-id
+//! ordering. On the responder side this poll really is the only thing refreshing
+//! the punched mapping. That is a `core/peer` gap, not an app-tier one, and it
+//! must land first. (b) **On the Worker arm this poll is the whole delivery
+//! mechanism** — `follow` needs a main-thread `PeerContext` — so retiring it
+//! without a Worker-arm replacement un-ships chat on `?worker=1`. Every prior
+//! account of this item is written about the Direct arm, where the poll is a
+//! supplement. And note `reach_keeper` cannot absorb it: `due` skips any peer
+//! the kernel calls `Connected`, so a healthy link gets nothing from the keeper.
+//!
 //! **The cost of that retry, measured (`EXTENSION-SIGNALING` §13 item 6).**
 //! Against a peer that can never be reached, this poll re-triggers
 //! `establish_live` at its own cadence — `POLL_EVERY`/60fps = **5 Hz**, measured

@@ -511,6 +511,32 @@ fn render_live_banner(live_base: &str, peer_id: &str, site_id: &str, slug: &str)
     )
 }
 
+/// **`APP-CONVENTION-SEMANTIC-CONTENT-SITE` §4.1's max depth, expressed once.**
+///
+/// *"A renderer walking nav MUST maintain a visited-set (cycle detection),
+/// enforce a max depth (recommend 32), and on either limit stop cleanly."*
+/// **Two** functions here walk the authored nav tree — [`render_nav_items`] and
+/// [`subtree_holds_active`] — and the bound was a `32` typed inline in one of
+/// them, with the other uncapped. Two expressions of one rule is C15's defect;
+/// one expression with no consumer is worse, so both read this.
+///
+/// **The cycle half of §4.1 is unreachable in this data model, and that is a
+/// conformance statement rather than a gap.** [`NavItem::children`] is an owned
+/// `Vec<NavItem>` — a Rust value cannot point back at an ancestor — and the
+/// decode side builds it from CBOR, which has no back-reference. So an authored
+/// cycle cannot survive into a tree we walk; what *is* reachable is pathological
+/// depth, which is what this bounds. A visited-set here would be a guard against
+/// a state the type system already forbids.
+///
+/// **Scope, stated because it is narrower than "the renderer":** the live DOM
+/// app does not recurse over nav at all. `views/content_site/model.rs`'s
+/// `output_from_resolved` maps `manifest.nav` **one level** into flat
+/// `NavLink`s and never reads `children` (its own `GAP 3 (sub-nav)` note). So
+/// §4.1's walking contract lands entirely on this static exporter today. If the
+/// live renderer ever grows sub-nav, this constant moves somewhere both can see
+/// it — and that move is the whole point of it being a constant.
+const MAX_NAV_DEPTH: usize = 32;
+
 /// Render the manifest nav menu to static `<a>` links (recursive). The
 /// page currently being rendered is marked `aria-current`.
 fn render_nav(
@@ -536,8 +562,8 @@ fn render_nav_items(
     depth: usize,
     ctx: LinkCtx,
 ) {
-    // Cycle/depth safety (SITE §4.1: recommend max depth 32).
-    if depth > 32 {
+    // §4.1 depth safety — see [`MAX_NAV_DEPTH`].
+    if depth > MAX_NAV_DEPTH {
         return;
     }
     out.push_str("<ul>");
@@ -613,6 +639,26 @@ fn subtree_holds_active(
     current: &location::Location,
     current_slug: &str,
 ) -> bool {
+    subtree_holds_active_at(items, current, current_slug, 0)
+}
+
+/// **Depth-bounded, and it was not until 2026-09-09.** This is the *second*
+/// walker over the authored nav tree and it had no bound at all, while its
+/// sibling one screen up carried an inline `32` — so §4.1's max-depth MUST was
+/// half-implemented, on the half nobody reads because it returns a `bool`
+/// instead of markup. Bounded in practice by the decoder's own ceiling
+/// (measured: an authored nav ≥127 deep does not decode at all), which is why
+/// it was never a live overflow — a bound that holds by accident somewhere else
+/// is not the bound the rule asks for.
+fn subtree_holds_active_at(
+    items: &[NavItem],
+    current: &location::Location,
+    current_slug: &str,
+    depth: usize,
+) -> bool {
+    if depth > MAX_NAV_DEPTH {
+        return false;
+    }
     items.iter().any(|item| {
         if !item.target.is_empty() {
             let target = location::classify_link(&item.target, current);
@@ -620,7 +666,7 @@ fn subtree_holds_active(
                 return true;
             }
         }
-        subtree_holds_active(&item.children, current, current_slug)
+        subtree_holds_active_at(&item.children, current, current_slug, depth + 1)
     })
 }
 
@@ -1737,5 +1783,213 @@ mod tests {
     fn humanize_is_reused_not_reimplemented() {
         // Guard: we depend on the shared humanize helper (no parallel impl).
         assert_eq!(location::humanize("getting-started"), "Getting started");
+    }
+}
+
+/// **`F-5` — the nav-cycle / max-depth vector.**
+/// `APP-CONVENTION-SEMANTIC-CONTENT-SITE` §9 asks for *"a fixture of authored
+/// depth 40 (> the max 32) with a cycle; assert the renderer stops at depth 32
+/// and on the cycle without looping — **pinned depth so 'stop cleanly' is not
+/// vacuously conformant**."*
+///
+/// That parenthetical is the whole design: a renderer that walked one level, or
+/// none, or crashed, would satisfy *"does not loop"*. So the assertions here are
+/// two-sided — it stops **at** 32 and it renders **through** 32.
+///
+/// **The cycle half is answered by the type, not by a guard** — see
+/// [`MAX_NAV_DEPTH`]. `NavItem::children` is an owned `Vec<NavItem>` and CBOR
+/// carries no back-reference, so a cycle cannot exist in a tree we walk. The
+/// nearest reachable thing (the same label and target repeated at every level)
+/// is exercised below and terminates on the depth bound, which is the behaviour
+/// the vector is really asking about.
+#[cfg(test)]
+mod nav_depth_f5 {
+    use super::*;
+    use crate::content_site::format::{NavItem, SiteManifest};
+
+    /// `depth` levels of nesting, every level carrying the **same** label and
+    /// target — as close to an authored cycle as this data model admits.
+    fn deep_nav(depth: usize) -> NavItem {
+        let mut node = NavItem::new("Loop", "/loop");
+        for _ in 0..depth {
+            node = NavItem::section("Loop", "/loop", vec![node]);
+        }
+        node
+    }
+
+    fn render(depth: usize) -> String {
+        let nav = vec![deep_nav(depth)];
+        let current = location::Location {
+            peer_id: Some("PEER".into()),
+            site_id: "site".into(),
+            page: "index".into(),
+        };
+        let ctx = LinkCtx { layout: Layout::BareRoot, prefix: "", audit: None };
+        render_nav(&nav, &current, "index", ctx)
+    }
+
+    /// How many `<ul>` opens the emitted markup nests — one per level walked.
+    fn nesting(html: &str) -> usize {
+        let (mut depth, mut max) = (0usize, 0usize);
+        let mut rest = html;
+        while let Some(i) = rest.find('<') {
+            rest = &rest[i..];
+            if rest.starts_with("<ul>") {
+                depth += 1;
+                max = max.max(depth);
+                rest = &rest[4..];
+            } else if rest.starts_with("</ul>") {
+                depth = depth.saturating_sub(1);
+                rest = &rest[5..];
+            } else {
+                rest = &rest[1..];
+            }
+        }
+        max
+    }
+
+    /// **The vector.** Authored depth 40, rendered, bounded at 32 — and the
+    /// bound is asserted from **both** sides so "stops cleanly" cannot be
+    /// satisfied by a renderer that stops early or not at all.
+    #[test]
+    fn an_authored_depth_of_forty_renders_through_thirty_two_and_stops_there() {
+        let html = render(40);
+        let levels = nesting(&html);
+
+        assert_eq!(
+            levels,
+            MAX_NAV_DEPTH + 1,
+            "§4.1 max depth is {MAX_NAV_DEPTH}, so a 40-deep nav must emit exactly {} nested \
+             <ul> levels (0..={MAX_NAV_DEPTH}) — got {levels}",
+            MAX_NAV_DEPTH + 1
+        );
+        // Two-sided, per §9's own "not vacuously conformant" clause: it did not
+        // stop at one level, and it did not run to the authored 40.
+        assert!(levels > 1, "a renderer that walked one level would pass a one-sided check");
+        assert!(levels < 40, "the authored depth reached the output — the bound did nothing");
+        // "Render what it has", not "render nothing".
+        assert!(html.contains("Loop"), "the truncated nav still renders the levels it walked");
+        assert!(html.ends_with("</nav>"), "the markup is closed — it stopped cleanly");
+    }
+
+    /// The **falsifier**, kept as a test rather than as a claim: the assertion
+    /// above is only worth something if the authored depth is what decides the
+    /// output below the bound.
+    #[test]
+    fn below_the_bound_the_authored_depth_is_what_renders() {
+        for authored in [1usize, 5, 31] {
+            assert_eq!(
+                nesting(&render(authored)),
+                authored + 1,
+                "at authored depth {authored} — under the bound — the renderer must walk all of it"
+            );
+        }
+    }
+
+    /// **`subtree_holds_active` is bounded too, and this is the half that had
+    /// no bound at all.** It returns a `bool`, so no markup assertion can see
+    /// it: a deep tree whose active page sits **below** the bound must read as
+    /// not-here rather than recursing to find it.
+    #[test]
+    fn the_second_nav_walker_is_bounded_by_the_same_constant() {
+        let current = location::Location {
+            peer_id: Some("PEER".into()),
+            site_id: "site".into(),
+            page: "index".into(),
+        };
+
+        // The active page at depth 2 — comfortably inside the bound.
+        let shallow = vec![NavItem::section(
+            "A",
+            "",
+            vec![NavItem::section("B", "", vec![NavItem::new("Here", "/index")])],
+        )];
+        assert!(
+            subtree_holds_active(&shallow, &current, "index"),
+            "inside the bound the walker must still find the active page"
+        );
+
+        // The same page buried past the bound: refused, not chased.
+        let mut deep = NavItem::new("Here", "/index");
+        for _ in 0..(MAX_NAV_DEPTH + 8) {
+            deep = NavItem::section("A", "", vec![deep]);
+        }
+        assert!(
+            !subtree_holds_active(&[deep], &current, "index"),
+            "past §4.1's max depth the walker must stop rather than descend"
+        );
+    }
+
+    /// **The decoder's own ceiling, measured and pinned — and the §4.1
+    /// divergence it produces.**
+    ///
+    /// §4.1 says *stop cleanly (render what it has)*. At an authored nav depth
+    /// of **127 or more** we do not render what we have: `SiteManifest::
+    /// from_entity`'s `Err(_) => Self::default()` arm discards the **entire
+    /// manifest**, so `site_id` and `title` go with the nav. Measured, not
+    /// reasoned — ≤126 decodes fully, ≥127 yields a wholly empty manifest, and
+    /// no depth up to 1,000,000 overflows the stack (the CBOR decoder's nesting
+    /// limit is what stops it, not anything of ours).
+    ///
+    /// **The DoS half of §4.1 is therefore satisfied** — never an infinite loop,
+    /// never a stack overflow — and the *"render what it has"* half is not, on
+    /// inputs past the ceiling. Pinned here rather than fixed: the repair is a
+    /// decoder change on the shipped bundle, and it is routed as a decision
+    /// rather than taken quietly. **If this test starts failing, the CBOR
+    /// decoder's nesting limit moved** — which is a supply-chain fact worth a
+    /// red, not a number to update.
+    #[test]
+    fn a_nav_deeper_than_the_decoder_loses_the_whole_manifest_not_just_the_nav() {
+        // Nested CBOR emitted by CONCATENATION, so nothing here recurses and
+        // the only recursion measured is the decoder's.
+        fn manifest_bytes(depth: usize) -> Vec<u8> {
+            let mut level = vec![0xA1u8, 0x68];
+            level.extend_from_slice(b"children");
+            level.push(0x81);
+            let mut leaf = vec![0xA1u8, 0x65];
+            leaf.extend_from_slice(b"label");
+            leaf.push(0x64);
+            leaf.extend_from_slice(b"leaf");
+
+            let mut nav = Vec::new();
+            for _ in 0..depth {
+                nav.extend_from_slice(&level);
+            }
+            nav.extend_from_slice(&leaf);
+
+            let mut data = vec![0xA3u8, 0x63];
+            data.extend_from_slice(b"nav");
+            data.push(0x81);
+            data.extend_from_slice(&nav);
+            data.extend_from_slice(&[0x65]);
+            data.extend_from_slice(b"title");
+            data.extend_from_slice(&[0x61]);
+            data.extend_from_slice(b"T");
+            data.extend_from_slice(&[0x67]);
+            data.extend_from_slice(b"site_id");
+            data.extend_from_slice(&[0x61]);
+            data.extend_from_slice(b"S");
+            data
+        }
+        let decode = |depth: usize| {
+            let e = entity_entity::Entity::new("app/site-manifest", manifest_bytes(depth)).unwrap();
+            SiteManifest::from_entity(&e)
+        };
+
+        // §9's chosen fixture depth is inside the ceiling, which is what makes
+        // the vector above reachable at all.
+        assert_eq!(decode(40).title, "T", "an authored depth of 40 must decode — F-5 needs it to");
+        assert_eq!(decode(126).title, "T", "126 is the last depth that decodes");
+
+        let lost = decode(127);
+        assert_eq!(lost.title, "", "measured: at 127 the decoder gives up");
+        assert_eq!(
+            lost.site_id, "",
+            "and it takes the site's IDENTITY with it — this is the §4.1 divergence, not the nav"
+        );
+        assert!(lost.nav.is_empty());
+
+        // No depth overflows: the DoS half of §4.1 holds, at any size.
+        assert!(decode(1_000_000).title.is_empty(), "a million levels is refused, not fatal");
     }
 }

@@ -247,6 +247,74 @@ a stated recovery path rather than an implied one. Still a **research preview**.
   A retained build now caches under its own address, which also makes a pinned
   build work offline for the first time.
 
+### Fixed — connections between devices
+
+- **On a fresh profile, peers could find each other and never connect.** The
+  mechanism that lets a browser be dialled back was decided once, at startup,
+  from settings a brand-new profile does not have yet — so adding a connector
+  during a session had no effect until you reloaded. Discovery and reachability
+  are separate mechanisms and only the second was broken, which is why the
+  roster lit up with names that could not be reached. A profile that had been
+  used before carried the setting and worked, so this read as a regression when
+  it was not. Meeting someone and chatting now works without a reload.
+- **A connection that died while your machine slept took over two minutes to
+  notice.** Everything needed to recover was already built and simply never
+  triggered: the app suppresses its own reachability probing for peers it
+  believes are connected, and after a suspend that is every peer. Waking is now
+  detected from the frame loop — which does not advance while suspended — and a
+  single probe turns a ~130-second wait into one round trip.
+- **A peer that vanished was never noticed, and its counterpart kept showing it
+  as connected.** Roughly half the time the loss surfaced after 30 seconds and
+  the rest of the time not at all. It was one defect on two code paths: a link
+  carries two handshake roles, and only one had been fixed. Detection is now
+  under a second on both. *This fix is in `entity-core-rust`; this application
+  needs a build linked against a kernel that carries it.*
+- **"You are not on your main peer" was shown for three different causes**, and
+  named the rarest one. On the Linux desktop specifically, the WebView ships
+  without the WebRTC bindings compiled in, so that window can act as a
+  rendezvous point but never as a WebRTC peer — it now says so instead of
+  sending you to fix a setting that is not the problem.
+- **A desktop install now serves its rendezvous point and app server by
+  default.** The whole zero-configuration path — open the app on your phone at
+  the desktop's address and you are already paired — existed in full and was
+  switched off behind two settings you had to know about. Turning either off
+  explicitly is still respected. The setting that reaches the internet rather
+  than the local network deliberately did *not* change.
+- **The app server moved to a random port when its own was taken**, and the
+  thing taking it was often an older copy of this same app — so another device
+  got a working UI running stale code, which presented as unrelated bugs. It now
+  refuses to start and names the port.
+
+### Fixed — publishers, succession and build identity
+
+- **A deployer can now declare that one publisher replaced another.** A client
+  may safely infer this for a domain's home publisher, because that is a single
+  slot; it cannot for the others, where a name disappearing as another appears
+  is ambiguous between a replacement and one tenant leaving as another arrives.
+  Guessing would write a replacement record against a publisher that is alive.
+- **A publisher a domain stopped hosting kept a registered address that 404s**
+  on every visit. Those are now un-named when the domain stops listing them —
+  the name is removed, never the cached content, and the next publish restores
+  it. A domain that lists no publishers at all withdraws nothing, deliberately.
+- **The update prompt followed the wrong file.** It fired when the service
+  worker's bytes changed — an asset touched three times all year — rather than
+  when the application itself changed. Measured across two real deployments: the
+  one carrying a substantial fix notified nobody, and a worker-only change would
+  have notified everybody about an application that had not moved. It now
+  compares the application build and stays quiet on a deliberately pinned one.
+- **Entity data is now always canonically encoded.** Five encoders built entity
+  bodies with a general-purpose encoder that preserves the author's key order,
+  so the recorded content hash was over bytes no peer would reproduce — which
+  became fatal for every write once the kernel began validating them. Silent,
+  because those writes do not wait for a result.
+- **A build is identified by a pair, and it can now be pinned.** This
+  application links its kernel by path dependency with no cross-repo lockfile,
+  so the same commit built twice against different kernel checkouts produces
+  different bytes. Both halves are stamped into the shipped page, every verb
+  that hands bytes to someone else refuses an unidentifiable tree, and
+  `CORE_RUST_REF=<ref>` now *builds* the kernel commit you name rather than
+  requiring it to already be checked out.
+
 ### Known limitations
 
 New in this release, or newly stated:

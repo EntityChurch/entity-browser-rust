@@ -1,0 +1,15 @@
+{
+  "site_id": "gpin4src",
+  "title": "Le Guide — Übersicht 案内",
+  "tagline": "the source half of the joint reproducible-publish fixture",
+  "theme": "demo",
+  "nav": [
+    { "title": "Home", "path": "pages/index.md" },
+    { "title": "Guide", "path": "pages/guide/intro.md", "children": [
+      { "title": "Install", "path": "pages/guide/install.md" },
+      { "title": "Internals", "path": "pages/guide/advanced/internals.md" }
+    ] },
+    { "title": "Glossary", "path": "pages/glossary.md" },
+    { "title": "Report", "path": "pages/report.html" }
+  ]
+}

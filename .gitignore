@@ -40,6 +40,36 @@ src-tauri/target/
 
 # Per-machine podman resource-cap overrides (RESOURCE-CAPS.md §4a) — never committed.
 caps.local.mk
+
+# Materialized kernel pins (`CORE_RUST_REF=<ref>` → tools/core-pin.sh). Each is a
+# `git archive` export of one entity-core-rust commit, mounted over the sibling
+# path inside the build container. Built from the sibling's object store, never
+# source, and reproducible from a commit — so it is cache, not work. ~13 MB per
+# distinct commit; `make core-pin-clean` empties it.
+/.core-pin
+# Cargo build dirs for pinned builds. UNBOUNDED IN THREE AXES, which is why the
+# glob has two stars AND no leading slash:
+#   1. TARGET_DIR is overridden per-target (`target-publish` for site-serve,
+#      `$(SITE_DIST_TARGET)` for site-dist) — so `/target-pin-*` alone is wrong
+#      and was: `target-publish-pin-e6213f1` turned up untracked on the first
+#      pinned release build.
+#   2. The sha varies per pin.
+#   3. **The DIRECTORY varies** — `src-tauri` is its own cargo root with its own
+#      target dir (ignored on its own line above), so a pinned `make test-tauri`
+#      leaves `src-tauri/target-pin-{sha}/`. An anchored pattern cannot match a
+#      nested path, so that one stayed untracked. Found 2026-09-09 during a
+#      release audit.
+#      **It does NOT break `make site-dist`** — checked rather than assumed, and
+#      the first draft of this note said it did. `build-pair --check` tests
+#      `git diff --quiet HEAD`, which is tracked-only, so an untracked directory
+#      never makes the pair read `-dirty`. What it does cost is `git status`
+#      readability, which is what this repo's own "report the state before you
+#      claim it" rule leans on — and any future check spelled `--porcelain`
+#      WOULD trip on it, since that one counts untracked.
+# Un-anchored rather than enumerating the two known roots: enumerating would
+# default every future one to committable, which is how a 2026-08-21 fix swept in
+# 18,408 files (see the dist- note above).
+target*-pin-*
 .tauri-home/
 .cache/
 

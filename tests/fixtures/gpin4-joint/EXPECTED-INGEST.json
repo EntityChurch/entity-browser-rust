@@ -1,0 +1,115 @@
+{
+  "_comment": "COMPUTED by entity-browser-rust's ingest from source/. Not hand-editable. This is OUR answer to G-PIN-4's first link, not the agreed one — a divergence here is routed, not corrected. See the module doc on src/content_site/gpin4_joint_fixture.rs.",
+  "bindings": {
+    "assets/figures/big.svg": "00f0871742d5f80d4686a8782ece0bd452fbef9ee8fb74380bd96bf990352577be",
+    "manifest": "0001924c4e9ab4a9a9cc190e924a5ff7753eadc7c6edaeb1d0ece9d453c3ee4bc0",
+    "pages/glossary": "009d8f4fe08ace701b7bf66d062d066a8ad2a3b9e13a957feb245469a2db8db635",
+    "pages/guide/advanced/internals": "0020069a583d4d77efea92510e1dd291a84397fa567f2bc8e0bb0cf537f276bd85",
+    "pages/guide/install": "00967cdd5a9ae79049313f1ec69247931d0a8ddbd0ab0c0be19d14ba8c0d72f675",
+    "pages/guide/intro": "008acec792f0111f6c3092a01b5fb21c959c6c7ad4eeb623795b324ac768b10b50",
+    "pages/index": "00c280469123e00d87755c60100fe6e57f86dc4bac33d968ebece12f6b481a6592",
+    "pages/report": "00b415ff2cddd7180ec7961dc4e1179bce784b22192daa740f1b7993e32c96e6ff"
+  },
+  "convention": "APP-CONVENTION-SEMANTIC-CONTENT-SITE §9 (G-PIN-4), link 1 of 3",
+  "entities": {
+    "assets": [
+      {
+        "media_type": "image/svg+xml",
+        "name": "figures/big.svg",
+        "note": "ONE entity, bytes inline — this publisher does not chunk at any size",
+        "source_bytes": 32047
+      }
+    ],
+    "manifest": {
+      "nav": [
+        {
+          "label": "Home",
+          "target": "/index"
+        },
+        {
+          "children": [
+            {
+              "label": "Install",
+              "target": "/guide/install"
+            },
+            {
+              "label": "Internals",
+              "target": "/guide/advanced/internals"
+            }
+          ],
+          "label": "Guide",
+          "target": "/guide/intro"
+        },
+        {
+          "label": "Glossary",
+          "target": "/glossary"
+        },
+        {
+          "label": "Report",
+          "target": "/report"
+        }
+      ],
+      "params": {
+        "root": "index",
+        "tagline": "the source half of the joint reproducible-publish fixture",
+        "theme": "demo"
+      },
+      "site_id": "gpin4src",
+      "title": "Le Guide — Übersicht 案内"
+    },
+    "pages": [
+      {
+        "body": "# Glossary\n\nNo frontmatter block at all. What the two ingests do with `title` here is the question.\n",
+        "format": "markdown",
+        "frontmatter": {
+          "title": ""
+        },
+        "slug": "glossary"
+      },
+      {
+        "body": "# Internals\n\nNested two levels, so the trie has interior nodes.\n",
+        "format": "markdown",
+        "frontmatter": {
+          "title": "Internals"
+        },
+        "slug": "guide/advanced/internals"
+      },
+      {
+        "body": "# Install\n\nA sibling of intro.\n",
+        "format": "markdown",
+        "frontmatter": {
+          "title": "Install"
+        },
+        "slug": "guide/install"
+      },
+      {
+        "body": "# Intro\n\nTwo frontmatter keys, so canonical map ordering is exercised.\n",
+        "format": "markdown",
+        "frontmatter": {
+          "status": "draft",
+          "title": "Intro"
+        },
+        "slug": "guide/intro"
+      },
+      {
+        "body": "# Home\n\nOne fixture, two publishers, one site root.\n\n::embed[A figure staged as a site asset]{ref=assets/figures/big.svg}\n",
+        "format": "markdown",
+        "frontmatter": {
+          "title": "Home"
+        },
+        "slug": "index"
+      },
+      {
+        "body": "<html><head><title>Report</title></head><body><p>A pre-rendered page: format is \"html\", not the default.</p></body></html>\n",
+        "format": "html",
+        "frontmatter": {
+          "title": "Report"
+        },
+        "slug": "report"
+      }
+    ]
+  },
+  "roots_are_split_because": "the asset row is known-incomparable today: this publisher emits ONE inline app/site-asset entity at any size and never enters a chunker, so §6.1's chunk_size MUST is bypassed rather than exercised. Compare site_root_pages until the asset representation is agreed.",
+  "site_root_full": "00f0538888813dd020af4e1068bbb3f05a11ca03a592e1951f9f09aa574fbd4ced",
+  "site_root_pages": "00ce0a218eca26c0b7ede535e41fc262a1b0cf0603ace2dcc708a87c49c9ffb0f8"
+}

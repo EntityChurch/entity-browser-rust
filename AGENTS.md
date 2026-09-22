@@ -1448,6 +1448,273 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   `src/content_site/` and **none of them is a site concern**. Nothing depends on it; it is simply
   what makes the next author reach for a site-shaped answer. Split it as part of the first change
   that proves the boundary, never as a standalone rename.
+- **`G-PIN-4` IS GREEN ON THE SUBSTRATE, AND THREE BLOCKERS WE WERE ABOUT TO FILE WERE ANSWERED BY
+  ONE SENTENCE IN A SPEC NOBODY HAD OPENED (2026-09-09).**
+  `src/content_site/crossimpl_reproducible_publish.rs` (in `make test`) runs
+  `APP-CONVENTION-SEMANTIC-CONTENT-SITE` §9's *reproducible-publish* case — one fixture, two
+  publishers, one root — against `entity-workbench-go`'s **vendored** deterministic emission, and
+  passes at root `00f567bf…`. **entity-core-rust vs entity-core-go, so §2's *"independent means built
+  over different cores"* is satisfied**, and this is the app tier's first byte-equality evidence that
+  is not cohort-consistent. Falsified: one perturbed body reds both halves, naming the key.
+  **The move worth copying is that it needed nothing from anybody.** The other seat's vendored
+  fixture **is a second implementation you already have** — it had been sitting in
+  `tests/fixtures/crossimpl-go-site/` since August, read only as *"can our reader walk their
+  bytes"*, when the same bytes answer *"do our publishers agree"* the other way round. **Before
+  opening a coordination thread for cross-impl evidence, check whether the counterpart's artifact is
+  already in your tree.**
+  **The comparand is the TRIE ROOT, and our own tooling prints the wrong thing under the right
+  words.** `system/peer/published-root` carries `published_at` — `core/peer/src/published_root.rs`
+  `now_ms()`, no seam — so two `make site` runs of ONE fixture under ONE pinned `--identity-seed`
+  gave heads `008615f3b44c09c7…` / `00a7b337ea9fd493…` with **`root_hash` identical**
+  (`00bc252f2a685c4a…`) and 13 of 15 content blobs shared. `make site-dist` prints that head as
+  *"signed root"*. **A G-PIN-4 rig comparing it reds 100% of the time, and across two impls it reds
+  wearing a real divergence's clothes.** `EXTENSION-TREE` §3.2 determinism rule 3 is the property to
+  reach for: *"No timestamp — a snapshot is pure structural data."*
+  **Three blockers, one sentence, all wrong in the direction of MORE coordination.** §3.2: *"Two
+  peers with identical content under different prefixes produce the same trie root hash"* — bindings
+  are keyed **relative to the prefix**. So **placement is irrelevant** (theirs
+  `content/sites/{id}/…`, ours `sites/{id}/…`; relative to the site root both spell `manifest` and
+  `pages/{slug}`), **no shared keypair or peer id is needed**, and neither seat moves. And the
+  `ENTITY-CBOR-ENCODING` §5.4 two-arm risk the last handoff said to settle *before building a rig* is
+  **withdrawn**: §5.4 is about *receiving* foreign bytes, and a publisher authoring from source
+  canonicalizes on either arm. Every one of the four was reasoned from our own code. *If nothing you
+  opened contradicted you, you did not run a check* — and the corollary this adds: **a blocker that
+  asks for more coordination is the one to re-read the spec about**, because it is the shape a wrong
+  inference takes when the honest answer is *"nothing is needed."*
+  **The vocabulary half is NOT established by that green** — their fixture's leaves are `test/note`.
+  `tests/fixtures/gpin4-joint/` is our side of it: `site.json` (language-neutral **authored input**),
+  `EXPECTED.json` (every site-relative key → content hash + the trie root, computed from our
+  `app/site-manifest` / `app/site-page` encoders), a `README.md` carrying the protocol, and
+  `gpin4_joint_fixture.rs` pinning it so our encoder cannot drift silently under the other seat.
+  **Every row of that fixture is a case where two impls can each be internally consistent and still
+  disagree** — a page with **no** frontmatter (absent ≠ empty map, `omitempty` on their struct and
+  conditional on ours), two frontmatter keys (canonical map order), a nav section with no `target`, a
+  nested `children`, a non-default `format`, two levels of nesting so the trie has interior nodes. A
+  fixture without them goes green while the divergence is live.
+  **`EXPECTED.json` is a wire artifact: regenerating it is a wire event, not a test fix.** The other
+  seat compares against those bytes, so if they move without a deliberate `site.json` edit, our
+  encoder moved and the question is which side is right.
+  **`G-PIN-3` is a different shape and `app/site-root` is its only reachable target** — the
+  published-root cannot carry *expected signature bytes* because it carries a clock; the pin
+  (`{root, seq, site_id, ? passthrough_of}`) has none, and Ed25519 is deterministic. Not implemented
+  here and not proposed unilaterally (arch's read is that we are not being asked); routed as
+  `A-22` so the withdraw/keep decision is made with it in hand.
+  Packets: `ROUTING-2026-09-09-g-workbench-go-…` (the fixture + the ask) and
+  `ROUTING-2026-09-09-h-arch-…` (the §9 wording clause + what we withdrew). `K-3` on the
+  `entity-core-rust` tracker is the publish-instant seam, which **blocks none of this**.
+  **`F-5` — the nav depth/cycle vector — is built too (`static_export.rs`, mod `nav_depth_f5`), and
+  building it found that §4.1's DoS property holds BY ACCIDENT, IN A DEPENDENCY.** Measured across
+  twelve depths: an authored nav ≤126 decodes fully, **≥127 makes `SiteManifest::from_entity` take its
+  `Err(_) => Self::default()` arm and discard the WHOLE manifest** — `site_id` and `title` with it,
+  silently, indistinguishable from an empty one. Nothing overflows at any depth to 1,000,000, but what
+  stops it is **the CBOR decoder's nesting limit**, not us — so the test **reds if that limit moves**
+  rather than tracking the number, because that is a supply-chain event and not a constant to update.
+  **Not repaired here: the fix is in a module that compiles into the frozen release bundle**, and the
+  shape (partial decode vs a distinguishable *"refused"*) is arch's — `A-23`.
+  **Two scope facts that reading §4.1 does not give you.** (1) **§4.1's walking contract lands entirely
+  on the STATIC EXPORTER.** The live DOM renderer maps `manifest.nav` **one level** into flat links and
+  never reads `children` (`output_from_resolved`; its own `GAP 3 (sub-nav)` note) — so nested nav is not
+  rendered live at all, and *"the renderer"* is two things here. (2) **The cycle half is unreachable by
+  construction** — `NavItem::children` is an owned `Vec<NavItem>` and CBOR carries no back-reference, so
+  a visited-set would guard a state the type system forbids. Answered structurally, and put to arch as a
+  question rather than assumed.
+  **`MAX_NAV_DEPTH` exists because there were TWO walkers and only one bound.** `render_nav_items`
+  carried an inline `32`; `subtree_holds_active` — same tree, same authored data, returns a `bool` so no
+  markup assertion can see it — had **no bound at all**. C15's shape: the half nobody reads is the half
+  that drifts. Both read one constant now, and **both neuters were run** (one reds on `got 41` vs
+  `right: 33`, the other by name).
+  **§9's *"pinned depth so 'stop cleanly' is not vacuously conformant"* is the clause to honour
+  literally** — assert the bound from **both** sides, or a renderer that walked one level passes.
+  **`F-1` CLASSIFIES TWO `ref` FORMS AND EVERY `ref` WE SHIP IS THE THIRD — read this before touching
+  embeds, and note the vector is deliberately NOT built (`A-24`).** §3.2: a leading `/` is a `path`,
+  *otherwise* a `content-hash` in multibase/hex — exhaustive by construction. Ours are all
+  `assets/figures/x.png`, and `paths::asset_name_from_ref` **rejects** a leading `/` and **rejects** a
+  bare hex, accepting only the `assets/`-prefixed site-relative form — which is what the authored
+  content, the papers render tool and `markdown_to_embed` all produce. **The two spaces are disjoint.**
+  **And our refusal is a SECURITY property, not an oversight** — subgraph confinement, one predicate
+  covering `://`, `//`, a leading `/`, `data:` and `..`, gated by
+  `asset_name_from_ref_accepts_site_local_and_rejects_external`. So `F-1`'s `path` arm asks for exactly
+  the shape that check treats as *not site-local*, and "conforming" is a security review rather than a
+  parser change. Likely reading (offered, not claimed): `F-1` was written for the sibling-`Embed` `ref`
+  and ours is a third site-scoped reference the convention has not named — under-scoped, not divergent.
+  **Do NOT write the vector to the rule and let it red.** A test asserting behaviour we deliberately
+  refuse is a disagreement wearing a gate's clothes — AP45's inverse, where the *name* would make one
+  arbitrary reading look settled.
+  **And check what a vector needs to EXIST before pricing it.** §9's embed case is *directive ⇔
+  **child-`Embed`***, i.e. directive ⇔ **entity**; we have **no `Embed` entity type** (`app/embed` over
+  `src/` returns one doc comment). Our `Embed` is a Rust struct that never becomes an entity. The first
+  draft of that packet called this half unblocked and next; it is neither, and **one grep** corrected
+  it. Same for the passive-only refuse vector — same absent node. **Of §9's four remaining cases only
+  `.entsite` (`C-1`) is genuinely ours and unblocked**, and most of the rest wait on
+  `APP-CONVENTION-EMBED`'s node, which §9 itself says is EMBED's to ship.
+  Packet: `ROUTING-2026-09-09-i-arch-F-1-CLASSIFIES-TWO-REF-FORMS-…`.
+  **`G-PIN-4` IS THREE LINKS, BOTH SEATS FOUND THE SAME THREE, AND LINK 1 IS THE ONE THAT DECIDES IT.**
+  `entity-workbench-go` pointed their types at our vendored emission the same day we pointed ours at
+  theirs, and **corroborated both of the links we measured** (their gates run green here: 3
+  `app/site-manifest`, 11 `app/site-page`, our signed root rebuilt from 15 bindings in a fresh store).
+  *Source → entity* is the third and had no fixture on either side; it does now —
+  `tests/fixtures/gpin4-joint/source/` (a real `render/` dir) + `EXPECTED-INGEST.json`.
+  **It needed a refactor that is the real lesson: the disk→entity half was welded to a `Peers` write.**
+  `ingest::read_site_dir` is pure now. *A link you cannot evaluate without standing up a peer is a link
+  nobody evaluates* — and that is why the link both seats agreed was the whole risk was also the one
+  neither had a fixture for.
+  **§6.1's CHUNKER MUST IS BYPASSED HERE, NOT UNEXERCISED — and the sharper claim came from checking
+  their recommendation rather than adopting it.** They measured *"nothing either seat holds exercises
+  chunking"* (right) and recommended an asset >16 KiB in the fixture. Measured through `make site`: a
+  208,046-byte source file becomes **ONE 208,109-byte `app/site-asset` entity**, 3 trie keys, no chunk
+  list. `SiteAsset` inlines at any size, so there is no chunker on this path to disagree about
+  parameters with, and a bigger file makes §6.1 no more tested. **What the asset row actually tests is
+  the prior question — do the two impls agree what an asset IS** — and today they cannot, since
+  workbench-go does not model `app/site-asset` at all. Hence **two roots** in `EXPECTED-INGEST.json`:
+  `site_root_pages` is comparable, `site_root_full` exists so the divergence is measured rather than
+  latent. **One root would make the whole gate red for a reason we already understand, which is the
+  shape of a gate nobody runs.**
+  **A markdown page with NO frontmatter stores `title: ""`; the `.html` path deliberately removes it**
+  (`page_from_html`: *"an empty title would render as a blank breadcrumb, which reads as broken"*).
+  Same absence, two encodings, one module — found by building the fixture, and **pinned rather than
+  repaired**: `{"title": ""}` and an absent key are different bytes, the other seat is comparing
+  against ours, and a silent repair mid-comparison is the wrong shape for a two-seat decision.
+  **`EXPECTED-INGEST.json` and `EXPECTED.json` are wire artifacts — regenerating either is a WIRE
+  EVENT, not a test fix.**
+  **Verify a counterpart's claims by running them, and say which ones you did NOT verify.** Their §5.4
+  correction was right and we had already withdrawn the risk; **their ground 1 is stronger than our
+  version and we took their wording** (the three-act frame is real normative text — *relaying and
+  re-encoding are both claims that "this is still the sender's entity"*). **Their ground 2 we could not
+  locate and therefore did not assert on their behalf.** Their `fbc2c5c`-is-stale caveat resolved with
+  a diff rather than a re-cut: `format.rs` is **+21/-0** since, all additions, **no encoder changed**.
+  Packet: `ROUTING-2026-09-09-j-workbench-go-LINK-1-IS-BUILT-…`.
+  **`make crossimpl-site` RUNS G-PIN-4 AS A COMMAND, AND IT IS GREEN: 8 keys + the site root,
+  byte-identical (2026-09-09).** `tools/crossimpl/gpin4` reads `site.json`, builds the entities
+  through **entity-workbench-go's own `entitysdk`** and the trie through **entity-core-go's own
+  `core/tree`**, and prints a per-key report. This is §9's *"one fixture, two publishers, identical
+  site root"* in the **forward** direction — their gate measures our frozen emission *backwards*
+  (decode ours, re-encode), which cannot see a field neither side emits. Falsified four ways: one
+  perturbed body reds that key **and** the root and nothing else; a dropped page reds as a *key-set*
+  difference with 0 keys diverging; an empty fixture is a **fatal**, not a clean report; the
+  unmodified fixture passes.
+  **THE COUNTERPART'S IMPLEMENTATION IS A LIBRARY ON THIS BOX, NOT A CORRESPONDENT — and that is
+  the transferable half.** The entry above already says *"before opening a coordination thread,
+  check whether the counterpart's artifact is already in your tree."* This is the stronger form:
+  their **code** is also in your tree. `entitysdk` is a Go module fifty lines of `replace` away, so
+  the answer to *"do our publishers agree"* was one command and no packet. We had instead built a
+  fixture, computed our half, written a protocol for their half, and filed it — a round trip for a
+  question we could answer alone in an afternoon. **Ask what you can CALL before you ask what you
+  can send.** The boundary is unchanged and load-bearing: we **consume** their types, we never
+  model them — the day a struct in `main.go` mirrors one of theirs, the gate measures nothing.
+  Read-only `replace` paths; nothing is written into either sibling tree. **Stated host dependency,
+  not hidden:** a `go` toolchain, the same call `crossimpl-go` already makes for its leg.
+  **SCOPE, AND IT IS A FINDING: LINK 1 IS NOT A CONFORMANCE SURFACE, SO DO NOT BUILD A GATE ON IT.**
+  The convention specifies **no authoring format at all** — no `render/` directory, no
+  `site.manifest.json`, no `+++` frontmatter block anywhere in its twelve sections. §0 calls
+  frontmatter *"optional local flavor not the contract"* and §4's CDDL says
+  *"title-only is conformant; **MAY** derive title from first H1"*. So two conformant publishers are
+  **permitted** to lower one markdown file to different entities — and the divergence our own
+  fixture README predicts (`glossary` → our `frontmatter: {"title": ""}` vs an absent key) is
+  **exactly** the case the spec already blesses both ways. A byte gate there reds forever,
+  legitimately, and teaches the next reader to ignore it.
+  **The sharpest part: that clause is OURS.** The v0.4.2 provenance line reads *"ordering tightened
+  (entity-browser-rust) — … frontmatter is optional local flavor not the contract."* We argued the
+  freedom into the spec, then built a fixture to compare the thing we had freed. **Grep the
+  provenance of the rule you are about to test against; you may have written the exemption.**
+  **`entity-workbench-go` has no source-directory site ingest** — proven, not assumed: zero TOML
+  parsing, no `+++` handling, no `site.manifest.json` reader, and `git log --all -S` finds none on
+  any branch. `workbench/ingest_tree.go` is a **doc-tree** ingest emitting `doc/markdown-file`, a
+  different vocabulary (and the one place they *do* chunk, which is where their §6.1 note came
+  from). So link 1 has no counterpart implementation to compare against, only a fixture on our side.
+  **`tests/fixtures/gpin4-joint/source/` + `EXPECTED-INGEST.json` are KEPT and re-scoped, not
+  withdrawn** — they pin our own ingest against silent drift and make our lowering choices legible
+  if the two seats ever choose to converge. What changed is the claim: they are a **shared
+  authoring note**, not *"the link that decides G-PIN-4"*, which is what the README said.
+  **An anti-vacuity floor set at the REAL count turns the most interesting divergence into a rig
+  fault.** `minKeys` was the fixture's true key count (8); dropping a page then hit *"anti-vacuity:
+  compared 7"* and **never reached the key-set report** — *one publisher emits a key the other does
+  not* is the single most valuable thing this program can find, reported as a broken harness.
+  It is **2** now — a manifest and one page, i.e. *did the fixture load* — and the key-set
+  comparison carries the finding. **A floor guards the rig; it must not adjudicate the subject.**
+- **A FIX HAS TWO AXES — THE ONE IT WAS WRITTEN FOR AND THE ONE IT MOVES. RUN THE GATE THAT
+  MEASURES THE COST, NOT ONLY THE GATE THAT MEASURES THE CURE (2026-09-09, found in a release
+  audit).** The 09-08 connectivity arc's whole purpose is *fail now rather than at the 30 s
+  deadline*, and it shipped with its own new gate (`e2e-webrtc-vanish`) proving the cure. **Failing
+  fast costs a re-establishment**, and the gate that measures establishment cost —
+  `e2e-webrtc-meet`'s §11.5 single-flight assertion — was not in the run set. Measured three weeks
+  later, app tree byte-identical on every arm, fresh browser pair per run: `e17d711` **4,4,4** →
+  `0f858df` **4,4,8** → `9e0cbd5` **8,8,8** → `e6213f1` **16,8,12,8** (bound 8). **Monotone
+  accumulation across three commits, not one culprit** — each makes a dead-or-superseded connection
+  fail sooner and each costs one more negotiation.
+  **Single-flight is intact and saying so precisely is the difference between a bug report and a
+  panic:** the node log shows a repeating **quartet** (`906/517/528/463` bytes), so one negotiation
+  is still the conformant ~4 deposits — the scenario now runs *two to four* negotiations where it
+  ran one. §11.5's bound is arch-pinned *per establishment* while the harness counts per
+  `(caller, key)` **per run**, so read a red as *establishments × 4* before reading it as brute
+  force.
+  **Three method points, and the middle one is why this hid for three weeks.**
+  (1) **`CORE_RUST_REF` turns "the kernel moved" into a bisect** — this was its first real use, and
+  a four-arm single-variable A/B across a sibling repo cost four `make wasm` builds and no writes to
+  their tree. Reach for it the moment a red is suspected upstream.
+  (2) **A gate absent from the recorded run set is a gate nobody ran.** The last recorded `meet`
+  deposit figure was **2026-08-19** (4/side); every 09-0x handoff records test · test-tauri · lint ·
+  e2e-worker · wasm · site-dist and **no WebRTC gate at all**. The suite did not regress silently —
+  it was not consulted. **When you list a gate run, list what you did NOT run.**
+  (3) **A variable metric needs N runs per arm.** At `e6213f1` it reads 8, 12 or 16; one run proves
+  nothing in *either* direction, and a single green would have closed this. Different cause from the
+  stale-grid lesson below — there the *rig* drifted, here the *product* is nondeterministic — same
+  discipline.
+  **And what was deliberately not concluded:** whether each extra negotiation is a legitimate
+  recovery or a spurious teardown. The node vantage cannot see it, the ~8.8 s gap on a link that had
+  just carried a message is suggestive, and suggestive is not measured — a lead was routed *as a
+  lead*. Packet:
+  `docs/status/ROUTING-2026-09-09-c-kernel-THE-VANISHED-PEER-ARC-COSTS-EXTRA-ESTABLISHMENTS.md`.
+- **A MEASUREMENT YOU ROUTE CAN GO STALE IN THE OTHER REPO — and once it is folded into someone
+  else's normative text it reads as current (2026-09-09).** We told arch on 2026-08-16 that *"we do
+  not run a §5 keepalive on the WebRTC path"*. True when written. `git -S spawn_keepalive` over
+  `core/peer/src/remote.rs` returns **one** commit — `d8ef14d`, **2026-08-23**, Amendment 12 — which
+  added it to the tail §10.3 traversal connections share with ordinary dials. The claim was false a
+  week later, and by then it was quoted inside `EXTENSION-NETWORK` §10.3 obligation 2 as the
+  empirical grounding for a MUST. **A fact about the kernel that you measured is a fact with an
+  expiry date; a fact about the kernel that you PUBLISHED is one somebody else is now reasoning
+  from.** So: when you route a measurement of a sibling repo, name the commit you measured it at
+  (`(symbol, path, commit)` is already the rule and it is exactly what would have dated this), and
+  when the sibling moves under you — the `git -C ../entity-core-rust log` reflex this charter already
+  teaches for red tests — **re-read what you have told other people, not only what your tests say.**
+  **The second half is where the value was:** reading the tail to check our own stale claim found
+  that the **§7.4.1 Responder runs no §5 keepalive at all** (`adopt_transport_connection` early-returns
+  into `serve_traversed_connection`, *above* the spawn site; three `spawn_keepalive` call sites, all
+  in `remote.rs`), and that the role — hence which browser is unprotected — **flips run to run** with
+  peer-id ordering. Nobody decided it: `6558a68`, the §7.4.1 role split, is the **immediate
+  descendant** of the commit that added the spawn. Same shape as *a teardown that evicts its own
+  binding disarms the §A1 demotion* — a correct change at one layer carving a MUST out of another.
+  **And obligation 2 contains a MUST we had never discharged:** *know and declare which mechanism
+  holds your mapping open.* Declared now (we rely on the **substrate** — RFC 7675 consent freshness,
+  both sides by construction; §5 covers one side as a by-product; the chat poll is not a mechanism we
+  intend to keep) in `BUILDOUT-SIGNALING-AND-NETWORK-EXTENSIONS.md` §2.3. **A MUST phrased as
+  "declare X" is invisible to every gate you own** — nothing goes red for silence, which is precisely
+  why the clause says silent reliance *is choosing nothing*. Packet:
+  `ROUTING-2026-09-09-b-arch-THE-EVIDENCE-IN-10-3-OBLIGATION-2-WENT-STALE.md`; the A3 investigation
+  that found it: `docs/plans/PLAN-2026-09-09-b-RETIRING-THE-CHAT-POLL-WHAT-IT-ACTUALLY-COSTS.md`
+  (recommendation: **do not retire the poll before the release** — four prerequisites, two in the
+  kernel, and on the **Worker arm the poll is the whole delivery mechanism**, which no prior account
+  of that item had priced).
+- **A DURABLE IDENTITY IS NOT A DURABLE SEQUENCE — the boundary is what a PROCESS carries, not
+  what it writes (C-2, measured 2026-09-09).** Signed-root continuity is recovered from the
+  **output directory** (`RootProjector::adopt_prior_head`), because every CLI run builds a fresh
+  in-memory peer and only the *keypair* is durable. So two out-dirs under one key are two
+  independent sequences — arch's multi-device-publishing case, reachable with no second machine.
+  **The headline: a session that read one device refuses the other with
+  `Verify("seq rollback: cached 1, received 0")`** — the publisher's own second machine,
+  indistinguishable from an attack. So the consumer's only defence against a rollback is also what
+  breaks legitimate multi-device publishing, and a fix cannot be *"tighten the floor"*.
+  **The cell with no defence is EQUAL seq, not lower:** two devices at one `seq` with different
+  content are both accepted and nothing in the chain has anything to say — the same shape as *two
+  trees both at zero never go backwards*, and it is exactly where *"give the second device a
+  starting sequence"* lands every deployment. Read `multi_device_sequence.rs` before proposing that.
+  **The falsifier is where the cause actually is, and it is the transferable move: the rig varied
+  TWO things at once.** One `RootProjector` held across the *same two out-dirs* advances `0 → 1` and
+  is accepted in either order — so directories are not the cause, **processes** are. **When a rig
+  changes two variables together, hold one and re-run before you name the cause**; a measurement
+  that names the wrong variable produces a fix that relocates the defect. **Stated bound:** Tori
+  cannot publish (no verb reads a long-lived native store), so two out-dirs under one keypair is the
+  honest stand-in — say which one you ran. The fix is `core/peer`'s; ours is the measurement.
+  Packet: `docs/status/ROUTING-2026-09-09-arch-C-2-MEASURED-THE-SECOND-DEVICE-IS-A-ROLLBACK.md`.
 - **A `home_site` is a `(peer, site, page)` triple — NOT the domain, the root, or a URL.**
   `SiteRef { peer_id, id, loc }`: which publisher, which of their sites, which page (empty `loc` =
   the manifest root; empty `peer_id` = the documented sentinel for *this profile's own peer*). It
@@ -1639,6 +1906,17 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   and I cannot read it"* decide different things. `--prune` is opt-in and **never removes an asset a
   surviving shell names**: a retained build whose bundle was pruned is a slot that 404s at exactly
   the moment someone falls back to it.
+  **AND THE HARD STOP HAS A DOOR BESIDE IT: `builds.json` is the ORIGIN's history, and
+  `make site-dist` builds into a FRESH directory (2026-09-09).** An *absent* manifest is a first
+  publish — `next_index()` 0, empty list — which is right, and cannot be refused without breaking
+  the actual first publish, so the malformed-manifest hard stop above does not cover it. Measured:
+  `entitychurch.org` named **two** builds with the live one at **index 1**, while a same-day
+  `make site-dist` produced a manifest naming **one** at **index 0**. Uploading that un-names both
+  retained shells and walks the counter backwards, on the deploy where a fallback is worth most.
+  It fails in the **safe** direction (unnamed ≠ 404), so the loss is the *capability*, not an
+  incident — which is exactly why nobody notices. **Seed `<dir>/builds.json` from the origin before
+  running `builds`**; continuity is the uploader's to carry, not the build's.
+  `PUBLISHING-QUICKSTART` §6.2a is canonical for it.
   **C10, the client half:** `window.__ENTITY_BUILD_SLOT__`, the **first `<script>` in
   `index.html`, plain JS, before the module script** — the same tier as `__ENTITY_RECOVERY__` and
   for the same reason, since anything needing the app to boot in order to escape a build that will
@@ -1670,7 +1948,7 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   carry.** `entitychurch.org` serves `/builds.json` **200** listing **two** builds
   (`7a1118c2630bd81d` @ `d9cc645` index 1, and a retained `70e3e3d69e547fb4` @ `ef3a7e1` index 0,
   `min_rollback_index: 0`), and **both slots' shells AND their bundles resolve 200** — so row 10 is
-  real on a live domain for the first time. It also serves `/sw-selfdestruct.js` **200**, so C17 is
+  live on a real domain. It also serves `/sw-selfdestruct.js` **200**, so C17 is
   pre-staged there. **The other five — `ecdeos.org`, `entitychurchfoundation.org`,
   `entitycoreprotocol.org`, `entitychurchregistry.org`, `billslab.com` — are 404 on BOTH**, because
   all five still serve the pre-C9 bundle `6a41dc151b1b09ba`. **The first publish to any of them
@@ -1682,6 +1960,24 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   **Every one of those five is `(unstamped)` on `entity-core-ref`**, so the kernel half of their
   pair is unrecoverable from the artifact — the stamp landed 2026-09-05 and they predate it.
   Headers are correctable on all six (`fleet-probe` exit 0).
+  **THREE FRAMING ERRORS IN THE FIRST WRITE-UP OF THIS MEASUREMENT, corrected by meta-devops on
+  2026-09-09, and the class is worth more than any of them: WE RE-DERIVED ESTATE FACTS AND REPORTED
+  THEM AS DISCOVERIES.** The numbers all matched theirs — which is the useful half, an independent
+  check — and the framing was wrong three times. **(1)** *"`10a5398` was in no handoff"* is **false**:
+  it is in **six** places in this tree, including `RELEASE-2026-09-05-…`, *our own release document
+  from four days earlier*, and in their deploy runbook. A named search of `docs/status/` for a commit
+  label costs one grep and was not run. **(2)** *"row 10 real for the first time"* stated a
+  deployment fact as a first sighting; devops had recorded entitychurch's two slots on 09-06 in a
+  runbook **this repo does not have a copy of**. The fact is right; *"for the first time"* was a
+  claim about the record, and it was not our record to make. **(3)** *"`AGENTS.md` said the fleet has
+  no slots"* was **correct about THIS repo's charter** (verified at `7b80161`, line 1652) and read as
+  a claim about *theirs*, whose `AGENTS.md` contains the word *slot* zero times. **In anything that
+  crosses a repo boundary, `AGENTS.md` is ambiguous by construction** — there is one per repo plus the
+  injected standard. **Say *this repo's charter* or name the repo.**
+  **The rule: the estate is not ours to state.** Before reporting a deployment fact as new, grep our
+  own `docs/` for it and assume the seat that owns the estate already knows. An independent
+  measurement that agrees is worth reporting *as a check*; the same measurement wearing a discovery's
+  clothes spends credibility for nothing.
   **Original bound, measured 2026-09-04, kept because the reasoning is the transferable half: a
   mechanism that shipped is not a mechanism a deployment HAS.** `/builds.json` and
   `/builds/<live-build-id>/index.html` both 404 on all **six** live domains — the retained-build
@@ -1891,8 +2187,81 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   mismatch+hatch still reds, match+hatch passes — plus `site-dist` seen refusing on the real target.
   **Stated bound: this makes the pair MEANINGFUL, not reproducible-by-instruction.** Refusing a
   dirty tree guarantees both halves are *at some commit*, so a reader can check the pair out. It is
-  not a lockfile and does not choose a ref for you.
+  not a lockfile and does not choose a ref for you. **Their pipeline's construction is still
+  meta-devops': `estate.conf` declares the pair and `publish.sh` builds from git worktrees at the
+  declared refs. Our guard runs INSIDE their worktree and must pass trivially — a real assertion,
+  not a second opinion. Do not build THEIR publishing pipeline here; this repo makes the contract.**
+  **What WE build is the local half, and as of 2026-09-09 `CORE_RUST_REF` CONSTRUCTS — see the next
+  entry. The line that used to sit here, "do not build worktree construction here", is retired: it
+  was right about their pipeline and was read as a ban on pinning our own builds at all.**
+  **AND THE FIRST CUT GUARDED THE PATH *WE* RUN — meta-devops found it in a day (2026-09-09).**
+  It went on `make site-dist`, our release target. **Their production pipeline calls `make site`**
+  (`publish.sh:384`, `make -C $BROWSER_RUST site …`), which had no guard at all — so the commit
+  message correctly named "the site publish is built locally, where nothing pinned anything, which
+  is the one path that reaches a deployer" and then guarded a different path. *The path that reaches
+  the deployer was not ours to see, and that is exactly why the guard must be structural rather than
+  placed.* Now **one macro, `$(check_build_pair)`, on all six verbs that hand bytes to a third
+  party** — `site` · `site-dist` · `site-bare` · `registry` · `dist` · `dist-web` — with `federation`
+  (a local rig) and `builds-manifest` (reads an already-built shell whose pair is already stamped)
+  **deliberately excluded and named as such in the Makefile**, so the next reader does not re-derive
+  the set. **When you add a guard, enumerate every entry point into the thing you are guarding, not
+  the one in front of you** — and if another seat invokes this repo, ask which target they call.
   **Quote build ids as `(our commit, entity-core-rust commit)` in anything a deployer reads.**
+- **`CORE_RUST_REF` NOW BUILDS THE COMMIT IT NAMES — construction, not verification, and THE PIN
+  POINT IS THE CONTAINER MOUNT (2026-09-09, `tools/core-pin.sh`).** The guard above made the pair
+  observable and refusable. It could not help in the one case that actually bites on this box: **we
+  share a machine, and the other seat is often mid-edit in `entity-core-rust` right now.**
+  Verification can only tell you to come back later — and worse, **`--check` runs BEFORE the build**,
+  so a commit landing mid-`make wasm` produces a mixed artifact behind a green guard. *A check that
+  runs before the window cannot close the window.*
+  **Every containerized verb already mounts the parent at `/src/entity-systems`, so a SECOND `-v`
+  over `/src/entity-systems/entity-core-rust` overlays it** — verified before it was designed on
+  (`-v parent:/src -v pin:/src/sib` → the pin's bytes). All **thirty-three** path deps (25 here, 8
+  in `src-tauri`) resolve through that one path, so pinning costs **zero `Cargo.toml` edits, zero
+  symlinks, and zero writes to the sibling's git**. Cargo is never told anything; it resolves the
+  paths it always did and finds different bytes.
+  **`git archive`, deliberately NOT `git worktree add`.** A worktree registers itself in the
+  *sibling's* `.git/worktrees/` — a write to a repo that is not ours, which AGENTS-STANDARD forbids —
+  and it leaks rows into the other seat's `git worktree list`. Not theoretical: `entity-core-rust`
+  carries two stale `/tmp` worktrees marked `prunable` today. The export lands in one gitignored
+  `.core-pin/<sha>/`, keyed by **resolved commit** so reuse can never be wrong, extracted through a
+  scratch dir and `mv`'d so a pin is complete or absent. ~13 MB, 57 ms; `make core-pin-clean`.
+  **Unset stays the default and the default is unchanged — the live sibling.** Always-live means
+  always-latest, which is what you want while two seats iterate; a pin you must remember to move is a
+  pin that goes stale. Pinning is **per-invocation**, so neither mode is a standing commitment.
+  **`NATIVE=1` REFUSES a pin** rather than ignoring it — no container, no mount, so the build would
+  read the live checkout while the operator believed it was pinned. A guard that silently does not
+  apply reads as covered (AP36).
+  **Three things it cost to get right, and none was visible from the design.**
+  **(1) A pinned build needs its OWN `CARGO_TARGET_DIR`, and this is correctness, not hygiene.**
+  `git archive` stamps extracted files with the **commit's** date, so pinning to an older commit
+  yields sources *older* than artifacts already in `target/` from a live build — and cargo
+  fingerprints path deps by mtime, so it would call them fresh and relink the artifact built from
+  the **live** tree, silently serving exactly the bytes the pin exists to exclude. Measured: the
+  export of `e6213f1` carries mtime 14:04 (its commit time), the live working copy 13:59. The cheap
+  fix is wrong in the mirror: `touch`ing the export to *now* makes pin→live wrong instead. Only
+  separate target dirs make the two independent of each other's clocks. `CARGO_TARGET` is
+  **recursive (`=`)** so per-target and recursive-make `TARGET_DIR` overrides each get their own.
+  **(2) `build-stamp.sh` runs INSIDE the container and reads the pair through `build-pair.sh`**, so
+  without `ENTITY_CORE_PIN` carried in, a pinned release would stamp weaker provenance than an
+  unpinned one — the strongest build we can make describing itself as the one we could not identify.
+  **(3) `git` WALKS UP, so "not a checkout" reported a NEIGHBOUR'S COMMIT, not `unknown`** — a
+  latent defect in `build-pair.sh` predating this work and the exact outcome its own doc comment
+  promises is impossible. `git -C <export> rev-parse HEAD` finds no `.git` and searches ancestors;
+  **`<shared-parent>` is itself a repo**, so the answer was its `0bc11b3`. Provenance naming the
+  wrong repository's commit is worse than provenance admitting ignorance — nothing downstream can
+  tell them apart and the number looks plausible. `read_ref` now confirms `--show-toplevel` **is**
+  the directory asked about (`pwd -P` both sides). **Found by falsifying the env pass and reading
+  the value instead of the pass/fail** — the neuter did not produce the failure predicted for it,
+  and the difference was the finding.
+  **Falsified, not asserted:** pinned to the commit *before* `reader_ended` landed, the container
+  reads **0** occurrences at the path Cargo compiles while the live tree reads **11**; the stamp
+  reports `unknown` with the env pass removed and `e6213f1` with it; `--check` says *pinned by
+  construction* and skips the on-disk comparison, because **construction outranks verification** —
+  re-running it would refuse a build strictly more reproducible than any this check could pass.
+  **What this does NOT do:** it does not choose a ref for you, and it is still not a cross-repo
+  lockfile. A clean-but-unintended ref still builds. It makes the pair *choosable*; deciding **which**
+  pair is a release is still a human act.
   **AN UNEXPLAINED RED IN A SUBSYSTEM YOU DID NOT TOUCH IS A `git -C ../entity-core-rust log`
   BEFORE IT IS A BISECT — 2026-09-06, and the entry above did not prevent it.** That entry is
   written about a moving **build id**; this arrived as **18 failing tests**, which reads as your
@@ -2332,6 +2701,44 @@ you are about to change:
 **The ratchet applies to that file.** When a feature or an audit teaches something, it
 lands there (or here) in the same session, in the section it belongs to — and when you
 land something that spends a stated concession, grep for the sentence it retires.
+
+## Routing packets and the per-counterpart trackers
+
+**One tracker per seat we exchange work with, at `docs/status/TRACKER-<their-repo>.md`.** Seven
+exist: arch, `entity-core-{rust,go,py}`, `entity-workbench-go`, `<devops-tree>`,
+`entity-core-papers`, `entity-apps`. **They are the delivery** — arch reconciles against the tracker,
+not against a directory listing, so an ask that is open and unanswered needs no re-send. Four
+sections (Open — asks · Corrections we owe them · Filed, nothing owed back to us · Closed), **stable
+ids that are never renumbered**, one sentence per ask naming what must be *decided*.
+Per `SEAT-CLEANUP-INSTRUCTIONS-2026-09-09` (arch's tree).
+
+Four rules that carry the weight:
+- **"Filed, nothing owed back" is a real section, and most documents belong there.** Treating a
+  for-information review as an open ask is the specific error that made arch report 44 open items
+  against a seat whose true number was eleven.
+- ***Filed* ≠ *routed* ≠ *answered*. Default to not established** — and evidence delivery by a named
+  search of *their* tree for the packet stem or its subject, never by our own filename existing.
+- **Archived is not delivered.** Close on their receipt or their reply, never on our own work
+  finishing. (`entity-workbench-go`'s rule, and it is the best sentence anyone has written about
+  this channel.)
+- **An implementation defect in a spec that is already clear is not arch's** — it goes on the
+  implementing seat's tracker.
+
+**New packets:** `docs/status/ROUTING-<date>-<letter>-<recipient>-<slug>.md`, opening with `**To:**`
+/ `**From:**` / `**cc:**` **each on its own line**, `To:` naming **repositories** (never a person or
+a nickname), `cc:` meaning *you are not on the hook*. Never reuse a letter within a day.
+**Cite a packet by its FULL stem** — `<date>-<letter>` is unique to one repo on one day, which is
+not unique, and three ids in this ecosystem already reach three different packets each. Existing
+documents stay where they are; this applies going forward.
+
+> **Where this convention is *not* written down, measured 2026-09-09.** Arch's instruction says it
+> is already in `AGENTS-STANDARD.md`. It is in **arch's copy** — the canonical
+> `<coordination-tree>/AGENTS-STANDARD.md` is 231 lines with **no** `## Routing packets` section,
+> **ours is byte-identical to canonical**, and 14 of 16 repos here carry no such section. The only
+> other holder is `entity-system-generator`, whose copy says so in its own provenance note (*"arch's
+> local edit of 2026-09-08 … not yet reconciled"*). The standard forbids editing our copy, so **this
+> section is where it lives for us** until the canonical file moves. Do not "fix" `AGENTS-STANDARD.md`
+> here; propose it upstream.
 
 ## Commit & PR
 
