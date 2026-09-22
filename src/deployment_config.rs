@@ -322,25 +322,53 @@ pub fn expand_origin(origin: &str) -> Option<String> {
 /// Read-only, best-effort: any failure (not served, unreachable, unparseable,
 /// or an empty/unrecognized doc) returns `None` and the build-time defaults
 /// stand (D16 — never blocks or fails boot).
+///
+/// **Bounded (D23, C1).** This is called from `boot_load`, which is awaited
+/// before the rAF loop starts and before the frozen-frame watchdog installs, so
+/// an unbounded await here is a blank page with no watchdog and no exit — not a
+/// slow boot. It used to be a bare `window.fetch_with_str`, which *rejects*
+/// promptly on a refused connection (why offline boot mostly worked) and
+/// *never returns* on an origin that accepts and never answers. Both call sites
+/// — the cold-boot `durable.is_none()` read and the warm-boot routing reconcile
+/// — go through this one function, so this deadline covers the whole boot path;
+/// the enumeration behind that claim is design §4A, and its falsifier is G1
+/// (`boot_survives_a_blackholed_deployment_config`), which was observed red
+/// before this line changed.
+///
+/// A timeout is deliberately indistinguishable from "not served": both mean the
+/// build-time defaults stand for this boot, which is the behaviour D16 already
+/// promises and every caller already handles.
 #[cfg(target_arch = "wasm32")]
 pub async fn fetch() -> Option<DeploymentConfig> {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-
-    let window = web_sys::window()?;
-    let resp_val = JsFuture::from(window.fetch_with_str(DEPLOYMENT_CONFIG_PATH))
-        .await
-        .ok()?;
-    let resp: web_sys::Response = resp_val.dyn_into().ok()?;
-    if !resp.ok() {
+    let resp = match crate::net::fetch_text_bounded(
+        DEPLOYMENT_CONFIG_PATH,
+        crate::net::BOOT_FETCH_DEADLINE_MS,
+    )
+    .await
+    {
+        Some(r) => r,
+        None => {
+            // Unreachable, aborted at the deadline, or unreadable. Logged at
+            // WARN rather than DEBUG because on a healthy origin it does not
+            // happen, and when it does it is the single most useful line in a
+            // "the page was blank" report.
+            tracing::warn!(
+                "deployment-config: {DEPLOYMENT_CONFIG_PATH} unreachable or timed out after \
+                 {}ms — booting on build-time defaults (D23: a deadline is a state the boot \
+                 proceeds from)",
+                crate::net::BOOT_FETCH_DEADLINE_MS
+            );
+            return None;
+        }
+    };
+    if !resp.ok {
         tracing::debug!(
-            status = resp.status(),
+            status = resp.status,
             "deployment-config: {DEPLOYMENT_CONFIG_PATH} not served — using build-time defaults"
         );
         return None;
     }
-    let text_promise = resp.text().ok()?;
-    let text = JsFuture::from(text_promise).await.ok()?.as_string()?;
+    let text = resp.text;
     match DeploymentConfig::parse(&text) {
         Some(cfg) if !cfg.is_empty() => {
             tracing::info!(

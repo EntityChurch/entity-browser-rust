@@ -36,6 +36,12 @@ blurb = "START HERE if you want to put your own content on your own domain. Iden
 group = "Overview"
 
 [[doc]]
+path  = "docs/architecture/specs/REFERENCE-BOOT-AVAILABILITY-AND-RECOVERY.md"
+title = "Boot, updates, and recovery"
+blurb = "How the app starts, how a new build reaches a browser that has visited before, and what recovers a bad state. The entry-vs-asset file split and the cache rules that follow from it — including the one deployment mistake that has no clean recovery; why updating is silent and automatic; the secure-context requirement, and why a plain-HTTP LAN address has no offline capability at all; what System Recovery does and does not answer; and a frank list of the current limits (no export, no version selection, no build id reported)."
+group = "Overview"
+
+[[doc]]
 path  = "docs/architecture/specs/SYSTEM-VISION.md"
 title = "System Vision"
 blurb = "Orientation — what the entity browser is for and the model it embodies. Start here."
@@ -134,6 +140,12 @@ group = "How we work"
 path  = "docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md"
 title = "Doctrines — browser substrate (the procedures)"
 blurb = "The procedure layer on the charter: the Feature Development Doctrine (F0–F8, 'build X') and Audit Doctrine (A0–A12, 'Y is broken'), the recurring-failure-cycle named in §0.5, and the F7/A10 ratchet."
+group = "How we work"
+
+[[doc]]
+path  = "docs/architecture/specs/MODEL-STAKEHOLDERS-AND-OWNERSHIP.md"
+title = "Stakeholders and ownership"
+blurb = "Ground truth for who owns what in a deployment: the three positional roles (vendor, deployer, end user) and why conflating them muddles every ownership rule; the two storage partitions — program-vs-state, which exists as a substrate boundary so replacing the program cannot touch local state, and publisher-vs-user inside the tree, which does not exist and is why no field can be safely refreshed; why the deployer↔end-user line is configured per deployment rather than fixed, so deployments span kiosk to full shell; and who can actually remedy each class of failure."
 group = "How we work"
 
 [[doc]]

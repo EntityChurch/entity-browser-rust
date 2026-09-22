@@ -2907,6 +2907,111 @@ mod tests {
         );
     }
 
+    // ── The re-key reproduction fixtures ──────────────────────────────────
+    //
+    // Two identities, so `dist/` can be published as one publisher and then
+    // RE-published as a different one — the `ecdeos.org` 2026-08-24 re-key,
+    // reproduced offline. Consumed by `tests/e2e_worker.rs`
+    // `rekeyed_domain_heals_on_next_boot`.
+    //
+    // They are FIXED seeds rather than generated ones because the e2e reads the
+    // resulting peer-ids back out of the emitted `entity-deployment.json`: the
+    // test must never re-derive a key itself, or a change to key derivation
+    // would make the fixture and the app agree with each other while both drift
+    // from the published artifact.
+
+    /// The publisher a returning visitor's browser learned at first contact.
+    const REKEY_SEED_BEFORE: [u8; 32] = *b"entity-rekey-before-seed-v1\0\0\0\0\0";
+    /// The durable identity the domain is re-keyed onto. Distinct from
+    /// [`DEMO_PUBLISH_SEED`] AND from `REKEY_SEED_BEFORE`, so a fixture that
+    /// silently failed to switch identity cannot pass as a re-key.
+    const REKEY_SEED_AFTER: [u8; 32] = *b"entity-rekey-after-seed-v1\0\0\0\0\0\0";
+
+    /// Publish the demo set + a locked same-origin deployment config into
+    /// `dist/` under an EXPLICIT publisher identity.
+    ///
+    /// `publish` only cleans its *own* peer's subtree (`base.join(peer_id)`), so
+    /// calling this twice with different seeds leaves BOTH trees standing —
+    /// which is the honest starting point. Production's re-key then had a second
+    /// half: *"the abandoned demo peer 404s"* was a listed success criterion. The
+    /// e2e performs that deletion itself rather than having the fixture do it,
+    /// so the two halves of a re-key stay separately observable.
+    /// `surface_args` is what makes this cover BOTH deployment shapes. The
+    /// re-key repair must not depend on which surface the domain ships — the
+    /// first version of the fix healed `surface=site` and left `surface=window`
+    /// broken, which is how `entitychurchfoundation.org` deploys, and a fix that
+    /// works on one surface is not a fix (AP26).
+    /// The output directory is taken from `ENTITY_REKEY_OUT` (default `dist`)
+    /// so the e2e can publish into an **isolated copy** of the served tree.
+    ///
+    /// That is not tidiness. Publishing these fixtures into the shared `dist/`
+    /// broke a phase that has nothing to do with re-keying: the monolith's
+    /// Phase 27 fixture then failed with *"publisher bound no signature"*,
+    /// because a publish whose content is already present takes the engine's
+    /// idempotent path and expects a prior signed head that a different
+    /// publisher's artifacts cannot supply. It passed when the monolith ran
+    /// alone and failed only when these tests ran first — i.e. it presented as
+    /// a flaky suite, in the wrong file.
+    fn emit_rekey_fixture(seed: [u8; 32], surface_args: &[&str]) {
+        let out = std::env::var("ENTITY_REKEY_OUT").unwrap_or_else(|_| "dist".to_string());
+        let hex = crate::vault_codec::seed_to_hex(&seed);
+        let mut args = vec![
+            "publish".to_string(),
+            out.clone(),
+            "--deployment-config".to_string(),
+            format!("--identity-seed={hex}"),
+        ];
+        args.extend(surface_args.iter().map(|s| s.to_string()));
+        let _ = run(&args);
+        assert!(
+            std::path::Path::new(&out).join("entity-deployment.json").exists(),
+            "re-key fixture: deployment config not emitted into {out}/"
+        );
+    }
+
+    /// The locked-kiosk site surface — `ecdeos`-shaped.
+    const REKEY_SURFACE_SITE: &[&str] = &["--surface=site", "--locked"];
+    /// The maximized Site Browser window — `entitychurchfoundation.org`-shaped.
+    const REKEY_SURFACE_WINDOW: &[&str] = &["--surface=window", "--window-type=Site Browser"];
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_rekey_fixture_before() {
+        emit_rekey_fixture(REKEY_SEED_BEFORE, REKEY_SURFACE_SITE);
+    }
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_rekey_fixture_after() {
+        emit_rekey_fixture(REKEY_SEED_AFTER, REKEY_SURFACE_SITE);
+    }
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_rekey_fixture_before_window() {
+        emit_rekey_fixture(REKEY_SEED_BEFORE, REKEY_SURFACE_WINDOW);
+    }
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_rekey_fixture_after_window() {
+        emit_rekey_fixture(REKEY_SEED_AFTER, REKEY_SURFACE_WINDOW);
+    }
+
+    /// The fixtures must name two DIFFERENT publishers, and neither may collide
+    /// with the demo seed. Cheap, but it is the one property the whole
+    /// reproduction rests on: if these ever converged, the e2e would publish,
+    /// "re-key" to the same identity, and pass while testing nothing.
+    #[test]
+    fn rekey_fixture_seeds_are_three_distinct_identities() {
+        let pid = |s: [u8; 32]| entity_crypto::Keypair::from_seed(s).peer_id();
+        let (before, after, demo) =
+            (pid(REKEY_SEED_BEFORE), pid(REKEY_SEED_AFTER), pid(DEMO_PUBLISH_SEED));
+        assert_ne!(before, after, "the re-key fixtures must not share a publisher");
+        assert_ne!(before, demo, "REKEY_SEED_BEFORE collides with the demo publisher");
+        assert_ne!(after, demo, "REKEY_SEED_AFTER collides with the demo publisher");
+    }
+
     /// Cut 2b producer↔consumer: the `--deployment-config` JSON `publish`
     /// emits must parse back through the SPA's [`crate::deployment_config`]
     /// reader with the home/origin/posture intact (round-trip safety — the file

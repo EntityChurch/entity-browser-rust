@@ -115,6 +115,21 @@ pub fn site_origin_path(app_id: &str, peer_id: &str, target_peer_id: &str) -> St
     format!("{}{}", site_origins_prefix(app_id, peer_id), target_peer_id)
 }
 
+/// Prefix for the peer-supersession registry — `retired_peer_id → the peer that
+/// replaced it`. Flat, one level, same shape as the site-origin registry (so the
+/// same `tree_listing_async` immediate-children read is correct for it).
+/// e.g. `"/{pid}/app/entity-browser/peer-supersessions/"`
+pub fn peer_supersessions_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/peer-supersessions/", peer_id, app_id)
+}
+
+/// One supersession record.
+/// e.g. `peer_supersession_path(APP_ID, pid, "PEERA")` →
+/// `"/{pid}/app/entity-browser/peer-supersessions/PEERA"`
+pub fn peer_supersession_path(app_id: &str, peer_id: &str, retired_peer_id: &str) -> String {
+    format!("{}{}", peer_supersessions_prefix(app_id, peer_id), retired_peer_id)
+}
+
 /// Prefix for the **app-tier** site-cache preferences for a cached foreign
 /// site — the browser's own bookkeeping (visit count, bookmarked, is-home,
 /// last-viewed-page). The FIELD-SPLIT counterpart to the SDK-tier provenance

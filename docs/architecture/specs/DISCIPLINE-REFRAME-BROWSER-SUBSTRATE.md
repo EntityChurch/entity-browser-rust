@@ -373,6 +373,7 @@ name. Rule: *every* long-lived driving loop (rAF, tick, any repeated-render
 only the one in `main.rs`. First incident:
 `AUDIT-L5-COMPUTE-HOST-FOUNDATION-2026-08-01` #1 — fixed via
 `program_host::host::guarded`; ratify on a 2nd loop repeating the shape).
+D23 — **ratified 2026-08-27**, on the terms it set for itself; see the entry below.
 
 **D19 — Every user-facing string goes through `t(key)`.** The string twin of
 "theme via tokens" (raw English → a message key → the catalog, just as raw hex →
@@ -584,6 +585,105 @@ was hardcoded English and dropped the host locale (→ `t()` + `i18n::apply(boot
 dist is a **dev/abort** build, so a REAL tick panic aborts the module there — the panic→`Err`
 containment is gated by a **native** `guarded` test, the visible-fault **surface** by an e2e
 query-param seam (`&app-host-fault-tick=N`); do not "upgrade" the e2e to a real panic.
+
+**D23 — No unbounded network await on the boot path.** Between page load and the
+frame loop running, every network operation carries an explicit deadline, and
+exceeding it is a **state the boot proceeds from**, never a stall; a cached or
+durable fallback that exists must be reachable within that deadline.
+
+*Distinct from D13/D22*, which are about a loop that **panics**. This is a boot
+that never **arrives** — and the observable is worse, because it is identical to
+a hang with no marker at all: the frozen-frame watchdog installs *after*
+`boot_load` returns (`main.rs`), so a boot that never returns never gets one.
+No banner, no message, no exit.
+
+*The recovery console counts, and it counts hardest.* **2026-08-27:** `tools/net-lint.sh`
+originally scanned Rust and `assets/sw.js` only, leaving `index.html` — which carries the
+service-worker registration *and* the L1 System Recovery BIOS — uncovered. That scope was
+drawn around where the bug had been found rather than around where the rule applies. The
+BIOS is the strictest case of D23, not an exception to it: it is what a user reaches
+*because* something already hung, and an unbounded read there replaces a broken app with a
+broken diagnostic, with no third tier beneath it. `index.html` is counted from that date, and
+the behavioural half is `the_recovery_console_survives_a_blackholed_origin` — the panel must
+reach a *reported* "could not reach the origin", never a spinner.
+
+*Why it is not a rule about the word `fetch`.* **D23 bounds an await that is
+blocking a defined alternative outcome.** A deadline is an improvement only when
+there is something else to do on expiry — build-time defaults (D16), a cached
+shell. Where the only outcomes are "the bytes" or "nothing" — a hashed asset
+absent from the cache, where the URL *is* the version — a deadline converts a
+slow first download of the ~30 MB bundle into a hard failure on exactly the
+connections least able to afford it. Those sites stay unbounded **and say so**;
+`tools/net-lint-baseline.txt` carries them by name rather than exempting their
+files. Getting this boundary wrong in the enthusiastic direction is the likeliest
+way to misapply this discipline.
+
+*The distinction the whole thing turns on, because it is what made the symptom
+disbelievable:* a network that **rejects** — interface down, DNS failure,
+connection refused — rejects the promise promptly, every `.catch` and `.ok()?`
+is reached, and boot continues. That case always worked, which is why the freeze
+was intermittent. A network that **accepts and never answers** — captive portal,
+half-open socket, a foreign LAN blackholing an address that used to work, an
+overloaded CDN edge — never rejects anything at all.
+
+*Source:* four same-shape instances. `assets/sw.js` `networkFirst` awaiting
+`fetch` with no deadline while the cached shell sits unreachable in the `.catch`
+(`grep -c setTimeout assets/sw.js` → **0**); `deployment_config::fetch()` on the
+**cold** boot path, shipped and live on the build both production domains were
+serving, plus R1's widening of it to warm boots
+(`AUDIT-REKEY-RECONCILE-2026-08-27` F1); the worker `Ready` wait under build-key
+skew (`REVIEW-2026-08-25` §3.3). Two languages, three subsystems, no shared code.
+Prior art the omission is measured against: Workbox ships
+`networkTimeoutSeconds: 3` on navigations by default, for this exact symptom
+(AP28).
+
+*Ratified on evidence, not on the count.* It was filed as a candidate precisely
+because all instances were **code-read and none reproduced**, and it named its
+own condition: *"ratify when G1 — an origin that accepts and never answers —
+reproduces the blank page and the fix closes it."* That run now exists.
+`tools/e2e/blackhole-serve.py` serves `dist/` and accepts-without-answering a
+nominated path — the one thing `python3 -m http.server` cannot do, and the reason
+this failure class had never been expressible in the harness. Observed **red on
+the unfixed tree first**, with the failure being the stated mechanism: the
+captured console stops dead at `app.rs:1740`, the line immediately before the
+fetch, and never reaches `Frame loop started`. Both gates green after the fix.
+
+*How / enforcement — all three, as owed:*
+1. **`src/net.rs`** — `net::fetch_text_bounded()`, the one bounded read. It
+   covers **headers and body under a single deadline**: bounding only the header
+   phase leaves the identical hazard one step later, since an origin may answer
+   `200` and then never send a body. It therefore does not expose a `Response`.
+2. **`tools/net-lint.sh`** (in `make lint`, baseline-ratcheted) — raw
+   `fetch_with_str` / `fetch_with_request` outside the chokepoint, and bare
+   `fetch(` in `sw.js` outside `fetchWithDeadline`. Verified by mutation: it
+   fires and names the file.
+3. **G1** — `boot_survives_a_blackholed_deployment_config` and
+   `a_cached_shell_survives_a_blackholed_origin` in `tests/e2e_worker.rs`, both
+   anti-vacuity guarded on the **server's own log** (the request must have
+   arrived and been stalled), because a boot that never asked would otherwise
+   satisfy every assertion for the wrong reason.
+
+Neither static half subsumes the other: the gate proves a deadline is *honoured*
+but only for the fetches that exist today on the paths it exercises; the lint
+proves no *new* raw fetch has appeared but cannot tell whether a deadline is
+respected.
+
+*One deadline covers BOTH stall shapes, and that is measured rather than
+derived.* There are two ways an origin can stall: send nothing at all, or send
+complete headers and then no body. The second looked like a hazard the fix would
+miss, because `fetch` is specified to resolve on **headers** — so a deadline
+clearing its timer at that moment would be disarmed exactly when the body read
+began, and the hang would move to `await cache.put('/', resp.clone())`. It does
+not: `a_cached_shell_survives_an_origin_that_stalls_the_body` is green in ~5 s at
+`NETWORK_DEADLINE_MS = 3000` and **red at 300000**, so the deadline is
+demonstrably what saves it. That gate is kept although it found nothing to fix,
+because the property is **engine behaviour rather than ours** and can therefore
+change without any diff of ours touching it.
+
+*What this does NOT close.* The `sw.js` deadline covers a **cached** shell. A
+first-ever visit to a black-holing origin has nothing to fall back to, and no
+deadline creates one — that remains E1 (reload retries), and it is the residual
+the boot-slot work addresses, not this discipline.
 
 ---
 
@@ -904,6 +1004,225 @@ these shipped in this repo.
   in any form. And: four of that audit's ten findings were found by *running* the
   tooling rather than reading it.
   [D8, D10, `AUDIT-NAMING-AND-PUBLISHING-ARC-2026-08-18`]
+
+- **AP26 — A self-heal scoped to the instance, gating out the class.** A repair
+  written for one instance of a failure, guarded by a condition that only that
+  instance satisfies, does not merely fail to cover the rest of the class — the
+  guard **prevents** the broad path from ever running, so the class is *less*
+  reachable than if no repair existed. The tell is a narrow, cheap precondition
+  in front of an expensive-but-general recovery: `if <the exact symptom I saw>
+  { <the general fix> }`. The general fix is right there; the `if` is what
+  stops it.
+  *Incident (2026-08-24 → 27, `ecdeos.org`):* a domain re-keyed onto a new
+  publisher identity, and every returning visitor kept asking the retired one —
+  newest WASM, 404s, an app that reports healthy. A warm-boot reconcile already
+  existed for this class and its comment stated the general principle correctly
+  (*"the site-origin REGISTRY is a routing FACT, not a preference … stranded
+  with no way to self-heal"*). But it re-fetched **only when the home peer's
+  origin was unregistered** — it repaired *the origin for the peer you already
+  have*, and could never repair *the peer you have being wrong*. The first cold
+  boot had registered that origin, so the guard was false and the re-fetch never
+  ran.
+  **Two things this cost, and they are the reason it is catalogued rather than
+  just fixed.** First, *the guard made the bug invisible in the log*: the
+  identical console is produced whether the reconcile ran and compared the wrong
+  pair or never ran at all (`unwrap_or(false)` collapses `None` and
+  `Some`-without-the-key onto one branch), so **two documents independently
+  concluded the reconcile had fired and the fix was a one-line field
+  comparison** — a fix that would have shipped looking correct while healing only
+  the minority whose origin seed had failed. The discriminator was a single
+  absent `warn!` line, and it took a live console to settle.
+  Second, the repair had a second half nobody had named: the overlay's
+  navigation state persists its own `peer`, so correcting the session config
+  alone leaves the user parked on the retired publisher **while the config
+  reports healthy** — the original defect wearing new clothes.
+  **And the first attempt at that second half repeated the anti-pattern one
+  level down**: it re-pointed the *overlay* and left a Site Browser **window**
+  (how `entitychurchfoundation.org` deploys) still on the retired peer, filed as
+  a "known gap". A fix scoped to the surface the author was looking at is the
+  same mistake as a reconcile scoped to the symptom the author had seen. The
+  operator's correction is the rule: **a peer being replaced is ONE fact about a
+  peer, not N facts about surfaces** — so it is recorded once
+  (`src/peer_supersession.rs`) and resolved at the single decode point every
+  surface shares, which also covers surfaces that do not exist yet. A *sweep* of
+  stored state was the obvious alternative and is unreachable: the recursive
+  enumeration is arm-dependent and the async one drops directory entries at the
+  worker boundary, so a sweep silently misses entries on one arm — AP26 a third
+  time, in the repair for AP26.
+  **Rule: write the reconcile at the width of the *class*, and when you
+  supersede a narrow one, retire it rather than gain a sibling.** Two
+  reconcilers with overlapping triggers is how the first came to hide the
+  second. Corollary, earned twice here: **when two code paths produce a
+  byte-identical observable, one of them must be made to say so** — the absent
+  log line was the whole diagnosis.
+  *Enforcement:* `rekeyed_domain_heals_on_next_boot` **and
+  `…_window_surface`** (`tests/e2e_worker.rs`) run the identical scenario over
+  BOTH deployment shapes — publish under one identity, cold-boot, re-key, retire
+  the old tree, reload the same profile. Two surfaces because one surface is how
+  this was got wrong. Each asserts **anti-vacuity** first (the boot was warm, the
+  re-key was detected, a supersession was recorded), since every other assertion
+  is also satisfied by a browser that merely cold-booted and never held the
+  retired peer.
+  *Corollary the proving cost, three times in one sitting:* **a selector that
+  looks precise and is not, whose failure surfaces away from its cause.** A
+  libtest substring filter also matched a longer fixture name (wrong surface
+  booted, failure reported as a product bug); `--exact` then matched nothing
+  because it compares the FULLY-QUALIFIED name, and **libtest exits 0 for "ran no
+  tests"**, so the fixture became a silent no-op that passed its own status
+  check; and publishing fixtures into the shared `dist/` broke the monolith's
+  Phase 27 with *"publisher bound no signature"* — green when that phase ran
+  alone. **Rule: a fixture asserts that it ran, and does not share a directory it
+  did not create.**
+  [D9, D16, `DESIGN-RESILIENCE-RECONCILIATION-AND-ENTITY-DOCTOR` §1.1a; arch's
+  L14 — *a rule written at the width of the incident* — is the same shape seen
+  from the spec side]
+
+- **AP27 — Escalating analysis as a decision.** Presenting the settled consequences of the
+  model as a menu for the operator. It reads as deference and functions as avoidance: it
+  moves work that requires *reading the system* onto someone who is being asked to rule on
+  it without one, and it launders "I did not finish the analysis" into "this needs your
+  input". The tell is a decision list whose options can be closed by re-reading the
+  requirements, the extensions, or the data model.
+  *Incident (2026-08-27):* a six-item "decisions only the operator can make" list. Five
+  collapsed on contact. Adoption granularity is **per entity** — it is in the store, it has
+  a path, it has a hash, it changed — because that is what the model *is*, not a preference;
+  the "atomic vs per-item" framing had invented a choice the system does not offer, and used
+  the wrong noun for the one it does. The ownership line was **malformed**: there is no
+  meaningful user peer yet, only our system peer and our publishing peers. DNS-shaped names
+  needed a **rename**, because the only defect is a pattern implying enforcement we neither
+  have nor want. Prerendered HTML is **not optional** if no-JS readers are supported.
+  Retention depth was **unanswerable** as posed and needed the prior analysis first. The
+  sixth was withdrawn as too poorly explained to be answered — our defect, not an open
+  question.
+  **Rule: if the analysis makes the design clear, it is not a decision — do the design.**
+  Escalate when the answer genuinely turns on intent, cost the operator alone can weigh, or
+  an outward-facing commitment. A real decision is recognisable; these were not.
+  Corollary: **a "known gap" filed in a fix is usually this anti-pattern wearing a different
+  hat** — see AP26, where the surface left unrepaired was booked as a gap rather than as the
+  unfinished half of the work.
+  [D9, `HANDOFF-2026-08-26-deployment-and-resilience-where-the-design-landed` §5]
+
+- **AP28 — A hand-rolled standard mechanism, minus the safety option the reference
+  implementation defaults to.** Re-implementing a well-trodden pattern from its *description*
+  rather than from a canonical implementation, and thereby omitting the guard that the
+  canonical version considers so essential it ships it on by default. The omission is
+  invisible to review because the code matches the pattern's name and its happy path exactly;
+  what is missing is the clause that only exists because the original authors hit the failure.
+  *Incident (2026-08-27):* `assets/sw.js` implements network-first caching in ~50 well-reasoned
+  lines with an extensive comment block — and no timeout of any kind
+  (`grep -c setTimeout assets/sw.js` → **0**), so the cached shell one line below is reachable
+  only when the network *rejects*, never when it accepts and stalls. Workbox — Google's
+  reference implementation of the same strategy — exposes `networkTimeoutSeconds` and its
+  `pageCache()` recipe sets it to 3 for navigations, with the documented rationale being
+  verbatim the symptom we shipped: *"loading spinners spinning endlessly."*
+  **Rule: when implementing a named pattern, read a canonical implementation's OPTIONS, not
+  just its description — the options are where the field experience is recorded.** A pattern's
+  defaults encode failures someone else already paid for; declining them is a decision that
+  must be made deliberately and written down, not made by not knowing.
+  Note the ladder position honestly: this is a **first** instance. D12
+  (*read canonical sources*) is the discipline it is already an instance of; what is new is
+  that "canonical source" includes the **API surface of a reference implementation**, not only
+  specs and upstream docs.
+  *Closed 2026-08-27:* `fetchWithDeadline` in `assets/sw.js`, at Workbox's own 3 s for
+  navigations — the number borrowed rather than invented, which is the point of the entry.
+  The mechanism is no longer code-read: `a_cached_shell_survives_a_blackholed_origin` was
+  observed red on the unfixed worker (the reload never painted although the shell was
+  cached) and green after.
+  [D12, D23, `DESIGN-CODE-AXIS-RECOVERY-AND-BOOT-SLOTS` §1.1b, §2.1]
+
+- **AP29 — A gate that counts prose.** A grep-based lint whose pattern matches the
+  *documentation of* the thing it forbids as readily as the thing itself. It reports a
+  violation in the file that has just been fixed — because the fix's comment names, by
+  necessity, the raw call it replaced — and the cheapest way to make it green is to delete
+  the explanation. **A gate that charges you for documenting its own rule teaches people to
+  stop documenting it**, which costs more than the drift it was built to catch.
+  *Incident (2026-08-27):* the first `tools/net-lint.sh` flagged
+  `src/deployment_config.rs` for a `fetch_with_str` that existed only in the doc comment
+  explaining why the call had been routed through the bounded chokepoint, and counted a
+  fourth `fetch(` in `sw.js` that was likewise a sentence. Fixed by dropping whole-line
+  comments before counting (`flatten`) — deliberately **not** a strip-from-`//`-to-end rule,
+  which would truncate any code line holding an `https://` literal and silently stop
+  counting whatever followed it, converting a false positive into a false negative.
+  **Rule: a text-matching gate is measured against its own documentation before it is
+  trusted, and it is verified by MUTATION — reintroduce the violation and watch it fire —
+  not by observing that it is green.** A lint that has only ever been seen passing has not
+  been shown to do anything. This sits beside the suite's standing rule about a cheap check
+  shadowing an expensive one; here the cheap check was fooled by the expensive one's
+  write-up.
+  [D9, D23, `tools/net-lint.sh`]
+
+- **AP30 — A durable record of someone else's assertion, with no way to re-ask.** State
+  adopted from a remote source (a deployment document, a registry, a peer's claim) is written
+  down permanently because it is *expensive to rediscover* — and then nothing ever
+  rediscovers it. The write path is conditional on a divergence that, by construction, occurs
+  exactly once; after it fires, the premise is never re-examined again for the life of the
+  profile. **The trigger is therefore not the rare event the record was designed for — it is
+  an ordinary mistake at the source**, which is corrected in minutes and yet becomes permanent
+  on every client that happened to load during the window.
+  *Incident (2026-08-27):* `peer_supersession` wrote `retired → replacement` durably on a
+  warm-boot identity divergence, with **no delete path, no listing and no expiry**
+  (`snapshot()` existed with zero callers). A single misconfigured `/entity-deployment.json`
+  would be adopted by every browser that booted while it was live and would *survive the
+  origin being fixed*, because the adoption branch never runs twice. Recovery was
+  clear-site-data — brick-matrix cell **#6 at E5**, introduced one row down by the fix for
+  cell #5, which is the worked example behind S-9.
+  **Rule: a durable record derived from a remote assertion must carry the path back to that
+  assertion.** Re-check it whenever the source is in hand and drop it when the source
+  contradicts it; "we already asked once" is not a reason, it is the defect. Two corollaries,
+  both of which are where the naive version goes wrong:
+  **(a) absence of evidence is never evidence** — no document, an expired D23 deadline, or a
+  document that declines to answer must change nothing, or a truncated file becomes a way to
+  wipe good state; and **(b) revalidate strictly after adopting**, because a legitimate second
+  divergence looks exactly like a stale record until the adoption path has written its half.
+  *Closed 2026-08-27:* `peer_supersession::{forget, revalidate, stale_against}` +
+  `Peers::remove_and_wait`, gated by `a_supersession_the_domain_contradicts_is_dropped` —
+  observed red on the unfixed tree, and falsified a second time by neutering only the
+  *durable* half of the drop, which reds the count assertion alone. Cell #6 → **E1**.
+  This is D9's third clause (*every persisted entity → writer / reader-at-boot / GC story*)
+  applied to remotely-derived state, where the "GC" is a re-derivation rather than a sweep.
+  Ladder position, honestly: **first instance**. The rollback pin's TTL (S-3) is the same
+  shape but was caught by analysis, not by a bug, so this stays an anti-pattern and is not
+  claimed as a discipline.
+  [D9, D16, `AUDIT-REKEY-RECONCILE-2026-08-27` F2, `src/peer_supersession.rs`]
+
+- **AP31 — A gate that is green by inheritance.** A test asserts against a build artifact
+  that the target running the test does not produce. It passes for everyone who happened to
+  run the other target first, and fails the moment someone runs it clean — so its record of
+  greenness measures the developer's shell history, not the code.
+  *Incident (2026-08-27):* `the_app_reports_the_build_it_is_running` (the C5 gate) asserts the
+  app's logged build id against the `entity-build` stamp in `dist/index.html`. `make wasm` and
+  `make wasm-release` both end in `./tools/build-stamp.sh`; the `make e2e-worker` build line
+  did **not**, so the gate was green only on a `dist/` left behind by an earlier `make wasm`,
+  and a clean `make e2e-worker` red it with *"tools/build-stamp.sh did not run."* It was
+  reported green in the session that introduced it.
+  **Rule: a gate must be run from a clean invocation of the target that owns it, before it is
+  reported.** Where a gate needs a build step, that step belongs in *every* build path that
+  feeds it — not in the one the author happened to use. The generalisation of the suite's
+  existing `SKIP_BUILD=1` warning: that rule names one way to inherit a stale `dist/`; this is
+  the same failure arriving through a target that never built the thing at all.
+  [D10, `Makefile` `e2e-worker`, `tools/build-stamp.sh`]
+
+- **AP32 — A diagnostic whose answer can come from the thing it is auditing.** A probe reads
+  through a layer it is supposed to be checking, so the layer can satisfy the probe with its
+  own stale copy. The report then says *"everything agrees"* — the most dangerous output a
+  diagnostic has, because it is the one that stops the investigation.
+  *Incident (2026-08-27):* the System Recovery version panel compares the running build with
+  "what the origin serves now". `/index.html` is not a hashed asset, so `sw.js` routes it
+  through `networkFirst` — which since C2 falls back to the **cached shell** when the origin is
+  slow. On the exact failure being diagnosed (a stale worker, a slow or black-holing origin)
+  the comparison would have been answered out of the cache under audit and reported
+  *"you are running the current build."* A user acting on that stops looking, or clears site
+  data on the wrong theory — the E5 action this work exists to prevent.
+  **Rule: a diagnostic states the provenance of every value it compares, and reports
+  INCONCLUSIVE rather than agreement whenever a value could have come from the layer under
+  test.** Prefer a signal that cannot be spoofed by that layer: here the service worker's own
+  `waiting` registration, which is definitive, needs no network, and is the observed form of
+  the claim the console had previously only asserted. The panel now says "inconclusive — a
+  service worker is controlling this page and its network-first leg falls back to the cache"
+  whenever a controller is present, and reserves "current" for the uncontrolled case.
+  *Related:* the suite's standing rule that a cheap check must not shadow an expensive one.
+  This is its read-side twin — a cheap check shadowed by the cache it was meant to inspect.
+  [D7, D13, `index.html` recovery console, `the_recovery_console_survives_a_blackholed_origin`]
 
 ---
 

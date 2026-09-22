@@ -350,6 +350,12 @@ web-sys = { version = "0.3", features = [
     # at stable URLs) is never served stale from the browser cache.
     "Request",
     "RequestInit",
+    # D23 (`src/net.rs`): a boot-path fetch is bounded by an AbortController on
+    # a deadline. Not decoration — an origin that ACCEPTS AND NEVER ANSWERS
+    # never rejects the promise, so a bare fetch on the boot path is a blank
+    # page with no watchdog. Gate: `boot_survives_a_blackholed_deployment_config`.
+    "AbortController",
+    "AbortSignal",
     "RequestCache",
     "Response",
     # OPFS for boot-time orphan cleanup (Stage 2C). We only need the

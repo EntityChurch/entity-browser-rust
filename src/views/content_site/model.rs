@@ -237,7 +237,17 @@ impl ContentSiteState {
                 Some("peer") => {
                     if let Some(s) = v.as_text() {
                         if !s.is_empty() {
-                            out.peer = Some(s.to_string());
+                            // Resolve a RETIRED publisher to the one that
+                            // replaced it. This is the single decode point for
+                            // persisted navigation state, so putting it here
+                            // covers every surface at once — the overlay, every
+                            // Site Browser window, and any surface added later —
+                            // rather than requiring each to remember. A peer
+                            // nothing superseded resolves to itself, so this is
+                            // a no-op on every boot but the one after a re-key.
+                            // See `crate::peer_supersession` for why this is a
+                            // read-time resolve and not a stored-state sweep.
+                            out.peer = Some(crate::peer_supersession::resolve(s));
                         }
                     }
                 }

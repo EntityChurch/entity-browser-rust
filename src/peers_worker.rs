@@ -232,6 +232,28 @@ impl WorkerPeerStore {
         });
     }
 
+    /// Awaited remove — the Worker half of [`crate::peers::Peers::remove_and_wait`].
+    ///
+    /// `proxy.remove` is an L1 round-trip into the worker's **durable** tree, so
+    /// resolving it means the entity is gone from disk, which is the property the
+    /// caller needs. Note there is no `remove_and_wait_for_cache` twin of
+    /// `put_and_wait_for_cache`: the cache mirror catches up on the worker's next
+    /// Change event, so do not use this to gate a UI transition that reads the
+    /// path back.
+    pub fn remove_and_wait(
+        &self,
+        peer_id: String,
+        path: String,
+    ) -> impl std::future::Future<Output = Result<bool, String>> + 'static {
+        let proxy = self.proxy.clone();
+        async move {
+            proxy
+                .remove(peer_id, path)
+                .await
+                .map_err(|e| format!("proxy.remove: {e:?}"))
+        }
+    }
+
     /// Return a clone of the inner `Rc<WorkerProxy>` for components
     /// that need to dispatch writes / RPCs directly (e.g.
     /// `event_log_writer`'s fire-and-forget appends). Cheap — just an

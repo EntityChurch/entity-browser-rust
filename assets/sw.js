@@ -161,7 +161,12 @@ async function currentBuildId(cache) {
     // previous build (see the note in `networkFirst`).
     let shell = await cache.match('/');
     if (!shell) {
-        shell = await fetch('/index.html', { cache: 'reload' }).catch(() => null);
+        // Bounded (D23): this runs on the worker's boot path and has a defined
+        // "could not establish the build id" outcome one line below — `null`,
+        // which sends `buildScopedAsset` to network-first. A stall here would
+        // wedge that path instead of taking the defined outcome, which is the
+        // exact shape D23 forbids.
+        shell = await fetchWithDeadline('/index.html', { cache: 'reload' }).catch(() => null);
         if (shell && shell.ok) await cache.put('/', shell.clone()).catch(() => {});
     }
     if (!shell) return null;
@@ -196,6 +201,14 @@ async function buildScopedAsset(req) {
     const hit = await cache.match(key);
     if (hit) return hit;
 
+    // DELIBERATELY unbounded, and this is the boundary of D23 rather than an
+    // omission — see the same note on `cacheFirst`. There is no cached entry for
+    // this build (that is what `hit` just ruled out) and an entry from a
+    // DIFFERENT build is not a fallback but the protocol mismatch this whole
+    // scheme exists to prevent. So a deadline here has nothing to fall back TO:
+    // it would convert a slow 17 MB download into a hard failure. D23 bounds an
+    // await that is blocking a defined alternative outcome; where the only
+    // outcomes are "the bytes" and "nothing", waiting is correct.
     const fresh = await fetch(req, { cache: 'reload' }).catch(() => null);
     if (fresh && fresh.ok) {
         await cache.put(key, fresh.clone()).catch(() => {});
@@ -233,12 +246,69 @@ async function cacheFirst(req) {
     const cached = await cache.match(req);
     if (cached) return cached;
 
+    // DELIBERATELY unbounded. A hashed asset that is not in the cache has no
+    // fallback — there is no older copy to serve, because the URL IS the
+    // version. A deadline would turn a slow first download of the ~30 MB main
+    // bundle into a hard failure on exactly the connections least able to
+    // afford one, and would gain nothing: the alternative to waiting is a 503.
+    //
+    // The user-visible consequence of a stall here is a first load that does not
+    // finish, which a reload retries (E1). That is categorically different from
+    // the networkFirst case, where a perfectly good cached shell was sitting
+    // unreachable behind an await that never returned (E6). **D23 is a rule
+    // about awaits that block a defined alternative, not a rule about the word
+    // `fetch`** — and stating the boundary here is what stops the next reader
+    // from "fixing" this line.
     const fresh = await fetch(req).then((resp) => {
         if (resp && resp.ok) cache.put(req, resp.clone()).catch(() => {});
         return resp;
     }).catch(() => null);
     if (fresh) return fresh;
     return offline503();
+}
+
+// How long the network leg of `networkFirst` may take before the cached copy
+// wins. **3000 ms, borrowed rather than invented:** Workbox — the reference
+// implementation of this exact strategy — ships `networkTimeoutSeconds: 3` for
+// navigations in its `pageCache()` recipe. Its documented rationale is verbatim
+// our symptom: without a timeout, network-first "will wait indefinitely for a
+// network response even when the user is offline, only falling back to cache
+// after the connection eventually times out (which can take 30-60 seconds),"
+// leaving "loading spinners spinning endlessly."
+//
+// Keep this in step with `BOOT_FETCH_DEADLINE_MS` in `src/net.rs`. They are two
+// tiers of the same discipline (D23) and a user hitting one hits the other.
+const NETWORK_DEADLINE_MS = 3000;
+
+// `fetch`, but it gives up. This is the whole of C2, and it exists because we
+// hand-rolled network-first and omitted the one option its reference
+// implementation considers essential (AP28).
+//
+// **The case it covers is not "offline".** A network that REJECTS — interface
+// down, DNS failure, connection refused — rejects this promise promptly, the
+// caller reaches its fallback, and offline reload works. It always did; that is
+// why the freeze was intermittent and looked like a fluke. A network that
+// ACCEPTS AND NEVER ANSWERS — a captive portal, a half-open socket, a foreign
+// LAN blackholing an address that used to work, an overloaded CDN edge — never
+// rejects. The cached shell sits one line below the caller's `await` and is
+// only consulted in the `.catch`, which is never reached. The page is blank for
+// as long as the OS is willing to wait. Brick-matrix cell #2, and unlike the
+// cold-boot one it applies to production HTTPS on any flaky network.
+//
+// AbortController rather than a bare `Promise.race`: racing would leave the
+// request in flight, still holding a connection and still able to write into
+// the cache after we had already decided to serve the cached copy — a
+// last-writer-wins race against ourselves. Aborting ends it.
+//
+// Gate: `a_cached_shell_survives_a_blackholed_origin` (G1/SW), which was
+// observed red on the unfixed worker before this function existed.
+function fetchWithDeadline(req, init) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort('entity-browser: network deadline'), NETWORK_DEADLINE_MS);
+    return fetch(req, Object.assign({}, init, { signal: ctl.signal })).then(
+        (resp) => { clearTimeout(timer); return resp; },
+        (err) => { clearTimeout(timer); throw err; }
+    );
 }
 
 // Network-first for the mutable app shell + non-hashed worker bundle:
@@ -256,7 +326,7 @@ async function cacheFirst(req) {
 // true latest bytes on the first online reload — dev server or CDN alike.
 async function networkFirst(req) {
     const cache = await caches.open(CACHE_NAME);
-    const fresh = await fetch(req, { cache: 'reload' }).then(async (resp) => {
+    const fresh = await fetchWithDeadline(req, { cache: 'reload' }).then(async (resp) => {
         if (resp && resp.ok) {
             if (req.mode === 'navigate') {
                 // A navigation is cached under the CANONICAL `/`, never under its own

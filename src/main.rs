@@ -16,6 +16,9 @@ mod app_host;
 mod app_paths;
 mod apps;
 mod boot;
+// Which build is this — read from the shell that loaded it (C5).
+mod boot_diagnostics;
+mod build_id;
 mod chain_trace_cache;
 mod deployment_config;
 #[cfg(target_arch = "wasm32")]
@@ -32,6 +35,7 @@ mod dial_markers;
 // shadow-parity probe uses it. Tighten when the mirror migration lands.
 #[allow(dead_code)]
 mod peer_liveness;
+mod peer_supersession;
 mod content_site;
 mod peer_auth;
 mod backend_auth;
@@ -95,6 +99,8 @@ mod idb_cleanup;
 mod storage_durability;
 #[cfg(target_arch = "wasm32")]
 mod multitab;
+// Bounded network reads — the D23 chokepoint for every boot-path fetch.
+mod net;
 #[cfg(target_arch = "wasm32")]
 mod diagnostics;
 #[cfg(target_arch = "wasm32")]
@@ -353,6 +359,30 @@ pub async fn start() -> Result<(), JsValue> {
         "WASM init: panic hook + tracing ready (cold-start timing)"
     );
     tracing::info!(level = %level, "WASM init: tracing level set");
+
+    // C5 — say which build this is, as early as anything can be said.
+    //
+    // Placement is the point: this sits immediately after the logger and BEFORE
+    // the recovery yield, the peer-host selection and `boot_load`, so a session
+    // that dies anywhere later still has a line naming the build it died on.
+    // Until this existed the application could not report its own version at all
+    // (`grep -rn "entity-build" src/` → 0), which meant a bug report could not
+    // identify one and "are these two domains running the same code" was only
+    // answerable by curling them from outside.
+    //
+    // Both identities, because they answer different questions: the commit
+    // resolves against `git log`, the bundle hash compares across deployments —
+    // and two docs-only commits produce byte-identical output, so the commit
+    // alone cannot tell you two domains match. Measured: they did.
+    {
+        let id = crate::build_id::current();
+        tracing::info!(
+            commit = ?id.commit,
+            bundle = ?id.bundle,
+            "WASM init: build {}",
+            id.describe()
+        );
+    }
 
     // L1 System Recovery (?systemrecovery=1): the recovery first-script in
     // index.html has taken over the page with a read-only storage inventory.

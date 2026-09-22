@@ -21,13 +21,24 @@ worked instances the framework was reconciled from** — D1–D11 there are the 
 D12–D16 here are ours, earned on our own bugs.
 - **Disciplines** (invariants — the *what*):
   `docs/architecture/specs/DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md` —
-  D1–D16 ratified plus candidates from D17 up, the per-diff review questions
-  (nine + 5b), anti-pattern catalog AP1–AP25.
+  D1–D16 and D19–D21 ratified, plus **D23** (no unbounded network await on the boot
+  path — ratified 2026-08-27 on a reproduced run, with all three enforcement points);
+  candidates at D17, D18, D22. The per-diff review questions (nine + 5b), anti-pattern
+  catalog AP1–AP29.
 - **Doctrines** (Feature/Audit procedures — the *how*):
   `docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md` — open the Feature
   Development Doctrine (F0–F8) for "build X", the Audit Doctrine (A0–A12) for "Y is broken".
 - **Substrate model** (ground truth — read before any leak / freeze / lifetime / persistence
   work): `docs/architecture/specs/MODEL-BROWSER-WASM-RUNTIME.md`.
+- **Stakeholder / ownership model** (ground truth — read before any rule about *who owns a piece
+  of state*, what may be refreshed from a remote source, what a cutover or rollback may replace,
+  or what a deployment decides on a visitor's behalf):
+  `docs/architecture/specs/MODEL-STAKEHOLDERS-AND-OWNERSHIP.md`. Three **positional** roles
+  (vendor / deployer / end user — one party often holds all three, which is how they collapse in
+  analysis); **two** partitions, only one of which exists; and the fact that the
+  deployer↔end-user line is **configured per deployment**, so an ownership table is the default
+  when a deployment says nothing, never the model. Four separate design threads each drew this
+  line differently before it was written down.
 - **The SIGNALING/NETWORK buildout** (this repo as the **browser leg** of `ROADMAP-EXTENSIONS`
   Stage B — every connectivity change we made, tracked to the spec section it answers, plus
   the open items and the gates not yet run):
@@ -89,7 +100,7 @@ must make us stronger, not weaker*).
 ```bash
 make test          # native unit/integration suite, all test binaries
 make test-tauri    # the src-tauri backend suite (workspace-excluded from `make test`)
-make lint          # Clippy + the UI/i18n/tree-hygiene linters
+make lint          # Clippy + the UI/i18n/boot-fetch/tree-hygiene linters
 make wasm          # WASM debug → dist/   ← MANDATORY after every change
 make wasm-release  # WASM release → dist/ (opt-level=z + LTO + wasm-opt -Oz)
 make serve         # serve dist/ on :8081 (plain browser, no Tauri). Every serve target
@@ -133,6 +144,26 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   imports, type inference, arm-split panics).
 - **`make test` compiles the e2e suite to NOTHING** — `tests/e2e_worker.rs` is
   `#![cfg(feature = "e2e")]`, so a green `make test` is no evidence that file even parses.
+- **Any network read on the boot path is bounded — D23, and it has three enforcement points.**
+  `net::fetch_text_bounded` (`src/net.rs`) is the Rust chokepoint and `fetchWithDeadline` the
+  `sw.js` one; `tools/net-lint.sh` (in `make lint`, baseline-ratcheted) gates new raw fetches;
+  the behavioural gate is the black-hole pair below. **The rule bounds an await blocking a
+  DEFINED ALTERNATIVE outcome, not every `fetch`** — two `sw.js` fetches are deliberately
+  unbounded and the baseline carries them by name. Read the GOTCHAS entry before "fixing" one.
+- **A durable record of a REMOTE assertion carries the path back to that assertion — AP30.**
+  Anything written down because a deployment doc, registry or peer said so must be re-checked
+  whenever the source is in hand, and dropped when the source contradicts it; a write path
+  whose trigger fires exactly once never re-examines its own premise, so an ordinary mistake
+  at the source becomes permanent client state (`peer_supersession::revalidate`, gated by
+  `a_supersession_the_domain_contradicts_is_dropped`). Two rules the naive version gets wrong:
+  **no source this boot changes nothing** (a truncated doc must not be able to wipe good
+  state — and D23's deadline makes that case *more* common), and **revalidate strictly after
+  adopting**, or a legitimate second divergence reads as a stale record.
+- **`make e2e-worker T=blackholed` is the boot-availability gate** —
+  `tools/e2e/blackhole-serve.py` serves an origin that accepts a request and never answers it,
+  which `python3 -m http.server` cannot do and which is why this whole failure class was
+  previously unreachable from the harness. Run it for any change to the boot path, `sw.js`, or
+  `deployment_config`.
 - **Run `make e2e-worker` for any peer-routing / arm-dispatch / peer-display change** —
   worker peer routes register *asynchronously*, so a fresh peer can be invisible while
   compile and unit tests stay green. The default browser arm is Worker-or-IDB, never
@@ -208,6 +239,11 @@ are in [the gotchas reference](docs/architecture/guides/GOTCHAS.md#testing--the-
 - `reach_keeper.rs` — standing intent to be reachable to a met peer; the §6.5 mutual-attempt half.
 - `file_offer.rs` — the browser as the **serving** side of a file transfer
   (`system/content` + an offer manifest); shell verbs `offer`/`offers`/`pull`.
+- `boot_diagnostics.rs` — the routing mirror (`entity_routing_mirror` in localStorage): what
+  publisher this profile is pointed at, when, and by which build. **A contract with the L1
+  recovery console in `index.html`, checked by no compiler — grep both together.** It exists
+  because the authoritative value is a CBOR entity in the tree and the BIOS cannot decode one
+  by design. Rewritten every boot; nothing branches on it; no secrets.
 - `window_watch.rs`, `dom/theme.rs`, `theme_tokens.rs`, `session_config.rs`.
 - `src-tauri/` — Tauri desktop backend. `tools/e2e/` + `tests/e2e_worker.rs` — Worker E2E.
 - `docs/architecture/{specs,guides,reviews}/`, `docs/plans/`, `docs/archive/`
@@ -265,8 +301,9 @@ you are about to change:
 | [Content sites & documents](docs/architecture/guides/GOTCHAS.md#content-sites--documents) | change either content-site renderer, link resolution, or the document sandbox |
 | [Apps & embedded programs](docs/architecture/guides/GOTCHAS.md#apps--embedded-programs) | change the app host, the iframe tiers, saves, or the programs surface |
 | [File transfer & chat](docs/architecture/guides/GOTCHAS.md#file-transfer--chat) | change offers, the browse cache, or conversation binding |
-| [Build, packaging & tree hygiene](docs/architecture/guides/GOTCHAS.md#build-packaging--tree-hygiene) | touch the Makefile, the release path, cache headers or `.gitignore` |
+| [Build, packaging & tree hygiene](docs/architecture/guides/GOTCHAS.md#build-packaging--tree-hygiene) | touch the Makefile, the release path, cache headers, `sw.js`, a boot-path fetch, or `.gitignore` |
 | [Testing & the gates](docs/architecture/guides/GOTCHAS.md#testing--the-gates) | add a phase, a budget, or a gate of any kind |
+| [The recovery console (L1 BIOS)](docs/architecture/guides/GOTCHAS.md#the-recovery-console-l1-bios) | touch `index.html`'s System Recovery screen, or anything it probes |
 | [Localization, copy & the operator surface](docs/architecture/guides/GOTCHAS.md#localization-copy--the-operator-surface) | change a user-facing string, a refusal message, or a CLI output |
 
 **The ratchet applies to that file.** When a feature or an audit teaches something, it

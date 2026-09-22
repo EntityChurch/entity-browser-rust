@@ -386,6 +386,65 @@ impl Sdk {
         }
     }
 
+    /// Awaited remove — the paired primitive for [`Sdk::put_and_wait`], per-arm.
+    ///
+    /// `Ok(true)` = a value was there and is gone, `Ok(false)` = nothing was
+    /// there. Both are success for a caller whose goal is the path's *absence*.
+    ///
+    /// **What it awaits is the durable removal, not a cache reflection.** The
+    /// worker proxy has no `remove_and_wait_for_cache` twin, so a Worker-arm
+    /// reader that mirrors this prefix may briefly still see the entity. That is
+    /// fine for the caller this exists for (`peer_supersession`, whose read path
+    /// is an in-process map loaded at boot) and is stated here so the next
+    /// caller checks rather than assumes.
+    ///
+    /// **Why this one BORROWS `&self` where [`Sdk::put_and_wait`] does not:**
+    /// `EntitySDK::put` is a plain `fn` returning an owned future, but
+    /// `EntitySDK::remove` is an `async fn` borrowing the SDK — an asymmetry in
+    /// SDK-tier code, which is not ours to change. Taking the L0 `tree.remove`
+    /// back door would dodge the lifetime and quietly downgrade a durable delete
+    /// to a store opt-out (D2), so the lifetime is carried instead. Callers hold
+    /// `&Peers` across the await, which every boot-path caller already does.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn remove_and_wait<'a>(
+        &'a self,
+        peer_id: &str,
+        path: impl Into<String>,
+        _timeout_ms: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + 'a>> {
+        let path: String = path.into();
+        let peer_id = peer_id.to_string();
+        match self {
+            Sdk::Direct(pm) => Box::pin(async move {
+                pm.sdk()
+                    .remove(&peer_id, &path)
+                    .await
+                    .map_err(|e| e.to_string())
+            }),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn remove_and_wait<'a>(
+        &'a self,
+        peer_id: &str,
+        path: impl Into<String>,
+        _timeout_ms: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + 'a>> {
+        let path: String = path.into();
+        let peer_id = peer_id.to_string();
+        match self {
+            Sdk::Direct(pm) => Box::pin(async move {
+                pm.sdk()
+                    .remove(&peer_id, &path)
+                    .await
+                    .map_err(|e| e.to_string())
+            }),
+            #[cfg(target_arch = "wasm32")]
+            Sdk::Worker(w) => Box::pin(w.remove_and_wait(peer_id, path)),
+        }
+    }
+
     /// Subscribe a prefix into the window's dirty-flag pattern. Direct:
     /// `ctx.store().subscribe(prefix, callback)` storing the
     /// `SubscriptionHandle` on `WindowWatch.handles`. Worker:
@@ -1562,6 +1621,21 @@ impl Peers {
         match self.sdk_for(peer_id) {
             Ok(sdk) => sdk.dispatch_remove(peer_id, path),
             Err(e) => tracing::error!(error = %e, "dispatch_remove dropped — unrouted peer"),
+        }
+    }
+
+    /// Awaited remove, routed via the **target peer's** owning SDK (D15).
+    /// The paired primitive for [`Peers::put_and_wait`]; see [`Sdk::remove_and_wait`]
+    /// for what it does and does not await.
+    pub fn remove_and_wait<'a>(
+        &'a self,
+        peer_id: &str,
+        path: impl Into<String>,
+        timeout_ms: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + 'a>> {
+        match self.sdk_for(peer_id) {
+            Ok(sdk) => sdk.remove_and_wait(peer_id, path, timeout_ms),
+            Err(e) => Box::pin(async move { Err(e.to_string()) }),
         }
     }
 

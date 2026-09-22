@@ -1471,6 +1471,50 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Publishing, signed roots & names
 
+- **A RE-KEY BRICKS EVERY RETURNING VISITOR, AND THE SELF-HEAL YOU ALREADY WROTE MAY BE WHAT
+  STOPS IT.** If a domain publishes under a new identity, a returning browser keeps asking the
+  retired one forever: newest WASM, 404s, an app that reports healthy. Live incident
+  `ecdeos.org` 2026-08-24; fixed 2026-08-27 (**AP26**, resilience design §1.1a/§1.1b). Four
+  things worth carrying:
+  - **`app.rs` re-reads `/entity-deployment.json` whenever the home is a REMOTE peer** and
+    adopts on **identity** divergence. Do not re-introduce a precondition in front of it. The
+    old (1.2.5) reconcile had one — *only if the home peer's origin is unregistered* — which
+    repaired the origin for the peer you already have and could never repair *the peer you
+    have being wrong*. Its guard was false on the incident, so the general path never ran.
+    **It is retired, not moved**; do not add a sibling beside the new one.
+  - **Adopt routing facts only** — `home_site`, `origins`, the registry pin. Posture
+    (`site_mode`, `surface`, `window_type`) is a user preference and must not move. An
+    absent/empty `home_site.peer` is **not** a divergence, or a truncated doc could re-home a
+    healthy browser.
+  - **The session config is only half the repair, and the other half is NOT per-surface.**
+    Nav state persists its own `peer` (`ContentSiteState`), so fixing the config alone parks
+    the user on the retired publisher *while the config reports healthy*. The first attempt
+    re-pointed the overlay only and left a Site Browser **window** broken — do not do that
+    again. **A peer being replaced is one fact about a peer, not N facts about surfaces:**
+    it is recorded once in `src/peer_supersession.rs` and resolved in
+    `ContentSiteState::from_entity`, the single decode point every surface shares.
+  - **Do not "just sweep" the stored state.** It cannot be made correct on both arms — the
+    recursive enumeration is the *sync* `tree_listing` (Worker-arm mirror not reliably
+    seeded at boot) and `tree_listing_async` returns **immediate children only**, with
+    directory entries dropped at the worker boundary. A sweep silently misses entries on one
+    arm. The supersession record has no such failure mode: its only enumeration is of a flat
+    one-level registry.
+  - **The record must be DURABLE.** The adoption branch runs exactly once — the next boot's
+    config already agrees with the domain, so there is no divergence left to detect. An
+    in-memory-only record repairs whatever happened to be open and nothing else, ever.
+  - **Two paths can share one console.** `deployment` being `None` and `Some`-without-the-key
+    both collapse through `unwrap_or(false)` onto the same `app.rs:2145` warn, which is how
+    two documents concluded the reconcile had fired when it had not. The discriminator was a
+    single *absent* log line. When you fix a boot path, check what its failure looks like from
+    outside before trusting a log to identify which branch ran.
+  - Gates: `rekeyed_domain_heals_on_next_boot` **and `…_window_surface`** — the same
+    scenario over both deployment shapes, because one surface is how this was got wrong.
+    They need no domain. Three harness traps they cost, all worth knowing before you add a
+    fixture: a libtest **substring** filter also matches a longer test name; `--exact`
+    compares the **fully-qualified** name and libtest **exits 0 when it matches nothing**
+    (assert `1 passed`); and a fixture that publishes into the shared `dist/` breaks Phase 27
+    with *"publisher bound no signature"* — stage an isolated copy on its own port instead.
+
 - **`transports` IS `[system/hash]`, NOT INLINE PROFILES — REGISTRY v1.21 D8/D8a/D8b, and we are
   the emitter the whole cohort waits on.** A binding now *references* `system/peer/transport/*`
   entities instead of carrying endpoint descriptors inline (arch `c2eb423`; `ROUTING-2026-08-21-f`
@@ -3292,6 +3336,29 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Build, packaging & tree hygiene
 
+- **D23 IS NOT A RULE ABOUT THE WORD `fetch`, AND "FIXING" THE REMAINING UNBOUNDED ONES IS A
+  REGRESSION.** The discipline bounds an await that is **blocking a defined alternative
+  outcome** — build-time defaults (D16), a cached shell. Two fetches in `assets/sw.js` are
+  deliberately left unbounded and say so in a comment beside them: `cacheFirst` on a hashed
+  asset that is *not* in the cache, and `buildScopedAsset` on a worker bin with no entry for
+  this build. In both, `hit` has already ruled out a cached copy, the URL *is* the version so
+  there is no older one, and an entry from a **different** build is not a fallback but the
+  protocol mismatch the build-scoping exists to prevent. A deadline there has nothing to fall
+  back to: it converts a slow first download of the ~30 MB main bundle into a hard failure on
+  precisely the connections least able to afford one. The user-visible difference is the whole
+  argument — a stall in `cacheFirst` is a first load that does not finish, which a reload
+  retries (**E1**); a stall in `networkFirst` left a perfectly good cached shell unreachable
+  behind an await that never returned (**E6**). They are carried by name in
+  `tools/net-lint-baseline.txt` rather than by exempting their files, so the count still moves
+  if a *new* one appears.
+- **THE RUST-TIER DEADLINE COVERS HEADERS AND BODY, AND SPLITTING THEM RECREATES THE BUG ONE
+  STEP LATER.** `net::fetch_text_bounded` deliberately does not return a `Response`. An origin
+  may answer `200`, hand over headers, and then never send a body — so a helper that bounds
+  only the header phase and lets the caller `await resp.text()` has moved the unbounded await
+  rather than removed it. One call, one deadline, both phases; the `AbortController` signal
+  covers the body stream too, which is what makes that possible. The `DeadlineGuard` clears
+  the timer and drops its closure on **every** exit path including the early `?` — a leaked
+  `Closure` here is per-boot and permanent (this repo never calls `Closure::forget()`).
 - **A DOC COMMENT THAT RUNS INTO THE NEXT ONE IS SILENT, AND THIS IS THE SECOND INSTANCE.** The last
   session caught itself splitting `render_meet`'s doc; this one found `meet_verb`'s doc block
   already merged into `net_verb`'s at HEAD — so `meet_verb` had no documentation and `net_verb`
@@ -3700,6 +3767,39 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Testing & the gates
 
+- **THE SERVICE-WORKER TIER HAS NEVER BEEN TESTABLE OFF THE BUILD MACHINE — every serve
+  target is plain HTTP.** `tools/cors-serve.py` binds `0.0.0.0` over HTTP, and browsers only
+  permit service workers in a **secure context**, whose sole plain-HTTP exceptions are
+  `localhost` / `127.0.0.1`. A phone or a second machine reaches a dev build by **LAN IP**,
+  where **no worker registers, nothing is cached, and there is no offline path at all** — so
+  the shell cache, offline boot, the build-scoped worker key and `dropSupersededBuilds` are
+  all unreachable from any device but the one that ran `make`. This is why an operator's LAN
+  experience and local test results have disagreed: *"I refreshed offline and it hung forever"*
+  on a LAN address is not an SW bug, it is the **absence** of the SW, and the hang is the
+  browser's own connect timeout against a host that left the network.
+  **Fix: `make serve TLS=1`** (`tools/dev-cert.sh` + `--tls`), which mints a local CA and a leaf
+  covering `localhost` **and this box's real LAN addresses**, detected under `--network host`.
+  **A plain self-signed cert is NOT enough and this is the trap:** Chrome refuses SW
+  registration on a cert-error origin **even after you click through the interstitial** —
+  the page renders normally and registration fails with `SecurityError: … An SSL certificate
+  error occurred when fetching the script`, so it looks like it worked. Firefox honours a
+  manually-added exception, so a naive self-signed setup passes on one browser and fails on
+  the other, which reads as a browser bug rather than as our misconfiguration. The device must
+  **trust the CA** (`dev-cert.sh` prints the per-platform install); the Chrome-only escape is
+  `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, which needs the origin to match
+  scheme, host **and** port exactly.
+  *Diagnostic first, always:* devtools → Application → Service Workers. An empty list means
+  every SW-shaped hypothesis about that origin is void before you start.
+  [`DESIGN-CODE-AXIS-RECOVERY-AND-BOOT-SLOTS` §1.1a, G0; `REFERENCE-BOOT-AVAILABILITY-AND-RECOVERY` §4]
+- **`podman stop -a` STOPS EVERY CONTAINER ON THE HOST, INCLUDING OTHER PEOPLE'S.** This box
+  runs concurrent e2e grids, GUI sessions and playbook containers from other worktrees and
+  other sessions. Many are started `--rm`, so stopping them **removes them permanently** —
+  there is no restart, and anything mid-run dies mid-run. *Incident (2026-08-27):* `stop -a`
+  run to clear a single port conflict took down ten containers, seven irrecoverably, and the
+  conflict was already being avoided by the port change in the same command — it bought
+  nothing. **Rule: never `-a` / `--all` against podman. Stop containers you named and started,
+  by name. For a port conflict, change the port.** A busy port is not evidence that the thing
+  holding it is yours.
 - **A real two-browser WebRTC test is browser↔browser on a SHARED podman bridge.**
   Native has no `RTCDataChannel` (UDP hole-punch only), so both peers must be
   browsers; and rootless **pasta mirrors the host IP** into a default-network
@@ -4125,6 +4225,107 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   app that wrote it**. The string was true of both states, so the assertion could not tell them
   apart; `querySelectorAll('button.app-card').length === 0` can. A text search over a whole
   section is a substring match pretending to be a structural claim.
+- **A NETWORK THAT *ACCEPTS AND NEVER ANSWERS* IS A DIFFERENT BUG FROM ONE THAT REFUSES, AND
+  `python3 -m http.server` CANNOT PRODUCE IT.** A refused connection (interface down, DNS
+  failure) rejects the promise promptly: every `.catch` and every `.ok()?` on the path is
+  reached and boot continues — which is why "offline reload sometimes works" and why three
+  instances of this bug accumulated as *code-reads nobody could reproduce*. An origin that
+  completes the TCP handshake and then sends nothing never rejects anything, so an unbounded
+  `await` on it does not fail — it does not return, for 75–130 s on Linux and effectively
+  forever behind a captive portal. Before the frame loop starts that is a blank page **with no
+  frozen-frame watchdog**, because the watchdog installs after `boot_load` returns.
+  **`tools/e2e/blackhole-serve.py`** is the only thing in this rig that can produce it: it
+  serves `dist/` normally and, for a nominated set of paths, reads the request and then writes
+  nothing and closes nothing. The stall set is settable at runtime
+  (`GET /__blackhole?stall=/a,/b`) because the service-worker half of the gate **must** cache
+  the shell before the origin is black-holed — start it stalled and there is nothing to fall
+  back to, so a pass would prove only that the app can fail. Gates:
+  `boot_survives_a_blackholed_deployment_config` and `a_cached_shell_survives_a_blackholed_origin`.
+- **BOTH BLACK-HOLE GATES ARE ANTI-VACUITY GUARDED ON THE SERVER'S OWN LOG, AND THEY HAVE TO
+  BE.** A boot that never requested the black-holed path satisfies every assertion in the test
+  for entirely the wrong reason, and the "fix" that would produce that is *removing the
+  fetch*. So the server's stderr is drained and checked: the request must have **arrived** and
+  been **stalled**. Measured at the wire, not reported by the thing under test — the same rule
+  that made `DistServer::request_count` exist, for the same reason (Firefox zeroes
+  `transferSize` for anything a service worker supplied, so the obvious in-page assertion is
+  vacuous).
+- **PRINT THE MARGIN, AND HERE IT IS ALSO THE VACUITY CHECK.** `boot_survives_a_blackholed_
+  deployment_config` prints its boot time because the expected value is *the deadline plus a
+  healthy boot* (~3 s + 108–711 ms). A time far **below** that means the stall was never
+  reached and the green is empty; far **above** means something else on the boot path is also
+  waiting and the §4A enumeration of "exactly two network awaits" is incomplete. A budget that
+  only speaks when it fails cannot tell you either of those.
+- **A GREP GATE IS VERIFIED BY MUTATION, NOT BY BEING GREEN — and check it against its own
+  documentation first.** `tools/net-lint.sh` initially reported a violation in the very file
+  that had just been fixed, because the fix's doc comment names the raw call it replaced; the
+  cheapest way to green it would have been deleting the explanation (AP29). It now drops
+  whole-line comments before counting — deliberately **not** a strip-from-`//`-to-end rule,
+  which would truncate any code line holding an `https://` literal and turn a false positive
+  into a false negative. Then reintroduce the violation and watch it fire. A lint that has
+  only ever been observed passing has not been shown to do anything.
+- **A GATE MUST BE RUN FROM A CLEAN INVOCATION OF THE TARGET THAT OWNS IT.**
+  `the_app_reports_the_build_it_is_running` asserts the app's logged build id against the
+  `entity-build` stamp in `dist/index.html`. `make wasm` and `make wasm-release` end in
+  `./tools/build-stamp.sh`; the `make e2e-worker` build line did **not**, so the gate was
+  green only for whoever had run `make wasm` first, and a clean `make e2e-worker` red it with
+  *"tools/build-stamp.sh did not run"* — after it had been reported green (AP31). Fixed by
+  putting the stamp in the e2e build line too. **If a gate needs a build step, that step
+  belongs in every build path that feeds it.** This is the general form of the `SKIP_BUILD=1`
+  warning: that names one way to inherit a stale `dist/`, this is the same failure arriving
+  through a target that never built the artifact at all.
+- **RE-RUNNING A PUBLISH FIXTURE DOES NOT REWRITE `entity-deployment.json`.** A publish whose
+  content is already present in the tree takes the engine's idempotent path, and the emitted
+  deployment document keeps naming whatever the *previous* publish named. A test that
+  re-published publisher A to "correct" a document pointing at B got a document still pointing
+  at B, and failed on a fixture artifact wearing the costume of a product bug. **To change
+  what the domain declares, write the document** — `std::fs::write` the bytes captured
+  earlier. It is also the more faithful reproduction whenever the scenario is about a
+  *document* being wrong rather than about a republish.
+  (`a_supersession_the_domain_contradicts_is_dropped`.)
+- **DO NOT SEED `blackhole-serve.py`'s STALL SET WITH `/index.html`.** The server's own
+  readiness probe fetches that path, so stalling it at startup deadlocks start-up and the test
+  fails before the browser is ever involved. The harness names this ("either `dist/` has no
+  index.html, or something else is holding the port — check before reading this as an app
+  fault"), which is the only reason it costs a minute instead of an hour. **Start clean and
+  call `set_blackhole(...)` at runtime** — the same reason the stall set is runtime-settable
+  for the service-worker variant, where the shell must be cached before the origin goes dark.
+
+## The recovery console (L1 BIOS)
+
+- **THE BIOS IS THE STRICTEST CASE OF D23, NOT AN EXCEPTION TO IT.** `index.html`'s System
+  Recovery console is what a user opens *because* something already hung. Every network read in
+  it is bounded (`fetchWithDeadline`, 3 s) and expiry is a **reported state** — "could not
+  reach the origin" — never a spinner. `tools/net-lint.sh` counts this file, and
+  `the_recovery_console_survives_a_blackholed_origin` is the behavioural half. Neutering the
+  deadline reds it with the panel stuck on "probing…", which is what the bug looks like.
+- **A VALUE THE CONSOLE COMPARES MUST DECLARE WHERE IT CAME FROM (AP32).** "What does the
+  origin serve now" is fetched over `/index.html`, which `sw.js` routes through `networkFirst`
+  — so on a slow origin the answer arrives *from the cache the panel is auditing*. Reporting
+  agreement there would tell a stuck user they are current. The panel reports **inconclusive**
+  whenever a service worker controls the page, and reserves "current" for the uncontrolled
+  case. The unspoofable signal is `registration.waiting`: it needs no network and it is the
+  observed form of "an update is downloaded and blocked".
+- **The negative result is half the point.** "You are running the build the origin currently
+  serves" is what stops someone clearing site data on a wrong theory — the destructive E5
+  action the brick matrix exists to prevent. Don't optimize it away as uninteresting output.
+- **THE ROUTING MIRROR IS THE ONLY CHANNEL ACROSS THE L1/L5 BOUNDARY — AND IT IS A CONTRACT
+  BETWEEN TWO FILES NO COMPILER CHECKS.** `boot_diagnostics::write_routing_mirror` writes
+  `entity_routing_mirror` to localStorage on every boot; the BIOS `JSON.parse`s it. The
+  authoritative value is a CBOR entity in the durable tree, which the console deliberately
+  cannot decode because it must work when the peer does not boot. **Rename the key or change a
+  field and you must grep `src/boot_diagnostics.rs` and `index.html` together** — the unit test
+  `the_mirror_carries_the_routing_facts_and_when_they_were_true` pins the exact document and is
+  the closest thing to a type on this seam.
+- **STALENESS IS THE FEATURE, SO NEVER RENDER THE MIRROR AS "WHAT THIS PROFILE BELIEVES".**
+  It is what the profile believed at `written_at`, running `build`. When the app cannot boot
+  that old value is the interesting fact — but a reader who cannot tell "current" from "last
+  known" draws a confident wrong conclusion from it, which is the exact failure the console
+  exists to remove. The card always shows the timestamp and the writing build beside the value.
+- **It is a mirror, not a second source of truth (AP17/AP30).** Nothing branches on it — no
+  code reads it to make a decision, it exists only to be reported — and it is rewritten from
+  the tree on every boot, so the re-derivation path AP30 demands is "boot again". Keep both
+  properties if you extend it. Anything added here is rendered verbatim with no redaction, so
+  it must stay public routing information: peer ids, site ids, timestamps. **No secrets, ever.**
 
 ## Localization, copy & the operator surface
 

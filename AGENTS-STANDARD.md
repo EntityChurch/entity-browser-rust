@@ -73,13 +73,24 @@ and the stability tiers ([ADR-0004]).
 **Every repo runs this. The tier differs; the ratchet does not.** The full framework is
 `METHODOLOGY.md`, injected beside this file. Read it once, then your repo's own charter.
 
-Four artifact kinds — do not conflate them:
+Five artifact kinds — do not conflate them:
 
-- **Disciplines** — invariants, the *what*. Checked on every diff.
-- **Doctrines** — procedures, the *how*. Opened at task-start (Feature / Audit / Foundation).
+- **Disciplines** — invariants, the *what*. Checked on every diff. **D1–D12 are the
+  ecosystem's; yours start at D13.**
+- **Doctrines** — procedures, the *how*. Opened at task-start. **There are exactly three —
+  Feature, Audit, Foundation — they live in `METHODOLOGY.md` §7, and you do not write one.**
+- **Workflows** — your substrate's procedures, under a doctrine's step. `docs/**/WORKFLOW-*.md`.
+  As many as you earn. **`DOCTRINE-*` is a reserved filename; use `WORKFLOW-*`.**
 - **Substrate model** — ground truth about the platform. Read before any lifetime, leak,
   render, or persistence work.
 - **Anti-pattern catalog** — named failure modes, each with a source commit.
+
+**Load by trigger, not all at once.** `AGENTS.md` and this file are always in context and stay
+small; `AGENTS.md` names the trigger and does not carry the content. Read `METHODOLOGY.md`
+§1–§4 once on cold start. Open **one** doctrine when its input arrives — a feature asked for,
+*"Y is broken"*, a surface you have not designed against — plus the substrate model before
+lifetime/render/persistence work. Everything else is looked up when something points at it.
+Then research the actual area, from canonical sources (D12), never from a summary.
 
 **The ratchet: a feature must make us stronger, not weaker.** Every feature and every audit
 ends by feeding what it taught back into the disciplines, **in the same session**. Feature:
@@ -95,8 +106,9 @@ enforcement point does not count** — name the file, grep, lint rule, or gate t
 **D1–D12 are universal and transfer verbatim** (use the kernel · L1 default, L0 back door ·
 capability-typed dispatch · bounded interfaces · declared composition · per-host namespaces ·
 symmetric state · surface spec drift · accounting · real-session coverage · inventory boundary ·
-read canonical sources). **Above those, each repo earns its own on its own bugs.** Do not
-copy another repo's substrate disciplines.
+read canonical sources). **D1–D12 are reserved: your own disciplines are numbered from D13,
+and you earn them on your own bugs.** Do not copy another repo's substrate disciplines, and
+do not reuse a universal number for one.
 
 **Tiers** — your `AGENTS.md` declares yours and links its docs:
 

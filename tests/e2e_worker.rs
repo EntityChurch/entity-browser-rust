@@ -471,12 +471,118 @@ fn start_dist_server() -> Result<DistServer, std::io::Error> {
     // app would run opaque-origin and then need a CORS-adding server; that arrives
     // with the sub-peer capability model — D21.)
     let port = http_server_port();
-    let mut child = Command::new("python3")
+    let child = Command::new("python3")
         .args(["-m", "http.server", &port.to_string(), "--directory", "dist"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
+    await_server_ready(child, port, "the dist server")
+}
 
+/// Port for the **black-hole** origin (G1). Distinct from the dist server's so a
+/// stalled origin can never be mistaken for, or collide with, the healthy one —
+/// and so the two can be up at once. Override via `E2E_BLACKHOLE_PORT`.
+#[allow(dead_code)]
+fn blackhole_server_port() -> u16 {
+    std::env::var("E2E_BLACKHOLE_PORT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(8093)
+}
+
+/// Start `tools/e2e/blackhole-serve.py` over `dist/`: a static server that
+/// serves everything normally **except** the paths in `stall`, which it accepts
+/// and never answers (see that file for why "accepts and never answers" is a
+/// different bug from "refuses").
+///
+/// Readiness is proven exactly as the dist server's is — an HTTP round-trip for
+/// `/index.html`, not a bare connect. That check matters more here than
+/// anywhere else in the suite: a bare TCP connect cannot distinguish this
+/// server from the failure it exists to simulate.
+#[allow(dead_code)]
+fn start_blackhole_server(stall: &[&str]) -> Result<DistServer, std::io::Error> {
+    let port = blackhole_server_port();
+    let mut args: Vec<String> = vec![
+        "tools/e2e/blackhole-serve.py".to_string(),
+        port.to_string(),
+        "--directory".to_string(),
+        "dist".to_string(),
+    ];
+    for p in stall {
+        args.push("--stall".to_string());
+        args.push((*p).to_string());
+    }
+    let child = Command::new("python3")
+        .args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    await_server_ready(child, port, "the black-hole server")
+}
+
+/// Turn the black hole on or off at runtime. `stall` replaces the whole set;
+/// an empty slice clears it.
+///
+/// Needed because the service-worker half of G1 cannot start black-holed: the
+/// shell has to be fetched and cached normally first, or there is nothing to
+/// fall back to and a passing test would prove nothing.
+#[allow(dead_code)]
+fn set_blackhole(stall: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    let port = blackhole_server_port();
+    let mut sock = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    sock.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let req = format!(
+        "GET /__blackhole?stall={} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n",
+        stall.join(",")
+    );
+    sock.write_all(req.as_bytes())?;
+    let mut body = String::new();
+    sock.read_to_string(&mut body)?;
+    if !body.contains(" 200 ") {
+        return Err(format!("black-hole control returned:\n{body}").into());
+    }
+    Ok(body)
+}
+
+/// Turn on the **headers-then-stall** mode: the origin answers `200` with a
+/// truthful `Content-Length` and then never sends the body.
+///
+/// A different bug from `set_blackhole`, and the reason it needs its own control:
+/// `fetch` resolves on **headers**, so a deadline that disarms at that moment is
+/// already disarmed when the body fails to arrive. Whatever reads the body next
+/// is the thing that hangs. A timeout written only against the never-answers
+/// case cannot see this.
+#[allow(dead_code)]
+fn set_blackhole_body(stall: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+    let port = blackhole_server_port();
+    let mut sock = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    sock.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let req = format!(
+        "GET /__blackhole?body={} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n",
+        stall.join(",")
+    );
+    sock.write_all(req.as_bytes())?;
+    let mut body = String::new();
+    sock.read_to_string(&mut body)?;
+    if !body.contains(" 200 ") {
+        return Err(format!("black-hole body control returned:\n{body}").into());
+    }
+    Ok(body)
+}
+
+/// Shared readiness probe + stderr drain for a helper HTTP server.
+///
+/// Extracted so the black-hole server inherits every hard-won property of the
+/// dist server's startup rather than re-deriving them: the child-alive check
+/// **before** the connect probe, an HTTP round-trip rather than a bare connect,
+/// and stderr that stays readable for the child's whole life.
+fn await_server_ready(
+    mut child: Child,
+    port: u16,
+    what: &str,
+) -> Result<DistServer, std::io::Error> {
     // Poll rather than guessing. **"Is our child alive" is checked BEFORE "is
     // something listening", and that order is load-bearing** — found by
     // mutation, holding :8092 with a socket that accepts and never answers.
@@ -495,7 +601,7 @@ fn start_dist_server() -> Result<DistServer, std::io::Error> {
                 let _ = e.read_to_string(&mut err);
             }
             return Err(std::io::Error::other(format!(
-                "the dist server on :{port} exited immediately ({status}). Its stderr:\n{}\n\
+                "{what} on :{port} exited immediately ({status}). Its stderr:\n{}\n\
                  If that says 'Address already in use', something still holds :{port} — a \
                  previous test's server, a stray `make serve`, or another suite run. This \
                  used to present as the BROWSER reporting connectionFailure, which looks \
@@ -545,7 +651,7 @@ fn start_dist_server() -> Result<DistServer, std::io::Error> {
     let _ = child.kill();
     let _ = child.wait();
     Err(std::io::Error::other(format!(
-        "the dist server never served a 200 for /index.html on :{port} within 20s. \
+        "{what} never served a 200 for /index.html on :{port} within 20s. \
          Either `dist/` has no index.html (run `make wasm`), or something else is \
          holding :{port} and answering — check for a stray `make serve` or another \
          suite run before reading this as an app fault."
@@ -13974,6 +14080,45 @@ async fn system_recovery_renders_readonly_inventory_without_booting(
         );
     }
 
+    // The version identity panel must name the build actually being served, not
+    // merely have a heading. The point of the panel is that the console can
+    // *measure* what it used to assert ("almost always a stale service worker"),
+    // and a heading over an empty value would be the same guess with better
+    // typography. Asserted against `dist/` for the same reason the C5 gate is:
+    // the browser's answer has to come from the same bytes the server serves.
+    let expect_build = std::fs::read_to_string("dist/index.html")
+        .map_err(|e| format!("cannot read dist/index.html — run `make wasm` first: {e}"))?
+        .split("name=\"entity-build\" content=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_string)
+        .ok_or("dist/index.html carries no entity-build stamp")?;
+    // Anti-vacuity: `contains("")` is true of everything, so an empty stamp
+    // would make the assertion below pass against a panel that rendered nothing.
+    assert!(
+        !expect_build.is_empty(),
+        "dist/index.html has an EMPTY entity-build stamp — the assertion below would \
+         pass vacuously. Check tools/build-stamp.sh."
+    );
+    let version = client
+        .execute(
+            r#"const v = document.getElementById('version'); return v ? v.textContent : '';"#,
+            vec![],
+        )
+        .await?;
+    let version = version.as_str().unwrap_or("");
+    assert!(
+        version.contains(&expect_build),
+        "the recovery version panel does not name the running build {expect_build:?} — \
+         the console still cannot answer \"which version am I on\". Got: {version:?}"
+    );
+    assert!(
+        version.contains("update waiting"),
+        "the version panel omits the service-worker `waiting` state, which is the one \
+         signal that distinguishes \"an update is downloaded and blocked\" from a guess. \
+         Got: {version:?}"
+    );
+
     // The app must NOT have booted — recovery yields the page (no windows).
     let windows = client
         .execute(
@@ -14557,14 +14702,7 @@ async fn default_idb_boots_into_remote_deployment_home(
 
         let read_site =
             r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#;
-        let mut home_text = String::new();
-        for _ in 0..25 {
-            sleep(Duration::from_millis(300)).await;
-            home_text = client.execute(read_site, vec![]).await?.as_str().unwrap_or("").to_string();
-            if home_text.contains("Welcome to the Entity Demo Site") {
-                break;
-            }
-        }
+        let home_text = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
         let log = capture_log(&client).await?;
         if !home_text.contains("Welcome to the Entity Demo Site") {
             print_log(&log);
@@ -14609,6 +14747,626 @@ async fn default_idb_boots_into_remote_deployment_home(
     r?;
 
     println!("  default_idb_boots_into_remote_deployment_home OK");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Run one of `publish.rs`'s `#[ignore]`d re-key fixture generators and fail
+/// LOUDLY if it did not. A fixture that silently no-ops would leave the next
+/// boot reading a stale `dist/`, and the test would then measure the wrong
+/// thing while looking like it ran.
+fn run_rekey_fixture(name: &str, out_dir: &str) {
+    // Two things here, both earned in one sitting.
+    //
+    // `--exact` is LOAD-BEARING. libtest's filter is a SUBSTRING match and these
+    // fixture names are prefixes of one another (`…_before` also selects
+    // `…_before_window`), so without it BOTH emitters run, write the same
+    // `dist/entity-deployment.json`, and the last one wins — the site scenario
+    // then silently booted a WINDOW surface, read an empty `#site-layer`, and
+    // failed with a message about the product.
+    //
+    // And `--exact` compares against the FULLY-QUALIFIED name, so the module
+    // path is required. Getting that wrong selects nothing, and libtest exits
+    // **0** for "ran no tests" — the fixture became a silent no-op that passed
+    // its own status check. Hence the `1 passed` assertion: a run that matched
+    // nothing must fail here, at the cause, not later as a confusing boot.
+    // ISOLATED `ENTITY_DATA_DIR`, and this one cost a full-suite run to find.
+    //
+    // Every nested cargo the suite spawns lives in the SAME container, so they
+    // share one publisher store. These fixtures publish under explicit
+    // `--identity-seed`s, and writing four extra publisher identities into that
+    // shared store left Phase 27's *durable* publisher unable to bind its own
+    // signature:
+    //
+    //   publish: signed root failed: publisher bound no signature at
+    //   /2KCMk1G1…/system/signature/00e031c4…
+    //
+    // Phase 27 passed when the monolith ran alone and failed only when these
+    // tests ran first — i.e. it read as a flaky monolith, in a phase that has
+    // nothing to do with re-keying. A fixture that reaches into shared state is
+    // not entitled to be convenient about it.
+    let full = format!("content_site::publish::tests::{name}");
+    let data_dir = std::env::temp_dir().join(format!("entity-rekey-fixture-{name}"));
+    let _ = std::fs::create_dir_all(&data_dir);
+    let out = Command::new(env!("CARGO"))
+        .args(["test", "--bin", "entity-browser", &full, "--", "--ignored", "--exact"])
+        .env("ENTITY_DATA_DIR", &data_dir)
+        .env("ENTITY_REKEY_OUT", out_dir)
+        .output()
+        .unwrap_or_else(|e| panic!("could not run fixture {full}: {e}"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "fixture {full} failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "fixture {full} matched no test (libtest exits 0 for that). stdout:\n{stdout}"
+    );
+}
+
+/// The publisher the freshly-emitted `dist/entity-deployment.json` names.
+///
+/// Read back out of the artifact rather than re-derived from the seed on the
+/// test side: the browser's belief comes from this file, so the test's notion of
+/// "who is the publisher" must come from the same bytes. Deriving it
+/// independently would let a key-derivation change keep the test and the app
+/// agreeing with each other while both drifted from what was published.
+fn deployment_home_peer(out_dir: &str) -> String {
+    let path = format!("{out_dir}/entity-deployment.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("re-key fixture did not emit {path}: {e}"));
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).expect("emitted deployment config must be valid JSON");
+    v["home_site"]["peer"]
+        .as_str()
+        .expect("emitted deployment config must carry home_site.peer")
+        .to_string()
+}
+
+/// **The `ecdeos.org` 2026-08-24 re-key, reproduced offline — and the acceptance
+/// test for R1 (boot-time routing reconcile).**
+///
+/// *The incident.* Devops re-keyed a live domain off a publicly-computable demo
+/// seed onto a durable identity. That was correct, and a security fix. But every
+/// returning visitor's browser had persisted the OLD publisher id at first
+/// contact and has fetched `/entity-deployment.json` exactly zero times since,
+/// so every request goes to a publisher that no longer publishes: newest WASM,
+/// 404s on everything not already cached, and it looks like a working app.
+///
+/// *The mechanism*, confirmed against the operator's live bricked profile on
+/// `2026-08-27` (`docs/plans/DESIGN-RESILIENCE-RECONCILIATION-AND-ENTITY-DOCTOR.md`
+/// §1.1a):
+///
+/// 1. `app.rs:1875` gates `deployment_config::fetch()` on `durable.is_none()`,
+///    so a warm boot never re-reads the doc.
+/// 2. The (1.2.5) reconcile at `app.rs:1963` is the only warm-boot escape, and
+///    it fires **only when the stale peer's origin is unregistered**. The first
+///    cold boot registered it, so it never fires — the `app.rs:1978` warn is
+///    absent from the real boot log while three other `WARN`s printed.
+/// 3. So `deployment` is `None` at `app.rs:2113`, and the browser asks a dead
+///    publisher forever. Nothing is missing; everything present is wrong.
+///
+/// *What this stages*, deterministically and with no domain: publish as A, cold
+/// boot — which persists `home_site.peer_id = A` **and registers A's origin**,
+/// step 2's precondition — then re-publish as B and delete A's tree so it 404s
+/// (production listed *"the abandoned demo peer 404s"* as a success criterion),
+/// then reload the SAME browser profile.
+///
+/// Deliberately the **default** URL (no `?worker`): the operator's profile is
+/// `try_worker = false` / `DurableDirectIdb`, and the Direct IDB arm is the
+/// shipped browser default.
+///
+/// **This fails until R1 lands, and that is the point.** The failure prints the
+/// browser console, which is the same artifact as the operator's. The staging
+/// assertions run first and hold independently of R1, so a red result can only
+/// mean the heal is missing — never that the fixture drifted.
+/// Poll a surface until it renders `want`, returning whatever it last read.
+///
+/// The budget is deliberately generous. A 7.5 s bound was observed failing on
+/// the FIRST boot after `dist/` changes — that boot pays a cold WASM compile and
+/// a cold fetch of a ~29 MB bundle, while every warm boot after it renders in
+/// well under a second. A budget that only holds on a warm cache is a flake that
+/// fires in CI and nowhere else, which is worse than a slow test. Returns early
+/// on success, so the bound costs nothing on the common path.
+async fn poll_rendered(
+    client: &Client,
+    read_js: &str,
+    want: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut last = String::new();
+    for _ in 0..80 {
+        sleep(Duration::from_millis(300)).await;
+        last = client.execute(read_js, vec![]).await?.as_str().unwrap_or("").to_string();
+        if last.contains(want) {
+            break;
+        }
+    }
+    Ok(last)
+}
+
+/// The scenario body, parameterised by **deployment surface**.
+///
+/// Parameterised rather than written once because the first version of this fix
+/// healed `surface = site` and left `surface = window` broken — and a repair that
+/// depends on which surface the domain happens to ship is not a repair, it just
+/// moves which door the bug is reachable through. Both callers below run the
+/// identical scenario; only the fixture's surface and the DOM read differ.
+async fn rekey_scenario(
+    before_fixture: &str,
+    after_fixture: &str,
+    read_js: &str,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let read_site = read_js;
+
+    // **An isolated copy of the served tree, on its own port.**
+    //
+    // The first version published these fixtures straight into `dist/`, cleaned
+    // up after itself, and still broke the monolith: Phase 27's fixture failed
+    // with *"publisher bound no signature"*, because a publish whose content is
+    // already present takes the engine's idempotent path and then wants a prior
+    // signed head that another publisher's artifacts cannot supply. It passed
+    // when the monolith ran alone. A test that can only be trusted when it runs
+    // alone is not a gate, and "clean up carefully" is a weaker guarantee than
+    // "never share the directory". So: copy the SPA, publish into the copy,
+    // serve the copy. `dist/` is never written to.
+    let root = format!("target/e2e-rekey-{}", label.replace(['=', ' '], "-"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    // A publish emits `entity-deployment.json`; a stale one copied out of `dist/`
+    // would be read before the first fixture writes its own.
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let mut planted: Vec<String> = Vec::new();
+
+    let r = async {
+        // ── 1. The domain as the returning visitor first met it ──────────────
+        run_rekey_fixture(before_fixture, &root);
+        let peer_a = deployment_home_peer(&root);
+        planted.push(peer_a.clone());
+        println!("  [{label}] re-key repro: published as A = {peer_a}");
+
+        // A GENUINE cold boot, which this scenario is worthless without: the
+        // whole point is that the FIRST contact persists publisher A and
+        // registers A's origin, and a warm profile does neither. IndexedDB
+        // survives WebDriver sessions, so without this wipe the two surface
+        // variants (and consecutive runs) inherit each other's durable config,
+        // the deployment doc is never fetched, and the staging assertion below
+        // fires on a test bug that looks exactly like a product bug. Land a
+        // document first — storage APIs need an origin.
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let home_text = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let cold = capture_log(&client).await?;
+        if !home_text.contains("Welcome to the Entity Demo Site") {
+            print_log(&cold);
+        }
+        // Staging: the cold boot must really have adopted A, on the IDB arm, and
+        // rendered A's home. If this fails the re-key was never set up and every
+        // assertion after it would be meaningless.
+        assert!(
+            cold.iter().any(|l| l.contains("DurableDirectIdb")),
+            "re-key repro: the default boot must select the main-thread IDB peer \
+             (the arm the incident is on)"
+        );
+        assert!(
+            cold.iter().any(|l| l.contains("deployment-config: applied")),
+            "re-key repro: cold boot did not apply the served /entity-deployment.json"
+        );
+        assert!(
+            home_text.contains("Welcome to the Entity Demo Site"),
+            "re-key repro: publisher A's home did not render on the cold boot; got: {home_text:?}"
+        );
+
+        // ── 2. The re-key ────────────────────────────────────────────────────
+        // `publish` cleans only its OWN peer's subtree, so B's publish leaves A
+        // standing; deleting A is the second half of a real re-key and is done
+        // here rather than in the fixture so the two halves stay separable.
+        run_rekey_fixture(after_fixture, &root);
+        let peer_b = deployment_home_peer(&root);
+        planted.push(peer_b.clone());
+        assert_ne!(peer_a, peer_b, "re-key repro: the fixture did not change publisher");
+
+        std::fs::remove_dir_all(format!("{root}/{peer_a}"))
+            .unwrap_or_else(|e| panic!("re-key repro: could not retire A's tree: {e}"));
+        assert!(
+            !std::path::Path::new(&format!("{root}/{peer_a}")).exists(),
+            "re-key repro: A's tree must be gone (the abandoned peer 404s)"
+        );
+        assert!(
+            std::path::Path::new(&format!("{root}/{peer_b}/sites.list")).exists(),
+            "re-key repro: B's tree must be serving"
+        );
+        println!("  [{label}] re-key repro: re-keyed A -> B = {peer_b}; A's tree retired (404s)");
+
+        // ── 3. The returning visitor's next load ─────────────────────────────
+        // Same client ⇒ same profile ⇒ same IndexedDB ⇒ a genuine WARM boot with
+        // `home_site.peer_id = A` persisted and A's origin registered.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let warm_text = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let warm = capture_log(&client).await?;
+
+        // ANTI-VACUITY. Everything below asserts that the browser ends up on B —
+        // which is also what a browser that simply COLD-booted would do, having
+        // never held A at all. That would pass this test while exercising none of
+        // it. So first prove the scenario was real: the boot must have been warm
+        // (it carried a durable config naming A) AND must have detected the
+        // re-key. Both are one line in the log, and without them a hermeticity
+        // slip turns this whole file green for the wrong reason.
+        let detected = warm.iter().any(|l| l.contains("DIFFERENT identity"));
+        let recorded = warm.iter().any(|l| l.contains("recorded a retired publisher"));
+        if !detected || !recorded {
+            print_log(&warm);
+        }
+        assert!(
+            detected,
+            "the warm boot never detected the re-key — it was not a warm boot carrying \
+             publisher {peer_a}, so this run proves nothing about healing"
+        );
+        assert!(
+            recorded,
+            "the re-key was detected but no supersession was recorded — every OTHER durable \
+             reference to {peer_a} (window nav state, the overlay's) depends on that record"
+        );
+
+        // The reproduction signature, printed whether or not we go on to fail —
+        // it is the artifact this test exists to produce, and it is the same
+        // shape as the operator's captured console.
+        let unresolvable: Vec<&String> = warm
+            .iter()
+            .filter(|l| l.contains("remote home has no registered origin"))
+            .collect();
+        let reconcile_fired = warm
+            .iter()
+            .any(|l| l.contains("home origin missing from the durable registry"));
+        // The site overlay's own words for this state. Worth naming separately:
+        // it is the ONLY user-visible report the incident produces, it appears
+        // only on the site surface (the operator's profile is `chrome`, which is
+        // why they saw nothing), and it describes the wrong thing — "the source
+        // is unreachable" rather than "the publisher you are asking for was
+        // replaced" — so it cannot be acted on even when it is seen.
+        const STALE_OUTLINE: &str = "This site's source is unreachable";
+        let showed_stale_outline = warm_text.contains(STALE_OUTLINE);
+        println!(
+            "  [{label}] warm boot — (1.2.5) reconcile fired: {reconcile_fired}; \
+             unresolvable-home reports: {}; stale cached outline shown: {showed_stale_outline}",
+            unresolvable.len()
+        );
+        for l in &unresolvable {
+            println!("    {}", l.chars().take(220).collect::<String>());
+        }
+
+        if !warm_text.contains("Welcome to the Entity Demo Site") {
+            print_log(&warm);
+            // The site layer carries its whole stylesheet, so echo only the tail
+            // — the rendered copy — rather than 3 KB of CSS that buries it.
+            let tail: String = {
+                let t = warm_text.trim_end();
+                let n = t.chars().count();
+                t.chars().skip(n.saturating_sub(180)).collect()
+            };
+            println!(
+                "\n  ---- re-key reproduction ----\n  \
+                 persisted publisher (stale): {peer_a}\n  \
+                 published publisher (live):  {peer_b}\n  \
+                 (1.2.5) reconcile fired:     {reconcile_fired}   \
+                 <- false is the confirmed incident path (§1.1a)\n  \
+                 stale cached outline shown:  {showed_stale_outline}\n  \
+                 site-layer tail:             …{tail}\n  \
+                 R1 is what turns this green: re-read /entity-deployment.json on a\n  \
+                 warm boot with a remote home, compare IDENTITY, adopt the routing\n  \
+                 facts, and re-point the persisted navigation state.\n"
+            );
+        }
+
+        // ── 4. The heal (R1) ─────────────────────────────────────────────────
+        // Asserted as BEHAVIOUR, not as a log string: this test was written
+        // before the fix, so it must not encode the fix's implementation.
+        assert!(
+            warm_text.contains("Welcome to the Entity Demo Site"),
+            "a re-keyed domain did not heal on the next boot — the browser is still \
+             pointed at the retired publisher {peer_a} instead of {peer_b}"
+        );
+        assert!(
+            unresolvable.is_empty(),
+            "the browser still reports an unresolvable home after the re-key: {unresolvable:#?}"
+        );
+
+        // ── 5. The adoption must PERSIST ─────────────────────────────────────
+        // A heal that re-derives itself every boot is a different (and quieter)
+        // bug than no heal at all: it would keep working while never writing the
+        // correction down, so the first offline boot after a re-key would fail.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let again = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let third = capture_log(&client).await?;
+        if !again.contains("Welcome to the Entity Demo Site") {
+            print_log(&third);
+        }
+        assert!(
+            again.contains("Welcome to the Entity Demo Site"),
+            "the adopted publisher did not persist — the boot after the heal broke again"
+        );
+
+        let panics = count_panics(&third);
+        assert!(panics.is_empty(), "panics across the re-key boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    // The whole staging area goes, on every path. Nothing to unpick in `dist/`
+    // because nothing was ever written there — which is the point of the copy.
+    let _ = planted;
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    println!("  rekey_scenario[{label}] OK");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// The locked-kiosk **site** surface — `ecdeos.org`-shaped, and the surface the
+/// operator's own bricked profile was closest to.
+#[tokio::test(flavor = "current_thread")]
+async fn rekeyed_domain_heals_on_next_boot() -> Result<(), Box<dyn std::error::Error>> {
+    rekey_scenario(
+        "emit_rekey_fixture_before",
+        "emit_rekey_fixture_after",
+        r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#,
+        "surface=site",
+    )
+    .await
+}
+
+/// The maximized Site Browser **window** surface — `entitychurchfoundation.org`-
+/// shaped, and **the case the first version of this fix did not cover.**
+///
+/// It is a separate deployment shape with separately-persisted navigation state
+/// (per-window, not the overlay's app-level path), so a repair that only
+/// re-points the overlay leaves this one pointed at the retired publisher. That
+/// is why the fix records the supersession against the *peer* and resolves at
+/// the single decode point both surfaces share, rather than re-pointing surfaces
+/// it happens to know about.
+#[tokio::test(flavor = "current_thread")]
+async fn rekeyed_domain_heals_on_next_boot_window_surface(
+) -> Result<(), Box<dyn std::error::Error>> {
+    rekey_scenario(
+        "emit_rekey_fixture_before_window",
+        "emit_rekey_fixture_after_window",
+        r#"const layer=document.getElementById('dom-layer');if(!layer)return '';
+           const root=layer.shadowRoot||layer;
+           const w=root.querySelector('section.window.maximized')||root.querySelector('section.window');
+           return w?(w.textContent||'').trim():'';"#,
+        "surface=window",
+    )
+    .await
+}
+
+/// How many durable supersession records `load()` found on this boot.
+///
+/// Read from the boot log rather than from the DOM because that is the only
+/// place the *durable* registry is reported — and the durable registry, not the
+/// live map, is what finding F2 is about. `load()` stays silent at zero, so an
+/// absent line is zero records.
+fn supersession_records(log: &[String]) -> usize {
+    log.iter()
+        .filter(|l| l.contains("loaded retired-publisher records"))
+        .filter_map(|l| {
+            let after = l.split("records = ").nth(1)?;
+            after
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()
+        })
+        .next_back()
+        .unwrap_or(0)
+}
+
+/// **The F2 gate — a supersession record must not be permanent.**
+///
+/// *The finding* (`AUDIT-REKEY-RECONCILE-2026-08-27` F2, HIGH). R1 writes a
+/// `retired → replacement` record durably when the deployment document names a
+/// different publisher. The first version had **no delete path, no listing and
+/// no expiry**, so the trigger is not a re-key at all — it is a *mistake*. A
+/// misconfigured publish, a bad templating run, a brief compromise: any
+/// `/entity-deployment.json` that names the wrong peer for as long as one boot
+/// is adopted by every browser that loads in that window, and then **survives
+/// the origin being fixed**, because nothing ever re-reads it. That is brick
+/// matrix cell **#6 at E5** — recovery is clear-site-data, which is destructive
+/// and, with no export, costs the user everything else they had.
+///
+/// *What this reproduces.* Three states of one document, which is the shape of
+/// the mistake rather than the shape of a re-key: the domain publishes as **A**,
+/// briefly declares **B**, then declares **A** again. The false record `A→B` is
+/// the durable damage, and after the correction the browser also holds the true
+/// record `B→A` — so this is precisely the case a naive "drop what the document
+/// disagrees with" would get backwards, condemning the good record along with
+/// the bad one.
+///
+/// *Note A's tree is never deleted.* The re-key scenario deletes it because a
+/// real re-key abandons the old publisher; here A never stopped publishing, and
+/// deleting it would quietly convert this into a second copy of that test.
+///
+/// **The assertion is the record count, not the render, and that is deliberate.**
+/// Both surfaces heal here either way — the overlay is re-pointed directly by
+/// the adoption path — so a render assertion would pass on the unfixed tree and
+/// prove nothing. That is exactly the trap finding F5 named in the sibling
+/// gates ("one of the two surface gates does not exercise the new mechanism"),
+/// and repeating it would be the whole bug. The discriminator is that a boot
+/// after the correction loads **one** record and not two, which can only be true
+/// if the drop reached durable storage.
+#[tokio::test(flavor = "current_thread")]
+async fn a_supersession_the_domain_contradicts_is_dropped(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let read_site =
+        r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#;
+
+    // Same isolation rule as `rekey_scenario`: publish into a copy, never into
+    // the shared `dist/`.
+    let root = "target/e2e-supersession-revalidate".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let r = async {
+        // ── 1. The domain as it really is: publisher A, met cold ─────────────
+        run_rekey_fixture("emit_rekey_fixture_before", &root);
+        let peer_a = deployment_home_peer(&root);
+        // The exact bytes the domain served before the mistake. Step 3 restores
+        // these rather than re-running the fixture: a republish of content that
+        // is already in the tree takes the engine's idempotent path and leaves
+        // the emitted document still naming B, which made the first version of
+        // this test fail on a fixture artifact instead of on the product. It is
+        // also the more faithful reproduction — F2 is about a *document* being
+        // wrong for one boot and then corrected, not about a republish.
+        let doc_a = std::fs::read(format!("{root}/entity-deployment.json"))?;
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let home = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let cold = capture_log(&client).await?;
+        assert!(
+            home.contains("Welcome to the Entity Demo Site"),
+            "staging: publisher A's home did not render on the cold boot; got {home:?}"
+        );
+        assert_eq!(
+            supersession_records(&cold),
+            0,
+            "staging: a fresh profile must start with no supersession records"
+        );
+
+        // ── 2. The mistake: the document names B for one boot ────────────────
+        // B is published so it is a real peer rather than a dangling id — a
+        // document naming a peer that serves nothing would be rejected further
+        // up and would never reach the record-writing path being tested.
+        run_rekey_fixture("emit_rekey_fixture_after", &root);
+        let peer_b = deployment_home_peer(&root);
+        assert_ne!(peer_a, peer_b, "the fixture did not change the declared publisher");
+
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let _ = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let adopted = capture_log(&client).await?;
+        assert!(
+            adopted.iter().any(|l| l.contains("peer-supersession: recorded a retired publisher")),
+            "staging: the bad document was not adopted, so there is no damage to repair. \
+             Without this the rest of the test is vacuous."
+        );
+
+        // ── 3. The origin is fixed: the document names A again ───────────────
+        std::fs::write(format!("{root}/entity-deployment.json"), &doc_a)?;
+        assert_eq!(
+            deployment_home_peer(&root),
+            peer_a,
+            "the corrected document must name A again"
+        );
+
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let _ = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let corrected = capture_log(&client).await?;
+
+        // Anti-vacuity: the boot that repairs must have actually SEEN the false
+        // record. A boot that loaded nothing would satisfy the count assertion
+        // below for the wrong reason.
+        assert_eq!(
+            supersession_records(&corrected),
+            1,
+            "the boot after the correction must load the one false record ({peer_a} → \
+             {peer_b}) before it can drop it — it loaded a different number, so this \
+             run is not reproducing F2"
+        );
+        assert!(
+            corrected.iter().any(|l| l.contains("DROPPING a record the domain contradicts")),
+            "F2 RED — the browser read a deployment document naming {peer_a} as the current \
+             publisher while holding a durable record saying {peer_a} was RETIRED, and kept \
+             the record.\n\
+             This is brick-matrix cell #6 at E5: a transient bad /entity-deployment.json \
+             becomes permanent client state that survives the origin being fixed, and the \
+             only recovery is clear-site-data.\n\
+             The fix is to re-check the records against the live document on every boot \
+             that has one, and drop the ones it contradicts."
+        );
+
+        // ── 4. And the drop must be DURABLE ──────────────────────────────────
+        // The half that makes this a fix rather than a per-session cosmetic: a
+        // removal from the in-process map alone leaves the entity on disk, and
+        // `load()` puts it straight back on the next boot. One record must
+        // survive — the TRUE one (B→A) written when the document was corrected
+        // — so this also proves the predicate did not take the good record with
+        // the bad one.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let after = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let final_log = capture_log(&client).await?;
+        let n = supersession_records(&final_log);
+        if n != 1 {
+            print_log(&final_log);
+        }
+        assert_eq!(
+            n, 1,
+            "the drop did not reach durable storage (or took the good record with it): the \
+             boot after the repair loaded {n} record(s), expected exactly 1 — the true \
+             {peer_b} → {peer_a} written when the document was corrected"
+        );
+        assert!(
+            after.contains("Welcome to the Entity Demo Site"),
+            "the site stopped rendering after the records were revalidated — the repair \
+             broke the thing it exists to protect; got {after:?}"
+        );
+
+        let panics = count_panics(&final_log);
+        assert!(panics.is_empty(), "panics across the revalidation boots:\n{panics:#?}");
+        println!("  F2: false record dropped, {n} true record retained across a reload");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
     client.close().await.ok();
     Ok(())
 }
@@ -16437,5 +17195,834 @@ async fn a_running_app_can_hold_a_screen_wake_lock() -> Result<(), Box<dyn std::
         mounted.get("sandbox").and_then(|v| v.as_str()).unwrap_or("?")
     );
     client.close().await.ok();
+    Ok(())
+}
+
+// ── G1 — the black-hole origin ────────────────────────────────────────────
+//
+// The two gates below are the falsifiers for the code-axis design's central
+// claim, and they are written to be seen RED on the unfixed tree before their
+// fix lands (§5.1). Read
+// `docs/plans/DESIGN-CODE-AXIS-RECOVERY-AND-BOOT-SLOTS.md` §1.1, §4A and §4B
+// before changing either.
+//
+// **The distinction they turn on is not "offline".** A network that REJECTS —
+// interface down, DNS failure, connection refused — reaches every `.catch` on
+// the path promptly, and offline boot works. That case has always worked and is
+// why the symptom is intermittent. A network that ACCEPTS AND NEVER ANSWERS
+// reaches no catch at all: an unbounded `await` on it is a blank page for as
+// long as the OS is willing to wait, which behind a captive portal is
+// unbounded. `tools/e2e/blackhole-serve.py` is the only thing in this rig that
+// can produce the second case.
+//
+// They cover brick-matrix cells #1 and #2 — two of the six live E6 cells — and
+// they are the enforcement point that makes D23 a discipline rather than an
+// assertion.
+
+/// Connect a browser session, without starting the dist server.
+///
+/// Split out of [`setup`] so a test can supply its own origin. Everything else
+/// [`setup`] does is preserved and matters: the stall watchdog has to be armed
+/// for a standalone test (it has no phases to report progress from), the stale
+/// session reaper has to hand back the single Selenium slot, and the two
+/// server-side timeouts have to be bounded rather than left at WebDriver's 300 s
+/// `pageLoad` default — which for a black-hole test would turn the exact failure
+/// under test into a five-minute silence.
+async fn connect_browser() -> Result<Client, Box<dyn std::error::Error>> {
+    arm_stall_watchdog();
+    note_progress("setup");
+    reap_stale_sessions();
+
+    let mut caps = serde_json::Map::new();
+    caps.insert(
+        "moz:firefoxOptions".to_string(),
+        serde_json::json!({ "args": ["-headless"] }),
+    );
+    let url = webdriver_url();
+    let client = ClientBuilder::native()
+        .capabilities(caps)
+        .connect(&url)
+        .await
+        .map_err(|e| format!("failed to connect to WebDriver at {url}: {e}"))?;
+    client
+        .update_timeouts(fantoccini::wd::TimeoutConfiguration::new(
+            Some(Duration::from_secs(30)),
+            Some(Duration::from_secs(45)),
+            Some(Duration::from_secs(0)),
+        ))
+        .await
+        .map_err(|e| format!("failed to set WebDriver timeouts: {e}"))?;
+    Ok(client)
+}
+
+/// **G1 — cold boot against an origin that black-holes `/entity-deployment.json`.**
+///
+/// The claim under test, from the design's §4A: between page load and the frame
+/// loop there are exactly two network awaits and both are
+/// `deployment_config::fetch()`, which had no deadline. `boot_load` is awaited
+/// before the rAF loop starts *and* before the frozen-frame watchdog installs
+/// (`main.rs`), so a stalling origin is a blank page with no watchdog, no
+/// message, and no exit — brick-matrix cell **#1**, at **E6**.
+///
+/// **This is a cold boot on purpose.** No staged warm profile, no re-key
+/// fixture, no persisted state: the cold path (`durable.is_none()`) has carried
+/// the unbounded fetch since long before the warm-boot reconcile widened it, so
+/// this gate fails on shipped code rather than only on unmerged work. A gate
+/// that can only fail on a branch is a regression test for a bug nobody has run.
+///
+/// **Anti-vacuity.** A boot that never asked for the config satisfies every
+/// assertion below for the wrong reason, so the server's own log is checked:
+/// the request must have arrived and must have been stalled. Measured at the
+/// wire, not reported by the thing under test.
+#[tokio::test]
+async fn boot_survives_a_blackholed_deployment_config() -> Result<(), Box<dyn std::error::Error>> {
+    let server = start_blackhole_server(&["/entity-deployment.json"])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+
+    // `localhost` rather than 127.0.0.1 so this runs on the same secure-context
+    // terms as production: the service worker registers, exactly as it does for
+    // a real visitor. C1's deadline lives in the page, so it bounds the fetch
+    // whether the SW is in the path or not — and a gate that quietly excluded
+    // the SW would be testing a configuration no user is in.
+    let url = format!("http://localhost:{port}/?log=trace");
+    let goto = client.goto(&url).await;
+
+    let boot = wait_for_boot(&client, BOOT_BUDGET_MS).await;
+
+    // Read the wire evidence BEFORE asserting, so the failure message can say
+    // which of the two possible reds this is.
+    let stalled = server.request_count("STALL");
+    let asked = server.request_count("entity-deployment.json");
+    client.close().await.ok();
+
+    if let Err(e) = goto {
+        return Err(format!(
+            "the navigation itself never completed against a black-holing origin: {e}\n\
+             (the config fetch is a runtime fetch, not a document subresource, so this \
+             is a different failure from the one this gate is about — check whether \
+             something on the document's critical path is now fetching a stalled URL)"
+        )
+        .into());
+    }
+
+    assert!(
+        asked >= 1,
+        "VACUOUS: the app never requested /entity-deployment.json, so nothing was \
+         black-holed and a green here would mean nothing. The server logged {} \
+         stalled request(s) in total. Either the boot path stopped fetching the \
+         deployment config, or the origin is not the one the browser loaded.",
+        stalled
+    );
+
+    let boot_ms = boot.as_ref().copied().unwrap_or(0);
+    boot.map_err(|e| {
+        format!(
+            "G1 RED — boot never reached the frame loop against an origin that accepts \
+             and never answers /entity-deployment.json ({asked} such request(s) stalled).\n\
+             This is brick-matrix cell #1 at E6: no frame loop, so no frozen-frame \
+             watchdog, no banner, no message, and no exit for the user.\n\
+             The fix is a deadline on `deployment_config::fetch()` (C1): a timeout must \
+             be a state the boot PROCEEDS FROM (`None` → build-time defaults), never a \
+             stall.\n\nUnderlying failure: {e}"
+        )
+    })?;
+
+    // Print the margin on success, per this suite's standing rule: a budget that
+    // only ever speaks when it fails cannot tell a loaded box from a broken one.
+    // Here it says something sharper — boot should land at roughly
+    // `BOOT_FETCH_DEADLINE_MS` plus a healthy boot (108-711 ms measured). A time
+    // far BELOW the deadline would mean the stall was never actually hit and the
+    // pass is vacuous; far above would mean something else on the path is also
+    // waiting, and the §4A enumeration is incomplete.
+    println!(
+        "  G1: booted in {boot_ms}ms with {asked} black-holed \
+         /entity-deployment.json request(s) ({stalled} stalled at the wire). \
+         Expect ~3s (the deadline) + a healthy boot."
+    );
+    Ok(())
+}
+
+/// **G1 (recovery variant) — the BIOS must survive a black-holing origin.**
+///
+/// The System Recovery console gained network probes on 2026-08-27 (the version
+/// identity panel: what build is running, what is cached, what the origin
+/// serves, what the domain declares). **That is a self-inflicted risk of exactly
+/// the kind this whole gate family exists for**, and it is the worst placement
+/// of it available: this is the screen a user opens *because* something is
+/// already hanging. A network read here that never returns replaces a broken app
+/// with a broken diagnostic, and there is no third tier to fall back to.
+///
+/// So the probes are bounded (D23) and their expiry is a *reported state* —
+/// "could not reach the origin" — rather than a spinner. This asserts that the
+/// panel reaches a definite answer, and that the probes did not take the
+/// storage inventory down with them: the parts of the report that need no
+/// network must still be there, because on a black-holing origin they are the
+/// only parts that can be.
+#[tokio::test]
+async fn the_recovery_console_survives_a_blackholed_origin(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Start CLEAN and black-hole at runtime. Seeding `/index.html` at startup
+    // deadlocks the server's own readiness probe, which fetches exactly that
+    // path — the harness says so rather than letting it read as an app fault,
+    // and this is the same reason the stall set is runtime-settable for the
+    // service-worker variant.
+    let server = start_blackhole_server(&[])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+    // `/` is deliberately NOT stalled — the navigation has to land, or we are
+    // testing whether a page can load rather than whether the console degrades.
+    set_blackhole(&["/index.html", "/entity-deployment.json"])?;
+
+    let url = format!("http://localhost:{port}/?systemrecovery=1");
+    client.goto(&url).await?;
+
+    // Poll for a *settled* panel rather than sleeping: the deadline is 3 s, so a
+    // healthy run lands just after it, and a fixed sleep would either be flaky
+    // or hide a regression by being generous.
+    let read = r#"const v = document.getElementById('version');
+                  const d = document.getElementById('domain');
+                  return (v ? v.textContent : '') + ' ' + (d ? d.textContent : '');"#;
+    let started = std::time::Instant::now();
+    let mut panel = String::new();
+    for _ in 0..75 {
+        sleep(Duration::from_millis(200)).await;
+        panel = client
+            .execute(read, vec![])
+            .await?
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if !panel.is_empty() && !panel.contains("probing…") {
+            break;
+        }
+    }
+    let settled_ms = started.elapsed().as_millis();
+
+    let stalled = server.request_count("STALL");
+    let asked = server.request_count("index.html");
+    let console = client
+        .execute(
+            r#"const r = document.getElementById('entity-recovery'); return r ? r.textContent : '';"#,
+            vec![],
+        )
+        .await?
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    client.close().await.ok();
+
+    assert!(
+        asked >= 1,
+        "VACUOUS: the recovery console never requested /index.html, so nothing was \
+         black-holed and a green here would mean nothing ({stalled} stalled overall)"
+    );
+    assert!(
+        !panel.contains("probing…"),
+        "G1/BIOS RED — the System Recovery version panel never settled against an origin \
+         that accepts and never answers ({asked} such request(s) stalled, {settled_ms}ms \
+         elapsed).\n\
+         This is the recovery console itself hanging: the screen a user reaches BECAUSE \
+         the app already hung, now hanging for the same reason one tier down.\n\
+         The probes must be bounded and expiry must be a reported state, not a spinner.\n\
+         Panel text was: {panel:?}"
+    );
+    assert!(
+        panel.contains("Could not reach the origin"),
+        "the panel settled but did not SAY the origin was unreachable — a diagnostic that \
+         goes quiet is worse than one that reports a negative. Got: {panel:?}"
+    );
+    // The network probes must not have taken the local inventory with them. On a
+    // black-holing origin these sections are the only ones that can work, so
+    // they are the ones that matter most here.
+    for needle in ["Storage Inventory", "IndexedDB", "localStorage"] {
+        assert!(
+            console.contains(needle),
+            "the {needle:?} section is missing — a stalled network probe blocked the \
+             local inventory, which needs no network at all"
+        );
+    }
+
+    // Same margin rule as G1: a settle far below the deadline would mean the
+    // stall was never reached and the green is empty.
+    println!(
+        "  G1/BIOS: recovery panel settled in {settled_ms}ms with {asked} black-holed \
+         request(s) ({stalled} stalled at the wire). Expect ~3s (the probe deadline)."
+    );
+    Ok(())
+}
+
+/// **A first contact that missed the deployment config must not be permanent.**
+///
+/// Written as a release-risk probe, from a code read, before deploying anything:
+///
+/// * the cold path fetches `/entity-deployment.json` only when there is **no**
+///   durable session config (`durable.is_none()`);
+/// * if that fetch yields `None` — a 404, an unparseable document, or (since C1)
+///   a timeout at 3 s — `cfg` falls back to `boot_default()`, whose `home_site`
+///   is `SiteRef::default()`, i.e. an **empty** `peer_id`;
+/// * that config is then **persisted**;
+/// * and on every later boot the R1 reconcile guards on
+///   `home_is_local = stale_peer.is_empty() || stale_peer == system_pid`, so an
+///   empty home means it never re-reads the document.
+///
+/// One unlucky first visit therefore pins a profile to the build-time default
+/// surface **forever**, and the only exit is clearing site data — an **E5**,
+/// which is the rung the whole brick matrix exists to keep empty. Confirmed by
+/// this test on 2026-08-27: the site never renders.
+///
+/// **The guard is not the bug — read this before "fixing" it.** An empty
+/// `home_site.peer_id` is a legitimate sentinel meaning *the system peer*:
+/// `set_home_site` documents "empty `target_peer` = the system peer", and
+/// `repair_for_deleted_peer` writes exactly that when a home's peer is deleted.
+/// So treating empty as local is correct for a user who chose a local home.
+/// The defect is one level up — **a failed fetch persists a value that is
+/// indistinguishable from a deliberate choice.** `deployment_config::fetch()`
+/// collapses three different outcomes into `None`: the document said nothing
+/// (a 404 — this origin genuinely has no config), the document was unreadable,
+/// and (since C1) the origin did not answer in time. Only the first is a fact
+/// worth persisting; the other two are "we do not know yet" and must be
+/// retried. Flipping the guard would make a local-home user's setting get
+/// overwritten from the domain document on every boot — trading this defect for
+/// a worse one.
+///
+/// Staged with a 404 rather than a stall because the sticky state is reached by
+/// *any* `None`, and a missing-then-added document is the ordinary version of it
+/// — a domain that publishes its deployment config after someone's first visit.
+/// C1's deadline did not create this path, it **widened** it: before, only a
+/// failing origin reached `None`; now a merely slow one does too.
+#[tokio::test(flavor = "current_thread")]
+async fn a_first_contact_that_missed_the_deployment_config_recovers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let read_site =
+        r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#;
+
+    let root = "target/e2e-late-deployment-config".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    // The whole point: at first contact this origin serves NO deployment config.
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let r = async {
+        // ── 1. First contact, with nothing served ────────────────────────────
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let first = capture_log(&client).await?;
+        assert!(
+            !first.iter().any(|l| l.contains("deployment-config: applied")),
+            "staging: the origin was supposed to serve no deployment config on first contact"
+        );
+
+        // ── 2. The domain publishes its deployment config ────────────────────
+        run_rekey_fixture("emit_rekey_fixture_before", &root);
+        let peer_a = deployment_home_peer(&root);
+        assert!(
+            std::path::Path::new(&format!("{root}/entity-deployment.json")).exists(),
+            "staging: the fixture did not emit a deployment config"
+        );
+
+        // ── 3. The visitor comes back ────────────────────────────────────────
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let second = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
+        let log = capture_log(&client).await?;
+        if !second.contains("Welcome to the Entity Demo Site") {
+            print_log(&log);
+        }
+
+        assert!(
+            second.contains("Welcome to the Entity Demo Site"),
+            "RED — a profile whose FIRST contact missed /entity-deployment.json never reads \
+             it again. The visitor is pinned to the build-time default surface with no exit \
+             but clearing site data: an E5, and the rung the brick matrix exists to keep \
+             empty.\n\
+             The domain now publishes as {peer_a} and this profile still cannot see it.\n\
+             DO NOT fix this by flipping R1's `home_is_local` guard — an empty home_site \
+             legitimately means \"the system peer\" (`set_home_site`, \
+             `repair_for_deleted_peer`), so that would overwrite a local-home user's \
+             setting from the domain document on every boot. The fix is upstream: \
+             `deployment_config::fetch()` collapses \"this origin has no config\" (404), \
+             \"unreadable\" and \"did not answer in time\" into one `None`. Only the first \
+             is a fact worth persisting; the others mean NOT YET and must be retried.\n\
+             Rendered: {second:?}"
+        );
+        println!("  late deployment config: picked up on the next load");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+    client.close().await.ok();
+    Ok(())
+}
+
+/// **The `ecdeos.org` symptom, named at L1 — without the app booting at all.**
+///
+/// *Why this gate exists, in devops' words:* the re-key failure "isn't a crash.
+/// `boot_load: complete`, frame loop armed, watchdog installed. The profile just
+/// kept showing the old apps out of its own local tree while every remote path
+/// under the retired peer 404'd. **Nothing on screen says anything is wrong.**"
+/// That is what made it undiagnosable for days — not subtlety, but the complete
+/// absence of any surface that could state it.
+///
+/// Diagnosing it needs exactly one comparison: who this profile is pointed at,
+/// beside who the domain says publishes it. This asserts the recovery console
+/// makes that comparison and **names the state**, through the whole arc:
+///
+/// 1. profile and domain agree → says so (the negative result, which is what
+///    stops someone clearing site data on a wrong theory);
+/// 2. the domain re-keys and the profile has **not** booted since → `STRANDED`,
+///    naming both publishers;
+/// 3. the app boots once and reconciles → back to agreement.
+///
+/// Step 2 is the one that could not previously be observed anywhere, and note
+/// what it does *not* require: no broken app, no hung boot, no cleared storage.
+/// The stranded condition is just "the profile's belief and the domain's
+/// declaration disagree", which is why it can be reproduced this cheaply and why
+/// it went unnoticed for so long.
+///
+/// Step 3 is not decoration — a panel that always cried `STRANDED` would pass a
+/// one-shot test and be worthless in the field.
+#[tokio::test(flavor = "current_thread")]
+async fn the_recovery_console_names_a_stranded_profile(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-stranded-profile".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let app_url = format!("http://localhost:{port}/?log=trace");
+    let bios_url = format!("http://localhost:{port}/?systemrecovery=1");
+
+    // Read the console's routing card, polling past "probing…" so this never
+    // races the bounded deployment-document fetch.
+    async fn routing(client: &Client) -> Result<String, Box<dyn std::error::Error>> {
+        let js = r#"const d = document.getElementById('domain'); return d ? d.textContent : '';"#;
+        let mut text = String::new();
+        for _ in 0..60 {
+            sleep(Duration::from_millis(250)).await;
+            text = client.execute(js, vec![]).await?.as_str().unwrap_or("").to_string();
+            if !text.is_empty() && !text.contains("probing…") {
+                break;
+            }
+        }
+        Ok(text)
+    }
+
+    let r = async {
+        // ── 1. A healthy returning visitor ───────────────────────────────────
+        run_rekey_fixture("emit_rekey_fixture_before", &root);
+        let peer_a = deployment_home_peer(&root);
+
+        client.goto(&app_url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        client.goto(&bios_url).await?;
+        let healthy = routing(&client).await?;
+        assert!(
+            healthy.contains(&peer_a),
+            "the console does not name the publisher this profile is pointed at ({peer_a}). \
+             The routing mirror is the only channel across the L1/L5 boundary — if it is \
+             absent, `boot_diagnostics::write_routing_mirror` did not run. Got: {healthy:?}"
+        );
+        assert!(
+            !healthy.contains("STRANDED"),
+            "the console reported STRANDED for a profile that agrees with its domain — a \
+             panel that always cries stranded diagnoses nothing. Got: {healthy:?}"
+        );
+
+        // ── 2. The domain re-keys; this profile has NOT booted since ──────────
+        // A's tree is deliberately left standing: what strands the visitor is the
+        // profile still *pointing* at A, not A's artifacts vanishing.
+        run_rekey_fixture("emit_rekey_fixture_after", &root);
+        let peer_b = deployment_home_peer(&root);
+        assert_ne!(peer_a, peer_b, "the fixture did not change the declared publisher");
+
+        client.goto(&bios_url).await?;
+        let stranded = routing(&client).await?;
+        assert!(
+            stranded.contains("STRANDED"),
+            "RED — the profile is pointed at {peer_a} while the domain now publishes as \
+             {peer_b}, and the recovery console did not say so.\n\
+             This is the `ecdeos.org` state: local content keeps rendering, every remote \
+             path 404s, and nothing on any screen states it. A console that cannot name \
+             this is why the incident took days.\n\
+             Got: {stranded:?}"
+        );
+        assert!(
+            stranded.contains(&peer_a) && stranded.contains(&peer_b),
+            "the console said STRANDED without naming BOTH publishers — the two ids are the \
+             whole actionable content of the report. Got: {stranded:?}"
+        );
+        // It must also tell the user not to do the destructive thing.
+        assert!(
+            stranded.contains("must not be cleared"),
+            "the stranded verdict does not tell the user their content is safe. Clearing \
+             site data is the E5 action this console exists to talk people out of. \
+             Got: {stranded:?}"
+        );
+
+        // ── 3. One normal boot reconciles it ─────────────────────────────────
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.goto(&bios_url).await?;
+        let healed = routing(&client).await?;
+        assert!(
+            !healed.contains("STRANDED"),
+            "the profile still reads as stranded after a boot that should have reconciled \
+             it to {peer_b}. Either R1 did not adopt, or the routing mirror was not \
+             rewritten afterwards. Got: {healed:?}"
+        );
+        assert!(
+            healed.contains(&peer_b),
+            "after reconciling, the console does not show the profile pointed at {peer_b}. \
+             Got: {healed:?}"
+        );
+
+        println!("  BIOS: agree → STRANDED({peer_a} vs {peer_b}) → reconciled, all at L1");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+    client.close().await.ok();
+    Ok(())
+}
+
+/// **G1 (service-worker variant) — a cached shell must survive a black-holed origin.**
+///
+/// `networkFirst` in `assets/sw.js` awaits `fetch(req, {cache:'reload'})` with no
+/// `AbortController`, no `Promise.race` and no deadline — measured, `grep -c
+/// setTimeout assets/sw.js` → 0. The cached shell sits one line below and is
+/// only consulted in the `.catch`, which a black-holing origin never reaches.
+/// Brick-matrix cell **#2**, at **E6**, and unlike cell #1 it applies to
+/// production HTTPS deployments on any flaky network, not just to a cold boot.
+///
+/// Workbox — the reference implementation of this exact strategy — treats a
+/// network timeout as the default-on mitigation and ships
+/// `networkTimeoutSeconds: 3` for navigations. We hand-rolled network-first and
+/// omitted the one option its author considers essential (AP28).
+///
+/// **The shell must be cached BEFORE the origin is black-holed**, or there is
+/// nothing to fall back to and a pass would prove only that the app can fail.
+/// That ordering is why `blackhole-serve.py` takes the stall set at runtime.
+#[tokio::test]
+async fn a_cached_shell_survives_a_blackholed_origin() -> Result<(), Box<dyn std::error::Error>> {
+    let server = start_blackhole_server(&[])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    // (1) A normal load: register the SW, let it claim this page, and cache `/`.
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    // Registration happens on `load` and `clients.claim()` a beat later, so this
+    // is an async round-trip, not a fact available on the first read. Polled
+    // rather than slept: a fixed wait here would encode a guess about someone
+    // else's install timing, and would fail as though the app were broken.
+    let sw_probe = r#"
+        const cb = arguments[arguments.length - 1];
+        (async () => {
+            const reg = await navigator.serviceWorker.getRegistration();
+            const hit = await caches.match('/');
+            return {
+                registered: !!reg,
+                controlled: !!navigator.serviceWorker.controller,
+                shell_cached: !!hit,
+            };
+        })().then(r => cb(r), e => cb({error: String(e)}));
+        "#;
+    let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+    let mut cached = client.execute_async(sw_probe, vec![]).await?;
+    while Instant::now() < deadline {
+        let ready = cached.get("shell_cached").and_then(|b| b.as_bool()) == Some(true)
+            && cached.get("controlled").and_then(|b| b.as_bool()) == Some(true);
+        if ready {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+        cached = client.execute_async(sw_probe, vec![]).await?;
+    }
+
+    // A precondition, not the thing under test: on an origin with no service
+    // worker there is no offline path to break, and that is a scope fact rather
+    // than a bug (§1.1a). Say so instead of asserting a red about the harness.
+    if cached.get("shell_cached").and_then(|b| b.as_bool()) != Some(true) {
+        client.close().await.ok();
+        return Err(format!(
+            "precondition failed: no cached shell on this origin, so there is nothing \
+             for a black-holed fetch to fall back TO and this gate cannot say anything. \
+             Got: {cached:?}. A secure context is required for a service worker — \
+             `localhost` qualifies, a LAN address over plain HTTP does not."
+        )
+        .into());
+    }
+
+    // (2) Black-hole the shell. From here every navigation to `/` is accepted
+    // and never answered.
+    let control = set_blackhole(&["/"])?;
+    assert!(
+        control.contains("stalling: /"),
+        "the black-hole control endpoint did not take the stall set: {control}"
+    );
+
+    // (3) Reload. `networkFirst` must give up on the network and serve the
+    // cached shell within its deadline.
+    let goto = client.goto(&url).await;
+    let boot = if goto.is_ok() {
+        wait_for_boot(&client, BOOT_BUDGET_MS).await
+    } else {
+        Err("navigation timed out".into())
+    };
+
+    let stalled = server.request_count("STALL");
+    client.close().await.ok();
+
+    assert!(
+        stalled >= 1,
+        "VACUOUS: the origin was never actually asked for a black-holed path, so the \
+         reload proved nothing. Control endpoint said: {control}"
+    );
+
+    if let Err(e) = boot {
+        return Err(format!(
+            "G1/SW RED — a reload against a black-holing origin never painted, even \
+             though the shell IS cached ({stalled} request(s) stalled at the wire).\n\
+             This is brick-matrix cell #2 at E6: `networkFirst` awaits the network with \
+             no deadline, so the cached shell one line below is never reached.\n\
+             The fix is a ~3 s deadline on the network leg (C2), Workbox's documented \
+             default for navigations: on expiry, serve the cached copy.\n\
+             Navigation result: {:?}\nUnderlying failure: {e}",
+            goto.map(|_| "ok").map_err(|e| e.to_string())
+        )
+        .into());
+    }
+
+    println!("  G1/SW: reload painted from cache with {stalled} black-holed request(s)");
+    Ok(())
+}
+
+/// **C5 — the app names the build it is running, and the name matches `dist/`.**
+///
+/// Until this landed the application could not report its own version at all:
+/// `tools/build-stamp.sh` had been stamping `<meta name="entity-build">` into
+/// the shell for months and `grep -rn "entity-build" src/` returned **0 hits**.
+/// A bug report could not identify a build, and "are these two domains running
+/// the same code" was answerable only by curling them from outside.
+///
+/// **The assertion is against `dist/index.html`, not against a constant.** A
+/// test that checked the log merely contained *some* build string would pass on
+/// a build id read from the wrong place, or stale, or invented — which is the
+/// entire failure this value exists to prevent. Reading the expected value out
+/// of the artifact the browser was actually served makes the two independent.
+///
+/// It also asserts the **bundle hash** separately, because the two identities
+/// answer different questions and only one of them is comparable across
+/// deployments: two docs-only commits produce byte-identical output, so the
+/// commit alone cannot tell you whether two domains match. Measured on the two
+/// production apexes, they did — different commits, same bundle.
+#[tokio::test]
+async fn the_app_reports_the_build_it_is_running() -> Result<(), Box<dyn std::error::Error>> {
+    // Read the expectation from the served artifact FIRST, so a mangled `dist/`
+    // fails here with a clear reason rather than as a mismatch later.
+    let shell = std::fs::read_to_string("dist/index.html")
+        .map_err(|e| format!("cannot read dist/index.html — run `make wasm` first: {e}"))?;
+    let expect_commit = shell
+        .split("name=\"entity-build\" content=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_string)
+        .ok_or("dist/index.html carries no entity-build stamp — tools/build-stamp.sh did not run")?;
+    let expect_bundle = shell
+        .split("entity-browser-")
+        .nth(1)
+        .map(|rest| {
+            rest.chars()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .collect::<String>()
+        })
+        .filter(|h| h.len() >= 8)
+        .ok_or("dist/index.html names no hashed main bundle")?;
+
+    let (client, _server) = setup().await?;
+    client
+        .goto(&format!("http://localhost:{}/?log=trace", http_server_port()))
+        .await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    let log = capture_log(&client).await?;
+    let line = log
+        .iter()
+        .find(|l| l.contains("WASM init: build"))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "the app never logged its build id. Expected a 'WASM init: build' line naming \
+                 commit {expect_commit} / bundle {expect_bundle}. {} log lines captured.",
+                log.len()
+            )
+        })?;
+    client.close().await.ok();
+
+    assert!(
+        line.contains(&expect_commit),
+        "the app reported a build id that is not the one dist/index.html carries.\n\
+         dist/ says commit: {expect_commit}\n  logged: {line}"
+    );
+    assert!(
+        line.contains(&expect_bundle),
+        "the app did not report the main bundle hash, or reported a different one. \
+         Reading it from the shell's <head> is what keeps this in step with \
+         `assets/sw.js`'s BUNDLE_HASH — if those two disagree, the service worker \
+         keys its build-scoped worker cache on a build the app does not think it is.\n\
+         dist/ says bundle: {expect_bundle}\n  logged: {line}"
+    );
+
+    println!("  C5: app reports commit={expect_commit} bundle={expect_bundle}, matching dist/");
+    Ok(())
+}
+
+/// **The headers-then-stall variant — a hazard hypothesised from reading, then
+/// measured, and the reading was wrong.**
+///
+/// The concern was this: `fetch` is specified to resolve on **headers**, not on
+/// the body. A deadline that clears its timer when that promise resolves would
+/// therefore already be disarmed when the body fails to arrive, and whatever
+/// reads the body next would hang — in `networkFirst` that is
+/// `await cache.put('/', resp.clone())` for a navigation, and then the page
+/// itself. The same E6, one step later, invisible to the never-answers gate.
+///
+/// **Measured, and it is not reachable: `fetchWithDeadline` already covers it.**
+/// Discriminated by neutering rather than by argument — with
+/// `NETWORK_DEADLINE_MS` raised to 300 000 this test goes **red** (the
+/// navigation times out at 45 s having never painted), and at 3 000 it is green
+/// in ~5 s. So the existing deadline is what saves this case: against an origin
+/// that sends complete headers and then nothing, the fetch promise does not
+/// settle within the deadline, the abort fires, `networkFirst` reaches its
+/// `.catch`, and the cached shell is served.
+///
+/// **Keep this test even though it found nothing to fix.** It pins a property
+/// the design cannot derive — that one deadline covers both stall shapes — and
+/// that property is engine behaviour, not our code, so it can change underneath
+/// us without any diff of ours touching it. If it ever goes red while
+/// `NETWORK_DEADLINE_MS` is unchanged, the original hypothesis has become true
+/// and the fix is **not** a bigger number: the deadline must stay armed through
+/// the body read for navigations, which changes `fetchWithDeadline`'s contract.
+#[tokio::test]
+async fn a_cached_shell_survives_an_origin_that_stalls_the_body(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let server = start_blackhole_server(&[])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    // (1) Normal load: register the SW, let it claim, cache `/`.
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    let sw_probe = r#"
+        const cb = arguments[arguments.length - 1];
+        (async () => {
+            const hit = await caches.match('/');
+            return {
+                controlled: !!navigator.serviceWorker.controller,
+                shell_cached: !!hit,
+            };
+        })().then(r => cb(r), e => cb({error: String(e)}));
+        "#;
+    let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+    let mut cached = client.execute_async(sw_probe, vec![]).await?;
+    while Instant::now() < deadline {
+        let ready = cached.get("shell_cached").and_then(|b| b.as_bool()) == Some(true)
+            && cached.get("controlled").and_then(|b| b.as_bool()) == Some(true);
+        if ready {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+        cached = client.execute_async(sw_probe, vec![]).await?;
+    }
+    if cached.get("shell_cached").and_then(|b| b.as_bool()) != Some(true) {
+        client.close().await.ok();
+        return Err(format!("precondition failed: no cached shell. Got: {cached:?}").into());
+    }
+
+    // (2) Headers arrive; the body never does.
+    let control = set_blackhole_body(&["/"])?;
+    assert!(
+        control.contains("body-stalling: /"),
+        "the control endpoint did not take the body-stall set: {control}"
+    );
+
+    // (3) Reload.
+    let goto = client.goto(&url).await;
+    let boot = if goto.is_ok() {
+        wait_for_boot(&client, BOOT_BUDGET_MS).await
+    } else {
+        Err("navigation timed out".into())
+    };
+
+    let stalled = server.request_count("STALL-BODY");
+    client.close().await.ok();
+
+    assert!(
+        stalled >= 1,
+        "VACUOUS: the origin was never asked for a body-stalled path, so the reload \
+         proved nothing. Control endpoint said: {control}"
+    );
+
+    if let Err(e) = boot {
+        return Err(format!(
+            "RED — a reload against an origin that sends HEADERS and then no body never \
+             painted, although the shell IS cached ({stalled} body-stalled request(s)).\n\
+             This was GREEN when measured, saved by `NETWORK_DEADLINE_MS` (confirmed by \
+             raising it to 300000, which makes this exact test red). So check that first: \
+             if the deadline is unchanged, the engine's behaviour has moved and `fetch` is \
+             now resolving on headers, leaving the body read that follows \
+             (`await cache.put('/', resp.clone())` for a navigation) unbounded.\n\
+             In that case the fix is NOT a bigger timeout — the deadline must stay armed \
+             through the body read for navigations, which changes `fetchWithDeadline`'s \
+             contract.\n\
+             Navigation result: {:?}\nUnderlying failure: {e}",
+            goto.map(|_| "ok").map_err(|e| e.to_string())
+        )
+        .into());
+    }
+
+    println!("  body-stall: reload painted with {stalled} headers-then-stall request(s)");
     Ok(())
 }

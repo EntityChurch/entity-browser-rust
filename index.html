@@ -178,11 +178,21 @@
   <p class="sub">Read-only &middot; origin <code id="origin">…</code> &middot; <span id="ts">…</span>
      &middot; <button class="re" onclick="location.reload()">Re-scan</button>
      &middot; <button class="re" onclick="location.href=location.pathname">Boot normally →</button></p>
+  <h2>Version identity</h2>
+  <p class="note">Which build of the program this browser is actually running, which one is in
+     the cache, and whether a newer one is downloaded and waiting. Until this existed the
+     advice below could only say what the problem <i>usually</i> is; this section measures it.</p>
+  <div id="version"><div class="empty">probing…</div></div>
+  <div id="domain"><div class="empty">probing…</div></div>
+
   <div class="bootnote">
-    <p><b>Stuck on “Loading Entity Browser…”?</b> This is almost always a <b>stale
+    <p><b>Stuck on “Loading Entity Browser…”?</b> The usual cause is a <b>stale
        service worker</b> serving an old or partial cached bundle — <i>not</i> lost data.
        Your content below is intact. A plain refresh (even a hard refresh) won’t fix it:
-       a reload does not replace the service worker that controls the tab.</p>
+       a reload does not replace the service worker that controls the tab.
+       <b>Check “Version identity” above before acting on this</b> — if it reports that you are
+       already running the build the origin serves, a stale program is not your problem and
+       none of the steps below will help.</p>
     <p><b>To recover, do one of these:</b></p>
     <ul>
       <li><b>Close every tab</b> open on this origin (<code id="origin3">…</code>), then
@@ -306,6 +316,245 @@
                 $("origin2").textContent = location.origin;
                 if ($("origin3")) $("origin3").textContent = location.origin;
                 $("ts").textContent = new Date().toLocaleString();
+
+                // --- Version identity ---------------------------------------
+                //
+                // The question this answers is the operator's: "what is my old
+                // version, what is my new version." Until it existed the
+                // recovery console asserted that a stall "is almost always a
+                // stale service worker" and had no way to show it — advice
+                // indistinguishable from a guess, on the one screen a user
+                // reaches when they are already stuck.
+                //
+                // **Bounded (D23), and this is the strictest case of it.** This
+                // is the console you open BECAUSE something already hung; a
+                // network read here that never returns replaces a broken app
+                // with a broken diagnostic. Every probe has a defined
+                // alternative outcome — "could not determine" — which is a
+                // legitimate thing for a report to say and is rendered as such.
+                // `tools/net-lint.sh` counts this file from 2026-08-27; the one
+                // bare `fetch` below is the helper's, and the baseline holds it.
+                const PROBE_DEADLINE_MS = 3000;
+                function fetchWithDeadline(url, ms) {
+                    const ctl = new AbortController();
+                    const t = setTimeout(() => ctl.abort(), ms);
+                    const done = () => clearTimeout(t);
+                    return fetch(url, { cache: "reload", signal: ctl.signal })
+                        .then((r) => { done(); return r; }, (e) => { done(); throw e; });
+                }
+                // Parse rather than regex: the stamp is a `<meta>` in a document
+                // we control, and DOMParser cannot be fooled by attribute order
+                // or by the string appearing in a comment.
+                const stampOf = (html) => {
+                    try {
+                        const d = new DOMParser().parseFromString(html || "", "text/html");
+                        const m = d.querySelector('meta[name="entity-build"]');
+                        const v = m && m.getAttribute("content");
+                        return v ? v : null;
+                    } catch (_) { return null; }
+                };
+                const unknown = '<span class="empty">could not determine</span>';
+
+                (async () => {
+                    const el = $("version");
+                    try {
+                        // 1. What this document is — whatever the service worker
+                        //    (or the network) handed us for this navigation.
+                        const runningEl = document.querySelector('meta[name="entity-build"]');
+                        const running = runningEl ? runningEl.getAttribute("content") : null;
+
+                        // 2. What is in Cache Storage. The shell is stored under
+                        //    the canonical '/' key; `/index.html` is tried too so
+                        //    this keeps working if that ever changes.
+                        let cached = null;
+                        try {
+                            for (const name of await caches.keys()) {
+                                const c = await caches.open(name);
+                                const hit = (await c.match("/", { ignoreSearch: true })) ||
+                                            (await c.match("/index.html", { ignoreSearch: true }));
+                                if (hit) { cached = stampOf(await hit.clone().text()); if (cached) break; }
+                            }
+                        } catch (_) { /* reported as "could not determine" */ }
+
+                        // 3. Is a newer program already downloaded and blocked?
+                        //    This is the DEFINITIVE signal and it needs no
+                        //    network at all: a worker sits in `waiting` exactly
+                        //    when an update installed but cannot take over
+                        //    because tabs on this origin are still open. That is
+                        //    the failure the advice below describes, observed
+                        //    rather than assumed.
+                        let waiting = false, controlled = false, swState = null;
+                        try {
+                            controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+                            const regs = await navigator.serviceWorker.getRegistrations();
+                            for (const r of regs) {
+                                if (r.waiting) waiting = true;
+                                const w = r.active || r.waiting || r.installing;
+                                if (w) swState = w.state;
+                            }
+                        } catch (_) { /* reported below */ }
+
+                        // 4. What the origin serves now. Honest caveat: this
+                        //    request goes THROUGH the service worker, whose
+                        //    network-first leg falls back to the very cache we
+                        //    are auditing when the origin is slow. So a match is
+                        //    only conclusive when nothing is controlling the
+                        //    page; otherwise it is reported as inconclusive
+                        //    rather than as agreement. A diagnostic that says
+                        //    "you are current" because it was served the stale
+                        //    copy is worse than one that says nothing.
+                        let origin = null, reachable = false;
+                        try {
+                            const r = await fetchWithDeadline("/index.html", PROBE_DEADLINE_MS);
+                            if (r && r.ok) { reachable = true; origin = stampOf(await r.text()); }
+                        } catch (_) { /* offline, or the origin is not answering */ }
+
+                        const row = (label, value, note) =>
+                            `<span>${esc(label)} <b>${value == null ? "" : esc(value)}</b>` +
+                            (value == null ? unknown : "") +
+                            (note ? ` <i style="color:#7e8696">${esc(note)}</i>` : "") + `</span>`;
+
+                        let verdict, tag = "";
+                        if (waiting) {
+                            verdict = "<b>An updated program is downloaded and waiting.</b> It cannot " +
+                                "take over while any tab on this origin is open — that is the service " +
+                                "worker lifecycle, not a fault. Close every tab on this origin and open " +
+                                "a fresh one. This is the case the advice below is written for.";
+                            tag = '<span class="tag code">stale</span>';
+                        } else if (!reachable) {
+                            verdict = "Could not reach the origin to compare — you are offline, or it " +
+                                "is not answering within " + (PROBE_DEADLINE_MS / 1000) + "s. Everything " +
+                                "above is what is on this machine, and it is still accurate.";
+                        } else if (origin && running && origin !== running) {
+                            verdict = "<b>You are running an older build than the origin serves</b> (" +
+                                esc(running) + " here, " + esc(origin) + " there). Follow the steps below.";
+                            tag = '<span class="tag code">stale</span>';
+                        } else if (origin && running && origin === running && !controlled) {
+                            verdict = "<b>You are running the build the origin currently serves.</b> A " +
+                                "stale program is not your problem — do not clear anything on that theory.";
+                            tag = '<span class="tag data">current</span>';
+                        } else if (origin && running && origin === running) {
+                            verdict = "The build here matches what the comparison returned — but a service " +
+                                "worker is controlling this page, and its network-first leg falls back to " +
+                                "the cache when the origin is slow, so that request may have been answered " +
+                                "from the same cache. <b>Inconclusive.</b> No worker is waiting, which is " +
+                                "the evidence against a stale program.";
+                        } else {
+                            verdict = "Not enough information to compare builds. The values above are what " +
+                                "could be read.";
+                        }
+
+                        el.innerHTML =
+                            card("Program build" + tag,
+                                `<div class="kv">` +
+                                row("running", running) +
+                                row("in cache", cached) +
+                                row("origin serves", origin, controlled ? "via the service worker" : "") +
+                                `</div>`) +
+                            card("Service worker",
+                                `<div class="kv">` +
+                                row("controlling this page", controlled ? "yes" : "no") +
+                                row("state", swState) +
+                                row("update waiting", waiting ? "yes" : "no") +
+                                `</div>`) +
+                            `<div class="card"><div class="meta">${verdict}</div></div>`;
+                    } catch (e) { setErr(el, "version probe failed: " + e); }
+                })();
+
+                // --- What this domain declares ------------------------------
+                // "What is on the domain" — the deployment document, read at the
+                // same tier as everything else here: no peer, no WASM, no tree.
+                // It is the origin's own statement of who publishes it, which is
+                // the value a re-key changes and the one a bad publish gets
+                // wrong.
+                (async () => {
+                    const el = $("domain");
+                    try {
+                        let doc = null;
+                        try {
+                            const r = await fetchWithDeadline("/entity-deployment.json", PROBE_DEADLINE_MS);
+                            if (r && r.ok) doc = await r.json();
+                        } catch (_) { /* below */ }
+                        if (!doc) {
+                            return setEmpty(el, "this origin serves no /entity-deployment.json, or it " +
+                                "could not be read within " + (PROBE_DEADLINE_MS / 1000) + "s");
+                        }
+                        const home = (doc.home_site && doc.home_site.peer) || null;
+                        const pin = doc.name_registry_pin || null;
+
+                        // What THIS PROFILE is pointed at. Mirrored to
+                        // localStorage on every boot by `boot_diagnostics.rs`,
+                        // because the authoritative value is a CBOR entity in the
+                        // durable tree and this console deliberately cannot
+                        // decode one — it has to work when the peer does not boot
+                        // at all. Read as "what it believed at `written_at`",
+                        // never as "what it believes": when the app is dead, an
+                        // old value is exactly the interesting fact, and a reader
+                        // who cannot tell those apart draws a confident wrong
+                        // conclusion.
+                        let mirror = null;
+                        try {
+                            const raw = localStorage.getItem("entity_routing_mirror");
+                            if (raw) mirror = JSON.parse(raw);
+                        } catch (_) { /* absent or unparseable → reported below */ }
+
+                        const believed = mirror && mirror.home_peer ? mirror.home_peer : null;
+                        const when = mirror && mirror.written_at
+                            ? new Date(mirror.written_at).toLocaleString() : null;
+                        const retired = (mirror && Array.isArray(mirror.supersessions))
+                            ? mirror.supersessions : [];
+
+                        // The whole point of the panel. `ecdeos.org` stranded
+                        // every returning visitor and looked healthy doing it:
+                        // local content kept rendering while every remote path
+                        // under the retired publisher 404'd. This is that
+                        // comparison, stated.
+                        let verdict;
+                        if (!mirror) {
+                            verdict = "This profile has not recorded which publisher it is pointed at. " +
+                                "That value is written on each boot by builds from 2026-08-27 onward, so " +
+                                "either this profile has not booted since then, or it has never completed " +
+                                "a boot here.";
+                        } else if (!home) {
+                            verdict = "This profile is pointed at <b>" + esc(believed || "?") + "</b>. The " +
+                                "domain did not answer, so there is nothing to compare it against.";
+                        } else if (believed && believed !== home) {
+                            verdict = "<b>STRANDED — this profile is pointed at a publisher this domain no " +
+                                "longer uses.</b> It believes <b>" + esc(believed) + "</b>; the domain " +
+                                "publishes as <b>" + esc(home) + "</b>. Everything already in your tree will " +
+                                "keep rendering and nothing will look broken, but every request for anything " +
+                                "new goes to the old publisher and returns nothing. Opening the app normally " +
+                                "on a build that reconciles this repairs it on the next load; your content is " +
+                                "not affected and must not be cleared.";
+                        } else if (believed === home) {
+                            verdict = "This profile is pointed at the publisher the domain currently declares. " +
+                                "Routing is not your problem.";
+                        } else {
+                            verdict = "The domain declares <b>" + esc(home) + "</b>. This profile recorded no " +
+                                "publisher to compare.";
+                        }
+
+                        el.innerHTML = card("Publisher routing",
+                            `<div class="kv">` +
+                            `<span>this domain publishes as <b>${home ? esc(home) : ""}</b>${home ? "" : unknown}</span>` +
+                            `<span>this profile is pointed at <b>${believed ? esc(believed) : ""}</b>${believed ? "" : unknown}</span>` +
+                            (when ? `<span>profile last booted <b>${esc(when)}</b></span>` : "") +
+                            (mirror && mirror.build ? `<span>by build <b>${esc(mirror.build)}</b></span>` : "") +
+                            (pin ? `<span>registry pin <b>${esc(String(pin))}</b></span>` : "") +
+                            `</div><div class="meta" style="margin-top:8px">${verdict}</div>`) +
+                            (retired.length
+                                ? card("Retired publishers",
+                                    `<div class="meta">Publishers this profile has seen replaced. Kept so that ` +
+                                    `bookmarks, saved locations and open windows still pointing at an old one ` +
+                                    `resolve to its replacement.</div>` +
+                                    retired.map((s) =>
+                                        `<div class="kv" style="margin-top:6px">` +
+                                        `<span>retired <b>${esc(s.retired || "?")}</b></span>` +
+                                        `<span>→ replaced by <b>${esc(s.replacement || "?")}</b></span>` +
+                                        `</div>`).join(""))
+                                : "");
+                    } catch (e) { setErr(el, "domain probe failed: " + e); }
+                })();
 
                 // --- Storage summary: estimate + persisted ---
                 (async () => {

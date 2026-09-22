@@ -235,12 +235,46 @@ endef
 # now behaves like a real deployment in both respects rather than only in the
 # one we happened to test. `cors-serve.py` takes (directory, port) positionally
 # and binds 0.0.0.0.
+#
+# `TLS=1` serves HTTPS with a locally-trusted cert instead. This is not a
+# nicety: service workers require a SECURE CONTEXT, whose only plain-HTTP
+# exceptions are `localhost` / `127.0.0.1`. Every phone and second machine
+# reaches a dev build by LAN IP, where — over HTTP — no service worker
+# registers at all, nothing is cached, and there is no offline behaviour to
+# observe. So the entire SW tier has only ever been testable on the build
+# machine. `TLS=1` closes that. See `tools/dev-cert.sh` for why the cert has to
+# be TRUSTED and a plain self-signed one is not enough (Chrome refuses to
+# register a worker on a cert-error origin even after you click through).
+#   make serve TLS=1                       # localhost + this box's LAN IPs
+#   make serve TLS=1 CERT_SAN='dev.local'  # plus extra names/IPs
+TLS      ?=
+CERT_DIR ?= .dev-certs
+CERT_SAN ?=
+# The URL the serve targets print. TLS=1 changes the scheme, and printing the
+# wrong one is not cosmetic: `https://` on a plain-HTTP serve just fails, and
+# `http://` on a TLS serve sends you to an origin where the whole reason for
+# TLS -- a secure context, so service workers register -- silently does not apply.
+SCHEME   := $(if $(TLS),https,http)
+
 define RUN_SERVE
+	$(if $(TLS),$(call RUN_SERVE_NET,sh -c 'tools/dev-cert.sh $(CERT_SAN)'),)
 	podman run --rm $(PODMAN_RUN_CAPS) --network host $(2) \
 		-v $(PARENT):/src/entity-systems:z \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
-		python3 tools/cors-serve.py $(1) $(PORT)
+		python3 tools/cors-serve.py $(1) $(PORT) \
+		$(if $(TLS),--tls $(CERT_DIR)/dev.crt $(CERT_DIR)/dev.key,)
+endef
+
+# Host-networked one-shot in the image. `dev-cert.sh` needs host networking to
+# see the real interfaces it must put in the cert's SANs — under the default
+# rootless network it would mint a cert for an address no test device can reach.
+define RUN_SERVE_NET
+	podman run --rm $(PODMAN_RUN_CAPS) --network host \
+		-v $(PARENT):/src/entity-systems:z \
+		-w /src/entity-systems/$(notdir $(CURDIR)) \
+		$(IMAGE) \
+		$(1)
 endef
 
 # Repo-local, gitignored HOME for the containerized desktop app so its durable
@@ -429,7 +463,7 @@ federation-vectors:
 # carries a character of its own script) and deliberately says nothing about the
 # 17 Latin-script locales, where a cognate cannot be told from a skipped string.
 lint: image
-	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
+	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image
@@ -567,7 +601,13 @@ e2e-worker: image
 	# dist/ was last built by `make wasm` it has NO demo-apps, and Phase 2h.2
 	# fails for that reason and not a real one. Never use it for a gate run.
 ifeq ($(strip $(SKIP_BUILD)),)
-	$(call RUN,trunk build --features demo-apps --dist $(DIST) && ./tools/check-dist.sh $(DIST))
+	# `build-stamp.sh` is part of the build, not a nicety of `make wasm`: the C5
+	# gate (`the_app_reports_the_build_it_is_running`) asserts the app's logged
+	# build id against the stamp in `dist/index.html`. Omitting it here made that
+	# gate pass only on a `dist/` inherited from a previous `make wasm` and fail
+	# on a clean run of its OWN target — green by inheritance, which is the
+	# shape of a gate that is not really a gate.
+	$(call RUN,trunk build --features demo-apps --dist $(DIST) && ./tools/check-dist.sh $(DIST) && ./tools/build-stamp.sh $(DIST))
 else
 	@echo ">>> SKIP_BUILD=1 — reusing the existing $(DIST)/ (NOT a gate-grade run)"
 	@./tools/check-dist.sh $(DIST)
@@ -1168,7 +1208,7 @@ program-fixtures:
 # guarantee the bundle is current — use `make build-serve` when you need
 # certainty you're serving the latest optimized build.
 serve:
-	@echo "  → http://localhost:$(PORT)   (override with: make serve PORT=8082)"
+	@echo "  → $(SCHEME)://localhost:$(PORT)   (override with: make serve PORT=8082)"
 	$(call RUN_SERVE,dist)
 
 # Build WITH the demo apps (incl. the L5 Ping + Life demos) and serve — the
@@ -1192,7 +1232,7 @@ build-serve: wasm-release
 	@echo ""
 	@echo "=== SHIPPING (release-optimized) build — serving latest ==="
 	@ls -lh dist/*.wasm 2>/dev/null | awk '{print "  " $$9 "  " $$5}'
-	@echo "  → http://localhost:$(PORT)   (override with: make build-serve PORT=8082)"
+	@echo "  → $(SCHEME)://localhost:$(PORT)   (override with: make build-serve PORT=8082)"
 	@echo ""
 	$(call RUN_SERVE,dist)
 

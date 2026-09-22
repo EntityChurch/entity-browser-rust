@@ -1893,6 +1893,252 @@ impl EntityApp {
                     }
                 }
             };
+
+            // (R1) WARM-BOOT ROUTING RECONCILE — **replaces the old (1.2.5)
+            // origin reconcile**, which used to sit ~200 lines below this and is
+            // gone. Read the whole story before changing this block:
+            // `docs/plans/DESIGN-RESILIENCE-RECONCILIATION-AND-ENTITY-DOCTOR.md`
+            // §1.1a. Regression gate: `rekeyed_domain_heals_on_next_boot`.
+            //
+            // The incident (`ecdeos.org`, 2026-08-24): a domain re-keyed onto a
+            // new publisher identity. Every returning visitor had persisted the
+            // OLD publisher at first contact and never re-read the deployment
+            // doc, so every request went to a publisher that no longer
+            // publishes — newest WASM, 404s, and it looks like a working app.
+            //
+            // (1.2.5) was written for exactly this class and could not reach it,
+            // for a reason worth stating because it is the general lesson: it
+            // re-fetched only when the home peer's origin was **unregistered**,
+            // which repairs *the origin for the peer you already have* and can
+            // never repair *the peer you have being wrong*. On the incident the
+            // first cold boot had registered that origin, so the gate was false
+            // and the re-fetch never ran — the narrow gate did not merely fail
+            // to help, it PREVENTED the broad path from running. Confirmed on
+            // the operator's live profile: the `1978` warn is absent from the
+            // boot log while three other `WARN`s printed.
+            //
+            // So: no gate on origin-presence. When the home is a REMOTE peer, the
+            // domain's own doc is re-read and **identity** is compared. It costs
+            // one same-origin GET of a ~400-byte document served
+            // `max-age=0, must-revalidate` (measured on all four production
+            // apexes), and only on the deployed-content-site path — a local or
+            // demo home never pays it.
+            //
+            // What may be adopted is bounded by the trust boundary (design §8):
+            // **routing facts only** — who publishes, where their artifacts
+            // live, which registry to ask. Posture (`site_mode`, `surface`,
+            // `window_type`) is a user preference and is NOT touched, which is
+            // the invariant (1.2.5)'s comment got right and is preserved here.
+            // Nothing the user holds state in is replaced, which is why this
+            // does not wait on the atomic-vs-per-item adoption decision.
+            // Retired publishers, loaded BEFORE anything hydrates persisted
+            // navigation state. Ordering is the whole contract: a surface that
+            // decodes its stored location before this lands would resolve
+            // against an empty map and keep the dead peer for the life of that
+            // session. See `peer_supersession`.
+            crate::peer_supersession::load(&self.peer_manager, &system_pid).await;
+
+            let mut adopted_identity = false;
+            // `!config_was_absent` — do not re-ask an origin this boot already
+            // asked. When the config was absent the cold path above has ALREADY
+            // fetched, and if that yielded `None` the origin is unreachable
+            // *right now*; asking again buys nothing and costs another full
+            // D23 deadline. Measured: without this the black-hole gate went
+            // from 3244 ms to **6195 ms** with three stalled requests instead
+            // of two — the suite stayed green and only the printed margin
+            // showed it, which is the entire reason that budget prints on
+            // success.
+            //
+            // The repair still lands, one boot later: the next load has a
+            // durable config, `config_was_absent` is false, and the
+            // `never_established` branch below runs then. That is the same
+            // "reload is the universal repair" shape the rest of this design
+            // targets, rather than a retry loop inside one boot.
+            if deployment.is_none() && !config_was_absent {
+                let stale_peer = cfg.home_site.peer_id.clone();
+                // **"No home at all" is the ABSENCE of a preference, not one of
+                // its values** — and it is exactly how a first contact that
+                // could not read `/entity-deployment.json` ends up. That boot
+                // falls back to `boot_default()` (empty `home_site`) and
+                // PERSISTS it; every later boot then saw an empty peer, called
+                // it local, and never re-read the document. One unlucky first
+                // visit pinned the profile to the build-time default surface
+                // with no exit but clearing site data — an E5. Reproduced by
+                // `a_first_contact_that_missed_the_deployment_config_recovers`.
+                //
+                // **The signal is the WHOLE default, not an empty field**, and
+                // that is worth spelling out because the obvious cheaper tests
+                // are both wrong:
+                //
+                //  * `peer_id.is_empty()` is a legitimate sentinel meaning *the
+                //    system peer* (`set_home_site`: "empty `target_peer` = the
+                //    system peer"; `repair_for_deleted_peer` writes it when a
+                //    home's peer is deleted). Re-probing on it would re-adopt
+                //    the domain's home over a user's deliberate local one on
+                //    every boot — a worse bug, and a violation of this
+                //    reconcile's own invariant that routing may be adopted but
+                //    preferences may not.
+                //  * `id.is_empty()` **can never be true.** `home_site_from`
+                //    falls back to `DEMO_SITE_ID` by design — "the site id is
+                //    never empty, the overlay always needs a site to point at"
+                //    — so a guard on it is dead code that silently never fires.
+                //    Measured, after writing exactly that guard and watching the
+                //    gate stay red.
+                //
+                // What a failed first contact actually leaves behind is
+                // `home_site_default()` **entire** — the build-time value,
+                // untouched by any document or any user action. Comparing
+                // against it is the narrowest available "nothing has ever set
+                // this" test, and adoption stays ROUTING-ONLY, so the blast
+                // radius of a false positive is that a profile parked on the
+                // build default gets pointed at the domain's home. That is what
+                // a correct first contact would have done anyway.
+                let never_established = cfg.home_site == crate::session_config::home_site_default();
+                let home_is_local =
+                    !never_established && (stale_peer.is_empty() || stale_peer == system_pid);
+                if !home_is_local {
+                    deployment = crate::deployment_config::fetch().await;
+                    if let Some(dc) = &deployment {
+                        // An absent/empty `home_site.peer` is NOT a divergence —
+                        // it is a doc that declines to say. Treating "says
+                        // nothing" as "says something different" would let a
+                        // truncated or partially-written document silently
+                        // re-home a working browser, which is a worse failure
+                        // than the one being fixed.
+                        let declared = dc.home_site.as_ref().map(|h| h.peer_id.as_str());
+                        if let Some(new_peer) = declared.filter(|p| !p.is_empty()) {
+                            if never_established {
+                                // **The first contact that failed, run late.**
+                                // Not a re-key: nothing was ever adopted, so
+                                // there is no divergence and no retired
+                                // publisher to record. Routing alone is not
+                                // enough here — it would leave the profile
+                                // reachable but permanently on the build-time
+                                // surface, so a kiosk deployment would boot into
+                                // windowed chrome forever. Apply the WHOLE
+                                // document, which is what the cold path would
+                                // have done.
+                                //
+                                // Applied over the CURRENT config, never over
+                                // `boot_default()`: `apply_to` only sets fields
+                                // the document actually declares, so anything it
+                                // is silent about (and anything the user has
+                                // changed that the deployment does not speak to)
+                                // survives. Rebuilding from the build default
+                                // would discard those.
+                                //
+                                // The blast radius if `never_established` is
+                                // ever a false positive: a profile still parked
+                                // on the untouched build default gets the
+                                // deployment's posture — which is precisely what
+                                // that profile was supposed to receive on its
+                                // first load.
+                                tracing::warn!(
+                                    new_peer = %new_peer,
+                                    "boot_load: this profile never read the deployment \
+                                     document — applying it now (a first contact that \
+                                     failed, recovered on a later boot)"
+                                );
+                                cfg = dc.apply_to(cfg);
+                                adopted_identity = dc.home_site.is_some();
+                            } else if new_peer != stale_peer {
+                                tracing::warn!(
+                                    stale_peer = %stale_peer,
+                                    new_peer = %new_peer,
+                                    "boot_load: warm boot — the domain now publishes under a \
+                                     DIFFERENT identity; adopting the new routing facts \
+                                     (posture preserved)"
+                                );
+                                // The whole `SiteRef`, not just the peer: if the
+                                // publisher moved, the domain's declaration of
+                                // *which* site is home is the authority, and
+                                // keeping a site id from the retired publisher
+                                // can leave a dangling home under the new one.
+                                if let Some(home) = dc.home_site.clone() {
+                                    cfg.home_site = home;
+                                }
+                                // The pin is a routing fact by the same argument.
+                                // The USER's pin still outranks it —
+                                // `restore_user_registry_pin()` below runs after
+                                // this and is where that precedence lives.
+                                if let Some(pin) = dc.name_registry_pin.clone() {
+                                    cfg.name_registry_pin = Some(pin);
+                                }
+                                // Record the supersession DURABLY. This is what
+                                // repairs every *other* durable reference to the
+                                // retired peer — every window's nav state, the
+                                // overlay's, and anything added later — without
+                                // enumerating any of them.
+                                //
+                                // It must be durable because this branch runs
+                                // exactly ONCE: the next boot's config already
+                                // agrees with the domain, so there is no
+                                // divergence left to detect. An in-memory-only
+                                // record would repair whatever happened to be
+                                // open and nothing else, ever again.
+                                crate::peer_supersession::persist(
+                                    &self.peer_manager,
+                                    &system_pid,
+                                    &stale_peer,
+                                    new_peer,
+                                )
+                                .await;
+                                adopted_identity = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // (F2) REVALIDATE the durable supersession records against the live
+            // deployment document, and drop the ones it contradicts.
+            //
+            // Audit finding F2: a supersession was written durably with no
+            // delete path, no listing and no expiry, so a transient bad
+            // `/entity-deployment.json` became PERMANENT client state that
+            // survived the origin being fixed. Recovery was clear-site-data,
+            // which with no export costs the user everything else too — brick
+            // matrix cell **#6 at E5**. Re-reading the record's premise on every
+            // boot that has a document moves it to **E1: a reload repairs it**.
+            //
+            // Three things about this block are load-bearing, and all three are
+            // the difference between a repair and a new way to lose data:
+            //
+            // 1. **It runs AFTER the adoption above, never before.** A second
+            //    re-key (`A→B` recorded, the domain now publishes `C`) arrives
+            //    as a document that agrees with no existing record until
+            //    adoption has written `B→C`. Checking first would delete `A→B`,
+            //    the record a window still on `A` depends on.
+            // 2. **The authority is the DOCUMENT, not `cfg.home_site`.** The
+            //    config may hold a persisted value the document never spoke to;
+            //    revalidating against ourselves would be circular and would let
+            //    a local edit retire a record the domain still stands behind.
+            // 3. **No document means no change.** `deployment` is `None` when we
+            //    are offline, when the doc declined to name a home peer, or when
+            //    D23's deadline expired — and the last of those is *more* likely
+            //    since C1 bounded the fetch, not less. A truncated document must
+            //    never be able to wipe a valid repair, which is the same rule
+            //    the adoption path states as "says nothing" ≠ "says something
+            //    different".
+            if let Some(publisher) = deployment
+                .as_ref()
+                .and_then(|dc| dc.home_site.as_ref())
+                .map(|h| h.peer_id.as_str())
+                .filter(|p| !p.is_empty())
+            {
+                crate::peer_supersession::revalidate(
+                    &self.peer_manager,
+                    &system_pid,
+                    publisher,
+                )
+                .await;
+            } else {
+                tracing::debug!(
+                    "peer-supersession: no live deployment document this boot — records \
+                     left untouched (absence of evidence is not evidence)"
+                );
+            }
+
             // DERIVE the runtime surface from the durable `boot_surface` — boot
             // lands where config says, not wherever a previous session's toggle
             // last left it. Everything else on the entity (boot_surface,
@@ -1913,6 +2159,31 @@ impl EntityApp {
                 ),
                 Err(e) => tracing::error!(error = %e, "boot_load: session config write failed"),
             }
+
+            // Mirror the routing facts where a DEAD app can still be read.
+            //
+            // The `ecdeos.org` re-key was undiagnosed for days not because the
+            // failure was subtle but because nothing could state it: the profile
+            // logged `boot_load: complete`, armed its frame loop, installed its
+            // watchdog and rendered local content, while every remote path under
+            // the retired publisher 404'd. Diagnosing it needs one comparison —
+            // who this profile is pointed at, beside who the domain says
+            // publishes it — and the second half is a plain GET the L1 recovery
+            // console already makes. This is the first half, put somewhere that
+            // console can reach: it cannot decode the tree, by design, because it
+            // has to work when the peer does not boot.
+            //
+            // Placed AFTER the supersession revalidation above so the mirror
+            // shows the repaired state rather than a snapshot mid-repair, and
+            // after `cfg` is final so `home_site` is the adopted value. Nothing
+            // branches on it — it exists to be reported, and it is rewritten
+            // every boot, which is what keeps it a mirror rather than a second
+            // source of truth (AP17/AP30).
+            crate::boot_diagnostics::write_routing_mirror(
+                &cfg.home_site.peer_id,
+                &cfg.home_site.id,
+                &crate::peer_supersession::snapshot(),
+            );
 
             // Keep the pre-peer fast-paint kill switch (localStorage mirror, cut
             // 2c) in sync with the durable config. The mirror is what `start()`
@@ -1945,45 +2216,13 @@ impl EntityApp {
             #[cfg(target_arch = "wasm32")]
             crate::session_config::restore_user_registry_pin();
 
-            // (1.2.5) Warm-boot origin RECONCILE (P1, symptom 2 — "site source
-            // unreachable"). On a warm boot we deliberately don't re-fetch the
-            // deployment config: POSTURE (profile / home / toggle) is a user
-            // preference, preserved from the durable config. But the site-origin
-            // REGISTRY is a routing FACT, not a preference — and it rides the
-            // same cold-only fetch gate above, so a warm boot leans entirely on
-            // the origin that the FIRST cold boot seeded durably. If that entry
-            // is ever missing or stale (a failed first seed, a wiped origins
-            // entry, a served-port change), the home is stranded "unreachable"
-            // with no way to self-heal — and in a locked deployment the user
-            // can't reach Settings to fix it. So: when the home is a remote
-            // thin-lens peer AND its origin is NOT durably registered, re-fetch
-            // the served config and let the (1.3) loop below re-apply ONLY the
-            // origins map (put_if_absent — a user override still wins; posture
-            // stays the persisted value). Routing self-heals; posture doesn't move.
-            if deployment.is_none() {
-                let home_peer = cfg.home_site.peer_id.clone();
-                let home_is_local = home_peer.is_empty() || home_peer == system_pid;
-                if !home_is_local {
-                    let origin_registered = self
-                        .peer_manager
-                        .get_entity_async(
-                            &system_pid,
-                            &crate::content_site::origins::origin_path(&system_pid, &home_peer),
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some();
-                    if !origin_registered {
-                        tracing::warn!(
-                            home_peer = %home_peer,
-                            "boot_load: warm boot — home origin missing from the durable \
-                             registry; re-fetching the deployment config to reconcile routing"
-                        );
-                        deployment = crate::deployment_config::fetch().await;
-                    }
-                }
-            }
+            // NOTE: the old "(1.2.5) Warm-boot origin RECONCILE" stood here. It
+            // is **retired, not moved** — superseded by the (R1) routing
+            // reconcile above, which subsumes it: re-reading the doc whenever the
+            // home is remote covers the missing-origin case (1.2.5) was written
+            // for *and* the wrong-identity case it structurally could not reach.
+            // Deliberately not kept as a sibling — two reconcilers with
+            // overlapping triggers is how the first one came to hide the second.
 
             // (1.3 cut 2b) Register every HTTP origin the per-domain deployment
             // config declares, durably + `put_if_absent` (a returning user's
@@ -2149,7 +2388,20 @@ impl EntityApp {
                          is persisted/registered elsewhere"
                     );
                 }
-                if config_was_absent {
+                // Re-point the overlay when there is no durable config (a fresh
+                // deployment) OR when (R1) just adopted a new publisher identity.
+                //
+                // The second case is load-bearing and was the easy half of this
+                // fix to miss. The overlay's navigation state PERSISTS — its
+                // `peer` field (`views/content_site/model.rs`, `ContentSiteState`)
+                // still names the retired publisher — so repairing the session
+                // config alone leaves the user parked on the dead peer while the
+                // config reports healthy. That is the original defect in new
+                // clothes: internally consistent, completely wrong, looks fine.
+                // Re-using this existing navigate path (rather than rewriting the
+                // persisted entity directly) keeps one code path for "point the
+                // overlay at the configured home".
+                if config_was_absent || adopted_identity {
                     if let Some(overlay) = self.site_overlay.as_ref() {
                         let uri = if home_loc.is_empty() {
                             format!("entity://{home_peer}/sites/{home_id}")
@@ -2159,7 +2411,8 @@ impl EntityApp {
                         overlay.navigate(&uri, &self.peer_manager);
                         tracing::info!(
                             target = %uri,
-                            "boot_load: pointed overlay at remote home (no durable config)"
+                            adopted_identity,
+                            "boot_load: pointed overlay at remote home"
                         );
                     }
                 }

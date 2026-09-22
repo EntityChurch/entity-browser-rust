@@ -42,10 +42,18 @@ a deployment that cannot be corrected.
                                 staleness silently defeats the `seq` floor
                                 (runbook §3), and the four above
 
-    ./tools/cors-serve.py [DIR] [PORT]
+    ./tools/cors-serve.py [DIR] [PORT] [--tls CERT KEY]
+
+TLS is opt-in and exists for one reason: **service workers require a secure
+context**, whose only plain-HTTP exceptions are `localhost` and `127.0.0.1`.
+Served over HTTP on a LAN address — which is how every phone and second machine
+reaches a dev build — no service worker registers, nothing is cached, and there
+is no offline path to test. `tools/dev-cert.sh` mints the cert; that file
+explains why a *trusted* one is required and a self-signed one is not enough.
 """
 import functools
 import http.server
+import ssl
 import sys
 
 import re
@@ -83,11 +91,47 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    directory = sys.argv[1] if len(sys.argv) > 1 else "."
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 8099
+    argv = sys.argv[1:]
+    cert = key = None
+    if "--tls" in argv:
+        i = argv.index("--tls")
+        try:
+            cert, key = argv[i + 1], argv[i + 2]
+        except IndexError:
+            sys.exit("cors-serve: --tls needs CERT and KEY paths")
+        argv = argv[:i] + argv[i + 3:]
+
+    directory = argv[0] if len(argv) > 0 else "."
+    port = int(argv[1]) if len(argv) > 1 else 8099
     handler = functools.partial(Handler, directory=directory)
+
     with http.server.ThreadingHTTPServer(("0.0.0.0", port), handler) as httpd:
-        print(f"serving {directory} on http://localhost:{port} with CORS + cache headers")
+        scheme = "http"
+        if cert:
+            # `SimpleHTTPRequestHandler` speaks HTTP/1.0 by default, which makes
+            # every response a connection teardown. Harmless over plain HTTP;
+            # over TLS it is a full handshake per asset, and the shell pulls
+            # tens of MB of wasm. HTTP/1.1 keeps the connection alive.
+            # Set on the CLASS, not on the `functools.partial` — the partial
+            # constructs `Handler`, so an attribute on it is read by nothing.
+            Handler.protocol_version = "HTTP/1.1"
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert, key)
+            httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+            scheme = "https"
+        print(
+            f"serving {directory} on {scheme}://localhost:{port} "
+            "with CORS + cache headers"
+        )
+        if scheme == "https":
+            print(
+                "  TLS on — reachable by LAN address as a SECURE CONTEXT, so "
+                "service workers register.\n"
+                "  The testing device must trust the CA (tools/dev-cert.sh "
+                "prints how); clicking\n"
+                "  through a certificate warning is NOT enough for Chrome to "
+                "register a worker."
+            )
         httpd.serve_forever()
 
 
