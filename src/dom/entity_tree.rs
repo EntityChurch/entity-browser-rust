@@ -32,7 +32,7 @@ pub fn render(container: &Element, output: &EntityTreeOutput, ctx: &DomCtx) {
     util::append(container, &tree_panel);
 
     let doc_panel = util::create_element_with_class("main", "document-panel");
-    render_document_panel(&doc_panel, &output.document);
+    render_document_panel(&doc_panel, &output.document, ctx);
     util::append(container, &doc_panel);
 
     let inspector_panel = util::create_element_with_class("aside", "inspector-panel");
@@ -231,7 +231,7 @@ fn render_tree_row(parent: &Element, row: &TreeRow) {
     util::append(parent, &item);
 }
 
-fn render_document_panel(container: &Element, view: &DocumentView) {
+fn render_document_panel(container: &Element, view: &DocumentView, ctx: &DomCtx) {
     util::clear_children(container);
 
     match view {
@@ -267,11 +267,29 @@ fn render_document_panel(container: &Element, view: &DocumentView) {
             util::append(&article, &hr);
 
             let pre = util::create_element_with_class("pre", "entity-content");
-            match body {
-                DocumentBody::Text(t) => util::set_text(&pre, t),
-                DocumentBody::Formatted(s) => util::set_text(&pre, s),
-            }
+            let text = match body {
+                DocumentBody::Text(t) | DocumentBody::Formatted(t) => t,
+            };
+            util::set_text(&pre, text);
             util::append(&article, &pre);
+
+            // The entity as a text file: what this panel shows, with the path and
+            // type it came from, so the file still says what it was once it has
+            // left the tree. A reading copy — the exchange format back in is the
+            // entity archive, not this.
+            let save = crate::dom::components::button_el(
+                &crate::i18n::t("entitytree.save_text", &[]),
+                crate::dom::components::ButtonKind::Small,
+            );
+            util::set_attr(&save, "data-field", "entitytree-save-text");
+            let file = format!("{}.txt", path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("entity")); // i18n-ignore — a file name
+            let contents = format!("{path}\n{entity_type}\n\n{text}\n"); // i18n-ignore — file contents, not UI
+            ctx.listen(&save, "click", move |_| {
+                if let Err(why) = crate::ops::download::save_bytes(&file, contents.as_bytes()) {
+                    web_sys::console::error_1(&format!("save entity as text: {why}").into());
+                }
+            });
+            util::append(&article, &save);
 
             util::append(container, &article);
         }

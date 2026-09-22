@@ -21,6 +21,7 @@ pub mod games;
 pub mod execute_console;
 pub mod file_transfer;
 pub mod key_manager;
+pub mod files;
 pub mod knowledge_base;
 pub mod peer_connections;
 pub mod peer_management;
@@ -34,6 +35,7 @@ pub mod site_editor;
 pub mod site_overlay;
 pub mod shell;
 pub mod storage;
+pub mod system_monitor;
 pub mod style;
 pub mod system_overview;
 pub mod system_peers;
@@ -81,6 +83,14 @@ struct WindowSectionState {
     /// live DOM-side state the tree can't reconstruct (most importantly the
     /// Games/Apps sandboxed `<iframe>`, whose internal app state would reset).
     max_btn: Element,
+    /// The header's *running app* label, beside the title. Reconciled per-frame
+    /// like [`Self::max_btn`]: the app is named during the rebuild that mounts
+    /// it, after the header was built, and a second rebuild to show the name
+    /// would restart the app it names.
+    app_el: Element,
+    /// The height the per-frame reconcile last wrote (`None` = natural), so an
+    /// unchanged height costs a comparison and not a style write.
+    applied_size: crate::window_size::Applied,
     /// Closures kept alive for this section's listeners. Cleared
     /// when the section is rebuilt. Dropping the section state
     /// drops these (which dereferences the JS-side closures).
@@ -318,6 +328,23 @@ impl DomRenderer {
         let mut section_timings: Vec<(String, WindowId, f64)> = Vec::new();
         let any_section_changed =
             self.update_window_sections(peers, window_manager, &mut section_timings, maximized, dial_markers, connect_attempt, offer_attempt, provisioning_drifted);
+        // The System Monitor's hooks — no-ops unless a monitor is open. The
+        // timings were always measured; this is where they stop being thrown away.
+        crate::monitor::sampler::note_sections(&section_timings);
+        if crate::monitor::sampler::active() {
+            crate::monitor::sampler::note_open_windows(
+                window_manager
+                    .windows
+                    .iter()
+                    .filter(|w| w.open)
+                    .map(|w| crate::monitor::sampler::OpenWindow {
+                        id: w.id,
+                        type_name: w.view.type_name(),
+                        title: crate::window::display_title(w.view.as_ref()),
+                        app: w.view.running_app(),
+                    }),
+            );
+        }
 
         // Show the first-run hint whenever the window area is empty (boot with
         // nothing open, or the user closed every window); remove it as soon as
@@ -332,9 +359,55 @@ impl DomRenderer {
         // `maximized`. Cheap idempotent classList writes. (The app also marks
         // the affected windows dirty so the button label rebuilds; this keeps
         // the full-screen promotion correct regardless.)
-        for (id, state) in self.window_sections.iter() {
+        for (id, state) in self.window_sections.iter_mut() {
+            let mut sized = false;
+            if let Some(win) = window_manager.get(*id) {
+                // The window's height (`crate::window_size`): one applier, here,
+                // every frame — a height change is a style write, never a
+                // rebuild, so the machine in an Apps window keeps running.
+                let key = crate::window_size::size_key(
+                    win.view.type_name(),
+                    win.view.running_app_key().as_deref(),
+                );
+                let applied = crate::window_size::applied(*id, &key);
+                if applied != state.applied_size {
+                    if let Some(el) = state.section_el.dyn_ref::<web_sys::HtmlElement>() {
+                        let style = el.style();
+                        match applied {
+                            crate::window_size::Applied::Px(px) => {
+                                let _ = style.set_property("height", &format!("{px}px")); // i18n-ignore — CSS
+                            }
+                            crate::window_size::Applied::Natural => {
+                                let _ = style.remove_property("height");
+                            }
+                        }
+                    }
+                    let _ = state.section_el.set_attribute(
+                        "data-size",
+                        &match applied {
+                            crate::window_size::Applied::Px(px) => px.to_string(),
+                            crate::window_size::Applied::Natural => "natural".to_string(), // i18n-ignore — attribute value
+                        },
+                    );
+                    state.applied_size = applied;
+                }
+                sized = matches!(applied, crate::window_size::Applied::Px(_));
+                let app = win.view.running_app().unwrap_or_default();
+                if state.app_el.text_content().unwrap_or_default() != app {
+                    util::set_text(&state.app_el, &app);
+                    if app.is_empty() {
+                        let _ = state.app_el.set_attribute("hidden", "");
+                    } else {
+                        let _ = state.app_el.remove_attribute("hidden");
+                    }
+                }
+            }
             let is_max = maximized == Some(*id);
-            let want = if is_max { "window maximized" } else { "window" }; // i18n-ignore — CSS class names
+            let want = match (is_max, sized) {
+                (true, _) => "window maximized", // i18n-ignore — CSS class names
+                (false, true) => "window sized", // i18n-ignore — CSS class names
+                (false, false) => "window",
+            };
             if state.section_el.class_name() != want {
                 state.section_el.set_class_name(want);
             }
@@ -434,7 +507,7 @@ impl DomRenderer {
                     "{}:{}:{};",
                     win.id,
                     win.view.type_name(),
-                    win.view.title()
+                    crate::window::display_title(win.view.as_ref())
                 ));
             }
         }
@@ -736,7 +809,7 @@ impl DomRenderer {
                 continue;
             }
             let entry = util::create_element_with_class("div", "active-entry");
-            let title = win.view.title();
+            let title = crate::window::display_title(win.view.as_ref());
             // Char-safe truncation: titles are static ASCII today, but a future
             // dynamic title (site/page name, app label with emoji) could put a
             // multibyte boundary at byte 27 — byte-slicing there would panic and
@@ -896,6 +969,9 @@ impl DomRenderer {
                 let section_el =
                     util::create_element_with_class("section", "window");
                 util::set_attr(&section_el, "data-instance", &win.id.to_string());
+                // The reconcile writes this on every change of height; a window
+                // starts natural, so say so rather than leave it unset.
+                util::set_attr(&section_el, "data-size", "natural"); // i18n-ignore — attribute value
                 // Bound peer-id — lets e2e helpers / DOM consumers
                 // disambiguate multiple windows of the same type bound
                 // to different peers (e.g., one Shell per backend
@@ -917,6 +993,8 @@ impl DomRenderer {
                         // assigned during the header build below (which runs on
                         // every rebuild, first included) before any reconcile.
                         max_btn: util::create_element("button"),
+                        app_el: util::create_element("span"),
+                        applied_size: crate::window_size::Applied::Natural,
                         closures: crate::window::new_closure_vec(),
                         drafts: std::rc::Rc::new(std::cell::RefCell::new(
                             std::collections::HashMap::new(),
@@ -947,6 +1025,15 @@ impl DomRenderer {
             let h3 = util::create_element("h3");
             util::set_text(&h3, &win.view.title());
             util::append(&header, &h3);
+            let app_el = util::create_element_with_class("span", "win-app"); // i18n-ignore — CSS class name
+            util::set_attr(&app_el, "style", crate::dom::theme::WINDOW_APP_LABEL);
+            util::set_attr(&app_el, "data-field", "window-running-app");
+            match win.view.running_app() {
+                Some(app) => util::set_text(&app_el, &app),
+                None => util::set_attr(&app_el, "hidden", ""),
+            }
+            util::append(&header, &app_el);
+            state.app_el = app_el;
 
             let pid = win.view.peer_id();
             if !pid.is_empty() {
@@ -1086,6 +1173,10 @@ impl DomRenderer {
             }
 
             util::append(&state.section_el, &content);
+            util::append(
+                &state.section_el,
+                &build_size_grip(&state.section_el, win.id, &self.pending_actions, &self.repaint, &state.closures),
+            );
 
             // Re-anchor any preserved scrollers now that the rebuilt content is
             // attached (matched by `data-scroll-key`; clamps if content shrank).
@@ -1100,6 +1191,138 @@ impl DomRenderer {
 
         any_changed
     }
+}
+
+/// The grip along a window's bottom edge: drag to set the window's height,
+/// double-click to forget it, arrow keys for a step, Home to forget.
+///
+/// **It writes no height itself.** A drag records the height in progress with
+/// [`crate::window_size::set_live`] and asks for a frame; the renderer's
+/// reconcile is the one applier (see that module for why). On release the height
+/// becomes the remembered one through [`Action::SetWindowSize`].
+///
+/// Pointer events, captured for the drag, so one handler serves a mouse, a pen
+/// and a finger — and a drag that leaves the grip (it always does, the grip is
+/// a few pixels tall) keeps reporting to it.
+fn build_size_grip(
+    section: &Element,
+    wid: WindowId,
+    actions: &Rc<RefCell<Vec<Action>>>,
+    repaint: &crate::window::RepaintFn,
+    closures: &crate::window::ClosureVec,
+) -> Element {
+    use crate::window_size::{clamp_px, set_live, SizePref, STEP_PX};
+    let grip = util::create_element_with_class("div", "win-grip"); // i18n-ignore — CSS class name
+    util::set_attr(&grip, "data-field", "window-size-grip");
+    util::set_attr(&grip, "role", "separator");
+    util::set_attr(&grip, "aria-orientation", "horizontal");
+    util::set_attr(&grip, "tabindex", "0");
+    let label = crate::i18n::t("tooltip.window_size_grip", &[]);
+    util::set_attr(&grip, "title", &label);
+    util::set_attr(&grip, "aria-label", &label);
+
+    // (pointer id, start y, start height, last height)
+    let drag: Rc<std::cell::Cell<Option<(i32, f64, f64, u32)>>> = Rc::new(std::cell::Cell::new(None));
+    let height_of = |section: &Element| {
+        section
+            .dyn_ref::<web_sys::HtmlElement>()
+            .map(|e| e.offset_height() as f64)
+            .unwrap_or(0.0)
+    };
+
+    {
+        let (drag, section, grip_el) = (drag.clone(), section.clone(), grip.clone());
+        util::listen(
+            &grip,
+            "pointerdown",
+            move |ev| {
+                let Some(p) = ev.dyn_ref::<web_sys::PointerEvent>() else { return };
+                if p.button() != 0 {
+                    return;
+                }
+                ev.prevent_default();
+                let _ = grip_el.set_pointer_capture(p.pointer_id());
+                let h = height_of(&section);
+                drag.set(Some((p.pointer_id(), p.client_y() as f64, h, clamp_px(h))));
+            },
+            closures,
+        );
+    }
+    {
+        let (drag, rp) = (drag.clone(), repaint.clone());
+        util::listen(
+            &grip,
+            "pointermove",
+            move |ev| {
+                let (Some(p), Some((pid, y0, h0, _))) = (ev.dyn_ref::<web_sys::PointerEvent>(), drag.get()) else {
+                    return;
+                };
+                if p.pointer_id() != pid {
+                    return;
+                }
+                let px = clamp_px(h0 + p.client_y() as f64 - y0);
+                drag.set(Some((pid, y0, h0, px)));
+                set_live(wid, Some(px));
+                rp();
+            },
+            closures,
+        );
+    }
+    for end in ["pointerup", "pointercancel"] {
+        let (drag, actions, rp) = (drag.clone(), actions.clone(), repaint.clone());
+        util::listen(
+            &grip,
+            end,
+            move |ev| {
+                let Some((pid, _, h0, px)) = drag.get() else { return };
+                if ev.dyn_ref::<web_sys::PointerEvent>().is_some_and(|p| p.pointer_id() != pid) {
+                    return;
+                }
+                drag.set(None);
+                set_live(wid, None);
+                // A press that did not move is a click, not a size.
+                if px != clamp_px(h0) {
+                    actions.borrow_mut().push(Action::SetWindowSize(wid, Some(SizePref::Height(px))));
+                }
+                rp();
+            },
+            closures,
+        );
+    }
+    {
+        let (actions, rp) = (actions.clone(), repaint.clone());
+        util::listen(
+            &grip,
+            "dblclick",
+            move |_| {
+                actions.borrow_mut().push(Action::SetWindowSize(wid, None));
+                rp();
+            },
+            closures,
+        );
+    }
+    {
+        let (actions, rp, section) = (actions.clone(), repaint.clone(), section.clone());
+        util::listen(
+            &grip,
+            "keydown",
+            move |ev| {
+                let Some(k) = ev.dyn_ref::<web_sys::KeyboardEvent>() else { return };
+                let h = height_of(&section);
+                let pref = match k.key().as_str() {
+                    "ArrowUp" => Some(SizePref::Height(clamp_px(h - STEP_PX as f64))),
+                    "ArrowDown" => Some(SizePref::Height(clamp_px(h + STEP_PX as f64))),
+                    "Home" => None, // i18n-ignore — KeyboardEvent.key value
+                    _ => return,
+                };
+                ev.prevent_default();
+                actions.borrow_mut().push(Action::SetWindowSize(wid, pref));
+                rp();
+            },
+            closures,
+        );
+    }
+    grip
 }
 
 /// The `.palette-shell` class string for the current mobile toggle state. Two

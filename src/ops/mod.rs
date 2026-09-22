@@ -11,6 +11,8 @@
 pub mod execute;
 #[cfg(target_arch = "wasm32")]
 pub mod download;
+#[cfg(target_arch = "wasm32")]
+pub mod gzip;
 
 pub use execute::{execute, ExecuteRequest};
 #[allow(unused_imports)] // consumed by the shell `exec` verb (Phase 4)

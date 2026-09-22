@@ -33,31 +33,11 @@
                  flex:0 0 auto; }
   #keys button.on { background:#0a63c2; border-color:#0a63c2; }
   #screen_container { display:none; }
-  /* Power: the machine lives in this page, so this is where it is turned off and on. */
-  #power { flex:0 0 auto; font:14px/1 system-ui,sans-serif; padding:3px 8px; background:#333;
-           color:#ddd; border:1px solid #444; border-radius:3px; }
-  #power.off { background:#7a2a24; border-color:#9a3a32; }
-  #powermenu { position:fixed; top:34px; right:6px; z-index:10; background:#2a2a2a;
-               border:1px solid #444; border-radius:4px; padding:4px; min-width:230px;
-               max-width:calc(100vw - 12px); box-shadow:0 4px 14px rgba(0,0,0,.5); }
-  #powermenu button { display:block; width:100%; text-align:left; font:13px system-ui,sans-serif;
-                      padding:9px 10px; background:none; color:#ddd; border:0; border-radius:3px; }
-  #powermenu button:hover, #powermenu button:focus { background:#3a3a3a; }
-  #powermenu .note { padding:6px 10px 4px; font-size:11px; color:#888; white-space:normal; }
 </style>
 <body>
 <div id="bar">
   <b>Alpine</b>
   <span id="status" class="dim">starting…</span>
-  <button id="power" title="Restart or turn off the machine" aria-haspopup="true" aria-expanded="false">⏻</button>
-</div>
-<div id="powermenu" hidden>
-  <button data-power="restart">Restart</button>
-  <button data-power="cold">Restart and show the boot</button>
-  <button data-power="off">Turn off</button>
-  <button data-power="start" hidden>Start</button>
-  <button data-power="start-cold" hidden>Start and show the boot</button>
-  <div class="note">Your home directory (~) is saved first. Everything else starts fresh.</div>
 </div>
 <div id="term"></div>
 <div id="keys">
@@ -72,13 +52,14 @@
   <button data-k="/">/</button>
   <button data-k="-">-</button>
   <button data-k="\x03">^C</button>
-  <button id="kbd">⌨ keyboard</button>
+  <button id="kbd">keyboard</button>
 </div>
 <div id="screen_container"><div></div><canvas></canvas></div>
 
 <script src="vendor/xterm.js"></script>
 <script src="vendor/addon-fit.js"></script>
 <script src="build/libv86.js"></script>
+<script src="vm-sdk/vm-sdk.js"></script>
 <script>
 // ── The app side of entity-apps' contract, plus the file verbs it lacks ────────
 //   app → host : ready-for-init · state · ready · closed · error
@@ -86,67 +67,31 @@
 // ⚠ The `x-` file verbs are a PROTOTYPE, deliberately un-minted: entity-apps owns
 // EMBEDDING.md, and minting vocabulary a counterpart also implements is the
 // mistake G-PIN-4 and the SHARE divergence both paid for.
-const HOST = 'entity-host', APP = 'entity-app';
-const send = (t, x) => parent !== window &&
-  parent.postMessage(Object.assign({ source: APP, type: t }, x || {}), '*');
-const $ = id => document.getElementById(id);
-const t0 = performance.now();
+const V = window.EntityVm;
+const { send, $, since, token, mib, kb, strip, exactBuffer, idHash } = V;
+const t0 = V.t0;
 
 let emulator = null, booted = false, prompted = false, serial = '', pending = null;
+// The System Monitor cannot see into this frame; the emulator reports for itself.
+V.reportStats(() => emulator);
 
 // ── assets from the HOST, when the host offers them ───────────────────────────
 // Hosted in an entity-app player, this page is an opaque-origin document: its
 // relative URLs resolve against the HOST page, where none of these files are.
-// So the player serves them. The catalog declares two bundles and `init` says
-// which ones this host answers for (`x-assets`); the page asks for a KEY in a
-// bundle with `x-asset-get` and gets bytes or a refusal code back. The host
-// does not know what any key means -- that is the whole contract.
-//   engine : v86.wasm · seabios.bin · vgabios.bin      (changes with OUR builds)
-//   image  : vmlinuz · initramfs · fs.json · blobs/<sha256>   (the environment)
-// Standalone (no host, or a host that offers nothing) nothing below runs and
-// the page fetches the same files by URL, exactly as before.
+// So the player serves them (vm-sdk.js `asset`). The catalog declares the
+// bundles and `init` says which ones this host answers for:
+//   engine   : v86.wasm · seabios.bin · vgabios.bin      (changes with OUR builds)
+//   image    : vmlinuz · initramfs · fs.json · blobs/<sha256> · snapshot · about.json
+//   packages : fs.json · blobs/<sha256>                   (the apk package set)
+// Standalone (no host, or a host that offers nothing) the page fetches the same
+// files by URL, exactly as before.
 let hostBundles = null;             // null = URL mode; a Set = host mode
-let assetSeq = 0;
-const assetWaiting = new Map();
-function hostAsset(bundle, key) {
-  return new Promise((resolve, reject) => {
-    const id = 'a' + (++assetSeq);
-    assetWaiting.set(id, { resolve, reject, bundle, key });
-    window.__m1.assets.requests++;
-    const per = window.__m1.assets.byBundle[bundle] = window.__m1.assets.byBundle[bundle] || { requests: 0, bytes: 0 };
-    per.requests++;
-    send('x-asset-get', { id, bundle, key });
-  });
-}
-function onHostAsset(m) {
-  const w = assetWaiting.get(m.id);
-  if (!w) return;
-  assetWaiting.delete(m.id);
-  if (m.ok && m.data) {
-    const bytes = new Uint8Array(m.data);
-    window.__m1.assets.bytes += bytes.byteLength;
-    window.__m1.assets.byBundle[w.bundle].bytes += bytes.byteLength;
-    w.resolve(bytes);
-  } else {
-    window.__m1.assets.refused++;
-    window.__m1.assets.lastRefusal = `${w.bundle}/${w.key}: ${m.reason}`;
-    w.reject(new Error(`the host did not serve ${w.bundle}/${w.key} (${m.reason})`));
-  }
-}
-// A buffer handed to v86 is kept by it; give it one that is exactly the file.
-const exactBuffer = u8 => (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength)
-  ? u8.buffer : u8.slice().buffer;
+const hostAsset = V.asset;
 
 // Diagnostics live HERE, not on screen. A probe reads them; a person reads the
 // terminal. (The previous page put a JSON dump across 80% of the viewport --
 // that was a measurement rig mistaken for the product.)
-window.__m1 = { serial:'', booted:false, probeOk:false, bootMs:null, promptMs:null,
-                error:null, net:null,
-                assets:{ requests:0, bytes:0, refused:0, lastRefusal:null, mode:'url', byBundle:{} },
-                env:{ crossOriginIsolated: (typeof crossOriginIsolated!=='undefined') ? crossOriginIsolated : 'undefined',
-                      SharedArrayBuffer_present: (typeof SharedArrayBuffer!=='undefined'),
-                      sandboxed: window.origin === 'null',
-                      ua: navigator.userAgent.slice(0,90) } };
+Object.assign(window.__m1, { serial:'', booted:false, probeOk:false, bootMs:null, promptMs:null, net:null });
 
 function netStats() {
   const rs = performance.getEntriesByType('resource');
@@ -166,8 +111,6 @@ function netStats() {
            engine:pick(r=>/v86\.wasm|libv86\.js/.test(r.name)),
            index:pick(r=>/fs\.json/.test(r.name)), total_requests:rs.length };
 }
-const strip = s => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
-const mib = n => (n/1048576).toFixed(1);
 
 const term = new Terminal({ convertEol:false, fontSize:13, scrollback:5000,
                             theme:{ background:'#1a1a1a' } });
@@ -251,7 +194,6 @@ function askAgent(verb, args, ms) {
     toAgent([verb, tok, ...args].join(' '));
   });
 }
-const token = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(16).padStart(2, '0')).join('');
 addEventListener('resize', () => setTimeout(fitAndTell, 150));
 // A phone rotating or opening its keyboard changes the visual viewport without
 // firing a useful `resize` on some browsers.
@@ -290,8 +232,38 @@ function focusKeyboard() {
   if (ta) { ta.focus(); ta.click(); }
   term.focus();
 }
-$('kbd').addEventListener('click', focusKeyboard);
-$('term').addEventListener('touchstart', focusKeyboard, { passive:true });
+// The button is a TOGGLE (field report 2026-09-14: once the phone keyboard was up,
+// nothing but leaving fullscreen put it away). Decided on what was true when the
+// finger went down -- a tap can blur the field before `click` fires, and a click
+// that looks then sees "closed" and opens it again.
+const helper = () => document.querySelector('.xterm-helper-textarea');
+let kbdWasOpen = false, kbdBlurAt = -1e9;
+document.addEventListener('focusout', e => { if (e.target === helper()) kbdBlurAt = performance.now(); });
+$('kbd').addEventListener('pointerdown', e => { kbdWasOpen = document.activeElement === helper(); e.preventDefault(); });
+$('kbd').addEventListener('mousedown', e => e.preventDefault());
+$('kbd').addEventListener('click', () => {
+  const wasOpen = kbdWasOpen || document.activeElement === helper() || performance.now() - kbdBlurAt < 500;
+  kbdWasOpen = false;
+  if (wasOpen) { const ta = helper(); if (ta) ta.blur(); term.blur(); return; }
+  focusKeyboard();
+});
+// A TAP on the terminal opens the keyboard; a pinch, a scroll or a drag does not.
+// It used to fire on every touchstart, so zooming the page with two fingers kept
+// summoning the keyboard over what you were trying to read (same report).
+let termTouch = null;
+$('term').addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  termTouch = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, at: performance.now() } : null;
+}, { passive:true });
+$('term').addEventListener('touchmove', e => {
+  const t = e.touches[0];
+  if (termTouch && (e.touches.length > 1 || Math.hypot(t.clientX - termTouch.x, t.clientY - termTouch.y) > 10)) termTouch = null;
+}, { passive:true });
+$('term').addEventListener('touchend', e => {
+  const tap = termTouch && e.touches.length === 0 && performance.now() - termTouch.at < 500;
+  termTouch = null;
+  if (tap) focusKeyboard();
+}, { passive:true });
 $('ctrl').addEventListener('click', () => {
   ctrl = !ctrl; $('ctrl').classList.toggle('on', ctrl);
   focusKeyboard();
@@ -338,7 +310,7 @@ function typeIn(text) {
   emulator && emulator.serial_send_bytes(0, utf8.encode(text));
 }
 
-function status(text, cls) { $('status').textContent = text; $('status').className = cls || 'dim'; }
+const status = V.status;
 
 // ── the download phase, which is the actual black box ─────────────────────────
 // The kernel log scrolling by is good feedback. The window BEFORE it is not:
@@ -349,28 +321,7 @@ function status(text, cls) { $('status').textContent = text; $('status').classNa
 // and THAT is when someone hits back not knowing they were nearly there.
 // So: say which phase we are in, and put a number on the one that has no other
 // evidence it is progressing. Still ONE LINE -- the detail goes to __m1.
-const dl = { files: new Map(), done: false, firstMs: null, lastMs: null };
-window.__m1.phases = { boot_called: null, first_progress: null,
-                       download_done: null, first_serial: null, prompt: null };
-const since = () => Math.round(performance.now() - t0);
-
-function onProgress(e) {
-  // `total` can be absent on a chunked response, so a file we cannot size is
-  // counted in the "unknown" column rather than silently scored as 0 bytes --
-  // a progress bar that quietly under-reports its denominator runs backwards.
-  const prev = dl.files.get(e.file_name) || { loaded: 0, total: 0 };
-  dl.files.set(e.file_name, { loaded: e.loaded || 0,
-                              total: (e.total && e.total > 0) ? e.total : prev.total });
-  if (dl.firstMs === null) { dl.firstMs = since(); window.__m1.phases.first_progress = dl.firstMs; }
-  dl.lastMs = since();
-  if (dl.done) return;                       // the guest is talking; it owns the line now
-  let loaded = 0, total = 0, unsized = 0;
-  for (const f of dl.files.values()) { loaded += f.loaded; total += f.total; if (!f.total) unsized++; }
-  window.__m1.dl = { loaded, total, files: dl.files.size, unsized };
-  status(total
-    ? `fetching the environment… ${mib(loaded)} / ${mib(total)} MiB`
-    : `fetching the environment… ${mib(loaded)} MiB`);
-}
+const onProgress = e => V.progress(e, 'fetching the environment…');
 
 // ── the userland phase, which is the REAL black box ───────────────────────────
 // Measured at 3000 kbps: the download phase is 39.6s and now reports a moving
@@ -588,35 +539,10 @@ const MACHINE = {
   uart1: true,
 };
 const MACHINE_ID = `mem=${MACHINE.memory_size};vga=${MACHINE.vga_memory_size};uart1=${MACHINE.uart1};cmdline=${MACHINE.cmdline}`;
-// An identity, not a security check: the bytes already came from the host by
-// content hash. Two FNV-1a 32 passes with different bases, because crypto.subtle
-// is absent outside a secure context (a phone on http://<lan-ip> is one) and
-// this must give the same answer there. build-snapshot.py records the ids THIS
-// function computed while building, so the two cannot disagree.
-function idHash(u8) {
-  let a = 0x811c9dc5, b = 0x01000193 ^ 0x9e3779b9;
-  for (let i = 0; i < u8.length; i++) {
-    a = Math.imul(a ^ u8[i], 0x01000193) >>> 0;
-    b = Math.imul(b ^ u8[i], 0x01000193) >>> 0;
-  }
-  return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0') + ':' + u8.length;
-}
-const SNAPSHOT_BUILD = parent === window && new URLSearchParams(location.search).get('snapshot') === 'build';
-window.__m1.snapshot = { used: false, why: 'not checked' };
-// Decide from what is in hand. Returns null to boot cold, with the reason kept.
-function snapshotFits(meta, ids) {
-  const st = window.__m1.snapshot;
-  if (SNAPSHOT_BUILD) { st.why = 'building one'; return false; }
-  if (POWER_ON.boot === 'cold') { st.why = 'a boot from scratch was asked for'; return false; }
-  if (!meta) { st.why = 'none published'; return false; }
-  let m;
-  try { m = JSON.parse(new TextDecoder().decode(meta)); } catch (e) { st.why = 'snapshot.json unreadable'; return false; }
-  for (const k of ['engine', 'image', 'packages', 'machine']) {
-    if ((m[k] || null) !== (ids[k] || null)) { st.why = `built for a different ${k}`; return false; }
-  }
-  st.why = 'fits';
-  return true;
-}
+// Identity (idHash) and the fit check live in vm-sdk.js; this machine's ids are
+// engine, image, packages and machine, and the page resumes only when all match.
+const snapshotFits = V.snapshotFits;
+const SNAPSHOT_BUILD = V.SNAPSHOT_BUILD;
 
 // The files every boot needs, by URL (standalone) or from the host's bundles.
 // In host mode they arrive as bytes and are handed to v86 as buffers; the file
@@ -760,9 +686,8 @@ async function boot() {
 
     // The first byte out of the guest is the hand-over: from here the kernel log
     // IS the progress indicator and a byte count would be competing with it.
-    if (!dl.done) {
-      dl.done = true;
-      window.__m1.phases.download_done = window.__m1.phases.first_serial = since();
+    if (V.downloadDone()) {
+      window.__m1.phases.first_serial = window.__m1.phases.download_done;
       status('booting the kernel…');
     }
 
@@ -809,15 +734,6 @@ async function boot() {
 // it falls back to an ordinary browser download, which is the only sink there.
 const OSC_FILES = 5379;
 const baseName = p => (p.split('/').pop() || '').trim();
-function download(name, bytes) {
-  const url = URL.createObjectURL(new Blob([bytes]));
-  const a = document.createElement('a');
-  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-// Sends the host has not answered yet, oldest first: `x-file-result` carries the
-// name, not a request id, so the first waiting send of that name is the one.
-const sendsWaiting = [];
 // Answer a waiting `send`/`save` in the guest: the script prints this line, so
 // the person reads what the HOST did rather than a line printed before it acted.
 function answerGuest(tok, ok, text) {
@@ -827,26 +743,18 @@ function answerGuest(tok, ok, text) {
 }
 async function sendOut(path, tok) {
   const name = baseName(path);
-  window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
-  try {
-    const bytes = await emulator.read_file(path.replace(/^\/+/, ''));
-    // A fresh buffer holding exactly the file: a view into a larger buffer
-    // posts its neighbours too (the trailing-NUL bug on x-get-file, above).
-    const exact = bytes.slice();
-    window.__m1.files.sent.push({ name, length: exact.byteLength });
-    if (parent !== window) {
-      sendsWaiting.push({ name, tok, at: since() });
-      send('x-file', { name, media_type: 'application/octet-stream', data: exact });
-      status(`sent ${name} to the host…`);
-    } else {
-      download(name, exact);
-      status(`downloaded ${name} (no host to send it to)`);
-      answerGuest(tok, true, `send: ${name} downloaded by the browser (no host to keep it)`);
-    }
-  } catch (err) {
+  let bytes;
+  try { bytes = await emulator.read_file(path.replace(/^\/+/, '')); }
+  catch (err) {
     status(`could not read ${path}: ${String(err).slice(0, 80)}`, 'bad');
     answerGuest(tok, false, `send: could not read ${path}: ${String(err).slice(0, 80)}`);
+    return;
   }
+  status(V.hosted ? `sent ${name} to the host…` : `downloaded ${name} (no host to send it to)`);
+  const r = await V.sendFile(name, bytes);
+  if (V.hosted) status(r.ok ? `the host saved ${r.name}` : `the host did not save ${r.name}: ${r.reason}`, r.ok ? 'ok' : 'bad');
+  // `detail` is the host's own sentence ("Saved notes.txt to your files").
+  answerGuest(tok, r.ok, `send: ${r.detail}${r.ok || !r.reason ? '' : ` (${r.reason})`}`);
 }
 term.parser.registerOscHandler(OSC_FILES, data => {
   // xterm has already decoded the UTF-8 (the serial bytes reach it as bytes),
@@ -870,14 +778,14 @@ term.parser.registerOscHandler(OSC_FILES, data => {
     // `reboot` / `poweroff` in the guest (build-guest.sh 3c2). Answer first, so
     // the script returns before the machine it runs on goes away. A reboot
     // starts the machine the way this session started it.
-    if (powering) { answerGuest(tok, false, 'power: the machine is already restarting or turning off'); return true; }
+    if (V.isPowering()) { answerGuest(tok, false, 'power: the machine is already restarting or turning off'); return true; }
     answerGuest(tok, true, arg === 'restart'
       ? 'reboot: saving your home directory, then restarting'
       : 'poweroff: saving your home directory, then turning off');
     power(arg === 'restart' ? (POWER_ON.boot === 'cold' ? 'cold' : 'restart') : 'off', 'command');
   }
   else if (verb === 'receive') {
-    if (parent !== window) { send('x-request-file', {}); status('asked the host for a file — use its “Send a file” button'); }
+    if (V.hosted) { V.requestFile(); status('asked the host for a file — use its “Send a file” button'); }
     else status('no host to receive a file from', 'bad');
   }
   return true;                      // handled: never draw the sequence
@@ -954,21 +862,7 @@ let known = null;                    // path -> sig we believe the host holds (n
 let saving = null;
 window.__m1.work = { restored: 0, restoreFailed: 0, saves: 0, saved: 0, removed: 0, last: null, recent: [] };
 
-const workWaiting = new Map();
-let workSeq = 0;
-function workRequest(type, body, ms) {
-  return new Promise((resolve, reject) => {
-    const id = 'w' + (++workSeq);
-    const timer = setTimeout(() => { workWaiting.delete(id); reject(new Error(`${type}: no answer from the host`)); }, ms || 60000);
-    workWaiting.set(id, m => { clearTimeout(timer); resolve(m); });
-    const transfer = (body.put || []).map(p => p.data);
-    parent.postMessage(Object.assign({ source: APP, type, id }, body), '*', transfer);
-  });
-}
-function onWorkReply(m) {
-  const w = workWaiting.get(m.id);
-  if (w) { workWaiting.delete(m.id); w(m); }
-}
+const workRequest = V.work;
 const sigOf = (mode, mtime, size) => `${mode}:${mtime}:${size}`;
 
 async function fetchWorkspace() {
@@ -990,48 +884,7 @@ async function fetchWorkspace() {
   for (const { f } of got) hostSigs.set(f.path, sigOf(f.mode, f.mtime, f.size));
   window.__m1.work.restored = got.length;
   window.__m1.work.restoreFailed = failed + (listing.unreadable || []).length;
-  return { tar: got.length ? makeTar(got) : null, count: got.length, failed };
-}
-
-// A POSIX ustar archive. Names up to 255 bytes (prefix + name); longer ones are
-// skipped and counted, never truncated into a different path.
-function makeTar(entries) {
-  const enc = new TextEncoder();
-  const blocks = [];
-  const field = (buf, off, len, str) => { const b = enc.encode(str); buf.set(b.subarray(0, len), off); };
-  const octal = (n, len) => n.toString(8).padStart(len - 1, '0') + '\0';
-  for (const { f, data } of entries) {
-    const name = enc.encode(f.path);
-    let pre = '', base = f.path;
-    if (name.length > 100) {
-      const cut = f.path.lastIndexOf('/', f.path.length - 1);
-      pre = cut > 0 ? f.path.slice(0, cut) : '';
-      base = cut > 0 ? f.path.slice(cut + 1) : f.path;
-      if (enc.encode(pre).length > 155 || enc.encode(base).length > 100) { window.__m1.work.restoreFailed++; continue; }
-    }
-    const h = new Uint8Array(512);
-    field(h, 0, 100, base);
-    field(h, 100, 8, octal(f.mode & 0o7777, 8));
-    field(h, 108, 8, octal(0, 8));
-    field(h, 116, 8, octal(0, 8));
-    field(h, 124, 12, octal(data.length, 12));
-    field(h, 136, 12, octal(Math.max(0, Math.floor(f.mtime)), 12));
-    field(h, 148, 8, '        ');
-    h[156] = 0x30;                                    // '0': a regular file
-    field(h, 257, 6, 'ustar\0');
-    field(h, 263, 2, '00');
-    field(h, 345, 155, pre);
-    let sum = 0; for (const b of h) sum += b;
-    field(h, 148, 8, sum.toString(8).padStart(6, '0') + '\0 ');
-    blocks.push(h, data);
-    const pad = (512 - (data.length % 512)) % 512;
-    if (pad) blocks.push(new Uint8Array(pad));
-  }
-  blocks.push(new Uint8Array(1024));
-  const total = blocks.reduce((a, b) => a + b.length, 0);
-  const out = new Uint8Array(total);
-  let o = 0; for (const b of blocks) { out.set(b, o); o += b.length; }
-  return out;
+  return { tar: got.length ? V.makeTar(got, () => window.__m1.work.restoreFailed++) : null, count: got.length, failed };
 }
 
 // On the disk before the CPU runs. `fs9p` is built by the engine asynchronously;
@@ -1190,7 +1043,6 @@ async function workspaceBaseline() {
   }
 }
 
-const kb = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(1)} KB` : `${(n/1048576).toFixed(1)} MB`;
 const MAX_FILE = 32 * 1048576, MAX_BATCH = 48 * 1048576;
 
 function saveWorkspace(reason) {
@@ -1275,9 +1127,47 @@ async function doSave(reason) {
 const PROMPT_SAVE_DELAY_MS = 1500, SAVE_SPACING_MS = 5000;
 let lastSaveAt = -1e9, promptSaveTimer = null;
 function onPromptPing() {
-  if (!hostWorkspace || !agentReady || powering || promptSaveTimer) return;
+  if (!hostWorkspace || !agentReady || V.isPowering() || promptSaveTimer) return;
   const wait = Math.max(PROMPT_SAVE_DELAY_MS, lastSaveAt + SAVE_SPACING_MS - since());
-  promptSaveTimer = setTimeout(() => { promptSaveTimer = null; if (!powering) saveWorkspace('prompt'); }, wait);
+  promptSaveTimer = setTimeout(() => { promptSaveTimer = null; if (!V.isPowering()) saveWorkspace('prompt'); }, wait);
+}
+
+
+// ── ⓘ: what this machine is made of, and where each piece's source is ─────────
+// The components are named here; the package rows come from about.json, which
+// build-about.py reads out of the image's own apk database and the package set's
+// signed index -- what shipped, not what was meant to ship. DESIGN-2026-09-14 §3.
+const ALPINE_ABOUT = {
+  title: 'About this machine',
+  summary: 'An Alpine Linux 3.22 (32-bit x86) machine, emulated in this tab by v86. Nothing here reaches the network; the software below was published with this page.',
+  components: [
+    { name: 'Alpine Linux 3.22', what: 'the operating system: packages listed below', version: '3.22 (x86)', licence: 'per package, below',
+      home: 'https://alpinelinux.org', source: 'https://gitlab.alpinelinux.org/alpine/aports/-/tree/3.22-stable',
+      notes: 'build recipes; upstream archives at distfiles.alpinelinux.org/distfiles/v3.22/' },
+    { name: 'Linux kernel', what: 'linux-virt, built by Alpine from linux-lts', version: '6.12.109-r0', licence: 'GPL-2.0-only',
+      home: 'https://kernel.org', source: 'https://gitlab.alpinelinux.org/alpine/aports/-/tree/3.22-stable/main/linux-lts' },
+    { name: 'v86', what: 'the x86 emulator (JavaScript + WebAssembly)', version: 'pinned by sha256, no upstream version', licence: 'BSD-2-Clause',
+      home: 'https://copy.sh/v86/', source: 'https://github.com/copy/v86', notes: 'the exact commit of this build is not published upstream' },
+    { name: 'SeaBIOS and SeaVGABIOS', what: 'the emulated PC firmware', version: 'rel-1.16.2-0-gea1b7a0', licence: 'LGPL-3.0',
+      home: 'https://www.seabios.org', source: 'https://github.com/coreboot/seabios/tree/rel-1.16.2' },
+    { name: 'xterm.js', what: 'the terminal', version: '5.5.0 (addon-fit 0.10.0)', licence: 'MIT',
+      home: 'https://xtermjs.org', source: 'https://github.com/xtermjs/xterm.js/tree/5.5.0' },
+    { name: 'Entity run environment', what: 'the image builder, this page, the guest agent and send/receive', version: '', licence: 'Apache-2.0',
+      source: '', notes: 'tools/run-env in entity-browser-rust' },
+  ],
+  obligations: [
+    { text: 'Every component and package is named here with its licence.' },
+    { text: 'Source for each Alpine package: its build recipe is linked, and the upstream archives it names are at distfiles.alpinelinux.org/distfiles/v3.22/.' },
+    { open: true, text: 'Copies of that source are not yet hosted beside these binaries. For GPL-2.0-only packages (the kernel among them) that is still to be decided.' },
+  ],
+};
+async function loadPackageAbout() {
+  const bytes = hostBundles ? await hostAsset('image', 'about.json') : await V.fetchBytes('guest/about.json');
+  const a = JSON.parse(new TextDecoder().decode(bytes));
+  return { tables: [
+    { caption: 'Installed in the image', rows: a.image },
+    { caption: 'Available with apk add (hosted with this page)', note: 'Installed on demand from the package set published beside this machine.', rows: a.available },
+  ] };
 }
 
 // ── power: restart, restart showing the boot, turn off, start ─────────────────
@@ -1285,95 +1175,38 @@ function onPromptPing() {
 // never the guest's: a reboot INSIDE a resumed guest has no kernel to boot (a
 // resume never fetched one), and a poweroff inside it leaves a dead terminal and
 // an unsaved home directory. `reboot`/`poweroff` in the guest ask for this too.
-//
-// A restart is a RELOAD of this document, not an emulator rebuilt in place: the
-// page holds a dozen pieces of per-machine state (the agent, the workspace
-// baseline, retained blobs, timers, the snapshot decision), and a reload resets
-// every one of them by construction where a hand-written reset would miss the
-// next one added. The host answers the second `ready-for-init` like the first.
-// How to start next goes across the reload in `window.name`, which a sandboxed
-// opaque-origin frame keeps across its own reload (measured, Firefox and Chrome)
-// and which is the only storage such a frame has.
-// `?boot=cold` asks for the same by URL: a standalone page (no power button has
-// been pressed yet) can then show the boot, and a probe that measures the boot
-// itself can get one while a snapshot is published beside the page.
-const POWER_ON = (() => {
-  try {
-    const v = JSON.parse(window.name || 'null');
-    if (v && v.entityVm) { window.name = ''; return { boot: v.entityVm.boot === 'cold' ? 'cold' : 'resume', note: v.entityVm.note || null, by: v.entityVm.by || null }; }
-  } catch (e) {}
-  let byUrl = null;
-  try { byUrl = new URLSearchParams(location.search).get('boot'); } catch (e) {}
-  return byUrl === 'cold' ? { boot: 'cold', note: null, by: 'url' } : { boot: 'resume', note: null, by: null };
-})();
-window.__m1.power = { started: POWER_ON, actions: [] };
+// The mechanism (a reload, the start mode in window.name, the menu) is vm-sdk.js;
+// what THIS machine saves first, and how it looks when off, is here.
+const POWER_ON = V.powerOn;
 if (POWER_ON.note) term.write(`\x1b[2m[${POWER_ON.note}]\x1b[0m\r\n`);
-
-let powering = false, poweredOff = false;
-async function power(what, by) {
-  if (powering) return;
-  const log = { what, by: by || 'menu', at: since() };
-  window.__m1.power.actions.push(log);
-  if (what === 'start' || what === 'start-cold') {
-    startAgain(what === 'start-cold' ? 'cold' : 'resume', null, log.by);
-    return;
-  }
-  powering = true;
-  closePowerMenu();
-  let note;
-  if (emulator && hostWorkspace && !agentReady) {
-    // Still starting: no shell has run, so nothing can have changed since the
-    // files were put back.
-    note = 'the machine had not finished starting, so there was nothing new to save';
-  } else if (emulator && hostWorkspace) {
-    status('saving your home directory…');
-    // Bounded: a wedged guest must not make the power button the thing that hangs.
-    const r = await Promise.race([
-      saveWorkspace('power'),
-      new Promise(res => setTimeout(() => res({ ok: false, text: 'the machine did not answer' }), 20000)),
-    ]);
-    log.save = r;
-    note = r.ok ? 'your home directory was saved' : `your home directory was NOT fully saved: ${r.text}`;
-  } else {
-    note = hostWorkspace ? 'the machine was not running, so nothing needed saving' : 'nothing keeps files here, so nothing was saved';
-  }
-  if (what === 'off') {
-    try { emulator && emulator.destroy && emulator.destroy(); } catch (e) {}
-    emulator = window.emulator = null;
-    agentReady = false; poweredOff = true; powering = false;
-    term.write(`\r\n\r\n\x1b[1mThe machine is off\x1b[0m -- ${note}.\r\nUse the power button to start it.\r\n`);
-    status('off', 'bad');
-    $('power').classList.add('off');
-    for (const b of document.querySelectorAll('#powermenu [data-power]')) {
-      b.hidden = !b.dataset.power.startsWith('start');
-    }
-    log.done = since();
-    return;
-  }
-  startAgain(what === 'cold' ? 'cold' : 'resume', `restarted -- ${note}`, log.by);
-}
-function startAgain(boot, note, by) {
-  status(boot === 'cold' ? 'restarting from scratch…' : 'restarting…');
-  window.name = JSON.stringify({ entityVm: { boot, note, by } });
-  location.reload();
-}
-function closePowerMenu() {
-  $('powermenu').hidden = true;
-  $('power').setAttribute('aria-expanded', 'false');
-}
-$('power').addEventListener('click', e => {
-  e.stopPropagation();
-  const menu = $('powermenu');
-  if (!menu.hidden) { closePowerMenu(); return; }
-  menu.style.top = Math.round($('bar').getBoundingClientRect().bottom + 2) + 'px';
-  menu.hidden = false;
-  $('power').setAttribute('aria-expanded', 'true');
+const power = V.power;
+let poweredOff = false;
+V.chrome({
+  note: 'Your home directory (~) is saved first. Everything else starts fresh.',
+  about: ALPINE_ABOUT,
+  loadAbout: loadPackageAbout,
+  hooks: {
+    async save() {
+      if (emulator && hostWorkspace && !agentReady) {
+        // Still starting: no shell has run, so nothing can have changed since the
+        // files were put back.
+        return 'the machine had not finished starting, so there was nothing new to save';
+      }
+      if (emulator && hostWorkspace) {
+        status('saving your home directory…');
+        const r = await saveWorkspace('power');
+        return r.ok ? 'your home directory was saved' : `your home directory was NOT fully saved: ${r.text}`;
+      }
+      return hostWorkspace ? 'the machine was not running, so nothing needed saving' : 'nothing keeps files here, so nothing was saved';
+    },
+    off(note) {
+      try { emulator && emulator.destroy && emulator.destroy(); } catch (e) {}
+      emulator = window.emulator = null;
+      agentReady = false; poweredOff = true;
+      term.write(`\r\n\r\n\x1b[1mThe machine is off\x1b[0m -- ${note}.\r\nUse the power button to start it.\r\n`);
+    },
+  },
 });
-for (const b of document.querySelectorAll('#powermenu [data-power]')) {
-  b.addEventListener('click', e => { e.stopPropagation(); power(b.dataset.power, 'menu'); });
-}
-document.addEventListener('click', e => { if (!$('powermenu').contains(e.target)) closePowerMenu(); });
-addEventListener('keydown', e => { if (e.key === 'Escape' && !$('powermenu').hidden) closePowerMenu(); });
 
 // ── files, both directions ────────────────────────────────────────────────────
 // Extraction asks the GUEST for the listing rather than reading emulator.fs9p:
@@ -1424,86 +1257,50 @@ function feedRun(ch) {
   const p = pending; pending = null; p.resolve(lines);
 }
 
-addEventListener('message', async e => {
-  const m = e.data;
-  if (!m || m.source !== HOST) return;
-  try {
-    switch (m.type) {
-      case 'init': {
-        const offered = Array.isArray(m['x-assets']) ? m['x-assets'] : [];
-        if (offered.includes('engine') && offered.includes('image')) hostBundles = new Set(offered);
-        hostWorkspace = m['x-workspace'] === true;
-        boot(); break;
-      }
-      case 'x-asset': onHostAsset(m); break;
-      case 'x-work-listing': case 'x-work-file': case 'x-work-saved': onWorkReply(m); break;
-      case 'request-state':
-        // Whole-object, latest-wins, host-blind -- the contract's own semantics.
-        // Deliberately NOT where file bytes go: debounced, retained N deep and
-        // keyed by one app id, so a rootfs through here is resent in full on
-        // every change and kept N times.
-        send('state', { state: { booted, engine:'v86', arch:'i686', distro:'alpine-3.21',
-          // the host cannot read into an opaque-origin document, so the only way
-          // it learns whether xterm actually painted is for the app to say so.
-          rows: term.rows, cols: term.cols,
-          termPainted: document.querySelectorAll('.xterm-rows > div').length,
-          promptMs: window.__m1.promptMs, fit: window.__m1.fit } });
-        break;
-      case 'x-put-files': send('x-files-put', { put: await putFiles(m.entries) }); break;
-      case 'x-file': if (emulator) await receiveIn(m); break;
-      case 'x-file-result':
-        window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
-        window.__m1.files.results.push({ ok: !!m.ok, name: m.name, reason: m.reason || null });
-        status(m.ok ? `the host saved ${m.name}` : `the host did not save ${m.name}: ${m.reason}`,
-               m.ok ? 'ok' : 'bad');
-        {
-          const i = sendsWaiting.findIndex(s => s.name === m.name);
-          if (i >= 0) {
-            const [s] = sendsWaiting.splice(i, 1);
-            // `detail` is the host's own sentence ("Saved notes.txt to your
-            // files"); an older host sends none, so say what we know.
-            const said = m.detail || (m.ok ? `the host kept ${m.name}` : `the host did not keep ${m.name}`);
-            answerGuest(s.tok, !!m.ok, `send: ${said}${m.ok ? '' : ` (${m.reason})`}`);
-          }
-        }
-        break;
-      case 'x-list-files': {
-        const names = await runInGuest('ls -1 /mnt');
-        send('x-files-list', { names, couldNotLook: names === null }); break;
-      }
-      case 'x-run': {
-        const out = await runInGuest(m.cmd, m.timeoutMs || 30000);
-        send('x-run-done', { out, timedOut: out === null }); break;
-      }
-      case 'x-get-file': {
-        const bytes = await emulator.read_file(m.name);
-        // ⚠ NEVER transfer `bytes.buffer` directly: a Uint8Array can be a VIEW into
-        // a larger backing buffer, so the receiver gets the view PLUS whatever else
-        // is in there. Measured: a 33-byte file arrived as 49 bytes with 16 trailing
-        // NULs, while four controlled probes were byte-exact -- data-dependent,
-        // silent, and only on some files.
-        const exact = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength)
-          ? bytes : bytes.slice();
-        // SAME SHAPE as `send`'s x-file ({name, media_type, data}): one message
-        // name carrying two payload shapes is drift a host has to guess between.
-        parent.postMessage({ source:APP, type:'x-file', name:m.name, media_type:'application/octet-stream',
-                             length:exact.byteLength, data:exact.buffer }, '*', [exact.buffer]);
-        break;
-      }
-      case 'destroy':
-        try { emulator && emulator.destroy && emulator.destroy(); } catch (err) {}
-        send('closed'); break;
-    }
-  } catch (err) { send('error', { message:String(err).slice(0,300) }); }
+V.on('request-state', () => {
+  // Whole-object, latest-wins, host-blind -- the contract's own semantics.
+  // Deliberately NOT where file bytes go: debounced, retained N deep and keyed by
+  // one app id, so a rootfs through here is resent in full on every change.
+  send('state', { state: { booted, engine:'v86', arch:'i686', distro:'alpine-3.22',
+    // the host cannot read into an opaque-origin document, so the only way it
+    // learns whether xterm actually painted is for the app to say so.
+    rows: term.rows, cols: term.cols,
+    termPainted: document.querySelectorAll('.xterm-rows > div').length,
+    promptMs: window.__m1.promptMs, fit: window.__m1.fit } });
 });
+V.on('x-put-files', async m => send('x-files-put', { put: await putFiles(m.entries) }));
+V.on('x-file', async m => { if (emulator) await receiveIn(m); });
+V.on('x-list-files', async () => {
+  const names = await runInGuest('ls -1 /mnt');
+  send('x-files-list', { names, couldNotLook: names === null });
+});
+V.on('x-run', async m => {
+  const out = await runInGuest(m.cmd, m.timeoutMs || 30000);
+  send('x-run-done', { out, timedOut: out === null });
+});
+V.on('x-get-file', async m => {
+  const bytes = await emulator.read_file(m.name);
+  // ⚠ NEVER transfer `bytes.buffer` directly: a Uint8Array can be a VIEW into a
+  // larger backing buffer, so the receiver gets the view PLUS whatever else is in
+  // there. Measured: a 33-byte file arrived as 49 bytes with 16 trailing NULs.
+  const exact = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) ? bytes : bytes.slice();
+  parent.postMessage({ source:V.APP, type:'x-file', name:m.name, media_type:'application/octet-stream',
+                       length:exact.byteLength, data:exact.buffer }, '*', [exact.buffer]);
+});
+V.on('destroy', () => {
+  try { emulator && emulator.destroy && emulator.destroy(); } catch (err) {}
+  send('closed');
+});
+// A result for a file this page did not send through sendOut (the probe's
+// x-get-file) is still shown, as before.
+V.onUnmatchedFileResult = r => status(r.ok ? `the host saved ${r.name}` : `the host did not save ${r.name}: ${r.reason}`, r.ok ? 'ok' : 'bad');
 
-send('ready-for-init');
-// The contract's 150ms fallback: a host that never answers still gets a working
-// app. Standalone (no parent) that is the only path, and it is the common one.
-// ⚠ EMBEDDED, THE FALLBACK WAITS LONGER: booting in URL mode inside a player
-// fetches every file from the HOST's origin, where none of them exist, so a
-// slow `init` would lose the host's assets to a boot that cannot succeed. A
-// frame with a parent gets two seconds for `init` before falling back.
-setTimeout(() => { if (!emulator) boot(); }, parent !== window ? 2000 : 150);
+// ready-for-init, then boot with whatever the host offers (vm-sdk.js `start`:
+// 150 ms fallback standalone, 2 s embedded).
+V.start({ needs: ['engine', 'image'] }).then(info => {
+  hostBundles = info.bundles;
+  hostWorkspace = info.workspace;
+  boot();
+});
 </script>
 </body>

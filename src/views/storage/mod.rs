@@ -30,7 +30,7 @@ use crate::window_watch::WindowWatch;
 use model::StorageModel;
 
 #[cfg(target_arch = "wasm32")]
-use output::{BackendStoreView, OriginEstimate};
+use output::{BackendStoreView, EstimateUnavailable, OriginEstimate};
 
 /// `WindowEvent` name the Refresh button emits — re-reads counts and re-probes
 /// the origin disk estimate. Defined here so the native `handle_action`
@@ -45,7 +45,7 @@ pub struct StorageWindow {
     /// Origin disk estimate, filled in asynchronously (the `estimate()` API is
     /// promise-based). `None` until the first probe resolves.
     #[cfg(target_arch = "wasm32")]
-    estimate: std::rc::Rc<std::cell::RefCell<Option<OriginEstimate>>>,
+    estimate: std::rc::Rc<std::cell::RefCell<Option<Result<OriginEstimate, EstimateUnavailable>>>>,
     /// Set when a fresh estimate probe should be kicked on the next render
     /// (boot + each Refresh). Guards against re-spawning on every frame.
     #[cfg(target_arch = "wasm32")]
@@ -158,10 +158,8 @@ impl WindowView for StorageWindow {
             let est = self.estimate.clone();
             let flag = self.watch.flag();
             wasm_bindgen_futures::spawn_local(async move {
-                if let Some(value) = fetch_origin_estimate().await {
-                    *est.borrow_mut() = Some(value);
-                    flag.mark();
-                }
+                *est.borrow_mut() = Some(fetch_origin_estimate().await);
+                flag.mark();
             });
         }
 
@@ -197,25 +195,30 @@ impl WindowView for StorageWindow {
 /// disk figures. Returns `None` where the API is unavailable (older runtimes /
 /// some automation contexts) — the renderer then simply omits the line.
 #[cfg(target_arch = "wasm32")]
-async fn fetch_origin_estimate() -> Option<OriginEstimate> {
+pub(crate) async fn fetch_origin_estimate() -> Result<OriginEstimate, EstimateUnavailable> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
 
     let global = js_sys::global();
-    let navigator = js_sys::Reflect::get(&global, &"navigator".into()).ok()?;
-    let storage = js_sys::Reflect::get(&navigator, &"storage".into()).ok()?;
+    let secure = js_sys::Reflect::get(&global, &"isSecureContext".into())
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let navigator = js_sys::Reflect::get(&global, &"navigator".into()).map_err(|_| EstimateUnavailable::NoApi)?;
+    let storage = js_sys::Reflect::get(&navigator, &"storage".into()).map_err(|_| EstimateUnavailable::NoApi)?;
     if storage.is_undefined() || storage.is_null() {
-        return None;
+        return Err(if secure { EstimateUnavailable::NoApi } else { EstimateUnavailable::InsecureContext });
     }
 
     // estimate() → { usage, quota }
     let est_fn: js_sys::Function = js_sys::Reflect::get(&storage, &"estimate".into())
-        .ok()?
-        .dyn_into()
-        .ok()?;
-    let result = JsFuture::from(js_sys::Promise::from(est_fn.call0(&storage).ok()?))
+        .ok()
+        .and_then(|f| f.dyn_into().ok())
+        .ok_or(EstimateUnavailable::NoApi)?;
+    let promise = est_fn.call0(&storage).map_err(|_| EstimateUnavailable::Failed)?;
+    let result = JsFuture::from(js_sys::Promise::from(promise))
         .await
-        .ok()?;
+        .map_err(|_| EstimateUnavailable::Failed)?;
     let usage_bytes = js_sys::Reflect::get(&result, &"usage".into())
         .ok()
         .and_then(|v| v.as_f64())
@@ -240,7 +243,7 @@ async fn fetch_origin_estimate() -> Option<OriginEstimate> {
         None => None,
     };
 
-    Some(OriginEstimate {
+    Ok(OriginEstimate {
         usage_bytes,
         quota_bytes,
         persisted,

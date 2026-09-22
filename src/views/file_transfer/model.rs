@@ -296,6 +296,15 @@ impl FileTransferModel {
                     source: o.source.map(|s| s.name),
                 })
                 .collect(),
+            kept_files: crate::kept_files::read_kept(peers, &self.peer_id)
+                .into_iter()
+                .map(|o| OwnOffer {
+                    id: o.id(),
+                    name: o.name,
+                    size: o.size,
+                    source: o.source.map(|s| s.name),
+                })
+                .collect(),
             offer_limit: crate::file_offer::MAX_OFFER_BYTES,
         }
     }

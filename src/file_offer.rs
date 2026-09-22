@@ -169,6 +169,13 @@ pub fn hash_from_id(id: &str) -> Result<Hash, String> {
 
 /// Encode an offer as its manifest entity.
 pub fn manifest_entity(offer: &FileOffer) -> Result<Entity, String> {
+    manifest_entity_as(offer, OFFER_TYPE)
+}
+
+/// [`manifest_entity`] under another entity type. The body is shared with a file
+/// an app kept privately (`crate::kept_files`); the TYPE is what keeps the two
+/// apart, so a private file can never decode as something we offer.
+pub fn manifest_entity_as(offer: &FileOffer, entity_type: &str) -> Result<Entity, String> {
     let mut fields = vec![
         (text("name"), text(offer.name.clone())),
         (text("size"), integer(offer.size as i64)),
@@ -187,14 +194,19 @@ pub fn manifest_entity(offer: &FileOffer) -> Result<Entity, String> {
         ));
     }
     let data = to_ecf(&Value::Map(fields));
-    Entity::new(OFFER_TYPE, data).map_err(|e| format!("offer manifest: {e}"))
+    Entity::new(entity_type, data).map_err(|e| format!("file manifest: {e}"))
 }
 
 /// Decode a manifest entity. `None` for a wrong type or any malformed body —
 /// a stranger's tree is untrusted input, so this never panics and never
 /// half-fills an offer.
 pub fn decode_manifest(entity: &Entity) -> Option<FileOffer> {
-    if entity.entity_type != OFFER_TYPE {
+    decode_manifest_as(entity, OFFER_TYPE)
+}
+
+/// [`decode_manifest`] for another entity type; `None` for any other type.
+pub fn decode_manifest_as(entity: &Entity, entity_type: &str) -> Option<FileOffer> {
+    if entity.entity_type != entity_type {
         return None;
     }
     let value: Value = ciborium::from_reader(entity.data.as_slice()).ok()?;
@@ -252,7 +264,12 @@ fn decode_source(v: &Value) -> Option<OfferSource> {
 /// `{namespace}/{hex(H)}` — a bare `system/content/files` would bind outside
 /// any peer's tree.
 pub fn namespace_resource(peer_id: &str) -> String {
-    format!("/{peer_id}/system/content/{NAMESPACE}")
+    namespace_resource_for(peer_id, NAMESPACE)
+}
+
+/// [`namespace_resource`] for another `system/content` namespace.
+pub fn namespace_resource_for(peer_id: &str, namespace: &str) -> String {
+    format!("/{peer_id}/system/content/{namespace}")
 }
 
 // `resource_opts`, `empty_params` and `remote_execute` used to live here, and
@@ -464,19 +481,7 @@ pub async fn offer_file_from(
     if raw.len() as u64 > MAX_OFFER_BYTES {
         return Err(too_large_message(name, raw.len() as u64));
     }
-    let (blob, chunks) = chunk_bytes(raw)?;
-    let params = ingest_params(&blob, &chunks)?;
-    let result = dispatch
-        .execute(
-            "system/content".to_string(),
-            "ingest".to_string(),
-            params,
-            resource_opts(&namespace_resource(&local_pid)),
-        )
-        .await?;
-    if result.status != 200 {
-        return Err(format!("ingest refused: status {}", result.status));
-    }
+    let blob = ingest_into(dispatch, NAMESPACE, raw).await?;
 
     let offer = FileOffer {
         name: name.to_string(),
@@ -492,6 +497,27 @@ pub async fn offer_file_from(
         )
         .await?;
     Ok(offer)
+}
+
+/// Chunk `raw` and ingest it into this peer's own `system/content` `namespace`;
+/// returns the blob manifest (its content hash is the file's id). No size check:
+/// callers state their own ceiling first.
+pub async fn ingest_into(dispatch: &DispatchHandle, namespace: &str, raw: &[u8]) -> Result<Entity, String> {
+    let local_pid = dispatch.local_peer_id();
+    let (blob, chunks) = chunk_bytes(raw)?;
+    let params = ingest_params(&blob, &chunks)?;
+    let result = dispatch
+        .execute(
+            "system/content".to_string(),
+            "ingest".to_string(),
+            params,
+            resource_opts(&namespace_resource_for(&local_pid, namespace)),
+        )
+        .await?;
+    if result.status != 200 {
+        return Err(format!("ingest refused: status {}", result.status));
+    }
+    Ok(blob)
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +612,7 @@ pub async fn pull_offer_with<P: Fn(usize, usize)>(
     blob: &Hash,
     progress: P,
 ) -> Result<Vec<u8>, String> {
-    walk_closure(dispatch, Holder::Peer(remote_pid), blob, progress).await
+    walk_closure(dispatch, Holder::Peer(remote_pid), NAMESPACE, blob, progress).await
 }
 
 /// The bytes of one of **our own** offers, read out of our own `system/content`.
@@ -598,7 +624,12 @@ pub async fn pull_offer_with<P: Fn(usize, usize)>(
 /// Same walk as [`pull_offer`], so a large file is reassembled from its chunks
 /// exactly as a pulled one is, and verified by the same hash walk.
 pub async fn read_own_offer(dispatch: &DispatchHandle, blob: &Hash) -> Result<Vec<u8>, String> {
-    walk_closure(dispatch, Holder::Local, blob, |_, _| {}).await
+    read_own_in(dispatch, NAMESPACE, blob).await
+}
+
+/// [`read_own_offer`] from another of our own `system/content` namespaces.
+pub async fn read_own_in(dispatch: &DispatchHandle, namespace: &str, blob: &Hash) -> Result<Vec<u8>, String> {
+    walk_closure(dispatch, Holder::Local, namespace, blob, |_, _| {}).await
 }
 
 /// Whose `system/content` a closure walk reads.
@@ -613,6 +644,7 @@ enum Holder<'a> {
 async fn walk_closure<P: Fn(usize, usize)>(
     dispatch: &DispatchHandle,
     holder: Holder<'_>,
+    namespace: &str,
     blob: &Hash,
     progress: P,
 ) -> Result<Vec<u8>, String> {
@@ -621,7 +653,7 @@ async fn walk_closure<P: Fn(usize, usize)>(
         Holder::Local => dispatch.local_peer_id(),
         Holder::Peer(pid) => pid.to_string(),
     };
-    let namespace = namespace_resource(&holder_pid);
+    let namespace = namespace_resource_for(&holder_pid, namespace);
 
     fetch_into(dispatch, holder, &namespace, &store, &[*blob]).await?;
     if store.get(blob).is_none() {

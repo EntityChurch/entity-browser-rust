@@ -273,19 +273,47 @@ pub async fn gather_timeline(
             }
         }
     }
-    plan_from_rows(gatherer, author, &rows, &closure)
+    // ⚠ **`&[]` — a first gather, every time, and this is a STATED BOUND rather
+    // than an oversight.** `--gather` reads an origin and projects in one shot;
+    // nothing loads the head and pages a previous run published, so a second
+    // gather of the same subject re-pages from scratch. Within a run the paging
+    // is conformant — bounded pages, `page` equals its key, gather order, seal
+    // on overflow — and the property that needs `prior` is the CROSS-RUN one
+    // (`FEED-R32`): a sealed page keeping its bytes so a reader's cache and
+    // cursor survive a round that added one entry.
+    //
+    // It is not wired because loading it is the same question `RootProjector::
+    // adopt_prior_head` answers for signed-root continuity — *what does a
+    // publish recover from the out-dir* — and that is a decision about the
+    // publish model, not a line in a paging change. `plan_mirror` takes the
+    // argument so the semantics are gated natively today and the wiring is one
+    // call site when it lands.
+    plan_from_rows(gatherer, author, &rows, &closure, &[])
 }
 
 /// The plan a gathered row set produces — split out so the decision is reachable
 /// without a directory, and so the clock rule below has one expression.
+///
+/// `prior` is what this gatherer already published for this subject; `&[]` is a
+/// first gather. See [`gather_from_origin`]'s ⚠ for why the CLI passes `&[]`
+/// today and what that costs.
 pub fn plan_from_rows(
     gatherer: &str,
     author: &str,
     rows: &[ReadEntry],
     closure: &[Entity],
+    prior: &[crate::feed::MirrorPage],
 ) -> Result<MirrorPlan, GatherFailure> {
-    plan_mirror(gatherer, &MirrorSubject::timeline(author), rows, closure, gathered_clock(rows))
-        .map_err(|source| GatherFailure::Unrepublishable { author: author.to_string(), source })
+    plan_mirror(
+        gatherer,
+        &MirrorSubject::timeline(author),
+        rows,
+        closure,
+        gathered_clock(rows),
+        prior,
+        crate::feed_publish::DEFAULT_PAGE_SIZE,
+    )
+    .map_err(|source| GatherFailure::Unrepublishable { author: author.to_string(), source })
 }
 
 /// The instant a mirror record is stamped with.

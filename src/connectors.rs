@@ -511,13 +511,17 @@ pub fn resolve_node_from(
 }
 
 /// What [`add_connector`] did beyond writing the row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddOutcome {
-    /// The add also became the selection, because nothing was selected. The
-    /// caller owes the user a word about it — a selection changing under you is
+    /// The add also became the selection — because nothing was selected, or
+    /// because the caller asked for it ([`ConnectorDraft::use_now`]). The caller
+    /// owes the user a word about it — a selection changing under you is
     /// exactly the kind of helpfulness that must be stated, not inferred
     /// [AP25].
     pub selected: bool,
+    /// Who the row was written for. On the discovering path this is the id the
+    /// node answered with, which the caller has no other way to learn.
+    pub node_peer_id: String,
 }
 
 /// What to do with this desktop's own adopted rendezvous row, given whatever is
@@ -603,7 +607,7 @@ pub fn add_connector(peers: &Peers, peer_id: &str, c: &Connector) -> Result<AddO
         let sel = app_paths::connector_selection_path(app_paths::APP_ID, peer_id);
         peers.dispatch_write(peer_id, sel, selection_to_entity(&write.row.node_peer_id));
     }
-    Ok(AddOutcome { selected: write.select })
+    Ok(AddOutcome { selected: write.select, node_peer_id: write.row.node_peer_id })
 }
 
 /// What the registry looked like just before an add, snapshotted so the decision
@@ -738,6 +742,14 @@ pub struct ConnectorDraft {
     pub relay: String,
     pub relay_username: String,
     pub relay_credential: String,
+    /// Make this node the one in use even when another is already selected.
+    ///
+    /// The ordinary add never overrides an existing choice (see
+    /// [`add_connector`]). *Find peers here* is the exception, and it is an
+    /// explicit one: the user typed this address and pressed a button whose
+    /// whole meaning is "rendezvous **here**", so keeping an older selection
+    /// would meet them at a node they did not name.
+    pub use_now: bool,
 }
 
 /// Everything about a draft that can be judged without dialing: a non-empty
@@ -841,19 +853,20 @@ pub fn add_connector_by_address(
             &Connector {
                 node_peer_id: learned,
                 node_addr: addr,
-                label: draft.label,
-                ice: draft.ice,
+                label: draft.label.clone(),
+                ice: draft.ice.clone(),
                 // Ignored by `plan_write` — a node's own advertisement is
                 // learned, never typed.
                 ice_advertised: String::new(),
-                relay: draft.relay,
-                relay_username: draft.relay_username,
-                relay_credential: draft.relay_credential,
+                relay: draft.relay.clone(),
+                relay_username: draft.relay_username.clone(),
+                relay_credential: draft.relay_credential.clone(),
             },
         )?;
+        let select = write.select || draft.use_now;
         let path = app_paths::connector_path(app_paths::APP_ID, &owner, &write.row.node_peer_id);
         handle.put(path.clone(), connector_to_entity(&write.row)).await?;
-        if write.select {
+        if select {
             let sel = app_paths::connector_selection_path(app_paths::APP_ID, &owner);
             handle
                 .put(sel, selection_to_entity(&write.row.node_peer_id))
@@ -868,6 +881,7 @@ pub fn add_connector_by_address(
         //
         // The dial has already happened, so unlike `learn_node_reflectors` this
         // needs no `reach_node` — the route exists by construction.
+        let node_peer_id = write.row.node_peer_id.clone();
         spawn(async move {
             match advertise_via(&handle, &write.row.node_peer_id).await {
                 Ok(ad) => {
@@ -887,7 +901,7 @@ pub fn add_connector_by_address(
                 ),
             }
         });
-        Ok(AddOutcome { selected: write.select })
+        Ok(AddOutcome { selected: select, node_peer_id })
     })
 }
 
@@ -1419,6 +1433,33 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 pub fn booted_snapshot() -> Option<WebRtcProvisioning> {
     BOOTED.with(|b| b.borrow().clone())
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// What the running session last ARMED from, once late arming has acted.
+    /// `None` = it never has, so boot is still the truth.
+    static APPLIED: std::cell::RefCell<Option<Option<WebRtcProvisioning>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Record what late arming just applied (`EntityApp::arm_webrtc_if_provisioned`
+/// is the only writer).
+#[cfg(target_arch = "wasm32")]
+pub fn record_applied(p: Option<WebRtcProvisioning>) {
+    APPLIED.with(|a| *a.borrow_mut() = Some(p));
+}
+
+/// **What this session is actually running on** — the late-armed provisioning
+/// when there is one, else what it booted with.
+///
+/// The `net` preflight used [`booted_snapshot`] for this and so kept reporting
+/// *"configured, none in effect this session — reload"* after late arming had
+/// already put the node in effect: the same stale reload advice the Peer
+/// Connections notice gave, one surface over.
+#[cfg(target_arch = "wasm32")]
+pub fn applied_snapshot() -> Option<WebRtcProvisioning> {
+    APPLIED.with(|a| a.borrow().clone()).unwrap_or_else(booted_snapshot)
 }
 
 /// Has the provisioning a reload would use drifted from what this session
@@ -2042,10 +2083,21 @@ pub(crate) mod tests {
         registry: std::sync::Arc<entity_peer::transport::MemoryTransportRegistry>,
         lobby_override: &str,
     ) -> (String, tokio::task::JoinHandle<()>) {
+        spawn_signaling_node_seeded(registry, lobby_override, [7u8; 32])
+    }
+
+    /// [`spawn_signaling_node`] with its identity chosen, for a test that needs
+    /// more than one node on one registry (a shared seed is one peer-id, and
+    /// the second listener would not bind).
+    pub(crate) fn spawn_signaling_node_seeded(
+        registry: std::sync::Arc<entity_peer::transport::MemoryTransportRegistry>,
+        lobby_override: &str,
+        seed: [u8; 32],
+    ) -> (String, tokio::task::JoinHandle<()>) {
         use entity_peer::transport::MemoryListener;
 
         let keypair =
-            entity_crypto::IdentityKeypair::Ed25519(entity_crypto::Keypair::from_seed([7u8; 32]));
+            entity_crypto::IdentityKeypair::Ed25519(entity_crypto::Keypair::from_seed(seed));
         let node_pid = keypair.peer_id().to_string();
         let core = std::sync::Arc::new(entity_signaling::SignalingCore::with_limits(
             "memory://node".to_string(),
@@ -2222,6 +2274,65 @@ pub(crate) mod tests {
         );
 
         node_handle.abort();
+    }
+
+    /// **`use_now` takes over the selection; an ordinary add never does.**
+    ///
+    /// *Find peers here* means "rendezvous at the address I just typed", so a
+    /// profile that already had a node selected must move to the new one — or
+    /// the lobby meet that follows runs at a node the user did not name. The
+    /// control is the half that keeps the ordinary add honest: a second node
+    /// added without it stays unselected, exactly as before.
+    #[tokio::test]
+    async fn use_now_takes_the_selection_and_an_ordinary_second_add_does_not() {
+        use entity_peer::transport::{MemoryConnector, MemoryTransportRegistry};
+
+        let registry = MemoryTransportRegistry::new();
+        let (first, h1) = spawn_signaling_node_seeded(registry.clone(), "pool-one", [1u8; 32]);
+        let (second, h2) = spawn_signaling_node_seeded(registry.clone(), "pool-two", [2u8; 32]);
+        let (third, h3) = spawn_signaling_node_seeded(registry.clone(), "pool-three", [3u8; 32]);
+        let peers = Peers::new_direct_with_connector(std::sync::Arc::new(MemoryConnector::new(
+            registry.clone(),
+        )));
+        let me = peers.primary_peer_id().to_string();
+        tokio::task::yield_now().await;
+
+        let add = |node: &str, use_now: bool| {
+            add_connector_by_address(
+                &peers,
+                &me,
+                &ConnectorDraft {
+                    node_addr: format!("memory://{node}"),
+                    use_now,
+                    ..Default::default()
+                },
+            )
+            .expect("offline checks pass")
+        };
+
+        let o1 = add(&first, false).await.expect("first add");
+        assert!(o1.selected, "the first node is the selection");
+        assert_eq!(o1.node_peer_id, first, "the outcome names who answered");
+
+        let o2 = add(&second, false).await.expect("second add");
+        assert!(!o2.selected, "an ordinary second add must not take over");
+        assert_eq!(
+            selected_connector(&peers, &me).map(|c| c.node_peer_id),
+            Some(first.clone())
+        );
+
+        let o3 = add(&third, true).await.expect("third add");
+        assert!(o3.selected, "use_now must report that it took the selection");
+        assert_eq!(o3.node_peer_id, third);
+        assert_eq!(
+            selected_connector(&peers, &me).map(|c| c.node_peer_id),
+            Some(third),
+            "use_now must move the selection to the node the user named"
+        );
+
+        h1.abort();
+        h2.abort();
+        h3.abort();
     }
 
     /// A typed peer-id is an **expectation checked against the dial**, and a

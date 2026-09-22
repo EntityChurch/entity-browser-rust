@@ -72,6 +72,37 @@ pub fn app_workspace_prefix(app_id: &str, peer_id: &str, set: &str, app_id_in_se
     format!("/{}/app/{}/apps/{}/work/{}/", peer_id, app_id, set, app_id_in_set)
 }
 
+/// Prefix holding the files **apps in one set handed the host** (`x-file`,
+/// `crate::kept_files`), one manifest each at `{prefix}{app}/{blob-hex}`.
+///
+/// **Private, and deliberately not `offers/`.** A file pulled out of an app is
+/// the person's own work; putting it where peers list offers would share it the
+/// moment it left the app (field report 2026-09-14). Sharing is a separate,
+/// deliberate act (File Transfer's "Offer to peers"). A sibling of `work/`,
+/// outside every prefix the Apps window watches, for the reason
+/// [`app_workspace_prefix`] gives.
+/// e.g. `app_files_prefix(APP_ID, pid, "apps")` → `"/{pid}/app/entity-browser/apps/apps/files/"`
+pub fn app_files_prefix(app_id: &str, peer_id: &str, set: &str) -> String {
+    format!("/{}/app/{}/apps/{}/files/", peer_id, app_id, set)
+}
+
+/// One app-kept file's manifest path, keyed like an offer by the hex of its blob.
+pub fn app_file_path(app_id: &str, peer_id: &str, set: &str, app_id_in_set: &str, file_id: &str) -> String {
+    format!("{}{}/{}", app_files_prefix(app_id, peer_id, set), app_id_in_set, file_id)
+}
+
+/// Prefix holding **My files** — files a person brought onto this device, kept
+/// privately (`crate::user_files`). One level, keyed by the hex of the blob.
+/// e.g. `user_files_prefix(APP_ID, pid)` → `"/{pid}/app/entity-browser/files/"`
+pub fn user_files_prefix(app_id: &str, peer_id: &str) -> String {
+    format!("/{}/app/{}/files/", peer_id, app_id)
+}
+
+/// One My files manifest path.
+pub fn user_file_path(app_id: &str, peer_id: &str, file_id: &str) -> String {
+    format!("{}{}", user_files_prefix(app_id, peer_id), file_id)
+}
+
 /// Prefix holding every backup of every app in one set.
 /// e.g. `"/{pid}/app/entity-browser/apps/games/backups/"`
 pub fn app_backups_prefix(app_id: &str, peer_id: &str, set: &str) -> String {

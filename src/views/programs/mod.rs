@@ -62,6 +62,8 @@ pub struct ProgramsWindow {
     /// grid is showing.
     #[cfg(target_arch = "wasm32")]
     listener: std::cell::RefCell<Option<crate::dom::games::HostListener>>,
+    /// The program mounted in this window, by name (see `AppWindow::running`).
+    running: std::cell::RefCell<Option<String>>,
 }
 
 impl ProgramsWindow {
@@ -72,6 +74,7 @@ impl ProgramsWindow {
             watch: WindowWatch::new(),
             #[cfg(target_arch = "wasm32")]
             listener: std::cell::RefCell::new(None),
+            running: std::cell::RefCell::new(None),
         }
     }
 
@@ -109,6 +112,10 @@ impl ProgramsWindow {
 impl WindowView for ProgramsWindow {
     fn title(&self) -> String {
         crate::i18n::window_title("Programs") // i18n-ignore — lookup key, resolves via catalog
+    }
+
+    fn running_app(&self) -> Option<String> {
+        self.running.borrow().clone()
     }
 
     fn type_name(&self) -> &'static str {
@@ -153,6 +160,7 @@ impl WindowView for ProgramsWindow {
         use crate::apps::format::AppEntry;
         use crate::apps::paths;
 
+        self.running.replace(None);
         // Drop any stale player listener before (re)building the section.
         if let Some(old) = self.listener.borrow_mut().take() {
             crate::dom::games::remove_listener(&old);
@@ -240,7 +248,11 @@ impl WindowView for ProgramsWindow {
             files: false,
             assets: None,
             workspace: None,
+            // Programs report no running-app key, so the window's size key is
+            // its type — the one the renderer computes for it.
+            size_key: crate::window_size::size_key("Programs", None), // i18n-ignore — stable type identifier
         };
+        self.running.replace(Some(cfg.game_name.clone()));
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;
     }

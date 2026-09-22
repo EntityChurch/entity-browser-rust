@@ -10,7 +10,7 @@ use crate::peers::Peers;
 #[allow(unused_imports)]
 use crate::window::{WindowId, WindowType, WindowView};
 
-use model::PeerConnectionsModel;
+use model::{FindPeers, PeerConnectionsModel};
 
 use crate::window_watch::WindowWatch;
 
@@ -178,6 +178,62 @@ impl PeerConnectionsWindow {
         });
     }
 
+    /// **Find peers here** — dial the address, make it the rendezvous node in
+    /// use, and look for anyone else there.
+    ///
+    /// This is the button the flow was missing. Doing it by hand meant typing
+    /// the same address into two different cards, choosing the node, scrolling
+    /// back up, picking *Lobby* and pressing Meet — and on each device. Every
+    /// step already existed and had its own gate; what was missing was one
+    /// press that performs them in order and says where it got to.
+    ///
+    /// The add goes through [`crate::connectors::add_connector_by_address`] with
+    /// `use_now`, so it shares every rule the Add form has (the dial, the
+    /// learned reflectors, the row). The meet starts from `tick`, once the node
+    /// is actually in force — see [`FindPeers::Switching`].
+    fn find_peers(&self, peers: &Peers, addr: &str) {
+        let addr = addr.trim().to_string();
+        let find = self.model.find_handle();
+        let set = |state: Option<FindPeers>| {
+            if let Ok(mut f) = find.lock() {
+                *f = state;
+            }
+        };
+        let draft = crate::connectors::ConnectorDraft {
+            node_addr: addr.clone(),
+            use_now: true,
+            ..Default::default()
+        };
+        let sys = peers.system_peer_id().to_string();
+        let fut = match crate::connectors::add_connector_by_address(peers, &sys, &draft) {
+            Ok(fut) => fut,
+            Err(reason) => {
+                set(Some(FindPeers::Failed { addr, reason }));
+                return self.watch.mark_dirty();
+            }
+        };
+        // A new press replaces whatever the last one was doing, including a
+        // meet it started: a second press means "look here instead".
+        self.model.stop_meet();
+        set(Some(FindPeers::Adding { addr: addr.clone() }));
+        self.watch.mark_dirty();
+        let dirty = self.watch.flag();
+        crate::views::peer_connections::spawn_check(async move {
+            let next = match fut.await {
+                Ok(outcome) => FindPeers::Switching {
+                    addr,
+                    node: outcome.node_peer_id,
+                    frames_left: crate::views::peer_connections::model::FIND_SWITCH_FRAMES,
+                },
+                Err(reason) => FindPeers::Failed { addr, reason },
+            };
+            if let Ok(mut f) = find.lock() {
+                *f = Some(next);
+            }
+            dirty.mark();
+        });
+    }
+
     /// `Check` — ask the node what it actually serves (`advertise()`).
     ///
     /// Async, so the result lands off-frame into the shared notice slot and
@@ -338,6 +394,7 @@ impl WindowView for PeerConnectionsWindow {
                             relay: next(),
                             relay_username: next(),
                             relay_credential: next(),
+                            use_now: false,
                         };
                         self.add_node(peers, draft);
                         false
@@ -360,6 +417,10 @@ impl WindowView for PeerConnectionsWindow {
                     }
                     "connector_check" => {
                         self.check_connector(peers, value);
+                        false
+                    }
+                    "find_peers" => {
+                        self.find_peers(peers, value);
                         false
                     }
                     // Meet at a name (`crate::rendezvous`) — the same three
@@ -431,6 +492,9 @@ impl WindowView for PeerConnectionsWindow {
     /// would ever repaint this window for it — the pump reports whether the
     /// visible status moved and we mark dirty on that. Free when idle.
     fn tick(&mut self, peers: &Peers) {
+        if self.model.pump_find(peers) {
+            self.watch.mark_dirty();
+        }
         if self.model.pump_meet(peers) {
             self.watch.mark_dirty();
         }

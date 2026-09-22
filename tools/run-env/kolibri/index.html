@@ -1,0 +1,881 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KolibriOS</title>
+<style>
+  /* The second v86 machine (DESIGN-2026-09-14). A graphical guest: the page is a
+     status line and the emulated screen, scaled to fit. Diagnostics go to
+     window.__m1, never onto the screen. */
+  html,body { margin:0; height:100%; background:#111; color:#ddd; font:13px system-ui,sans-serif; overflow:hidden; }
+  body { display:flex; flex-direction:column; }
+  #bar { flex:0 0 auto; padding:5px 9px; background:#252525; border-bottom:1px solid #333;
+         display:flex; gap:9px; align-items:center; font-size:12px; white-space:nowrap; overflow:hidden; }
+  #bar b { font-weight:600; flex:0 0 auto; }
+  /* The player's own bar already names the app; on a phone the status needs the room. */
+  @media (max-width:520px) { #bar b, #files .lbl { display:none; } #bar { gap:6px; padding:5px 6px; } }
+  #files { display:flex; gap:5px; align-items:center; }
+  #sound { flex:0 0 auto; font:14px/1 system-ui,sans-serif; padding:4px 7px; background:#333; color:#ddd;
+           border:1px solid #444; border-radius:3px; }
+  #sound.muted { color:#888; }
+  #kbd { flex:0 0 auto; font:14px/1 system-ui,sans-serif; padding:4px 7px; background:#333; color:#888;
+         border:1px solid #444; border-radius:3px; }
+  #kbd.on { color:#7ee787; border-color:#2f6f3a; }
+  /* The key bar: what a phone keyboard lacks for a desktop OS. Shown while typing. */
+  #keys { flex:0 0 auto; display:flex; gap:5px; padding:5px 6px; background:#202020;
+          border-top:1px solid #333; overflow-x:auto; }
+  #keys button { font:12px/1 monospace; padding:8px 9px; background:#333; color:#ddd;
+                 border:1px solid #444; border-radius:3px; min-width:34px; flex:0 0 auto; }
+  #keys button.on { background:#0a63c2; border-color:#0a63c2; }
+  /* The phone keyboard belongs to whatever is focused; this is that thing. Not
+     display:none (unfocusable) and 16px (iOS zooms the page into a smaller input). */
+  #kbdin { position:fixed; left:0; bottom:0; width:2px; height:2px; opacity:0; border:0; padding:0;
+           margin:0; font-size:16px; resize:none; background:transparent; color:transparent; }
+  #status { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; }
+  .dim { color:#888; } .ok { color:#7ee787; } .bad { color:#ff7b72; }
+  #files { flex:0 0 auto; font:12px/1 system-ui,sans-serif; padding:4px 8px; background:#333; color:#ddd;
+           border:1px solid #444; border-radius:3px; }
+  #stage { flex:1 1 auto; min-height:0; position:relative; overflow:hidden; display:flex;
+           align-items:center; justify-content:center; background:#000; }
+  /* v86 draws a text grid (the boot menu) and a canvas (the desktop); the page
+     scales whichever is showing to fit the stage, keeping the aspect ratio. */
+  /* The page owns the view: fit, pinch-zoom and pan are one transform it computes
+     (applyView). touch-action:none so a finger drives the machine, not the page. */
+  #stage { touch-action:none; }
+  #screen_container { position:absolute; left:0; top:0; transform-origin:0 0; }
+  #stage:focus { outline:none; }
+  /* Pixelated only at a whole-number scale; at any other scale it drops whole rows and
+     columns of the desktop, which reads as spotty text. fitScreen() sets the class. */
+  #screen_container canvas { display:block; image-rendering:auto; }
+  #screen_container.crisp canvas { image-rendering:pixelated; }
+  #screen_container div { white-space:pre; font:14px monospace; line-height:14px; color:#fff; }
+  #off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+         text-align:center; padding:20px; color:#bbb; background:#111; }
+  /* [hidden] loses to an author `display`, so say it again: an overlay that ignores
+     hidden covers the machine it describes (it did). */
+  [hidden] { display:none !important; }
+  #filepanel { position:fixed; top:34px; right:6px; z-index:10; width:min(420px, calc(100vw - 12px));
+               max-height:calc(100vh - 44px); overflow:auto; background:#222; border:1px solid #444;
+               border-radius:4px; padding:10px 12px; box-shadow:0 4px 14px rgba(0,0,0,.5); }
+  #filepanel h3 { margin:0 0 6px; font-size:13px; }
+  #filepanel p { margin:4px 0 8px; color:#aaa; font-size:12px; white-space:normal; }
+  #filepanel table { width:100%; border-collapse:collapse; font-size:12px; }
+  #filepanel td { padding:4px 4px; border-top:1px solid #333; }
+  #filepanel td:last-child { text-align:right; }
+  #filepanel button { font:12px system-ui,sans-serif; padding:5px 9px; background:#333; color:#ddd;
+                      border:1px solid #444; border-radius:3px; }
+  #filepanel .row { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
+</style>
+<body>
+<div id="bar">
+  <b>KolibriOS</b>
+  <span id="status" class="dim">starting…</span>
+  <button id="kbd" aria-label="Keyboard" title="Keyboard: click the screen to type; on a phone, tap here to open the keyboard"></button>
+  <button id="sound" aria-label="Sound" title="Sound"></button>
+  <button id="files" title="Move files in and out through the machine's floppy drive"><span class="ic"></span><span class="lbl">Files</span></button>
+</div>
+<div id="filepanel" hidden>
+  <h3>The floppy drive</h3>
+  <p>Files move through a floppy disk in drive A (<code>/fd/1</code> inside KolibriOS). It holds 1.44 MB,
+     and its files are kept between visits (in the entity tree, under this app's workspace, <code>floppy/</code>).
+     Put a file in and it appears there; save a file there from KolibriOS and take it out here.
+     A file taken out goes to File Transfer.</p>
+  <div class="row">
+    <button id="putfile">Put a file in…</button>
+    <button id="takeall">Take all files out</button>
+    <button id="rescan">Look again</button>
+  </div>
+  <input id="picker" type="file" multiple hidden>
+  <table><tbody id="filelist"></tbody></table>
+  <p id="floppyfree" class="dim"></p>
+</div>
+<div id="stage" tabindex="0">
+  <div id="screen_container"><div></div><canvas></canvas></div>
+  <div id="off" hidden></div>
+</div>
+<div id="keys" hidden>
+  <button data-sc="01">esc</button>
+  <button data-sc="0f">tab</button>
+  <button data-mod="1d">ctrl</button>
+  <button data-mod="38">alt</button>
+  <button data-sc="e0 4b">←</button>
+  <button data-sc="e0 48">↑</button>
+  <button data-sc="e0 50">↓</button>
+  <button data-sc="e0 4d">→</button>
+  <button data-sc="0e">⌫</button>
+  <button data-sc="e0 53">del</button>
+  <button data-sc="1c">⏎</button>
+  <button id="fit">fit</button>
+</div>
+<textarea id="kbdin" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="keyboard for the machine"></textarea>
+
+<script src="vm-sdk/vm-sdk.js"></script>
+<script src="vm-sdk/fat.js"></script>
+<script>
+// Before libv86 loads: the engine reads performance.now() for the PIT refresh bit
+// KolibriOS's boot delay polls. Rounded to 1 ms (every non-isolated origin, which
+// includes the Apps player's frame) that loop takes ~66x too long: 33 s instead of
+// ~8. DESIGN-2026-09-14 §1.1.
+EntityVm.clockShim();
+</script>
+<script src="build/libv86.js"></script>
+<script>
+const V = window.EntityVm, Fat = window.EntityFat;
+const { $, since, status, idHash, exactBuffer, kb } = V;
+// Bar icons are inline SVG (EntityVm.icon): a font glyph showed as an empty box on a phone.
+$('kbd').innerHTML = V.icon('keyboard');
+document.querySelector('#files .ic').innerHTML = V.icon('floppy');
+Object.assign(window.__m1, { booted: false, desktopMs: null, floppy: { files: 0, saves: 0, lastSave: null, swaps: 0, received: [], changedByGuest: 0 } });
+
+// ── the machine ───────────────────────────────────────────────────────────────
+// One definition, used to build it AND to decide whether a snapshot fits it.
+// 128 MiB is what the spike measured KolibriOS on; less was not measured.
+const MACHINE = { memory_size: 128 * 1024 * 1024, vga_memory_size: 8 * 1024 * 1024 };
+const MACHINE_ID = `mem=${MACHINE.memory_size};vga=${MACHINE.vga_memory_size};fda=boot`;
+// What this machine keeps in the host workspace: THE FLOPPY'S FILES, one workspace
+// file each under floppy/, so they show in the entity tree like Alpine's home and
+// the image is rebuilt from them each visit. (Until 2026-09-14 it kept the whole
+// image as one opaque transfer.img; a profile that still has one is migrated on
+// its next save.)
+const FLOPPY_DIR = 'floppy/';
+const LEGACY_IMAGE = 'transfer.img';
+const EMPTY_FOLDER = '.empty-folder';   // a workspace holds files; this marks a folder with nothing in it
+
+let emulator = null, hostBundles = null, hostWorkspace = false;
+// The System Monitor cannot see into this frame; the emulator reports for itself.
+V.reportStats(() => emulator);
+// Sound: v86 emulates a Sound Blaster 16 and the PC speaker, and this KolibriOS image
+// carries SB16.SYS and players for MP3/WAV/XM and MIDI. ?audio=0 builds it silent.
+const AUDIO = (() => { try { return new URLSearchParams(location.search).get('audio') !== '0'; } catch (e) { return true; } })();
+let floppy = null;                   // the transfer floppy's bytes, as the page last put them in
+let floppySig = null;                // the image as it was when it last matched the host (null = unknown)
+let kept = new Map();                // workspace path -> hash of what the host holds
+let legacyImage = false;             // the host still holds a transfer.img to remove
+let ready = false;                   // the desktop is up and the transfer floppy is in the drive
+
+// ── ⓘ ─────────────────────────────────────────────────────────────────────────
+const KOLIBRI_ABOUT = {
+  title: 'About this machine',
+  summary: 'KolibriOS, a graphical operating system written in assembly, running in this tab under the v86 emulator. It boots from a 1.44 MB floppy image published with this page.',
+  components: [
+    { name: 'KolibriOS', what: 'the operating system and every program on its desktop', version: '0.7.7.0-9197 (en_US)', licence: 'GPL-2.0',
+      home: 'https://kolibrios.org', source: 'https://git.kolibrios.org/KolibriOS/kolibrios/src/commit/b0055ba4721a68ed6352e4eeae6808ed4f813784',
+      notes: 'KolibriOS CI build 0.7.7.0-9197-gb0055ba47, upstream image sha256 2c1216b6…6c1f, changed in two ways: the VMMOUSE driver below is added and loaded at start, and two desktop icons for programs this build does not contain (XONIX, KOSILKA) are removed. Some bundled programs carry their own licences, listed in the source tree' },
+    { name: 'VMMOUSE.SYS', what: 'a small KolibriOS driver that puts its pointer exactly under yours', version: '', licence: 'GPL-2.0',
+      notes: 'written for this page; it reads the host pointer through the VMware mouse interface v86 emulates. Source: tools/run-env/kolibri/vmmouse in entity-browser-rust; assembled with fasm 1.73.35 against KolibriOS driver headers at the commit above' },
+    { name: 'v86', what: 'the x86 emulator (JavaScript + WebAssembly)', version: 'pinned by sha256, no upstream version', licence: 'BSD-2-Clause',
+      home: 'https://copy.sh/v86/', source: 'https://github.com/copy/v86', notes: 'the exact commit of this build is not published upstream' },
+    { name: 'SeaBIOS and SeaVGABIOS', what: 'the emulated PC firmware', version: 'rel-1.16.2-0-gea1b7a0', licence: 'LGPL-3.0',
+      home: 'https://www.seabios.org', source: 'https://github.com/coreboot/seabios/tree/rel-1.16.2' },
+    { name: 'Entity run environment', what: 'this page, the floppy transfer and the shared VM library', version: '', licence: 'Apache-2.0',
+      notes: 'tools/run-env in entity-browser-rust' },
+  ],
+  obligations: [
+    { text: 'Every component is named here with its licence and a link to the exact source commit.' },
+    { open: true, text: 'A copy of the KolibriOS source is not yet hosted beside the image; whether to host one is still to be decided.' },
+  ],
+};
+
+// ── power ─────────────────────────────────────────────────────────────────────
+V.chrome({
+  note: 'The floppy in drive A is saved first. Everything else starts fresh.',
+  about: KOLIBRI_ABOUT,
+  hooks: {
+    async save() {
+      if (!hostWorkspace) return 'nothing keeps files here, so nothing was saved';
+      if (!emulator || !ready) return 'the machine had not finished starting, so there was nothing new to save';
+      const r = await saveFloppy('power');
+      return r.ok ? 'the floppy was saved' : `the floppy was NOT saved: ${r.text}`;
+    },
+    off(note) {
+      try { emulator && emulator.destroy && emulator.destroy(); } catch (e) {}
+      emulator = window.emulator = null; ready = false;
+      $('screen_container').hidden = true;
+      $('off').hidden = false;
+      $('off').textContent = `The machine is off — ${note}. Use the power button to start it.`;
+    },
+  },
+});
+if (V.powerOn.note) status(V.powerOn.note, 'dim');
+
+// ── the view: fit, zoom, pan ──────────────────────────────────────────────────
+// One transform, computed here: the screen fitted to the stage (zoom 1), or zoomed
+// in and panned -- which a phone needs, since 1024x768 fitted into a portrait
+// phone is ~0.37x and nothing on it can be hit with a finger. v86 reads the
+// container's bounding box for absolute mouse positions, so a zoomed view needs
+// no coordinate work of its own.
+const view = { zoom: 1, tx: 0, ty: 0, base: 1 };
+// Tell the host the screen's size once the desktop is up (the boot's text mode is
+// a different shape for a few seconds, and fitting the window to it first would
+// make the window jump twice).
+const tellView = V.reportView($('stage'));
+function screenSize() {
+  const sc = $('screen_container');
+  const canvas = sc.querySelector('canvas'), text = sc.querySelector('div');
+  const showing = canvas.style.display !== 'none' && canvas.width ? canvas : text;
+  return [showing.offsetWidth || showing.width, showing.offsetHeight || showing.height];
+}
+function applyView(recentre) {
+  const sc = $('screen_container'), stage = $('stage');
+  const [w, h] = screenSize();
+  if (!w || !h) return;
+  const cv = sc.querySelector('canvas');
+  if (cv && cv.style.display !== 'none' && cv.width >= 640) tellView(w, h);
+  const W = stage.clientWidth, H = stage.clientHeight;
+  view.base = Math.max(0.05, Math.min(W / w, H / h));
+  view.zoom = Math.min(8, Math.max(1, view.zoom));
+  const s = view.base * view.zoom;
+  const clamp = (t, size, room) => size <= room ? (room - size) / 2 : Math.min(0, Math.max(room - size, t));
+  if (recentre) { view.tx = (W - w * s) / 2; view.ty = (H - h * s) / 2; }
+  view.tx = clamp(view.tx, w * s, W); view.ty = clamp(view.ty, h * s, H);
+  sc.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${s})`;
+  const whole = s >= 1 && Math.abs(s - Math.round(s)) < 0.01;
+  sc.classList.toggle('crisp', whole);
+  window.__m1.screen = { scale: +s.toFixed(3), zoom: +view.zoom.toFixed(3), smoothing: !whole };
+  $('fit').hidden = view.zoom <= 1.001;
+}
+// Zoom by `factor` about a stage point, moving that point by (dx, dy): the guest
+// pixel under the fingers stays under the fingers, which is what a pinch is.
+function zoomAbout(cx, cy, factor, dx, dy) {
+  const s0 = view.base * view.zoom;
+  view.zoom = Math.min(8, Math.max(1, view.zoom * factor));
+  const s1 = view.base * view.zoom;
+  const gx = (cx - dx - view.tx) / s0, gy = (cy - dy - view.ty) / s0;
+  view.tx = cx - gx * s1; view.ty = cy - gy * s1;
+  applyView(false);
+}
+function fitScreen() { applyView(view.zoom <= 1.001); }
+addEventListener('resize', () => setTimeout(fitScreen, 100));
+if (window.ResizeObserver) new ResizeObserver(fitScreen).observe($('stage'));
+$('stage').addEventListener('wheel', e => {
+  // Ctrl+wheel (and a trackpad pinch, which browsers deliver as one) zooms the VIEW;
+  // a plain wheel still scrolls inside the machine.
+  if (!e.ctrlKey) return;
+  e.preventDefault(); e.stopPropagation();
+  const r = $('stage').getBoundingClientRect();
+  zoomAbout(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY / 300), 0, 0);
+}, { passive: false, capture: true });
+$('fit').addEventListener('click', () => { view.zoom = 1; applyView(true); });
+
+// ── keyboard and pointer ──────────────────────────────────────────────────────
+// KEYBOARD (desktop): v86 listens for keys on this frame's window, and its mousedown
+// handler calls preventDefault() -- which also stops the click from moving focus. So
+// in the Apps player (a frame) clicking the screen never gave the frame focus, and
+// every key went to the host page instead (field report 2026-09-14). Take focus
+// ourselves, in the capture phase, before v86 sees the event.
+const coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+$('stage').addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') return;          // the touch layer keeps the phone keyboard where it is
+  try { window.focus(); } catch (err) {}
+  $('stage').focus({ preventScroll: true });
+}, true);
+const kbdin = $('kbdin');
+function showKeyboard() {
+  const on = document.hasFocus();
+  const phone = document.activeElement === kbdin;
+  window.__m1.keyboardFocus = on;
+  window.__m1.phoneKeyboard = phone;
+  $('kbd').classList.toggle('on', on);
+  $('kbd').title = phone ? 'The phone keyboard types into KolibriOS -- tap to close it'
+    : on ? 'Typing goes to KolibriOS' : (coarse ? 'Tap to open the keyboard' : 'Click the screen to type');
+  $('keys').hidden = !phone;
+  setTimeout(fitScreen, 50);
+}
+addEventListener('focus', showKeyboard); addEventListener('blur', showKeyboard);
+kbdin.addEventListener('focus', showKeyboard); kbdin.addEventListener('blur', showKeyboard);
+showKeyboard();
+// THE TOGGLE DECIDES ON WHAT WAS TRUE WHEN THE FINGER WENT DOWN, not at click.
+// Field report 2026-09-14 (Android): once the phone keyboard was up, the button
+// never put it away. A tap on a button can blur the field before `click` fires --
+// preventDefault on pointerdown does not reliably stop that on a touch screen --
+// so the click saw "not open" and opened it again. So: note whether it was open
+// at pointerdown, and count a blur in the last half second as "it was open".
+let kbdWasOpen = false, kbdBlurAt = -1e9;
+kbdin.addEventListener('blur', () => { kbdBlurAt = performance.now(); });
+const noteKbd = e => { kbdWasOpen = document.activeElement === kbdin; e.preventDefault(); };
+$('kbd').addEventListener('pointerdown', noteKbd);   // keep focus where it is until the click decides
+$('kbd').addEventListener('mousedown', e => e.preventDefault());
+$('kbd').addEventListener('click', () => {
+  const wasOpen = kbdWasOpen || document.activeElement === kbdin || performance.now() - kbdBlurAt < 500;
+  kbdWasOpen = false;
+  window.__m1.kbdToggles = (window.__m1.kbdToggles || 0) + 1;
+  if (wasOpen) { kbdin.blur(); return; }
+  if (coarse || window.__m1.forcePhoneKeyboard) { resetKbdin(); kbdin.focus({ preventScroll: true }); }
+  else { try { window.focus(); } catch (e) {} $('stage').focus({ preventScroll: true }); }
+});
+
+// KEYBOARD (phone): a soft keyboard types into a focused text field, and what
+// arrives is not a clean stream of keys. Android keyboards send COMPOSITION updates
+// (the word so far, replaced as you type), autocorrect REPLACES text, and keydown
+// says only "Unidentified". So the field's contents are the truth: every change is
+// diffed against the last one and typed into the guest as backspaces and characters.
+// The field holds one sentinel space, so a backspace on an "empty" field still
+// changes something. Keys go out paced -- KolibriOS drops keys that arrive faster
+// than ~60 ms (kolibri-probe.py measured it) -- through one queue.
+const SENTINEL = ' ';
+let kbdPrev = '';
+function resetKbdin() { kbdin.value = SENTINEL; kbdPrev = ''; try { kbdin.setSelectionRange(1, 1); } catch (e) {} }
+resetKbdin();
+// prev/next are the field's text after the sentinel; null next = the sentinel itself was deleted.
+function kbdDiff(prev, next) {
+  if (next === null) return { back: prev.length + 1, text: '' };
+  let k = 0;
+  while (k < prev.length && k < next.length && prev[k] === next[k]) k++;
+  return { back: prev.length - k, text: next.slice(k) };
+}
+window.__kbdDiff = kbdDiff;
+const keyQueue = [];
+let keyTimer = 0;
+const mods = new Set();
+function scancodes(spec) { return spec.split(' ').map(h => parseInt(h, 16)); }
+function press(codes) {                 // make then break, for one key (optionally E0-prefixed)
+  const e0 = codes[0] === 0xE0, c = e0 ? codes[1] : codes[0];
+  return e0 ? [0xE0, c, 0xE0, c | 0x80] : [c, c | 0x80];
+}
+function pumpKeys() {
+  if (keyTimer || !keyQueue.length) return;
+  const run = () => {
+    const job = keyQueue.shift();
+    if (!job) { keyTimer = 0; return; }
+    if (emulator) {
+      if (job.run) job.run();
+      else if (job.char != null) {
+        if (job.char === '\n') emulator.keyboard_send_scancodes(press([0x1C]));
+        else if (job.char === '\t') emulator.keyboard_send_scancodes(press([0x0F]));
+        else emulator.keyboard_send_text(job.char);
+      } else emulator.keyboard_send_scancodes(job.codes);
+      window.__m1.keysSent = (window.__m1.keysSent || 0) + 1;
+      if (job.releaseMods) releaseMods();
+    }
+    keyTimer = setTimeout(run, 70);
+  };
+  run();
+}
+function queueChar(ch) { keyQueue.push({ char: ch, releaseMods: true }); pumpKeys(); }
+function queueCodes(codes) { keyQueue.push({ codes, releaseMods: true }); pumpKeys(); }
+function releaseMods() {
+  for (const m of mods) emulator && emulator.keyboard_send_scancodes([m | 0x80]);
+  mods.clear();
+  for (const b of document.querySelectorAll('#keys [data-mod]')) b.classList.remove('on');
+}
+kbdin.addEventListener('input', () => {
+  const v = kbdin.value;
+  const next = v.startsWith(SENTINEL) ? v.slice(1) : null;
+  const d = kbdDiff(kbdPrev, next);
+  for (let i = 0; i < d.back; i++) queueCodes(press([0x0E]));
+  for (const ch of d.text) queueChar(ch);
+  kbdPrev = next === null ? '' : next;
+  // Keep the field short, but never mid-composition: resetting under a composing
+  // keyboard makes it re-send the whole word.
+  if (next === null || (!composing && (kbdPrev.length > 24 || /\n/.test(kbdPrev)))) resetKbdin();
+});
+let composing = false;
+kbdin.addEventListener('compositionstart', () => { composing = true; });
+kbdin.addEventListener('compositionend', () => { composing = false; });
+// Keys a soft keyboard DOES name, and a hardware keyboard on a tablet: the ones a
+// text field would otherwise swallow (arrows, Esc, Tab) or a Ctrl/Alt combination.
+const NAMED = { Escape: '01', Tab: '0f', ArrowLeft: 'e0 4b', ArrowUp: 'e0 48', ArrowDown: 'e0 50',
+                ArrowRight: 'e0 4d', Delete: 'e0 53', Home: 'e0 47', End: 'e0 4f', PageUp: 'e0 49', PageDown: 'e0 51' };
+kbdin.addEventListener('keydown', e => {
+  if (NAMED[e.key]) { e.preventDefault(); queueCodes(press(scancodes(NAMED[e.key]))); return; }
+  if ((e.ctrlKey || e.altKey) && e.key.length === 1 && e.keyCode) {
+    e.preventDefault();
+    const m = e.ctrlKey ? 0x1D : 0x38, kc = e.keyCode;
+    // simulate_press maps a browser keyCode to scancodes, so no letter table here.
+    keyQueue.push({ run: () => { emulator.keyboard_send_scancodes([m]); emulator.keyboard_adapter.simulate_press(kc); emulator.keyboard_send_scancodes([m | 0x80]); } });
+    pumpKeys();
+  }
+});
+for (const b of document.querySelectorAll('#keys button')) {
+  b.addEventListener('pointerdown', e => e.preventDefault());   // a key-bar tap must not close the phone keyboard
+  b.addEventListener('click', () => {
+    if (b.dataset.mod) {
+      const m = parseInt(b.dataset.mod, 16);
+      if (mods.has(m)) { releaseMods(); return; }
+      mods.add(m); b.classList.add('on');
+      emulator && emulator.keyboard_send_scancodes([m]);
+      return;
+    }
+    if (b.dataset.sc) queueCodes(press(scancodes(b.dataset.sc)));
+  });
+}
+
+// TOUCH: v86's own touch handling moves the pointer and never clicks, so a phone
+// could aim and not press (field report 2026-09-14). The page takes touches off the
+// stage before v86 sees them and speaks the absolute mouse itself:
+//   tap                 click where the finger is
+//   long press          right click
+//   drag                press, move, release (windows, sliders, selections)
+//   two fingers         pinch to zoom, move to pan the view
+function stagePoint(x, y) {
+  const r = $('screen_container').getBoundingClientRect();
+  return [x - r.left, y - r.top, r.width, r.height];
+}
+const touch = { mode: null, x0: 0, y0: 0, timer: 0, pinch: null, taps: 0, rightClicks: 0, drags: 0, zooms: 0 };
+window.__m1.touch = touch;
+function pointerTo(x, y) { emulator && emulator.bus.send('mouse-absolute', stagePoint(x, y)); }
+function buttons(left, right) { emulator && emulator.bus.send('mouse-click', [left, false, right]); }
+function pinchOf(ts) {
+  const a = ts[0], b = ts[1];
+  return { d: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)), cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 };
+}
+const stageEl = $('stage');
+stageEl.addEventListener('touchstart', e => {
+  e.preventDefault(); e.stopPropagation();
+  if (!emulator) return;
+  if (e.touches.length === 1 && touch.mode === null) {
+    const t = e.touches[0];
+    touch.mode = 'tap'; touch.x0 = t.clientX; touch.y0 = t.clientY;
+    pointerTo(t.clientX, t.clientY);
+    clearTimeout(touch.timer);
+    touch.timer = setTimeout(() => {
+      if (touch.mode !== 'tap') return;
+      touch.mode = 'held'; touch.rightClicks++;
+      buttons(false, true); setTimeout(() => buttons(false, false), 60);
+    }, 550);
+  } else if (e.touches.length >= 2) {
+    clearTimeout(touch.timer);
+    if (touch.mode === 'drag') buttons(false, false);
+    touch.mode = 'pinch'; touch.pinch = pinchOf(e.touches);
+  }
+}, { passive: false });
+stageEl.addEventListener('touchmove', e => {
+  e.preventDefault(); e.stopPropagation();
+  if (!emulator) return;
+  if ((touch.mode === 'tap' || touch.mode === 'drag') && e.touches.length === 1) {
+    const t = e.touches[0];
+    if (touch.mode === 'tap' && Math.hypot(t.clientX - touch.x0, t.clientY - touch.y0) > 10) {
+      clearTimeout(touch.timer);
+      touch.mode = 'drag'; touch.drags++;
+      pointerTo(touch.x0, touch.y0); buttons(true, false);
+    }
+    if (touch.mode === 'drag') pointerTo(t.clientX, t.clientY);
+  } else if (touch.mode === 'pinch' && e.touches.length >= 2) {
+    const n = pinchOf(e.touches), r = stageEl.getBoundingClientRect();
+    zoomAbout(n.cx - r.left, n.cy - r.top, n.d / touch.pinch.d, n.cx - touch.pinch.cx, n.cy - touch.pinch.cy);
+    touch.pinch = n; touch.zooms++;
+  }
+}, { passive: false });
+function touchEnd(e, cancelled) {
+  e.preventDefault(); e.stopPropagation();
+  clearTimeout(touch.timer);
+  if (touch.mode === 'tap' && !cancelled) {
+    touch.taps++;
+    buttons(true, false); setTimeout(() => buttons(false, false), 50);
+  } else if (touch.mode === 'drag') buttons(false, false);
+  // A pinch that loses one finger does not become a drag: wait for both to lift.
+  if (e.touches.length === 0) touch.mode = null;
+  else if (touch.mode !== 'pinch') touch.mode = 'held';
+}
+stageEl.addEventListener('touchend', e => touchEnd(e, false), { passive: false });
+stageEl.addEventListener('touchcancel', e => touchEnd(e, true), { passive: false });
+
+// POINTER: the image carries VMMOUSE.SYS (build-image.sh), which switches v86's
+// VMware interface to absolute positions -- the guest pointer then sits exactly
+// under the host pointer and v86 hides the host's. While it is on, the PS/2 mouse
+// must say nothing: its relative, accelerated movement would pull the pointer
+// off the absolute position between packets, and clicks and the wheel would
+// arrive twice. Before the driver loads (the boot menu) PS/2 is the only mouse.
+function bridgePointer() {
+  const dev = emulator && emulator.v86 && emulator.v86.cpu && emulator.v86.cpu.devices;
+  const ps2 = dev && dev.ps2, vm = dev && dev.vmware;
+  if (!ps2 || !vm || typeof ps2.mouse_stream_active !== 'function') {
+    window.__m1.pointer = { mode: 'ps2', why: 'this engine has no VMware mouse device' };
+    return;
+  }
+  if (ps2.__bridged) return;
+  const stream = ps2.mouse_stream_active;
+  ps2.mouse_stream_active = function () { return !(vm.enabled && vm.absolute) && stream.call(this); };
+  ps2.__bridged = true;
+  Object.defineProperty(window.__m1, 'pointer', {
+    configurable: true, enumerable: true,
+    get: () => ({ mode: vm.enabled && vm.absolute ? 'absolute' : 'ps2', queued: vm.queue.length }),
+  });
+}
+
+// ── sound ─────────────────────────────────────────────────────────────────────
+// v86 plays the guest's Sound Blaster 16 and PC speaker through one AudioContext it
+// creates at start -- before any gesture, so a browser holds it suspended and the
+// machine is silent however loudly it plays. Resume it on the first tap, click or
+// key (a gesture is the only thing that may), unless the person muted it. Measured:
+// KolibriOS's MP3 player drives the SB16 (DAC enabled, 300+ sample buffers for
+// SINE.MP3) with no setup of ours.
+let muted = false;
+function audioCtx() { return emulator && emulator.speaker_adapter && emulator.speaker_adapter.audio_context; }
+function showSound() {
+  const ctx = audioCtx();
+  const state = !AUDIO ? 'off' : ctx ? ctx.state : 'none';
+  window.__m1.audio = { enabled: AUDIO, state, muted };
+  const b = $('sound');
+  b.hidden = !AUDIO;
+  const want = muted || state !== 'running' ? 'muted' : 'sound';
+  if (b.dataset.icon !== want) { b.innerHTML = V.icon(want); b.dataset.icon = want; }
+  b.classList.toggle('muted', muted || state !== 'running');
+  b.title = muted ? 'Sound is muted -- tap to turn it on'
+    : state === 'running' ? 'Sound is on -- tap to mute' : 'Sound starts at your first tap, click or key';
+}
+function wakeAudio() {
+  const ctx = audioCtx();
+  if (!ctx || muted || ctx.state === 'running') return;
+  ctx.resume().then(showSound, showSound);
+}
+for (const ev of ['pointerdown', 'touchstart', 'keydown']) addEventListener(ev, wakeAudio, { capture: true, passive: true });
+$('sound').addEventListener('click', e => {
+  e.stopPropagation();
+  const ctx = audioCtx();
+  muted = !muted;
+  if (ctx) (muted ? ctx.suspend() : ctx.resume()).then(showSound, showSound);
+  showSound();
+});
+setInterval(showSound, 1000);
+showSound();
+
+// ── the floppy: build, swap, read back ────────────────────────────────────────
+const README = 'Files you put in from the page appear here.\r\nSave a file to /fd/1 in KolibriOS to take it out.\r\nThis disk holds 1.44 MB and is kept between visits.\r\n';
+const sigOfBytes = u8 => idHash(u8);
+
+async function insertFloppy(bytes, why) {
+  floppy = bytes;
+  // v86 keeps the buffer it is given and writes the guest's changes into it.
+  await emulator.set_fda({ buffer: exactBuffer(bytes) });
+  window.__m1.floppy.swaps++;
+  window.__m1.floppy.lastSwap = { why, at: since() };
+  listFloppy();
+}
+// The live disk: v86's copy, which the guest may have written to.
+function liveFloppy() {
+  try { const d = emulator && emulator.get_disk_fda(); return d ? (d instanceof Uint8Array ? d : new Uint8Array(d)) : null; }
+  catch (e) { return null; }
+}
+function floppyFiles() {
+  const live = liveFloppy();
+  if (!live) return { files: [], error: 'no floppy in the drive' };
+  try { return { files: Fat.readFloppy(live) }; }
+  catch (e) { return { files: [], error: String(e.message || e) }; }
+}
+function listFloppy() {
+  const { files, error } = floppyFiles();
+  window.__m1.floppy.files = files.length;
+  window.__m1.floppy.names = files.map(f => f.path);
+  const body = $('filelist');
+  body.textContent = '';
+  if (error) { const tr = body.insertRow(); tr.insertCell().textContent = 'The floppy could not be read: ' + error; return; }
+  if (!files.length) { const tr = body.insertRow(); tr.insertCell().textContent = 'The floppy is empty.'; }
+  for (const f of files) {
+    const tr = body.insertRow();
+    if (f.dir) { tr.insertCell().textContent = f.path + '/'; tr.insertCell().textContent = 'empty folder'; tr.insertCell(); continue; }
+    tr.insertCell().textContent = f.path;
+    tr.insertCell().textContent = kb(f.size);
+    const b = document.createElement('button');
+    b.textContent = V.hosted ? 'Take out' : 'Download';
+    b.dataset.take = f.path;
+    b.addEventListener('click', () => takeOut([f]));
+    tr.insertCell().appendChild(b);
+  }
+  const used = files.reduce((a, f) => a + Math.ceil(f.size / 512) * 512, 0);
+  $('floppyfree').textContent = `${kb(Math.max(0, Fat.CAPACITY - used))} free of 1.44 MB`;
+}
+
+// A name already on the disk gets `-1`, `-2`: a file put in never replaces one there.
+function freeName(name, taken) {
+  const lower = new Set([...taken].map(n => n.toLowerCase()));
+  if (!lower.has(name.toLowerCase())) return name;
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+  for (let i = 1; ; i++) { const n = `${base}-${i}${ext}`; if (!lower.has(n.toLowerCase())) return n; }
+}
+
+// Put files onto the floppy. The disk is REBUILT from what the guest has on it now
+// plus the new files, then swapped in -- KolibriOS sees a disk change at once
+// (measured). Folders on the old disk are kept (fat.js builds them).
+async function putIn(entries) {
+  if (!emulator || !ready) { status('the machine is still starting -- put the file in again in a moment', 'bad'); return false; }
+  const { files, error } = floppyFiles();
+  if (error && !/no floppy/.test(error)) { status('the floppy could not be read, so nothing was put in: ' + error, 'bad'); return false; }
+  const keep = files.map(f => ({ path: f.path, dir: f.dir, data: f.data, mtime: f.mtime }));
+  const taken = new Set(files.map(f => f.path.split('/')[0]));      // new files go in the root
+  const added = [];
+  for (const e of entries) {
+    const name = freeName(String(e.name || 'file').split(/[\\/]/).pop(), taken);
+    taken.add(name);
+    keep.push({ path: name, data: e.data, mtime: Date.now() / 1000 });
+    added.push(name);
+  }
+  let img;
+  try { img = Fat.makeFloppy(keep); }
+  catch (e) { status(`not put in: ${e.message}`, 'bad'); return false; }
+  await insertFloppy(img, 'put in');
+  window.__m1.floppy.received.push(...added);
+  status(`put ${added.join(', ')} on the floppy — /fd/1 in KolibriOS`, 'ok');
+  saveFloppy('put in');
+  return true;
+}
+
+async function takeOut(files) {
+  if (!files.length) { status('the floppy is empty', 'dim'); return; }
+  for (const f of files) {
+    const r = await V.sendFile(f.name, f.data);
+    status(r.ok ? (r.downloaded ? `downloaded ${f.name}` : r.detail) : `${f.name} was not taken out: ${r.reason}`, r.ok ? 'ok' : 'bad');
+  }
+}
+
+// ── keeping the floppy ────────────────────────────────────────────────────────
+const workPathOf = f => FLOPPY_DIR + (f.dir ? `${f.path}/${EMPTY_FOLDER}` : f.path);
+async function restoreFloppy() {
+  if (!hostWorkspace) return null;
+  const listing = await V.work('x-work-list', {});
+  if (!listing.ok) throw new Error(`the host did not list the workspace (${listing.reason})`);
+  const all = listing.files || [];
+  legacyImage = all.some(f => f.path === LEGACY_IMAGE);
+  const mine = all.filter(f => f.path.startsWith(FLOPPY_DIR));
+  if (mine.length) {
+    const entries = [];
+    let next = 0, failed = [];
+    const worker = async () => {
+      while (next < mine.length) {
+        const f = mine[next++];
+        const r = await V.work('x-work-get', { path: f.path }).catch(e => ({ ok: false, reason: String(e) }));
+        if (!r.ok || !r.data) { failed.push(`${f.path} (${r.reason})`); continue; }
+        const data = new Uint8Array(r.data), rel = f.path.slice(FLOPPY_DIR.length);
+        kept.set(f.path, idHash(data));
+        if (rel.endsWith('/' + EMPTY_FOLDER)) entries.push({ path: rel.slice(0, -EMPTY_FOLDER.length - 1), dir: true });
+        else entries.push({ path: rel, data, mtime: f.mtime });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, mine.length) }, worker));
+    // A file that could not be fetched must not be dropped from the host by the next
+    // save, so saving stays off (the caller turns the whole failure into that).
+    if (failed.length) throw new Error(`${failed.length} saved file(s) could not be fetched: ${failed[0]}`);
+    const bytes = Fat.makeFloppy(entries);
+    floppySig = sigOfBytes(bytes);
+    window.__m1.floppy.restoredFrom = 'files';
+    return bytes;
+  }
+  if (legacyImage) {
+    const r = await V.work('x-work-get', { path: LEGACY_IMAGE });
+    if (!r.ok || !r.data) throw new Error(`the saved floppy could not be fetched (${r.reason})`);
+    const bytes = new Uint8Array(r.data);
+    if (bytes.length !== Fat.SIZE) throw new Error(`the saved floppy is ${bytes.length} bytes, not 1.44 MB`);
+    window.__m1.floppy.restoredFrom = 'image';
+    return bytes;                      // floppySig stays null: the next save writes its files and removes the image
+  }
+  return null;
+}
+// For probes: a WebDriver script cannot see this page's top-level let/const bindings.
+window.__floppyKeep = { paths: () => [...kept.keys()], stopSaving: () => { hostWorkspace = false; } };
+let saving = null;
+function saveFloppy(reason) {
+  const run = (saving || Promise.resolve()).then(() => doSaveFloppy(reason));
+  saving = run.catch(() => {});
+  return run.catch(e => ({ ok: false, text: String(e).slice(0, 200) }));
+}
+async function doSaveFloppy(reason) {
+  if (!hostWorkspace) return { ok: false, text: 'nothing keeps files here' };
+  const live = liveFloppy();
+  if (!live) return { ok: false, text: 'no floppy in the drive' };
+  const sig = sigOfBytes(live);
+  const f = window.__m1.floppy;
+  if (sig === floppySig && !legacyImage) { f.lastSave = { reason, nothing: true, at: since() }; return { ok: true, text: 'nothing changed' }; }
+  let files;
+  try { files = Fat.readFloppy(live); }
+  catch (e) { f.lastSave = { reason, failed: 'unreadable', at: since() }; return { ok: false, text: 'the floppy could not be read: ' + e.message }; }
+  const want = new Map(files.map(x => [workPathOf(x), x]));
+  const put = [], remove = [];
+  for (const [path, x] of want) {
+    const h = idHash(x.data);
+    if (kept.get(path) !== h) put.push({ path, h, msg: { path, mode: 0o644, mtime: Math.floor(x.mtime || Date.now() / 1000), data: x.data.slice().buffer } });
+  }
+  for (const path of kept.keys()) if (!want.has(path)) remove.push(path);
+  if (legacyImage) remove.push(LEGACY_IMAGE);
+  if (!put.length && !remove.length) { floppySig = sig; f.lastSave = { reason, nothing: true, at: since() }; return { ok: true, text: 'nothing changed' }; }
+  if (reason === 'auto' || reason === 'hidden') f.changedByGuest++;
+  const r = await V.work('x-work-save', { put: put.map(p => p.msg), remove }, 60000);
+  if (!r.ok && r.reason) { f.lastSave = { reason, failed: r.reason, at: since() }; return { ok: false, text: r.reason }; }
+  const bad = new Map((r.failed || []).map(x => [x.path, x.reason]));
+  for (const p of put) if (!bad.has(p.path)) kept.set(p.path, p.h);
+  for (const path of remove) if (!bad.has(path)) { kept.delete(path); if (path === LEGACY_IMAGE) legacyImage = false; }
+  if (bad.size) {
+    const [path, why] = bad.entries().next().value;
+    f.lastSave = { reason, failed: `${path}: ${why}`, at: since() };
+    return { ok: false, text: `${bad.size} file(s) were not saved -- ${path}: ${why}` };
+  }
+  floppySig = sig; f.saves++;
+  f.lastSave = { reason, saved: true, files: put.length, removed: remove.length, at: since() };
+  if (reason !== 'power') listFloppy();
+  return { ok: true, text: 'saved' };
+}
+
+// ── the files panel ───────────────────────────────────────────────────────────
+$('files').addEventListener('click', e => {
+  e.stopPropagation();
+  const p = $('filepanel');
+  const open = p.hidden;
+  V.closeMenus();
+  p.hidden = !open;
+  if (open) { p.style.top = Math.round($('bar').getBoundingClientRect().bottom + 2) + 'px'; listFloppy(); }
+});
+$('filepanel').addEventListener('click', e => e.stopPropagation());
+document.addEventListener('click', () => { $('filepanel').hidden = true; });
+$('rescan').addEventListener('click', () => { listFloppy(); saveFloppy('look'); });
+$('takeall').addEventListener('click', () => takeOut(floppyFiles().files.filter(f => !f.dir)));
+$('putfile').addEventListener('click', () => {
+  // Hosted: the host chooses the file (its "Send a file" flow). Standalone: a picker.
+  if (V.hosted) { V.requestFile(); status('asked the host for a file — use its “Send a file” button'); }
+  else $('picker').click();
+});
+$('picker').addEventListener('change', async () => {
+  const entries = [];
+  for (const file of $('picker').files) entries.push({ name: file.name, data: new Uint8Array(await file.arrayBuffer()) });
+  $('picker').value = '';
+  if (entries.length) putIn(entries);
+});
+V.on('x-file', async m => {
+  const name = String(m.name || '').split(/[\\/]/).pop();
+  if (!name || /[\x00-\x1f]/.test(name)) { status('the host sent a file with an unusable name', 'bad'); return; }
+  await putIn([{ name, data: new Uint8Array(m.data) }]);
+});
+V.on('destroy', () => { try { emulator && emulator.destroy(); } catch (e) {} V.send('closed'); });
+
+// ── boot or resume ────────────────────────────────────────────────────────────
+async function sources() {
+  const t = since();
+  let wasm, bios, vga, image, meta;
+  if (hostBundles) {
+    [wasm, bios, vga, image, meta] = await Promise.all([
+      V.asset('engine', 'v86.wasm'), V.asset('engine', 'seabios.bin'), V.asset('engine', 'vgabios.bin'),
+      V.asset('image', 'kolibri.img'), V.asset('image', 'snapshot.json').catch(() => null),
+    ]);
+  } else {
+    const maybe = url => V.fetchBytes(url).catch(() => null);
+    [wasm, bios, vga, image, meta] = await Promise.all([
+      V.fetchBytes('build/v86.wasm'), V.fetchBytes('bios/seabios.bin'), V.fetchBytes('bios/vgabios.bin'),
+      V.fetchBytes('guest/kolibri.img'), maybe('guest/snapshot.json'),
+    ]);
+  }
+  const ids = { engine: idHash(wasm), image: idHash(image), machine: MACHINE_ID };
+  const common = {
+    wasm_fn: env => WebAssembly.instantiate(wasm, env).then(r => r.instance.exports),
+    bios: { buffer: exactBuffer(bios) }, vga_bios: { buffer: exactBuffer(vga) },
+    fda: { buffer: exactBuffer(image) },
+  };
+  if (V.snapshotFits(meta, ids)) {
+    const state = hostBundles
+      ? await V.asset('image', 'snapshot.bin.zst').catch(e => { window.__m1.snapshot.why = String(e); return null; })
+      : await V.fetchBytes('guest/snapshot.bin.zst').catch(() => null);
+    if (state) { window.__m1.snapshot.used = true; common.initial_state = { buffer: exactBuffer(state) }; }
+    else if (window.__m1.snapshot.why === 'fits') window.__m1.snapshot.why = 'snapshot.bin.zst could not be fetched';
+  }
+  window.__m1.assets.fixed_ms = since() - t;
+  return common;
+}
+
+// The desktop is up when the screen is graphical (1024x768) and has stopped
+// changing for a moment -- there is no serial line to read a prompt from.
+function whenDesktop(stableMs, cb) {
+  let lastHash = null, stableSince = 0;
+  const canvas = $('screen_container').querySelector('canvas');
+  const tick = setInterval(() => {
+    if (!emulator) { clearInterval(tick); return; }
+    if (canvas.style.display === 'none' || canvas.width < 640) { lastHash = null; return; }
+    const ctx = canvas.getContext('2d');
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < d.length; i += 4093) h = Math.imul(h ^ d[i], 16777619) >>> 0;
+    if (h !== lastHash) { lastHash = h; stableSince = since(); return; }
+    if (since() - stableSince >= stableMs) { clearInterval(tick); cb(); }
+  }, 250);
+}
+
+let bootMenuAnswered = false;
+function answerBootMenu() {
+  // "press [Enter] to continue booting / or wait 5 seconds": pressing it is the
+  // difference between ~8 s and ~4 s (measured). Only on THAT screen, once.
+  const t = setInterval(() => {
+    if (!emulator || bootMenuAnswered) { clearInterval(t); return; }
+    const text = $('screen_container').querySelector('div').textContent || '';
+    if (/press \[Enter\] to continue booting/.test(text)) {
+      bootMenuAnswered = true; clearInterval(t);
+      emulator.keyboard_send_scancodes([0x1C, 0x9C]);
+      window.__m1.bootMenuMs = since();
+    }
+  }, 100);
+}
+
+async function boot() {
+  window.__m1.phases.boot_called = since();
+  status(hostBundles ? 'fetching the machine from the host…' : 'fetching the machine…');
+  let src, saved = null;
+  try {
+    [src, saved] = await Promise.all([
+      sources(),
+      hostWorkspace ? restoreFloppy().catch(e => ({ error: String(e.message || e) })) : null,
+    ]);
+  } catch (e) {
+    window.__m1.error = String(e);
+    status('could not fetch the machine: ' + String(e).slice(0, 120), 'bad');
+    V.send('error', { message: String(e).slice(0, 300) });
+    return;
+  }
+  if (saved && saved.error) {
+    // Said, and the machine still starts: a floppy that could not be fetched must not
+    // be replaced by an empty one on the next save, so saving stays off this session.
+    window.__m1.floppy.restoreError = saved.error;
+    status('your saved floppy could not be fetched: ' + saved.error.slice(0, 100), 'bad');
+    hostWorkspace = false; saved = null;
+  }
+  emulator = window.emulator = new V86(Object.assign({}, MACHINE, src, {
+    screen_container: $('screen_container'),
+    autostart: true, disable_speaker: !AUDIO,
+  }));
+  emulator.add_listener('download-progress', e => V.progress(e));
+  emulator.add_listener('screen-set-size', () => setTimeout(fitScreen, 0));
+  emulator.add_listener('emulator-started', () => {
+    bridgePointer();
+    V.downloadDone();
+    status(window.__m1.snapshot.used ? 'resuming the machine…' : 'booting KolibriOS…');
+    if (!window.__m1.snapshot.used) answerBootMenu();
+    // A resumed desktop is already drawn; a booting one settles after the launcher.
+    whenDesktop(window.__m1.snapshot.used ? 300 : 1500, async () => {
+      window.__m1.desktopMs = since();
+      window.__m1.booted = true;
+      // The boot floppy has done its job (KolibriOS copied it into a RAM disk, /rd/1);
+      // drive A becomes the transfer floppy from here on.
+      if (V.SNAPSHOT_BUILD) { buildSnapshot(); return; }
+      await insertFloppy(saved || Fat.makeFloppy([{ name: 'README.TXT', data: new TextEncoder().encode(README) }]), saved ? 'restored' : 'fresh');
+      if (!saved) saveFloppy('fresh');
+      ready = true;
+      status(`${window.__m1.snapshot.used ? 'resumed' : 'ready'} in ${(since() / 1000).toFixed(1)}s · files move through drive A (/fd/1)`, 'ok');
+      V.send('ready');
+      setInterval(() => saveFloppy('auto'), 30000);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) saveFloppy('hidden'); });
+      fitScreen();
+    });
+  });
+  fitScreen();
+}
+
+// BUILD TIME (?snapshot=build, standalone): boot cold to the desktop, save the
+// state with the boot floppy still in the drive, gzip it for build-snapshot.py.
+async function buildSnapshot() {
+  const out = window.__snapshotOut = { phase: 'saving' };
+  try {
+    // The snapshot must hold the LOADED pointer driver: a resumed machine never runs
+    // autorun again, so one saved before VMMOUSE.SYS loaded would drift forever.
+    const t = since();
+    while (!(window.__m1.pointer && window.__m1.pointer.mode === 'absolute')) {
+      if (since() - t > 30000) throw new Error('VMMOUSE.SYS did not switch the pointer to absolute within 30 s');
+      await new Promise(r => setTimeout(r, 250));
+    }
+    await new Promise(r => setTimeout(r, 2000));
+    const state = await emulator.save_state();
+    const gz = new Uint8Array(await new Response(new Blob([state]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+    Object.assign(out, { phase: 'ready', raw: state.byteLength, gzip: gz, ids: window.__m1.snapshot.ids });
+  } catch (e) { Object.assign(out, { phase: 'error', error: String(e && e.stack || e) }); }
+}
+
+V.start({ needs: ['engine', 'image'] }).then(info => {
+  hostBundles = info.bundles;
+  hostWorkspace = info.workspace;
+  boot();
+});
+</script>
+</body>

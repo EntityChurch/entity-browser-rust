@@ -144,6 +144,15 @@ pub fn run(args: &[String]) -> ExitCode {
         .iter()
         .find_map(|a| a.strip_prefix("--window-type=").map(str::to_string))
         .unwrap_or_else(|| crate::session_config::SITE_BROWSER_WINDOW.to_string());
+    // `--window-target=<entity+ref://…>` — WHAT that window opens at. A window
+    // type says which viewer; this says what it is looking at, and until it
+    // existed a deployment could boot the Feed window and not name a publisher
+    // (`DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION` §2).
+    // No default: a deployment that says nothing gets today's behaviour exactly.
+    let config_window_target: String = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--window-target=").map(str::to_string))
+        .unwrap_or_default();
     let config_locked = args.iter().any(|a| a == "--locked");
     let config_site: Option<String> =
         args.iter().find_map(|a| a.strip_prefix("--config-site=").map(str::to_string));
@@ -213,6 +222,17 @@ pub fn run(args: &[String]) -> ExitCode {
     let ingest_feed: Option<PathBuf> = args
         .iter()
         .find_map(|a| a.strip_prefix("--ingest-feed=").map(PathBuf::from));
+    // `--gather=<peer_id>@<published-tree-dir>` (repeatable) — `APP-CONVENTION-
+    // FEED` §6's gatherer as a verb: read that author's feed out of a tree they
+    // published, and carry it into this publish as a mirror.
+    //
+    // ⚠ **A DIRECTORY, not an origin** — this tree has no native HTTP client
+    // (`feed_gather`'s module doc leads with why). The topology it serves is the
+    // real one it sounds like a stand-in for: several publishers share a hosting
+    // scope and their trees tell them apart, so a gatherer at that origin
+    // gathers a sibling with no network at all.
+    let gather_raw: Vec<String> =
+        args.iter().filter_map(|a| a.strip_prefix("--gather=").map(str::to_string)).collect();
     // `--prefix=<path>` is the per-peer hosting scope: everything (`.html`
     // projection, `.bin` content data, deployment-config origin) nests under
     // `{out}/{PREFIX}/…`. Empty (the default) = the domain root, byte-identical
@@ -287,6 +307,55 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    // `--window-target` is validated HERE, at the CLI boundary, for
+    // `parse_registry_pin`'s reason: an address the consumer will drop is
+    // refused where the operator can read the refusal, never emitted for
+    // somebody else to ignore in silence (audit F9).
+    //
+    // **Three separate refusals, because they are three different mistakes.**
+    // The third is the one worth having: naming an address whose viewer is not
+    // the window type declared beside it is a contradiction the deployment
+    // document can express and the consumer can only answer with `Aim::NotMine`
+    // — a startup window that opens and shows nothing it was pointed at.
+    if !config_window_target.is_empty() {
+        if !deployment_config || config_surface != "window" {
+            eprintln!(
+                "publish --window-target: an address rides in /entity-deployment.json on a \
+                 window surface, so it needs --deployment-config --surface=window (got \
+                 --surface={config_surface:?}); without both, nothing would carry it"
+            );
+            return ExitCode::FAILURE;
+        }
+        match crate::open_target::parse(&config_window_target) {
+            None => {
+                eprintln!(
+                    "publish --window-target={config_window_target:?}: not a readable entity \
+                     reference (expected APP-CONVENTION-REFERENCE §3.1, \
+                     e.g. entity+ref://<peer-id>/app/feed/index)"
+                );
+                return ExitCode::FAILURE;
+            }
+            Some(address) => match crate::open_target::route(&address) {
+                crate::open_target::Routing::Viewer(w)
+                    if crate::window::canonical_window_type(&config_window_type) == w => {}
+                crate::open_target::Routing::Viewer(w) => {
+                    eprintln!(
+                        "publish --window-target={config_window_target:?}: that address opens \
+                         in {w:?}, but --window-type={config_window_type:?}. A window cannot \
+                         show another convention's address — pick one"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                other => {
+                    eprintln!(
+                        "publish --window-target={config_window_target:?}: no viewer handles \
+                         that address ({other:?})"
+                    );
+                    return ExitCode::FAILURE;
+                }
+            },
+        }
+    }
     // A pin with no config file to carry it does nothing at all, silently — the
     // shape where an operator ships a deployment believing it seeds a registry.
     if registry_pin_raw.is_some() && !deployment_config {
@@ -326,6 +395,34 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    // A gather has nowhere to land in either site-shaped mode, and BOTH would
+    // accept the flag and write nothing: `--bare-root` manages no `{peer}/`
+    // projection at all, and `--html-only` skips the entire `.bin` axis loop. A
+    // flag that is silently a no-op is the shape an operator ships a deployment
+    // believing it carries something — the same refusal `--registry-pin` and
+    // `--supersede` take one guard up.
+    if !gather_raw.is_empty() && bare_root {
+        eprintln!(
+            "publish --gather: a mirror is bound at {}… under the gatherer, and \
+             --bare-root manages no {{peer}}/ projection to bind it in — drop one.",
+            crate::feed::mirror_prefix()
+        );
+        return ExitCode::FAILURE;
+    }
+    if !gather_raw.is_empty() && html_only {
+        eprintln!(
+            "publish --gather: --html-only skips the .bin projection entirely, so the \
+             gathered view would be read and then not written — drop one."
+        );
+        return ExitCode::FAILURE;
+    }
+    let gathers = match parse_gathers(&gather_raw) {
+        Ok(g) => g,
+        Err(msg) => {
+            eprintln!("publish --gather: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     // [A] Resolve the source peer + read every publish axis off the tree.
     let PublishSource { peer_id, sites, app_sets, feed } = match resolve_publish_source(
@@ -356,10 +453,25 @@ pub fn run(args: &[String]) -> ExitCode {
     // read its real sites"*, which is the change its own doc comment describes.
     // Stated rather than implied — a branch nobody can reach is not a branch
     // anybody has checked.
+    // [A2] Gather, **before anything is cleaned**. The carried bytes are held in
+    // memory from here on, which is what makes `--gather=<author>@<this same
+    // out-dir>` sound: the blobs behind that author's tree live in the SHARED
+    // `content/` store this publish may be about to remove, so reading them
+    // first is the difference between mirroring a sibling and mirroring
+    // whatever survived our own clean.
+    let mirrors = match resolve_gathers(&peer_id, &gathers) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("publish --gather: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let site_shaped = bare_root || html_only;
-    let carries_nothing = crate::publish_axes::axes(&peer_id, &sites, &app_sets, feed.as_ref())
-        .iter()
-        .all(|a| a.incoming() == 0);
+    let carries_nothing =
+        crate::publish_axes::axes(&peer_id, &sites, &app_sets, feed.as_ref(), &mirrors)
+            .iter()
+            .all(|a| a.incoming() == 0);
     if sites.is_empty() && (site_shaped || carries_nothing) {
         if site_shaped {
             eprintln!(
@@ -400,6 +512,7 @@ pub fn run(args: &[String]) -> ExitCode {
             bare_root,
             &app_sets,
             feed.as_ref(),
+            &mirrors,
             !html_only,
         );
     }
@@ -420,6 +533,7 @@ pub fn run(args: &[String]) -> ExitCode {
             DeployConfigSpec {
                 surface: config_surface,
                 window_type: config_window_type,
+                window_target: config_window_target,
                 locked: config_locked,
                 site: config_site,
                 origin,
@@ -438,6 +552,7 @@ pub fn run(args: &[String]) -> ExitCode {
             deploy_spec,
             &app_sets,
             feed.as_ref(),
+            &mirrors,
             publisher_key,
             strict_links,
         )
@@ -491,6 +606,14 @@ struct DeployConfigSpec {
     surface: String,
     /// Window type when `surface == "window"` (e.g. `"Site Browser"`).
     window_type: String,
+    /// What that window is aimed at — an `APP-CONVENTION-REFERENCE` §3.1 address.
+    /// Empty = none declared, which is every document published before this flag.
+    ///
+    /// **Validated at the CLI boundary**, like `registry_pin` one field along and
+    /// for the identical reason: an address the consumer will drop is refused
+    /// where the operator can read the refusal, never emitted for somebody else
+    /// to silently ignore (audit F9).
+    window_target: String,
     /// Locked overlay kiosk (`surface == "site"` only): no chrome toggle, no
     /// peer creation. Emits the explicit `site_mode` + `peer_creation_enabled`.
     locked: bool,
@@ -561,6 +684,80 @@ fn parse_supersessions(
             ));
         }
         out.insert(retired.to_string(), replacement.to_string());
+    }
+    Ok(out)
+}
+
+/// Parse `--gather=<peer_id>@<published-tree-dir>` occurrences.
+///
+/// Refused at the CLI boundary for `parse_supersessions`' reason, and the third
+/// refusal is the one only the emitter can see:
+///
+/// ⭐ **Two gathers of one author would derive ONE key and the second would
+/// silently replace the first.** §6.0.1's address is a function of the subject
+/// alone (`FEED-R25`), and two `--gather=alice@…` specs have one subject however
+/// different the two trees are — so `publish_mirror` writes both records at
+/// `app/feed/mirrors/{coordinate}` and the last one wins, with nothing anywhere
+/// saying a view was dropped. That is the property the derivation exists for
+/// working exactly as intended, met by a caller asking for something the address
+/// space cannot hold.
+fn parse_gathers(raw: &[String]) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    for entry in raw {
+        let (author, dir) = entry
+            .split_once('@')
+            .ok_or_else(|| format!("expected PEER_ID@DIR, got {entry:?}"))?;
+        let (author, dir) = (author.trim(), dir.trim());
+        if author.is_empty() || dir.is_empty() {
+            return Err(format!("both a peer id and a directory are required, got {entry:?}"));
+        }
+        if out.iter().any(|(a, _)| a == author) {
+            return Err(format!(
+                "{author} is gathered twice. A mirror's address is derived from its \
+                 subject (§6.0.1), so both views would be written at one key and the \
+                 second would silently replace the first — gather each author once."
+            ));
+        }
+        out.push((author.to_string(), PathBuf::from(dir)));
+    }
+    Ok(out)
+}
+
+/// Run every `--gather` against the tree it names, **before the clean**.
+///
+/// Fails the whole publish on the first refusal rather than carrying a partial
+/// set: a mirror is a *statement about what you gathered*, and one that silently
+/// omitted an author a publisher asked for would be short in exactly the way
+/// §6.1 rule 2 lets a reader assume is the source's fault.
+fn resolve_gathers(
+    gatherer: &str,
+    specs: &[(String, PathBuf)],
+) -> Result<Vec<crate::feed_mirror::MirrorPlan>, String> {
+    let mut out = Vec::with_capacity(specs.len());
+    for (author, dir) in specs {
+        // Gathering yourself is not a mirror — it is the feed axis. The record
+        // would be a claim about our own timeline bound under our own name, and
+        // `--ingest-feed` is what publishes that, verifiably, from the source.
+        if author == gatherer {
+            return Err(format!(
+                "{author} is this publisher — a mirror is a view of somebody ELSE's feed; \
+                 --ingest-feed publishes your own"
+            ));
+        }
+        let plan = crate::feed_read::block_on(crate::feed_gather::gather_timeline(
+            dir,
+            author,
+            gatherer,
+            crate::feed_gather::DEFAULT_GATHER_LIMIT,
+        ))
+        .map_err(|e| e.to_string())?;
+        eprintln!(
+            "publish --gather: {} entry(ies) from {author} ({} attributable) ← {}",
+            plan.entry_count(),
+            plan.attributable(),
+            dir.display()
+        );
+        out.push(plan);
     }
     Ok(out)
 }
@@ -875,6 +1072,82 @@ fn other_identity_hint(out_dir: &Path, prefix: &str, peer_id: &str) -> Option<St
     }
 }
 
+/// **Every top-level directory at this base, other than ours, that holds an
+/// entity pointer anywhere beneath it** — i.e. somebody else's tree.
+///
+/// [`projected_peer_ids`] answers a narrower question (*who has a site
+/// projection*) and was measured in `REFERENCE-PUBLISHING-PIPELINE` §0.2a to be
+/// blind to a carried author, who has no `sites/{peer}/` and never will. It is
+/// also blind to a co-hosted publisher who published only a feed, which is
+/// latent today and stops being latent the moment `resolve_publish_source` can
+/// read a real peer's tree.
+///
+/// ⚠ **This is a SUPPRESSION input and must never authorize a delete.**
+/// Enumerating to decide what *not* to remove is safe in the worst case —
+/// orphan blobs accumulate, which `--verify` already lists and §7's origin-wide
+/// keep-set is the real answer to. Enumerating to decide what to remove is how a
+/// publish destroyed a co-hosted publisher's signature blob (AP52/AP53), and the
+/// predicate here cannot tell a carried author's segment from a sibling
+/// publisher's — which is exactly why it is only ever allowed to say *"leave it
+/// alone"*.
+///
+/// No name list: `sites/` holds `.html`, `content/` holds extensionless blobs
+/// and `builds/` holds a retained shell, so *"contains a `.bin`"* separates a
+/// peer's tree from every other thing at a publish root without anyone having to
+/// keep a list of what those things are called.
+fn foreign_trees(base: &Path, peer_id: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return Vec::new();
+    };
+    let mut found: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok().map(|n| (n, e.path())))
+        .filter(|(name, path)| name != peer_id && holds_any_bin(path))
+        .map(|(name, _)| name)
+        .collect();
+    found.sort();
+    found
+}
+
+/// Does this directory hold an entity pointer anywhere beneath it? Early-exits
+/// on the first one.
+fn holds_any_bin(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            if holds_any_bin(&path) {
+                return true;
+            }
+        } else if path.extension().map(|x| x == "bin").unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
+/// How many gathered views are already projected under
+/// `{out}/{prefix}/{peer}/app/feed/mirrors/`.
+///
+/// The fourth axis's counterpart of [`projected_feed_posts`], for the fourth
+/// time for the same reason — and the report it feeds is the deciding argument
+/// for a mirror being its own row rather than a second subgraph of the feed: a
+/// publisher carrying posts and no gather would otherwise read *"0 post(s)
+/// REMOVED"* on the run that deletes every view they hold.
+fn projected_mirrors(out_dir: &Path, peer_id: &str, prefix: &str) -> usize {
+    let root = paths::prefixed_root(out_dir, prefix)
+        .join(peer_id)
+        .join(crate::feed::mirror_prefix());
+    std::fs::read_dir(&root)
+        .map(|d| {
+            d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".bin")).count()
+        })
+        .unwrap_or(0)
+}
+
 /// How many feed posts are already projected under
 /// `{out}/{prefix}/{peer}/app/feed/entries/`.
 ///
@@ -1054,6 +1327,33 @@ fn warn_replaced_app_sets(
 /// point of view both mean *"the tool ran fine and the answer is no"*, which is
 /// the distinction that matters — `1` stays "could not run".
 pub const VERIFY_DEFECT_EXIT: u8 = 2;
+
+// **What `--verify` last counted as an orphan** — a test-only record, because
+// the orphan report is `eprintln!` and an exit code cannot carry it.
+//
+// It exists for a reason a comment alone cannot hold: **exit 0 is not the whole
+// report.** A mirror publish verified clean while describing every carried
+// `system/signature` as *"dead weight the sync will keep re-uploading"* — i.e.
+// `FEED-R2`'s whole authorship instrument — and no assertion about the exit
+// code could ever have seen it.
+//
+// A thread-local rather than a return value: `run_verify` prints throughout and
+// returning a report would be a refactor of a 300-line function for one
+// assertion. **`#[cfg(test)]` on both halves**, so nothing in a shipped binary
+// carries it; a caller that genuinely wants the count should be given a real
+// return type instead of reaching for this.
+#[cfg(test)]
+thread_local! {
+    static LAST_ORPHAN_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+#[cfg(test)]
+fn record_orphan_count(n: usize) {
+    LAST_ORPHAN_COUNT.with(|c| c.set(n));
+}
+
+#[cfg(not(test))]
+fn record_orphan_count(_n: usize) {}
 
 /// `--verify`: walk a **published output directory** and prove the two-hop
 /// chain resolves — every `.bin` pointer cracks, names a blob that exists, and
@@ -1301,6 +1601,7 @@ pub(crate) fn run_verify(
 
     let orphans: Vec<&std::path::PathBuf> =
         all_blobs.iter().filter(|b| !referenced.contains(*b)).collect();
+    record_orphan_count(orphans.len());
 
     eprintln!(
         "publish --verify: {} pointer(s), {verified} verified, {broken} broken; {} blob(s), {} \
@@ -1478,6 +1779,11 @@ fn verify_signed_root(
     // A set, not a counter: a shared sub-node is declared by more than one
     // parent, and reporting it twice would overstate the damage.
     let mut missing_hashes: std::collections::BTreeSet<String> = Default::default();
+    // Entries this walk reached through a mirror record, and whose author is
+    // therefore NOT the publisher. Populated by the `app/feed/mirror` arm and
+    // read by the `app/feed/entry` arm immediately after — the queue is LIFO, so
+    // a record's rows pop before anything else it enqueued.
+    let mut carried_author: std::collections::BTreeMap<String, String> = Default::default();
     let mut queue = vec![root.root_hash];
     while let Some(h) = queue.pop() {
         if !seen.insert(h.to_hex()) {
@@ -1562,38 +1868,6 @@ fn verify_signed_root(
             continue;
         }
 
-        // **An app's asset-bundle index declares one blob per file**, and gets
-        // the arm in the commit that introduces it — F8's rule, which the site
-        // asset and the feed entry both paid for after the fact. A missing file
-        // here is the worst of the three: the app launches, its index resolves,
-        // and the first key it asks for comes back `unavailable` from inside a
-        // running program, nowhere near the publish that dropped it.
-        if entity.entity_type == crate::apps::assets::INDEX_TYPE {
-            match crate::apps::assets::AssetIndex::from_entity(&entity) {
-                Ok(index) => {
-                    for blob in index.blobs() {
-                        if fetcher.content(&blob).is_ok() {
-                            queue.push(blob);
-                        } else if missing_hashes.insert(blob.to_hex()) {
-                            eprintln!(
-                                "publish --verify: BROKEN app asset closure — blob {} is DECLARED \
-                                 by asset index {} but not projected. The app will ask for it \
-                                 and be told it is unavailable.",
-                                blob.to_hex(),
-                                h.to_hex()
-                            );
-                        }
-                    }
-                }
-                Err(why) => eprintln!(
-                    "publish --verify: asset index {} did not decode ({why}) — its closure could \
-                     not be checked",
-                    h.to_hex()
-                ),
-            }
-            continue;
-        }
-
         // **An `app/feed/entry` declares its body's blob the same way, and this
         // arm landed with the third publish axis rather than after it.** F8's
         // lesson is that a heuristic scan filters on presence and therefore
@@ -1605,8 +1879,164 @@ fn verify_signed_root(
         // figure: an asset's absence drops an image out of a page that still
         // reads, and an entry's absence is **the post itself**, rendering as an
         // empty body with nothing anywhere saying why.
+        // ⭐ **`APP-CONVENTION-FEED` §6's mirror record — F8's rule reaching the
+        // fourth declaring type, and the one `REFERENCE-PUBLISHING-PIPELINE`
+        // §0.2a said an arm could not fix.**
+        //
+        // That paragraph is **corrected by this arm, and the correction is worth
+        // the space.** It reasoned: the sweep is rooted at `{base}/{peer_id}/`,
+        // a mirror's carried bodies are bound under each *author's* segment, so
+        // the sweep never visits them and the question is *which peers' subtrees
+        // a verify covers* — a scope redesign rather than an arm. Two facts,
+        // both measured here rather than reasoned, make it an arm after all:
+        //
+        // 1. **The blobs are not foreign at all.** `write_entity` puts every
+        //    body into the SHARED `content/{aa}/{bb}/{hex}` store whoever it
+        //    belongs to; only the `.bin` *pointer* is peer-scoped. So the
+        //    closure fetcher already reaches a carried entry's bytes, by hash,
+        //    with no widening of anything.
+        // 2. **A mirror record DECLARES what it carries** — `entries` is
+        //    `FEED-R28`-pinned, so each row is a `(peer, hash)` coordinate. That
+        //    is the same structural handle a trie node's children and a site
+        //    asset's blob give, and it is what *"a heuristic scan filters on
+        //    presence, so it cannot see absence"* has needed every time.
+        //
+        // ⇒ the general rule holds without an exception: **every declaring type
+        // owes an arm, in the commit that introduces it.** What is different
+        // here is only that the declaration names a *pair*, so the arm checks
+        // two things — the bytes, and the foreign key a consumer resolves them
+        // by. Either alone passes a tree that does not serve: bytes with no
+        // pointer are unreachable by `read_mirror`'s `entry_key` fetch, and a
+        // pointer with no bytes is the two-hop's second leg missing.
+        // **The HEAD declares a page RANGE, so it owes an arm of its own.**
+        // §6.0a moved `entries` off the head onto key-addressed pages, and the
+        // absence that move created is a head naming a page nothing serves —
+        // which no scan can see, for the reason this whole section exists.
+        if entity.entity_type == crate::feed::FEED_MIRROR_TYPE {
+            match crate::feed::FeedMirror::from_entity(&entity, peer_id) {
+                Ok(record) => {
+                    let subject =
+                        crate::feed::MirrorSubject::from_reference(&record.subject);
+                    for page in record.oldest..=record.current {
+                        let key = subject.page_key(page);
+                        let pointer = base.join(peer_id).join(format!("{key}.bin"));
+                        if !pointer.exists() && missing_hashes.insert(key.clone()) {
+                            eprintln!(
+                                "publish --verify: BROKEN mirror — head {} names pages {}..={} \
+                                 and page {page} is not projected at {key}. A reader reads DOWN \
+                                 from `current`, so the view stops at a hole it cannot explain.",
+                                h.to_hex(),
+                                record.oldest,
+                                record.current
+                            );
+                        }
+                    }
+                }
+                Err(why) => eprintln!(
+                    "publish --verify: mirror head {} did not decode ({why}) — the pages it \
+                     names could not be checked",
+                    h.to_hex()
+                ),
+            }
+            continue;
+        }
+
+        if entity.entity_type == crate::feed::FEED_MIRROR_PAGE_TYPE {
+            // The page number is recoverable from the key we read it at, and
+            // `MirrorPage::from_entity` checks the body agrees — but this sweep
+            // walks by hash and does not carry the key, so the page is decoded
+            // against its own declared number. The key/body agreement is gated
+            // where a reader learns the key: `read_mirror`.
+            match crate::feed::MirrorPage::from_entity(&entity, None) {
+                Ok(record) => {
+                    for reference in &record.entries {
+                        let crate::entity_ref::EntityRef::Pinned { peer: author, hash, .. } =
+                            reference
+                        else {
+                            // `from_entity` already refuses a non-pin in
+                            // `entries` (`FEED-R28`), so this is unreachable —
+                            // and `continue` rather than a report, because
+                            // inventing a message for a state the decoder
+                            // excludes is a sentence nobody can ever act on.
+                            continue;
+                        };
+                        // Leg 1 — the bytes, in the shared store.
+                        if fetcher.content(hash).is_ok() {
+                            queue.push(*hash);
+                            // Whoever pops this next needs to know it is not
+                            // ours, or `FEED-R1` refuses it and the entry arm
+                            // reports a decode failure about a healthy entry.
+                            carried_author.insert(hash.to_hex(), author.clone());
+                        } else if missing_hashes.insert(hash.to_hex()) {
+                            eprintln!(
+                                "publish --verify: BROKEN mirror closure — entry {} is DECLARED \
+                                 by mirror {} and its body is not projected. The gathered view \
+                                 names a post nobody can fetch.",
+                                hash.to_hex(),
+                                h.to_hex()
+                            );
+                        }
+                        // Leg 2 — the key a consumer resolves it BY, under the
+                        // author, which is the half outside this sweep's root.
+                        let pointer = base
+                            .join(author)
+                            .join(format!("{}.bin", crate::feed::entry_key(hash)));
+                        if !pointer.exists()
+                            && missing_hashes.insert(format!("{}@{author}", hash.to_hex()))
+                        {
+                            eprintln!(
+                                "publish --verify: BROKEN mirror closure — entry {} is DECLARED \
+                                 by mirror {} and has no pointer at {}/{}. A consumer reaches a \
+                                 carried entry by KEY under its author, so these bytes are \
+                                 unreachable however present they are.",
+                                hash.to_hex(),
+                                h.to_hex(),
+                                author,
+                                crate::feed::entry_key(hash)
+                            );
+                        }
+                        // **The author's detached signature, if they published
+                        // one.** Followed rather than declared, and the two are
+                        // different for a reason: `FEED-R4` makes a missing
+                        // signature an ordinary fact, so the record says nothing
+                        // about whether one exists and there is nothing for
+                        // structure to check. What *is* wrong is leaving it out
+                        // of the walk — measured, before this existed: every
+                        // carried signature was reported as an **orphan**, i.e.
+                        // `--verify` calling `FEED-R2`'s entire authorship
+                        // instrument *"dead weight the sync will keep
+                        // re-uploading"*. Enqueuing it both silences that and
+                        // puts its bytes through the same integrity check
+                        // everything else here gets.
+                        let sig_pointer = base
+                            .join(author)
+                            .join(format!("{}.bin", crate::feed::signature_key(author, hash)));
+                        if let Ok(raw) = std::fs::read(&sig_pointer) {
+                            if let Ok(sig_hash) = super::http_poll::crack_pointer(&raw) {
+                                queue.push(sig_hash);
+                            }
+                        }
+                    }
+                }
+                // Reported, never skipped — same rule as an undecodable feed
+                // entry one arm down.
+                Err(why) => eprintln!(
+                    "publish --verify: mirror record {} did not decode ({why}) — the entries \
+                     it carries could not be checked",
+                    h.to_hex()
+                ),
+            }
+            continue;
+        }
+
         if entity.entity_type == crate::feed::FEED_ENTRY_TYPE {
-            match crate::feed::FeedEntry::from_entity(&entity, peer_id) {
+            // **Whose entry is this?** Ours by default, and a carried one
+            // belongs to the author the mirror record named. `FEED-R1` refuses
+            // an entry whose `author` is not the namespace it was read in, so
+            // passing `peer_id` for a gathered entry would report a decode
+            // failure about an entry that is exactly right.
+            let author = carried_author.get(&h.to_hex()).map(String::as_str).unwrap_or(peer_id);
+            match crate::feed::FeedEntry::from_entity(&entity, author) {
                 Ok(feed_entry) => {
                     for blob in crate::feed_tree::body_blob_hashes(&feed_entry.body) {
                         if fetcher.content(&blob).is_ok() {
@@ -1801,6 +2231,7 @@ fn run_plan(
     bare_root: bool,
     app_sets: &crate::apps::ingest::IngestedSets,
     feed: Option<&crate::feed_tree::OwnedFeed>,
+    mirrors: &[crate::feed_mirror::MirrorPlan],
     emit_bin: bool,
 ) -> ExitCode {
     // Bare-root renders ONE site at the domain root and owns no `sites/{peer}/`
@@ -1886,7 +2317,33 @@ fn run_plan(
         0
     };
 
-    if removed.is_empty() && app_removed.is_empty() && feed_removed == 0 {
+    // The mirror axis. Fourth time, same rule — and this term is the reason a
+    // mirror is its own row: folded into the feed's, a publisher republishing
+    // posts without re-gathering would be told *"0 post(s) REMOVED"* on the run
+    // that deletes every gathered view they hold.
+    //
+    // ⚠ **The units are VIEWS, not the entries inside them.** The carried
+    // bodies are not removed by the clean at all (they are under their authors,
+    // which `{base}/{peer}/` is not), so counting entries here would name a loss
+    // that does not happen and hide the one that does: it is the *record* — the
+    // only thing that says a view exists and how to find it — that goes.
+    let mirrors_removed: usize = if emit_bin {
+        let present = projected_mirrors(out_dir, peer_id, prefix);
+        let incoming = mirrors.len();
+        if present > 0 || incoming > 0 {
+            eprintln!(
+                "publish --plan: {present} gathered view(s) present, {incoming} incoming — \
+                 {} REMOVED",
+                present.saturating_sub(incoming)
+            );
+        }
+        present.saturating_sub(incoming)
+    } else {
+        0
+    };
+
+    if removed.is_empty() && app_removed.is_empty() && feed_removed == 0 && mirrors_removed == 0
+    {
         eprintln!("publish --plan: nothing would be removed.");
         ExitCode::SUCCESS
     } else {
@@ -1913,6 +2370,16 @@ fn run_plan(
                  {peer_id}/app/feed/** too — re-run with --ingest-feed=<dir> to carry them."
             );
         }
+        if mirrors_removed > 0 {
+            eprintln!(
+                "publish --plan: {mirrors_removed} gathered view(s) would be REMOVED. The \
+                 clean covers {peer_id}/{} too — re-run with --gather=<peer_id>@<dir> to \
+                 carry them. (The entries themselves stay: they are bound under their own \
+                 authors, which this clean does not reach — what goes is the record that \
+                 says the view exists.)",
+                crate::feed::mirror_prefix()
+            );
+        }
         eprintln!("publish --plan: (exit {PLAN_DESTRUCTIVE_EXIT})");
         ExitCode::from(PLAN_DESTRUCTIVE_EXIT)
     }
@@ -1929,6 +2396,7 @@ fn run_projection(
     deploy_spec: Option<DeployConfigSpec>,
     app_sets: &crate::apps::ingest::IngestedSets,
     feed: Option<&crate::feed_tree::OwnedFeed>,
+    mirrors: &[crate::feed_mirror::MirrorPlan],
     publisher_key: entity_crypto::Keypair,
     strict_links: bool,
 ) -> ExitCode {
@@ -2005,8 +2473,31 @@ fn run_projection(
         // (keep-set = the union across every peer's retained generations) is the
         // real answer to. **Accumulating bytes is recoverable; deleting another
         // publisher's signature is not.**
-        if siblings.is_empty() {
+        //
+        // **And `siblings` is not the whole question** — it reads
+        // `{base}/sites/`, so it cannot see a peer whose tree is here without a
+        // site projection. `APP-CONVENTION-FEED` §6's carried bodies are exactly
+        // that: bound at `{base}/{author}/app/feed/entries/…` with their blobs
+        // in this shared store, and with no `sites/{author}/` now or ever. Left
+        // to `siblings` alone, a republish that does not re-gather would delete
+        // the blobs and leave the pointers — **remove-then-un-name, which is
+        // this repo's own rule run backwards**, and a tree that no longer
+        // resolves what it still names.
+        //
+        // So the question the content clean asks is the broader one, and it is
+        // asked in the direction that is safe to be wrong in: *is anybody else's
+        // tree here at all?* A false positive costs orphans; a false negative
+        // costs somebody else's bytes.
+        let foreign = foreign_trees(&base, peer_id);
+        if siblings.is_empty() && foreign.is_empty() {
             clean.push(base.join("content"));
+        } else if siblings.is_empty() {
+            println!(
+                "  foreign tree(s) at this base ({}) — leaving the shared content store \
+                 alone, because their bodies are in it and nothing here can tell a \
+                 gathered author's segment from a co-hosted publisher's",
+                foreign.join(", ")
+            );
         }
     }
     // D13: a publish that is sharing a hosting scope must say so, and say what
@@ -2088,7 +2579,7 @@ fn run_projection(
         // An axis with nothing to publish is not an error — most publishers use
         // one convention — so a `None` report line is silence, not a skip that
         // needs explaining.
-        for axis in crate::publish_axes::axes(peer_id, sites, app_sets, feed) {
+        for axis in crate::publish_axes::axes(peer_id, sites, app_sets, feed, mirrors) {
             match axis.project(out_dir, peer_id, prefix, &mut root) {
                 Ok(Some(line)) => println!("  {line}"),
                 Ok(None) => {}
@@ -2196,9 +2687,18 @@ fn emit_deployment_config(
             serde_json::json!({ "peer_id": pin.peer_id, "origin": pin.origin }),
         );
     }
-    // Window surface carries its window type.
+    // Window surface carries its window type, and its address if one was named.
     if spec.surface == "window" {
         obj.insert("window_type".into(), serde_json::Value::String(spec.window_type.clone()));
+        // Absent rather than empty when nothing was declared: *"named no
+        // target"* and *"named the empty target"* stay apart on the wire, the
+        // same choice `superseded` makes about an empty declared set.
+        if !spec.window_target.is_empty() {
+            obj.insert(
+                "window_target".into(),
+                serde_json::Value::String(spec.window_target.clone()),
+            );
+        }
     }
     // Emit the overlay posture (`site_mode`) explicitly per surface — the surface
     // field alone no longer bundles it. A `window` / `chrome` deployment turns the
@@ -2650,6 +3150,7 @@ fn report_bare_root(out_dir: &Path, site: &read::OwnedSite, pages: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content_site::http_poll;
 
     /// The publish source resolver seeds + reads both demo sites whole off
     /// the tree (the [A] read), with the second site's cross-link intact.
@@ -2964,6 +3465,473 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// ⭐⭐ **A READER CAN SEE WHAT A PUBLISHER OFFERS WITHOUT BEING TOLD — one
+    /// enumeration of one signed root names both conventions.**
+    ///
+    /// The operator's model of this system, stated 2026-09-13: *"you don't guess
+    /// sites, you don't guess the feed, you don't guess an app — you go to the
+    /// peer and see what they have, you look at their manifest, you walk their
+    /// tree, and then you open whatever they offer."*
+    ///
+    /// **That is available today and nothing in the product does it.**
+    /// `SignedSession::enumerate` walks the trie under a prefix, is bounded on
+    /// both axes a large-or-hostile origin can grow, and reports whether it
+    /// finished — and its only callers are its own unit tests. Meanwhile the two
+    /// surfaces that need the answer guess: the Registry Browser resolves a name
+    /// and opens `sites` because that is what it has always opened, and
+    /// `views::games::app_source` picks the first foreign origin it holds
+    /// (AP54).
+    ///
+    /// So this gate measures the **premise**, not a feature: with sites and a
+    /// feed published in one run under one root, an enumeration of that root
+    /// names keys from **both** conventions. If it ever reds, the no-guessing
+    /// model has stopped being implementable and the surfaces that guess have
+    /// acquired an excuse.
+    ///
+    /// **The empty prefix is the point.** Enumerating `sites/` is a reader who
+    /// already decided what they were looking for; the model above is a reader
+    /// who has not, and the difference is exactly one argument — falsified that
+    /// way, and the failure prints the site keys under the words *sites only*.
+    #[test]
+    fn one_enumeration_of_a_publishers_root_names_every_convention_they_carry() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-enumerate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let posts = posts_dir(&tmp, 2);
+
+        let code = run(&[
+            "publish".into(),
+            out.to_string_lossy().to_string(),
+            "--demo-identity".into(),
+            format!("--ingest-feed={}", posts.display()),
+        ]);
+        assert_eq!(code, ExitCode::SUCCESS);
+
+        let pid = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+        let pin = crate::content_site::signed_fetch::PinnedPublisher::from_peer_id("", &pid)
+            .expect("a canonical peer-id carries its key");
+        let session = crate::content_site::signed_fetch::SignedSession::new(pin);
+        let src = crate::feed_gather::DirOrigin(out.clone());
+        // Bounded, and the bound REPORTS — a truncated enumeration would let a
+        // reader conclude a publisher carries less than they do, which is the
+        // same wrong answer as guessing with extra steps.
+        let found = crate::feed_read::block_on(async {
+            session
+                .enumerate_bounded(
+                    &src,
+                    "",
+                    crate::content_site::signed_fetch::DEFAULT_ENUMERATION_BUDGET,
+                )
+                .await
+        })
+        .expect("a tree this publish just wrote enumerates");
+        assert!(
+            found.complete,
+            "the whole premise is that a reader learns what is there; an incomplete \
+             enumeration of {} keys cannot support it — and `complete` is the field \
+             that must be read before `keys`, because a short list cannot be told \
+             from a small publisher",
+            found.keys.len()
+        );
+
+        let sites: Vec<&String> = found.keys.iter().filter(|k| k.starts_with("sites/")).collect();
+        let feed: Vec<&String> =
+            found.keys.iter().filter(|k| k.starts_with("app/feed/")).collect();
+        assert!(
+            !sites.is_empty(),
+            "no site key in an enumeration of a publisher who published sites: {:?}",
+            found.keys
+        );
+        assert!(
+            !feed.is_empty(),
+            "no feed key in an enumeration of a publisher who published a feed — a reader \
+             asking this publisher what they offer would be told *sites only*, which is the \
+             guess the model exists to replace: {:?}",
+            found.keys
+        );
+        // §4.2's pinned head specifically, not merely "something under app/feed":
+        // the head is what a reader needs to START, so a tree whose entries are
+        // named and whose index is not is a feed nobody can open.
+        assert!(
+            found.keys.iter().any(|k| k == crate::feed::index_head_key()),
+            "the enumeration names feed keys but not the §4.2 index head, so a reader who \
+             found this feed still has no way in: {feed:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // The fourth axis — `APP-CONVENTION-FEED` §6's gatherer as a verb.
+    // -----------------------------------------------------------------------
+
+    /// A second publisher's seed, so a gather has somebody to gather.
+    const AUTHOR_SEED: [u8; 32] = *b"the-author-this-gatherer-mirrors";
+
+    fn author_seed_arg() -> String {
+        format!("--identity-seed={}", crate::vault_codec::seed_to_hex(&AUTHOR_SEED))
+    }
+
+    fn author_peer_id() -> String {
+        entity_crypto::Keypair::from_seed(AUTHOR_SEED).peer_id().to_string()
+    }
+
+    /// Publish `n` posts under [`AUTHOR_SEED`] into `out`, and hand back the id.
+    ///
+    /// `long_post` adds one over EMBED §3's 16 KiB inline ceiling, which
+    /// `feed_ingest` lowers to the **pointer** arm — so the entry declares a
+    /// blob of its own. That is the only shape in which a carried entry has a
+    /// closure *below* it, and therefore the only one that can measure whether
+    /// the walk decoded it with the right author.
+    fn publish_an_author(tmp: &Path, out: &Path, n: usize, long_post: bool) -> String {
+        let posts = posts_dir(tmp, n);
+        if long_post {
+            std::fs::write(
+                posts.join("post-long.md"),
+                format!(
+                    "+++\ncreated_at = 2026-09-30T09:00:00Z\ntitle = \"Long\"\n+++\n{}\n",
+                    "x".repeat(crate::embed::INLINE_PAYLOAD_MAX + 1)
+                ),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                out.to_string_lossy().to_string(),
+                author_seed_arg(),
+                format!("--ingest-feed={}", posts.display()),
+            ]),
+            ExitCode::SUCCESS,
+            "the author's own publish failed, so nothing below measures a gather"
+        );
+        author_peer_id()
+    }
+
+    /// ⭐⭐ **THE GATHER LOOP, END TO END AND THROUGH THE PRODUCT'S OWN
+    /// CONSUMER.** A publishes a feed. B gathers it and publishes a mirror in
+    /// the same run as B's own site. A third party then reads B's origin —
+    /// **record through B's signed root, carried bodies by key and hash** — and
+    /// gets A's posts back, attributed to A.
+    ///
+    /// The read goes through [`crate::feed_fetch::OriginMirrorSource`], which is
+    /// the production type, for the reason `ROUTING-2026-09-12-c` §3 stated
+    /// before this existed: ***a map keyed by `(peer, key)` verifies nothing***.
+    /// Such a double answers both legs identically and would leave the whole
+    /// asymmetry this gate is about — one leg signed-root-anchored, one leg
+    /// pin-and-hash-anchored — untouched by every assertion.
+    #[test]
+    fn a_gathered_view_is_published_and_a_stranger_reads_it_back_attributed_to_its_author() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-gather-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let author_out = tmp.join("author");
+        let author = publish_an_author(&tmp, &author_out, 3, false);
+
+        // B publishes its own site AND the gathered view, in one run, one
+        // projector, one root.
+        let out = tmp.join("gatherer");
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+                format!("--gather={author}@{}", author_out.display()),
+            ]),
+            ExitCode::SUCCESS
+        );
+        let gatherer = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+        assert_ne!(gatherer, author, "the fixture's two publishers collapsed into one");
+
+        // B's own site is still named — the axes composed (the third axis's own
+        // gate one screen up, now with a fourth in the run).
+        assert_eq!(
+            resolve_signed(
+                &out,
+                &gatherer,
+                &format!("sites/{}/manifest", crate::views::content_site::DEMO_SITE_ID)
+            ),
+            Ok(()),
+            "the mirror publish un-named B's site"
+        );
+
+        // …and the read, as a stranger performs it.
+        let subject = crate::feed::MirrorSubject::timeline(&author);
+        let src = crate::feed_fetch::OriginMirrorSource::new(
+            "",
+            &gatherer,
+            std::rc::Rc::new(crate::feed_gather::DirOrigin(out.clone())),
+        )
+        .expect("the gatherer's peer id carries its key");
+        let rows = crate::feed_read::block_on(crate::feed_mirror::read_mirror(
+            &src, &gatherer, &subject, 100,
+        ))
+        .expect("the mirror reads back off the published origin");
+
+        assert_eq!(rows.len(), 3, "the gathered view came back short");
+        for row in &rows {
+            assert_eq!(row.entry.author, author, "attribution followed the carrier");
+            assert_eq!(
+                row.attribution,
+                crate::feed_read::Attribution::Signed,
+                "an entry that travelled through a stranger lost its authorship — the \
+                 author's detached signature did not survive the republish"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// ⛔ **A republish that does not re-gather leaves NO DANGLING POINTER.**
+    ///
+    /// The clean removes `{base}/{peer}/` and — when it believes it is alone at
+    /// this base — the shared `content/` store. A carried author has no
+    /// `sites/{author}/`, so `projected_peer_ids` cannot see them
+    /// (`REFERENCE-PUBLISHING-PIPELINE` §0.2a measured exactly this): left to
+    /// that check alone, the second publish deletes the blobs behind every
+    /// carried entry and leaves the pointers naming them. **Remove-then-un-name
+    /// — this repo's own rule run backwards** — and a tree that no longer
+    /// resolves what it still names.
+    ///
+    /// The mirror RECORD going is correct and is asserted: it is under the
+    /// gatherer, the clean is wholesale, and `--plan` says so in the units an
+    /// operator can act on. What must not go is the evidence.
+    ///
+    /// Falsified: restore `if siblings.is_empty()` as the content clean's only
+    /// condition and this reds with the blob missing under its own pointer.
+    #[test]
+    fn a_republish_that_does_not_re_gather_leaves_no_dangling_pointer() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-regather-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let author_out = tmp.join("author");
+        let author = publish_an_author(&tmp, &author_out, 2, false);
+        let out = tmp.join("gatherer");
+        let publish = |extra: &[String]| {
+            let mut args = vec![
+                "publish".to_string(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+            ];
+            args.extend(extra.iter().cloned());
+            run(&args)
+        };
+        assert_eq!(
+            publish(&[format!("--gather={author}@{}", author_out.display())]),
+            ExitCode::SUCCESS
+        );
+
+        // Every carried pointer, and the blob each one names.
+        let carried: Vec<std::path::PathBuf> = {
+            let mut v = Vec::new();
+            collect_files(&out.join(&author), "bin", &mut v);
+            v
+        };
+        assert!(!carried.is_empty(), "nothing was carried, so this gate measures nothing");
+        let blob_of = |p: &std::path::PathBuf| -> std::path::PathBuf {
+            let h = http_poll::crack_pointer(&std::fs::read(p).unwrap()).unwrap();
+            out.join(http_poll::content_url("", &h).trim_start_matches('/'))
+        };
+        assert!(carried.iter().all(|p| blob_of(p).exists()));
+
+        // The republish, with no `--gather` — the ordinary case, a content fix.
+        assert_eq!(publish(&[]), ExitCode::SUCCESS);
+
+        for p in &carried {
+            assert!(
+                p.exists(),
+                "a carried pointer was deleted by a clean that does not reach {}",
+                p.display()
+            );
+            assert!(
+                blob_of(p).exists(),
+                "the pointer at {} survived and the bytes it names did not — the tree now \
+                 serves a name with nothing behind it",
+                p.display()
+            );
+        }
+
+        // And the record itself IS gone, which is the axis behaving like every
+        // other axis: carried on every publish or deleted.
+        assert_eq!(
+            projected_mirrors(&out, &entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string(), ""),
+            0,
+            "the mirror record survived a publish that did not carry it — then the clean \
+             is not wholesale and the plan's term is a lie"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// ⛔ **`--verify` fails when a mirror's declared evidence is missing — and
+    /// BOTH legs are falsified separately.**
+    ///
+    /// `REFERENCE-PUBLISHING-PIPELINE` §0.2a said an arm could not close this,
+    /// because the sweep is rooted at the publisher's subtree. The correction is
+    /// in `verify_signed_root`'s mirror arm and this is the measurement behind
+    /// it: a mirror record *declares* `(peer, hash)` pairs, the bytes are in the
+    /// shared content store (not foreign at all), and the pointer is the one
+    /// genuinely foreign half — so the arm checks both and neither alone is
+    /// enough.
+    ///
+    /// Leg 1 gone = bytes a consumer cannot fetch. Leg 2 gone = bytes present
+    /// and unreachable, because a carried entry is reached by KEY under its
+    /// author. **Either one alone passes a tree that does not serve**, which is
+    /// why the two arms are asserted apart rather than as "verify goes red".
+    #[test]
+    fn verify_follows_a_mirror_and_fails_on_either_half_of_what_it_declares() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-vmirror-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let author_out = tmp.join("author");
+        let author = publish_an_author(&tmp, &author_out, 2, true);
+        let out = tmp.join("gatherer");
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+                format!("--gather={author}@{}", author_out.display()),
+            ]),
+            ExitCode::SUCCESS
+        );
+        let verify = || {
+            run(&[
+                "publish".into(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+                "--verify".into(),
+            ])
+        };
+        assert_eq!(verify(), ExitCode::SUCCESS, "a complete mirror must verify clean");
+
+        // ⛔ **And it verifies clean WITHOUT calling the authors' signatures
+        // rubbish.** Measured by hand before this assertion existed: every
+        // carried `system/signature` came back as an *orphan* — a blob no
+        // pointer references, which `run_verify` describes as *"dead weight the
+        // sync will keep re-uploading"*. It is `FEED-R2`'s entire authorship
+        // instrument, referenced by a pointer under the author that this
+        // sweep's own root does not cover. **Exit code 0 is not the whole
+        // report**, and a gate that only reads the code would have shipped a
+        // verb that tells an operator to delete the evidence.
+        assert_eq!(
+            LAST_ORPHAN_COUNT.with(|c| c.get()),
+            0,
+            "a carried mirror left orphans — if these are the authors' signatures, \
+             --verify is describing FEED-R2's evidence as dead weight"
+        );
+
+        // One carried ENTRY pointer, and the blob behind it.
+        let entry_pointer = {
+            let mut v = Vec::new();
+            collect_files(&out.join(&author).join(crate::feed::entry_prefix()), "bin", &mut v);
+            v.sort();
+            v.into_iter().next().expect("the gather carried an entry")
+        };
+        let entry_blob = {
+            let h = http_poll::crack_pointer(&std::fs::read(&entry_pointer).unwrap())
+                .unwrap();
+            out.join(http_poll::content_url("", &h).trim_start_matches('/'))
+        };
+
+        // Leg 1 — the bytes.
+        let saved = std::fs::read(&entry_blob).unwrap();
+        std::fs::remove_file(&entry_blob).unwrap();
+        assert_eq!(
+            verify(),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "a mirror naming a post whose body is not projected verified CLEAN"
+        );
+        std::fs::write(&entry_blob, &saved).unwrap();
+        assert_eq!(verify(), ExitCode::SUCCESS, "the restore did not restore");
+
+        // Leg 2 — the key a consumer reaches it BY, which is the half outside
+        // the sweep's own root.
+        let saved_ptr = std::fs::read(&entry_pointer).unwrap();
+        std::fs::remove_file(&entry_pointer).unwrap();
+        assert_eq!(
+            verify(),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "a mirror whose carried entry has no pointer under its author verified CLEAN \
+             — the bytes are there and nothing can ask for them"
+        );
+        std::fs::write(&entry_pointer, &saved_ptr).unwrap();
+        assert_eq!(verify(), ExitCode::SUCCESS);
+
+        // Leg 3 — **the closure BELOW a carried entry**, which is what says the
+        // walk decoded it as its author's rather than as ours.
+        //
+        // `FEED-R1` refuses an entry whose `author` is not the namespace it was
+        // read in, so a walk passing the *publisher's* id for a gathered entry
+        // gets a decode failure — which is only an `eprintln!`, so the exit code
+        // never moves and nothing here would notice. What it silently skips is
+        // this: the body's blob. One post in this fixture is over EMBED §3's
+        // inline ceiling and therefore carries a pointer, so dropping its blob
+        // MUST red — and does not, if `carried_author` is not consulted.
+        let long_blob = {
+            let mut found = None;
+            let mut pointers = Vec::new();
+            collect_files(&out.join(&author).join(crate::feed::entry_prefix()), "bin", &mut pointers);
+            for p in pointers {
+                let h = http_poll::crack_pointer(&std::fs::read(&p).unwrap()).unwrap();
+                let blob =
+                    out.join(http_poll::content_url("", &h).trim_start_matches('/'));
+                let entity =
+                    http_poll::verify_and_decode(&std::fs::read(&blob).unwrap(), &h).unwrap();
+                let entry = crate::feed::FeedEntry::from_entity(&entity, &author).unwrap();
+                if let Some(b) = crate::feed_tree::body_blob_hashes(&entry.body).first() {
+                    found = Some(out.join(http_poll::content_url("", b).trim_start_matches('/')));
+                    break;
+                }
+            }
+            found.expect(
+                "no carried entry took the pointer arm — the fixture's long post did not \
+                 land, so this leg measures nothing",
+            )
+        };
+        std::fs::remove_file(&long_blob).unwrap();
+        assert_eq!(
+            verify(),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "a carried post whose BODY is not projected verified CLEAN — the walk reached \
+             the entry and could not read it, which is what happens when a gathered entry \
+             is decoded under the publisher's own namespace instead of its author's"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The CLI refusals, each of which exists because the alternative is silent.
+    #[test]
+    fn a_gather_the_address_space_cannot_hold_is_refused_at_the_boundary() {
+        // §6.0.1 derives one address per subject, so two gathers of one author
+        // would write two views at one key and the second would win in silence.
+        let dup = vec!["alice@/a".to_string(), "alice@/b".to_string()];
+        let err = parse_gathers(&dup).unwrap_err();
+        assert!(err.contains("gathered twice"), "{err}");
+        // …and two DIFFERENT authors are fine, which is what makes the above a
+        // statement about the address and not about repetition.
+        assert!(parse_gathers(&["alice@/a".into(), "bob@/b".into()]).is_ok());
+
+        // Shape refusals.
+        assert!(parse_gathers(&["alice".to_string()]).is_err(), "no directory");
+        assert!(parse_gathers(&["@/a".to_string()]).is_err(), "no author");
+        assert!(parse_gathers(&["alice@".to_string()]).is_err(), "empty directory");
+
+        // Gathering yourself is the feed axis, not a mirror — and it is caught
+        // where the gatherer id is known rather than at parse time.
+        let err = resolve_gathers("QmMe", &[("QmMe".into(), PathBuf::from("/a"))]).unwrap_err();
+        assert!(err.contains("--ingest-feed"), "{err}");
     }
 
     /// **A prefixed publish puts every axis INSIDE the prefix**, and the feed is
@@ -4052,71 +5020,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// **An app's asset-bundle index declares its files, so a missing file is a
-    /// broken tree** — the same structural arm the site asset and the feed entry
-    /// have, landed with the type rather than after it. Through the real CLI:
-    /// `--ingest-apps` a `dist/` whose app declares a bundle, verify clean,
-    /// delete the one file blob, verify must fail, restore, clean again.
-    #[test]
-    fn an_app_asset_bundle_declares_its_files_so_verify_fails_when_one_is_missing() {
-        let tmp = std::env::temp_dir()
-            .join(format!("entity-publish-appassets-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let dist = tmp.join("dist");
-        let out = tmp.join("out");
-        std::fs::create_dir_all(dist.join("vm.assets/guest")).unwrap();
-        std::fs::write(
-            dist.join("index.json"),
-            br#"[{"id":"vm","name":"VM","type":"tool","x-assets":["guest"]}]"#,
-        )
-        .unwrap();
-        std::fs::write(dist.join("vm.html"), b"<html><body>vm</body></html>").unwrap();
-        std::fs::write(dist.join("vm.assets/guest/kernel"), b"the only file in the bundle").unwrap();
-
-        let out_s = out.to_string_lossy().to_string();
-        let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out_s.clone(), "--demo-identity".into()];
-            args.extend(extra.iter().map(|s| s.to_string()));
-            run(&args)
-        };
-        assert_eq!(
-            call(&[&format!("--ingest-apps={}", dist.to_string_lossy())]),
-            ExitCode::SUCCESS
-        );
-        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "the published tree is clean");
-
-        // The one `system/content/blob` in the tree is the bundle file's: the
-        // catalog and app bundle are plain entities, not chunked content.
-        let mut files = Vec::new();
-        collect_files(&out.join("content"), "", &mut files);
-        let blob = files
-            .iter()
-            .find(|p| {
-                std::fs::read(p)
-                    .ok()
-                    .and_then(|b| ciborium::from_reader::<ciborium::Value, _>(&b[..]).ok())
-                    .and_then(|v| {
-                        use entity_ecf::ValueExt;
-                        v.get("type").and_then(|t| t.as_str()).map(|t| t == entity_types::TYPE_CONTENT_BLOB)
-                    })
-                    .unwrap_or(false)
-            })
-            .expect("the publish emitted the bundle file's blob")
-            .clone();
-
-        let bytes = std::fs::read(&blob).unwrap();
-        std::fs::remove_file(&blob).unwrap();
-        assert_eq!(
-            call(&["--verify"]),
-            ExitCode::from(VERIFY_DEFECT_EXIT),
-            "a file the asset index DECLARES is not projected — the app would be told it is \
-             unavailable, and verify must say so first"
-        );
-        std::fs::write(&blob, &bytes).unwrap();
-        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "restored tree is clean again");
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
     /// An orphaned blob is reported but does **not** fail the tree: nothing
     /// links to it, so no reader can hit it, and a tree mid-cutover legitimately
     /// holds blobs its pointers have not adopted yet. Failing on this would make
@@ -4446,6 +5349,214 @@ mod tests {
     /// The maximized Site Browser window — `entitychurchfoundation.org`- and
     /// `entitychurchregistry.org`-shaped, and the surface production actually ships.
     const REKEY_SURFACE_WINDOW: &[&str] = &["--surface=window", "--window-type=Site Browser"];
+
+    // ── The gathered-feed fixture — §6's browser leg ──────────────────────
+    //
+    // `a_gathered_view_is_published_and_a_stranger_reads_it_back_attributed_to_\
+    // its_author` above proves the loop natively, through the production
+    // `OriginMirrorSource`. What it cannot prove is that a **browser** shows it:
+    // the rig had never registered a gatherer origin or published a mirror to
+    // one, so *"a mirror reaches a person"* rested on native gates plus the
+    // type being the production one. This emits the tree that closes it.
+    //
+    // **The author is published into a THROWAWAY directory and never served.**
+    // That is the scenario and it is also the anti-vacuity guard: with no origin
+    // for A, the published leg cannot contribute, so anything the browser shows
+    // came through the mirror. A rig that served both would go green with the
+    // mirror leg entirely unwired.
+
+    /// The author a browser cannot reach directly. Distinct from every other
+    /// fixture seed here, so a scenario that silently published the wrong
+    /// identity cannot pass as a gather.
+    const GATHERED_AUTHOR_SEED: [u8; 32] = *b"the-author-a-browser-cant-reach\0";
+
+    /// The gatherer whose origin the browser DOES have. Likewise distinct.
+    const GATHERER_SEED: [u8; 32] = *b"the-gatherer-a-browser-reads-th0";
+
+    /// Publish A's feed to a scratch dir, then B's site + a mirror of A + a
+    /// deployment document into `ENTITY_GATHER_OUT`.
+    ///
+    /// `--surface=chrome` so the e2e can open the Feed window from the palette;
+    /// the default `window` surface would boot a maximized Site Browser over the
+    /// thing under test. `--set-home` for every fixture emitter's reason: this
+    /// one DEFINES the domain its scenario boots against, and the document
+    /// merges rather than clobbers.
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_gathered_feed_fixture() {
+        let out = std::env::var("ENTITY_GATHER_OUT").unwrap_or_else(|_| "dist".to_string());
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-gather-fixture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // A's tree. Local to this process and thrown away — the browser never
+        // fetches from it, and that is the point.
+        let author_out = tmp.join("author");
+        let posts = posts_dir(&tmp, 3);
+        let author_hex = crate::vault_codec::seed_to_hex(&GATHERED_AUTHOR_SEED);
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                author_out.to_string_lossy().to_string(),
+                format!("--identity-seed={author_hex}"),
+                format!("--ingest-feed={}", posts.display()),
+            ]),
+            ExitCode::SUCCESS,
+            "the author's own publish failed, so there is nothing to gather"
+        );
+        let author = entity_crypto::Keypair::from_seed(GATHERED_AUTHOR_SEED).peer_id().to_string();
+
+        // B's tree — site, mirror and the document that tells a browser where B
+        // is. One run, one projector, one root (`publish_axes`).
+        let gatherer_hex = crate::vault_codec::seed_to_hex(&GATHERER_SEED);
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                out.clone(),
+                format!("--identity-seed={gatherer_hex}"),
+                format!("--gather={author}@{}", author_out.display()),
+                "--deployment-config".into(),
+                "--set-home".into(),
+                "--surface=chrome".into(),
+            ]),
+            ExitCode::SUCCESS,
+            "the gatherer's publish failed"
+        );
+
+        // Hand the two ids to the harness through the artifact, never through a
+        // seed the test re-derives: the browser's belief comes from these bytes,
+        // so the test's notion of who is who must come from them too. The
+        // gatherer is already in the document's `origins`; the author is not
+        // (deliberately — see above), so it is written beside it.
+        std::fs::write(
+            std::path::Path::new(&out).join("gathered-feed-fixture.json"),
+            format!("{{\n  \"author\": \"{author}\",\n  \"gatherer\": \"{}\"\n}}\n",
+                entity_crypto::Keypair::from_seed(GATHERER_SEED).peer_id()),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── The published-feed fixture — the feed's ORDINARY leg ──────────────
+    //
+    // The gathered fixture above is the extraordinary case: an author a browser
+    // cannot reach, read through somebody else. The ordinary one — *this
+    // publisher serves their own feed at their own origin, and a reader follows
+    // them* — had no browser rig at all, so `Leg::Published` was gated only
+    // natively while the leg a real deployment uses had never been executed in a
+    // browser once.
+    //
+    // **One peer, sites AND a feed, one publish, one signed root.** That is the
+    // thing worth having a rig for beyond the leg itself: it is the shape
+    // `examples/entity-demo/` documents, and the assertion that two application
+    // conventions coexist under one identity is otherwise only a sentence.
+
+    /// The publisher whose own origin serves their own feed. Distinct from every
+    /// other seed here, so a scenario that published the wrong identity cannot
+    /// pass as this one.
+    const PUBLISHED_FEED_SEED: [u8; 32] = *b"the-author-who-serves-their-own\0";
+
+    /// How many posts the fixture authors. Handed to the harness in the
+    /// artifact rather than duplicated as a literal in the e2e file — a count
+    /// written down twice is a count that disagrees with itself the first time
+    /// somebody adds a post.
+    ///
+    /// ⭐ **The number is chosen to CROSS A PAGE BOUNDARY and stay under the
+    /// reader's limit.** `feed_publish::DEFAULT_PAGE_SIZE` is 32 and
+    /// `feed_fetch::LIMIT` is 50, so 34 entries publish as two `app/feed/index`
+    /// pages and a conformant walk must fetch **both** — the head names the
+    /// newest page, and the oldest post is on the other one. Every other feed
+    /// fixture in this tree is a single page, which means *"a reader that
+    /// fetched the head and the first page and stopped"* had never been
+    /// falsifiable anywhere. `FEED-R12` forbids assuming a page size; a
+    /// one-page population cannot tell an implementation that walks from one
+    /// that got lucky.
+    const PUBLISHED_FEED_POSTS: usize = 34;
+
+    /// Publish one peer's site set **and** their feed into `ENTITY_PUBLISHED_FEED_OUT`,
+    /// with a deployment document that registers their origin.
+    ///
+    /// `--surface=chrome` so the e2e can open the Feed window from the palette.
+    /// `--set-home` for every fixture emitter's reason: this one defines the
+    /// domain its scenario boots against, and the document merges rather than
+    /// clobbers.
+    ///
+    /// **The last post is deliberately over EMBED §3's 16 KiB inline ceiling**,
+    /// so the archive this browser reads back contains a body on the *pointer*
+    /// arm. That arm is gated natively at the chunker and at the publish
+    /// closure; what nothing covered is a real consumer resolving a tree that
+    /// contains one. It costs one post and it is the row a synthetic
+    /// all-inline fixture can never contain — which is the same population
+    /// argument that let the legacy-asset regression ship.
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_published_feed_fixture() {
+        let out = std::env::var("ENTITY_PUBLISHED_FEED_OUT").unwrap_or_else(|_| "dist".to_string());
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-published-feed-fixture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Authored here rather than through `posts_dir`, which spells its dates
+        // `2026-09-{i+1}` and therefore cannot count past 30 without emitting a
+        // date TOML refuses. Titles are zero-padded so `Post 00` is nobody
+        // else's prefix — the harness asserts the oldest by name.
+        let posts = tmp.join("posts");
+        std::fs::create_dir_all(&posts).unwrap();
+        for i in 0..PUBLISHED_FEED_POSTS - 1 {
+            std::fs::write(
+                posts.join(format!("post-{i:02}.md")),
+                format!(
+                    "+++\ncreated_at = 2026-09-{:02}T{:02}:00:00Z\ntitle = \"Post {i:02}\"\n+++\n\
+                     body {i}\n",
+                    1 + i / 10,
+                    i % 10
+                ),
+            )
+            .unwrap();
+        }
+        // The oversized one, and the newest. `stage` refuses an inline payload
+        // above the ceiling, so this body has exactly one conformant encoding
+        // and the publish must carry its blob as well as the entry.
+        let long = "This post is long on purpose. ".repeat(700);
+        assert!(long.len() > 16_384, "the oversized post is not oversized: {}", long.len());
+        std::fs::write(
+            posts.join("post-long.md"),
+            format!(
+                "+++\ncreated_at = 2026-09-20T09:00:00Z\ntitle = \"Post Long\"\n+++\n{long}\n"
+            ),
+        )
+        .unwrap();
+
+        let hex = crate::vault_codec::seed_to_hex(&PUBLISHED_FEED_SEED);
+        assert_eq!(
+            run(&[
+                "publish".into(),
+                out.clone(),
+                format!("--identity-seed={hex}"),
+                format!("--ingest-feed={}", posts.display()),
+                "--deployment-config".into(),
+                "--set-home".into(),
+                "--surface=chrome".into(),
+            ]),
+            ExitCode::SUCCESS,
+            "the publisher's own publish failed, so there is no feed to read"
+        );
+
+        // The id comes out of the ARTIFACT, never re-derived from the seed in the
+        // harness: the browser's belief comes from these bytes, so the test's
+        // notion of who it is reading must come from the same place.
+        std::fs::write(
+            std::path::Path::new(&out).join("published-feed-fixture.json"),
+            format!(
+                "{{\n  \"author\": \"{}\",\n  \"posts\": {PUBLISHED_FEED_POSTS}\n}}\n",
+                entity_crypto::Keypair::from_seed(PUBLISHED_FEED_SEED).peer_id()
+            ),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
@@ -4942,6 +6053,7 @@ mod tests {
         let spec = DeployConfigSpec {
             surface: "site".to_string(),
             window_type: String::new(),
+            window_target: String::new(),
             locked: true,
             site: None,            // → demo
             origin: String::new(), // same-origin
@@ -5042,6 +6154,7 @@ mod tests {
         let spec = DeployConfigSpec {
             surface: "site".to_string(),
             window_type: String::new(),
+            window_target: String::new(),
             locked: false,
             site: None,
             origin: String::new(),
@@ -5062,6 +6175,7 @@ mod tests {
         let spec_none = DeployConfigSpec {
             surface: "site".to_string(),
             window_type: String::new(),
+            window_target: String::new(),
             locked: false,
             site: None,
             origin: String::new(),
@@ -5096,6 +6210,7 @@ mod tests {
         let spec = DeployConfigSpec {
             surface: "window".to_string(),
             window_type: "Site Browser".to_string(),
+            window_target: String::new(),
             locked: false,
             site: None,
             origin: String::new(),
@@ -5121,6 +6236,98 @@ mod tests {
             !applied.site_mode.exposes_toggle(),
             "a window deployment must expose no 'View Site' toggle"
         );
+    }
+
+    /// ⭐ **A deployment can say WHICH feed, end to end** — the one-field gap
+    /// `DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION` §2 measured:
+    /// before this, `surface: window` + `window_type: Feed` could name the viewer
+    /// and had no way to name a publisher, so a domain declaring *"open my feed"*
+    /// booted an empty picker.
+    ///
+    /// Asserted through the whole chain — emitter → JSON → `parse` → `apply_to` →
+    /// `BootSurface` — because each hop is where the address could be dropped, and
+    /// a test of the emitter alone would pass with the parser ignoring the key.
+    #[test]
+    fn a_deployment_can_name_which_feed_its_startup_window_opens_at() {
+        use crate::deployment_config::DeploymentConfig;
+
+        let dir = tempfile::tempdir().unwrap();
+        let PublishSource { peer_id, sites, .. } = resolve_publish_source(
+            entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let address = crate::open_target::feed("2KPUBLISHEREXAMPLE").to_uri().unwrap();
+        let spec = DeployConfigSpec {
+            surface: "window".to_string(),
+            window_type: "Feed".to_string(),
+            window_target: address.clone(),
+            locked: false,
+            site: None,
+            origin: String::new(),
+            registry_pin: None,
+            set_home: false,
+            superseded: Default::default(),
+        };
+        let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let cfg = DeploymentConfig::parse(&raw).unwrap();
+        assert_eq!(cfg.window_target.as_deref(), Some(address.as_str()));
+
+        let applied = cfg.apply_to(crate::session_config::SessionConfig::default());
+        let crate::session_config::BootSurface::Window { window_type, target, .. } =
+            &applied.boot_surface
+        else {
+            panic!("expected a window surface, got {:?}", applied.boot_surface)
+        };
+        assert_eq!(window_type, "Feed");
+        assert_eq!(
+            target.as_ref().map(|t| t.peer()),
+            Some("2KPUBLISHEREXAMPLE"),
+            "the startup window must know whose feed it opens at"
+        );
+        // And the routing agrees with the declared window type, which is what the
+        // CLI refuses a contradiction of.
+        assert_eq!(
+            crate::open_target::route(target.as_ref().unwrap()),
+            crate::open_target::Routing::Viewer("Feed")
+        );
+    }
+
+    /// **Declaring nothing emits no key** — the same choice `superseded` makes,
+    /// and for the same reason: *"named no target"* and *"named the empty
+    /// target"* are different facts, and a document that cannot tell them apart
+    /// makes the absent case unexpressible.
+    #[test]
+    fn a_deployment_that_names_no_target_carries_no_target_key() {
+        use crate::deployment_config::DeploymentConfig;
+
+        let dir = tempfile::tempdir().unwrap();
+        let PublishSource { peer_id, sites, .. } = resolve_publish_source(
+            entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let spec = DeployConfigSpec {
+            surface: "window".to_string(),
+            window_type: "Site Browser".to_string(),
+            window_target: String::new(),
+            locked: false,
+            site: None,
+            origin: String::new(),
+            registry_pin: None,
+            set_home: false,
+            superseded: Default::default(),
+        };
+        let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("window_target"), "{raw}");
+        let cfg = DeploymentConfig::parse(&raw).unwrap();
+        assert_eq!(cfg.window_target, None);
     }
 
     /// The deployment-config origin folds the hosting prefix in. Empty prefix →

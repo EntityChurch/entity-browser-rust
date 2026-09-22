@@ -253,6 +253,10 @@ select optgroup {
     flex-direction: column;
     min-height: 200px;
     flex-shrink: 0;
+    /* A remembered height is the window's whole outer height: measured with
+       offsetHeight, written back as style.height. Content-box would add the
+       border on every drag, and a window would creep taller each time. */
+    box-sizing: border-box;
 }
 
 /* Maximized window surface (reframe §4-B). One-deep: at most one window
@@ -270,6 +274,81 @@ select optgroup {
     min-height: 0;
     border-radius: 0;
     background: var(--surface-max, #14141c);
+}
+
+/* A window with a height of its own (`crate::window_size`): the content fills
+   that height and scrolls inside it, and no content's floor may push the
+   window past it — the Apps player's 560 px stage floor is the one that
+   matters, since that floor is what drew a VM small in a tall window. */
+.window.sized {
+    min-height: 0;
+}
+
+.window.sized .window-content > * {
+    min-height: 0;
+}
+
+.window.sized .gm-stage-area {
+    min-height: 0 !important;
+}
+
+/* The maximized surface is the viewport, whatever height the window was given. */
+.window.maximized {
+    height: auto !important;
+}
+
+/* A window that accepts dropped files, while a drag is over it (File Manager). */
+[data-drop-over] {
+    outline: 2px dashed var(--accent, #90d0ff);
+    outline-offset: -4px;
+}
+
+/* The resize grip along a window's bottom edge. Thin on a mouse, a finger's
+   width on a touch screen; `touch-action: none` so a drag on it resizes the
+   window instead of scrolling the page. */
+.win-grip {
+    flex: 0 0 auto;
+    height: 9px;
+    cursor: ns-resize;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-top: 1px solid var(--border, #333);
+    background: var(--surface-header, #1e1e3e);
+    border-radius: 0 0 4px 4px;
+}
+
+.win-grip::after {
+    content: "";
+    width: 36px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border-strong, #444);
+}
+
+.win-grip:hover::after,
+.win-grip:focus-visible::after {
+    background: var(--accent, #90d0ff);
+}
+
+.win-grip:focus-visible {
+    outline: 1px solid var(--accent, #90d0ff);
+    outline-offset: -1px;
+}
+
+@media (pointer: coarse) {
+    .win-grip {
+        height: 18px;
+    }
+    .win-grip::after {
+        width: 48px;
+        height: 4px;
+    }
+}
+
+.window.maximized .win-grip {
+    display: none;
 }
 
 .window header {

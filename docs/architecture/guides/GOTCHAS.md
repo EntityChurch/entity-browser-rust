@@ -15,6 +15,72 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Windows, DOM & rendering
 
+- **A WINDOW THAT WATCHES THE WHOLE TREE PAYS FOR EVERY WRITE — keep its rebuild cheap (2026-09-14).** Storage
+  watches `/{pid}/` and rebuilds on any write; adding a size read per entity per rebuild slowed the whole app enough
+  that the e2e monolith's fixed-sleep steps missed (falsified: two different steps red without the fix). Sizes are
+  remembered by content hash (`StorageModel::sizes`). *Before adding work to a render, check what its watch covers.*
+
+- **A WINDOW'S HEIGHT HAS ONE APPLIER, AND IT IS NEVER A REBUILD — `src/window_size.rs`, 2026-09-14
+  (BACKLOG B-5).** Three sources — a drag in progress, the remembered size per *size key* (window type,
+  or `{type}/{set}/{app}` while an app runs), and the Apps player's **fit** from the app's own `x-view`
+  report — resolve in `window_size::resolve`, and only the renderer's per-frame reconcile writes
+  `style.height` (beside the `.maximized` class flip, for the same reason: a section rebuild replaces
+  the iframe and restarts the VM). The grip never sets a height and the player never sets a height;
+  both file a number and ask for a frame. Four things it cost: **(1)** `.window` is `box-sizing:
+  border-box`, or a height measured with `offsetHeight` and written back as `style.height` grows by the
+  border on every drag; **(2)** `.window.maximized` needs `height:auto !important`, or an inline height
+  beats `inset:0` and a maximized VM keeps its windowed height; **(3)** the player's 560 px stage floor
+  (`.gm-stage-area{min-height}`) must be lifted inside `.window.sized`, or a fitted window smaller than
+  the floor scrolls instead of shrinking; **(4)** the fit reads the window area's height at each fit but
+  does **not observe it** — on a phone the keyboard shrinks the area, and a VM window that resized every
+  time the keyboard opened would be worse than the bug. The frame's width is observed
+  (`ResizeObserver`); the fit is a fixed point of its own resize (native-tested), so the observer does
+  not loop. The player's `size_key` must equal the reconcile's (`debug_assert` in `AppWindow`), or a fit
+  is filed where nothing reads it. Gate: `a_window_keeps_the_height_it_was_given_and_an_apps_screen_fits_its_window`
+  — falsified by dropping the host's `x-view` arm, and by removing the spawn-restores-maximized line.
+- **Opening a window while another is maximized restores the maximized one** (`SpawnWindow`,
+  `OpenWindow`'s spawn arm, the singleton focus). A maximized window is `position:fixed` over the whole
+  viewport, so a window spawned behind it was invisible — the menu click appeared to do nothing (VM
+  design §8, a deployment booting `surface=window`).
+
+- **A WINDOW THAT REBUILDS EVERY SECOND LOSES `<details>` AND CLIPS A GRAPH'S NEWEST END — the System
+  Monitor, 2026-09-14 (`src/dom/system_monitor.rs`, `src/monitor/`).** Two things only a screenshot
+  showed, with every test green: **(1)** a pane-wide braille graph wider than its pane was clipped on
+  the RIGHT, which is where the newest samples are, so the CPU graph rendered **blank** while its
+  figure line updated — the fix is `direction:rtl` on the box (it overflows left) with the text set
+  back to LTR (`theme::MONITOR_GRAPH` + `MONITOR_GRAPH_TEXT`), and only for time series: a meter or a
+  short row graph in an RTL box right-aligns (`MONITOR_METER`). **(2)** a section rebuilt once a second
+  recreates a `<details>` closed each time, so the explanation is a button toggle held in the window.
+  **Take a screenshot of anything whose product is how it looks** — the gate asserts a braille
+  character exists, and a clipped graph still contains one. Also: the sampler's hooks are no-ops unless a
+  `MonitorHold` exists (dropped with the window at `gc_closed`), and the frame hook is what the e2e
+  `the_system_monitor_counts_a_stall_and_closes_a_window` falsifies — remove it and the graph goes blank
+  and the 400 ms freeze counts no stall.
+
+- **A MONITOR THAT CAN ONLY SEE DRAWING WILL CALL A VM "IDLE" — say *not reporting*, and measure what
+  drawing does not explain. Field report 2026-09-14 (Firefox):** two v86 machines froze the tab, and
+  every Apps row read *idle* while the monitor itself looked like the only thing using anything. All
+  true, all useless: the rows judged **drawing** time, and an app's work in its frame is not drawing
+  (in Firefox it is on our thread, in Chrome in another process — `tools/monitor-probe`). Three fixes,
+  one rule — *the absence of a measurement is not a measurement of zero* (AP40): **(1)** a window that
+  hosts an app says **not reporting** until the app speaks (`WindowHistory::app_reporting`, and a report
+  that stops reads *stopped reporting*, never zero); **(2)** the tab pane splits **frozen** time (rAF gap
+  past one frame + jitter, `sampler::FROZEN_AFTER_MS`) into the part `frame()` accounts for and the rest,
+  and only in Firefox, with apps running, names them as the likely cause (`output::other_work` — in
+  Chrome they cannot freeze us, so naming them would be a false lead); **(3)** apps report themselves
+  with `x-stats` (the VMs time v86's `do_tick` on the INSTANCE, since `yield_callback` calls
+  `this.do_tick()`). The e2e is falsified three ways: drop the host's `x-stats` arm, charge all frozen
+  time to drawing, or leave a maximized window up on **Show**.
+- **Do not put anything in a window's TITLE that changes — every gate and probe locates a window by
+  `header h3` text** (33 sites in `e2e_worker.rs` alone match `=== 'Apps'`). Naming the running app
+  went in `WindowView::running_app`, shown **beside** the h3 (`data-field="window-running-app"`,
+  reconciled per frame like the maximize glyph, since the app is named during the rebuild that mounts
+  it and a second rebuild would restart it) and in lists via `window::display_title`.
+- **`navigator.storage` is `[SecureContext]`, so on a plain-http LAN link it does not exist** — the
+  phone link `http://192.168.x.x:8213/` is exactly that. An `Option` whose `None` meant both *not back
+  yet* and *never coming* rendered **Loading…** forever in the monitor and showed nothing in the Storage
+  window. `EstimateUnavailable` keeps *insecure context* / *no API* / *failed* apart and each says so.
+
 - **A misbehaving window is usually ONE window panicking in its frame** — the
   rAF loop now survives it (`src/main.rs` reschedules *before* `frame()` and
   wraps it in `catch_unwind`, C1), so a frame panic *degrades* (`FRAME PANIC` /
@@ -808,6 +874,31 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Connectivity — WebRTC, rendezvous, NAT & relays
 
+- **A "RELOAD TO APPLY" NOTICE MUST COMPARE AGAINST WHAT IS APPLIED, NEVER AGAINST WHAT BOOTED —
+  fixed 2026-09-14, and it was the reload the late arm (09-07) had already removed.** Peer
+  Connections' *"takes effect on reload"* and the `net` preflight's *"none in effect this session"*
+  both compared the live selection with the boot snapshot, so on the Direct arm — where
+  `arm_webrtc_if_provisioned` had applied the node a frame later — they told people to reload for
+  something already live. The operator reloaded, on both devices, because the screen said to.
+  **Fixing a mechanism does not fix the sentences that describe the old one; grep for every surface
+  that states the limit** (`EntityApp::webrtc_applied`, `connectors::applied_snapshot`). The late
+  arm also compared the **node id only**, so reflectors a node advertises a moment after it is added
+  never reached the running establisher — the one case a reload still changed; `decide_late_arm`
+  compares the whole provisioning now and `LateEstablisher::install` replaces for the same node.
+  Gate: `make e2e-webrtc-find-peers` asserts the notice is absent (falsified by comparing against
+  boot again).
+- **"FIND PEERS HERE" IS THE CONNECT FLOW; THE FIVE STEPS IT REPLACED EACH HAD A GATE AND NONE WAS
+  THE JOURNEY.** Reported 2026-09-14 with feeling: connect by address, paste the same address into
+  the rendezvous form, add, select, scroll back, pick Lobby, meet — on each device. Every step worked
+  and was tested; nothing tested a person doing them in order. The button is
+  `add_connector_by_address` with `ConnectorDraft::use_now` (takes the selection even when another
+  node was chosen) + a lobby meet started from `tick` once `node_in_force` names that node
+  (`FindPeers`, `find_step` — never earlier, or it meets at the old node). Peers a meet finds are
+  already reached by `pump_meet`, so no Remember click is needed to connect. **The lobby is public
+  to anyone at that node; the hint says so beside the button.** Gate: `make e2e-webrtc-find-peers`
+  (two browsers, only the address typed and the button pressed, then chat both ways; falsified by
+  dropping `pump_find`). **The rig now builds its signaling node inside the image when the host has
+  no `cargo`** (`make e2e-signaling-node`); every WebRTC target needed host cargo until then.
 - **THE DATA CHANNEL HAS A PER-MESSAGE CEILING AND THE ENGINES DISAGREE ABOUT IT BY FOUR
   ORDERS OF MAGNITUDE. Measured, both rigs, 2026-08-28: Firefox↔Firefox negotiates
   `sctp.maxMessageSize` = **1073741823**; Firefox↔Chrome negotiates **262144**.** A pair takes
@@ -3014,6 +3105,16 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Apps & embedded programs
 
+- **A TOGGLE BUTTON ON A PHONE MUST DECIDE ON WHAT WAS TRUE AT `pointerdown`, NOT AT `click` — the VM
+  keyboard button, field report 2026-09-14 (Android).** Once the phone keyboard was up, the button
+  never put it away (only leaving full screen did). A tap can blur the focused field before `click`
+  fires — `preventDefault` on `pointerdown` does not reliably stop that on a touch screen — so a handler
+  reading `document.activeElement` in `click` sees *closed* and opens it again. Both VM pages now note
+  the state at `pointerdown` and treat a blur in the last 500 ms as *it was open*; Alpine's button was
+  not a toggle at all. Same report, second half: Alpine focused the keyboard on every `touchstart` on
+  the terminal, so a two-finger page zoom kept summoning it — it now opens on a **tap** only.
+  `tools/run-env/probes/monitor-vm-probe.py` reproduces the blur-then-click order in both machines.
+
 - **A resumed VM snapshot gives every visitor the SAME random numbers until something reseeds it —
   measured, not theorised (2026-09-13).** The Alpine app resumes from a snapshot taken at build time,
   and the kernel's RNG state is part of that memory. With the reseed skipped, two separate visits
@@ -3089,6 +3190,61 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   - **`emulator.read_file` REJECTS AN EMPTY FILE as "File not found"** (zero bytes read → `null` →
     treated as absent). An empty `/root` is an empty manifest on every fresh profile; the agent's
     line count decides instead.
+
+- **A VM GATE THAT DRIVES THE GUEST THROUGH THE EMULATOR API CANNOT SEE ITS INPUT BUGS — the
+  KolibriOS field report, 2026-09-14 (`tools/run-env/kolibri/`).** Three probes went green on a
+  machine whose keyboard did nothing and whose pointer drifted, because they typed with
+  `keyboard_send_text` and moved with `emulator.bus.send('mouse-delta')` — both go around the
+  browser. **Drive a VM app with WebDriver actions** (`probes/kolibri-input.py`) and measure the
+  result on the guest's own screen. What real input found:
+  - **v86's `mousedown` handler calls `preventDefault()`, which also stops focus moving.** In a frame
+    the click never focuses the frame, so every key goes to the host page. The page must take focus
+    itself on `pointerdown` (capture phase). Standalone it works, because the page already has focus.
+    **The gate is `document.hasFocus()` after a real click** — a typed-keys check alone passed with
+    the fix removed, because WebDriver's key dispatch focused the frame on a retry.
+  - **A PS/2 mouse cannot stay under the host pointer**: it is relative, the guest accelerates it, and
+    the page scales the screen. v86 emulates the VMware absolute mouse; a guest needs a driver for it
+    (KolibriOS had none — `kolibri/vmmouse/vmmouse.asm` is ours) and **the page must silence PS/2
+    while absolute mode is on**, or relative movement pulls the pointer off between packets.
+    **A snapshot must be taken after the driver loads** — a resume never runs autorun again.
+  - **`image-rendering: pixelated` at a non-integer scale drops whole rows and columns** of a
+    desktop; it read as "spotty graphics". Pixelated only at a whole-number scale.
+  - **A maximized window (surface=window deployments, z-index 9999) stays on top of every window
+    opened after it**, so real clicks at an Apps window land on the Site Browser. Script clicks never
+    notice occlusion. Open, not fixed; the probe closes the maximized window as a person would.
+
+- **A GRAPHICAL VM ON A PHONE: v86's touch path aims and never clicks, and a phone keyboard does not
+  send keys — second KolibriOS field report, 2026-09-14 (`kolibri/index.html`,
+  `probes/kolibri-touch-probe.py`).**
+  - **v86's touch handlers send `mouse-delta`/`mouse-absolute` and no `mouse-click`.** A page that
+    wants touch must take the touches off its stage (`preventDefault` + `stopPropagation`, passive
+    false, `touch-action:none`) and speak the bus itself: tap = click, long press = right click,
+    drag = press-move-release, two fingers = pinch/pan the VIEW. 1024×768 fitted into a portrait
+    phone is ~0.37×, so zoom is not optional.
+  - **An Android keyboard sends compositions and autocorrect replacements, with `keydown` saying
+    `Unidentified`.** v86's own `phone_keyboard` route only understands `insertText`. Diff the hidden
+    field's contents instead (backspaces + new characters), keep a sentinel character so a backspace
+    on an "empty" field still fires, never reset the field mid-composition, and pace keys through one
+    queue (KolibriOS drops keys faster than ~60 ms). `tapping a key-bar button` must
+    `preventDefault` its `pointerdown`, or the tap takes focus and closes the keyboard.
+  - **Gate touch with Chrome's mobile emulation and W3C `pointerType: "touch"` actions** — a
+    `standalone-chrome` node on its own port (`make e2e-grid GRID_NAME=… GRID_PORT=…
+    SELENIUM_IMAGE=…standalone-chrome`). Firefox headless ignores `layout.css.devPixelsPerPx` and
+    will not go narrower than 500 px.
+  - **A pixel-diff "where is the cursor" check is confused by any window redrawing inside its search
+    box** — it reported a zoomed tap 60 px off while the screenshot showed it exact. Where the
+    question is the page's coordinates, read what the page handed the device (`vmware.last_x`).
+
+- **A SAMPLE COUNT READ AFTER A TRANSFERABLE SEND CAN BE ZERO WHILE THE AUDIO IS FINE (2026-09-14).**
+  v86's SB16 sends `dac-send-data` with its `Float32Array` buffers as **transferables**; a listener
+  that runs after the audio worklet can see them emptied (length 0) — and the first measurement of
+  KolibriOS sound read that as "no sound". Measure where the samples are made: wrap the device's
+  `dma_to_dac` and read its DMA buffer. Also: v86 creates its `AudioContext` before any gesture, so a
+  browser keeps it suspended; resume it on the first `pointerdown`/`touchstart`/`keydown`.
+
+- **A WebDriver script in Firefox cannot see a page's top-level `let`/`const` bindings** — functions
+  and `window` properties it can (`ReferenceError: V is not defined` from a sandboxed app frame, while
+  `listFloppy()` worked). Expose what a probe needs on `window` explicitly.
 
 - **A RETURNING PROFILE NEVER RE-FETCHED AN APP BUNDLE — FIXED 2026-08-29 (D24), and the
   history is kept because the fix is a rule, not a line.** `src/views/games/mod.rs` refreshed
@@ -3333,6 +3489,45 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     measured tile count** instead of the literal "3 built-in programs" it had gone stale carrying.
 
 ## File transfer & chat
+
+- **WHAT COUNTS AS A FILE IS A TABLE, AND A SECOND SURFACE OVER FILES REUSES ACTIONS, NOT CODE —
+  the Files window, 2026-09-14 (`src/file_kinds.rs`, `src/views/files/`).** A file is an entity
+  whose **type** has a row in `file_kinds::KINDS` (never a path — a path is a place). The census
+  `every_module_that_encodes_a_blob_pointer_is_classified` fails when a module starts writing a
+  `"blob"` pointer nobody has classified as a file or not-a-file, so a new kind of file cannot be
+  silently absent from Files. Three things this cost: **(1)** the save operations lived as Apps-window
+  methods, and a second surface would have copied *"back up what an import replaces"* — the line a copy
+  forgets — so they are `apps::saves::{backup_live, import_bundle, …}` now, and the Files e2e reds when
+  that backup is removed. **(2)** Kept-file and offer presses reuse the app-level actions File Transfer
+  raises; their handlers woke only windows typed `"File Transfer"`, so a press from Files would have
+  finished silently — `app::shows_own_files` is the one list. **(3)** `file_transfer::file_picker`
+  writes progress into the shared `offer_attempt` slot; a picker used for something that is **not** an
+  offer (importing a save) must `clear()` it once the bytes arrive, or both windows show *Loading…*
+  forever. Also: a DOM event value built as `tag|a|b|path` must split at most N times — a workspace
+  path is whatever `assets::valid_key` admits, and that admits `|`.
+
+- **KEEPING A FILE AND SHARING A FILE ARE DIFFERENT ACTS — an app's `x-file` was made an OFFER for
+  two days, so pulling a file out of a VM advertised it to every connected peer (field report
+  2026-09-14; `src/kept_files.rs`).** The reuse looked free: offers already had storage, a name, a
+  list in File Transfer and "Save to this device". But an offer's manifest lives under `offers/`,
+  **the prefix peers list**, so "the host kept my file" and "I am sharing my file" became one write.
+  **Before reusing a storage path, ask who can LIST it**, not only who can write it. App files now
+  live under the app's directory (`apps/{set}/files/{app}/`), File Transfer shows them as *Kept by
+  apps — only on this device*, and **Offer to peers** is the one deliberate step that shares one.
+  ⚠ **CORRECTED 2026-09-14 (`AUDIT-2026-09-14-d-…`): the leak is the lesson; the fix above is AP57.**
+  Choosing a prefix nobody lists made *path choice* the permission, and every file feature after it
+  inherited that — three manifest types with one body, three content namespaces, sharing by re-ingesting
+  into `offers/`, un-sharing by moving entities (`TakeBack`). **Visibility is a grant, never a type, a
+  namespace or a prefix**: *private* = covered by no grant (a `PathScope` `exclude` on the default
+  connection grant expresses it today), *share* = a share record plus a policy entry on the file's own
+  path. Not migrated yet — the location is a cross-host convention (arch) and bytes need the kernel's
+  namespace-scoped `get` (K-4) — so do not add a fourth type or namespace in the meantime.
+  `kept_files::TakeBack` reverts any offer that names an app (what the old build wrote), so a person's
+  own offer — which names none — is safe from it. Gate: native
+  `a_file_an_app_hands_over_is_kept_privately_and_never_listed_as_an_offer`, asserted **from the peer
+  who would have seen it** (B's listing of A's offers is empty) — A's own view cannot show a leak.
+  Stated bound: *not advertised* is not *sealed* — grants are debug-open and `system/content:get`
+  serves any hash, so the namespace records the act rather than enforcing access.
 
 - **File transfer: the TRANSFER is transport-agnostic; what the browser lacks is a RECEIVING
   side.** Upload is picker → `File::array_buffer()` → bytes → `Action::UploadFile` →

@@ -152,21 +152,55 @@ pub fn asset_path(peer_id: &str, site_id: &str, name: &str) -> String {
 /// `assets/` prefix), or `None` if the ref is not a resolvable site-local
 /// asset. This is the **security gate** for image resolution: only refs that
 /// name a file inside the site's own `assets/` subgraph resolve — an external
-/// URL (`https://…`, `//…`, `data:`), an absolute path, a parent escape
-/// (`..`), or a non-`assets/` ref is rejected, so a hostile page body cannot
-/// make the renderer fetch an arbitrary/tracking URL. `assets/figures/x.png`
+/// URL (`https://…`, `//…`, `data:`), a parent escape (`..`), or a
+/// non-`assets/` ref is rejected, so a hostile page body cannot make the
+/// renderer fetch an arbitrary/tracking URL. `assets/figures/x.png`
 /// → `Some("figures/x.png")`.
+///
+/// ## Both spellings of the same bytes resolve — `AT-117`
+///
+/// `/assets/x.png` and `assets/x.png` name the **same file** and both resolve.
+/// `APP-CONVENTION-REFERENCE` §3.4 has said so the whole time — *a leading `/`
+/// is root-absolute within the current site* — in a paragraph whose next
+/// sentence **recommends producers emit that form**. An asset ref has exactly
+/// one base and it is the site root ([`asset_path`]; neither caller does
+/// page-relative resolution), so refusing the recommended spelling was a **pure
+/// loss** and the arc's only user-visible interop divergence: the same
+/// published page rendering a figure in one reader and a gap in the other.
+///
+/// ⭐ **Both implementations searched for a rule scoped to the asset POSITION;
+/// the rule is scoped to the FORM.** We had also argued the refusal was a
+/// security property — true of this function as a whole, **false of the
+/// leading-slash clause**, which is the one the ruling turned on. What confines
+/// the subgraph is the mandatory `assets/` prefix plus `..`/`//`/`://`/`data:`,
+/// and `the_leading_slash_refusal_is_not_what_confines_the_subgraph` is the
+/// measurement rather than the assertion.
+///
+/// ⛔ **Deliberately narrow: ONE leading slash, site-root-relative only.** A
+/// peer-absolute path (`/{peer}/sites/…`) still refuses — it is a different
+/// base, `AT-117` leaves it open by name along with the `content-hash` arm and
+/// the absolute `entity+ref://` form, and adopting one here would make us the
+/// seat that ruled it.
 pub fn asset_name_from_ref(reference: &str) -> Option<String> {
     let r = reference.trim();
     if r.is_empty()
         || r.contains("://")
         || r.starts_with("//")
-        || r.starts_with('/')
         || r.starts_with("data:")
         || r.split('/').any(|seg| seg == "..")
     {
         return None;
     }
+    // §3.4's root-absolute form, resolved against the one base an asset ref has.
+    //
+    // ⚠ **The order is legibility, NOT a safety property — measured, because the
+    // first draft of this change claimed it was one.** Hoisting the strip above
+    // the refusals changes the answer for **no input**: `//host/x` strips to
+    // `/host/x`, which the mandatory `assets/` prefix refuses anyway, and
+    // `://`/`..`/`data:` are substring and segment tests that a leading slash
+    // cannot affect. The neuter that reds is dropping the `assets/` prefix —
+    // that is the clause doing the confinement work.
+    let r = r.strip_prefix('/').unwrap_or(r);
     let name = r.strip_prefix("assets/")?;
     if name.is_empty() {
         None
@@ -492,48 +526,69 @@ mod tests {
     /// is **still** refused — so the claim above is a measurement rather than an
     /// argument, and a future session cannot re-derive it the wrong way round.
     ///
-    /// ⛔ **BEHAVIOUR IS DELIBERATELY UNCHANGED.** `A-24` is open at arch and
-    /// the live question is what §3.2's `path` form *means* at this position —
-    /// site-root-relative (their reading) or peer-relative `/{peer}/sites/…`
-    /// (which would make accepting it our own invented third reading). Widening
-    /// while a ruling is pending would make us a second seat asserting a reading
-    /// of a clause we just found we had mis-argued. **The correction is what is
-    /// owed, not the change** — a ruling made on a premise we now know is partly
-    /// wrong is worse than a delayed one.
+    /// ✅ **RULED `AT-117` and BUILT 2026-09-14** — §3.4 answered it before the
+    /// argument started, and *an authority named is not an authority applied*
+    /// (arch's own correction against themselves: a fold four days earlier cited
+    /// §3.4 and then characterized the refusing implementation as conformant with
+    /// it, which is backwards, so the divergence stayed open because nobody was
+    /// told they had to change).
     ///
-    /// Stated so nobody reads the divergence as dangerous: it fails **safe** on
-    /// our side. A refused ref renders no figure; it never renders somebody
-    /// else's.
+    /// ⚠ **This test used to assert the REFUSAL, which is `AP45`:** a test whose
+    /// name makes a non-conformance read as a decision. It was green for two days
+    /// across a ruling. The hostile list below is no longer a *hypothetical*
+    /// strip — it is the shipped path — so this file now measures the property it
+    /// always claimed instead of a counterfactual.
+    ///
+    /// ⛔ **Still refused and still open at arch:** the peer-absolute form
+    /// (`/{peer}/sites/…`), the `content-hash` arm, and an absolute
+    /// `entity+ref://` URI. `AT-117` names all three as open, so accepting any of
+    /// them here would make us the seat that ruled it.
     #[test]
     fn the_leading_slash_refusal_is_not_what_confines_the_subgraph() {
-        // The `path` form of the ref we DO accept. Refused today…
-        assert_eq!(asset_name_from_ref("/assets/figures/x.png"), None);
-        // …and it names the same bytes as the form we accept, because the base
-        // is the site root and nothing else.
+        // §3.4's root-absolute form — the one the spec RECOMMENDS producers emit.
+        // Both spellings resolve, and to the same name.
         assert_eq!(
-            asset_path("PEER1", "church", &asset_name_from_ref("assets/figures/x.png").unwrap()),
+            asset_name_from_ref("/assets/figures/x.png"),
+            Some("figures/x.png".to_string()),
+            "AT-117: a leading / is root-absolute within the current site"
+        );
+        assert_eq!(
+            asset_name_from_ref("/assets/figures/x.png"),
+            asset_name_from_ref("assets/figures/x.png"),
+            "two spellings of one file must not resolve to two names"
+        );
+        // …and they name the same bytes, because the base is the site root and
+        // nothing else.
+        assert_eq!(
+            asset_path("PEER1", "church", &asset_name_from_ref("/assets/figures/x.png").unwrap()),
             "/PEER1/sites/church/assets/figures/x.png"
         );
 
-        // Every hostile input, with ONE leading slash removed — i.e. what the
-        // function would see if the leading-slash clause were dropped. All still
-        // refused, by the clauses that are doing the real work.
-        let hostile_after_a_slash_strip = [
-            "etc/passwd",                     // ← "/etc/passwd"
-            "/evil.test/x.png",               // ← "//evil.test/x.png"
+        // Every hostile input, INCLUDING the leading-slash spellings that now
+        // reach the strip. All still refused, by the clauses doing the real work.
+        let hostile = [
+            "/etc/passwd",
+            "etc/passwd",
+            "//evil.test/x.png",              // authority, never a path
+            "/evil.test/x.png",
             "https://evil.test/x.png",
+            "/https://evil.test/x.png",
             "data:image/png;base64,AAAA",
+            "/assets/../../secret",
             "assets/../../secret",
             "../../../etc/shadow",
-            "figures/x.png",                  // not under assets/
+            "/figures/x.png",                 // not under assets/
+            "figures/x.png",
+            "/PEER2/sites/other/assets/x.png", // peer-absolute: a different base
+            "/",
             "",
         ];
-        for input in hostile_after_a_slash_strip {
+        for input in hostile {
             assert_eq!(
                 asset_name_from_ref(input),
                 None,
-                "{input:?} resolved — the leading-slash clause was load-bearing after all, and \
-                 the correction routed as B-10/A-24 is wrong"
+                "{input:?} resolved — the confinement clauses are not doing the work \
+                 AT-117 assumed they were"
             );
         }
 

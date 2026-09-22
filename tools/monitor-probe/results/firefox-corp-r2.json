@@ -1,0 +1,920 @@
+{
+ "startedAt": "2026-09-14T19:49:09.385Z",
+ "log": [
+  [
+   87,
+   "worker"
+  ],
+  [
+   87,
+   "frames"
+  ],
+  [
+   163,
+   "collect"
+  ],
+  [
+   461,
+   "busy"
+  ],
+  [
+   12165,
+   "fetch"
+  ],
+  [
+   14248,
+   "frame-workers"
+  ],
+  [
+   14267,
+   "pressure"
+  ],
+  [
+   14267,
+   "memory-top"
+  ],
+  [
+   14267,
+   "memory-worker"
+  ],
+  [
+   14267,
+   "memory-srcdoc"
+  ],
+  [
+   14267,
+   "memory-urlSame"
+  ],
+  [
+   14267,
+   "memory-urlOpaque"
+  ],
+  [
+   14267,
+   "done"
+  ]
+ ],
+ "sandbox": {
+  "srcdoc": "allow-scripts allow-downloads",
+  "urlSame": "allow-scripts allow-same-origin",
+  "urlOpaque": "allow-scripts allow-downloads"
+ },
+ "topObserve": {
+  "longtask": "observe() returned",
+  "long-animation-frame": "observe() returned"
+ },
+ "frameHello": {
+  "srcdoc": true,
+  "urlSame": true,
+  "urlOpaque": true
+ },
+ "workerHello": true,
+ "env": {
+  "top": {
+   "global": "Window",
+   "origin": "http://127.0.0.1:8298",
+   "href": "http://127.0.0.1:8298/index.html",
+   "isSecureContext": true,
+   "crossOriginIsolated": true,
+   "SharedArrayBuffer": "function",
+   "sabConstruct": 8,
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": "undefined"
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415349298.08,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1.240000000000009,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04,
+     0.08,
+     0.1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 58.18000000000001,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "worker": {
+   "global": "DedicatedWorkerGlobalScope",
+   "origin": "http://127.0.0.1:8298",
+   "href": "http://127.0.0.1:8298/worker.js",
+   "isSecureContext": true,
+   "crossOriginIsolated": true,
+   "SharedArrayBuffer": "function",
+   "sabConstruct": 8,
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": "undefined"
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415349385,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 0.9599999999999795,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 62.30000000000001,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04,
+     0.06,
+     0.1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "undefined",
+   "navigator_gpu": "undefined",
+   "wakeLock": "undefined"
+  },
+  "srcdoc": {
+   "global": "Window",
+   "origin": "null",
+   "href": "about:srcdoc",
+   "isSecureContext": true,
+   "crossOriginIsolated": true,
+   "SharedArrayBuffer": "function",
+   "sabConstruct": 8,
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": "TypeError: estimate() called for opaque origin",
+   "storage_persisted": {
+    "ok": false,
+    "err": "TypeError: persisted() called for opaque origin"
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415349407.12,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1.0200000000000102,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 58.84,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.06,
+     0.08,
+     0.1,
+     0.14,
+     0.76
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "urlSame": {
+   "global": "Window",
+   "origin": "http://127.0.0.1:8298",
+   "href": "http://127.0.0.1:8298/frame.html?kind=urlSame",
+   "isSecureContext": true,
+   "crossOriginIsolated": true,
+   "SharedArrayBuffer": "function",
+   "sabConstruct": 8,
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": "undefined"
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415349408.4,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 0.799999999999983,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04,
+     0.06
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 52.400000000000006,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04,
+     0.08
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "urlOpaque": {
+   "global": "Window",
+   "origin": "null",
+   "href": "http://127.0.0.1:8298/frame.html?kind=urlOpaque",
+   "isSecureContext": true,
+   "crossOriginIsolated": true,
+   "SharedArrayBuffer": "function",
+   "sabConstruct": 8,
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": "TypeError: estimate() called for opaque origin",
+   "storage_persisted": {
+    "ok": false,
+    "err": "TypeError: persisted() called for opaque origin"
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415349409.74,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 0.8199999999999932,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 54.460000000000036,
+    "minNonZeroMs": 0.01999999999998181,
+    "smallestDistinctMs": [
+     0.02,
+     0.04,
+     0.06
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  }
+ },
+ "rafOverall": {
+  "frames": 637,
+  "medianGapMs": 17.06
+ },
+ "tickOverall": {
+  "ticks": 1057,
+  "medianGapMs": 10.12
+ },
+ "busy": [
+  {
+   "who": "idle-baseline",
+   "sent": 1261,
+   "start": 1261,
+   "end": 1561,
+   "topRaf": {
+    "samples": 29,
+    "maxGapMs": 17.1,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 10.2,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "top",
+   "sent": 2661,
+   "start": 2661,
+   "end": 2961,
+   "topRaf": {
+    "samples": 12,
+    "maxGapMs": 308.1,
+    "gapsOver50ms": [
+     308
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 305.1,
+    "gapsOver50ms": [
+     305
+    ]
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "worker",
+   "sent": 4461,
+   "ping": {
+    "ok": true,
+    "rttMs": 240
+   },
+   "start": 4462,
+   "end": 4762,
+   "replyReceived": 4762,
+   "ctxTimeOriginDeltaMs": 86.919921875,
+   "topRaf": {
+    "samples": 29,
+    "maxGapMs": 17.1,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 10.1,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "srcdoc",
+   "sent": 6262,
+   "ping": {
+    "ok": true,
+    "rttMs": 0
+   },
+   "start": 6262,
+   "end": 6562,
+   "replyReceived": 6562,
+   "ctxTimeOriginDeltaMs": 109.0400390625,
+   "topRaf": {
+    "samples": 12,
+    "maxGapMs": 315.7,
+    "gapsOver50ms": [
+     316
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 304,
+    "gapsOver50ms": [
+     304
+    ]
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "urlSame",
+   "sent": 8062,
+   "ping": {
+    "ok": true,
+    "rttMs": 1
+   },
+   "start": 8062,
+   "end": 8362,
+   "replyReceived": 8364,
+   "ctxTimeOriginDeltaMs": 110.31982421875,
+   "topRaf": {
+    "samples": 13,
+    "maxGapMs": 302.6,
+    "gapsOver50ms": [
+     303
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 304.8,
+    "gapsOver50ms": [
+     305
+    ]
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "urlOpaque",
+   "sent": 9864,
+   "ping": {
+    "ok": true,
+    "rttMs": 0
+   },
+   "start": 9864,
+   "end": 10164,
+   "replyReceived": 10164,
+   "ctxTimeOriginDeltaMs": 111.659912109375,
+   "topRaf": {
+    "samples": 11,
+    "maxGapMs": 307.2,
+    "gapsOver50ms": [
+     307
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 304.9,
+    "gapsOver50ms": [
+     305
+    ]
+   },
+   "topEntriesInWindow": []
+  }
+ ],
+ "topEntriesAll": [],
+ "frameOwnEntries": {
+  "srcdoc": [],
+  "urlSame": [],
+  "urlOpaque": []
+ },
+ "fetch": {
+  "top": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=top",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.66,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=top",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.26,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "worker": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=worker",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.18,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=worker",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.04,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "srcdoc": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=srcdoc",
+     "initiatorType": "fetch",
+     "transferSize": 0,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.52,
+     "responseStatus": 200,
+     "nextHopProtocol": ""
+    },
+    {
+     "name": "/data/blob-tao.bin?from=srcdoc",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.26,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "urlSame": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=urlSame",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.32,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=urlSame",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.42,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "urlOpaque": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=urlOpaque",
+     "initiatorType": "fetch",
+     "transferSize": 0,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.24,
+     "responseStatus": 200,
+     "nextHopProtocol": ""
+    },
+    {
+     "name": "/data/blob-tao.bin?from=urlOpaque",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.26,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  }
+ },
+ "topResourceEntries": [
+  {
+   "name": "/collect.js",
+   "initiatorType": "script",
+   "transferSize": 9615,
+   "encodedBodySize": 9315,
+   "decodedBodySize": 9315,
+   "duration": 28.82,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/collect.js",
+   "initiatorType": "fetch",
+   "transferSize": 9615,
+   "encodedBodySize": 9315,
+   "decodedBodySize": 9315,
+   "duration": 1.42,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.js",
+   "initiatorType": "fetch",
+   "transferSize": 2195,
+   "encodedBodySize": 1895,
+   "decodedBodySize": 1895,
+   "duration": 10.44,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/worker.js",
+   "initiatorType": "other",
+   "transferSize": 1093,
+   "encodedBodySize": 793,
+   "decodedBodySize": 793,
+   "duration": 10.5,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.html?kind=urlSame",
+   "initiatorType": "iframe",
+   "transferSize": 440,
+   "encodedBodySize": 140,
+   "decodedBodySize": 140,
+   "duration": 11.18,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.html?kind=urlOpaque",
+   "initiatorType": "iframe",
+   "transferSize": 440,
+   "encodedBodySize": 140,
+   "decodedBodySize": 140,
+   "duration": 10.5,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/data/blob.bin?from=top",
+   "initiatorType": "fetch",
+   "transferSize": 65836,
+   "encodedBodySize": 65536,
+   "decodedBodySize": 65536,
+   "duration": 1.66,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/data/blob-tao.bin?from=top",
+   "initiatorType": "fetch",
+   "transferSize": 65836,
+   "encodedBodySize": 65536,
+   "decodedBodySize": 65536,
+   "duration": 1.26,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  }
+ ],
+ "frameWorkers": {
+  "srcdoc": {
+   "relativeUrl": "Error: worker error event: ",
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  },
+  "urlSame": {
+   "relativeUrl": {
+    "ok": true,
+    "reply": "object"
+   },
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  },
+  "urlOpaque": {
+   "relativeUrl": "Error: worker error event: ",
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  }
+ },
+ "pressure": {
+  "top": {
+   "typeof": "undefined"
+  },
+  "worker": {
+   "typeof": "undefined"
+  },
+  "srcdoc": {
+   "typeof": "undefined"
+  },
+  "urlSame": {
+   "typeof": "undefined"
+  },
+  "urlOpaque": {
+   "typeof": "undefined"
+  }
+ },
+ "memory": {
+  "top": {
+   "typeof": "undefined"
+  },
+  "worker": {
+   "typeof": "undefined"
+  },
+  "srcdoc": {
+   "typeof": "undefined"
+  },
+  "urlSame": {
+   "typeof": "undefined"
+  },
+  "urlOpaque": {
+   "typeof": "undefined"
+  }
+ },
+ "browserVersion": "149.0.2",
+ "engine": "firefox",
+ "url": "http://127.0.0.1:8298/index.html"
+}

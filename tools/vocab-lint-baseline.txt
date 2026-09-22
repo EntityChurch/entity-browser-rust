@@ -66,16 +66,60 @@
 #   reproducible-publish check can see the path. That is why the G-PIN-4 asset
 #   row is incomparable and the joint fixture carries two roots.
 #
-# app/feed/{entry,index-head,index-page,follow} — FOUR NEW ROWS, 2026-09-10,
-#   phase 2a. Honest rather than debt we chose: `APP-CONVENTION-FEED` declares
-#   six types, both seats measured at ZERO on 2026-09-10, and we are the first
-#   to implement any of them. They clear as workbench-go models them; there is
-#   nothing for us to fix.
+# app/feed/{entry,index-head,index-page,follow} — ✅ CLEARED 2026-09-14, BY THE
+#   OTHER SEAT, EXACTLY AS THESE FOUR ROWS PREDICTED. They read "they clear as
+#   workbench-go models them; there is nothing for us to fix" — and they did:
+#   `entitysdk/feed.go:68-71` at `d85b799` declares `TypeFeedEntry`,
+#   `TypeFeedIndexHead`, `TypeFeedIndexPage`, `TypeFeedFollow`, in `6a6cd6b`.
+#   Verified in their tree before the rows were removed, per the standing rule —
+#   a row is removed on evidence, never because the analyzer stopped saying it.
 #
-#   `collection` and `mirror` are the two we did NOT build, so the family reads
-#   6 declared / 4 implemented. That gap is stage-1 scope, not an omission: the
+#   ⭐ FOURTH INSTANCE OF THE NAMES-NOT-COUNTS PAYOFF, AND THE SECOND WHERE THE
+#   COUNTERPART DID THE WORK. Four rows left at once and none arrived, so the
+#   gate went RED on a 4 -> 0 movement. A count-based ratchet reads that as
+#   progress and passes, and would never have shown that the tier's largest
+#   single-seat family had closed — which was the most important thing that run
+#   had to report. `A ratchet that only counts cannot tell you what got better.`
+#
+#   ⛔ AND IT SURFACED A DELIVERY FAILURE, WHICH IS THE PART TO CARRY: the red is
+#   how we learned. Their packet announcing it —
+#   `ROUTING-2026-09-13-a-entity-browser-rust-…-agrees-five-of-five-…` — was on
+#   their `dev` for a day and is NOT in this tree, and our tracker for them had
+#   not moved since their `ec969d8`. So a lint gate told us a counterpart had
+#   shipped, because the channel did not. Their own §0 files the reciprocal half
+#   (`B-12c`): *reconcile against the counterpart's tracker on a schedule you
+#   keep, not when you happen to be writing to them.*
+#
+#   ⭐⭐ What the same commit establishes, and it is the first of its kind at this
+#   tier: `J-4` — our joint fixture, driven through THEIR encoder — agrees
+#   **5/5 on entry hashes, 5/5 on detached signatures and their invariant-pointer
+#   keys, 4/4 on index bindings, and on the trie root** (`001064708fe2ad99d0…`),
+#   with **no correction on either side**, between two encoders that had never
+#   seen each other's output. The claim "no cross-impl FEED evidence of any kind"
+#   was true on 2026-09-13 and stale within hours — fifth instance in this arc of
+#   `reading our own trackers is not reading the corpus`.
+#
+#   `collection` and `mirror` were the two we did NOT build, so the family read
+#   6 declared / 4 implemented. That gap was stage-1 scope, not an omission: the
 #   mirror is phase 4 and needs the byte-fidelity republication path rather than
 #   a codec, and the collection has no consumer yet.
+#
+# app/feed/mirror — FIFTH ROW, 2026-09-11, and it is the one the prior paragraph
+#   said was waiting on the byte-fidelity republication path. That path is built
+#   (`src/feed_mirror.rs`), so the type is: the family now reads 6 declared /
+#   5 implemented, and `collection` is the only one left.
+#
+#   Honest and NOT debt we chose, on the same terms as its four siblings: arch
+#   ruled `D20` the same morning and asked for the closure path to be built
+#   FIRST, which makes us the first seat by request rather than by accident. It
+#   clears as workbench-go models the type; there is nothing for us to fix.
+#
+#   ⚠ Worth keeping beside this row, because it is what the build found: §2.2
+#   defines `reference` as pinned-only, so §6's `subject` pins ONE ENTITY — a
+#   thread. The replication proposal's own closure trace is a gatherer
+#   republishing three authors' TIMELINES, which are growing prefixes and cannot
+#   be pinned. We implemented what the convention says and routed the gap, per
+#   G-PIN-4's rule that whoever publishes first becomes the baseline.
 #
 # ⚠ THE ANALYZER CANNOT SEE A PARAMETRIC FAMILY BEING IMPLEMENTED, and this run
 #   is where that surfaced. `spec vocab` reports the `embed` family as
@@ -100,14 +144,28 @@
 #   analyzer observation; nothing for this baseline to hold, because the finding
 #   is an absence of findings.
 #
-# app/user — RETIRED 2026-09-12. It was single-seat on the strength of a
-#   query-console filter example and its tests ("app/user" as a sample
-#   type_filter), which is a string, not an implementation of the type. The
-#   analyzer (entity-system-arch-tools, 2026-09-11 changes) now reports it as
-#   declared-unimplemented, i.e. no seat, and this repo never emitted one.
+# app/feed/mirror-page — SIXTH ROW, 2026-09-14, and it arrives with its head:
+#   §6.0a made a mirror a bounded head plus key-addressed pages (`FEED-R29`–
+#   `FEED-R32`, landed in v0.3 on 2026-09-13), so `app/feed/mirror` alone was a
+#   MUST NOT — we were carrying `entries` as an unbounded collection on the
+#   head. Paying that down necessarily mints the page type.
+#
+#   Honest and not debt we chose, on the same terms as `app/feed/mirror`: the
+#   type is DECLARED (`APP-CONVENTION-FEED` §2's table and §6's CDDL) and we are
+#   the first seat to implement it, because we are the only seat with a
+#   gatherer. It clears as workbench-go models it; there is nothing for us to
+#   fix. The family now reads 7 declared / 6 implemented, with `collection` the
+#   only one left and still without a consumer.
+#
+#   ⚠ Note the row arrived on a run that paid a conformance debt DOWN, which is
+#   the movement a count cannot read: one row in, nothing out, total 3 -> 4, and
+#   the honest summary is "we became conformant and the tier's implementation
+#   gap widened by one." Both halves are true and only the names show it.
+#
+# app/user — single-seat, declared in EXTENSION-TYPE. Not app-tier convention
+#   work; carried so the row is visible rather than filtered out by hand.
 
-single-seat	app/feed/entry
-single-seat	app/feed/follow
-single-seat	app/feed/index-head
-single-seat	app/feed/index-page
+single-seat	app/feed/mirror
+single-seat	app/feed/mirror-page
 single-seat	app/site-asset
+single-seat	app/user

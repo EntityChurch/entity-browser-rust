@@ -1224,6 +1224,34 @@ endif
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet-noreload: PASS"; else echo ">>> e2e-webrtc-meet-noreload: FAIL (rc=$$rc)"; fi; \
 	 exit $$rc
 
+.PHONY: e2e-signaling-node
+# The rung-1 rig's signaling node, built INSIDE the image into this repo's own
+# target dir — the rig's own `cargo build` needs a host toolchain, which a
+# make+podman host does not have. Built from whatever entity-core-rust the image
+# mounts, i.e. the same checkout `make wasm` linked dist/ against.
+E2E_NODE_BIN := target/e2e-node/debug/entity-signaling-node
+e2e-signaling-node: image
+	$(call RUN,cd ../entity-core-rust && CARGO_TARGET_DIR=/src/entity-systems/$(notdir $(CURDIR))/target/e2e-node cargo build -p entity-signaling-node 2>&1 | tail -3)
+	@test -x $(E2E_NODE_BIN) && echo ">>> signaling node: $(E2E_NODE_BIN)"
+
+.PHONY: e2e-webrtc-find-peers
+# THE ONE-BUTTON PATH: both browsers type the node's address into Peer
+# Connections and press "Find peers here" — no Shell, no connector form, no
+# reload, no Meet form — then chat over the id the lobby meet turned up.
+# Direct arm only (it implies NO_RELOAD).
+e2e-webrtc-find-peers:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-find-peers SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-find-peers BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-find-peers: type an address, press Find peers here, then chat"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; FIND_PEERS=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-find-peers: PASS"; else echo ">>> e2e-webrtc-find-peers: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
 e2e-webrtc-meet:
 	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-meet SKIPPED: podman not found on host"; exit 0; }
 ifneq ($(strip $(BUILD)),)
@@ -1671,7 +1699,6 @@ appimage: wasm-release
 # boots into the baked content; to re-test, clear ~/.local/share/<app-identifier>.
 APPS_STAGE   := .apps-stage
 INGEST_STAGE := .ingest-stage
-FEED_STAGE   := .feed-stage
 # Stage an out-of-mount INGEST / APPS_DIST into repo-local dirs, so a path
 # ANYWHERE on the host works with a publish that runs in a container mounting
 # only the parent meta dir.
@@ -1694,26 +1721,23 @@ FEED_STAGE   := .feed-stage
 # without still having what produced it), so staging there would copy a
 # multi-hundred-megabyte corpus to look at none of it.
 define stage_publish_sources
-	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE))
+	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE))
 	$(if $(VERIFY),,$(if $(INGEST),@echo "==> staging INGEST=$(INGEST) → $(INGEST_STAGE)/ (the publish container mounts only this repo)"))
 	$(if $(VERIFY),,$(if $(INGEST),@cp -r $(INGEST) $(INGEST_STAGE)))
 	$(if $(VERIFY),,$(if $(APPS_DIST),@echo "==> staging APPS_DIST=$(APPS_DIST) → $(APPS_STAGE)/"))
 	$(if $(VERIFY),,$(if $(APPS_DIST),@cp -r $(APPS_DIST) $(APPS_STAGE)))
-	$(if $(VERIFY),,$(if $(FEED),@echo "==> staging FEED=$(FEED) → $(FEED_STAGE)/"))
-	$(if $(VERIFY),,$(if $(FEED),@cp -r $(FEED) $(FEED_STAGE)))
 endef
 define unstage_publish_sources
-	@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE)
+	@rm -rf $(INGEST_STAGE) $(APPS_STAGE)
 endef
 # The flags every staged publish passes — the staged paths, never the caller's.
 INGEST_STAGED_FLAG = $(if $(INGEST),--ingest=$(INGEST_STAGE),)
 APPS_STAGED_FLAG   = $(if $(APPS_DIST),--ingest-apps=$(APPS_STAGE),)
-FEED_STAGED_FLAG   = $(if $(FEED),--ingest-feed=$(FEED_STAGE),)
 tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
@@ -1876,15 +1900,7 @@ pair-check:
 #                   any generator's output OR a hand-authored folder — instead of
 #                   the bundled demo seed. One site dir, or a parent of many.
 #                   Format: docs/architecture/guides/PUBLISH-INGEST-FORMAT.md;
-#                   worked example: examples/entity-demo/ (make site INGEST=…).
-#   FEED=<dir>      source this peer's OWN FEED from a directory of authored
-#                   posts (`*.md`, each with a `+++` TOML block carrying
-#                   `created_at`) — the third publish axis, same staging and
-#                   same one-projector publish as INGEST. Opt-in like APPS_DIST
-#                   and for the same reason: a publish that invented an empty
-#                   feed would claim every site publisher has one.
-#                   Worked example: examples/entity-demo/feed/
-#                   (make site FEED=examples/entity-demo/feed).
+#                   worked example: examples/demo-site/ (make site INGEST=…).
 #   PREFIX=<path>   the per-peer HOSTING SCOPE: nest everything (.html, .bin,
 #                   deployment-config origin) under {OUT}/{PREFIX}/… so a domain
 #                   can host many isolated peers side by side. Empty (default) =
@@ -1946,7 +1962,7 @@ pair-check:
 #                     `site` target the dir must live UNDER the repo tree (only
 #                     the meta dir is bind-mounted); `site-serve` runs host
 #                     cargo and accepts any path. e.g.
-#   make site-serve INGEST=examples/entity-demo APPS_DIST=~/path/to/entity-apps/dist
+#   make site-serve INGEST=examples/demo-site APPS_DIST=~/path/to/entity-apps/dist
 APPS_DIST ?=
 # Deployment-config startup surface (used by publish / site-serve when
 # DEPLOY_CONFIG is set): chrome | site | window (default window + a Site Browser
@@ -2006,7 +2022,7 @@ site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 
 # ============================================================================
@@ -2216,7 +2232,7 @@ site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
 	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="

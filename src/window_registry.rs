@@ -55,6 +55,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         ProgramsWindow::window_type(),
         KeyManagerWindow::window_type(),
         PeerConnectionsWindow::window_type(),
+        crate::views::files::FilesWindow::window_type(),
         FileTransferWindow::window_type(),
         ExecuteConsoleWindow::window_type(),
         QueryConsoleWindow::window_type(),
@@ -73,6 +74,7 @@ pub fn standard_window_types() -> Vec<WindowType> {
         StorageWindow::window_type(),
         SiteEditorWindow::window_type(),
         SystemOverviewWindow::window_type(),
+        crate::views::system_monitor::SystemMonitorWindow::window_type(),
         AccessLogWindow::window_type(),
         ThemeEditorWindow::window_type(),
     ]
@@ -127,10 +129,14 @@ pub fn window_groups() -> Vec<(WindowCategory, Vec<&'static str>)> {
             System,
             vec![
                 "System Overview",
+                "System Monitor",
                 "Settings",
                 "Theme Editor",
                 "Peers",
                 "Peer Connections",
+                // Files beside File Transfer: my files, then peers' files
+                // (DESIGN-2026-09-14-b — one home per file operation).
+                "Files",
                 "File Transfer",
                 // **Moved out of Apps & Content, 2026-08-21, operator's call.**
                 // It sat beside Site Browser on the argument that "how do I find
@@ -197,7 +203,10 @@ mod tests {
         // where before it was reachable only from the Shell's `name` verb.
         // 25 → 26: Feed — the first product surface over APP-CONVENTION-FEED,
         // and the first consumer of `feed_read` / `feed_fetch` / `feed_follows`.
-        assert_eq!(meta.len(), 26, "the standard roster is 26 windows");
+        // 26 → 27: Files — one home for this device's own files
+        // (DESIGN-2026-09-14-b).
+        // 27 → 28: System Monitor (DESIGN-2026-09-14-c).
+        assert_eq!(meta.len(), 28, "the standard roster is 28 windows");
         // **System-scoped, and it was already so while it sat in the Apps &
         // Content menu.** A registry pin is deployment infrastructure read from
         // the durable `SessionConfig`, not a property of whichever peer a window

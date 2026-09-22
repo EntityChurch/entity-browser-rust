@@ -238,10 +238,286 @@ impl SaveBundle {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The save operations — ONE implementation, two surfaces.
+//
+// The Apps window's Saves panel and the Files window both back up, restore,
+// drop and import saves. They used to be methods on the Apps window only; a
+// second surface would have had to copy them, and the copy of "back up what an
+// import replaces" is exactly the line a copy forgets. Each returns what it did
+// as an enum, so each surface words it its own way without re-deciding it.
+// ---------------------------------------------------------------------------
+
+/// What [`backup_live`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackupOutcome {
+    BackedUp,
+    /// The newest backup already holds these exact bytes — a second row that
+    /// differs only by a clock would be noise and one more binding nothing
+    /// reclaims.
+    Unchanged,
+    /// There is no live save to back up.
+    NoSave,
+}
+
+/// Snapshot one app's live save under `now_ms`.
+pub fn backup_live(
+    peers: &Peers,
+    writer: &crate::writer_handle::WriterHandle,
+    peer_id: &str,
+    set: &str,
+    id: &str,
+    now_ms: u64,
+) -> BackupOutcome {
+    let live = app_paths::app_save_path(APP_ID, peer_id, set, id);
+    let Some(ent) = peers.get_entity(peer_id, &live) else {
+        return BackupOutcome::NoSave;
+    };
+    if already_backed_up(peers, peer_id, set, id) {
+        return BackupOutcome::Unchanged;
+    }
+    writer.put(app_paths::app_backup_path(APP_ID, peer_id, set, id, now_ms), ent);
+    BackupOutcome::BackedUp
+}
+
+/// Copy a backup back over the live save. The backup entity is written
+/// unchanged, so the two share one content blob. `false` = no such backup.
+pub fn restore_backup(
+    peers: &Peers,
+    writer: &crate::writer_handle::WriterHandle,
+    peer_id: &str,
+    set: &str,
+    id: &str,
+    stamp: u64,
+) -> bool {
+    let from = app_paths::app_backup_path(APP_ID, peer_id, set, id, stamp);
+    let Some(ent) = peers.get_entity(peer_id, &from) else {
+        return false;
+    };
+    writer.put(app_paths::app_save_path(APP_ID, peer_id, set, id), ent);
+    true
+}
+
+/// Forget a backup, and reclaim its bytes if nothing else binds them.
+/// Reclaim is binding-safe, so a live save restored from this very backup
+/// keeps the blob alive.
+pub fn drop_backup(
+    peers: &Peers,
+    writer: &crate::writer_handle::WriterHandle,
+    peer_id: &str,
+    set: &str,
+    id: &str,
+    stamp: u64,
+) {
+    let path = app_paths::app_backup_path(APP_ID, peer_id, set, id, stamp);
+    let hash = peers.get_entity(peer_id, &path).map(|e| e.content_hash);
+    writer.remove(path);
+    if let Some(h) = hash {
+        writer.content_remove(h);
+    }
+}
+
+/// What [`import_bundle`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportOutcome {
+    /// There was no save for that app; this is now it.
+    Imported,
+    /// A save was replaced — and backed up first, so it is in the backup list.
+    ImportedReplacing,
+}
+
+/// File a bundle as this peer's save for the app it names.
+///
+/// **It backs up whatever it replaces first.** Importing is the one save
+/// operation that destroys a save without naming it — the person is thinking
+/// about the incoming one — so the outgoing one is snapshotted on the way past.
+/// Where the bundle came from (a peer's offer, a file off a USB stick) is not
+/// this function's business; the bundle carries what it is.
+pub fn import_bundle(
+    peers: &Peers,
+    writer: &crate::writer_handle::WriterHandle,
+    peer_id: &str,
+    bundle: &SaveBundle,
+    now_ms: u64,
+) -> ImportOutcome {
+    let live = app_paths::app_save_path(APP_ID, peer_id, &bundle.set, &bundle.id);
+    let replaced = peers.get_entity(peer_id, &live).is_some();
+    if replaced {
+        backup_live(peers, writer, peer_id, &bundle.set, &bundle.id, now_ms);
+    }
+    writer.put(live, AppSave::new(&bundle.state).to_entity());
+    if replaced {
+        ImportOutcome::ImportedReplacing
+    } else {
+        ImportOutcome::Imported
+    }
+}
+
+/// Package one app's live save as a bundle, ready to leave the device. `None` =
+/// no live save. `app_name` is advisory (see [`SaveBundle::app_name`]).
+pub fn bundle_live(
+    peers: &Peers,
+    peer_id: &str,
+    set: &str,
+    id: &str,
+    app_name: &str,
+    now_ms: u64,
+) -> Option<SaveBundle> {
+    let ent = peers.get_entity(peer_id, &app_paths::app_save_path(APP_ID, peer_id, set, id))?;
+    if ent.entity_type != APP_SAVE_TYPE {
+        return None;
+    }
+    Some(SaveBundle {
+        set: set.to_string(),
+        id: id.to_string(),
+        app_name: app_name.to_string(),
+        state: AppSave::from_entity(&ent).state,
+        saved_at_ms: now_ms,
+    })
+}
+
+/// Package one backup as a bundle. `None` = no such backup. The bundle's
+/// `saved_at_ms` is the backup's own stamp — when the state was captured, which
+/// is what a person importing it later wants to know.
+pub fn bundle_backup(
+    peers: &Peers,
+    peer_id: &str,
+    set: &str,
+    id: &str,
+    app_name: &str,
+    stamp_ms: u64,
+) -> Option<SaveBundle> {
+    let ent = peers.get_entity(peer_id, &app_paths::app_backup_path(APP_ID, peer_id, set, id, stamp_ms))?;
+    if ent.entity_type != APP_SAVE_TYPE {
+        return None;
+    }
+    Some(SaveBundle {
+        set: set.to_string(),
+        id: id.to_string(),
+        app_name: app_name.to_string(),
+        state: AppSave::from_entity(&ent).state,
+        saved_at_ms: stamp_ms,
+    })
+}
+
+/// What reading a picked file as a save did — the file-picker half of the USB
+/// flow, shared by the Files window and the Apps window's Saves panel so both
+/// word the same three facts the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileImport {
+    /// The file is not a save at all. Carries the file's own name: an ordinary
+    /// file picked by mistake is the common case, and "corrupt save" would send
+    /// the person looking for a problem that is not there.
+    NotASave { file_name: String },
+    Imported { app: String },
+    ImportedReplacing { app: String },
+}
+
+impl FileImport {
+    /// The sentence for a person.
+    pub fn message(&self) -> String {
+        match self {
+            FileImport::NotASave { file_name } => crate::i18n::t("files.not_a_save", &[("name", file_name)]),
+            FileImport::Imported { app } => crate::i18n::t("saves.imported", &[("app", app)]),
+            FileImport::ImportedReplacing { app } => crate::i18n::t("saves.imported_replacing", &[("app", app)]),
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self, FileImport::NotASave { .. })
+    }
+}
+
+/// Import a picked file as a save ([`import_bundle`], which backs up first).
+pub fn import_file(
+    peers: &Peers,
+    writer: &crate::writer_handle::WriterHandle,
+    peer_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+    now_ms: u64,
+) -> FileImport {
+    let Some(bundle) = SaveBundle::from_bytes(bytes) else {
+        return FileImport::NotASave { file_name: file_name.to_string() };
+    };
+    // The bundle's advisory name, else its id: a save is filed by set/id.
+    let app = if bundle.app_name.is_empty() { bundle.id.clone() } else { bundle.app_name.clone() };
+    match import_bundle(peers, writer, peer_id, &bundle, now_ms) {
+        ImportOutcome::ImportedReplacing => FileImport::ImportedReplacing { app },
+        ImportOutcome::Imported => FileImport::Imported { app },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::apps::paths;
+
+    #[tokio::test]
+    async fn a_backup_bundles_with_its_own_stamp_and_a_picked_non_save_says_so() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let writer = peers.writer_handle_for(&pid).expect("writer");
+        peers.seed_write(&pid, app_paths::app_backup_path(APP_ID, &pid, paths::GAMES_SET, "chess", 42), AppSave::new("old").to_entity());
+        let b = bundle_backup(&peers, &pid, paths::GAMES_SET, "chess", "Chess", 42).expect("a backup bundles");
+        assert_eq!((b.state.as_str(), b.saved_at_ms, b.app_name.as_str()), ("old", 42, "Chess"));
+        assert!(bundle_backup(&peers, &pid, paths::GAMES_SET, "chess", "Chess", 43).is_none());
+
+        assert_eq!(
+            import_file(&peers, &writer, &pid, "photo.jpg", b"\xff\xd8", 1),
+            FileImport::NotASave { file_name: "photo.jpg".into() }
+        );
+        assert_eq!(
+            import_file(&peers, &writer, &pid, "x.entitysave", &b.to_bytes(), 1),
+            FileImport::Imported { app: "Chess".into() }
+        );
+        assert_eq!(
+            import_file(&peers, &writer, &pid, "x.entitysave", &b.to_bytes(), 2),
+            FileImport::ImportedReplacing { app: "Chess".into() }
+        );
+    }
+
+    /// The USB flow end to end at the data layer: a save leaves one profile as
+    /// bytes, arrives in another, and the second profile's save is backed up on
+    /// the way past rather than lost.
+    #[tokio::test]
+    async fn a_save_leaves_as_bytes_and_an_import_backs_up_what_it_replaces() {
+        let from = Peers::new_direct();
+        let from_pid = from.primary_peer_id().to_string();
+        seed_save(&from, &from_pid, paths::GAMES_SET, "chess", "{\"board\":\"e4\"}");
+        let bytes = bundle_live(&from, &from_pid, paths::GAMES_SET, "chess", "Chess", 7)
+            .expect("a live save bundles")
+            .to_bytes();
+
+        let to = Peers::new_direct();
+        let to_pid = to.primary_peer_id().to_string();
+        let writer = to.writer_handle_for(&to_pid).expect("writer");
+        let bundle = SaveBundle::from_bytes(&bytes).expect("the bytes are a bundle");
+
+        assert_eq!(import_bundle(&to, &writer, &to_pid, &bundle, 1_000), ImportOutcome::Imported);
+        assert!(list_backups(&to, &to_pid, paths::GAMES_SET, "chess").is_empty(), "nothing replaced, nothing backed up");
+
+        seed_save(&to, &to_pid, paths::GAMES_SET, "chess", "{\"board\":\"d4\"}");
+        assert_eq!(
+            import_bundle(&to, &writer, &to_pid, &bundle, 2_000),
+            ImportOutcome::ImportedReplacing
+        );
+        let backups = list_backups(&to, &to_pid, paths::GAMES_SET, "chess");
+        assert_eq!(backups.len(), 1, "the replaced save was backed up first");
+        let saves = list_saves(&to, &to_pid, paths::GAMES_SET);
+        assert_eq!(saves[0].bytes, "{\"board\":\"e4\"}".len(), "the imported state is live");
+    }
+
+    #[tokio::test]
+    async fn backup_reports_no_save_and_unchanged_as_their_own_outcomes() {
+        let peers = Peers::new_direct();
+        let pid = peers.primary_peer_id().to_string();
+        let writer = peers.writer_handle_for(&pid).expect("writer");
+        assert_eq!(backup_live(&peers, &writer, &pid, paths::GAMES_SET, "chess", 1), BackupOutcome::NoSave);
+        seed_save(&peers, &pid, paths::GAMES_SET, "chess", "s");
+        assert_eq!(backup_live(&peers, &writer, &pid, paths::GAMES_SET, "chess", 2), BackupOutcome::BackedUp);
+        assert_eq!(backup_live(&peers, &writer, &pid, paths::GAMES_SET, "chess", 3), BackupOutcome::Unchanged);
+    }
 
     fn seed_save(peers: &Peers, pid: &str, set: &str, id: &str, state: &str) {
         peers.seed_write(

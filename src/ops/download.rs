@@ -21,9 +21,10 @@ use entity_content::{blob_chunk_hashes, reassemble};
 use entity_handler::HandlerResult;
 use entity_store::{ContentStore, MemoryContentStore};
 
-/// Reassemble the file bytes from a `local/files:read` result and trigger a
-/// browser download. Returns the byte count on success.
-pub fn materialize_and_download(result: &HandlerResult, filename: &str) -> Result<usize, String> {
+/// Reassemble the file bytes from a `local/files:read` result, without saving
+/// them anywhere: the caller downloads them ([`save_bytes`]) or keeps them in My
+/// files.
+pub fn materialize(result: &HandlerResult) -> Result<Vec<u8>, String> {
     // Rebuild a content store from the response's included entities so the
     // shared reassembler can resolve the blob → chunks. Keyed by content
     // hash, matching the `included` map keys.
@@ -50,10 +51,7 @@ pub fn materialize_and_download(result: &HandlerResult, filename: &str) -> Resul
              (large-file transfer is a follow-up)"
         )
     })?;
-
-    let len = bytes.len();
-    trigger_browser_download(filename, &bytes)?;
-    Ok(len)
+    Ok(bytes)
 }
 
 /// Hand already-reassembled `bytes` to the browser as a download. The public

@@ -68,6 +68,48 @@ pub trait PublishAxis {
     /// error, since most publishers use one convention.
     fn incoming(&self) -> usize;
 
+    /// **Peers other than the publisher whose segments this axis writes into.**
+    ///
+    /// Three of the four rows answer with an empty list, and until the mirror
+    /// they all did — a publish writes under its own peer, which is exactly what
+    /// made [`tree_prefix`](Self::tree_prefix) a *complete* statement of what
+    /// the wholesale clean removes. `APP-CONVENTION-FEED` §6's gatherer is the
+    /// first axis whose bytes are not its publisher's: a carried entry is bound
+    /// at its own **author's** address, which is precisely what lets a consumer
+    /// reach it with the reader it already has.
+    ///
+    /// `REFERENCE-PUBLISHING-PIPELINE` §0.2a recorded that as the reason a
+    /// mirror *"is not a row"* — `tree_prefix`, whose whole job is to name what
+    /// the clean would remove, cannot describe this axis truthfully. **This
+    /// method is what makes that false**: a row states the foreign half instead
+    /// of `tree_prefix` lying about it. Two consequences it exists to carry:
+    ///
+    /// 1. **The wholesale clean does not reach them.** `{base}/{author}/` is not
+    ///    `{base}/{peer}/`, so carried pointers survive a republish that drops
+    ///    the author — the safe direction (D24), and **not free**, because the
+    ///    blobs those pointers name live in the SHARED `content/` store, which
+    ///    the clean *does* remove. `run_projection` suppresses that half when a
+    ///    foreign tree is present, and the gate is
+    ///    `a_republish_that_does_not_re_gather_leaves_no_dangling_pointer`.
+    /// 2. **`--verify`'s sweep is rooted at `{base}/{peer}/`**, so it never
+    ///    visits them either. That one is answered by structure rather than by
+    ///    scope — a mirror record *declares* what it carries, so `run_verify`
+    ///    follows the declaration instead of widening the sweep.
+    ///
+    /// ⚠ **Returned for reporting and for suppression, never to authorize a
+    /// delete.** Enumerating to decide what *not* to remove is safe in the worst
+    /// case (orphans accumulate); enumerating to decide what to remove is how a
+    /// publish destroys a co-hosted publisher's tree, which this repo has
+    /// already done once (AP52/AP53).
+    ///
+    /// **Deliberately not defaulted.** A `fn carried_peers(&self) -> Vec<String>
+    /// { Vec::new() }` on the trait would be right for every axis that exists
+    /// and silently wrong for the next one that is not — AP44's shape exactly,
+    /// where the rule decays on the first implementor who did not have the whole
+    /// set in their head. Three rows below answer it in one line; a fifth
+    /// convention gets `error[E0046]` instead of an empty list it never chose.
+    fn carried_peers(&self) -> Vec<String>;
+
     /// Record every entity into `root`. Returns a report line when there is
     /// something to say.
     ///
@@ -95,11 +137,13 @@ pub fn axes<'a>(
     sites: &'a [OwnedSite],
     app_sets: &'a crate::apps::ingest::IngestedSets,
     feed: Option<&'a OwnedFeed>,
+    mirrors: &'a [crate::feed_mirror::MirrorPlan],
 ) -> Vec<Box<dyn PublishAxis + 'a>> {
     vec![
         Box::new(SiteAxis { sites }),
         Box::new(AppsAxis { peer_id, sets: app_sets }),
         Box::new(FeedAxis { feed }),
+        Box::new(MirrorAxis { mirrors }),
     ]
 }
 
@@ -120,6 +164,10 @@ impl PublishAxis for SiteAxis<'_> {
     }
     fn incoming(&self) -> usize {
         self.sites.len()
+    }
+    /// A site publish writes under its publisher and nowhere else.
+    fn carried_peers(&self) -> Vec<String> {
+        Vec::new()
     }
     fn project(
         &self,
@@ -156,6 +204,10 @@ impl PublishAxis for AppsAxis<'_> {
     fn incoming(&self) -> usize {
         self.sets.values().map(|i| i.catalog.entries.len()).sum()
     }
+    /// An app set is the publisher's own; bundles live at `{peer}/apps/…`.
+    fn carried_peers(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn project(
         &self,
         out_dir: &Path,
@@ -174,22 +226,11 @@ impl PublishAxis for AppsAxis<'_> {
                 set,
                 &ing.catalog,
                 &ing.bundles,
-                &ing.assets,
                 prefix,
                 Some(root),
             )
             .map_err(|e| format!("app-set '{set}': {e}"))?;
-            let mut line = format!("apps[{set}]: {n} bundle(s) → {peer_id}/apps/{set}/");
-            if !ing.assets.is_empty() {
-                let files: usize = ing.assets.iter().map(|b| b.index.entries.len()).sum();
-                let bytes: u64 = ing.assets.iter().map(|b| b.index.total_bytes()).sum();
-                line.push_str(&format!(
-                    " + {} asset bundle(s), {files} file(s), {:.1} MiB",
-                    ing.assets.len(),
-                    bytes as f64 / 1048576.0
-                ));
-            }
-            lines.push(line);
+            lines.push(format!("apps[{set}]: {n} bundle(s) → {peer_id}/apps/{set}/"));
         }
         Ok((!lines.is_empty()).then(|| lines.join("\n  ")))
     }
@@ -215,6 +256,12 @@ impl PublishAxis for FeedAxis<'_> {
     fn incoming(&self) -> usize {
         self.feed.map_or(0, |f| f.entries.len())
     }
+    /// A peer has ONE feed and it is theirs — `FEED-R1` refuses an entry
+    /// claiming any other author, on the emitting side as well as the
+    /// reading one, so this axis cannot write into a stranger's namespace.
+    fn carried_peers(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn project(
         &self,
         out_dir: &Path,
@@ -239,6 +286,93 @@ impl PublishAxis for FeedAxis<'_> {
         Ok(Some(format!(
             "feed: {} post(s) over {} page(s) → {}/app/feed/",
             report.entry_count, report.page_count, feed.peer_id
+        )))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mirrors — `APP-CONVENTION-FEED` §6
+// ---------------------------------------------------------------------------
+
+/// **The fourth axis — and the one that pays for [`PublishAxis::carried_peers`].**
+///
+/// `REFERENCE-PUBLISHING-PIPELINE` §0.2a left three questions open before a
+/// mirror could be a row. Answered here, and the answers are in the code rather
+/// than only in the prose:
+///
+/// **1. A fourth axis, not a second subgraph of [`FeedAxis`].** The deciding
+/// argument is the *plan's* per-unit term, not tidiness: `run_plan` exists to
+/// name **which** thing a republish would delete, and a publisher who carries
+/// posts without re-gathering would otherwise be told *"0 post(s) REMOVED"* on
+/// the same run that deletes every mirror they hold. A post and a gathered view
+/// are different units and [`incoming`](PublishAxis::incoming) is a count of
+/// units.
+///
+/// **2. The prefix NESTS, and it is asserted rather than implied.**
+/// `app/feed/mirrors/` is inside `app/feed/`, so the census is not a partition
+/// and would be misread as one — `the_only_nesting_between_two_axes_is_the_one_
+/// feed_6_puts_there` pins exactly which pair overlaps, so a fifth convention
+/// that collides with an existing prefix by accident fails instead of quietly
+/// sharing accounting. Both statements are true at once because the clean is
+/// wholesale over `{base}/{peer}/`: every prefix here is nested inside *that*.
+///
+/// **3. `--verify` is answered by structure, not by scope** — see `run_verify`'s
+/// mirror arm. §0.2a said *"this one is the wrong root and no extra arm fixes
+/// it"*; that is true of an arm operating on the swept file set and false of one
+/// that follows a **declaration**, which is the same move that closed the
+/// `app/site-asset` and `app/feed/entry` instances (*a heuristic scan filters on
+/// presence, so it cannot see absence — structure can*).
+pub struct MirrorAxis<'a> {
+    pub mirrors: &'a [crate::feed_mirror::MirrorPlan],
+}
+
+impl PublishAxis for MirrorAxis<'_> {
+    fn name(&self) -> &'static str {
+        "mirrors"
+    }
+    fn tree_prefix(&self) -> &'static str {
+        // §6.0.1's derived key, under the GATHERER. The carried bodies are not
+        // here and cannot be — see `carried_peers`.
+        crate::feed::mirror_prefix()
+    }
+    fn incoming(&self) -> usize {
+        self.mirrors.len()
+    }
+    /// ⭐ **The only non-empty answer in the table.** Each gathered author's
+    /// entries and detached signatures are bound under *their* peer segment,
+    /// which is what makes them reachable by the reader a consumer already has
+    /// (`feed_mirror::Carried`).
+    fn carried_peers(&self) -> Vec<String> {
+        let mut peers: Vec<String> =
+            self.mirrors.iter().flat_map(|m| m.carried_peers()).collect();
+        peers.sort();
+        peers.dedup();
+        peers
+    }
+    fn project(
+        &self,
+        out_dir: &Path,
+        _peer_id: &str,
+        prefix: &str,
+        root: &mut RootProjector,
+    ) -> Result<Option<String>, String> {
+        if self.mirrors.is_empty() {
+            return Ok(None);
+        }
+        // The prefixed base, for `FeedAxis`'s reason: `publish_mirror` writes
+        // `{dir}/{peer}/…` directly and takes no prefix of its own.
+        let base = paths::prefixed_root(out_dir, prefix);
+        let mut entries = 0usize;
+        for plan in self.mirrors {
+            crate::feed_mirror::publish_mirror(&base, root, plan)?;
+            entries += plan.entry_count();
+        }
+        let authors = self.carried_peers().len();
+        Ok(Some(format!(
+            "mirrors: {} gathered view(s), {entries} entry(ies) from {authors} author(s) \
+             → {}",
+            self.mirrors.len(),
+            crate::feed::mirror_prefix(),
         )))
     }
 }
@@ -278,18 +412,107 @@ mod tests {
     #[test]
     fn every_axis_names_the_tree_prefix_the_clean_would_remove() {
         let sets = crate::apps::ingest::IngestedSets::new();
-        let all = axes("QmPeer", &[], &sets, None);
+        let all = axes("QmPeer", &[], &sets, None, &[]);
         let rows: Vec<(&str, &str)> =
             all.iter().map(|a| (a.name(), a.tree_prefix())).collect();
         assert_eq!(
             rows,
-            vec![("sites", "sites/"), ("apps", "apps/"), ("feed", "app/feed/")],
-            "a fourth L5 convention is a row in `axes` — if this fails because you added \
+            vec![
+                ("sites", "sites/"),
+                ("apps", "apps/"),
+                ("feed", "app/feed/"),
+                ("mirrors", "app/feed/mirrors/"),
+            ],
+            "a fifth L5 convention is a row in `axes` — if this fails because you added \
              one, add it here and check `run_plan` gives it a term"
         );
         // Nothing to publish is not an error on any axis; most publishers use
         // one convention.
         assert!(all.iter().all(|a| a.incoming() == 0));
+    }
+
+    /// ⛔ **The census reads like a partition and is not one — so say which pair
+    /// overlaps, by name.**
+    ///
+    /// `app/feed/mirrors/` nests inside `app/feed/` because §6 puts it there,
+    /// and that is a fact about the convention rather than a collision. Every
+    /// *other* pair is disjoint, and a fifth row that lands inside an existing
+    /// prefix by accident would share another axis's accounting silently — the
+    /// two would each report a term, and one clean would satisfy both.
+    ///
+    /// Asserted as an exhaustive set rather than "the mirror nests": a check
+    /// spelled that way is satisfied by a table in which everything nests.
+    #[test]
+    fn the_only_nesting_between_two_axes_is_the_one_feed_6_puts_there() {
+        let sets = crate::apps::ingest::IngestedSets::new();
+        let all = axes("QmPeer", &[], &sets, None, &[]);
+
+        let mut nested: Vec<(&str, &str)> = Vec::new();
+        for a in &all {
+            for b in &all {
+                if a.name() != b.name() && a.tree_prefix().starts_with(b.tree_prefix()) {
+                    nested.push((a.name(), b.name()));
+                }
+            }
+        }
+        assert_eq!(
+            nested,
+            vec![("mirrors", "feed")],
+            "an axis prefix moved inside another one. If that is deliberate, it belongs \
+             in this list with the reason; if it is not, the two rows now report one \
+             subgraph twice."
+        );
+    }
+
+    /// ⭐ **Exactly one axis writes outside its publisher's namespace, and the
+    /// table says which.**
+    ///
+    /// Until §6's gatherer this was true of all of them and nothing recorded it,
+    /// which is why `tree_prefix` read as a complete statement of what a publish
+    /// touches. The count is asserted so a fifth convention that carries foreign
+    /// bytes cannot join the table without the clean and the verify being asked
+    /// about it.
+    #[test]
+    fn only_the_mirror_axis_writes_under_a_peer_that_is_not_the_publisher() {
+        use crate::feed_mirror::{Carried, MirrorPlan};
+        use crate::feed::{FeedMirror, MirrorSubject};
+
+        let sets = crate::apps::ingest::IngestedSets::new();
+        let empty = axes("QmPeer", &[], &sets, None, &[]);
+        assert!(
+            empty.iter().all(|a| a.carried_peers().is_empty()),
+            "an axis carrying nothing still named a foreign peer"
+        );
+
+        // One mirror of one author, which is the only shape that can answer
+        // non-empty — and a plan with no carried rows would make this vacuous.
+        let author = "2AuthorPeerIdForThisCensus";
+        let plan = MirrorPlan {
+            record: FeedMirror::new(
+                MirrorSubject::timeline(author).reference(),
+                0,
+                7,
+                "QmPeer",
+            ),
+            pages: Vec::new(),
+            carried: vec![Carried {
+                peer: author.to_string(),
+                key: "app/feed/entries/ff".into(),
+                entity: entity_entity::Entity::new("app/feed/entry", entity_ecf::to_ecf(
+                    &entity_ecf::Value::Map(Vec::new()),
+                ))
+                .unwrap(),
+            }],
+            content: Vec::new(),
+        };
+        let mirrors = vec![plan];
+        let all = axes("QmPeer", &[], &sets, None, &mirrors);
+        let carrying: Vec<(&str, Vec<String>)> = all
+            .iter()
+            .map(|a| (a.name(), a.carried_peers()))
+            .filter(|(_, peers)| !peers.is_empty())
+            .collect();
+        assert_eq!(carrying, vec![("mirrors", vec![author.to_string()])]);
     }
 
     /// **The head's clock is the feed's own high-water mark, not the wall

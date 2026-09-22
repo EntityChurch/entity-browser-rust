@@ -1,0 +1,4981 @@
+{
+ "startedAt": "2026-09-14T19:49:24.762Z",
+ "log": [
+  [
+   17,
+   "worker"
+  ],
+  [
+   17,
+   "frames"
+  ],
+  [
+   89,
+   "collect"
+  ],
+  [
+   1075,
+   "busy"
+  ],
+  [
+   12815,
+   "fetch"
+  ],
+  [
+   14845,
+   "frame-workers"
+  ],
+  [
+   14867,
+   "pressure"
+  ],
+  [
+   32932,
+   "pressure-stress"
+  ],
+  [
+   47934,
+   "memory-top"
+  ],
+  [
+   47934,
+   "memory-worker"
+  ],
+  [
+   47934,
+   "memory-srcdoc"
+  ],
+  [
+   47935,
+   "memory-urlSame"
+  ],
+  [
+   47935,
+   "memory-urlOpaque"
+  ],
+  [
+   47935,
+   "done"
+  ]
+ ],
+ "sandbox": {
+  "srcdoc": "allow-scripts allow-downloads",
+  "urlSame": "allow-scripts allow-same-origin",
+  "urlOpaque": "allow-scripts allow-downloads"
+ },
+ "topObserve": {
+  "longtask": "observe() returned",
+  "long-animation-frame": "observe() returned"
+ },
+ "frameHello": {
+  "srcdoc": true,
+  "urlSame": true,
+  "urlOpaque": true
+ },
+ "workerHello": true,
+ "env": {
+  "top": {
+   "global": "Window",
+   "origin": "http://127.0.0.1:8297",
+   "href": "http://127.0.0.1:8297/index.html?stress=1",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": {
+    "usedJSHeapSize": 1257275,
+    "totalJSHeapSize": 2411599,
+    "jsHeapSizeLimit": 4395630592
+   },
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": 32,
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": {}
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": {
+    "effectiveType": "4g",
+    "downlink": 1.5,
+    "rtt": 100,
+    "saveData": false
+   },
+   "getBattery": "function",
+   "battery": {
+    "level": 1,
+    "charging": true,
+    "chargingTime": 0,
+    "dischargingTime": null
+   },
+   "PressureObserver": "function",
+   "pressure_knownSources": [
+    "cpu"
+   ],
+   "userAgentData": "object",
+   "uaData_low": {
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "platform": "Linux"
+   },
+   "uaData_high": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "Linux",
+    "platformVersion": ""
+   },
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+   "timeOrigin": 1789415364745.5,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 4.100000008940697,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1,
+     0.2
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 277.90000000596046,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "object",
+   "isInputPending": "function",
+   "isInputPending_value": false,
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "element",
+    "event",
+    "first-input",
+    "interaction-contentful-paint",
+    "largest-contentful-paint",
+    "layout-shift",
+    "long-animation-frame",
+    "longtask",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource",
+    "soft-navigation",
+    "visibility-state"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "object",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "worker": {
+   "global": "DedicatedWorkerGlobalScope",
+   "origin": "http://127.0.0.1:8297",
+   "href": "http://127.0.0.1:8297/worker.js",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": 32,
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": {}
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": {
+    "effectiveType": "4g",
+    "downlink": 1.5,
+    "rtt": 100,
+    "saveData": false
+   },
+   "getBattery": "undefined",
+   "PressureObserver": "function",
+   "pressure_knownSources": [
+    "cpu"
+   ],
+   "userAgentData": "object",
+   "uaData_low": {
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "platform": "Linux"
+   },
+   "uaData_high": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "Linux",
+    "platformVersion": ""
+   },
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+   "timeOrigin": 1789415364774.3,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 2.4000000059604645,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 187.90000000596046,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "mark",
+    "measure",
+    "resource"
+   ],
+   "eventCounts": "undefined",
+   "navigator_gpu": "object",
+   "wakeLock": "undefined"
+  },
+  "srcdoc": {
+   "global": "Window",
+   "origin": "null",
+   "href": "about:srcdoc",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": {
+    "usedJSHeapSize": 812467,
+    "totalJSHeapSize": 2127079,
+    "jsHeapSizeLimit": 4395630592
+   },
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": 32,
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": "TypeError: Failed to execute 'estimate' on 'StorageManager': The operation is not supported in this context.",
+   "storage_persisted": {
+    "ok": false,
+    "err": "TypeError: Failed to execute 'persisted' on 'StorageManager': The operation is not supported in this context."
+   },
+   "connection": {
+    "effectiveType": "4g",
+    "downlink": 1.45,
+    "rtt": 100,
+    "saveData": false
+   },
+   "getBattery": "function",
+   "battery": {
+    "level": 1,
+    "charging": true,
+    "chargingTime": 0,
+    "dischargingTime": null
+   },
+   "PressureObserver": "function",
+   "pressure_knownSources": [
+    "cpu"
+   ],
+   "userAgentData": "object",
+   "uaData_low": {
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "platform": "Linux"
+   },
+   "uaData_high": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "Linux",
+    "platformVersion": ""
+   },
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+   "timeOrigin": 1789415364778.4,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 2.0999999940395355,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 171.90000000596046,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "object",
+   "isInputPending": "function",
+   "isInputPending_value": false,
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "element",
+    "event",
+    "first-input",
+    "interaction-contentful-paint",
+    "largest-contentful-paint",
+    "layout-shift",
+    "long-animation-frame",
+    "longtask",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource",
+    "soft-navigation",
+    "visibility-state"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "object",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "urlSame": {
+   "global": "Window",
+   "origin": "http://127.0.0.1:8297",
+   "href": "http://127.0.0.1:8297/frame.html?kind=urlSame",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": {
+    "usedJSHeapSize": 1626310,
+    "totalJSHeapSize": 2936374,
+    "jsHeapSizeLimit": 4395630592
+   },
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": 32,
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": {}
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": {
+    "effectiveType": "4g",
+    "downlink": 1.5,
+    "rtt": 100,
+    "saveData": false
+   },
+   "getBattery": "function",
+   "battery": {
+    "level": 1,
+    "charging": true,
+    "chargingTime": 0,
+    "dischargingTime": null
+   },
+   "PressureObserver": "function",
+   "pressure_knownSources": [
+    "cpu"
+   ],
+   "userAgentData": "object",
+   "uaData_low": {
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "platform": "Linux"
+   },
+   "uaData_high": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "Linux",
+    "platformVersion": ""
+   },
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+   "timeOrigin": 1789415364779.3,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1.9000000059604645,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 163.6000000089407,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "object",
+   "isInputPending": "function",
+   "isInputPending_value": false,
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "element",
+    "event",
+    "first-input",
+    "interaction-contentful-paint",
+    "largest-contentful-paint",
+    "layout-shift",
+    "long-animation-frame",
+    "longtask",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource",
+    "soft-navigation",
+    "visibility-state"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "object",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "urlOpaque": {
+   "global": "Window",
+   "origin": "null",
+   "href": "http://127.0.0.1:8297/frame.html?kind=urlOpaque",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": {
+    "usedJSHeapSize": 1161186,
+    "totalJSHeapSize": 2652094,
+    "jsHeapSizeLimit": 4395630592
+   },
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": 32,
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": "TypeError: Failed to execute 'estimate' on 'StorageManager': The operation is not supported in this context.",
+   "storage_persisted": {
+    "ok": false,
+    "err": "TypeError: Failed to execute 'persisted' on 'StorageManager': The operation is not supported in this context."
+   },
+   "connection": {
+    "effectiveType": "4g",
+    "downlink": 1.7,
+    "rtt": 100,
+    "saveData": false
+   },
+   "getBattery": "function",
+   "battery": {
+    "level": 1,
+    "charging": true,
+    "chargingTime": 0,
+    "dischargingTime": null
+   },
+   "PressureObserver": "function",
+   "pressure_knownSources": [
+    "cpu"
+   ],
+   "userAgentData": "object",
+   "uaData_low": {
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "platform": "Linux"
+   },
+   "uaData_high": {
+    "architecture": "x86",
+    "bitness": "64",
+    "brands": [
+     {
+      "brand": "Not=A?Brand",
+      "version": "99"
+     },
+     {
+      "brand": "Google Chrome",
+      "version": "151"
+     },
+     {
+      "brand": "Chromium",
+      "version": "151"
+     }
+    ],
+    "mobile": false,
+    "model": "",
+    "platform": "Linux",
+    "platformVersion": ""
+   },
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+   "timeOrigin": 1789415364781.5,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1.9000000059604645,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 156.79999999701977,
+    "minNonZeroMs": 0.09999999403953552,
+    "smallestDistinctMs": [
+     0.1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "object",
+   "isInputPending": "function",
+   "isInputPending_value": false,
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "element",
+    "event",
+    "first-input",
+    "interaction-contentful-paint",
+    "largest-contentful-paint",
+    "layout-shift",
+    "long-animation-frame",
+    "longtask",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource",
+    "soft-navigation",
+    "visibility-state"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "object",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  }
+ },
+ "rafOverall": {
+  "frames": 713,
+  "medianGapMs": 16.4
+ },
+ "tickOverall": {
+  "ticks": 1164,
+  "medianGapMs": 10.1
+ },
+ "busy": [
+  {
+   "who": "idle-baseline",
+   "sent": 1876,
+   "start": 1876,
+   "end": 2176,
+   "topRaf": {
+    "samples": 29,
+    "maxGapMs": 17.6,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 10.2,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "top",
+   "sent": 3280,
+   "start": 3280,
+   "end": 3580,
+   "topRaf": {
+    "samples": 13,
+    "maxGapMs": 312.9,
+    "gapsOver50ms": [
+     313
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 300.4,
+    "gapsOver50ms": [
+     300
+    ]
+   },
+   "topEntriesInWindow": [
+    {
+     "entryType": "longtask",
+     "name": "self",
+     "startTime": 3279.5,
+     "duration": 300,
+     "attribution": [
+      {
+       "name": "unknown",
+       "entryType": "taskattribution",
+       "containerType": "window",
+       "containerSrc": "",
+       "containerId": "",
+       "containerName": ""
+      }
+     ]
+    },
+    {
+     "entryType": "long-animation-frame",
+     "name": "long-animation-frame",
+     "startTime": 3269.2,
+     "duration": 310.5,
+     "blockingDuration": 250.1,
+     "renderStart": 3579.5999999940395,
+     "styleAndLayoutStart": 3579.7000000029802,
+     "scripts": [
+      {
+       "invoker": "TimerHandler:setTimeout",
+       "invokerType": "user-callback",
+       "sourceURL": "",
+       "sourceFunctionName": "",
+       "sourceCharPosition": -1,
+       "windowAttribution": "self",
+       "duration": 300,
+       "startTime": 3279.6
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "who": "worker",
+   "sent": 5085,
+   "ping": {
+    "ok": true,
+    "rttMs": 240
+   },
+   "start": 5085,
+   "end": 5385,
+   "replyReceived": 5386,
+   "ctxTimeOriginDeltaMs": 28.800048828125,
+   "topRaf": {
+    "samples": 30,
+    "maxGapMs": 17.4,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 10.2,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "srcdoc",
+   "sent": 6886,
+   "ping": {
+    "ok": true,
+    "rttMs": 241
+   },
+   "start": 6886,
+   "end": 7186,
+   "replyReceived": 7186,
+   "ctxTimeOriginDeltaMs": 32.89990234375,
+   "topRaf": {
+    "samples": 30,
+    "maxGapMs": 17.5,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 10.2,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "urlSame",
+   "sent": 8691,
+   "ping": {
+    "ok": true,
+    "rttMs": 0
+   },
+   "start": 8692,
+   "end": 8992,
+   "replyReceived": 8992,
+   "ctxTimeOriginDeltaMs": 33.800048828125,
+   "topRaf": {
+    "samples": 13,
+    "maxGapMs": 308.6,
+    "gapsOver50ms": [
+     309
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 300.5,
+    "gapsOver50ms": [
+     301
+    ]
+   },
+   "topEntriesInWindow": [
+    {
+     "entryType": "longtask",
+     "name": "same-origin-descendant",
+     "startTime": 8691.5,
+     "duration": 300,
+     "attribution": [
+      {
+       "name": "unknown",
+       "entryType": "taskattribution",
+       "containerType": "iframe",
+       "containerSrc": "frame.html?kind=urlSame",
+       "containerId": "f-urlSame",
+       "containerName": "n-urlSame"
+      }
+     ]
+    },
+    {
+     "entryType": "long-animation-frame",
+     "name": "long-animation-frame",
+     "startTime": 8691.4,
+     "duration": 300.3,
+     "blockingDuration": 250.1,
+     "renderStart": 8991.70000000298,
+     "styleAndLayoutStart": 8991.70000000298,
+     "scripts": [
+      {
+       "invoker": "TimerHandler:setTimeout",
+       "invokerType": "user-callback",
+       "sourceURL": "http://127.0.0.1:8297/frame.js",
+       "sourceFunctionName": "",
+       "sourceCharPosition": 1087,
+       "windowAttribution": "descendant",
+       "duration": 300.1,
+       "startTime": 8691.5
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "who": "urlOpaque",
+   "sent": 10496,
+   "ping": {
+    "ok": true,
+    "rttMs": 240
+   },
+   "start": 10497,
+   "end": 10797,
+   "replyReceived": 10797,
+   "ctxTimeOriginDeltaMs": 36,
+   "topRaf": {
+    "samples": 29,
+    "maxGapMs": 17.4,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 10.3,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  }
+ ],
+ "topEntriesAll": [
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 94.2,
+   "duration": 282,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 84.2,
+   "duration": 293,
+   "blockingDuration": 232.9,
+   "renderStart": 377.20000000298023,
+   "styleAndLayoutStart": 377.20000000298023,
+   "scripts": [
+    {
+     "invoker": "Promise.resolve",
+     "invokerType": "resolve-promise",
+     "sourceURL": "http://127.0.0.1:8297/collect.js",
+     "sourceFunctionName": "",
+     "sourceCharPosition": 3992,
+     "windowAttribution": "self",
+     "duration": 282.8,
+     "startTime": 94.3
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 747.8,
+   "duration": 166,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 742.4,
+   "duration": 171.6,
+   "blockingDuration": 116.1,
+   "renderStart": 913.9000000059605,
+   "styleAndLayoutStart": 913.9000000059605,
+   "scripts": [
+    {
+     "invoker": "Promise.resolve",
+     "invokerType": "resolve-promise",
+     "sourceURL": "http://127.0.0.1:8297/collect.js",
+     "sourceFunctionName": "",
+     "sourceCharPosition": 3992,
+     "windowAttribution": "descendant",
+     "duration": 166.1,
+     "startTime": 747.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 3279.5,
+   "duration": 300,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 3269.2,
+   "duration": 310.5,
+   "blockingDuration": 250.1,
+   "renderStart": 3579.5999999940395,
+   "styleAndLayoutStart": 3579.7000000029802,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 300,
+     "startTime": 3279.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 8691.5,
+   "duration": 300,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 8691.4,
+   "duration": 300.3,
+   "blockingDuration": 250.1,
+   "renderStart": 8991.70000000298,
+   "styleAndLayoutStart": 8991.70000000298,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "http://127.0.0.1:8297/frame.js",
+     "sourceFunctionName": "",
+     "sourceCharPosition": 1087,
+     "windowAttribution": "descendant",
+     "duration": 300.1,
+     "startTime": 8691.5
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 14867.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 14947.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 14867.5,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "PressureObserver.observe.then",
+     "invokerType": "resolve-promise",
+     "sourceURL": "http://127.0.0.1:8297/collect.js",
+     "sourceFunctionName": "",
+     "sourceCharPosition": 6233,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 14867.5
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 14947.6,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 14947.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15027.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15108,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15027.9,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15027.9
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15108,
+   "duration": 79.9,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15108
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15188,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15268,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15188,
+   "duration": 79.9,
+   "blockingDuration": 29.8,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15188
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15268,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15268
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15348.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15348.2,
+   "duration": 80.1,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 15348.2
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15432.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15432.3,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15432.3
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15516.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15516.4,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 15516.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15600.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15600.4,
+   "duration": 79.9,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15600.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15684.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15684.5,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 15684.5
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15768.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15768.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15768.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15852.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15852.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15852.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 15936.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 15936.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 15936.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16020.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16020.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 16020.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16104.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16104.8,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16104.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16188.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16188.8,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16188.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16272.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16272.9,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16272.9
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16356.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16356.9,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 16356.9
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16441.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16441.1,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16441.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16525.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16525.1,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16525.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16609.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16609.1,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 16609.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16693.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16693.2,
+   "duration": 79.9,
+   "blockingDuration": 29.9,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16693.2
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16777.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16777.2,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16777.2
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16861.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16861.2,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16861.3
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 16945.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 16945.4,
+   "duration": 80.1,
+   "blockingDuration": 30.2,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 16945.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17029.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17029.5,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 17029.5
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17113.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17113.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17113.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17197.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17197.7,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17197.7
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17281.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17281.7,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17281.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17365.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17365.8,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17365.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17449.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17449.8,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.2,
+     "startTime": 17449.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17533.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17533.9,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 17533.9
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17618.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17618.1,
+   "duration": 80.1,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17618.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17702.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17702.1,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17702.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17786.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17786.2,
+   "duration": 80.1,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17786.2
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17870.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17870.3,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17870.3
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 17954.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 17954.3,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 17954.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18038.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18038.4,
+   "duration": 79.9,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18038.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18122.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18122.4,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 18122.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18206.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18206.5,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18206.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18290.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18290.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18290.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18374.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18374.7,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18374.7
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18458.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18458.7,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18458.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18542.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18542.9,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18542.9
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18626.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18626.8,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 18626.8
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18711,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18711,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 18711
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18795.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18795.1,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18795.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18879.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18879.1,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 18879.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 18963.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 18963.1,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 18963.1
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19047.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19047.2,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 19047.2
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19131.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19131.4,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 19131.4
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19215.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19215.4,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 19215.5
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19299.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19299.6,
+   "duration": 79.9,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 19299.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19383.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19383.5,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 19383.6
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19467.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19467.6,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 19467.7
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19551.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19551.7,
+   "duration": 80.1,
+   "blockingDuration": 30.1,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 19551.7
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19635.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19635.8,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 19635.9
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19720,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19720,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80,
+     "startTime": 19720
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "self",
+   "startTime": 19804,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "window",
+     "containerSrc": "",
+     "containerId": "",
+     "containerName": ""
+    }
+   ]
+  },
+  {
+   "entryType": "long-animation-frame",
+   "name": "long-animation-frame",
+   "startTime": 19804,
+   "duration": 80,
+   "blockingDuration": 30,
+   "renderStart": 0,
+   "styleAndLayoutStart": 0,
+   "scripts": [
+    {
+     "invoker": "TimerHandler:setTimeout",
+     "invokerType": "user-callback",
+     "sourceURL": "",
+     "sourceFunctionName": "",
+     "sourceCharPosition": -1,
+     "windowAttribution": "self",
+     "duration": 80.1,
+     "startTime": 19804
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 26910,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 26990,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27070.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27150.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27230.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27310.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27391,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27475.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27559.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27643.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27727.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27811.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27895.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 27979.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28063.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28147.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28231.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28315.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28400.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28484.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28568.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28652.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28736.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28820.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28904.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 28988.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29072.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29156.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29240.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29324.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29408.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29492.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29576.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29660.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29745,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29829,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29913.1,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 29997.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30081.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30165.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30249.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30333.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30417.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30501.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30585.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30669.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30753.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30837.7,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 30921.8,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31005.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31089.9,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31174,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31258,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31342.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31426.2,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31510.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31594.3,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31678.4,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31762.5,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  },
+  {
+   "entryType": "longtask",
+   "name": "same-origin-descendant",
+   "startTime": 31846.6,
+   "duration": 80,
+   "attribution": [
+    {
+     "name": "unknown",
+     "entryType": "taskattribution",
+     "containerType": "iframe",
+     "containerSrc": "frame.html?kind=urlSame",
+     "containerId": "f-urlSame",
+     "containerName": "n-urlSame"
+    }
+   ]
+  }
+ ],
+ "frameOwnEntries": {
+  "srcdoc": [
+   {
+    "entryType": "longtask",
+    "name": "self",
+    "startTime": 538.6,
+    "duration": 174,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "window",
+      "containerSrc": "",
+      "containerId": "",
+      "containerName": ""
+     }
+    ]
+   },
+   {
+    "entryType": "long-animation-frame",
+    "name": "long-animation-frame",
+    "startTime": 538.6,
+    "duration": 174.7,
+    "blockingDuration": 124.7,
+    "renderStart": 0,
+    "styleAndLayoutStart": 0,
+    "scripts": []
+   },
+   {
+    "entryType": "longtask",
+    "name": "self",
+    "startTime": 6853.1,
+    "duration": 300,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "window",
+      "containerSrc": "",
+      "containerId": "",
+      "containerName": ""
+     }
+    ]
+   },
+   {
+    "entryType": "long-animation-frame",
+    "name": "long-animation-frame",
+    "startTime": 6853.1,
+    "duration": 300,
+    "blockingDuration": 250,
+    "renderStart": 0,
+    "styleAndLayoutStart": 0,
+    "scripts": []
+   }
+  ],
+  "urlSame": [
+   {
+    "entryType": "longtask",
+    "name": "same-origin-ancestor",
+    "startTime": 60.4,
+    "duration": 282,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "window",
+      "containerSrc": "",
+      "containerId": "",
+      "containerName": ""
+     }
+    ]
+   },
+   {
+    "entryType": "longtask",
+    "name": "self",
+    "startTime": 714,
+    "duration": 166,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "iframe",
+      "containerSrc": "frame.html?kind=urlSame",
+      "containerId": "f-urlSame",
+      "containerName": "n-urlSame"
+     }
+    ]
+   },
+   {
+    "entryType": "longtask",
+    "name": "same-origin-ancestor",
+    "startTime": 3245.7,
+    "duration": 300,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "window",
+      "containerSrc": "",
+      "containerId": "",
+      "containerName": ""
+     }
+    ]
+   },
+   {
+    "entryType": "longtask",
+    "name": "self",
+    "startTime": 8657.7,
+    "duration": 300,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "iframe",
+      "containerSrc": "frame.html?kind=urlSame",
+      "containerId": "f-urlSame",
+      "containerName": "n-urlSame"
+     }
+    ]
+   }
+  ],
+  "urlOpaque": [
+   {
+    "entryType": "longtask",
+    "name": "self",
+    "startTime": 879.8,
+    "duration": 159,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "window",
+      "containerSrc": "",
+      "containerId": "",
+      "containerName": ""
+     }
+    ]
+   },
+   {
+    "entryType": "long-animation-frame",
+    "name": "long-animation-frame",
+    "startTime": 879.8,
+    "duration": 159.3,
+    "blockingDuration": 109.2,
+    "renderStart": 0,
+    "styleAndLayoutStart": 0,
+    "scripts": [
+     {
+      "invoker": "Promise.resolve",
+      "invokerType": "resolve-promise",
+      "sourceURL": "http://127.0.0.1:8297/collect.js",
+      "sourceFunctionName": "",
+      "sourceCharPosition": 3992,
+      "windowAttribution": "self",
+      "duration": 159.3,
+      "startTime": 879.8
+     }
+    ]
+   },
+   {
+    "entryType": "longtask",
+    "name": "self",
+    "startTime": 10460.9,
+    "duration": 300,
+    "attribution": [
+     {
+      "name": "unknown",
+      "entryType": "taskattribution",
+      "containerType": "window",
+      "containerSrc": "",
+      "containerId": "",
+      "containerName": ""
+     }
+    ]
+   },
+   {
+    "entryType": "long-animation-frame",
+    "name": "long-animation-frame",
+    "startTime": 10460.9,
+    "duration": 300,
+    "blockingDuration": 250.1,
+    "renderStart": 0,
+    "styleAndLayoutStart": 0,
+    "scripts": [
+     {
+      "invoker": "TimerHandler:setTimeout",
+      "invokerType": "user-callback",
+      "sourceURL": "http://127.0.0.1:8297/frame.js",
+      "sourceFunctionName": "",
+      "sourceCharPosition": -1,
+      "windowAttribution": "self",
+      "duration": 300.1,
+      "startTime": 10460.9
+     }
+    ]
+   }
+  ]
+ },
+ "fetch": {
+  "top": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=top",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.8,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=top",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.6,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "worker": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=worker",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.7,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=worker",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.6,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "srcdoc": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=srcdoc",
+     "initiatorType": "fetch",
+     "transferSize": 0,
+     "encodedBodySize": 0,
+     "decodedBodySize": 0,
+     "duration": 2,
+     "responseStatus": 200,
+     "nextHopProtocol": ""
+    },
+    {
+     "name": "/data/blob-tao.bin?from=srcdoc",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.8,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "urlSame": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=urlSame",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 2.3,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=urlSame",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 2.5,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "urlOpaque": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=urlOpaque",
+     "initiatorType": "fetch",
+     "transferSize": 0,
+     "encodedBodySize": 0,
+     "decodedBodySize": 0,
+     "duration": 1.6,
+     "responseStatus": 200,
+     "nextHopProtocol": ""
+    },
+    {
+     "name": "/data/blob-tao.bin?from=urlOpaque",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1.9,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  }
+ },
+ "topResourceEntries": [
+  {
+   "name": "/collect.js",
+   "initiatorType": "script",
+   "transferSize": 9615,
+   "encodedBodySize": 9315,
+   "decodedBodySize": 9315,
+   "duration": 8.3,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/collect.js",
+   "initiatorType": "fetch",
+   "transferSize": 9615,
+   "encodedBodySize": 9315,
+   "decodedBodySize": 9315,
+   "duration": 2.3,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.js",
+   "initiatorType": "fetch",
+   "transferSize": 2195,
+   "encodedBodySize": 1895,
+   "decodedBodySize": 1895,
+   "duration": 2.5,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/worker.js",
+   "initiatorType": "other",
+   "transferSize": 1093,
+   "encodedBodySize": 793,
+   "decodedBodySize": 793,
+   "duration": -6.8,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.html?kind=urlSame",
+   "initiatorType": "iframe",
+   "transferSize": 440,
+   "encodedBodySize": 140,
+   "decodedBodySize": 140,
+   "duration": 9.1,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.html?kind=urlOpaque",
+   "initiatorType": "iframe",
+   "transferSize": 440,
+   "encodedBodySize": 140,
+   "decodedBodySize": 140,
+   "duration": 15.7,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/data/blob.bin?from=top",
+   "initiatorType": "fetch",
+   "transferSize": 65836,
+   "encodedBodySize": 65536,
+   "decodedBodySize": 65536,
+   "duration": 1.8,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/data/blob-tao.bin?from=top",
+   "initiatorType": "fetch",
+   "transferSize": 65836,
+   "encodedBodySize": 65536,
+   "decodedBodySize": 65536,
+   "duration": 1.6,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  }
+ ],
+ "frameWorkers": {
+  "srcdoc": {
+   "relativeUrl": "THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8297/worker.js' cannot be accessed from origin 'null'.",
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  },
+  "urlSame": {
+   "relativeUrl": {
+    "ok": true,
+    "reply": "object"
+   },
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  },
+  "urlOpaque": {
+   "relativeUrl": "THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8297/worker.js' cannot be accessed from origin 'null'.",
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  }
+ },
+ "pressure": {
+  "top": {
+   "typeof": "function",
+   "knownSources": [
+    "cpu"
+   ],
+   "observe": "resolved",
+   "records": [
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 15868.70000000298
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 16869.29999999702
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 17869.59999999404
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 18870.5
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 19871.40000000596
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 20872.40000000596
+    }
+   ]
+  },
+  "worker": {
+   "typeof": "function",
+   "knownSources": [
+    "cpu"
+   ],
+   "observe": "resolved",
+   "records": [
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 21861.89999999106
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 22863
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 23864
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 24864.89999999106
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 25865.89999999106
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 26866.79999999702
+    }
+   ]
+  },
+  "srcdoc": {
+   "typeof": "function",
+   "knownSources": [
+    "cpu"
+   ],
+   "observe": "NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."
+  },
+  "urlSame": {
+   "typeof": "function",
+   "knownSources": [
+    "cpu"
+   ],
+   "observe": "resolved",
+   "records": [
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 27877.10000000894
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 28878
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 29878.60000000894
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 30878.70000000298
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 31879.5
+    },
+    {
+     "source": "cpu",
+     "state": "nominal",
+     "time": 32880.79999999702
+    }
+   ]
+  },
+  "urlOpaque": {
+   "typeof": "function",
+   "knownSources": [
+    "cpu"
+   ],
+   "observe": "NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."
+  }
+ },
+ "pressureStress": {
+  "workers": 12,
+  "loadStart": 34933,
+  "loadEnd": 43934,
+  "records": [
+   {
+    "state": "nominal",
+    "time": 33934
+   },
+   {
+    "state": "nominal",
+    "time": 34937
+   },
+   {
+    "state": "critical",
+    "time": 35946
+   },
+   {
+    "state": "critical",
+    "time": 36943
+   },
+   {
+    "state": "critical",
+    "time": 37946
+   },
+   {
+    "state": "critical",
+    "time": 38947
+   },
+   {
+    "state": "critical",
+    "time": 39946
+   },
+   {
+    "state": "critical",
+    "time": 40947
+   },
+   {
+    "state": "critical",
+    "time": 41950
+   },
+   {
+    "state": "critical",
+    "time": 42949
+   },
+   {
+    "state": "nominal",
+    "time": 43950
+   },
+   {
+    "state": "nominal",
+    "time": 44950
+   },
+   {
+    "state": "nominal",
+    "time": 45951
+   },
+   {
+    "state": "nominal",
+    "time": 46952
+   }
+  ]
+ },
+ "memory": {
+  "top": {
+   "typeof": "undefined"
+  },
+  "worker": {
+   "typeof": "undefined"
+  },
+  "srcdoc": {
+   "typeof": "undefined"
+  },
+  "urlSame": {
+   "typeof": "undefined"
+  },
+  "urlOpaque": {
+   "typeof": "undefined"
+  }
+ },
+ "browserVersion": "151.0.7922.108",
+ "engine": "chrome",
+ "url": "http://127.0.0.1:8297/index.html?stress=1"
+}

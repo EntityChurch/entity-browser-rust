@@ -196,3 +196,79 @@ pub const HEADER_ROW: &str = "display:flex;flex-wrap:wrap;justify-content:space-
 /// Checkbox row.
 #[allow(dead_code)] // layout token kept for the shared set's completeness (siblings BTN_ROW/HEADER_ROW are used)
 pub const CHECKBOX_ROW: &str = "margin:6px 0;display:flex;flex-wrap:wrap;align-items:center;gap:6px";
+
+// --- System Monitor (DESIGN-2026-09-14-c §3) --------------------------------
+//
+// Text mode: panes are bordered boxes with an inset title, graphs are braille
+// text in the accent colour, meters are block characters. Everything is a theme
+// token, so all twelve themes get a monitor that matches.
+
+/// The panes, flowing into as many columns as fit and one column on a phone.
+pub const MONITOR_GRID: &str = "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));\
+    gap:10px;margin:8px 0";
+
+/// One pane: a box-drawing-style border with the title set into it.
+pub const MONITOR_PANE: &str = "border:1px solid var(--border-strong,#3a3a5e);border-radius:4px;\
+    padding:12px 10px 8px;position:relative;min-width:0;font-family:var(--font-mono,monospace);font-size:12px";
+
+/// A pane's title, sitting on its top border.
+pub const MONITOR_PANE_TITLE: &str = "position:absolute;top:-8px;inset-inline-start:8px;padding:0 4px;\
+    background:var(--bg,#101018);color:var(--accent,#7aa2f7);font-size:11px;font-weight:bold;\
+    text-transform:uppercase;letter-spacing:0.05em";
+
+/// A braille graph or block meter. Monospace with braille-capable fallbacks,
+/// no line gap, so rows of cells read as one picture.
+///
+/// **`direction:rtl` is for the overflow, not the text.** The newest samples are
+/// at the right; a graph wider than its pane must lose its OLDEST end, and an
+/// RTL box overflows to the left. The text inside is set back to LTR by
+/// [`MONITOR_GRAPH_TEXT`], so the cells keep their order.
+pub const MONITOR_GRAPH: &str = "font-family:\"DejaVu Sans Mono\",\"Noto Sans Symbols 2\",var(--font-mono,monospace);\
+    font-size:14px;line-height:1;color:var(--accent,#7aa2f7);white-space:pre;overflow:hidden;letter-spacing:0;\
+    direction:rtl;margin:2px 0";
+
+/// The same, for a figure that crossed a warning line.
+pub const MONITOR_GRAPH_WARN: &str = "font-family:\"DejaVu Sans Mono\",\"Noto Sans Symbols 2\",var(--font-mono,monospace);\
+    font-size:14px;line-height:1;color:var(--status-warn,#e0af68);white-space:pre;overflow:hidden;letter-spacing:0;\
+    direction:rtl;margin:2px 0";
+
+/// A meter or a short fixed-width graph: never wider than its box, so it keeps
+/// the reading direction and starts at the left.
+pub const MONITOR_METER: &str = "font-family:\"DejaVu Sans Mono\",\"Noto Sans Symbols 2\",var(--font-mono,monospace);\
+    font-size:14px;line-height:1;color:var(--accent,#7aa2f7);white-space:pre;overflow:hidden;letter-spacing:0;margin:2px 0";
+
+/// [`MONITOR_METER`] past a warning line.
+pub const MONITOR_METER_WARN: &str = "font-family:\"DejaVu Sans Mono\",\"Noto Sans Symbols 2\",var(--font-mono,monospace);\
+    font-size:14px;line-height:1;color:var(--status-warn,#e0af68);white-space:pre;overflow:hidden;letter-spacing:0;margin:2px 0";
+
+/// The graph's text inside a [`MONITOR_GRAPH`] box — back to left-to-right.
+pub const MONITOR_GRAPH_TEXT: &str = "direction:ltr;unicode-bidi:isolate";
+
+/// One labelled figure line.
+pub const MONITOR_LINE: &str = "margin:4px 0 0;color:var(--text,#e2e2ea);overflow-wrap:anywhere";
+
+/// Where a figure came from — small and dim, after the figure.
+pub const MONITOR_SOURCE: &str = "color:var(--text-faint,#666);font-size:10px";
+
+/// A window header's *running app* label, beside the title: dimmer than the
+/// title, truncated rather than wrapped so the header keeps its height.
+/// `margin-inline-end:auto` keeps it beside the title in a header that spaces
+/// its children apart.
+pub const WINDOW_APP_LABEL: &str = "color:var(--text-dim,#888);font-size:12px;margin-inline:6px auto;\
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto";
+
+/// What a figure means, in a sentence — dimmer than the figure, full width.
+pub const MONITOR_NOTE: &str = "margin:2px 0 6px;color:var(--text-dim,#888);font-size:11px;line-height:1.35;\
+    font-family:system-ui,sans-serif;overflow-wrap:anywhere";
+
+/// The tab pane's headline, by how the tab feels.
+pub const MONITOR_FEEL_OK: &str = "margin:0 0 4px;color:var(--status-ok,#9ece6a);font-weight:bold;overflow-wrap:anywhere";
+pub const MONITOR_FEEL_WARN: &str = "margin:0 0 4px;color:var(--status-warn,#e0af68);font-weight:bold;overflow-wrap:anywhere";
+pub const MONITOR_FEEL_BAD: &str = "margin:0 0 4px;color:var(--status-err,#f7768e);font-weight:bold;overflow-wrap:anywhere";
+
+/// A window row's Show / Close buttons.
+pub const MONITOR_ROW_ACTIONS: &str = "display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end";
+
+/// The explanation drawer: room above the button, and above the pane it opens,
+/// whose title is set into its top border.
+pub const MONITOR_DRAWER: &str = "margin:14px 0 0;display:flex;flex-direction:column;align-items:flex-start;gap:16px";

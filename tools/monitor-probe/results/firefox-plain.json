@@ -1,0 +1,908 @@
+{
+ "startedAt": "2026-09-14T19:48:20.101Z",
+ "log": [
+  [
+   94,
+   "worker"
+  ],
+  [
+   94,
+   "frames"
+  ],
+  [
+   168,
+   "collect"
+  ],
+  [
+   498,
+   "busy"
+  ],
+  [
+   12201,
+   "fetch"
+  ],
+  [
+   14221,
+   "frame-workers"
+  ],
+  [
+   14241,
+   "pressure"
+  ],
+  [
+   14242,
+   "pressure-stress"
+  ],
+  [
+   14242,
+   "memory-top"
+  ],
+  [
+   14242,
+   "memory-worker"
+  ],
+  [
+   14242,
+   "memory-srcdoc"
+  ],
+  [
+   14242,
+   "memory-urlSame"
+  ],
+  [
+   14242,
+   "memory-urlOpaque"
+  ],
+  [
+   14242,
+   "done"
+  ]
+ ],
+ "sandbox": {
+  "srcdoc": "allow-scripts allow-downloads",
+  "urlSame": "allow-scripts allow-same-origin",
+  "urlOpaque": "allow-scripts allow-downloads"
+ },
+ "topObserve": {
+  "longtask": "observe() returned",
+  "long-animation-frame": "observe() returned"
+ },
+ "frameHello": {
+  "srcdoc": true,
+  "urlSame": true,
+  "urlOpaque": true
+ },
+ "workerHello": true,
+ "env": {
+  "top": {
+   "global": "Window",
+   "origin": "http://127.0.0.1:8297",
+   "href": "http://127.0.0.1:8297/index.html?stress=1",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": "undefined"
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415300006,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 60,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "worker": {
+   "global": "DedicatedWorkerGlobalScope",
+   "origin": "http://127.0.0.1:8297",
+   "href": "http://127.0.0.1:8297/worker.js",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": "undefined"
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415300100,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 68,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "undefined",
+   "navigator_gpu": "undefined",
+   "wakeLock": "undefined"
+  },
+  "srcdoc": {
+   "global": "Window",
+   "origin": "null",
+   "href": "about:srcdoc",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": "TypeError: estimate() called for opaque origin",
+   "storage_persisted": {
+    "ok": false,
+    "err": "TypeError: persisted() called for opaque origin"
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415300119,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 66,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1,
+     2
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "urlSame": {
+   "global": "Window",
+   "origin": "http://127.0.0.1:8297",
+   "href": "http://127.0.0.1:8297/frame.html?kind=urlSame",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": {
+    "usage": 0,
+    "quota": 10737418240,
+    "usageDetails": "undefined"
+   },
+   "storage_persisted": {
+    "ok": true,
+    "v": false
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415300121,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 60,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  },
+  "urlOpaque": {
+   "global": "Window",
+   "origin": "null",
+   "href": "http://127.0.0.1:8297/frame.html?kind=urlOpaque",
+   "isSecureContext": true,
+   "crossOriginIsolated": false,
+   "SharedArrayBuffer": "undefined",
+   "sabConstruct": "THROW ReferenceError: SharedArrayBuffer is not defined",
+   "performance_memory": "undefined",
+   "measureUserAgentSpecificMemory": "undefined",
+   "deviceMemory": "undefined",
+   "hardwareConcurrency": 12,
+   "storage": "object",
+   "storage_estimate": "TypeError: estimate() called for opaque origin",
+   "storage_persisted": {
+    "ok": false,
+    "err": "TypeError: persisted() called for opaque origin"
+   },
+   "connection": "undefined",
+   "getBattery": "undefined",
+   "PressureObserver": "undefined",
+   "userAgentData": "undefined",
+   "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+   "timeOrigin": 1789415300123,
+   "timer_10k": {
+    "calls": 10000,
+    "wallMs": 1,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "timer_1M": {
+    "calls": 1000000,
+    "wallMs": 66,
+    "minNonZeroMs": 1,
+    "smallestDistinctMs": [
+     1
+    ]
+   },
+   "scheduler": "object",
+   "scheduler_yield": "function",
+   "scheduler_postTask": "function",
+   "navigator_scheduling": "undefined",
+   "isInputPending": "n/a",
+   "wasm_memory": {
+    "before": 65536,
+    "growReturned": 1,
+    "after": 1048576,
+    "toResizableBuffer": "function"
+   },
+   "wasm_shared_memory": {
+    "byteLength": 65536,
+    "bufferType": "[object SharedArrayBuffer]"
+   },
+   "supportedEntryTypes": [
+    "event",
+    "first-input",
+    "largest-contentful-paint",
+    "mark",
+    "measure",
+    "navigation",
+    "paint",
+    "resource"
+   ],
+   "eventCounts": "object",
+   "navigator_gpu": "undefined",
+   "wakeLock": "object",
+   "visibilityState": "visible"
+  }
+ },
+ "rafOverall": {
+  "frames": 636,
+  "medianGapMs": 17
+ },
+ "tickOverall": {
+  "ticks": 1056,
+  "medianGapMs": 10
+ },
+ "busy": [
+  {
+   "who": "idle-baseline",
+   "sent": 1299,
+   "start": 1299,
+   "end": 1599,
+   "topRaf": {
+    "samples": 29,
+    "maxGapMs": 18,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 47,
+    "maxGapMs": 11,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "top",
+   "sent": 2699,
+   "start": 2699,
+   "end": 2999,
+   "topRaf": {
+    "samples": 13,
+    "maxGapMs": 303,
+    "gapsOver50ms": [
+     303
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 305,
+    "gapsOver50ms": [
+     305
+    ]
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "worker",
+   "sent": 4498,
+   "ping": {
+    "ok": true,
+    "rttMs": 240
+   },
+   "start": 4499,
+   "end": 4799,
+   "replyReceived": 4799,
+   "ctxTimeOriginDeltaMs": 94,
+   "topRaf": {
+    "samples": 29,
+    "maxGapMs": 18,
+    "gapsOver50ms": []
+   },
+   "topTimeout10ms": {
+    "samples": 48,
+    "maxGapMs": 11,
+    "gapsOver50ms": []
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "srcdoc",
+   "sent": 6299,
+   "ping": {
+    "ok": true,
+    "rttMs": 0
+   },
+   "start": 6299,
+   "end": 6599,
+   "replyReceived": 6599,
+   "ctxTimeOriginDeltaMs": 113,
+   "topRaf": {
+    "samples": 12,
+    "maxGapMs": 310,
+    "gapsOver50ms": [
+     310
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 304,
+    "gapsOver50ms": [
+     304
+    ]
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "urlSame",
+   "sent": 8100,
+   "ping": {
+    "ok": true,
+    "rttMs": 1
+   },
+   "start": 8099,
+   "end": 8399,
+   "replyReceived": 8400,
+   "ctxTimeOriginDeltaMs": 115,
+   "topRaf": {
+    "samples": 12,
+    "maxGapMs": 314,
+    "gapsOver50ms": [
+     314
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 303,
+    "gapsOver50ms": [
+     303
+    ]
+   },
+   "topEntriesInWindow": []
+  },
+  {
+   "who": "urlOpaque",
+   "sent": 9901,
+   "ping": {
+    "ok": true,
+    "rttMs": 0
+   },
+   "start": 9900,
+   "end": 10200,
+   "replyReceived": 10199,
+   "ctxTimeOriginDeltaMs": 117,
+   "topRaf": {
+    "samples": 13,
+    "maxGapMs": 300,
+    "gapsOver50ms": [
+     300
+    ]
+   },
+   "topTimeout10ms": {
+    "samples": 18,
+    "maxGapMs": 304,
+    "gapsOver50ms": [
+     304
+    ]
+   },
+   "topEntriesInWindow": []
+  }
+ ],
+ "topEntriesAll": [],
+ "frameOwnEntries": {
+  "srcdoc": [],
+  "urlSame": [],
+  "urlOpaque": []
+ },
+ "fetch": {
+  "top": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=top",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=top",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "worker": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=worker",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=worker",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 0,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "srcdoc": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=srcdoc",
+     "initiatorType": "fetch",
+     "transferSize": 0,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1,
+     "responseStatus": 200,
+     "nextHopProtocol": ""
+    },
+    {
+     "name": "/data/blob-tao.bin?from=srcdoc",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "urlSame": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=urlSame",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 1,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    },
+    {
+     "name": "/data/blob-tao.bin?from=urlSame",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 2,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  },
+  "urlOpaque": {
+   "data/blob.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "data/blob-tao.bin": {
+    "status": 200,
+    "bytes": 65536
+   },
+   "ownEntries": [
+    {
+     "name": "/data/blob.bin?from=urlOpaque",
+     "initiatorType": "fetch",
+     "transferSize": 0,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 0,
+     "responseStatus": 200,
+     "nextHopProtocol": ""
+    },
+    {
+     "name": "/data/blob-tao.bin?from=urlOpaque",
+     "initiatorType": "fetch",
+     "transferSize": 65836,
+     "encodedBodySize": 65536,
+     "decodedBodySize": 65536,
+     "duration": 0,
+     "responseStatus": 200,
+     "nextHopProtocol": "http/1.0"
+    }
+   ]
+  }
+ },
+ "topResourceEntries": [
+  {
+   "name": "/collect.js",
+   "initiatorType": "script",
+   "transferSize": 9615,
+   "encodedBodySize": 9315,
+   "decodedBodySize": 9315,
+   "duration": 40,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/collect.js",
+   "initiatorType": "fetch",
+   "transferSize": 9615,
+   "encodedBodySize": 9315,
+   "decodedBodySize": 9315,
+   "duration": 2,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/worker.js",
+   "initiatorType": "other",
+   "transferSize": 1093,
+   "encodedBodySize": 793,
+   "decodedBodySize": 793,
+   "duration": 5,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.js",
+   "initiatorType": "fetch",
+   "transferSize": 2195,
+   "encodedBodySize": 1895,
+   "decodedBodySize": 1895,
+   "duration": 4,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.html?kind=urlSame",
+   "initiatorType": "iframe",
+   "transferSize": 440,
+   "encodedBodySize": 140,
+   "decodedBodySize": 140,
+   "duration": 2,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/frame.html?kind=urlOpaque",
+   "initiatorType": "iframe",
+   "transferSize": 440,
+   "encodedBodySize": 140,
+   "decodedBodySize": 140,
+   "duration": 2,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/data/blob.bin?from=top",
+   "initiatorType": "fetch",
+   "transferSize": 65836,
+   "encodedBodySize": 65536,
+   "decodedBodySize": 65536,
+   "duration": 1,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  },
+  {
+   "name": "/data/blob-tao.bin?from=top",
+   "initiatorType": "fetch",
+   "transferSize": 65836,
+   "encodedBodySize": 65536,
+   "decodedBodySize": 65536,
+   "duration": 1,
+   "responseStatus": 200,
+   "nextHopProtocol": "http/1.0"
+  }
+ ],
+ "frameWorkers": {
+  "srcdoc": {
+   "relativeUrl": "Error: worker error event: ",
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  },
+  "urlSame": {
+   "relativeUrl": {
+    "ok": true,
+    "reply": "object"
+   },
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  },
+  "urlOpaque": {
+   "relativeUrl": "Error: worker error event: ",
+   "blobUrl": {
+    "ok": true,
+    "reply": "object"
+   }
+  }
+ },
+ "pressure": {
+  "top": {
+   "typeof": "undefined"
+  },
+  "worker": {
+   "typeof": "undefined"
+  },
+  "srcdoc": {
+   "typeof": "undefined"
+  },
+  "urlSame": {
+   "typeof": "undefined"
+  },
+  "urlOpaque": {
+   "typeof": "undefined"
+  }
+ },
+ "pressureStress": {
+  "typeof": "undefined"
+ },
+ "memory": {
+  "top": {
+   "typeof": "undefined"
+  },
+  "worker": {
+   "typeof": "undefined"
+  },
+  "srcdoc": {
+   "typeof": "undefined"
+  },
+  "urlSame": {
+   "typeof": "undefined"
+  },
+  "urlOpaque": {
+   "typeof": "undefined"
+  }
+ },
+ "browserVersion": "149.0.2",
+ "engine": "firefox",
+ "url": "http://127.0.0.1:8297/index.html?stress=1"
+}

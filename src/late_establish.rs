@@ -143,6 +143,26 @@ impl LateEstablisher {
             }
         }
     }
+
+    /// Install `establisher` whatever the slot holds — including a different
+    /// establisher for the **same** node.
+    ///
+    /// [`Self::arm`] treats the same node as nothing to do, which is right for
+    /// a caller asking every frame and wrong when the caller has already
+    /// established that the provisioning changed (a node's reflectors arriving
+    /// after it was added). That caller decides; this one obeys, and reports
+    /// `Rearmed { from }` with `from` equal to the node in that case.
+    pub fn install(&self, node_peer_id: &str, establisher: Arc<dyn LiveEstablish>) -> Arm {
+        let Ok(mut slot) = self.inner.write() else {
+            return Arm::Unchanged;
+        };
+        let previous = slot.as_ref().map(|(n, _)| n.clone());
+        *slot = Some((node_peer_id.to_string(), establisher));
+        match previous {
+            Some(from) => Arm::Rearmed { from },
+            None => Arm::Armed,
+        }
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
@@ -238,5 +258,28 @@ mod tests {
             Arm::Rearmed { from: "2KNodeA".to_string() }
         );
         assert_eq!(late.armed_node().as_deref(), Some("2KNodeB"));
+    }
+
+    /// **`install` replaces an establisher for the same node** — the case `arm`
+    /// deliberately ignores. Asserted through delegation, not `armed_node`,
+    /// because the node name is the one thing that does not change: a slot that
+    /// kept the old establisher would report the right node and dial with the
+    /// wrong reflectors.
+    #[tokio::test]
+    async fn install_replaces_the_establisher_for_the_same_node() {
+        let late = LateEstablisher::new();
+        late.arm("2KNodeA", Arc::new(Stub("without reflectors")));
+        assert_eq!(
+            late.install("2KNodeA", Arc::new(Stub("with reflectors"))),
+            Arm::Rearmed { from: "2KNodeA".to_string() }
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        match late.establish_live(EstablishCtx::dispatch(deadline), "2KPeer").await {
+            Err(LiveEstablishError::Refused { reason, .. }) => {
+                assert_eq!(reason, "with reflectors", "the slot must delegate to the new establisher")
+            }
+            Err(other) => panic!("expected the stub's refusal, got {other:?}"),
+            Ok(_) => panic!("expected the stub's refusal, got a path"),
+        }
     }
 }

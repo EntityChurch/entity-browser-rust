@@ -4241,6 +4241,121 @@ pub(crate) mod memory_transport_tests {
         handle_b.abort();
     }
 
+    /// **A file pulled out of an app is not shared** (field report 2026-09-14).
+    ///
+    /// Keeping an app's file used to OFFER it, so every connected peer could list
+    /// and pull what a person took out of a VM. The boundary, asserted from the
+    /// peer who would have seen it: after A keeps a file, B's listing of A's
+    /// offers is EMPTY, while A's own private list names it with its app and the
+    /// bytes read back across every chunk.
+    ///
+    /// Then the take-back: an offer an EARLIER build made for an app becomes a
+    /// kept file and leaves the listing, and an offer a person made by hand is
+    /// untouched — B sees exactly the hand-made one.
+    ///
+    /// **Mutation check:** make `kept_files::keep` call `offer_file_from` and the
+    /// first B-listing assertion reds; make `take_back_app_offers` skip the
+    /// `source` filter and the hand-made offer disappears.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_file_an_app_hands_over_is_kept_privately_and_never_listed_as_an_offer() {
+        use crate::file_offer::{self, OfferSource};
+        use crate::kept_files;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+        let connect = peers_b.connect_peer(&pid_b, format!("memory://{pid_a}"));
+        tokio::time::timeout(Duration::from_secs(2), connect)
+            .await
+            .expect("connect timed out")
+            .expect("connect");
+        let dispatch_a = peers_a.dispatch_handle(&pid_a).expect("A dispatch");
+        let dispatch_b = peers_b.dispatch_handle(&pid_b).expect("B dispatch");
+        let source = OfferSource { set: "apps".into(), app: "kolibri".into(), name: "KolibriOS".into() };
+
+        // 1. Keep: private.
+        let raw: Vec<u8> = (0..(file_offer::CHUNK_SIZE * 2 + 9)).map(|i| (i * 7 % 253) as u8).collect();
+        let kept = kept_files::keep(&dispatch_a, "diary.txt", &raw, source.clone()).await.expect("keep");
+        assert!(
+            file_offer::list_offers(&dispatch_b, &pid_a).await.expect("B can ask").is_empty(),
+            "a file an app handed over must NOT be discoverable by a connected peer"
+        );
+        assert!(file_offer::read_own_offers(&peers_a, &pid_a).is_empty(), "and A offers nothing");
+        let listed = kept_files::read_kept(&peers_a, &pid_a);
+        assert_eq!(listed, vec![kept.clone()], "A's private list names it");
+        assert_eq!(listed[0].source.as_ref(), Some(&source), "with the app it came from");
+        assert_eq!(
+            kept_files::read_bytes(&dispatch_a, &kept.blob).await.expect("read"),
+            raw,
+            "byte for byte, across every chunk"
+        );
+
+        // 2. Take back what an earlier build offered for an app; leave a person's offer alone.
+        let app_raw = b"made inside an app, offered by an old build".to_vec();
+        file_offer::offer_file_from(&dispatch_a, "old-app-file.txt", &app_raw, Some(source.clone()))
+            .await
+            .expect("old-style app offer");
+        let mine = file_offer::offer_file(&dispatch_a, "chosen.txt", b"offered on purpose").await.expect("offer");
+        let writer_a = peers_a.writer_handle_for(&pid_a).expect("A writer");
+        let moved = kept_files::take_back_app_offers(&dispatch_a, &writer_a, file_offer::read_own_offers(&peers_a, &pid_a))
+            .await
+            .expect("take back");
+        assert_eq!(moved, 1, "exactly the app's offer is taken back");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let still = file_offer::list_offers(&dispatch_b, &pid_a).await.expect("B can ask");
+        assert_eq!(still, vec![mine], "B sees only the offer a person chose to make");
+        let names: Vec<String> = kept_files::read_kept(&peers_a, &pid_a).into_iter().map(|f| f.name).collect();
+        assert_eq!(names, vec!["diary.txt".to_string(), "old-app-file.txt".to_string()], "the app's file is kept privately");
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
+    /// **A file a person adds to My files is theirs alone** — Files F2.
+    ///
+    /// It lists in My files, reads back byte for byte across chunks, is not an
+    /// offer a connected peer can list, and is not an app's kept file either
+    /// (the two private stores stay apart, so the File Manager puts each in its
+    /// own place). Removing it takes it off the list.
+    ///
+    /// **Mutation check:** make `user_files::keep` write through `offer_file`
+    /// and the B-listing assertion reds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_file_added_to_my_files_is_private_and_reads_back() {
+        use crate::file_offer;
+        use crate::user_files;
+
+        let registry = MemoryTransportRegistry::new();
+        let (peers_a, pid_a, handle_a) = spawn_peer_on_registry(registry.clone());
+        let (peers_b, pid_b, handle_b) = spawn_peer_on_registry(registry.clone());
+        tokio::task::yield_now().await;
+        let connect = peers_b.connect_peer(&pid_b, format!("memory://{pid_a}"));
+        tokio::time::timeout(Duration::from_secs(2), connect).await.expect("connect timed out").expect("connect");
+        let dispatch_a = peers_a.dispatch_handle(&pid_a).expect("A dispatch");
+        let dispatch_b = peers_b.dispatch_handle(&pid_b).expect("B dispatch");
+
+        let raw: Vec<u8> = (0..(file_offer::CHUNK_SIZE + 17)).map(|i| (i * 11 % 241) as u8).collect();
+        let mine = user_files::keep(&dispatch_a, "holiday/photo.jpg", &raw).await.expect("keep");
+        assert_eq!(mine.name, "photo.jpg", "listed by its file name, never a path");
+        assert!(file_offer::list_offers(&dispatch_b, &pid_a).await.expect("B can ask").is_empty(),
+            "a file added to My files must NOT be discoverable by a connected peer");
+        assert!(crate::kept_files::read_kept(&peers_a, &pid_a).is_empty(), "and it is not an app's file");
+        assert_eq!(user_files::read_mine(&peers_a, &pid_a), vec![mine.clone()]);
+        assert_eq!(user_files::read_bytes(&dispatch_a, &mine.blob).await.expect("read"), raw);
+
+        let too_big = vec![0u8; (file_offer::MAX_OFFER_BYTES + 1) as usize];
+        assert!(user_files::keep(&dispatch_a, "huge.bin", &too_big).await.is_err(), "the ceiling applies");
+
+        let writer = peers_a.writer_handle_for(&pid_a).expect("writer");
+        writer.remove(crate::app_paths::user_file_path(crate::app_paths::APP_ID, &pid_a, &mine.id()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(user_files::read_mine(&peers_a, &pid_a).is_empty(), "removed from the list");
+
+        handle_a.abort();
+        handle_b.abort();
+    }
+
     /// **A file an app handed the host can be saved to this device** — M2.
     ///
     /// The bytes of an app's `x-file` are already in our own `system/content`,

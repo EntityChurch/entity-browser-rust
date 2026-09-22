@@ -5336,19 +5336,34 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             vec![],
         )
         .await?;
-    sleep(Duration::from_millis(300)).await;
     // Back on `en`, the pseudo brackets must be gone — proves the switch
-    // re-rendered in both directions (not a one-way transform).
-    let pseudo_gone = client
-        .execute(
-            r#"
+    // re-rendered in both directions (not a one-way transform). Polled, and on
+    // failure it names where a bracket survived.
+    let leftover = poll_json(
+        &client,
+        r#"
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
-            return (root.textContent || '').includes('⟦');
-            "#,
-            vec![],
-        )
-        .await?;
+            const hits = [];
+            const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            while (walk.nextNode()) {
+                const t = walk.currentNode.textContent;
+                if (t.includes('⟦')) {
+                    const sec = walk.currentNode.parentElement && walk.currentNode.parentElement.closest('section.window');
+                    const h = sec && sec.querySelector('header h3');
+                    hits.push((h ? h.textContent.trim() : '(outside a window)') + ': ' + t.slice(0, 80));
+                }
+            }
+            return hits;
+        "#,
+        ASYNC_ROUND_TRIP_BUDGET,
+        |v| v.as_array().is_some_and(|a| a.is_empty()),
+    )
+    .await?;
+    if leftover.as_array().is_some_and(|a| !a.is_empty()) {
+        println!("  pseudo brackets left after restoring en: {leftover}");
+    }
+    let pseudo_gone = serde_json::Value::Bool(leftover.as_array().is_some_and(|a| !a.is_empty()));
     assert_eq!(
         pseudo_gone.as_bool(),
         Some(false),
@@ -19657,12 +19672,13 @@ const READ_PLAYER_CHROME: &str = r#"
 ///     the keep is async, so only both proves the wait is not just the fast one;
 ///  2. the frame stamps and the status line agree (a person and a gate must be
 ///     able to see the same fact);
-///  3. File Transfer lists `probe-out.txt` at **33 B** — the name had its
-///     directory stripped, and a host that read the view's `.buffer` instead of
-///     its bytes would list 64 B;
+///  3. File Transfer lists `probe-out.txt` at **33 B** under **Kept by apps**, and
+///     **not** under the files being offered — pulling a file out of an app must
+///     not share it (field report 2026-09-14) — the name had its directory
+///     stripped, and a host that read the view's `.buffer` would list 64 B;
 ///  4. a file given to the app through the host's picker arrives byte-exact;
 ///  5. and an app that did NOT declare the key (Calculator) draws no control;
-///  6. the offer row says it came from File Probe, and **Save to this device**
+///  6. the kept row says it came from File Probe, and **Save to this device**
 ///     — in File Transfer and in the player bar (2b) — hands the browser the
 ///     same 33 bytes under the same name.
 ///
@@ -19772,7 +19788,7 @@ async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_bac
             const btn = sec && sec.querySelector('[data-field="app-file-save"]');
             if (!btn) return {{ state: 'no-button' }};
             if (btn.hidden) return {{ state: 'hidden' }};
-            const named = btn.getAttribute('data-offer-name');
+            const named = btn.getAttribute('data-file-name');
             btn.click();
             return {{ state: 'clicked', named }};
         "#), vec![]).await?;
@@ -19823,51 +19839,60 @@ async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_bac
     assert_eq!(kept.and_then(|r| r.get("name")).and_then(|s| s.as_str()), Some("probe-out.txt"),
         "the app never heard its file kept, or under the wrong name: {inside}");
     assert!(kept.and_then(|r| r.get("id")).and_then(|s| s.as_str()).map(|s| s.len() > 16).unwrap_or(false),
-        "a kept file must carry the offer id the app can refer to: {inside}");
+        "a kept file must carry the id the app can refer to: {inside}");
     let got = inside.get("received").and_then(|r| r.as_array()).and_then(|r| r.first()).cloned().unwrap_or_default();
     assert_eq!(got.get("name").and_then(|s| s.as_str()), Some("given.bin"), "{inside}");
     assert_eq!(got.get("length").and_then(|n| n.as_u64()), Some(12 + 256),
         "the file given to the app did not arrive byte-exact in length: {inside}");
 
-    // ── 3: the kept file is a real offer, at its real size.
+    // ── 3: the kept file is PRIVATE — listed in File Manager under Kept by apps at
+    // its real size, and nowhere among the files File Transfer offers to peers.
+    // File Transfer only points at File Manager for it.
     assert_eq!(click_spawn_btn(&client, "+ File Transfer").await?, "clicked", "couldn't open File Transfer");
+    assert_eq!(click_spawn_btn(&client, "+ File Manager").await?, "clicked", "couldn't open File Manager");
     let listed = poll_json(&client, r#"
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
+            let row = null, offered = false, pointer = false, oldCard = false;
             for (const s of root.querySelectorAll('section.window')) {
-                if (!s.querySelector('.file-transfer')) continue;
-                const row = s.querySelector('[data-field="ft-offer-row"][data-offer-name="probe-out.txt"]');
-                return { row: !!row, text: row ? row.textContent : null };
+                if (s.querySelector('.file-transfer')) {
+                    offered = !!s.querySelector('[data-field="ft-offer-row"][data-offer-name="probe-out.txt"]');
+                    pointer = !!s.querySelector('[data-field="ft-open-files"]');
+                    oldCard = !!s.querySelector('[data-field="ft-kept-row"]');
+                }
+                if (s.querySelector('[data-field="files-window"]')) {
+                    row = s.querySelector('[data-field="files-row"][data-file-name="probe-out.txt"]');
+                }
             }
-            return { row: false, text: null };
-        "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("row").and_then(|b| b.as_bool()).unwrap_or(false)).await?;
-    println!("  offer row: {listed}");
+            return { row: !!row, offered, pointer, oldCard, text: row ? row.textContent : null };
+        "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("row").and_then(|b| b.as_bool()).unwrap_or(false)
+            && v.get("pointer").and_then(|b| b.as_bool()).unwrap_or(false)).await?;
+    println!("  kept row: {listed}");
     assert!(listed.get("row").and_then(|b| b.as_bool()).unwrap_or(false),
-        "the host said `kept` and File Transfer lists no `probe-out.txt` offer: {listed}");
+        "the host said `kept` and File Manager lists no kept `probe-out.txt`: {listed}");
+    assert!(listed.get("pointer").and_then(|b| b.as_bool()).unwrap_or(false) && !listed.get("oldCard").and_then(|b| b.as_bool()).unwrap_or(true),
+        "File Transfer should point at File Manager for kept files, not list them itself: {listed}");
+    assert!(!listed.get("offered").and_then(|b| b.as_bool()).unwrap_or(true),
+        "an app's file is listed as OFFERED to peers — pulling a file out of an app shared it: {listed}");
     let text = listed.get("text").and_then(|s| s.as_str()).unwrap_or("");
     assert!(text.contains("33 B"),
-        "the offer is not 33 bytes — 64 B means the host read the view's whole `.buffer`: {listed}");
+        "the kept file is not 33 bytes — 64 B means the host read the view's whole `.buffer`: {listed}");
 
     // ── 6: the row names the app it came from, and saving it to this device
-    // hands the browser the file's own 33 bytes under its own name (M2 — how
-    // an app's output leaves a phone). The download is captured at the object
-    // URL and the anchor, not performed: a real download on a remote grid is
-    // a dialog nobody can see, and what matters is the bytes and the name we
-    // handed the browser. Reading the Blob back is what proves the bytes came
-    // out of the store rather than from a row's size.
+    // hands the browser the file's own 33 bytes under its own name. The download
+    // is captured at the object URL and the anchor, not performed.
     let source = poll_json(&client, r#"
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
             for (const s of root.querySelectorAll('section.window')) {
-                if (!s.querySelector('.file-transfer')) continue;
-                const row = s.querySelector('[data-field="ft-offer-row"][data-offer-name="probe-out.txt"]');
-                const src = row && row.querySelector('[data-field="ft-offer-source"]');
-                const btn = row && row.querySelector('[data-field="ft-save-offer"]');
-                return { source: src ? src.textContent : null, button: !!btn };
+                if (!s.querySelector('[data-field="files-window"]')) continue;
+                const row = s.querySelector('[data-field="files-row"][data-file-name="probe-out.txt"]');
+                const btn = row && row.querySelector('[data-field="files-save"]');
+                return { source: row ? row.querySelector('td').textContent : null, button: !!btn };
             }
             return { source: null, button: false };
         "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("source").and_then(|s| s.as_str()).is_some()).await?;
-    println!("  offer source: {source}");
+    println!("  kept source: {source}");
     assert!(source.get("source").and_then(|s| s.as_str()).unwrap_or("").contains("File Probe"),
         "the row does not say the file came from File Probe — app output reads as something the person offered: {source}");
     assert!(source.get("button").and_then(|b| b.as_bool()).unwrap_or(false),
@@ -19877,8 +19902,8 @@ async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_bac
             const layer = document.getElementById('dom-layer');
             const root = layer.shadowRoot || layer;
             for (const s of root.querySelectorAll('section.window')) {{
-                if (!s.querySelector('.file-transfer')) continue;
-                const btn = s.querySelector('[data-field="ft-save-offer"][data-offer-name="probe-out.txt"]');
+                if (!s.querySelector('[data-field="files-window"]')) continue;
+                const btn = s.querySelector('[data-field="files-save"][data-file-name="probe-out.txt"]');
                 if (!btn) return 'no-button';
                 btn.click(); return 'clicked';
             }}
@@ -19894,6 +19919,1054 @@ async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_bac
         "Save to this device never handed the browser a download named probe-out.txt: {saved}");
     assert_eq!(first.get("text").and_then(|s| s.as_str()), Some("file probe: made inside the app\n!"),
         "the downloaded bytes are not the file the app sent: {saved}");
+
+    // ── 7: sharing is a DELIBERATE act. "Offer to peers" on the kept file puts it
+    // among the offers — and it stays there: the take-back (`kept_files::TakeBack`)
+    // reverts only offers that name an app, and a person's offer names none.
+    let pressed = client.execute(r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const s of root.querySelectorAll('section.window')) {
+                if (!s.querySelector('[data-field="files-window"]')) continue;
+                const btn = s.querySelector('[data-field="files-offer"][data-file-name="probe-out.txt"]');
+                if (!btn) return 'no-button';
+                btn.click(); return 'clicked';
+            }
+            return 'no-window';
+        "#, vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "no Offer to peers on the kept file: {pressed}");
+    const OFFERED: &str = r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            for (const s of root.querySelectorAll('section.window')) {
+                if (!s.querySelector('.file-transfer')) continue;
+                return !!s.querySelector('[data-field="ft-offer-row"][data-offer-name="probe-out.txt"]');
+            }
+            return false;
+        "#;
+    let offered = poll_json(&client, OFFERED, ASYNC_ROUND_TRIP_BUDGET, |v| v.as_bool() == Some(true)).await?;
+    assert_eq!(offered.as_bool(), Some(true), "Offer to peers did not put the kept file among the offers");
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let still = client.execute(OFFERED, vec![]).await?;
+    assert_eq!(still.as_bool(), Some(true),
+        "a file the person CHOSE to offer was taken back — the take-back must only revert offers that name an app");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// THE SYSTEM MONITOR SEES THIS TAB'S OWN LOAD — `DESIGN-2026-09-14-c` M1.
+///
+///  1. the monitor paints its panes, and the CPU pane draws a braille graph
+///     once the first second has rolled (the text-mode picture is the product);
+///  2. it lists the open windows, **itself included** — its own cost must be
+///     visible, or the monitor is the one process a person cannot see;
+///  3. a 400 ms busy loop on the main thread is COUNTED as a stall — the one
+///     thing the sampler's frame hook exists to catch, and what a person means
+///     by "it froze";
+///     — and because nothing on this app's drawing path held the thread, the
+///     freeze is reported as OTHER work, which is where a Firefox app frame's
+///     work lands (field report 2026-09-14: two VMs froze the tab while every
+///     row read *idle*);
+///  4. **Close** on a window's row closes that window and its row goes;
+///  5. *What your browser tells this tab* opens, survives the once-a-second
+///     rebuild, and reports the timer resolution this engine gives a page;
+///  6. the Storage pane settles — figures, or the reason there are none — and
+///     never sits on *Loading…* (it did, forever, on a plain-http LAN link);
+///  7. an Apps window is named by the app it runs, in its header beside the
+///     unchanged title and in its row, and reads *not reporting* until the app
+///     speaks — then an `x-stats` report from inside the sandbox turns the row
+///     *busy* and puts the app's memory in the Memory pane;
+///  8. **Show** on a row brings that window into view: with the monitor
+///     maximized over it, Show restores the monitor.
+#[tokio::test]
+async fn the_system_monitor_counts_a_stall_and_closes_a_window() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ Shell").await?, "clicked", "couldn't open a Shell");
+    assert_eq!(click_spawn_btn(&client, "+ System Monitor").await?, "clicked", "couldn't open the System Monitor");
+
+    const MON: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let sec = null;
+        for (const s of root.querySelectorAll('section.window')) {
+            if (s.querySelector('[data-field="monitor-window"]')) { sec = s; break; }
+        }
+    "#;
+    let state = format!(r#"{MON}
+        if (!sec) return {{ window: false }};
+        const cpu = sec.querySelector('[data-field="monitor-cpu"]');
+        const stalls = sec.querySelector('[data-field="monitor-stalls"]');
+        const rows = Array.from(sec.querySelectorAll('[data-field="monitor-window-row"]'))
+            .map(r => r.getAttribute('data-window-type'));
+        const timer = sec.querySelector('[data-field="monitor-timer-resolution"]');
+        const other = sec.querySelector('[data-field="monitor-frozen-other"]');
+        const storage = sec.querySelector('[data-field="monitor-storage"]');
+        const memory = sec.querySelector('[data-field="monitor-memory"]');
+        const apps = Array.from(sec.querySelectorAll('[data-field="monitor-window-row"]'))
+            .filter(r => r.getAttribute('data-window-type') === 'Apps')
+            .map(r => ({{ name: r.querySelector('td').textContent.replace(/[\u2068\u2069]/g, ''), app: r.getAttribute('data-app-load') }}));
+        return {{
+            window: true,
+            braille: !!(cpu && /[⠁-⣿]/.test(cpu.textContent)),
+            stalls: stalls ? Number(stalls.getAttribute('data-value')) : null,
+            other: other ? Number(other.getAttribute('data-value')) : null,
+            rows,
+            apps,
+            storage: storage ? storage.getAttribute('data-state') : null,
+            // Placeholders arrive wrapped in bidi isolates (U+2068 … U+2069).
+            memory: memory ? memory.textContent.replace(/[\u2068\u2069]/g, '') : null,
+            maximized: sec.classList.contains('maximized'),
+            timer: timer ? Number(timer.getAttribute('data-value')) : null,
+        }};
+    "#);
+
+    // ── 1 + 2
+    let first = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("braille").and_then(|b| b.as_bool()).unwrap_or(false)
+            && v.get("rows").and_then(|r| r.as_array()).is_some_and(|r| r.len() >= 2)
+    }).await?;
+    println!("  monitor: {first}");
+    assert!(first.get("braille").and_then(|b| b.as_bool()).unwrap_or(false), "the CPU pane never drew a graph: {first}");
+    let rows: Vec<String> = first.get("rows").and_then(|r| r.as_array()).map(|r| r.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    assert!(rows.iter().any(|r| r == "System Monitor"), "the monitor does not list itself — its own cost is invisible: {first}");
+    assert!(rows.iter().any(|r| r == "Shell"), "an open Shell is not listed: {first}");
+
+    // ── 3: hold the main thread for 400 ms
+    let before = first.get("stalls").and_then(|n| n.as_u64()).unwrap_or(0);
+    // Record the largest "other work" figure the pane shows while the freeze is
+    // the last second — the page keeps it, so the poll below cannot miss it.
+    client.execute(&format!(r#"
+        window.__monOther = 0;
+        window.__monOtherTimer = setInterval(() => {{
+            {MON}
+            const el = sec && sec.querySelector('[data-field="monitor-frozen-other"]');
+            if (el) window.__monOther = Math.max(window.__monOther, Number(el.getAttribute('data-value')));
+        }}, 100);
+        return true;
+    "#), vec![]).await?;
+    client.execute("const end = performance.now() + 400; while (performance.now() < end) {} return true;", vec![]).await?;
+    let after = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("stalls").and_then(|n| n.as_u64()).is_some_and(|n| n > before)
+    }).await?;
+    println!("  after a 400 ms busy loop: {after}");
+    assert!(after.get("stalls").and_then(|n| n.as_u64()).is_some_and(|n| n > before),
+        "a 400 ms freeze of the main thread was not counted as a stall (before {before}): {after}");
+    let other = poll_json(&client, "return window.__monOther;", ASYNC_ROUND_TRIP_BUDGET, |v| v.as_f64().is_some_and(|n| n >= 200.0)).await?;
+    client.execute("clearInterval(window.__monOtherTimer); return true;", vec![]).await?;
+    assert!(other.as_f64().is_some_and(|n| n >= 200.0),
+        "a 400 ms freeze outside this app's drawing was not reported as other work — the place a Firefox app frame's load shows up: {other}");
+
+    // ── 4: close the Shell from its row
+    let closed = client.execute(&format!(r#"{MON}
+        const row = Array.from(sec.querySelectorAll('[data-field="monitor-window-row"]'))
+            .find(r => r.getAttribute('data-window-type') === 'Shell');
+        const btn = row && row.querySelector('[data-field="monitor-close"]');
+        if (!btn) return 'no-button';
+        btn.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(closed.as_str(), Some("clicked"), "no Close on the Shell's row: {closed}");
+    let gone = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("rows").and_then(|r| r.as_array()).is_some_and(|r| !r.iter().any(|x| x.as_str() == Some("Shell")))
+    }).await?;
+    assert!(!gone.get("rows").and_then(|r| r.as_array()).is_some_and(|r| r.iter().any(|x| x.as_str() == Some("Shell"))),
+        "the Shell's row is still listed after Close: {gone}");
+    let shell_open = client.execute(r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        return Array.from(root.querySelectorAll('section.window header h3')).some(h => h.textContent.trim() === 'Shell');
+    "#, vec![]).await?;
+    assert_eq!(shell_open.as_bool(), Some(false), "Close removed the row but the Shell window is still open");
+
+    // ── 5: the explanation opens, stays open across rebuilds, and measured the clock
+    let toggled = client.execute(&format!(r#"{MON}
+        const b = sec.querySelector('[data-field="monitor-about-toggle"]');
+        if (!b) return 'no-toggle'; b.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(toggled.as_str(), Some("clicked"), "{toggled}");
+    let opened = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("timer").is_some_and(|t| t.is_number())).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let still = client.execute(&state, vec![]).await?;
+    println!("  about: {opened} → after rebuilds: {still}");
+    let timer = still.get("timer").and_then(|t| t.as_f64());
+    assert!(timer.is_some_and(|t| t > 0.0 && t <= 16.0),
+        "the explanation closed on a rebuild, or reports no timer resolution: {still}");
+
+    // ── 6: storage settles (localhost is a secure context, so: figures)
+    let settled = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("storage").and_then(|s| s.as_str()).is_some_and(|s| s != "pending")
+    }).await?;
+    assert_eq!(settled.get("storage").and_then(|s| s.as_str()), Some("known"),
+        "the Storage pane never settled, or localhost (a secure context) was told it has no figures: {settled}");
+
+    // ── 7: an app window, named, not reporting, then reporting
+    assert_eq!(click_spawn_btn(&client, "+ Apps").await?, "clicked", "couldn't open the Apps window");
+    const APPS: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let sec = null;
+        for (const s of root.querySelectorAll('section.window')) {
+            const h3 = s.querySelector('header h3');
+            if (h3 && h3.textContent.trim() === 'Apps') { sec = s; break; }
+        }
+    "#;
+    let launched = poll_json(&client, &format!(r#"{APPS}
+        if (!sec) return 'no-window';
+        const b = Array.from(sec.querySelectorAll('button')).find(b => !b.hasAttribute('data-chip') && b.textContent.includes('Calculator'));
+        if (!b) return 'no-card';
+        b.click(); return 'clicked';
+    "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(launched.as_str(), Some("clicked"), "could not launch Calculator: {launched}");
+    let named = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("apps").and_then(|a| a.as_array()).is_some_and(|a| a.iter().any(|r|
+            r.get("name").and_then(|n| n.as_str()).is_some_and(|n| n.contains("Calculator"))
+                && r.get("app").and_then(|x| x.as_str()) == Some("not-reporting")))
+    }).await?;
+    println!("  app row before a report: {named}");
+    assert!(named.get("apps").and_then(|a| a.as_array()).is_some_and(|a| a.iter().any(|r|
+        r.get("name").and_then(|n| n.as_str()).is_some_and(|n| n.contains("Calculator"))
+            && r.get("app").and_then(|x| x.as_str()) == Some("not-reporting"))),
+        "the Apps row does not name Calculator, or calls an app that never reported anything other than not reporting: {named}");
+    let header = client.execute(&format!(r#"{APPS}
+        const label = sec && sec.querySelector('header [data-field="window-running-app"]');
+        return {{ title: sec ? sec.querySelector('header h3').textContent.trim() : null, app: label && !label.hidden ? label.textContent : null }};
+    "#), vec![]).await?;
+    assert_eq!(header.get("app").and_then(|s| s.as_str()), Some("Calculator"),
+        "the Apps window's header does not say which app it runs: {header}");
+
+    client.enter_frame(0).await?;
+    client.execute(r#"
+        setInterval(() => parent.postMessage({ source: 'entity-app', type: 'x-stats', busy_ms: 700, span_ms: 1000,
+            instructions: 5e7, memory_bytes: 64 * 1024 * 1024 }, '*'), 500);
+        return true;
+    "#, vec![]).await?;
+    client.enter_parent_frame().await?;
+    let busy = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("apps").and_then(|a| a.as_array()).is_some_and(|a| a.iter().any(|r| r.get("app").and_then(|x| x.as_str()) == Some("busy")))
+            && v.get("memory").and_then(|m| m.as_str()).is_some_and(|m| m.contains("Calculator: 64.0 MB"))
+    }).await?;
+    println!("  app row after x-stats: {busy}");
+    assert!(busy.get("apps").and_then(|a| a.as_array()).is_some_and(|a| a.iter().any(|r| r.get("app").and_then(|x| x.as_str()) == Some("busy"))),
+        "an app reporting 70% of a core from inside its sandbox is not shown busy — the host dropped x-stats: {busy}");
+    assert!(busy.get("memory").and_then(|m| m.as_str()).is_some_and(|m| m.contains("Calculator: 64.0 MB")),
+        "the app's reported memory is not in the Memory pane: {busy}");
+
+    // ── 8: Show restores a maximized monitor that covers the window
+    let maxed = client.execute(&format!(r#"{MON}
+        const b = sec && sec.querySelector('header button.winctl');
+        if (!b) return 'no-button'; b.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(maxed.as_str(), Some("clicked"), "{maxed}");
+    let covering = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("maximized").and_then(|b| b.as_bool()) == Some(true)).await?;
+    assert_eq!(covering.get("maximized").and_then(|b| b.as_bool()), Some(true), "could not maximize the monitor: {covering}");
+    let shown = client.execute(&format!(r#"{MON}
+        const row = Array.from(sec.querySelectorAll('[data-field="monitor-window-row"]'))
+            .find(r => r.getAttribute('data-window-type') === 'Apps');
+        const b = row && row.querySelector('[data-field="monitor-show"]');
+        if (!b) return 'no-button'; b.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(shown.as_str(), Some("clicked"), "no Show on the Apps row: {shown}");
+    let restored = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| v.get("maximized").and_then(|b| b.as_bool()) == Some(false)).await?;
+    assert_eq!(restored.get("maximized").and_then(|b| b.as_bool()), Some(false),
+        "Show left the maximized monitor covering the window it was asked to show: {restored}");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// A WINDOW KEEPS THE HEIGHT IT WAS GIVEN, AND AN APP'S SCREEN FITS ITS WINDOW
+/// (BACKLOG B-5, `crate::window_size`).
+///
+/// Field report 2026-09-14: KolibriOS drew small with black bars in a normal
+/// window, full screen was the only mode that fit, and leaving it put the window
+/// back at a height nobody chose. What each step proves:
+///
+///  1. every window has a resize grip, and starts at its natural height;
+///  2. a **trusted** drag on the grip sets the window's height — through the
+///     renderer's reconcile, the one applier;
+///  3. the height is **remembered**: a reload, then the same window type opened
+///     again, opens at it (waited on the durable store, not on the put log —
+///     the Direct arm is write-behind);
+///  4. a double-click forgets it and the window is natural again;
+///  5. an app that says what its screen is (`x-view`) gets a window whose frame
+///     shows that screen **at its aspect** (or as tall as the window area allows),
+///     with no remount of the running app — a height change is never a rebuild;
+///  6. **Fit** is offered once the app has reported;
+///  7. opening a window while another is maximized restores the maximized one,
+///     so the new window is not opened invisibly behind it.
+#[tokio::test]
+async fn a_window_keeps_the_height_it_was_given_and_an_apps_screen_fits_its_window(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    const ROOT: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const byTitle = t => Array.from(root.querySelectorAll('section.window'))
+            .find(s => { const h = s.querySelector('header h3'); return h && h.textContent.trim() === t; });
+    "#;
+    let probe = |title: &str| {
+        format!(r#"{ROOT}
+            const sec = byTitle('{title}');
+            if (!sec) return {{ window: false }};
+            const grip = sec.querySelector('[data-field="window-size-grip"]');
+            const g = grip && grip.getBoundingClientRect();
+            const frame = sec.querySelector('iframe.gm-frame');
+            const fit = sec.querySelector('[data-field="app-fit-screen"]');
+            return {{
+                window: true,
+                size: sec.getAttribute('data-size'),
+                height: sec.offsetHeight,
+                classes: sec.className,
+                grip: g ? {{ x: g.left + g.width / 2, y: g.top + g.height / 2 }} : null,
+                frame: frame ? {{ w: frame.clientWidth, h: frame.clientHeight, marker: frame.__sizeGate === 1 }} : null,
+                fit_offered: !!(fit && !fit.hidden),
+                area_h: sec.parentElement ? sec.parentElement.clientHeight : null,
+                viewport_h: innerHeight,
+            }};
+        "#)
+    };
+
+    // ── 1
+    assert_eq!(click_spawn_btn(&client, "+ Shell").await?, "clicked", "couldn't open a Shell");
+    let first = poll_json(&client, &probe("Shell"), ASYNC_ROUND_TRIP_BUDGET, |v| v.get("grip").is_some_and(|g| g.is_object())).await?;
+    println!("  shell: {first}");
+    assert!(first.get("grip").is_some_and(|g| g.is_object()), "the Shell window has no resize grip: {first}");
+    assert_eq!(first.get("size").and_then(|s| s.as_str()), Some("natural"), "a window nobody sized is not natural: {first}");
+    let h0 = first.get("height").and_then(|h| h.as_f64()).unwrap_or(0.0);
+    let gx = first["grip"]["x"].as_f64().unwrap_or(0.0);
+    let gy = first["grip"]["y"].as_f64().unwrap_or(0.0);
+
+    // ── 2: a real drag, 120 px down
+    {
+        use fantoccini::actions::{InputSource, MouseActions, PointerAction, MOUSE_BUTTON_LEFT};
+        let seq = MouseActions::new("mouse".to_string())
+            .then(PointerAction::MoveTo { duration: None, x: gx, y: gy })
+            .then(PointerAction::Down { button: MOUSE_BUTTON_LEFT })
+            .then(PointerAction::MoveTo { duration: Some(Duration::from_millis(150)), x: gx, y: gy + 60.0 })
+            .then(PointerAction::MoveTo { duration: Some(Duration::from_millis(150)), x: gx, y: gy + 120.0 })
+            .then(PointerAction::Up { button: MOUSE_BUTTON_LEFT });
+        client.perform_actions(seq).await?;
+    }
+    let want = h0 + 120.0;
+    let dragged = poll_json(&client, &probe("Shell"), ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("height").and_then(|h| h.as_f64()).is_some_and(|h| (h - want).abs() <= 3.0)
+            && v.get("size").and_then(|s| s.as_str()).is_some_and(|s| s != "natural")
+    }).await?;
+    println!("  after a 120 px drag (from {h0}): {dragged}");
+    assert!(dragged.get("height").and_then(|h| h.as_f64()).is_some_and(|h| (h - want).abs() <= 3.0),
+        "a 120 px drag on the grip did not make the window 120 px taller (was {h0}): {dragged}");
+    assert!(dragged.get("classes").and_then(|c| c.as_str()).is_some_and(|c| c.split(' ').any(|x| x == "sized")),
+        "a sized window is not classed sized, so its content does not fill it: {dragged}");
+
+    // ── 3: remembered across a reload
+    let mut stored = String::new();
+    for _ in 0..40 {
+        stored = durable_hash_for(&client, "settings/window-sizes", "").await?;
+        if !stored.is_empty() { break; }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(!stored.is_empty(), "the window's height never reached the durable store");
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ Shell").await?, "clicked", "couldn't reopen a Shell");
+    let again = poll_json(&client, &probe("Shell"), ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("height").and_then(|h| h.as_f64()).is_some_and(|h| (h - want).abs() <= 3.0)
+    }).await?;
+    println!("  after a reload: {again}");
+    assert!(again.get("height").and_then(|h| h.as_f64()).is_some_and(|h| (h - want).abs() <= 3.0),
+        "a reopened Shell did not open at the height it was given ({want}): {again}");
+
+    // ── 4: double-click forgets
+    client.execute(&format!(r#"{ROOT}
+        const g = byTitle('Shell').querySelector('[data-field="window-size-grip"]');
+        g.dispatchEvent(new MouseEvent('dblclick', {{ bubbles: true }})); return true;
+    "#), vec![]).await?;
+    let reset = poll_json(&client, &probe("Shell"), ASYNC_ROUND_TRIP_BUDGET, |v| v.get("size").and_then(|s| s.as_str()) == Some("natural")).await?;
+    assert_eq!(reset.get("size").and_then(|s| s.as_str()), Some("natural"), "a double-click on the grip did not forget the height: {reset}");
+
+    // ── 5 + 6: an app's screen
+    assert_eq!(click_spawn_btn(&client, "+ Apps").await?, "clicked", "couldn't open the Apps window");
+    let launched = poll_json(&client, &format!(r#"{ROOT}
+        const sec = byTitle('Apps');
+        if (!sec) return 'no-window';
+        const b = Array.from(sec.querySelectorAll('button')).find(b => !b.hasAttribute('data-chip') && b.textContent.includes('Calculator'));
+        if (!b) return 'no-card';
+        b.click(); return 'clicked';
+    "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(launched.as_str(), Some("clicked"), "could not launch Calculator: {launched}");
+    let running = poll_json(&client, &probe("Apps"), ASYNC_ROUND_TRIP_BUDGET, |v| v.get("frame").is_some_and(|f| f.is_object())).await?;
+    assert!(running.get("frame").is_some_and(|f| f.is_object()), "no app frame: {running}");
+    assert_eq!(running.get("fit_offered").and_then(|b| b.as_bool()), Some(false),
+        "Fit is offered before the app said what its screen is: {running}");
+    // Mark the running frame; a remount would lose the mark.
+    client.execute(&format!(r#"{ROOT} byTitle('Apps').querySelector('iframe.gm-frame').__sizeGate = 1; return true;"#), vec![]).await?;
+
+    const EXTRA_H: f64 = 30.0;
+    client.enter_frame(0).await?;
+    client.execute(&format!(r#"
+        parent.postMessage({{ source: 'entity-app', type: 'x-view', screen_w: 1024, screen_h: 768, extra_w: 0, extra_h: {EXTRA_H} }}, '*');
+        return true;
+    "#), vec![]).await?;
+    client.enter_parent_frame().await?;
+    let fitted = poll_json(&client, &probe("Apps"), ASYNC_ROUND_TRIP_BUDGET, |v| {
+        let (Some(w), Some(h)) = (v["frame"]["w"].as_f64(), v["frame"]["h"].as_f64()) else { return false };
+        let aspect_ok = w > 0.0 && ((h - EXTRA_H) / w - 0.75).abs() < 0.02;
+        let capped = v["height"].as_f64().zip(v["area_h"].as_f64()).is_some_and(|(sh, ah)| (sh - (ah - 8.0)).abs() <= 3.0);
+        v.get("size").and_then(|s| s.as_str()).is_some_and(|s| s != "natural") && (aspect_ok || capped)
+    }).await?;
+    println!("  after x-view 1024x768: {fitted}");
+    let (fw, fh) = (fitted["frame"]["w"].as_f64().unwrap_or(0.0), fitted["frame"]["h"].as_f64().unwrap_or(0.0));
+    let aspect_ok = fw > 0.0 && ((fh - EXTRA_H) / fw - 0.75).abs() < 0.02;
+    let capped = fitted["height"].as_f64().zip(fitted["area_h"].as_f64()).is_some_and(|(sh, ah)| (sh - (ah - 8.0)).abs() <= 3.0);
+    assert!(fitted.get("size").and_then(|s| s.as_str()).is_some_and(|s| s != "natural") && (aspect_ok || capped),
+        "an app that reported a 4:3 screen did not get a window showing it at 4:3, nor one as tall as the window area: {fitted}");
+    assert_eq!(fitted["frame"]["marker"].as_bool(), Some(true),
+        "fitting the window remounted the running app — a height change must never be a rebuild: {fitted}");
+    assert_eq!(fitted.get("fit_offered").and_then(|b| b.as_bool()), Some(true), "Fit is not offered after the app reported its screen: {fitted}");
+
+    // ── 7: a new window is not opened behind a maximized one
+    let maxed = client.execute(&format!(r#"{ROOT}
+        const b = byTitle('Apps').querySelector('header button.winctl');
+        if (!b) return 'no-button'; b.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(maxed.as_str(), Some("clicked"), "{maxed}");
+    let covering = poll_json(&client, &probe("Apps"), ASYNC_ROUND_TRIP_BUDGET, |v| v["classes"].as_str().is_some_and(|c| c.contains("maximized"))).await?;
+    assert!(covering["classes"].as_str().is_some_and(|c| c.contains("maximized")), "could not maximize: {covering}");
+    let vh = covering["viewport_h"].as_f64().unwrap_or(0.0);
+    assert!(covering["height"].as_f64().is_some_and(|h| (h - vh).abs() <= 2.0),
+        "a maximized window kept its fitted height instead of filling the screen: {covering}");
+    assert_eq!(click_spawn_btn(&client, "+ Settings").await?, "clicked", "couldn't open Settings");
+    let uncovered = poll_json(&client, &probe("Apps"), ASYNC_ROUND_TRIP_BUDGET, |v| v["classes"].as_str().is_some_and(|c| !c.contains("maximized"))).await?;
+    assert!(uncovered["classes"].as_str().is_some_and(|c| !c.contains("maximized")),
+        "a window opened while Apps was maximized was opened invisibly behind it: {uncovered}");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// THE APPS WINDOW'S SAVES PANEL DOES THE USB FLOW TOO — without sending anyone
+/// to another window (Files F1 leftover, `DESIGN-2026-09-14-b` §5).
+///
+///  1. **From a file on this device** imports a picked `.entitysave` as the
+///     app's live save, and a picked non-save is refused by name;
+///  2. **Download save file** on that row hands the browser a `.entitysave`
+///     whose advisory name is the **catalog's** (`War`), not the id — the bundle
+///     picked in step 1 deliberately carries no name, so only the catalog can
+///     have supplied it;
+///  3. importing those bytes again backs up the save it replaces, and the
+///     backup has its own **Download save file**.
+#[tokio::test]
+async fn the_saves_panel_downloads_a_save_and_imports_one_from_a_file(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ Apps").await?, "clicked", "couldn't open the Apps window");
+
+    const APPS: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const sec = Array.from(root.querySelectorAll('section.window'))
+            .find(s => { const h = s.querySelector('header h3'); return h && h.textContent.trim() === 'Apps'; });
+    "#;
+    let entered = poll_json(&client, &format!(r#"{APPS}
+        const entry = sec && sec.querySelector('button[data-control="saves"]');
+        if (!entry) return 'no-entry';
+        entry.click(); return 'clicked';
+    "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(entered.as_str(), Some("clicked"), "no way into the Saves panel: {entered}");
+
+    let pick = |name: &str, bytes: &[u8]| {
+        let arr = serde_json::to_string(bytes).unwrap();
+        format!(r#"{APPS}
+            const inp = sec && sec.querySelector('[data-field="saves-import-file-input"]');
+            if (!inp) return 'no-input';
+            const dt = new DataTransfer();
+            dt.items.add(new File([new Uint8Array({arr})], '{name}', {{ type: 'application/octet-stream' }}));
+            inp.files = dt.files;
+            inp.dispatchEvent(new Event('change'));
+            return 'picked';
+        "#)
+    };
+    let panel = format!(r#"{APPS}
+        if (!sec) return {{ window: false }};
+        return {{
+            window: true,
+            text: sec.textContent,
+            downloads: Array.from(sec.querySelectorAll('[data-field="saves-download"]')).map(b => b.getAttribute('data-save-ref')),
+        }};
+    "#);
+
+    // ── 1
+    let refused = poll_json(&client, &pick("notes.txt", b"just some notes"), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("picked")).await?;
+    assert_eq!(refused.as_str(), Some("picked"), "the Saves panel has no import-from-a-file control: {refused}");
+    let said = poll_json(&client, &panel, ASYNC_ROUND_TRIP_BUDGET, |v| v["text"].as_str().is_some_and(|t| t.contains("notes.txt"))).await?;
+    assert!(said["text"].as_str().is_some_and(|t| t.contains("notes.txt")), "a picked non-save was not refused by name: {said}");
+
+    let state = r#"{"pile":12}"#;
+    let mut bundle = Vec::new();
+    ciborium::into_writer(&ciborium::Value::Map(vec![
+        (ciborium::Value::Text("set".into()), ciborium::Value::Text("games".into())),
+        (ciborium::Value::Text("id".into()), ciborium::Value::Text("war".into())),
+        (ciborium::Value::Text("state".into()), ciborium::Value::Text(state.into())),
+    ]), &mut bundle)?;
+    assert_eq!(client.execute(&pick("games-war.entitysave", &bundle), vec![]).await?.as_str(), Some("picked"));
+    let listed = poll_json(&client, &panel, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v["downloads"].as_array().is_some_and(|d| d.iter().any(|r| r.as_str() == Some("games/war")))
+    }).await?;
+    println!("  imported: {}", listed["downloads"]);
+    assert!(listed["downloads"].as_array().is_some_and(|d| d.iter().any(|r| r.as_str() == Some("games/war"))),
+        "the imported save is not listed with a Download save file: {listed}");
+
+    // ── 2
+    let capture = r#"
+        window.__savesSaved = [];
+        const blobs = new Map();
+        if (!URL.__savesOrig) URL.__savesOrig = URL.createObjectURL;
+        URL.createObjectURL = function (b) { const u = URL.__savesOrig.call(URL, b); blobs.set(u, b); return u; };
+        HTMLAnchorElement.prototype.click = function () {
+            const b = blobs.get(this.href);
+            const rec = { download: this.getAttribute('download'), bytes: null };
+            window.__savesSaved.push(rec);
+            if (b) b.arrayBuffer().then(buf => { rec.bytes = Array.from(new Uint8Array(buf)); });
+        };
+    "#;
+    let pressed = client.execute(&format!(r#"{APPS} {capture}
+        const b = Array.from(sec.querySelectorAll('[data-field="saves-download"]')).find(b => b.getAttribute('data-save-ref') === 'games/war');
+        if (!b) return 'no-button'; b.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "{pressed}");
+    let saved = poll_json(&client, "return window.__savesSaved || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("bytes")).and_then(|b| b.as_array()).is_some()
+    }).await?;
+    let first = saved.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    assert_eq!(first["download"].as_str(), Some("games-war.entitysave"), "{saved}");
+    let downloaded: Vec<u8> = first["bytes"].as_array().map(|a| a.iter().filter_map(|n| n.as_u64()).map(|n| n as u8).collect()).unwrap_or_default();
+    let decoded: ciborium::Value = ciborium::from_reader(downloaded.as_slice())
+        .map_err(|e| format!("the downloaded save file is not CBOR ({} bytes): {e}", downloaded.len()))?;
+    let field = |k: &str| decoded.as_map().and_then(|m| m.iter().find(|(key, _)| key.as_text() == Some(k)))
+        .and_then(|(_, v)| v.as_text().map(str::to_string));
+    assert_eq!(field("state").as_deref(), Some(state), "{decoded:?}");
+    assert_eq!(field("app_name").as_deref(), Some("War"),
+        "the downloaded save is named by its id, not by the catalog's name for the app: {decoded:?}");
+
+    // ── 3
+    assert_eq!(client.execute(&pick("games-war.entitysave", &downloaded), vec![]).await?.as_str(), Some("picked"));
+    let expanded = poll_json(&client, &format!(r#"{APPS}
+        // Counts arrive wrapped in bidi isolates (U+2068 … U+2069).
+        const b = Array.from(sec.querySelectorAll('button')).find(b => /\(1\)/.test(b.textContent.replace(/[\u2068\u2069]/g, '')));
+        if (!b) return 'no-backup-yet'; b.click(); return 'clicked';
+    "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    if expanded.as_str() != Some("clicked") {
+        let now = client.execute(&panel, vec![]).await?;
+        panic!("importing over the live save made no backup: {expanded} — panel: {now}");
+    }
+    let backups = poll_json(&client, &panel, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v["downloads"].as_array().is_some_and(|d| d.iter().any(|r| r.as_str().is_some_and(|s| s.starts_with("games/war/"))))
+    }).await?;
+    println!("  with backups expanded: {}", backups["downloads"]);
+    assert!(backups["downloads"].as_array().is_some_and(|d| d.iter().any(|r| r.as_str().is_some_and(|s| s.starts_with("games/war/")))),
+        "the backup has no Download save file: {backups}");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// MY FILES — a file from this device is kept privately, and sharing it stays a
+/// separate act (Files F2, `DESIGN-2026-09-14-b` §4).
+///
+///  1. the File Manager opens on **My files**, empty;
+///  2. **Add a file from this device** keeps a picked file there, listed by name
+///     at its size — and it is **not** in Offered;
+///  3. files **dropped** onto the window land there too, even while another
+///     place is showing (the window switches to nothing; the count moves);
+///  4. **Save to this device** hands the browser the same bytes;
+///  5. **Offer to peers** makes it an offer — the one deliberate sharing act —
+///     and it stays in My files;
+///  6. **Remove** asks, then takes it off the list.
+#[tokio::test]
+async fn a_file_from_this_device_is_kept_in_my_files_and_shared_only_on_purpose(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ File Manager").await?, "clicked", "couldn't open the File Manager");
+
+    const FILES: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let sec = null;
+        for (const s of root.querySelectorAll('section.window')) {
+            if (s.querySelector('[data-field="files-window"]')) { sec = s; break; }
+        }
+    "#;
+    let state = format!(r#"{FILES}
+        if (!sec) return {{ window: false }};
+        const chips = {{}};
+        for (const c of sec.querySelectorAll('[data-chip]')) chips[c.getAttribute('data-chip')] = {{ active: c.getAttribute('aria-pressed') === 'true' || c.className.includes('active'), text: c.textContent.replace(/[\u2068\u2069]/g, '') }};
+        const rows = Array.from(sec.querySelectorAll('[data-field="files-row"]')).map(r => ({{
+            name: r.getAttribute('data-file-name'), ref: r.getAttribute('data-file-ref'), text: r.textContent,
+        }}));
+        const n = sec.querySelector('[data-field="files-notice"]');
+        return {{ window: true, chips, rows, add: !!sec.querySelector('[data-field="files-add"]'), notice: n ? n.textContent : null }};
+    "#);
+    let chip = |key: &str| format!(r#"{FILES}
+        const c = sec && sec.querySelector('[data-chip="{key}"]');
+        if (!c) return 'no-chip'; c.click(); return 'clicked';
+    "#);
+
+    // ── 1
+    let first = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| v["add"].as_bool() == Some(true)).await?;
+    println!("  opened: {first}");
+    assert_eq!(first["add"].as_bool(), Some(true), "the File Manager does not open on My files with a way to add a file: {first}");
+    assert_eq!(first["rows"].as_array().map(|r| r.len()), Some(0), "{first}");
+
+    // ── 2
+    // Repetitive on purpose, so the .zip in 3c actually deflates it.
+    let body_text = "dear diary, today I tested a file manager. ".repeat(4);
+    let body = body_text.as_bytes();
+    let arr = serde_json::to_string(&body.to_vec())?;
+    let picked = client.execute(&format!(r#"{FILES}
+        const inp = sec.querySelector('[data-field="files-add-input"]');
+        if (!inp) return 'no-input';
+        const dt = new DataTransfer();
+        dt.items.add(new File([new Uint8Array({arr})], 'diary.txt', {{ type: 'text/plain' }}));
+        inp.files = dt.files; inp.dispatchEvent(new Event('change'));
+        return 'picked';
+    "#), vec![]).await?;
+    assert_eq!(picked.as_str(), Some("picked"), "{picked}");
+    let added = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v["rows"].as_array().is_some_and(|r| r.iter().any(|x| x["name"].as_str() == Some("diary.txt")))
+    }).await?;
+    println!("  added: {added}");
+    let diary = added["rows"].as_array().and_then(|r| r.iter().find(|x| x["name"].as_str() == Some("diary.txt")).cloned()).unwrap_or_default();
+    assert!(diary["ref"].as_str().is_some_and(|r| r.starts_with("mine|")), "the picked file is not in My files: {added}");
+    assert!(diary["text"].as_str().is_some_and(|t| t.contains(&format!("{} B", body.len()))), "not listed at its size: {added}");
+    assert!(added["chips"]["offered"]["text"].as_str().is_some_and(|t| !t.contains('1')),
+        "adding a file to My files offered it: {added}");
+
+    // ── 3: drop two files while Saves is showing
+    assert_eq!(client.execute(&chip("saves"), vec![]).await?.as_str(), Some("clicked"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let dropped = client.execute(&format!(r#"{FILES}
+        const dt = new DataTransfer();
+        dt.items.add(new File([new Uint8Array([1,2,3])], 'a.bin'));
+        dt.items.add(new File([new Uint8Array([4,5,6,7])], 'b.bin'));
+        const w = sec.querySelector('[data-field="files-window"]');
+        w.dispatchEvent(new DragEvent('dragover', {{ bubbles: true, cancelable: true, dataTransfer: dt }}));
+        const over = w.hasAttribute('data-drop-over');
+        w.dispatchEvent(new DragEvent('drop', {{ bubbles: true, cancelable: true, dataTransfer: dt }}));
+        return {{ over, after: w.hasAttribute('data-drop-over') }};
+    "#), vec![]).await?;
+    println!("  drop: {dropped}");
+    assert_eq!(dropped["over"].as_bool(), Some(true), "a drag over the window is not shown: {dropped}");
+    let counted = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v["chips"]["my-files"]["text"].as_str().is_some_and(|t| t.contains('3'))
+    }).await?;
+    println!("  after drop: {}", counted["chips"]);
+    assert!(counted["chips"]["my-files"]["text"].as_str().is_some_and(|t| t.contains('3')),
+        "two dropped files did not land in My files: {counted}");
+    assert_eq!(client.execute(&chip("my-files"), vec![]).await?.as_str(), Some("clicked"));
+    let mine = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| v["rows"].as_array().is_some_and(|r| r.len() == 3)).await?;
+    assert_eq!(mine["rows"].as_array().map(|r| r.len()), Some(3), "{mine}");
+
+    // ── 3b: the whole place as one archive a person can open anywhere. Unpacked
+    // here by Python's own tarfile + gzip, so the gate reads the format, not our
+    // writer.
+    let pressed = client.execute(&format!(r#"{FILES}
+        window.__myTar = [];
+        const blobs = new Map();
+        if (!URL.__tarOrig) URL.__tarOrig = URL.createObjectURL;
+        URL.createObjectURL = function (b) {{ const u = URL.__tarOrig.call(URL, b); blobs.set(u, b); return u; }};
+        HTMLAnchorElement.prototype.click = function () {{
+            const b = blobs.get(this.href);
+            const rec = {{ download: this.getAttribute('download'), bytes: null }};
+            window.__myTar.push(rec);
+            if (b) b.arrayBuffer().then(buf => {{ rec.bytes = Array.from(new Uint8Array(buf)); }});
+        }};
+        const btn = sec.querySelector('[data-field="files-export-tar"]');
+        if (!btn) return 'no-button'; btn.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "My files offers no Download all: {pressed}");
+    let tarred = poll_json(&client, "return window.__myTar || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("bytes")).and_then(|b| b.as_array()).is_some()
+    }).await?;
+    let rec = tarred.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    let name = rec["download"].as_str().unwrap_or("").to_string();
+    assert!(name.starts_with("my-files-") && name.ends_with(".tar.gz"), "the archive is not a .tar.gz named for the place: {name}");
+    let gz: Vec<u8> = rec["bytes"].as_array().map(|a| a.iter().filter_map(|n| n.as_u64()).map(|n| n as u8).collect()).unwrap_or_default();
+    let tmp = std::env::temp_dir().join(format!("my-files-{}.tar.gz", std::process::id()));
+    std::fs::write(&tmp, &gz)?;
+    let listing = std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import sys,tarfile\nwith tarfile.open(sys.argv[1], 'r:gz') as t:\n  for m in t.getmembers(): print(m.name, m.size, t.extractfile(m).read().hex())")
+        .arg(&tmp)
+        .output()?;
+    let _ = std::fs::remove_file(&tmp);
+    let listed = String::from_utf8_lossy(&listing.stdout).to_string();
+    println!("  archive {name}: {listed}");
+    assert!(listing.status.success(), "Python could not open the archive as .tar.gz: {}", String::from_utf8_lossy(&listing.stderr));
+    let diary_hex: String = body.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(listed.contains(&format!("diary.txt {} {diary_hex}", body.len())), "the diary is not in the archive with its bytes: {listed}");
+    assert!(listed.contains("a.bin 3 010203") && listed.contains("b.bin 4 04050607"), "the dropped files are not in the archive: {listed}");
+
+    // ── 3c: the same place as a .zip — the format Windows Explorer opens.
+    // Python's zipfile checks every member's CRC (`testzip`) and inflates the
+    // deflated ones, so this reads the format, not our writer.
+    let pressed = client.execute(&format!(r#"{FILES}
+        window.__myTar = [];
+        const btn = sec.querySelector('[data-field="files-export-zip"]');
+        if (!btn) return 'no-button'; btn.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "My files offers no Download all (.zip): {pressed}");
+    let zipped = poll_json(&client, "return window.__myTar || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("bytes")).and_then(|b| b.as_array()).is_some()
+    }).await?;
+    let rec = zipped.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    let zname = rec["download"].as_str().unwrap_or("").to_string();
+    assert!(zname.starts_with("my-files-") && zname.ends_with(".zip"), "the archive is not a .zip named for the place: {zname}");
+    let zbytes: Vec<u8> = rec["bytes"].as_array().map(|a| a.iter().filter_map(|n| n.as_u64()).map(|n| n as u8).collect()).unwrap_or_default();
+    let ztmp = std::env::temp_dir().join(format!("my-files-{}.zip", std::process::id()));
+    std::fs::write(&ztmp, &zbytes)?;
+    let zlisting = std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1]) as z:\n  bad = z.testzip()\n  assert bad is None, bad\n  for i in z.infolist(): print(i.filename, i.file_size, i.compress_type, z.read(i).hex())")
+        .arg(&ztmp)
+        .output()?;
+    let _ = std::fs::remove_file(&ztmp);
+    let zlisted = String::from_utf8_lossy(&zlisting.stdout).to_string();
+    println!("  archive {zname}: {zlisted}");
+    assert!(zlisting.status.success(), "Python could not open the archive as .zip: {}", String::from_utf8_lossy(&zlisting.stderr));
+    assert!(zlisted.contains(&format!("diary.txt {} 8 {diary_hex}", body.len())),
+        "the diary is not in the zip, deflated (method 8), with its bytes: {zlisted}");
+    assert!(zlisted.contains("a.bin 3 0 010203") && zlisted.contains("b.bin 4 0 04050607"),
+        "the dropped files are not in the zip (stored, since three bytes do not shrink): {zlisted}");
+
+    // ── 4: save the diary to this device
+    let pressed = client.execute(&format!(r#"{FILES}
+        window.__mySaved = [];
+        const blobs = new Map();
+        if (!URL.__myOrig) URL.__myOrig = URL.createObjectURL;
+        URL.createObjectURL = function (b) {{ const u = URL.__myOrig.call(URL, b); blobs.set(u, b); return u; }};
+        HTMLAnchorElement.prototype.click = function () {{
+            const b = blobs.get(this.href);
+            const rec = {{ download: this.getAttribute('download'), bytes: null }};
+            window.__mySaved.push(rec);
+            if (b) b.arrayBuffer().then(buf => {{ rec.bytes = Array.from(new Uint8Array(buf)); }});
+        }};
+        const btn = sec.querySelector('[data-field="files-save"][data-file-name="diary.txt"]');
+        if (!btn) return 'no-button'; btn.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "{pressed}");
+    let saved = poll_json(&client, "return window.__mySaved || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("bytes")).and_then(|b| b.as_array()).is_some()
+    }).await?;
+    let rec = saved.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    let got: Vec<u8> = rec["bytes"].as_array().map(|a| a.iter().filter_map(|n| n.as_u64()).map(|n| n as u8).collect()).unwrap_or_default();
+    assert_eq!(rec["download"].as_str(), Some("diary.txt"), "{saved}");
+    assert_eq!(got, body.to_vec(), "Save to this device did not hand over the file's bytes");
+
+    // ── 4b: where is it in the tree? The row names its path and opens the
+    // Entity Tree on it — a file you cannot find there is not in the system.
+    let shown = client.execute(&format!(r#"{FILES}
+        const btn = sec.querySelector('tr[data-file-name="diary.txt"] [data-field="files-show-in-tree"]');
+        if (!btn) return {{ err: 'no-button' }};
+        const path = btn.getAttribute('title'); btn.click();
+        return {{ path }};
+    "#), vec![]).await?;
+    let tree_path = shown["path"].as_str().ok_or(format!("the diary row has no Show in Entity Tree: {shown}"))?.to_string();
+    assert!(tree_path.ends_with(diary["ref"].as_str().unwrap_or("?").trim_start_matches("mine|")) && tree_path.starts_with('/'),
+        "the button does not name the file's own tree path: {tree_path}");
+    let selected = poll_json(&client, &format!(r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const row = [...root.querySelectorAll('.tree-row')].find(r => r.getAttribute('data-path') === {p});
+        return row ? {{ selected: row.getAttribute('aria-selected'), cls: row.className }} : null;
+    "#, p = serde_json::to_string(&tree_path)?), ASYNC_ROUND_TRIP_BUDGET, |v| v["selected"].as_str() == Some("true")).await?;
+    println!("  show in tree: {tree_path} -> {selected}");
+    assert_eq!(selected["selected"].as_str(), Some("true"), "the Entity Tree did not open with the file selected: {selected}");
+
+    // ── 5: offer it, on purpose
+    let offered = client.execute(&format!(r#"{FILES}
+        const btn = sec.querySelector('[data-field="files-offer"][data-file-name="diary.txt"]');
+        if (!btn) return 'no-button'; btn.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(offered.as_str(), Some("clicked"), "{offered}");
+    let listed = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v["chips"]["offered"]["text"].as_str().is_some_and(|t| t.contains('1'))
+    }).await?;
+    println!("  after offering: {}", listed["chips"]);
+    assert!(listed["chips"]["offered"]["text"].as_str().is_some_and(|t| t.contains('1')), "Offer to peers did not make it an offer: {listed}");
+    assert!(listed["chips"]["my-files"]["text"].as_str().is_some_and(|t| t.contains('3')), "offering took it out of My files: {listed}");
+
+    // ── 6: remove
+    let removed = client.execute(&format!(r#"{FILES}
+        window.confirm = () => true;
+        const btn = sec.querySelector('[data-field="files-remove"][data-file-name="a.bin"]');
+        if (!btn) return 'no-button'; btn.click(); return 'clicked';
+    "#), vec![]).await?;
+    assert_eq!(removed.as_str(), Some("clicked"), "{removed}");
+    let after = poll_json(&client, &state, ASYNC_ROUND_TRIP_BUDGET, |v| v["rows"].as_array().is_some_and(|r| r.len() == 2)).await?;
+    assert!(after["rows"].as_array().is_some_and(|r| r.len() == 2 && !r.iter().any(|x| x["name"].as_str() == Some("a.bin"))),
+        "Remove did not take the file off My files: {after}");
+
+    // ── 7: the Storage window answers "what is using my space" in bytes, by
+    // the File Manager's places (BACKLOG B-8): the diary + b.bin's 4 B.
+    assert_eq!(click_spawn_btn(&client, "+ Storage").await?, "clicked", "couldn't open Storage");
+    let usage = poll_json(&client, r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const row = root.querySelector('.storage [data-place="my-files"]');
+        return row ? Number(row.getAttribute('data-bytes')) : null;
+    "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.as_u64() == Some(body.len() as u64 + 4)).await?;
+    assert_eq!(usage.as_u64(), Some(body.len() as u64 + 4), "Storage does not report My files at its size in bytes: {usage}");
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// AN ENTITY LEAVES THE TREE AS A TEXT FILE THAT STILL SAYS WHAT IT WAS — the
+/// Entity Tree's *Save as text file* (operator direction 2026-09-14: "export an
+/// entity as a text file"). The file carries the entity's path and type above
+/// what the document panel shows, so it is not an orphaned dump.
+#[tokio::test]
+async fn the_entity_tree_saves_an_entity_as_a_text_file() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ Entity Tree").await?, "clicked", "couldn't open the Entity Tree");
+
+    let mut picked = serde_json::Value::Null;
+    for _ in 0..12 {
+        picked = client.execute(r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const items = root.querySelectorAll('.tree-row.has-entry');
+            if (items.length === 0) {
+                for (const t of root.querySelectorAll('.tree-toggle')) if (t.textContent.trim().startsWith('▶')) t.click();
+                return null;
+            }
+            items[0].click();
+            return items[0].getAttribute('data-path');
+        "#, vec![]).await?;
+        if picked.is_string() { break; }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    let path = picked.as_str().ok_or("the Entity Tree never showed a row with an entity")?.to_string();
+    let pressed = poll_json(&client, r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        const b = root.querySelector('[data-field="entitytree-save-text"]');
+        if (!b) return 'no-button';
+        window.__etSaved = [];
+        const blobs = new Map();
+        if (!URL.__etOrig) URL.__etOrig = URL.createObjectURL;
+        URL.createObjectURL = function (x) { const u = URL.__etOrig.call(URL, x); blobs.set(u, x); return u; };
+        HTMLAnchorElement.prototype.click = function () {
+            const x = blobs.get(this.href);
+            const rec = { download: this.getAttribute('download'), text: null };
+            window.__etSaved.push(rec);
+            if (x) x.text().then(t => { rec.text = t; });
+        };
+        b.click(); return 'clicked';
+    "#, ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "a selected entity offers no Save as text file: {pressed}");
+    let saved = poll_json(&client, "return window.__etSaved || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).is_some_and(|r| r["text"].is_string())
+    }).await?;
+    let rec = saved.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    println!("  saved {path}: {rec}");
+    let last = path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("");
+    assert_eq!(rec["download"].as_str(), Some(format!("{last}.txt").as_str()), "{rec}");
+    assert!(rec["text"].as_str().is_some_and(|t| t.starts_with(&format!("{path}\n"))),
+        "the text file does not start with the entity's path: {rec}");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// THE FILES WINDOW'S SAVE FLOW — a save leaves this device as a file and comes
+/// back in as one, with no peer and no connection (`DESIGN-2026-09-14-b` §5, the
+/// "send someone my save on a USB stick" case).
+///
+/// What each step proves that the one before does not:
+///
+///  1. a picked file that is NOT a save is refused **by name** and adds nothing
+///     — an ordinary file picked by mistake is the common case, and "corrupt
+///     save" would send the person looking for a problem that is not there;
+///  2. a picked `.entitysave` becomes the app's live save (the Saves place lists
+///     it, at its real size) — the import half;
+///  3. **Download save file** hands the browser a `.entitysave` named for the
+///     app — the export half — and those exact bytes, imported again, are a
+///     save: the file round-trips through the browser's own Blob, not through
+///     a Rust test double;
+///  4. importing over an existing save **backs it up first** (a backup row
+///     appears) — the one import rule a copy of this code would forget;
+///  5. **Remove** on the backup asks first, and removes it; the live save stays
+///     (a live save offers no Remove at all).
+///
+/// The bundle is built here with `ciborium` in the exact shape
+/// `apps::saves::SaveBundle` decodes, so the gate does not depend on the code
+/// under test to produce its input. The picker is driven by assigning
+/// `input.files` and dispatching `change`, the same seam as the app-files gate.
+#[tokio::test]
+async fn a_save_leaves_the_files_window_as_a_file_and_comes_back_in_as_one(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+    client.goto(&url).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    assert_eq!(click_spawn_btn(&client, "+ File Manager").await?, "clicked", "couldn't open the File Manager window");
+
+    const FILES: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        let sec = null;
+        for (const s of root.querySelectorAll('section.window')) {
+            if (s.querySelector('[data-field="files-window"]')) { sec = s; break; }
+        }
+    "#;
+    // The Saves place, pressed once the window has painted its chips.
+    let to_saves = poll_json(&client, &format!(r#"{FILES}
+            const chip = sec && sec.querySelector('[data-chip="saves"]');
+            if (!chip) return 'no-chip';
+            chip.click(); return 'clicked';
+        "#), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("clicked")).await?;
+    assert_eq!(to_saves.as_str(), Some("clicked"), "the Files window has no Saves place: {to_saves}");
+
+    let pick = |name: &str, bytes: &[u8]| {
+        let arr = serde_json::to_string(bytes).unwrap();
+        format!(r#"{FILES}
+            const inp = sec && sec.querySelector('[data-field="files-import-save-input"]');
+            if (!inp) return 'no-input';
+            const dt = new DataTransfer();
+            dt.items.add(new File([new Uint8Array({arr})], '{name}', {{ type: 'application/octet-stream' }}));
+            inp.files = dt.files;
+            inp.dispatchEvent(new Event('change'));
+            return 'picked';
+        "#)
+    };
+    let state_of = format!(r#"{FILES}
+            if (!sec) return {{ window: false }};
+            const rows = Array.from(sec.querySelectorAll('[data-field="files-row"]')).map(r => ({{
+                name: r.getAttribute('data-file-name'), ref: r.getAttribute('data-file-ref'), text: r.textContent,
+                remove: !!r.querySelector('[data-field="files-remove"]'),
+            }}));
+            const n = sec.querySelector('[data-field="files-notice"]');
+            return {{ window: true, rows, notice: n ? n.textContent : null }};
+        "#);
+
+    // ── 1: not a save
+    // Polled: the Saves chip rebuilds the section on the next frame, and the
+    // import control exists only in the Saves place.
+    let picked = poll_json(&client, &pick("photo.jpg", b"\xff\xd8\xff\xe0 not a save"), ASYNC_ROUND_TRIP_BUDGET, |v| v.as_str() == Some("picked")).await?;
+    assert_eq!(picked.as_str(), Some("picked"), "the Saves place has no import control: {picked}");
+    let refused = poll_json(&client, &state_of, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("notice").and_then(|n| n.as_str()).is_some_and(|n| n.contains("photo.jpg"))
+    }).await?;
+    println!("  not a save: {refused}");
+    assert!(refused.get("notice").and_then(|n| n.as_str()).is_some_and(|n| n.contains("photo.jpg")),
+        "a picked file that is not a save was not refused by name: {refused}");
+    assert_eq!(refused.get("rows").and_then(|r| r.as_array()).map(|r| r.len()), Some(0),
+        "refusing a non-save still added a row: {refused}");
+
+    // ── 2: a save file, built independently of the code under test
+    let state = r#"{"board":"e4 e5","turn":3}"#;
+    let mut bundle = Vec::new();
+    ciborium::into_writer(&ciborium::Value::Map(vec![
+        (ciborium::Value::Text("set".into()), ciborium::Value::Text("games".into())),
+        (ciborium::Value::Text("id".into()), ciborium::Value::Text("chess".into())),
+        (ciborium::Value::Text("app_name".into()), ciborium::Value::Text("Chess".into())),
+        (ciborium::Value::Text("state".into()), ciborium::Value::Text(state.into())),
+        (ciborium::Value::Text("saved_at_ms".into()), ciborium::Value::Integer(1_755_630_000_000u64.into())),
+    ]), &mut bundle)?;
+    assert_eq!(client.execute(&pick("games-chess.entitysave", &bundle), vec![]).await?.as_str(), Some("picked"));
+    let imported = poll_json(&client, &state_of, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("rows").and_then(|r| r.as_array()).is_some_and(|r| r.len() == 1)
+    }).await?;
+    println!("  imported: {imported}");
+    let rows = imported.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1, "the imported save is not listed: {imported}");
+    assert_eq!(rows[0].get("ref").and_then(|s| s.as_str()), Some("save|games|chess"), "{imported}");
+    assert!(rows[0].get("text").and_then(|s| s.as_str()).is_some_and(|t| t.contains(&format!("{} B", state.len()))),
+        "the save is not listed at the size of the state it carries ({} B): {imported}", state.len());
+    assert!(!rows[0].get("remove").and_then(|b| b.as_bool()).unwrap_or(true),
+        "a LIVE save offers Remove — that pulls state out from under the app: {imported}");
+
+    // ── 3: download it, capturing the bytes the page handed the browser
+    let pressed = client.execute(&format!(r#"{FILES}
+            window.__filesSaved = [];
+            const blobs = new Map();
+            if (!URL.__filesOrig) URL.__filesOrig = URL.createObjectURL;
+            URL.createObjectURL = function (b) {{ const u = URL.__filesOrig.call(URL, b); blobs.set(u, b); return u; }};
+            HTMLAnchorElement.prototype.click = function () {{
+                const b = blobs.get(this.href);
+                const rec = {{ download: this.getAttribute('download'), bytes: null }};
+                window.__filesSaved.push(rec);
+                if (b) b.arrayBuffer().then(buf => {{ rec.bytes = Array.from(new Uint8Array(buf)); }});
+            }};
+            const btn = sec && sec.querySelector('[data-field="files-download-save"]');
+            if (!btn) return 'no-button';
+            btn.click(); return 'clicked';
+        "#), vec![]).await?;
+    assert_eq!(pressed.as_str(), Some("clicked"), "no Download save file on the save row: {pressed}");
+    let saved = poll_json(&client, "return window.__filesSaved || [];", ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.as_array().and_then(|a| a.first()).and_then(|r| r.get("bytes")).and_then(|b| b.as_array()).is_some()
+    }).await?;
+    let first = saved.as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
+    assert_eq!(first.get("download").and_then(|s| s.as_str()), Some("games-chess.entitysave"),
+        "Download save file did not hand the browser a .entitysave named for the app: {saved}");
+    let downloaded: Vec<u8> = first.get("bytes").and_then(|b| b.as_array())
+        .map(|a| a.iter().filter_map(|n| n.as_u64()).map(|n| n as u8).collect())
+        .unwrap_or_default();
+    let decoded: ciborium::Value = ciborium::from_reader(downloaded.as_slice())
+        .map_err(|e| format!("the downloaded save file is not CBOR ({} bytes): {e}", downloaded.len()))?;
+    let field = |k: &str| decoded.as_map().and_then(|m| m.iter().find(|(key, _)| key.as_text() == Some(k)))
+        .and_then(|(_, v)| v.as_text().map(str::to_string));
+    assert_eq!(field("state").as_deref(), Some(state), "the downloaded file does not carry the save's state: {decoded:?}");
+    assert_eq!((field("set").as_deref(), field("id").as_deref()), (Some("games"), Some("chess")), "{decoded:?}");
+
+    // ── 4: those downloaded bytes, imported over the live save, back it up first
+    assert_eq!(client.execute(&pick("games-chess.entitysave", &downloaded), vec![]).await?.as_str(), Some("picked"));
+    let replaced = poll_json(&client, &state_of, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("rows").and_then(|r| r.as_array()).is_some_and(|r| r.len() == 2)
+    }).await?;
+    println!("  imported again: {replaced}");
+    let rows = replaced.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let backup = rows.iter().find(|r| r.get("ref").and_then(|s| s.as_str()).is_some_and(|s| s.starts_with("backup|games|chess|")));
+    assert!(backup.is_some(), "importing over a live save did not back it up first: {replaced}");
+    assert!(backup.and_then(|b| b.get("remove")).and_then(|b| b.as_bool()).unwrap_or(false),
+        "a backup offers no Remove: {replaced}");
+
+    // ── 5: Remove asks, then removes the backup; the live save stays
+    let removed = client.execute(&format!(r#"{FILES}
+            window.__filesAsked = null;
+            window.confirm = (q) => {{ window.__filesAsked = q; return true; }};
+            const row = Array.from(sec.querySelectorAll('[data-field="files-row"]'))
+                .find(r => (r.getAttribute('data-file-ref') || '').startsWith('backup|'));
+            const btn = row && row.querySelector('[data-field="files-remove"]');
+            if (!btn) return 'no-button';
+            btn.click(); return 'clicked';
+        "#), vec![]).await?;
+    assert_eq!(removed.as_str(), Some("clicked"), "{removed}");
+    let after = poll_json(&client, &state_of, ASYNC_ROUND_TRIP_BUDGET, |v| {
+        v.get("rows").and_then(|r| r.as_array()).is_some_and(|r| r.len() == 1)
+    }).await?;
+    let asked = client.execute("return window.__filesAsked;", vec![]).await?;
+    println!("  after remove: {after} (asked: {asked})");
+    assert!(asked.as_str().is_some_and(|q| q.contains("chess")), "Remove did not ask first, naming the file: {asked}");
+    let rows = after.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 1, "the backup was not removed: {after}");
+    assert_eq!(rows[0].get("ref").and_then(|s| s.as_str()), Some("save|games|chess"), "the live save must stay: {after}");
 
     client.close().await.ok();
     Ok(())

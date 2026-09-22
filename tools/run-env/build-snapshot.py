@@ -36,8 +36,10 @@ import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 GRID = os.environ.get("GRID", "http://127.0.0.1:4444")
+# APP=kolibri builds the KolibriOS machine's snapshot (serve tools/run-env/kolibri instead).
+APP_DIR = {"alpine": "alpine-guest", "kolibri": "kolibri"}[os.environ.get("APP", "alpine")]
 URL = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8216/").rstrip("/") + "/index.html?snapshot=build"
-OUT = HERE / "alpine-guest" / "guest"
+OUT = HERE / APP_DIR / "guest"
 
 
 def rq(method, path, body=None):
@@ -51,8 +53,8 @@ def js(sid, script):
     return rq("POST", f"/session/{sid}/execute/sync", {"script": script, "args": []})["value"]
 
 
-if not (OUT / "fs.json").exists():
-    sys.exit(f"no built guest at {OUT} -- run ./build-guest.sh first")
+if not ((OUT / "fs.json").exists() or (OUT / "kolibri.img").exists()):
+    sys.exit(f"no built guest at {OUT} -- run ./build-guest.sh (or kolibri/fetch-image.sh) first")
 
 print(f"==> building a snapshot from {URL} (grid {GRID})")
 caps = {"capabilities": {"alwaysMatch": {"browserName": "firefox", "moz:firefoxOptions": {"args": ["-headless"]}}}}
@@ -94,9 +96,10 @@ zst = subprocess.run(["podman", "run", "--rm", "-i", "docker.io/library/alpine:3
                       "apk add --no-cache zstd >/dev/null 2>&1 && zstd -19 -T0 -q -c"],
                      input=raw, capture_output=True, check=True).stdout
 (OUT / "snapshot.bin.zst").write_bytes(zst)
-meta = {"engine": ids["engine"], "image": ids["image"], "packages": ids["packages"], "machine": ids["machine"],
-        "raw_bytes": len(raw), "zstd_bytes": len(zst)}
+# Every id the page decided fit on, whatever machine it is; the page checks the same keys.
+meta = dict(ids, raw_bytes=len(raw), zstd_bytes=len(zst))
 (OUT / "snapshot.json").write_text(json.dumps(meta, indent=2) + "\n")
 print(f"    state {len(raw) / 1048576:.1f} MiB -> zstd {len(zst) / 1048576:.1f} MiB")
-print(f"    packages: {'included' if ids['packages'] else 'none'}")
+if "packages" in ids:
+    print(f"    packages: {'included' if ids['packages'] else 'none'}")
 print(f"==> {OUT / 'snapshot.bin.zst'}")

@@ -2308,6 +2308,22 @@ these shipped in this repo.
   [AP40, AP52, `PublishLayout::profile_peer_id`,
   `a_profile_names_the_peer_it_is_about_and_silence_is_not_a_mismatch`,
   `AUDIT-MULTI-PEER-HOSTING-AND-THE-HOME-SITE-2026-09-03.md` F3]
+- **AP57 — Visibility decided by the app, beside a kernel that owns it: a second permission system
+  built out of types, namespaces and prefixes.** (AP54–AP56 are recorded in `AGENTS.md`; this number
+  follows them.) With grants debug-open, a file an app handed over was listed to peers; the fix moved
+  it to a prefix peers do not list, and the rule was written down as *"ask who can LIST a path"*.
+  Every later file feature inherited it: `app/entity-browser/{user-file, app-file, file-offer}` are
+  **one body under three tags**, `system/content` got three namespaces the code itself calls *"not an
+  access boundary"*, **Offer to peers re-ingests the bytes and writes a second manifest**, and
+  `kept_files::TakeBack` revokes by moving entities between prefixes. Each diff was locally right
+  (*don't show a private file to peers*) and none asked who owns visibility — **AP12's tell verbatim,
+  in the permission domain instead of connection state**, which makes this AP12's second shape and a
+  **promotion candidate** (*the browser does not decide who may read; grants do*), not yet a
+  discipline: it has no enforcement point. Candidate per-diff question: *does this diff decide who may
+  read something — and is that decision a grant?* The kernel already expresses the replacement
+  (`PathScope { include, exclude }`; `system/capability:configure` via `share::author_policy`); what it
+  lacks is namespace-scoped `system/content:get` (CONTENT §6.4.2, routed K-4), without which no grant
+  keeps bytes private. [AP12, D1, `AUDIT-2026-09-14-d-MY-FILES-IS-IN-THE-TREE-AND-ITS-PRIVACY-IS-A-SECOND-PERMISSION-SYSTEM.md`]
 
 ---
 

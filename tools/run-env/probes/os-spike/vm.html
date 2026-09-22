@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>v86 os spike</title>
+<style>
+  body { margin: 0; background: #000; color: #ccc; font: 12px monospace; }
+  #screen_container { display: inline-block; }
+  #screen_container canvas { display: block; }
+  #screen_container div { white-space: pre; font: 14px monospace; line-height: 14px; color: #fff; }
+</style>
+<div id="screen_container"><div></div><canvas></canvas></div>
+<script>
+// ?clockshim=1 : strictly-increasing performance.now() with bounded (<1 ms) lead over the real
+// clock, so code that polls a sub-millisecond-rate signal (PIT port 0x61 bit 4) sees it advance
+// on a non-isolated origin where the real clock is clamped to 1 ms.
+if (new URLSearchParams(location.search).get('clockshim') === '1') {
+  const orig = performance.now.bind(performance); let last = 0;
+  performance.now = function () { const r = orig(); last = Math.min(Math.max(r, last + 0.015), r + 0.999); return last; };
+}
+</script>
+<script src="libv86.js"></script>
+<script>
+// Generic spike page. Query: fda=, cdrom=, hda=, hdb= (URLs; hda/hdb/fda fetched into an
+// ArrayBuffer so the page holds the bytes), mem= MiB, boot= boot_order (hex), acpi=1.
+const q = new URLSearchParams(location.search);
+const S = window.__spike = { t0: performance.now(), events: [], serial: '', sizes: [], mouseEnabled: null, error: null };
+const ev = (k, v) => S.events.push([Math.round(performance.now() - S.t0), k, v]);
+async function ab(url) { const r = await fetch(url); if (!r.ok) throw new Error(url + ' ' + r.status); return await r.arrayBuffer(); }
+(async () => {
+  try {
+    const cfg = {
+      wasm_path: 'v86.wasm',
+      bios: { url: 'seabios.bin' }, vga_bios: { url: 'vgabios.bin' },
+      memory_size: (+(q.get('mem') || 128)) * 1048576,
+      vga_memory_size: (+(q.get('vgamem') || 8)) * 1048576,
+      screen_container: document.getElementById('screen_container'),
+      acpi: q.get('acpi') === '1',
+      autostart: true,
+    };
+    S.held = {};
+    for (const k of ['fda', 'hda', 'hdb']) if (q.get(k)) {
+      const buf = await ab(q.get(k)); S.held[k] = buf; cfg[k] = { buffer: buf }; ev('fetched', k + ' ' + buf.byteLength);
+    }
+    if (q.get('cdrom')) cfg.cdrom = { url: q.get('cdrom') };
+    if (q.get('state')) cfg.initial_state = { url: q.get('state') };
+    if (q.get('boot')) cfg.boot_order = parseInt(q.get('boot'), 16);
+    S.t0 = performance.now();
+    const e = window.emulator = new V86(cfg);
+    e.add_listener('emulator-loaded', () => ev('loaded'));
+    e.add_listener('emulator-started', () => ev('started'));
+    e.add_listener('screen-set-size', (a) => { S.sizes.push([Math.round(performance.now() - S.t0), a]); });
+    e.add_listener('mouse-enable', (a) => { S.mouseEnabled = a; ev('mouse-enable', a); });
+    e.add_listener('serial0-output-byte', (b) => { S.serial += String.fromCharCode(b); });
+  } catch (err) { S.error = String(err && err.stack || err); }
+})();
+// helper: hash of the visible canvas (graphical) or text rows, for "has the screen settled"
+window.__screenHash = function () {
+  const c = document.querySelector('#screen_container canvas');
+  let h = 2166136261 >>> 0, n = 0;
+  if (c && c.width && c.style.display !== 'none') {
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < d.length; i += 97) { h = Math.imul(h ^ d[i], 16777619) >>> 0; n++; }
+    return { mode: 'gfx', w: c.width, h: c.height, hash: h };
+  }
+  const t = document.querySelector('#screen_container div').innerText || '';
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619) >>> 0;
+  return { mode: 'text', hash: h, text: t.slice(0, 3000) };
+};
+
+// Minimal FAT12/16 root-directory reader (page-side read-back proof). Handles an MBR
+// (first partition) or a superfloppy. Returns [{name, size, text}] for root files.
+window.__fatls = function (buf) {
+  const u = new Uint8Array(buf), dv = new DataView(buf);
+  let base = 0;
+  const sig = dv.getUint16(510, true) === 0xAA55;
+  const bpsGuess = dv.getUint16(11, true);
+  if (sig && !(bpsGuess === 512 && (u[0] === 0xEB || u[0] === 0xE9))) base = dv.getUint32(446 + 8, true) * 512;
+  const bps = dv.getUint16(base + 11, true), spc = u[base + 13], rsv = dv.getUint16(base + 14, true);
+  const nfats = u[base + 16], nroot = dv.getUint16(base + 17, true);
+  let tot = dv.getUint16(base + 19, true) || dv.getUint32(base + 32, true);
+  const spf = dv.getUint16(base + 22, true);
+  const fat0 = base + rsv * bps, root0 = fat0 + nfats * spf * bps, data0 = root0 + Math.ceil(nroot * 32 / bps) * bps;
+  const clusters = (tot - (data0 - base) / bps) / spc, fat16 = clusters >= 4085;
+  const next = (c) => fat16 ? dv.getUint16(fat0 + c * 2, true) : ((dv.getUint16(fat0 + (c + (c >> 1)), true) >> (c & 1 ? 4 : 0)) & 0xfff);
+  const out = [];
+  for (let i = 0; i < nroot; i++) {
+    const o = root0 + i * 32; if (u[o] === 0) break; if (u[o] === 0xE5 || (u[o + 11] & 0x0F) === 0x0F || (u[o + 11] & 0x08)) continue;
+    const name = String.fromCharCode(...u.slice(o, o + 8)).trim() + '.' + String.fromCharCode(...u.slice(o + 8, o + 11)).trim();
+    const size = dv.getUint32(o + 28, true); let c = dv.getUint16(o + 26, true); const bytes = [];
+    while (c >= 2 && c < (fat16 ? 0xFFF8 : 0xFF8) && bytes.length < size) { const s0 = data0 + (c - 2) * spc * bps; bytes.push(...u.slice(s0, s0 + spc * bps)); c = next(c); }
+    out.push({ name, size, attr: u[o + 11], text: String.fromCharCode(...bytes.slice(0, Math.min(size, 200))) });
+  }
+  return { base, bps, spc, fat16, out };
+};
+</script>

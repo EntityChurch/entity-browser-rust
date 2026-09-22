@@ -380,8 +380,10 @@ pub fn assess(f: &Facts) -> Report {
                 "two browsers that have never met need a third party to swap \
                  offers through. On the machine running Tori: System Overview -> \
                  Rendezvous -> Start, which shows the node's peer id and ws:// \
-                 address. Here: `connector add <node-peer-id> <ws://host:port>`, \
-                 then `connector use <node-peer-id>`, then reload."
+                 address. Here: Peer Connections -> type its ws:// address -> \
+                 Find peers here (or `connector add <ws://host:port>`). On the \
+                 default storage arm it takes effect at once; with ?worker=1, \
+                 reload."
                     .into(),
             ),
         }),
@@ -390,8 +392,9 @@ pub fn assess(f: &Facts) -> Report {
             level: Level::Fail,
             detail: format!("{n} connector(s) configured, none in effect this session"),
             remedy: Some(
-                "the node is read once, at boot. Select one with `connector use \
-                 <node-peer-id>` and reload the page."
+                "select one with `connector use <node-peer-id>`. On the default \
+                 storage arm it takes effect at once; with ?worker=1 the node is \
+                 read at boot, so reload the page."
                     .into(),
             ),
         }),
@@ -744,7 +747,9 @@ pub fn collect(peers: &crate::peers::Peers, bound_peer_id: &str) -> Facts {
     });
 
     let system_pid = peers.system_peer_id().to_string();
-    let booted = crate::connectors::booted_snapshot();
+    // What is in effect NOW: late arming can put a node in effect mid-session on
+    // the Direct arm, and a check reading boot would tell you to reload for it.
+    let booted = crate::connectors::applied_snapshot();
     let rows = crate::connectors::read_connectors(peers, &system_pid);
 
     let booted_node = booted.as_ref().map(|p| {

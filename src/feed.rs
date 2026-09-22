@@ -146,6 +146,16 @@ pub const FEED_INDEX_PAGE_TYPE: &str = "app/feed/index-page";
 /// *a mirror can omit but never substitute.*
 pub const FEED_MIRROR_TYPE: &str = "app/feed/mirror";
 
+/// `app/feed/mirror-page` — one **key-addressed, sealed** page of a gathered
+/// view, in **gather** order (§6.0a).
+///
+/// The head is fixed-size whatever the size of the view it heads; `entries`
+/// lives here. Sealed when its successor opens, and never renumbered, merged,
+/// compacted or chained by hash (`FEED-R31`) — a hash chain would make
+/// *extending* a view *republish* it, which is the cost §4.3 rule 1 exists to
+/// prevent, moved onto the peer that can least afford it.
+pub const FEED_MIRROR_PAGE_TYPE: &str = "app/feed/mirror-page";
+
 /// `app/feed/follow` — a reader's durable subscription to a peer's feed.
 ///
 /// **A distinct type from `app/share/follow`, and the discriminator is the
@@ -821,57 +831,86 @@ impl MirrorSubject {
         }
     }
 
-    /// §6.0.1's coordinate — **the value the key is the hex of.**
-    pub fn coordinate(&self) -> Hash {
+    /// §6.0.1's coordinate — **the 66-character hex the key ends in.**
+    ///
+    /// The two arms derive differently and are only the same *shape*: a thread's
+    /// coordinate is an entity hash the subject already carries, a timeline's is
+    /// `prefix_hash` over a path. Both land on `00`-prefixed 66-hex, which is
+    /// what keeps [`key`](Self::key) one expression rather than two.
+    pub fn coordinate(&self) -> String {
         match self {
-            Self::Thread { root, .. } => *root,
+            Self::Thread { root, .. } => root.to_hex(),
             Self::Timeline { peer, path } => path_coordinate(peer, path),
         }
     }
 
-    /// Where a gatherer binds its mirror of this subject (`FEED-R25`).
+    /// Where a gatherer binds the **head** of its mirror of this subject
+    /// (`FEED-R25`).
     pub fn key(&self) -> String {
-        format!("{}{}", mirror_prefix(), self.coordinate().to_hex())
+        format!("{}{}", mirror_prefix(), self.coordinate())
+    }
+
+    /// Where page `page` of that mirror lives — `{head}/{page}`, §6.0a.
+    ///
+    /// **Derived from [`key`](Self::key) rather than spelled**, for
+    /// [`index_page_key`]'s reason one type over: §6.0.1's prefix and the
+    /// coordinate derivation then have exactly one expression, and a page key
+    /// cannot drift from the head key it hangs off.
+    ///
+    /// Decimal, and **key-addressed rather than chained by hash** (`FEED-R31`) —
+    /// a hash chain makes extending a view republish it.
+    pub fn page_key(&self, page: u64) -> String {
+        format!("{}/{page}", self.key())
     }
 }
 
-/// §6.0.1's live coordinate — `content_hash` of the **absolute** path,
-/// `/{peer}/{path}`, canonical UTF-8.
+/// §6.0.1's live coordinate — `prefix_hash` over the **absolute** path,
+/// `/{peer}/{path}`.
 ///
-/// ## ⚠ This is the one invention in the ruling, and the clause is one argument
-/// short
+/// ## The ask was answered, and the answer was a function that already existed
 ///
-/// §6.0.1 says `hex(content_hash(absolute-path))`. **`content_hash` in this
-/// corpus is a function of TWO arguments** — V7 §1.4's hash over the ECF
-/// encoding of `{data, type}`, which is what [`Hash::compute`] takes — and a
-/// path is not an entity, so there is no type to supply. Two readings survive,
-/// they produce different bytes, and **the key is precisely the thing `FEED-12`
-/// compares**, so a seat cannot pass that vector by reading the text.
+/// v0.2's §6.0.1 read `hex(content_hash(absolute-path))`, naming a **one**-argument
+/// function the corpus defines with **two** (V7 §1.4, over `{data, type}` — a path
+/// is not an entity, so there was no type to supply). We routed that as `A-60`,
+/// took `sha256(utf8(absolute))` on the ground that its input was fully determined
+/// by the clause's own words, and said in this doc comment that one function moves
+/// whichever way it was ruled.
 ///
-/// | reading | input | what it invents |
-/// |---|---|---|
-/// | **ours** — the digest of the path | `sha256(utf8(absolute))` | that `content_hash` here means a bare digest |
-/// | ECF-framed | `Hash::compute(T, utf8(absolute))` | a value for `T`, which the clause does not name |
+/// **It was ruled the other way (`AT-110`), and the reading we could not derive was
+/// not an invention at all — it is `EXTENSION-REVISION` §3.1's landed
+/// `prefix_hash`:** `hex(content_hash(type="system/tree/path", data=path))`, where
+/// the missing type tag is one this corpus already ships. `FEED-R33` now makes any
+/// other derivation a **MUST NOT**. ⇒ *the argument we could not settle from FEED's
+/// text was settled, in another document, by a value that had a name.* Fifth
+/// instance of **a blocker that asks for more coordination is the one to re-read
+/// the corpus about** — and the first where the missing piece was a *function*
+/// rather than a sentence.
 ///
-/// **We take the first because its input is fully determined by the clause's own
-/// words.** The second needs a type tag that would itself have to be transmitted
-/// and agreed — and anything tag-shaped invented here is also a vocabulary
-/// finding (`spec vocab` classifies source literals by shape). The output is
-/// wrapped in the corpus's SHA-256 hash format so that **both kinds of key are
-/// the same shape**, 66 hex characters `00`-prefixed, which is what makes
-/// [`MirrorSubject::key`] one expression instead of two.
+/// ## ⭐ Why this CALLS the kernel rather than restating three lines
 ///
-/// **Routed as an ask, and one function to change if arch rules the other way.**
-/// `the_live_coordinate_is_pinned_to_a_literal` holds the bytes so a silent
-/// drift on either side is visible.
-pub fn path_coordinate(peer: &str, relative_path: &str) -> Hash {
+/// `prefix_hash` is `[derive-to-meet]`: both sides compute it independently from
+/// the same string and must land on the same byte, with **nothing failing loudly**
+/// if they do not — two conformant peers simply construct different paths and never
+/// meet. That is C15's drift shape with a wire event on the far end, so the rule
+/// *one expression of a rule* binds harder here than usual. We take
+/// [`entity_revision::prefix_hash`] itself; a kernel change to it reaches us by
+/// recompiling rather than by somebody noticing.
+///
+/// It is pinned to the ECFv1-SHA-256 floor (`0x00`) and **does not follow the
+/// deriving peer's home format**, so the output is 66 lowercase hex characters on
+/// every peer — the same shape a thread's coordinate has, which is what keeps
+/// [`MirrorSubject::key`] one expression.
+///
+/// `the_live_coordinate_is_pinned_to_a_literal` holds the bytes, computed with
+/// `hashlib` rather than with the function under test, so a drift on either side is
+/// visible as a diff.
+pub fn path_coordinate(peer: &str, relative_path: &str) -> String {
     let absolute = if relative_path.starts_with('/') {
         format!("/{peer}{relative_path}")
     } else {
         format!("/{peer}/{relative_path}")
     };
-    let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(absolute.as_bytes()).into();
-    Hash::new(entity_hash::HASH_ALGORITHM_SHA256, digest)
+    entity_revision::prefix_hash(&absolute)
 }
 
 // There is deliberately no `mirror_key(&Hash)` shorthand beside
@@ -908,15 +947,19 @@ pub struct FeedMirror {
     /// §6.0 — the subject this view is of. **Either atom**; see
     /// [`MirrorSubject`] for what each kind means and for `FEED-R26`.
     pub subject: EntityRef,
-    /// Pinned references to what this mirror holds, **republished unmodified**.
-    /// Order is the gatherer's; nothing in §6 makes it authoritative.
+    /// The highest mirror page in use (§6.0a).
     ///
-    /// ⭐ **Always pinned, even though `subject` is not — `FEED-R28`.** §6.0 says
-    /// why in one line: a mirror carries exact bytes (§6.1 rule 1), so an entry
-    /// named by a live reference would be a mirror of *whatever is there now*,
-    /// which is not a mirror. The two fields taking different atoms is the shape
-    /// of the type, not an inconsistency in it.
-    pub entries: Vec<EntityRef>,
+    /// ⚠ **`entries` USED TO LIVE HERE and that was `FEED-R29`** — an unbounded
+    /// collection in the head, so the head grew with participation. §6.0a is the
+    /// instance of `SYSTEM-DATA-EXCHANGE` §2.5 for this object: membership grows
+    /// with *how much the gatherer gathered*, so it is a bounded head plus
+    /// key-addressed pages. **The head is fixed-size whatever the size of the
+    /// view it heads** — a subject, two integers and two scalars.
+    pub current: u64,
+    /// The lowest page still published. **Defaults to 0**, per §6.0a — same
+    /// declared-default as [`IndexHead::oldest`] and decoded the same way, so
+    /// *absent* is a real zero and *present-but-unreadable* is malformed.
+    pub oldest: u64,
     pub gathered_at: u64,
     /// The key that assembled it. **Never an authorship claim** — §6.1 rule 3:
     /// attribution follows `entry.author`, and a renderer naming the gatherer is
@@ -927,23 +970,26 @@ pub struct FeedMirror {
 impl FeedMirror {
     pub fn new(
         subject: EntityRef,
-        entries: Vec<EntityRef>,
+        current: u64,
         gathered_at: u64,
         gathered_by: impl Into<String>,
     ) -> Self {
-        Self { subject, entries, gathered_at, gathered_by: gathered_by.into() }
+        Self { subject, current, oldest: 0, gathered_at, gathered_by: gathered_by.into() }
     }
 
     pub fn data_value(&self) -> Value {
-        Value::Map(vec![
+        let mut fields = vec![
             (text("subject"), self.subject.to_value()),
-            (
-                text("entries"),
-                Value::Array(self.entries.iter().map(EntityRef::to_value).collect()),
-            ),
-            (text("gathered_at"), uinteger(self.gathered_at)),
-            (text("gathered_by"), text(self.gathered_by.clone())),
-        ])
+            (text("current"), uinteger(self.current)),
+        ];
+        // `? oldest` defaults to 0, so a mirror that has dropped nothing emits
+        // no key — `IndexHead`'s rule, one type over, for the same reason.
+        if self.oldest != 0 {
+            fields.push((text("oldest"), uinteger(self.oldest)));
+        }
+        fields.push((text("gathered_at"), uinteger(self.gathered_at)));
+        fields.push((text("gathered_by"), text(self.gathered_by.clone())));
+        Value::Map(fields)
     }
 
     pub fn to_entity(&self) -> Result<Entity, String> {
@@ -973,10 +1019,6 @@ impl FeedMirror {
             // the design, not an oversight.
             Some(v) => reference(v, "subject", false)?,
         };
-        let entries = match field(&map, "entries") {
-            None => return Err(FeedError::Malformed("entries")),
-            Some(v) => reference_list(v, "entries", true)?,
-        };
         let gathered_by = required_text(&map, "gathered_by")?;
         if gathered_by != namespace {
             return Err(FeedError::AuthorIsNotTheNamespace {
@@ -986,10 +1028,105 @@ impl FeedMirror {
         }
         Ok(FeedMirror {
             subject,
-            entries,
+            current: required_uint(&map, "current")?,
+            // Absent is a real zero (§6.0a's declared default); present-and-
+            // unreadable is not — see `optional_uint`.
+            oldest: optional_uint(&map, "oldest")?.unwrap_or(0),
             gathered_at: required_uint(&map, "gathered_at")?,
             gathered_by,
         })
+    }
+}
+
+/// §6.0a's `app/feed/mirror-page` — one sealed, key-addressed page of a gathered
+/// view, in **gather** order.
+///
+/// ## Why gather order and not the author's
+///
+/// An author's index is append-mostly. **A gatherer backfills, routinely,
+/// because that is what gathering is** — so paging a mirror in the author's
+/// order would rewrite old pages on every gather round, which is the
+/// archive-republishing cost §4.3 rule 1 exists to prevent, moved onto the peer
+/// that can least afford it. §6.0a gives three reasons it is free, and the third
+/// decides it: **gather order is the order a source leg is read in**, so a
+/// reader's *"what do you have that I have not seen?"* is *read down from
+/// `current` to your cursor and stop* — `O(new)`. In the author's order that
+/// question is not expressible at all.
+///
+/// **The named cost, stated rather than discovered:** a reader wanting *the
+/// author's newest 50* from a mirror must read and sort, because gather order is
+/// not post order. That is the right trade — a mirror is a **source**, and a
+/// reader who wants the author's own order has the author's own index, which is
+/// authoritative for it and one signed-root check away.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirrorPage {
+    /// This page's own number. **MUST equal its key** (§6.0a).
+    pub page: u64,
+    /// Pinned references to what this page holds, **republished unmodified**.
+    ///
+    /// ⭐ **Always pinned, even though the head's `subject` is not —
+    /// `FEED-R28`.** §6.0 says why in one line: a mirror carries exact bytes
+    /// (§6.1 rule 1), so an entry named by a live reference would be a mirror of
+    /// *whatever is there now*, which is not a mirror. The two fields taking
+    /// different atoms is the shape of the type, not an inconsistency in it.
+    pub entries: Vec<EntityRef>,
+    pub updated_at: u64,
+}
+
+impl MirrorPage {
+    pub fn new(page: u64, entries: Vec<EntityRef>, updated_at: u64) -> Self {
+        Self { page, entries, updated_at }
+    }
+
+    pub fn data_value(&self) -> Value {
+        Value::Map(vec![
+            (text("page"), uinteger(self.page)),
+            (
+                text("entries"),
+                Value::Array(self.entries.iter().map(EntityRef::to_value).collect()),
+            ),
+            (text("updated_at"), uinteger(self.updated_at)),
+        ])
+    }
+
+    pub fn to_entity(&self) -> Result<Entity, String> {
+        Entity::new(FEED_MIRROR_PAGE_TYPE, to_ecf(&self.data_value()))
+            .map_err(|e| format!("feed mirror page: {e}"))
+    }
+
+    /// Decode a page. `key_page` is the number of the key it was read at, when
+    /// the caller has one.
+    ///
+    /// **The key is a parameter for [`IndexPage::from_entity`]'s reason:** §6.0a
+    /// makes `page` MUST equal its key, and a decoder that never learns which key
+    /// it read from cannot check it. A page answering to two numbers is
+    /// `FEED-R31`'s renumbering hazard arriving through the body instead of
+    /// through the publisher.
+    ///
+    /// ⚠ **`None` is not a relaxation for convenience — it is for a caller that
+    /// genuinely has no key**, and there is exactly one: `publish --verify`
+    /// sweeps a projected tree **by hash**, so it holds bytes and never the key
+    /// they were bound at. Passing a made-up number there would be worse than
+    /// skipping the check, and passing the body's own would be a check against
+    /// itself. The agreement is gated where a key exists, which is
+    /// [`read_mirror`](crate::feed_mirror::read_mirror) — the reader, i.e. the
+    /// party the rule protects.
+    ///
+    /// This diverges from [`IndexPage::from_entity`], whose only caller always
+    /// has a key. Two shapes because two call-site populations, not by accident.
+    pub fn from_entity(entity: &Entity, key_page: Option<u64>) -> Result<Self, FeedError> {
+        let map = body_map(entity, FEED_MIRROR_PAGE_TYPE)?;
+        let page = required_uint(&map, "page")?;
+        if let Some(key) = key_page {
+            if page != key {
+                return Err(FeedError::PageNumberDisagreesWithKey { declared: page, key });
+            }
+        }
+        let entries = match field(&map, "entries") {
+            None => return Err(FeedError::Malformed("entries")),
+            Some(v) => reference_list(v, "entries", true)?,
+        };
+        Ok(MirrorPage { page, entries, updated_at: required_uint(&map, "updated_at")? })
     }
 }
 
@@ -1505,30 +1642,61 @@ mod tests {
 
     /// The live coordinate, **pinned to a literal computed outside this code.**
     ///
-    /// §6.0.1 names `content_hash` with one argument where the corpus defines it
-    /// with two (see [`path_coordinate`]), so our reading is a choice — and the
-    /// key is exactly what `FEED-12` compares across seats. A test spelled in
-    /// terms of `path_coordinate` would follow the choice silently; this one
-    /// carries the bytes, so a drift on either side is visible as a diff.
+    /// The key is exactly what `FEED-12` compares across seats. A test spelled in
+    /// terms of [`path_coordinate`] would follow the implementation silently; this
+    /// one carries the bytes, so a drift on either side is visible as a diff.
     ///
-    /// The expected value is `"00" || sha256(utf8("/{peer}/app/feed/index"))`,
-    /// computed with `hashlib`, not with the function under test.
+    /// The expected value is `EXTENSION-REVISION` §3.1's
+    /// `prefix_hash("/{peer}/app/feed/index")` =
+    /// `"00" || sha256(ecf_for_hash("system/tree/path", to_ecf(text(path))))`,
+    /// computed with `hashlib` from the ECF framing rules, **not** with the
+    /// function under test and **not** by calling the kernel.
+    ///
+    /// ⚠ **The literal below MOVED on 2026-09-14 and that was a WIRE EVENT, not a
+    /// test fix.** It was `00c11cf3…`, our `A-60` reading (`sha256(utf8(absolute))`);
+    /// `AT-110` ruled `prefix_hash` and `FEED-R33` made every other derivation a
+    /// MUST NOT. Nothing had published a mirror at the old key — the emitter is a
+    /// CLI verb and the axis is opt-in — so this cost no migration. **A later move
+    /// of this literal will not be that cheap; check what is published first.**
     #[test]
     fn the_live_coordinate_is_pinned_to_a_literal() {
         const ALICE: &str = "2AliceExamplePeerIdForKeyVectors";
+        const RULED: &str =
+            "004bba26751170e5329b232e70568e5b86e72d773532af2da7e7dd2ba14578856d";
         let subject = MirrorSubject::timeline(ALICE);
         assert_eq!(
-            subject.coordinate().to_hex(),
-            "00c11cf34c7c0dcf8c67494648b34e6690173fd07fb229b2f6d9b5ce2e23bbef4f",
+            subject.coordinate(),
+            RULED,
             "the live-key derivation moved — this is a WIRE event, not a test fix"
         );
         assert_eq!(
             subject.key(),
-            format!(
-                "app/feed/mirrors/{}",
-                "00c11cf34c7c0dcf8c67494648b34e6690173fd07fb229b2f6d9b5ce2e23bbef4f"
-            ),
+            format!("app/feed/mirrors/{RULED}"),
             "and the prefix is §6.0.1's"
+        );
+        // §3.1's shape claim, asserted rather than assumed: pinned to the
+        // ECFv1-SHA-256 floor on every peer, whatever its home format.
+        assert_eq!(RULED.len(), 66, "§3.1 pins 66 characters");
+        assert!(RULED.starts_with("00"), "§3.1 pins the SHA-256 floor");
+    }
+
+    /// ⭐ **The independent literal above agrees with the kernel's own function**,
+    /// which is what makes this a `[derive-to-meet]` value rather than two
+    /// implementations that happen to be compiled together.
+    ///
+    /// Two derivations reach the same byte: `hashlib` over §3.1's framing rules
+    /// (the literal in the test above), and [`entity_revision::prefix_hash`]. This
+    /// test is what says our *call site* — building `/{peer}/{relative}` — hands it
+    /// the string the convention means. Neuter the absolute-path assembly and this
+    /// reds while a test spelled in terms of `path_coordinate` would not.
+    #[test]
+    fn the_call_site_hands_prefix_hash_the_absolute_path() {
+        const ALICE: &str = "2AliceExamplePeerIdForKeyVectors";
+        let subject = MirrorSubject::timeline(ALICE);
+        assert_eq!(
+            subject.coordinate(),
+            entity_revision::prefix_hash(&format!("/{ALICE}/app/feed/index")),
+            "the coordinate is prefix_hash of the ABSOLUTE index path"
         );
     }
 
@@ -1553,20 +1721,20 @@ mod tests {
         assert_ne!(subject.key(), MirrorSubject::timeline(THEM).key());
     }
 
-    /// §6.0 since v0.2: the **subject** takes either atom and **`entries`**
-    /// takes only a pin (`FEED-R28`).
+    /// §6.0 since v0.2: the **subject** takes either atom and a page's
+    /// **`entries`** take only a pin (`FEED-R28`).
     ///
     /// The asymmetry is the design. A mirror carries exact bytes, so an entry
     /// named live would be a mirror of whatever is there now — which is not a
     /// mirror — while a subject named live is the only way to say *this view is
-    /// of that author's feed*.
+    /// of that author's feed*. The two now live on different objects (§6.0a moved
+    /// `entries` to the page), which does not change the rule.
     #[test]
     fn a_mirror_subject_takes_either_atom_and_its_entries_take_only_a_pin() {
         let entry = Hash::compute("app/feed/entry", b"one post");
         let timeline = MirrorSubject::timeline(ME);
 
-        let record =
-            FeedMirror::new(timeline.reference(), vec![EntityRef::pin(ME, entry)], 7, THEM);
+        let record = FeedMirror::new(timeline.reference(), 0, 7, THEM);
         let entity = record.to_entity().unwrap();
         let back = FeedMirror::from_entity(&entity, THEM).expect("a live subject decodes");
         assert_eq!(back, record, "the timeline mirror did not round-trip");
@@ -1576,19 +1744,70 @@ mod tests {
             "the subject came back as a different subject"
         );
 
-        // …and the entries do not widen with it.
-        let live_entry = FeedMirror::new(
-            timeline.reference(),
+        let page = MirrorPage::new(0, vec![EntityRef::pin(ME, entry)], 7);
+        assert_eq!(
+            MirrorPage::from_entity(&page.to_entity().unwrap(), Some(0)).unwrap(),
+            page,
+            "the mirror page did not round-trip"
+        );
+
+        // …and the entries do not widen with the subject.
+        let live_entry = MirrorPage::new(
+            0,
             vec![EntityRef::live(ME, "/app/feed/entries/whatever-is-there-now")],
             7,
-            THEM,
         );
         assert!(
             matches!(
-                FeedMirror::from_entity(&live_entry.to_entity().unwrap(), THEM),
+                MirrorPage::from_entity(&live_entry.to_entity().unwrap(), Some(0)),
                 Err(FeedError::LiveReferenceWherePinRequired { field: "entries" })
             ),
-            "a live entry reference was accepted into a mirror"
+            "a live entry reference was accepted into a mirror page"
+        );
+    }
+
+    /// §6.0a's `[MUST]`: a page's `page` field equals its key, and a decoder that
+    /// is told the key checks it (`FEED-R31`'s renumbering hazard arriving
+    /// through the body).
+    ///
+    /// The `None` arm is the one caller that genuinely has no key — see
+    /// [`MirrorPage::from_entity`].
+    #[test]
+    fn a_mirror_page_answering_to_two_numbers_is_refused() {
+        let page = MirrorPage::new(3, Vec::new(), 1);
+        let entity = page.to_entity().unwrap();
+        assert!(matches!(
+            MirrorPage::from_entity(&entity, Some(4)),
+            Err(FeedError::PageNumberDisagreesWithKey { declared: 3, key: 4 })
+        ));
+        assert_eq!(MirrorPage::from_entity(&entity, Some(3)).unwrap().page, 3);
+        assert_eq!(
+            MirrorPage::from_entity(&entity, None).unwrap().page,
+            3,
+            "a keyless caller still decodes"
+        );
+    }
+
+    /// §6.0a's head is **fixed-size whatever the size of the view it heads** —
+    /// `FEED-R29`, which is what the old shape broke by carrying `entries` here.
+    ///
+    /// Asserted as a property of the ENCODING rather than of the struct: a field
+    /// added to the head that grows with membership would pass a field-name
+    /// check and fail this one.
+    #[test]
+    fn the_mirror_head_does_not_grow_with_the_view() {
+        let timeline = MirrorSubject::timeline(ME);
+        let small = FeedMirror::new(timeline.reference(), 0, 7, THEM);
+        let huge = FeedMirror::new(timeline.reference(), 10_000, 7, THEM);
+        let small_len = small.to_entity().unwrap().data.len();
+        let huge_len = huge.to_entity().unwrap().data.len();
+        // `current` is a uint, so a bigger number is a few bytes wider; what
+        // must not happen is growth in the membership.
+        assert!(
+            huge_len - small_len <= 4,
+            "the head grew {} bytes between a 1-page and a 10,001-page view — \
+             FEED-R29: membership does not live on the head",
+            huge_len - small_len
         );
     }
 }

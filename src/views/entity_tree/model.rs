@@ -207,6 +207,14 @@ pub struct EntityTreeInner {
     /// produced the rows.
     pending_expand_restore: Option<HashSet<String>>,
 
+    /// The selection names a path whose node has not arrived yet, so its
+    /// ancestors could not all be expanded. Finished when that path lands.
+    /// A freshly spawned window is empty when `Action::RevealInEntityTree`
+    /// navigates it, and the one-shot `pending_expand_restore` can fire on a
+    /// batch that does not contain the path — without this the row stays
+    /// hidden inside collapsed folders.
+    reveal_pending: bool,
+
     /// Which slot this panel co-orients to. Persisted (wire form) in
     /// window state; default `None` (manual).
     selection_source: SelectionSource,
@@ -231,6 +239,7 @@ impl EntityTreeInner {
             selected_dirty: false,
             search: String::new(),
             pending_expand_restore: None,
+            reveal_pending: false,
             selection_source: SelectionSource::None,
             last_consumed_at: 0,
         }
@@ -303,6 +312,7 @@ impl EntityTreeModel {
         inner.selection_source = SelectionSource::parse(&persisted.selection_source);
         if inner.current_path.is_some() {
             inner.selected_dirty = true;
+            inner.reveal_pending = true;
         }
     }
 
@@ -450,8 +460,9 @@ impl EntityTreeModel {
         inner.current_path = Some(path.to_string());
         if changed {
             inner.selected_dirty = true;
-            // Expand ancestors so the row becomes visible.
-            expand_ancestors(&mut inner.root, path);
+            // Expand ancestors so the row becomes visible — now, or when the
+            // path arrives.
+            inner.reveal_pending = !expand_ancestors(&mut inner.root, path);
             rebuild_visible(&mut inner);
         }
     }
@@ -612,6 +623,10 @@ impl EntityTreeModel {
                     insert_or_update(&mut inner.root, &entry.path, AUTO_EXPAND_BELOW);
                     if inner.current_path.as_deref() == Some(entry.path.as_str()) {
                         inner.selected_dirty = true;
+                        if inner.reveal_pending {
+                            let p = entry.path.clone();
+                            inner.reveal_pending = !expand_ancestors(&mut inner.root, &p);
+                        }
                     }
                     any_change = true;
                 }
@@ -643,7 +658,7 @@ impl EntityTreeModel {
                 restore_expanded(&mut inner.root, &pending);
             }
             if let Some(ref p) = inner.current_path.clone() {
-                expand_ancestors(&mut inner.root, p);
+                inner.reveal_pending = !expand_ancestors(&mut inner.root, p);
             }
             any_change = true;
         }
@@ -780,6 +795,9 @@ pub fn apply_change(inner: &Mutex<EntityTreeInner>, op: ChangeOp) {
             insert_or_update(&mut guard.root, &path, AUTO_EXPAND_BELOW);
             if guard.current_path.as_deref() == Some(path.as_str()) {
                 guard.selected_dirty = true;
+                if guard.reveal_pending {
+                    guard.reveal_pending = !expand_ancestors(&mut guard.root, &path);
+                }
             }
         }
         ChangeOp::Remove { path } => {
@@ -811,7 +829,7 @@ pub fn apply_change(inner: &Mutex<EntityTreeInner>, op: ChangeOp) {
             restore_expanded(&mut guard.root, &pending);
         }
         if let Some(ref p) = guard.current_path.clone() {
-            expand_ancestors(&mut guard.root, p);
+            guard.reveal_pending = !expand_ancestors(&mut guard.root, p);
         }
     }
     guard.visible_dirty = true;
@@ -1092,6 +1110,31 @@ mod tests {
         let e = s.to_entity();
         let s2 = EntityTreeState::from_entity(&e);
         assert_eq!(s2, s);
+    }
+
+    /// Show in Entity Tree navigates a window that has not listed anything
+    /// yet. The selected row must still become visible when its entity
+    /// arrives — after the one-shot expand restore has already fired on an
+    /// earlier batch that did not contain it.
+    #[test]
+    fn a_path_selected_before_it_arrives_is_revealed_when_it_lands() {
+        let pm = pm();
+        let pid = pm.primary_peer_id().to_string();
+        let mut model = EntityTreeModel::new(1, pid);
+        model.initialize(&pm);
+        let deep = "/p/app/entity-browser/files/00ab";
+        apply_change(&model.inner, ChangeOp::Put { path: "/p/other/thing".into() });
+        model.navigate(deep);
+        apply_change(&model.inner, ChangeOp::Put { path: "/p/app/entity-browser/settings/x".into() });
+        apply_change(&model.inner, ChangeOp::Put { path: deep.into() });
+        let mut inner = model.inner.lock().unwrap();
+        rebuild_visible(&mut inner);
+        assert!(
+            inner.visible_rows.iter().any(|r| r.path == deep),
+            "the selected file is hidden in collapsed folders: {:?}",
+            inner.visible_rows.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
+        );
+        assert!(!inner.reveal_pending, "the reveal is finished once the path is shown");
     }
 
     #[test]

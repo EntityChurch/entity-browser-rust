@@ -116,6 +116,17 @@ pub struct Carried {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirrorPlan {
     pub record: FeedMirror,
+    /// §6.0a's key-addressed pages, in **gather** order, page 0 first.
+    ///
+    /// ⚠ **These used to be a `Vec<EntityRef>` on the head, which was
+    /// `FEED-R29`.** The head is fixed-size now whatever the size of the view it
+    /// heads; `entries` lives here and nowhere else.
+    ///
+    /// **Every page a plan carries is emitted, including pages it did not
+    /// change.** A sealed page's bytes are byte-identical to what it held
+    /// before — that is what `FEED-R31`/`FEED-R32` buy, and what makes a mirror
+    /// cacheable: a reader that has read page 7 never re-reads page 7.
+    pub pages: Vec<crate::feed::MirrorPage>,
     pub carried: Vec<Carried>,
     /// **The `system/content` closure behind every pointer body**, hash-
     /// addressed and therefore bound at no tree key at all.
@@ -139,9 +150,9 @@ pub struct MirrorPlan {
 }
 
 impl MirrorPlan {
-    /// How many entries this mirror holds.
+    /// How many entries this mirror holds, across every page.
     pub fn entry_count(&self) -> usize {
-        self.record.entries.len()
+        self.pages.iter().map(|p| p.entries.len()).sum()
     }
 
     /// The peers whose namespaces this plan writes into — **never the
@@ -250,13 +261,41 @@ impl std::fmt::Display for GatherError {
 /// this"* at the consumer — two facts that send a person to different places —
 /// and a mirror is not the layer that adjudicates. The consumer re-verifies
 /// every one from the bytes; §6.1 rule 3 already says what it must then present.
+/// ## Paging — §6.0a, and `prior` is what makes `FEED-R32` expressible
+///
+/// `prior` is the pages this gatherer already published for this subject, page 0
+/// first; `&[]` is a first gather. **Sealed pages are carried forward
+/// byte-identically and an entry already on one is never re-paged** — a newly
+/// discovered entry goes on the *current* page, which is `FEED-R32` and is the
+/// whole of what makes a mirror cacheable.
+///
+/// ⚠ **A gatherer that re-pages from scratch each round is not conformant even
+/// though nothing errors**: page 0's bytes move, so every reader's cached page
+/// and every cursor into it is invalidated by a round that added one entry at
+/// the other end. That failure is silent at both ends, which is why `prior` is a
+/// required argument rather than an `Option` with a convenient default — a
+/// caller passing `&[]` is *saying* this is a first gather.
 pub fn plan_mirror(
     gathered_by: &str,
     subject: &MirrorSubject,
     rows: &[ReadEntry],
     closure: &[Entity],
     gathered_at: u64,
+    prior: &[crate::feed::MirrorPage],
+    page_size: usize,
 ) -> Result<MirrorPlan, GatherError> {
+    // Everything `prior` already names, so a re-gather that sees an entry twice
+    // does not page it twice. Keyed by the pin's hash, which IS the entry's
+    // identity (§2.2 makes `entries` pinned-only).
+    let already: std::collections::BTreeSet<String> = prior
+        .iter()
+        .flat_map(|p| p.entries.iter())
+        .filter_map(|r| match r {
+            EntityRef::Pinned { hash, .. } => Some(hash.to_hex()),
+            _ => None,
+        })
+        .collect();
+
     let mut entries = Vec::with_capacity(rows.len());
     let mut carried = Vec::with_capacity(rows.len() * 2);
     // Indexed by the address each blob claims, so the lookup below is by the
@@ -305,7 +344,14 @@ pub fn plan_mirror(
         }
 
         let author = row.entry.author.clone();
-        entries.push(EntityRef::pin(author.clone(), row.hash));
+        // **Paged only if new; CARRIED either way.** A re-gather into a fresh
+        // out-dir must still write the bodies of entries that were paged in an
+        // earlier round — a projection re-projects — and writing identical bytes
+        // at an identical address is a no-op. Re-*paging* one is not: it would
+        // move a sealed page.
+        if !already.contains(&row.hash.to_hex()) {
+            entries.push(EntityRef::pin(author.clone(), row.hash));
+        }
         carried.push(Carried {
             peer: author.clone(),
             key: entry_key(&row.hash),
@@ -332,11 +378,39 @@ pub fn plan_mirror(
         }
     }
 
-    Ok(MirrorPlan {
-        record: FeedMirror::new(subject.reference(), entries, gathered_at, gathered_by),
-        carried,
-        content: carried_content,
-    })
+    // ── §6.0a: append in gather order, seal on overflow ──────────────────────
+    //
+    // A page size of 0 would spin, and it is a caller error rather than a wire
+    // condition, so it is clamped rather than refused.
+    let page_size = page_size.max(1);
+    let mut pages: Vec<crate::feed::MirrorPage> = prior.to_vec();
+    if pages.is_empty() {
+        pages.push(crate::feed::MirrorPage::new(0, Vec::new(), gathered_at));
+    }
+    for pin in entries {
+        // The current page is the last one; everything before it is sealed and
+        // is never touched again (`FEED-R32`).
+        let full = pages.last().map(|p| p.entries.len() >= page_size).unwrap_or(true);
+        if full {
+            let next = pages.last().map(|p| p.page + 1).unwrap_or(0);
+            pages.push(crate::feed::MirrorPage::new(next, Vec::new(), gathered_at));
+        }
+        let current = pages.last_mut().expect("pushed above");
+        current.entries.push(pin);
+        // Only the page that CHANGED restamps. A sealed page keeps the
+        // `updated_at` it was sealed with, which is what keeps its bytes
+        // identical across rounds — the same witness rule `plan_index` learned
+        // when a publish-instant stamp on every page defeated §4.3 rule 1's
+        // MUST through the ordinary act of posting.
+        current.updated_at = gathered_at;
+    }
+
+    let current = pages.last().map(|p| p.page).unwrap_or(0);
+    let oldest = pages.first().map(|p| p.page).unwrap_or(0);
+    let mut record = FeedMirror::new(subject.reference(), current, gathered_at, gathered_by);
+    record.oldest = oldest;
+
+    Ok(MirrorPlan { record, pages, carried, content: carried_content })
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +459,18 @@ pub fn publish_mirror(
     // key we cannot derive is a mirror nobody can find; `A-57` widened the field
     // and gave the live kind its own derivation, so the refusal is gone rather
     // than relaxed.
-    let key = MirrorSubject::from_reference(&plan.record.subject).key();
+    let subject = MirrorSubject::from_reference(&plan.record.subject);
+
+    // §6.0a's pages, at `{head}/{page}` — written BEFORE the head, so a publish
+    // interrupted between the two leaves a head naming pages that exist rather
+    // than pages nothing names. Same ordering rule, and the same reason, as
+    // `builds.json`'s *un-name before you remove* run forwards.
+    for page in &plan.pages {
+        let entity = page.to_entity()?;
+        write(dir, &gatherer, &subject.page_key(page.page), &entity, root)?;
+    }
+
+    let key = subject.key();
     let entity = plan.record.to_entity()?;
     write(dir, &gatherer, &key, &entity, root)
 }
@@ -509,8 +594,43 @@ pub async fn read_mirror<M: MirrorSource + ?Sized>(
     let record = FeedMirror::from_entity(&entity, gatherer)
         .map_err(|source| MirrorReadError::Malformed { key: key.clone(), source })?;
 
+    // ── §6.0a: read DOWN from `current`, and stop ────────────────────────────
+    //
+    // The head names the page range; nothing here assumes a page size
+    // (`FEED-R12`, over the object §6.0a extends it to). Descending is the
+    // direction the convention specifies, because the reader's question is
+    // *"what do you have that I have not seen?"* and in gather order that is
+    // read-down-and-stop. Without a cursor we stop on `limit` instead — so what
+    // this returns is **the most recently GATHERED `limit`**, which is not the
+    // author's newest `limit`. §6.0a names that cost and calls it the right
+    // trade: a reader who wants the author's order has the author's own index,
+    // which is authoritative for it and one signed-root check away.
+    let mut references: Vec<EntityRef> = Vec::new();
+    let mut page = record.current;
+    loop {
+        let page_key = subject.page_key(page);
+        match src.get(gatherer.to_string(), page_key.clone()).await {
+            // **A page the head names and the origin does not serve is skipped**,
+            // for the same reason a named entry that does not resolve is: §1.3
+            // makes a partial view short rather than wrong, and a gatherer whose
+            // origin lost one page must not become unreadable.
+            Err(_) | Ok(None) => {}
+            Ok(Some(e)) => {
+                let decoded = crate::feed::MirrorPage::from_entity(&e, Some(page))
+                    .map_err(|source| MirrorReadError::Malformed { key: page_key, source })?;
+                // Within a page, gather order is append order, so the newest
+                // gathered is last — reverse to keep the whole walk descending.
+                references.extend(decoded.entries.into_iter().rev());
+            }
+        }
+        if references.len() >= limit || page == record.oldest || page == 0 {
+            break;
+        }
+        page -= 1;
+    }
+
     let mut out = Vec::new();
-    for reference in &record.entries {
+    for reference in &references {
         if out.len() >= limit {
             break;
         }
@@ -535,6 +655,19 @@ pub async fn read_mirror<M: MirrorSource + ?Sized>(
             Err(_) => continue,
         }
     }
+    // The walk SELECTS newest-gathered-first (§6.0a) and returns in gather
+    // order, which is the order the flat record used to come back in and the
+    // order this reader's only consumer renders.
+    //
+    // ⚠ **Selection and presentation are different questions and only the first
+    // is the convention's.** §6.0a names the cost — *"a reader wanting the
+    // author's newest 50 from a mirror must read and sort, because gather order
+    // is not post order"* — and **nothing in this crate pays it**: no consumer
+    // of these rows sorts by `created_at`, so a mirror panel shows the
+    // gatherer's order and calls it the author's. Pre-existing, unchanged here,
+    // and not silently papered over by reversing the list: sorting is the
+    // consumer's job and belongs where the rows are rendered.
+    out.reverse();
     Ok(out)
 }
 
@@ -543,8 +676,35 @@ pub async fn read_mirror<M: MirrorSource + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feed::MirrorPage;
     use crate::feed_read::{block_on, read_feed, Attribution, Tree};
     use std::collections::BTreeMap;
+
+    /// A **first** gather at the default page size — the two paging arguments
+    /// filled in, for the tests whose subject is gathering rather than paging.
+    ///
+    /// The paging properties get their own tests, which pass `prior` by hand.
+    /// A helper is right here and would be wrong there: these fixtures are all
+    /// under one page, so a helper hiding the page size hides nothing they
+    /// assert, whereas §6.0a's whole content is what happens across pages and
+    /// across rounds.
+    fn plan_fresh(
+        gathered_by: &str,
+        subject: &MirrorSubject,
+        rows: &[ReadEntry],
+        closure: &[Entity],
+        gathered_at: u64,
+    ) -> Result<MirrorPlan, GatherError> {
+        plan_mirror(
+            gathered_by,
+            subject,
+            rows,
+            closure,
+            gathered_at,
+            &[],
+            crate::feed_publish::DEFAULT_PAGE_SIZE,
+        )
+    }
 
     /// A whole origin: `(peer, key) -> entity`. The double a mirror needs, since
     /// one origin serves several peers' segments.
@@ -575,8 +735,14 @@ mod tests {
             // The same derivation the publisher uses (§6.0.1) — **never a key
             // spelled here**, or the gates would agree with each other about an
             // address production disagrees with.
-            let key = MirrorSubject::from_reference(&plan.record.subject).key();
-            self.0.insert((gatherer.to_string(), key), plan.record.to_entity().unwrap());
+            let subject = MirrorSubject::from_reference(&plan.record.subject);
+            for page in &plan.pages {
+                self.0.insert(
+                    (gatherer.to_string(), subject.page_key(page.page)),
+                    page.to_entity().unwrap(),
+                );
+            }
+            self.0.insert((gatherer.to_string(), subject.key()), plan.record.to_entity().unwrap());
         }
     }
 
@@ -614,7 +780,7 @@ mod tests {
 
         let gatherer = "2GathererPeerIdForTheseGates";
         let subject = thread(&author, rows[0].hash);
-        let plan = plan_mirror(gatherer, &subject, &rows, &[], 1_757_000_999).expect("the gather plans");
+        let plan = plan_fresh(gatherer, &subject, &rows, &[], 1_757_000_999).expect("the gather plans");
 
         let mut origin = Origin::default();
         origin.take(&plan, gatherer);
@@ -715,7 +881,7 @@ mod tests {
         };
         let gatherer = "2GathererPeerIdForTheseGates";
         let plan =
-            plan_mirror(gatherer, &thread(&author, published_hash), &[row], &[], 9)
+            plan_fresh(gatherer, &thread(&author, published_hash), &[row], &[], 9)
                 .expect("the gather plans");
         let carried = &plan.carried[0].entity;
         assert_eq!(
@@ -779,7 +945,7 @@ mod tests {
         };
         let subject = thread(&author, rows[0].hash);
 
-        match plan_mirror("2Gatherer", &subject, &[row.clone()], &[], 9) {
+        match plan_fresh("2Gatherer", &subject, &[row.clone()], &[], 9) {
             Err(GatherError::BodyClosureMissing { entry, blob }) => {
                 assert_eq!(entry, row.hash);
                 assert_eq!(blob, blob_hash);
@@ -790,7 +956,7 @@ mod tests {
         // …and with the bytes it is carried, hash-addressed and bound at no
         // tree key — which is what makes the refusal above about the closure
         // rather than about pointer bodies.
-        let plan = plan_mirror("2Gatherer", &subject, &[row], std::slice::from_ref(&blob), 9)
+        let plan = plan_fresh("2Gatherer", &subject, &[row], std::slice::from_ref(&blob), 9)
             .expect("a pointer body with its bytes plans");
         assert_eq!(plan.content, vec![blob]);
         assert!(
@@ -807,7 +973,7 @@ mod tests {
         let stranger =
             Entity::new("system/content", entity_ecf::to_ecf(&entity_ecf::text("unnamed")))
                 .unwrap();
-        let plan = plan_mirror(
+        let plan = plan_fresh(
             "2Gatherer",
             &thread(&author, rows[0].hash),
             &rows,
@@ -829,7 +995,7 @@ mod tests {
         let real = rows[0].hash;
         rows[0].obtained.entity = rows[1].obtained.entity.clone();
 
-        match plan_mirror("2Gatherer", &thread(&author, real), &rows, &[], 1) {
+        match plan_fresh("2Gatherer", &thread(&author, real), &rows, &[], 1) {
             Err(GatherError::RowDoesNotAddress { claimed, actual }) => {
                 assert_eq!(claimed, real);
                 assert_ne!(actual, real);
@@ -849,7 +1015,7 @@ mod tests {
 
         let subject = thread(&author, rows[0].hash);
         let gatherer = "2GathererPeerIdForTheseGates";
-        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9).expect("the gather plans");
+        let plan = plan_fresh(gatherer, &subject, &rows, &[], 9).expect("the gather plans");
         assert_eq!(plan.entry_count(), 2, "the unsigned entry was dropped");
         assert_eq!(plan.attributable(), 1);
 
@@ -872,7 +1038,7 @@ mod tests {
         let (rows, author, _) = gathered_rows(3);
         let gatherer = "2GathererPeerIdForTheseGates";
         let subject = thread(&author, rows[0].hash);
-        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9).unwrap();
+        let plan = plan_fresh(gatherer, &subject, &rows, &[], 9).unwrap();
 
         // Omission: the record still names three, the origin serves two.
         let mut short = Origin::default();
@@ -906,7 +1072,7 @@ mod tests {
     #[test]
     fn a_mirror_record_cannot_name_a_different_gatherer() {
         let (rows, author, _) = gathered_rows(1);
-        let plan = plan_mirror("2SomeoneElse", &thread(&author, rows[0].hash), &rows, &[], 9)
+        let plan = plan_fresh("2SomeoneElse", &thread(&author, rows[0].hash), &rows, &[], 9)
             .unwrap();
         let mut origin = Origin::default();
         origin.take(&plan, "2TheActualGatherer");
@@ -961,13 +1127,13 @@ mod tests {
         let c = "2TheSecondGatherer";
 
         let plan_b =
-            plan_mirror(b, &thread(&author, rows[0].hash), &rows, &[], 1).unwrap();
+            plan_fresh(b, &thread(&author, rows[0].hash), &rows, &[], 1).unwrap();
         let mut origin = Origin::default();
         origin.take(&plan_b, b);
 
         let via_b = block_on(read_mirror(&origin, b, &thread(&author, rows[0].hash), 100)).unwrap();
         let plan_c =
-            plan_mirror(c, &thread(&author, rows[0].hash), &via_b, &[], 2).unwrap();
+            plan_fresh(c, &thread(&author, rows[0].hash), &via_b, &[], 2).unwrap();
         origin.take(&plan_c, c);
 
         let via_c = block_on(read_mirror(&origin, c, &thread(&author, rows[0].hash), 100)).unwrap();
@@ -1009,7 +1175,7 @@ mod tests {
         let gatherer = "2GathererPeerIdForTheseGates";
 
         let subject = MirrorSubject::timeline(&author);
-        let plan = plan_mirror(gatherer, &subject, &rows, &[], 1).expect("the gather plans");
+        let plan = plan_fresh(gatherer, &subject, &rows, &[], 1).expect("the gather plans");
         let mut origin = Origin::default();
         origin.take(&plan, gatherer);
 
@@ -1032,7 +1198,7 @@ mod tests {
         let pinned_after = MirrorSubject::thread(&author, head_after);
         assert_ne!(pinned_before.key(), pinned_after.key());
         let mut head_pinned = Origin::default();
-        let head_plan = plan_mirror(gatherer, &pinned_before, &rows, &[], 1).unwrap();
+        let head_plan = plan_fresh(gatherer, &pinned_before, &rows, &[], 1).unwrap();
         head_pinned.take(&head_plan, gatherer);
         assert!(
             matches!(
@@ -1069,15 +1235,17 @@ mod tests {
     ///
     /// 1. under a **foreign** peer, only content-addressed entries and their
     ///    signatures — nothing whose key is an author's own index;
-    /// 2. under the **gatherer**, exactly one binding, the mirror record;
-    /// 3. that record is at §6.0.1's derived key, so it presents as *a mirror*
-    ///    and cannot be mistaken for the author's own entry point.
+    /// 2. under the **gatherer**, nothing but THIS subject's mirror — its §6.0a
+    ///    head and that head's own pages;
+    /// 3. every one of those is under §6.0.1's derived prefix, so the view
+    ///    presents as *a mirror* and cannot be mistaken for the author's own
+    ///    entry point.
     #[test]
     fn a_gatherer_publishes_no_set_layer_object_of_the_authors() {
         let (rows, author, _) = gathered_rows(3);
         let gatherer = "2GathererPeerIdForTheseGates";
         let subject = thread(&author, rows[0].hash);
-        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9).unwrap();
+        let plan = plan_fresh(gatherer, &subject, &rows, &[], 9).unwrap();
 
         // 1 — the foreign half.
         assert!(!plan.carried.is_empty(), "a plan carrying nothing proves nothing here");
@@ -1101,17 +1269,149 @@ mod tests {
             );
         }
 
-        // 2 and 3 — the gatherer's own half is one record, and it is a mirror.
+        // 2 and 3 — the gatherer's own half is its mirror and nothing else.
+        //
+        // ⚠ **This used to assert `ours.len() == 1` and §6.0a made that the
+        // wrong shape** — a mirror is a head plus pages now, so the count is 2
+        // for a one-page view and grows with the archive. The count was
+        // measuring the author's memory (the charter's own rule about a census
+        // that counts a literal); what `DX-R4` is about is *which keys*, and
+        // that is derivable from the plan rather than typed in.
         let mut origin = Origin::default();
         origin.take(&plan, gatherer);
         let ours: Vec<&String> =
             origin.0.keys().filter(|(p, _)| p == gatherer).map(|(_, k)| k).collect();
+        assert!(!ours.is_empty(), "the gatherer bound nothing — this proves nothing");
+
+        let permitted: std::collections::BTreeSet<String> = std::iter::once(subject.key())
+            .chain(plan.pages.iter().map(|p| subject.page_key(p.page)))
+            .collect();
+        for key in &ours {
+            assert!(
+                permitted.contains(*key),
+                "the gatherer bound {key} under its own name — DX-R4 admits this \
+                 subject's mirror head and its pages and nothing else"
+            );
+            assert!(
+                key.starts_with(crate::feed::mirror_prefix()),
+                "{key} does not present as a mirror, so it can be mistaken for the \
+                 author's own entry point"
+            );
+            // The two the flat sentence invites, named under the GATHERER this
+            // time — a forged author entry point is the thing DX-R4 forbids and
+            // the prefix test above would already catch it, so this is the
+            // belt-and-braces half that says so in words.
+            assert_ne!(*key, &crate::feed::index_head_key().to_string());
+            assert!(!key.starts_with(crate::feed::entry_prefix()));
+        }
+        assert!(ours.contains(&&subject.key()), "the mirror head is not bound");
+    }
+
+    // ── §6.0a — the paged mirror ────────────────────────────────────────────
+
+    /// `FEED-R29`/`FEED-R30`: a bounded head plus key-addressed pages, and
+    /// `page` equals its key.
+    ///
+    /// **The fixture spans more than one page on purpose.** A single-page
+    /// fixture passes against a flat list and measures nothing — which is
+    /// `FEED-13`'s own anti-vacuity note, and the reason every feed fixture on
+    /// either seat being one page is what left `FEED-R12` unfalsifiable
+    /// everywhere.
+    #[test]
+    fn a_mirror_past_one_page_is_a_bounded_head_plus_key_addressed_pages() {
+        let (rows, author, _) = gathered_rows(7);
+        let gatherer = "2GathererPeerIdForThePagingGates";
+        let subject = thread(&author, rows[0].hash);
+        // Three to a page over seven entries: three pages, the last short.
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9, &[], 3).unwrap();
+
+        assert_eq!(plan.pages.len(), 3, "seven entries at three to a page is three pages");
+        assert_eq!(plan.entry_count(), 7, "entries were lost in the paging");
+        for (i, page) in plan.pages.iter().enumerate() {
+            assert_eq!(page.page, i as u64, "FEED-R30: page numbers are dense from oldest");
+            assert!(page.entries.len() <= 3, "FEED-R29: page {i} is over the bound");
+            assert!(!page.entries.is_empty(), "an empty page is a hole a reader cannot explain");
+        }
+        assert_eq!(plan.record.current, 2, "the head names the highest page in use");
+        assert_eq!(plan.record.oldest, 0, "nothing has been dropped");
+
+        // `page` equals its KEY — asserted through the key builder rather than a
+        // spelled string, so the head, the pages and the reader cannot disagree.
+        for page in &plan.pages {
+            assert!(subject.page_key(page.page).ends_with(&format!("/{}", page.page)));
+        }
+    }
+
+    /// ⭐ `FEED-R32`, and it is the property the whole paging change exists for:
+    /// **a sealed page's bytes do not move when the view is extended.**
+    ///
+    /// A gatherer backfills, routinely, because that is what gathering is. If a
+    /// later round can re-page an earlier entry then every reader's cached page
+    /// and every cursor into it is invalidated by a round that added one entry
+    /// at the other end — *and nothing errors at either end*, which is why this
+    /// is asserted on the BYTES rather than on the page count.
+    #[test]
+    fn a_later_gather_does_not_move_a_sealed_page() {
+        let (rows, author, _) = gathered_rows(7);
+        let gatherer = "2GathererPeerIdForThePagingGates";
+        let subject = thread(&author, rows[0].hash);
+
+        // Round 1 — the gatherer holds the first four.
+        let first = plan_mirror(gatherer, &subject, &rows[..4], &[], 9, &[], 3).unwrap();
+        assert_eq!(first.pages.len(), 2);
+        let sealed = first.pages[0].to_entity().unwrap();
+
+        // Round 2 — it holds all seven now, including the four it already paged.
+        let second = plan_mirror(gatherer, &subject, &rows, &[], 11, &first.pages, 3).unwrap();
+
+        assert_eq!(second.entry_count(), 7, "the second round lost or duplicated entries");
         assert_eq!(
-            ours.len(),
-            1,
-            "the gatherer bound more than its own record under its own name: {ours:?}"
+            second.pages[0].to_entity().unwrap().data,
+            sealed.data,
+            "a SEALED page moved — FEED-R32, and every cached copy and cursor into \
+             page 0 was just invalidated by a round that appended at the other end"
         );
-        assert_eq!(ours[0], &subject.key());
-        assert!(ours[0].starts_with(crate::feed::mirror_prefix()));
+        // The already-paged four are not re-paged, so the new three land on the
+        // page that was current plus whatever it overflows into.
+        let all: Vec<_> = second.pages.iter().flat_map(|p| p.entries.iter()).collect();
+        assert_eq!(all.len(), 7, "an entry was paged twice");
+        let mut seen = std::collections::BTreeSet::new();
+        for r in &all {
+            let EntityRef::Pinned { hash, .. } = r else { panic!("FEED-R28") };
+            assert!(seen.insert(hash.to_hex()), "the same entry is on two pages");
+        }
+    }
+
+    /// A reader reads **down from `current`** and reaches both ends of a view
+    /// that spans pages — the walk `FEED-13` calls the leg §6.2 sells as cheap.
+    ///
+    /// Anti-vacuity: the view spans three pages, so a reader that fetched the
+    /// head's page and stopped comes back with three of seven.
+    #[test]
+    fn a_reader_walks_a_mirror_down_from_current_across_pages() {
+        let (rows, author, tree) = gathered_rows(7);
+        let gatherer = "2GathererPeerIdForThePagingGates";
+        let subject = thread(&author, rows[0].hash);
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9, &[], 3).unwrap();
+        assert!(plan.pages.len() > 1, "a one-page fixture cannot measure a walk");
+
+        let mut origin = Origin::default();
+        origin.absorb(&author, &tree);
+        origin.take(&plan, gatherer);
+
+        let read = block_on(read_mirror(&origin, gatherer, &subject, 100)).expect("the walk reads");
+        assert_eq!(read.len(), 7, "the reader stopped at a page boundary");
+
+        // And the limit selects the most recently GATHERED, not the first page.
+        let two = block_on(read_mirror(&origin, gatherer, &subject, 2)).expect("the walk reads");
+        assert_eq!(two.len(), 2);
+        let newest: Vec<String> = rows[5..].iter().map(|r| r.hash.to_hex()).collect();
+        for row in &two {
+            assert!(
+                newest.contains(&row.hash.to_hex()),
+                "a limited read returned an entry from the OLDEST page — the walk is \
+                 ascending, so a reader asking for what is new gets what is oldest"
+            );
+        }
     }
 }

@@ -74,6 +74,8 @@ ALLOWLIST: dict[str, str] = {
     # "Markdown — {page}": a file-format proper noun plus a slot. There is no
     # prose in it to translate.
     "siteeditor.markdown_label": "file-format proper noun plus a slot",
+    # "{window} · {app}": two slots and a separator. Nothing in it is a word.
+    "palette.running_title": "two slots and a separator — no text to translate",
 }
 
 # Codepoint ranges that count as "this locale's own script". A locale absent

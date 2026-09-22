@@ -213,6 +213,9 @@ pub struct EntityApp {
     /// union rule needs the COMPLETE set and the Worker mirror seeds
     /// asynchronously — see `share::ShareSync`.
     share_sync: crate::share::ShareSync,
+    /// Takes back any offer an app's file became (an earlier build offered app
+    /// files to peers; `crate::kept_files`). Per-frame, one atomic check.
+    kept_take_back: crate::kept_files::TakeBack,
     /// Connector-registry sync: app-lifetime watch on the connectors prefix +
     /// the selection. `sync()` per frame is one atomic check unless either
     /// changed (then it refreshes the pre-peer localStorage mirror the next
@@ -237,6 +240,20 @@ pub struct EntityApp {
     /// actually moves.
     #[cfg(target_arch = "wasm32")]
     webrtc_booted: Option<crate::session_config::WebRtcProvisioning>,
+    /// **What this session is actually running on** — the provisioning the §6.5
+    /// slot was last armed from (or deliberately refused, `?webrtc_enable=0`).
+    ///
+    /// Starts equal to [`Self::webrtc_booted`] and moves only when
+    /// [`Self::arm_webrtc_if_provisioned`] acts, so on a profile with no slot
+    /// (the Worker arm, the ephemeral fallback) it never moves and the reload
+    /// notice keeps comparing against boot, which is still the truth there.
+    ///
+    /// The notice used to compare against `webrtc_booted` on every arm, so
+    /// adding a rendezvous node told the user *"takes effect on reload"* on the
+    /// Direct arm, where late arming had already applied it — the reload people
+    /// were then told to do was the one this whole mechanism exists to remove.
+    #[cfg(target_arch = "wasm32")]
+    webrtc_applied: Option<crate::session_config::WebRtcProvisioning>,
     /// The §6.5 seam slot installed at boot, kept so a rendezvous node chosen
     /// **during** this session can be armed into the running peer.
     ///
@@ -696,24 +713,31 @@ pub enum LateArm {
 /// Pure, and split out for the reason `decide_home` and `ladder_step` are: the
 /// only caller is behind `cfg(wasm32)` and reads the URL and localStorage, so
 /// without this the branch could not be gated by `make test` on either arm.
+///
+/// **Compares the whole provisioning, not just the node.** A connector's
+/// reflectors arrive from the node's own §4.5.1 advertisement a moment *after*
+/// it is added, so a node-only comparison armed the first frame without them
+/// and then answered `AlreadyArmed` forever — the one case left where a reload
+/// still changed something. `replaced` names the node it replaces, which is the
+/// same node in that case.
 pub fn decide_late_arm(
     has_slot: bool,
-    armed_node: Option<&str>,
-    resolved_node: Option<&str>,
+    applied: Option<&crate::session_config::WebRtcProvisioning>,
+    resolved: Option<&crate::session_config::WebRtcProvisioning>,
 ) -> LateArm {
     if !has_slot {
         return LateArm::NoSlot;
     }
-    let Some(node) = resolved_node else {
+    let Some(resolved) = resolved else {
         return LateArm::NoProvisioning;
     };
-    match armed_node {
-        Some(current) if current == node => LateArm::AlreadyArmed,
+    match applied {
+        Some(current) if current == resolved => LateArm::AlreadyArmed,
         Some(current) => LateArm::Armed {
-            node: node.to_string(),
-            replaced: Some(current.to_string()),
+            node: resolved.node_peer_id.clone(),
+            replaced: Some(current.node_peer_id.clone()),
         },
-        None => LateArm::Armed { node: node.to_string(), replaced: None },
+        None => LateArm::Armed { node: resolved.node_peer_id.clone(), replaced: None },
     }
 }
 
@@ -1546,6 +1570,10 @@ impl EntityApp {
             let pid = peer_manager.system_peer_id().to_string();
             crate::share::ShareSync::new(&peer_manager, &pid)
         };
+        let kept_take_back = {
+            let pid = peer_manager.system_peer_id().to_string();
+            crate::kept_files::TakeBack::new(&peer_manager, &pid)
+        };
         let connectors = crate::connectors::ConnectorRegistry::new(&peer_manager);
         // Capture what this session booted with, BEFORE any frame can run —
         // `ConnectorRegistry::sync` rewrites the mirror from the tree on its
@@ -1751,7 +1779,10 @@ impl EntityApp {
             peer_registry,
             user_themes,
             share_sync,
+            kept_take_back,
             connectors,
+            #[cfg(target_arch = "wasm32")]
+            webrtc_applied: webrtc_booted.clone(),
             #[cfg(target_arch = "wasm32")]
             webrtc_booted,
             // Filled by `new_wasm` right after this returns — the slot is built
@@ -2030,6 +2061,31 @@ impl EntityApp {
                 self.window_manager.peek_next_id(),
                 resolution.swept,
             );
+        }
+
+        // (0d) Remembered window heights (`window_size.rs`). Local, one entity,
+        // and before any spawn so a restored window opens at its height rather
+        // than jumping to it. A read that could not answer installs nothing and
+        // writes nothing (AP30 corollary (a)) — the defaults stand.
+        {
+            let path = crate::app_paths::settings_path(
+                crate::app_paths::APP_ID,
+                &primary_pid,
+                crate::window_size::SIZES_SUFFIX,
+            );
+            match self.peer_manager.get_entity_async(&primary_pid, &path).await {
+                Ok(Some(e)) => match crate::window_size::decode(&e) {
+                    Some(map) => {
+                        tracing::info!(sizes = map.len(), "window sizes: restored");
+                        crate::window_size::install_loaded(map);
+                    }
+                    None => tracing::warn!(path = %path, "window sizes: unreadable entity, using defaults"),
+                },
+                Ok(None) => {
+                    crate::window_size::install_loaded(Default::default());
+                }
+                Err(e) => tracing::warn!(error = %e, "window sizes: could not read, using defaults"),
+            }
         }
 
         // (1) The session config spine (§4-A). Two distinct concerns, and
@@ -3378,11 +3434,10 @@ impl EntityApp {
     fn arm_webrtc_if_provisioned(&mut self) -> LateArm {
         let resolved =
             crate::connectors::resolve_provisioning_quietly(&webrtc_url_query()).map(|(p, _)| p);
-        let armed_node = self.late_establisher.as_ref().and_then(|l| l.armed_node());
         let outcome = decide_late_arm(
             self.late_establisher.is_some() && self.webrtc_seed.is_some(),
-            armed_node.as_deref(),
-            resolved.as_ref().map(|p| p.node_peer_id.as_str()),
+            self.webrtc_applied.as_ref(),
+            resolved.as_ref(),
         );
         let LateArm::Armed { ref node, .. } = outcome else {
             return outcome;
@@ -3390,6 +3445,12 @@ impl EntityApp {
         let (Some(slot), Some(seed)) = (self.late_establisher.clone(), self.webrtc_seed) else {
             return LateArm::NoSlot;
         };
+        // Whatever happens next, this session has now acted on `resolved`: it is
+        // armed from it, or it refused it on purpose. Recording that is what
+        // stops the next frame deciding the same thing again, and what the
+        // reload notice compares against.
+        self.webrtc_applied = resolved.clone();
+        crate::connectors::record_applied(resolved.clone());
         let primary = self.peer_manager.primary_peer_id().to_string();
         // Rebuild through the SAME builder boot uses, so there is one expression
         // of what an establisher is made of (carrier, ICE, policy, observer).
@@ -3397,14 +3458,19 @@ impl EntityApp {
         let Some((built_node, inner)) = build_direct_webrtc_establisher(seed, &primary) else {
             // The resolver said yes and the builder said no — `?webrtc_enable=0`
             // is the one way that happens, and it is a deliberate refusal, not a
-            // failure. Report it as "nothing provisioned" rather than retrying
-            // the build on every frame forever.
+            // failure. Report it as "nothing provisioned"; `webrtc_applied`
+            // above keeps it from being retried on every frame.
             return LateArm::NoProvisioning;
         };
         debug_assert_eq!(&built_node, node, "the builder and the resolver disagreed on the node");
         // Reachability follows the arm — this is what un-silences the meet
         // surfaces, and what makes `peer_has_webrtc` true without a reload.
-        let armed = slot.arm(&built_node, inner);
+        //
+        // `install`, not `arm`: the decision above already established that
+        // something changed, and that includes the same node with different
+        // reflectors — a node's §4.5.1 advertisement lands a moment after it is
+        // added, and `arm` would keep the establisher built without them.
+        let armed = slot.install(&built_node, inner);
         self.peer_manager.set_webrtc_peer(&primary, true);
         // **Report from the ARM, never from the decision.** Logging at the call
         // site off the returned outcome looked equivalent and is not: it states
@@ -3419,6 +3485,11 @@ impl EntityApp {
                 node_peer_id = %built_node,
                 "webrtc: armed the §6.5 establisher from a node chosen after \
                  boot — this session is now reachable, no reload needed"
+            ),
+            crate::late_establish::Arm::Rearmed { from } if from == &built_node => tracing::info!(
+                node_peer_id = %built_node,
+                "webrtc: rebuilt the §6.5 establisher for the same rendezvous node — \
+                 its reflectors or relay changed; no reload needed"
             ),
             crate::late_establish::Arm::Rearmed { from } => tracing::info!(
                 node_peer_id = %built_node,
@@ -3598,6 +3669,7 @@ impl EntityApp {
         // it must run every frame so the Worker mirror's async seeding
         // converges (each seed event re-dirties the watch).
         self.share_sync.sync(&self.peer_manager);
+        self.kept_take_back.sync(&self.peer_manager);
         // **This order IS load-bearing now** — it was not when this call landed,
         // and the note that said so was true at the time: the mirror's only
         // consumer was the next reload's PRE-peer boot path, so nothing in a
@@ -3619,14 +3691,18 @@ impl EntityApp {
         // the render as a plain fact. Both sides go through the same resolver,
         // so URL precedence is self-handling (see `provisioning_drifted`).
         //
-        // **Still meaningful after late arming**, and the distinction is worth
-        // keeping: arming installs the establisher, but `InitParams.webrtc` on
-        // the Worker arm is Init-only upstream, and ICE/relay credentials that
-        // only `apply_to` consumes are still boot-shaped. So this notice now
-        // means "some of your choice needs a reload", not "none of it is live".
+        // **Compared against what is APPLIED, not what booted.** On the Direct
+        // arm late arming applies a new node — and its reflectors and relay,
+        // since the establisher is rebuilt from the whole provisioning — so a
+        // comparison against boot told people to reload for something already
+        // live. `webrtc_applied` only moves where there is a slot to arm, so on
+        // the Worker arm (`InitParams.webrtc` is Init-only upstream) this is
+        // still boot, and the notice still appears where a reload is genuinely
+        // required. It also still appears when a selection is REMOVED: the slot
+        // is never disarmed mid-session, so that change really does wait.
         #[cfg(target_arch = "wasm32")]
         let provisioning_drifted = crate::connectors::provisioning_drifted(
-            self.webrtc_booted.as_ref(),
+            self.webrtc_applied.as_ref(),
             crate::connectors::resolve_provisioning_quietly(&webrtc_url_query())
                 .map(|(p, _)| p)
                 .as_ref(),
@@ -3792,6 +3868,9 @@ impl EntityApp {
                     if self.singleton_windows_enabled() {
                         if let Some(existing) = self.window_manager.find_open(type_name, pid) {
                             tracing::info!(type_name = %type_name, peer_id = %pid, existing, "SpawnWindow: focusing existing (singleton)");
+                            if self.maximized_window.is_some_and(|m| m != existing) {
+                                self.maximized_window = None;
+                            }
                             if let Some(dom) = self.dom.as_ref() {
                                 dom.focus_window(existing);
                             }
@@ -3799,6 +3878,11 @@ impl EntityApp {
                         }
                     }
                     tracing::info!(type_name = %type_name, peer_id = %pid, open_windows = open, "SpawnWindow");
+                    // A maximized window covers the whole viewport, so a window
+                    // opened behind it is invisible — the person clicked the
+                    // menu and nothing happened (VM design §8). Opening one
+                    // restores the surface, the same rule `ShowWindow` follows.
+                    self.maximized_window = None;
                     self.window_manager.spawn(type_name, pid, &self.peer_manager);
                 }
                 Action::CloseWindow(id) => {
@@ -3836,7 +3920,84 @@ impl EntityApp {
                     if self.maximized_window == Some(*id) {
                         self.maximized_window = None;
                     }
+                    crate::window_size::forget_window(*id);
                     self.window_manager.close(*id);
+                }
+                Action::OpenWindow { type_name } => {
+                    let pid = self.peer_manager.primary_peer_id().to_string();
+                    // Any open one, whichever peer it is bound to: the person
+                    // asked for "File Manager", not for a peer's.
+                    let open = self.window_manager.find_open(type_name, &pid).or_else(|| {
+                        self.window_manager.windows.iter().find(|w| w.open && w.view.type_name() == *type_name).map(|w| w.id)
+                    });
+                    match open {
+                        Some(existing) => {
+                            if self.maximized_window.is_some_and(|m| m != existing) {
+                                self.maximized_window = None;
+                            }
+                            tracing::info!(type_name = %type_name, existing, "OpenWindow: showing the open one");
+                            if let Some(dom) = self.dom.as_ref() {
+                                dom.focus_window(existing);
+                            }
+                        }
+                        None => {
+                            tracing::info!(type_name = %type_name, "OpenWindow: spawning");
+                            self.maximized_window = None;
+                            self.window_manager.spawn(type_name, &pid, &self.peer_manager);
+                        }
+                    }
+                }
+                Action::RevealInEntityTree { path } => {
+                    let type_name = crate::views::entity_tree::TYPE_NAME;
+                    let pid = self.peer_manager.primary_peer_id().to_string();
+                    let id = match self.window_manager.find_open(type_name, &pid) {
+                        Some(existing) => {
+                            if let Some(dom) = self.dom.as_ref() {
+                                dom.focus_window(existing);
+                            }
+                            Some(existing)
+                        }
+                        None => self.window_manager.spawn(type_name, &pid, &self.peer_manager),
+                    };
+                    if self.maximized_window.is_some_and(|m| Some(m) != id) {
+                        self.maximized_window = None;
+                    }
+                    tracing::info!(path = %path, window = ?id, "RevealInEntityTree");
+                    // The same per-window Navigate a click in the tree raises, so
+                    // selection publishing and the hydration witness see an
+                    // ordinary move, not a second way to select.
+                    if let Some(win) = id.and_then(|id| self.window_manager.get_mut(id)) {
+                        win.view.handle_action(&Action::Navigate(win.id, path.clone()), &self.peer_manager);
+                    }
+                }
+                Action::ShowWindow(id) => {
+                    // A maximized window covers everything else, so showing a
+                    // different one restores it first (a pure CSS reconcile, no
+                    // rebuild — see ToggleMaximizeWindow). Showing the maximized
+                    // window itself leaves it maximized.
+                    if self.maximized_window.is_some_and(|m| m != *id) {
+                        self.maximized_window = None;
+                    }
+                    tracing::info!(window_id = id, "Action::ShowWindow");
+                    if let Some(dom) = self.dom.as_ref() {
+                        dom.focus_window(*id);
+                    }
+                }
+                Action::SetWindowSize(id, pref) => {
+                    let Some(win) = self.window_manager.get(*id) else { continue };
+                    let key = crate::window_size::size_key(
+                        win.view.type_name(),
+                        win.view.running_app_key().as_deref(),
+                    );
+                    let map = crate::window_size::set_pref(&key, *pref);
+                    let pid = self.peer_manager.primary_peer_id().to_string();
+                    let path = crate::app_paths::settings_path(
+                        crate::app_paths::APP_ID,
+                        &pid,
+                        crate::window_size::SIZES_SUFFIX,
+                    );
+                    self.peer_manager.seed_write(&pid, path, crate::window_size::encode(&map));
+                    tracing::info!(window_id = id, key = %key, pref = ?pref, "window size remembered");
                 }
                 Action::ToggleMaximizeWindow(id) => {
                     // One-deep (reframe §4-B decision #3): maximizing replaces
@@ -4268,11 +4429,12 @@ impl EntityApp {
                 }
                 Action::DownloadFile { peer_id, handler_uri, path, filename } => {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, "Action::DownloadFile");
-                    self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone());
+                    let finish = self.pull_finisher(None);
+                    self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone(), finish);
                 }
-                Action::PullFile { peer_id, target, plan } => {
-                    tracing::info!(peer = %peer_id, target = %target, plan = ?plan, "Action::PullFile");
-                    self.handle_pull_file(peer_id.clone(), target.clone(), plan.clone());
+                Action::PullFile { peer_id, target, plan, keep } => {
+                    tracing::info!(peer = %peer_id, target = %target, plan = ?plan, keep, "Action::PullFile");
+                    self.handle_pull_file(peer_id.clone(), target.clone(), plan.clone(), *keep);
                 }
                 Action::UploadFile { peer_id, handler_uri, path, bytes, window_id } => {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, len = bytes.len(), "Action::UploadFile");
@@ -4288,7 +4450,15 @@ impl EntityApp {
                 }
                 Action::SaveOwnOffer { peer_id, offer_id, filename } => {
                     tracing::info!(peer = %peer_id, offer = %offer_id, "Action::SaveOwnOffer");
-                    self.handle_save_own_offer(peer_id.clone(), offer_id.clone(), filename.clone());
+                    self.handle_save_own_offer(peer_id.clone(), offer_id.clone(), filename.clone(), None);
+                }
+                Action::SaveKeptFile { peer_id, file_id, filename, store } => {
+                    tracing::info!(peer = %peer_id, file = %file_id, store = ?store, "Action::SaveKeptFile");
+                    self.handle_save_own_offer(peer_id.clone(), file_id.clone(), filename.clone(), Some(*store));
+                }
+                Action::OfferKeptFile { peer_id, file_id, filename, store } => {
+                    tracing::info!(peer = %peer_id, file = %file_id, store = ?store, "Action::OfferKeptFile");
+                    self.handle_offer_kept_file(peer_id.clone(), file_id.clone(), filename.clone(), *store);
                 }
                 Action::Query { peer_id, expression } => {
                     tracing::info!(peer = %peer_id, expr_type = %expression.entity_type, "Action::Query");
@@ -4677,11 +4847,17 @@ impl EntityApp {
     /// or the content-closure walk (browser peer, hash-addressed offer). The
     /// window, the row and the button are identical for both.
     #[cfg(target_arch = "wasm32")]
-    fn handle_pull_file(&self, pid: String, target: String, plan: crate::action::PullPlan) {
+    fn handle_pull_file(&self, pid: String, target: String, plan: crate::action::PullPlan, keep: bool) {
         use crate::action::PullPlan;
+        let keep_to = keep.then(|| self.peer_manager.dispatch_handle(&pid)).flatten();
+        if keep && keep_to.is_none() {
+            self.event_log_writer.log(format!("✗ keep → {}", crate::file_offer::not_routed_message(&pid)));
+            return;
+        }
+        let finish = self.pull_finisher(keep_to);
         match plan {
             PullPlan::Share { path, filename } => {
-                self.handle_download_file(pid, format!("entity://{target}/local/files"), path, filename)
+                self.handle_download_file(pid, format!("entity://{target}/local/files"), path, filename, finish)
             }
             PullPlan::Offer { blob_hex, filename } => {
                 let log = self.event_log_writer.clone();
@@ -4720,13 +4896,7 @@ impl EntityApp {
                     match crate::file_offer::pull_offer_with(&dispatch, &target, &blob, report)
                         .await
                     {
-                        Ok(bytes) => {
-                            let n = bytes.len();
-                            match crate::ops::download::save_bytes(&filename, &bytes) {
-                                Ok(()) => log.log(format!("✓ saved {filename} ({n} bytes)")),
-                                Err(e) => log.log(format!("✗ save {filename} → {e}")),
-                            }
-                        }
+                        Ok(bytes) => finish(filename, bytes),
                         Err(e) => log.log(format!("✗ pull {filename} → {e}")),
                     }
                 });
@@ -4763,7 +4933,7 @@ impl EntityApp {
             .window_manager
             .windows
             .iter()
-            .filter(|w| w.open && w.view.type_name() == "File Transfer") // i18n-ignore — stable type identifier, not UI text
+            .filter(|w| w.open && shows_own_files(w.view.type_name()))
             .map(|w| w.view.watch().flag())
             .collect();
         let wake = move |flags: &[crate::window_watch::DirtyFlag]| {
@@ -4794,34 +4964,57 @@ impl EntityApp {
         // task — no deferral needed. Its grant is authored by
         // `share_sync`'s reconcile, which this write dirties.
         let share_writer = self.peer_manager.writer_handle_for(&pid);
-        let share_pid = pid.clone();
+        wasm_bindgen_futures::spawn_local(offer_and_publish(
+            dispatch, share_writer, pid, filename, bytes, log, attempt, watchers,
+        ));
+    }
+
+    /// Offer one of the files an app kept privately (`Action::OfferKeptFile`) —
+    /// the deliberate act that shares it. Reads the bytes from the private store
+    /// and runs the ordinary offer path, with **no app source** on the offer: an
+    /// offer naming an app is one `kept_files::TakeBack` takes back, because by
+    /// construction nobody chose it.
+    #[cfg(target_arch = "wasm32")]
+    fn handle_offer_kept_file(&self, pid: String, file_id: String, filename: String, store: crate::user_files::PrivateStore) {
+        let log = self.event_log_writer.clone();
+        let attempt = self.offer_attempt.clone();
+        let watchers: Vec<crate::window_watch::DirtyFlag> = self
+            .window_manager
+            .windows
+            .iter()
+            .filter(|w| w.open && shows_own_files(w.view.type_name()))
+            .map(|w| w.view.watch().flag())
+            .collect();
+        let fail = |why: String| {
+            log.log(format!("✗ offer {filename} → {why}"));
+            attempt.set_failed(&filename, &why);
+            for f in &watchers {
+                f.mark();
+            }
+        };
+        let Some(dispatch) = self.peer_manager.dispatch_handle(&pid) else {
+            return fail(crate::file_offer::not_routed_message(&pid));
+        };
+        let blob = match crate::file_offer::hash_from_id(&file_id) {
+            Ok(h) => h,
+            Err(e) => return fail(e),
+        };
+        attempt.set_preparing(&filename);
+        for f in &watchers {
+            f.mark();
+        }
+        let share_writer = self.peer_manager.writer_handle_for(&pid);
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::file_offer::offer_file(&dispatch, &filename, &bytes).await {
-                Ok(offer) => {
-                    log.log(format!(
-                        "✓ offering {} ({}) — id {}",
-                        offer.name,
-                        crate::file_offer::human_bytes(offer.size),
-                        offer.id()
-                    ));
-                    attempt.set_offered(&offer.name, offer.size);
-                    wake(&watchers);
-                    if let Some(writer) = share_writer {
-                        let share = crate::share::Share::from_file_offer(
-                            &offer,
-                            crate::share::now_epoch_ms(),
-                        );
-                        if let Err(e) =
-                            crate::share::publish_share(&writer, &share_pid, &share)
-                        {
-                            tracing::warn!(error = %e, "share publish failed");
-                        }
-                    }
+            match crate::file_offer::read_own_in(&dispatch, store.namespace(), &blob).await {
+                Ok(bytes) => {
+                    offer_and_publish(dispatch, share_writer, pid, filename, bytes, log, attempt, watchers).await
                 }
-                Err(e) => {
-                    log.log(format!("✗ offer {filename} → {e}"));
-                    attempt.set_failed(&filename, &e);
-                    wake(&watchers);
+                Err(why) => {
+                    log.log(format!("✗ offer {filename} → {why}"));
+                    attempt.set_failed(&filename, &why);
+                    for f in &watchers {
+                        f.mark();
+                    }
                 }
             }
         });
@@ -4855,14 +5048,17 @@ impl EntityApp {
     /// the reason `handle_offer_file` gives: on a phone the Results pane is not
     /// where anyone is looking. Success is the download itself.
     #[cfg(target_arch = "wasm32")]
-    fn handle_save_own_offer(&self, pid: String, offer_id: String, filename: String) {
+    /// `kept`: the file is one an app kept privately (`crate::kept_files`), read
+    /// from that store; otherwise one of our offers.
+    /// `store`: the private store holding the bytes, or `None` for an offer.
+    fn handle_save_own_offer(&self, pid: String, offer_id: String, filename: String, store: Option<crate::user_files::PrivateStore>) {
         let log = self.event_log_writer.clone();
         let attempt = self.offer_attempt.clone();
         let watchers: Vec<crate::window_watch::DirtyFlag> = self
             .window_manager
             .windows
             .iter()
-            .filter(|w| w.open && w.view.type_name() == "File Transfer") // i18n-ignore — stable type identifier, not UI text
+            .filter(|w| w.open && shows_own_files(w.view.type_name()))
             .map(|w| w.view.watch().flag())
             .collect();
         let wake = move |flags: &[crate::window_watch::DirtyFlag]| {
@@ -4892,7 +5088,11 @@ impl EntityApp {
         attempt.set_saving(&filename);
         wake(&watchers);
         wasm_bindgen_futures::spawn_local(async move {
-            let outcome = match crate::file_offer::read_own_offer(&dispatch, &blob).await {
+            let read = match store {
+                Some(store) => crate::file_offer::read_own_in(&dispatch, store.namespace(), &blob).await,
+                None => crate::file_offer::read_own_offer(&dispatch, &blob).await,
+            };
+            let outcome = match read {
                 Ok(bytes) => crate::ops::download::save_bytes(&filename, &bytes).map(|()| bytes.len()),
                 Err(e) => Err(e),
             };
@@ -4913,13 +5113,46 @@ impl EntityApp {
         });
     }
 
-    /// Pull a file from `handler_uri` (`local/files:read` on `path`) and
-    /// materialize its bytes onto this device via a browser download.
+    /// Where pulled bytes go: the browser's downloads, or — with a dispatch
+    /// handle — My files. One function for every pull, so no two of them word
+    /// the outcome differently.
+    #[cfg(target_arch = "wasm32")]
+    fn pull_finisher(&self, keep_to: Option<crate::dispatch_handle::DispatchHandle>) -> impl Fn(String, Vec<u8>) + 'static {
+        let log = self.event_log_writer.clone();
+        move |filename: String, bytes: Vec<u8>| {
+            let n = bytes.len();
+            match keep_to.clone() {
+                Some(dispatch) => {
+                    let log = log.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match crate::user_files::keep(&dispatch, &filename, &bytes).await {
+                            Ok(_) => log.log(format!("✓ kept {filename} in My files ({n} bytes)")),
+                            Err(e) => log.log(format!("✗ keep {filename} → {e}")),
+                        }
+                    });
+                }
+                None => match crate::ops::download::save_bytes(&filename, &bytes) {
+                    Ok(()) => log.log(format!("✓ saved {filename} ({n} bytes)")),
+                    Err(e) => log.log(format!("✗ save {filename} → {e}")),
+                },
+            }
+        }
+    }
+
+    /// Pull a file from `handler_uri` (`local/files:read` on `path`) and hand
+    /// its bytes to `finish` ([`Self::pull_finisher`]: a download, or My files).
     /// Reuses the same execute path as `handle_execute` but captures the
     /// structured result (with its `included` blob/chunks) rather than
-    /// logging only a summary. WASM-only (browser download API).
+    /// logging only a summary. WASM-only.
     #[cfg(target_arch = "wasm32")]
-    fn handle_download_file(&self, pid: String, handler_uri: String, path: String, filename: String) {
+    fn handle_download_file(
+        &self,
+        pid: String,
+        handler_uri: String,
+        path: String,
+        filename: String,
+        finish: impl Fn(String, Vec<u8>) + 'static,
+    ) {
         let log = self.event_log_writer.clone();
         log.log(format!("↓ pulling {}...", path));
 
@@ -4943,8 +5176,8 @@ impl EntityApp {
                         log.log(format!("✗ pull {} → {}", path, resp.summary));
                         return;
                     }
-                    match crate::ops::download::materialize_and_download(&resp.result, &filename) {
-                        Ok(n) => log.log(format!("✓ saved {} ({} bytes)", filename, n)),
+                    match crate::ops::download::materialize(&resp.result) {
+                        Ok(bytes) => finish(filename, bytes),
                         Err(e) => log.log(format!("✗ save {} → {}", filename, e)),
                     }
                 }
@@ -6689,6 +6922,22 @@ mod status_summary_tests {
 #[cfg(test)]
 mod late_arm_tests {
     use super::*;
+    use crate::session_config::{IceServer, WebRtcProvisioning};
+
+    fn prov(node: &str) -> WebRtcProvisioning {
+        WebRtcProvisioning {
+            node_peer_id: node.to_string(),
+            node_addr: format!("ws://{node}.lan:4041"),
+            ice_servers: Vec::new(),
+            poll_interval_ms: None,
+            max_deadline_ms: None,
+        }
+    }
+
+    /// Tests below were written against node strings; `p` keeps them readable.
+    fn p(node: &str) -> Option<WebRtcProvisioning> {
+        Some(prov(node))
+    }
 
     /// **The regression, stated as a test.** A fresh profile boots with nothing
     /// resolving, the user adds a rendezvous node, and the very next frame must
@@ -6697,7 +6946,7 @@ mod late_arm_tests {
     #[test]
     fn a_node_chosen_after_boot_arms_without_a_reload() {
         assert_eq!(
-            decide_late_arm(true, None, Some("2KNodeA")),
+            decide_late_arm(true, None, p("2KNodeA").as_ref()),
             LateArm::Armed { node: "2KNodeA".to_string(), replaced: None },
             "a node chosen after boot must arm the running peer, not wait for a reload"
         );
@@ -6709,11 +6958,11 @@ mod late_arm_tests {
     #[test]
     fn an_already_armed_slot_is_not_re_armed_every_frame() {
         assert_eq!(
-            decide_late_arm(true, Some("2KNodeA"), Some("2KNodeA")),
+            decide_late_arm(true, p("2KNodeA").as_ref(), p("2KNodeA").as_ref()),
             LateArm::AlreadyArmed
         );
         assert_ne!(
-            decide_late_arm(true, Some("2KNodeA"), Some("2KNodeA")),
+            decide_late_arm(true, p("2KNodeA").as_ref(), p("2KNodeA").as_ref()),
             LateArm::NoProvisioning,
             "already armed and nothing configured are different facts — only one \
              of them means the user still has to act"
@@ -6726,7 +6975,7 @@ mod late_arm_tests {
     #[test]
     fn switching_connectors_re_points_the_live_establisher() {
         assert_eq!(
-            decide_late_arm(true, Some("2KNodeA"), Some("2KNodeB")),
+            decide_late_arm(true, p("2KNodeA").as_ref(), p("2KNodeB").as_ref()),
             LateArm::Armed {
                 node: "2KNodeB".to_string(),
                 replaced: Some("2KNodeA".to_string())
@@ -6741,7 +6990,7 @@ mod late_arm_tests {
     fn no_provisioning_never_arms() {
         assert_eq!(decide_late_arm(true, None, None), LateArm::NoProvisioning);
         assert_eq!(
-            decide_late_arm(true, Some("2KNodeA"), None),
+            decide_late_arm(true, p("2KNodeA").as_ref(), None),
             LateArm::NoProvisioning,
             "a resolve that stops answering does not disarm what is already \
              working — this session keeps the establisher it has"
@@ -6754,12 +7003,37 @@ mod late_arm_tests {
     /// and the difference is what stops a caller retrying forever.
     #[test]
     fn a_profile_with_no_slot_reports_that_rather_than_a_missing_node() {
-        assert_eq!(decide_late_arm(false, None, Some("2KNodeA")), LateArm::NoSlot);
+        assert_eq!(decide_late_arm(false, None, p("2KNodeA").as_ref()), LateArm::NoSlot);
         assert_eq!(decide_late_arm(false, None, None), LateArm::NoSlot);
         assert_ne!(
-            decide_late_arm(false, None, Some("2KNodeA")),
+            decide_late_arm(false, None, p("2KNodeA").as_ref()),
             LateArm::NoProvisioning,
             "nowhere to install and nothing to install are different problems"
+        );
+    }
+
+    /// **The same node with new reflectors re-arms.** A connector's §4.5.1
+    /// reflectors land a moment after it is added; a decision keyed on the node
+    /// alone armed without them and never looked again, which left a reload as
+    /// the only way to pick them up.
+    #[test]
+    fn the_same_node_with_learned_reflectors_re_arms() {
+        let bare = prov("2KNodeA");
+        let mut learned = prov("2KNodeA");
+        learned.ice_servers.push(IceServer {
+            urls: vec!["stun:192.168.1.10:3478".to_string()],
+            username: None,
+            credential: None,
+        });
+        assert_eq!(
+            decide_late_arm(true, Some(&bare), Some(&learned)),
+            LateArm::Armed { node: "2KNodeA".to_string(), replaced: Some("2KNodeA".to_string()) },
+            "reflectors learned after the add must reach the running establisher"
+        );
+        assert_eq!(
+            decide_late_arm(true, Some(&learned), Some(&learned)),
+            LateArm::AlreadyArmed,
+            "and once applied, the next frame must be quiet again (AP43)"
         );
     }
 
@@ -6770,8 +7044,8 @@ mod late_arm_tests {
         let outcomes = [
             decide_late_arm(false, None, None),
             decide_late_arm(true, None, None),
-            decide_late_arm(true, Some("n"), Some("n")),
-            decide_late_arm(true, None, Some("n")),
+            decide_late_arm(true, p("n").as_ref(), p("n").as_ref()),
+            decide_late_arm(true, None, p("n").as_ref()),
         ];
         let mut seen = std::collections::BTreeSet::new();
         for o in &outcomes {
@@ -6781,5 +7055,59 @@ mod late_arm_tests {
             );
         }
         assert_eq!(seen.len(), 4);
+    }
+}
+
+/// The windows an offer/save/keep press wakes: both surfaces that list this
+/// device's own files (File Transfer's offers and kept files, and the Files
+/// window). A handler that woke only one would leave the other showing a press
+/// that never finished.
+#[cfg(target_arch = "wasm32")]
+fn shows_own_files(type_name: &str) -> bool {
+    matches!(type_name, "File Transfer" | "Files") // i18n-ignore — stable type identifiers, not UI text
+}
+
+/// Offer `bytes` under `filename` and publish its share row — the one offer path,
+/// shared by a file a person picked (`handle_offer_file`) and a file an app kept
+/// that the person chose to share (`handle_offer_kept_file`).
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+async fn offer_and_publish(
+    dispatch: crate::dispatch_handle::DispatchHandle,
+    share_writer: Option<crate::writer_handle::WriterHandle>,
+    share_pid: String,
+    filename: String,
+    bytes: Vec<u8>,
+    log: EventLogWriter,
+    attempt: crate::offer_attempt::OfferAttempt,
+    watchers: Vec<crate::window_watch::DirtyFlag>,
+) {
+    let wake = |flags: &[crate::window_watch::DirtyFlag]| {
+        for f in flags {
+            f.mark();
+        }
+    };
+    match crate::file_offer::offer_file(&dispatch, &filename, &bytes).await {
+        Ok(offer) => {
+            log.log(format!(
+                "✓ offering {} ({}) — id {}",
+                offer.name,
+                crate::file_offer::human_bytes(offer.size),
+                offer.id()
+            ));
+            attempt.set_offered(&offer.name, offer.size);
+            wake(&watchers);
+            if let Some(writer) = share_writer {
+                let share = crate::share::Share::from_file_offer(&offer, crate::share::now_epoch_ms());
+                if let Err(e) = crate::share::publish_share(&writer, &share_pid, &share) {
+                    tracing::warn!(error = %e, "share publish failed");
+                }
+            }
+        }
+        Err(e) => {
+            log.log(format!("✗ offer {filename} → {e}"));
+            attempt.set_failed(&filename, &e);
+            wake(&watchers);
+        }
     }
 }

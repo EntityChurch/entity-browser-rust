@@ -240,32 +240,36 @@ pub fn count_leaves(node: &TreeNode) -> usize {
 
 /// Expand every ancestor of `path` so the row at `path` becomes
 /// visible. No-op for paths that don't exist in the tree.
-pub fn expand_ancestors(root: &mut TreeNode, path: &str) {
+/// Returns whether `path`'s own node exists — i.e. whether the reveal is
+/// complete. A path whose node has not arrived yet expands as far as it can
+/// and answers `false`, so a caller can finish the reveal when it lands.
+pub fn expand_ancestors(root: &mut TreeNode, path: &str) -> bool {
     let parts = segments(path);
     if parts.is_empty() {
-        return;
+        return false;
     }
-    expand_ancestors_recursive(root, &parts);
+    expand_ancestors_recursive(root, &parts)
 }
 
-fn expand_ancestors_recursive(node: &mut TreeNode, parts: &[&str]) {
+fn expand_ancestors_recursive(node: &mut TreeNode, parts: &[&str]) -> bool {
     let part = parts[0];
     let pos = match node
         .children
         .binary_search_by(|c| c.segment.as_str().cmp(part))
     {
         Ok(p) => p,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let child = &mut node.children[pos];
     if parts.len() > 1 {
         // Walking towards target — expand intermediate folder.
         child.expanded = true;
-        expand_ancestors_recursive(child, &parts[1..]);
+        return expand_ancestors_recursive(child, &parts[1..]);
     }
     // The terminal node itself is NOT auto-expanded — selection
     // doesn't imply "open the group beneath it." Go's reference
     // behaves the same way.
+    true
 }
 
 /// Toggle the `expanded` flag of the node at `path`. Returns `true`

@@ -76,6 +76,12 @@ pub const SAVES_SEND_EVENT: &str = "apps_saves_send";
 pub const SAVES_SCAN_EVENT: &str = "apps_saves_scan";
 /// Pull one of those and file it. Value = the offer id.
 pub const SAVES_IMPORT_EVENT: &str = "apps_saves_import";
+/// Download a save (`"{set}/{id}"`) or a backup (`"{set}/{id}/{stamp}"`) as a
+/// `.entitysave` file.
+pub const SAVES_DOWNLOAD_EVENT: &str = "apps_saves_download";
+/// A save file was picked from this device; its bytes wait in
+/// [`SavesUi::picked`].
+pub const SAVES_PICKED_EVENT: &str = "apps_saves_picked";
 
 /// Split a `"{set}/{id}/{stamp}"` backup reference. The id is taken from the
 /// LEFT of the last `/` so an id containing a slash cannot swallow the stamp.
@@ -121,6 +127,9 @@ pub struct SavesUi {
     pub found: Vec<(String, crate::apps::saves::SaveBundle)>,
     /// A list/pull is in flight — the button says so rather than looking inert.
     pub busy: bool,
+    /// A save file picked from this device, waiting for the window to import
+    /// it. Taken exactly once.
+    pub picked: Option<(String, Vec<u8>)>,
 }
 
 /// Split a `"{set}/{id}"` selection. Returns `None` for `""` (the grid).
@@ -507,6 +516,16 @@ pub struct SetView {
 /// Resolve every set's source and read its catalog. Native-callable (no DOM),
 /// so the merge, the filter and the legacy-selection resolution are all covered
 /// by `make test` rather than only by the browser.
+/// An app's display name from whichever catalog still lists it, else its id —
+/// a save outlives its catalog, and a file named by id is still a file.
+pub fn catalog_name(peers: &Peers, me: &str, set: &str, id: &str) -> String {
+    resolve_sets(peers, me)
+        .iter()
+        .filter(|sv| sv.set == set)
+        .find_map(|sv| sv.catalog.entries.iter().find(|e| e.id == id).map(|e| e.name.clone()))
+        .unwrap_or_else(|| id.to_string())
+}
+
 pub fn resolve_sets(peers: &Peers, me: &str) -> Vec<SetView> {
     paths::APP_SETS
         .iter()
@@ -608,6 +627,11 @@ pub struct AppWindow {
     /// happened, open the Apps window"* (audit F5). Dropped with the window, so
     /// there is no close path to remember.
     _retry_holder: crate::refresh_ledger::RetryHolder,
+    /// The name of the app mounted in this window, set when the player mounts
+    /// and cleared on any other view — what [`WindowView::running_app`] reports.
+    running: std::cell::RefCell<Option<String>>,
+    /// `{set}/{id}` of the same app — [`WindowView::running_app_key`].
+    running_key: std::cell::RefCell<Option<String>>,
 }
 
 impl AppWindow {
@@ -630,6 +654,8 @@ impl AppWindow {
             #[cfg(target_arch = "wasm32")]
             retry_seen: std::cell::Cell::new(crate::refresh_ledger::retry_generation()),
             _retry_holder: crate::refresh_ledger::RetryHolder::new(),
+            running: std::cell::RefCell::new(None),
+            running_key: std::cell::RefCell::new(None),
         }
     }
 
@@ -674,70 +700,36 @@ impl AppWindow {
         self.watch.mark_dirty();
     }
 
-    /// Snapshot the live save under a fresh timestamp.
+    /// Snapshot the live save under a fresh timestamp (`saves::backup_live`).
     fn backup_save(&self, peers: &Peers, set: &str, id: &str) {
         let Some(writer) = peers.writer_handle_for(&self.peer_id) else {
             return;
         };
-        let live = crate::app_paths::app_save_path(
-            crate::app_paths::APP_ID,
-            &self.peer_id,
-            set,
-            id,
-        );
-        let Some(ent) = peers.get_entity(&self.peer_id, &live) else {
-            self.say(crate::i18n::t("saves.err_no_save", &[("app", id)]));
-            return;
+        use crate::apps::saves::BackupOutcome;
+        // Unchanged is said rather than silently doing nothing, which reads as a
+        // dead button.
+        let key = match crate::apps::saves::backup_live(peers, &writer, &self.peer_id, set, id, now_ms()) {
+            BackupOutcome::BackedUp => "saves.backed_up",
+            BackupOutcome::Unchanged => "saves.unchanged",
+            BackupOutcome::NoSave => "saves.err_no_save",
         };
-        // The same bytes under a second timestamp is two rows differing only by
-        // a clock, and one more presence binding nothing reclaims. Say so
-        // rather than silently doing nothing, which reads as a dead button.
-        if crate::apps::saves::already_backed_up(peers, &self.peer_id, set, id) {
-            self.say(crate::i18n::t("saves.unchanged", &[("app", id)]));
-            return;
-        }
-        writer.put(
-            crate::app_paths::app_backup_path(
-                crate::app_paths::APP_ID,
-                &self.peer_id,
-                set,
-                id,
-                now_ms(),
-            ),
-            ent,
-        );
-        self.say(crate::i18n::t("saves.backed_up", &[("app", id)]));
+        self.say(crate::i18n::t(key, &[("app", id)]));
     }
 
-    /// Copy a snapshot back over the live save.
-    ///
-    /// The backup entity is written to the live path **unchanged**, so the two
-    /// share one content blob rather than the restore minting a second copy of
-    /// bytes the store already has.
+    /// Copy a snapshot back over the live save (`saves::restore_backup`).
     fn restore_save(&self, peers: &Peers, set: &str, id: &str, stamp: u64) {
         let Some(writer) = peers.writer_handle_for(&self.peer_id) else {
             return;
         };
-        let from = crate::app_paths::app_backup_path(
-            crate::app_paths::APP_ID,
-            &self.peer_id,
-            set,
-            id,
-            stamp,
-        );
-        let Some(ent) = peers.get_entity(&self.peer_id, &from) else {
-            // The backup list is rendered from the tree it lives in, so this is
-            // reachable only if it went away between paint and click — say the
-            // same thing as a missing save rather than inventing a second
-            // sentence for a case a person will read once.
-            self.say(crate::i18n::t("saves.err_no_save", &[("app", id)]));
-            return;
+        // The backup list is rendered from the tree it lives in, so a missing
+        // backup is reachable only if it went away between paint and click — the
+        // same sentence as a missing save.
+        let key = if crate::apps::saves::restore_backup(peers, &writer, &self.peer_id, set, id, stamp) {
+            "saves.restored"
+        } else {
+            "saves.err_no_save"
         };
-        writer.put(
-            crate::app_paths::app_save_path(crate::app_paths::APP_ID, &self.peer_id, set, id),
-            ent,
-        );
-        self.say(crate::i18n::t("saves.restored", &[("app", id)]));
+        self.say(crate::i18n::t(key, &[("app", id)]));
     }
 
     /// Forget a snapshot, and reclaim its bytes if nothing else binds them.
@@ -745,22 +737,7 @@ impl AppWindow {
         let Some(writer) = peers.writer_handle_for(&self.peer_id) else {
             return;
         };
-        let path = crate::app_paths::app_backup_path(
-            crate::app_paths::APP_ID,
-            &self.peer_id,
-            set,
-            id,
-            stamp,
-        );
-        // Reclaim is **binding-safe** (`content_remove_if_unbound`), which is
-        // what makes it safe to call when the live save was restored from this
-        // very backup and still points at the same blob: the live binding keeps
-        // it alive, and only a genuinely unreferenced blob goes.
-        let hash = peers.get_entity(&self.peer_id, &path).map(|e| e.content_hash);
-        writer.remove(path);
-        if let Some(h) = hash {
-            writer.content_remove(h);
-        }
+        crate::apps::saves::drop_backup(peers, &writer, &self.peer_id, set, id, stamp);
         self.say(crate::i18n::t("saves.backup_dropped", &[]));
     }
 
@@ -768,17 +745,42 @@ impl AppWindow {
     /// rides along in a bundle so the far end can show a word rather than a
     /// slug, and is never what the far end files by.
     fn app_display_name(&self, peers: &Peers, set: &str, id: &str) -> String {
-        resolve_sets(peers, &self.peer_id)
-            .iter()
-            .filter(|sv| sv.set == set)
-            .find_map(|sv| {
-                sv.catalog
-                    .entries
-                    .iter()
-                    .find(|e| e.id == id)
-                    .map(|e| e.name.clone())
-            })
-            .unwrap_or_else(|| id.to_string())
+        catalog_name(peers, &self.peer_id, set, id)
+    }
+
+    /// Hand a save or a backup to this device as a `.entitysave` file.
+    fn download_save(&self, peers: &Peers, value: &str) {
+        let name_of = |set: &str, id: &str| self.app_display_name(peers, set, id);
+        let bundle = match parse_backup_ref(value) {
+            Some((set, id, stamp)) => {
+                crate::apps::saves::bundle_backup(peers, &self.peer_id, set, id, &name_of(set, id), stamp)
+            }
+            None => parse_selection(value).and_then(|(set, id)| {
+                crate::apps::saves::bundle_live(peers, &self.peer_id, set, id, &name_of(set, id), now_ms())
+            }),
+        };
+        let Some(bundle) = bundle else {
+            self.say(crate::i18n::t("saves.err_no_save", &[("app", value)]));
+            return;
+        };
+        let file = bundle.file_name();
+        #[cfg(target_arch = "wasm32")]
+        let result = crate::ops::download::save_bytes(&file, &bundle.to_bytes());
+        #[cfg(not(target_arch = "wasm32"))]
+        let result: Result<(), String> = Ok(());
+        self.say(match result {
+            Ok(()) => crate::i18n::t("files.downloaded", &[("name", &file)]),
+            Err(why) => crate::i18n::t("filetransfer.save_failed", &[("name", &file), ("why", &why)]),
+        });
+    }
+
+    /// Import the save file the picker read (`saves::import_file`, which backs
+    /// up what it replaces).
+    fn import_picked(&self, peers: &Peers) {
+        let Some((name, bytes)) = self.saves_ui.borrow_mut().picked.take() else { return };
+        let Some(writer) = peers.writer_handle_for(&self.peer_id) else { return };
+        let outcome = crate::apps::saves::import_file(peers, &writer, &self.peer_id, &name, &bytes, now_ms());
+        self.say(outcome.message());
     }
 
     /// Offer this save to the chosen peer, who pulls it.
@@ -898,12 +900,8 @@ impl AppWindow {
         });
     }
 
-    /// File a scanned bundle as this peer's save for that app.
-    ///
-    /// **It backs up whatever it replaces first.** Importing is the one action
-    /// here that destroys a save without naming it — you are thinking about the
-    /// incoming one — so the outgoing one is snapshotted on the way past and
-    /// stays in the backup list.
+    /// File a scanned bundle as this peer's save for that app
+    /// (`saves::import_bundle`, which backs up whatever it replaces first).
     fn import_save(&self, peers: &Peers, offer_id: &str) {
         let Some(bundle) = self
             .saves_ui
@@ -918,28 +916,11 @@ impl AppWindow {
         let Some(writer) = peers.writer_handle_for(&self.peer_id) else {
             return;
         };
-        let live = crate::app_paths::app_save_path(
-            crate::app_paths::APP_ID,
-            &self.peer_id,
-            &bundle.set,
-            &bundle.id,
-        );
-        let replaced = peers.get_entity(&self.peer_id, &live).is_some();
-        if replaced {
-            self.backup_save(peers, &bundle.set, &bundle.id);
-        }
-        writer.put(
-            live,
-            crate::apps::format::AppSave::new(&bundle.state).to_entity(),
-        );
-        self.say(crate::i18n::t(
-            if replaced {
-                "saves.imported_replacing"
-            } else {
-                "saves.imported"
-            },
-            &[("app", &bundle.app_name)],
-        ));
+        let key = match crate::apps::saves::import_bundle(peers, &writer, &self.peer_id, &bundle, now_ms()) {
+            crate::apps::saves::ImportOutcome::ImportedReplacing => "saves.imported_replacing",
+            crate::apps::saves::ImportOutcome::Imported => "saves.imported",
+        };
+        self.say(crate::i18n::t(key, &[("app", &bundle.app_name)]));
     }
 
     /// Assemble and draw the Saves panel.
@@ -975,7 +956,8 @@ impl AppWindow {
             .into_iter()
             .map(|row| {
                 let name = name_of(&row.set, &row.id);
-                (row, name)
+                let backups = crate::apps::saves::list_backups(peers, &self.peer_id, &row.set, &row.id).len();
+                (row, name, backups)
             })
             .collect();
 
@@ -1024,6 +1006,7 @@ impl AppWindow {
                 status: &ui.status,
                 busy: ui.busy,
                 back_label,
+                saves_ui: self.saves_ui.clone(),
             },
         );
     }
@@ -1094,12 +1077,14 @@ impl AppWindow {
         // prefixes that existed at window-open, so a write to a peer whose origin
         // registered later would otherwise land silently with no re-render.
         let dirty = self.watch.flag();
+        let window_id = self.window_id;
         let origin = origin.to_string();
         let apps_peer = apps_peer.to_string();
         wasm_bindgen_futures::spawn_local(async move {
             use crate::content_site::foreign_cache::{ensure_current, Currency};
             use crate::content_site::http_poll::FetchBinSource;
-            let src = FetchBinSource;
+            // Counted against this window in the System Monitor (B-6).
+            let src = crate::monitor::CountingSource::new(FetchBinSource, Some(window_id));
             // Bounded backoff retry. The render loop is **dirty-gated**: a failed
             // fetch writes nothing, fires no subscription, and so never flips the
             // window dirty — without a retry the grid/app stays wedged until the
@@ -1349,6 +1334,14 @@ impl WindowView for AppWindow {
         crate::i18n::t("window.apps", &[])
     }
 
+    fn running_app(&self) -> Option<String> {
+        self.running.borrow().clone()
+    }
+
+    fn running_app_key(&self) -> Option<String> {
+        self.running_key.borrow().clone()
+    }
+
     fn type_name(&self) -> &'static str {
         TYPE_NAME
     }
@@ -1456,6 +1449,8 @@ impl WindowView for AppWindow {
             SAVES_SEND_EVENT => self.send_save(peers, value),
             SAVES_SCAN_EVENT => self.scan_peer_saves(peers),
             SAVES_IMPORT_EVENT => self.import_save(peers, value),
+            SAVES_DOWNLOAD_EVENT => self.download_save(peers, value),
+            SAVES_PICKED_EVENT => self.import_picked(peers),
 
             _ => {}
         }
@@ -1469,6 +1464,10 @@ impl WindowView for AppWindow {
         ctx: &crate::dom::DomCtx,
     ) {
         use crate::apps::format::AppSave;
+
+        // Nothing is running until the player mounts below.
+        self.running.replace(None);
+        self.running_key.replace(None);
 
         // No player is mounted from here until one is, so save writes may
         // rebuild again. Opening it BEFORE the listener drops is deliberate:
@@ -1630,7 +1629,15 @@ impl WindowView for AppWindow {
                     &entry.id,
                 ),
             }),
+            size_key: crate::window_size::size_key(TYPE_NAME, Some(&format!("{}/{}", sv.set, entry.id))),
         };
+        self.running.replace(Some(cfg.game_name.clone()));
+        self.running_key.replace(Some(format!("{}/{}", cfg.set, cfg.game_id)));
+        debug_assert_eq!(
+            cfg.size_key,
+            crate::window_size::size_key(TYPE_NAME, self.running_key.borrow().as_deref()),
+            "the player files a fit under the key the renderer reads"
+        );
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;
 

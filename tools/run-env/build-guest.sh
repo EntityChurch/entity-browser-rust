@@ -34,7 +34,7 @@ set -euo pipefail
 
 OUT="$(cd "$(dirname "$0")" && pwd)/${1:-alpine-guest}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ALPINE="${ALPINE:-3.21}"
+ALPINE="${ALPINE:-3.22}"
 IMAGE="docker.io/i386/alpine:${ALPINE}"
 # Reproducible builds: a fixed mtime keeps fs.json byte-stable across runs, so a
 # rebuilt guest that changed nothing has the same index hash and every consumer
@@ -62,6 +62,7 @@ KEYNAME="$("$HERE/package-key.sh")"
 
 podman run --rm --arch 386 \
   -v "${HERE}/fs2json.py:/fs2json.py:ro,z" \
+  -v "${HERE}/packs.txt:/packs.txt:ro,z" \
   -v "${HERE}/.keys/${KEYNAME}:/entity-packages.pub:ro,z" \
   -e KEYNAME="$KEYNAME" \
   -v "${OUT}/guest:/guest:z" \
@@ -328,6 +329,51 @@ esac
 SAVE
     chmod 0755 /out/usr/local/bin/send /out/usr/local/bin/receive /out/usr/local/bin/save
 
+    # ---- 3c3. packs: ready-made tool sets, one command each ----------------
+    # The package set is over a hundred names; a person who wants "C" should not
+    # have to know it is tcc + tcc-libs-static + musl-dev + make (and that tcc cannot
+    # link without tcc-libs-static). packs.txt is the list; build-about.py fails the build if a pack
+    # names anything that cannot be installed offline.
+    mkdir -p /out/usr/local/share/entity
+    grep -v "^#" /packs.txt | grep -v "^[[:space:]]*$" > /out/usr/local/share/entity/packs.txt
+    cat > /out/usr/local/bin/packs <<"PACKS"
+#!/bin/sh
+# packs -- ready-made tool sets. Everything installs from this site, no network.
+F=/usr/local/share/entity/packs.txt
+field() { printf %s "$1" | cut -d"|" -f"$2" | sed "s/^ *//; s/ *$//"; }
+names_of() { while IFS= read -r l; do [ "$(field "$l" 1)" = "$1" ] && field "$l" 3; done < "$F"; }
+case "${1:-}" in
+  ""|list|-h|--help)
+    echo "Ready-made tool sets. Install one with:  packs add NAME   (several: packs add c data)"
+    echo
+    while IFS= read -r l; do printf "  %-10s %s\n" "$(field "$l" 1)" "$(field "$l" 2)"; done < "$F"
+    echo
+    echo "  packs show NAME   prints the apk add line, to install part of a set."
+    echo "  Installed tools last until the machine restarts; your home directory is kept."
+    ;;
+  show)
+    shift; [ $# -gt 0 ] || { echo "packs show NAME" >&2; exit 2; }
+    for p in "$@"; do n=$(names_of "$p"); [ -n "$n" ] || { echo "packs: no pack called $p (packs lists them)" >&2; exit 1; }; echo "apk add $n"; done ;;
+  add|install)
+    shift; [ $# -gt 0 ] || { echo "packs add NAME..." >&2; exit 2; }
+    all=""
+    for p in "$@"; do n=$(names_of "$p"); [ -n "$n" ] || { echo "packs: no pack called $p (packs lists them)" >&2; exit 1; }; all="$all $n"; done
+    echo "apk add$all"
+    exec apk add $all ;;
+  *) echo "packs: unknown command $1 -- try: packs" >&2; exit 2 ;;
+esac
+PACKS
+    chmod 0755 /out/usr/local/bin/packs
+
+    # ---- 3c4. tcc links: the crt files where the x86 package looks ---------
+    # The Alpine 3.22 x86 tcc searches /usr/lib/i386-linux-gnu for crt1.o, crti.o and
+    # crtn.o (a Debian multiarch path), so `tcc -run` works and `tcc -o` fails with
+    # "library crt1.o not found". Verified on 3.22.5 x86: these three links make it
+    # link and run. They dangle until musl-dev is installed, which is what `packs
+    # add c` does; a dangling link costs nothing.
+    mkdir -p /out/usr/lib/i386-linux-gnu
+    for f in crt1.o crti.o crtn.o; do ln -sf ../$f /out/usr/lib/i386-linux-gnu/$f; done
+
     # ---- 3c2. reboot / poweroff / halt / shutdown: the PAGE does them ------
     # This machine lives in a page. A reboot inside the guest cannot work after
     # a snapshot resume (the kernel was never fetched, so there is nothing to
@@ -536,6 +582,7 @@ AGENT
   send FILE   hands a file out to the page    receive   asks the page for one (it lands in ~)
   save        saves ~ now (it also saves after each command and every 30s)
   apk add NAME   installs from the package set this site hosts (apk search lists it), until restart.
+  packs          ready-made tool sets: C, scripting, data, media, documents, writing, games...
   reboot / poweroff   restart or turn off the machine -- or use the power button, top right.
 
   DEMO POSTURE: root, no password, no getty. Not a multi-user box.

@@ -50,7 +50,9 @@ export TOPOLOGY
 NET_A=entity-rtc-nat-a
 NET_B=entity-rtc-nat-b
 CORE=../entity-core-rust
-SIG="$CORE/target/debug/entity-signaling-node"
+# Overridable. On a host with no `cargo` the build step below uses
+# `make e2e-signaling-node` (inside the image) and points this at its output.
+SIG="${SIG:-$CORE/target/debug/entity-signaling-node}"
 DISTPORT=8092
 WSPORT=4071
 SCRATCH="$(dirname "$0")"
@@ -87,8 +89,16 @@ if [ "${SKIP_NODE_BUILD:-}" = "1" ]; then
   echo ">> SKIP_NODE_BUILD=1 — reusing existing node binary (ensure it matches dist/'s core-rust build)"
   [ -x "$SIG" ] || { echo "!! $SIG missing and build skipped"; exit 1; }
 else
-  echo ">> rebuilding signaling node from core-rust HEAD ($CORE_SHA) to match dist/"
-  ( cd "$CORE" && cargo build -p entity-signaling-node 2>&1 | tail -2 )
+  if command -v cargo >/dev/null 2>&1; then
+    echo ">> rebuilding signaling node from core-rust HEAD ($CORE_SHA) to match dist/"
+    ( cd "$CORE" && cargo build -p entity-signaling-node 2>&1 | tail -2 )
+  else
+    # A make+podman host has no cargo. Build the same crate inside the image,
+    # into this repo's target dir, from the same sibling checkout dist/ links.
+    echo ">> no host cargo — building the signaling node in the image ($CORE_SHA)"
+    make --no-print-directory e2e-signaling-node || exit 1
+    SIG="$PWD/target/e2e-node/debug/entity-signaling-node"
+  fi
 fi
 echo "── build posture ─────────────────────────────────────────────"
 echo "   core-rust HEAD : $CORE_SHA${CORE_DIRTY:+  (working tree DIRTY — node/dist may disagree)}"

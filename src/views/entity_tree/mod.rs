@@ -17,6 +17,9 @@
 //! Multiple instances can be open at different paths or different
 //! peers.
 
+/// The Entity Tree's window type — what `Action::RevealInEntityTree` opens.
+pub const TYPE_NAME: &str = "Entity Tree"; // i18n-ignore — identity key; display via window.entity_tree
+
 pub mod model;
 pub mod output;
 pub mod tree;
@@ -55,7 +58,7 @@ impl EntityTreeWindow {
 
     pub fn window_type() -> WindowType {
         WindowType {
-            name: "Entity Tree", // i18n-ignore — identity key; display via window.entity_tree
+            name: TYPE_NAME,
             description: "Navigate entity tree, inspect content and metadata", // i18n-ignore — dead_code
             scope: crate::window::WindowScope::Peer,
             create: |id, peer_id, pm| {

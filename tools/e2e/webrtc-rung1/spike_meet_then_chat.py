@@ -89,6 +89,15 @@ MODE = os.environ.get("MODE", "direct").strip().lower()
 # Skip step 3's reload and require the seam to arm in-session instead — the
 # regression gate for `src/late_establish.rs`. See step 3.
 NO_RELOAD = os.environ.get("NO_RELOAD", "").strip() in ("1", "true", "yes")
+# **FIND_PEERS=1 — the one-button path.** Both browsers type the node's address
+# into Peer Connections and press *Find peers here*, and nothing else: no Shell
+# `connector add`, no `connector use`, no reload, no `meet`. That button replaced
+# a five-step walk across three cards, reported 2026-09-14 in no uncertain terms,
+# so the gate drives exactly what a person now does. It implies NO_RELOAD, and it
+# reads who was found from the Meet card's table, not from the Shell.
+FIND_PEERS = os.environ.get("FIND_PEERS", "").strip() in ("1", "true", "yes")
+if FIND_PEERS:
+    NO_RELOAD = True
 if MODE not in ("direct", "worker"):
     print(f"!! MODE must be 'direct' or 'worker', got {MODE!r}"); sys.exit(2)
 
@@ -629,7 +638,53 @@ def channel_opens(base, sid):
 
 
 def met_ids(base, sid):
+    if FIND_PEERS:
+        return PID_RE.findall(ex(base, sid, FOUND_TEXT) or "")
     return MET_RE.findall(ex(base, sid, SHELL_TEXT) or "")
+
+
+# ── the one-button path (FIND_PEERS=1) ───────────────────────────────────────
+PID_RE = re.compile(r"[1-9A-HJ-NP-Za-km-z]{40,}")
+# Cell by cell, joined with spaces: `textContent` of the whole table runs the id
+# straight into the next cell ("…Xii" + "unverified"), and every letter of
+# "unverified" is Base58, so the id regex swallowed it and matched nobody.
+FOUND_TEXT = _windows("Peer Connections") + (
+    "if(!out.length)return '';"
+    "const t=out[out.length-1].querySelector('[data-field=\"meet-found\"]');"
+    "if(!t)return '';"
+    "return Array.from(t.querySelectorAll('td')).map(c=>c.textContent).join(' ');")
+FIND_STATUS = field_text("Peer Connections", "find-status")
+PEERS_COUNT = _windows("Peer Connections") + "return out.length;"
+CLICK_FIND = _windows("Peer Connections") + (
+    "if(!out.length)return 'no-window';"
+    "const b=out[out.length-1].querySelector('[data-field=\"find-peers\"]');"
+    "if(!b)return 'no-button';b.click();return 'clicked';")
+
+
+def find_peers_here(base, sid, label):
+    """Type the node's address and press *Find peers here*. Confirmed by the
+    button's own status line reaching *Looking for peers*, which it only says
+    once the add landed, the node is in force and the lobby meet started."""
+    if not ex(base, sid, PEERS_COUNT):
+        ex(base, sid, spawn_script("Peer Connections"))
+        for _ in range(30):
+            if ex(base, sid, PEERS_COUNT):
+                break
+            time.sleep(0.5)
+    typed = type_once(base, sid, "Peer Connections", "address", NODE_WS, submit=False)
+    status = ""
+    for attempt in range(3):
+        clicked = ex(base, sid, CLICK_FIND)
+        for _ in range(40):
+            time.sleep(0.5)
+            status = ex(base, sid, FIND_STATUS) or ""
+            if "Looking for peers" in status or "Couldn" in status:
+                break
+        if "Looking for peers" in status:
+            break
+        print(f"  {label} press {attempt + 1}: typed={typed} clicked={clicked} status={status!r}")
+    print(f"  {label} find-peers status: {status!r}")
+    return "Looking for peers" in status
 
 def send_and_wait(from_base, from_sid, to_base, to_sid, msg, label,
                   sends=3, wait_each=20):
@@ -675,12 +730,37 @@ def main():
         checks["cold boot installs no establisher"] = cold_a and cold_b
 
         # ── 2. the user adds their connector ─────────────────────────────────
-        print("\n── 2. add the connector through the Shell ─────")
-        pa_ok = provision(A_BASE, sa, node_peer, "A")
-        pb_ok = provision(B_BASE, sb, node_peer, "B")
-        checks["the connector registry takes the node"] = pa_ok and pb_ok
-        if not (pa_ok and pb_ok):
-            print("\nRESULT: FAIL ❌ could not register the connector"); return 1
+        if FIND_PEERS:
+            print("\n── 2. type the address, press Find peers here ─")
+            pa_ok = find_peers_here(A_BASE, sa, "A")
+            pb_ok = find_peers_here(B_BASE, sb, "B")
+            checks["Find peers here reaches 'Looking for peers' on both"] = pa_ok and pb_ok
+            # **No reload notice.** The node the button chose is already live
+            # (late arming), so a window that still says it "takes effect on
+            # reload" is telling the user to do the step this path removed. The
+            # arm lands a frame or two after the status line, so give it a
+            # moment to clear rather than reading the frame in between.
+            peers_text = _windows("Peer Connections") + (
+                "return out.length?out[out.length-1].textContent:'';")
+            nag = {}
+            for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+                for _ in range(20):
+                    nag[lbl] = "takes effect on reload" in (ex(base, sid, peers_text) or "")
+                    if not nag[lbl]:
+                        break
+                    time.sleep(0.5)
+            print(f"  A/B still show 'takes effect on reload': {nag['A']}/{nag['B']}")
+            checks["no reload notice for a node that is already live"] = not (nag["A"] or nag["B"])
+            if not (pa_ok and pb_ok):
+                print("\nRESULT: FAIL ❌ the one-button path did not start a meet")
+                return 1
+        else:
+            print("\n── 2. add the connector through the Shell ─────")
+            pa_ok = provision(A_BASE, sa, node_peer, "A")
+            pb_ok = provision(B_BASE, sb, node_peer, "B")
+            checks["the connector registry takes the node"] = pa_ok and pb_ok
+            if not (pa_ok and pb_ok):
+                print("\nRESULT: FAIL ❌ could not register the connector"); return 1
 
         # ── 3. the establisher arrives — with or WITHOUT a reload ────────────
         #
@@ -835,13 +915,18 @@ def main():
                 provision(base, sid, node_peer, lbl)
 
         # ── 4. both meet at the same name ────────────────────────────────────
-        print(f"\n── 4. both `meet tag {TAG}` ───────────────────")
-        # A bucket holds its messages for the 60s TTL, so the two searches only
-        # have to overlap — they need not start together.
-        for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
-            started, _ = run_until(base, sid, f"meet tag {TAG}",
-                                   shell_says(base, sid, "meeting at"), tries=10)
-            print(f"  {lbl} meet started: {started}")
+        if FIND_PEERS:
+            # Already running — the button started a lobby meet at the node.
+            # Nothing is typed here; that is the claim.
+            print("\n── 4. the lobby meet the button started ───────")
+        else:
+            print(f"\n── 4. both `meet tag {TAG}` ───────────────────")
+            # A bucket holds its messages for the 60s TTL, so the two searches only
+            # have to overlap — they need not start together.
+            for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+                started, _ = run_until(base, sid, f"meet tag {TAG}",
+                                       shell_says(base, sid, "meeting at"), tries=10)
+                print(f"  {lbl} meet started: {started}")
 
         learned_a, learned_b = [], []
         for i in range(45):

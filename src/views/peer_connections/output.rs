@@ -53,6 +53,9 @@ pub struct PeerConnectionsOutput {
     /// (`crate::rendezvous`). The same operations the `meet` shell verb
     /// exposes; this window is their localized surface.
     pub meet: MeetPanel,
+    /// Where the last *Find peers here* press has got to, or `None` before the
+    /// first one. Rendered in the Connect card beside the button.
+    pub find: Option<super::model::FindPeers>,
     // (Device authorizations moved to the System Backend window, Direction A.)
 }
 

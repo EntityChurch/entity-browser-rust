@@ -57,6 +57,7 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
         // person can put the file up first and meet second. Returning here (as
         // this did while "send" meant only "push into their share") would hide
         // the browser↔browser send behind a precondition it does not have.
+        render_kept_files(&wrapper, output, ctx);
         render_offer_controls(&wrapper, output, ctx);
         render_results(&wrapper, output);
         util::append(container, &wrapper);
@@ -102,6 +103,7 @@ pub fn render(container: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
     // Serve: publish a file for the other side to pull. Outside the `denied`
     // gate for the same reason it survives "no target" — it is not a
     // conversation with the selected device.
+    render_kept_files(&wrapper, output, ctx);
     render_offer_controls(&wrapper, output, ctx);
 
     render_results(&wrapper, output);
@@ -317,37 +319,45 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
     util::append(list, &el);
 }
 
-/// Pull the currently-selected file. Inert (dimmed, no handler) when nothing is
-/// selected — reuses the proven `Action::DownloadFile` path.
+/// Pull the currently-selected file — to this device's downloads, or into My
+/// files (`crate::user_files`), which keeps it privately in this browser. Both
+/// inert (dimmed, no handler) when nothing is selected.
 fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
-    let btn = components::button_el(&crate::i18n::t("filetransfer.pull_selected", &[]), components::ButtonKind::Primary);
-    btn.set_attribute("data-field", "ft-pull").ok();
-    // The plan comes from the model already decided — a share `read` or an
-    // offer's content-closure walk. This layer must never learn which.
-    match &output.selected_pull {
-        Some(plan) => {
-            let actions = ctx.actions.clone();
-            let rp = ctx.repaint.clone();
-            let peer_id = output.peer_id.clone();
-            let target = output.selected_target.clone();
-            let plan = plan.clone();
-            ctx.listen(&btn, "click", move |_| {
-                if target.is_empty() {
-                    return;
-                }
-                actions.borrow_mut().push(Action::PullFile {
-                    peer_id: peer_id.clone(),
-                    target: target.clone(),
-                    plan: plan.clone(),
+    for (keep, label, field) in [
+        (false, "filetransfer.pull_selected", "ft-pull"),
+        (true, "filetransfer.keep_selected", "ft-keep"),
+    ] {
+        let kind = if keep { components::ButtonKind::Secondary } else { components::ButtonKind::Primary };
+        let btn = components::button_el(&crate::i18n::t(label, &[]), kind);
+        btn.set_attribute("data-field", field).ok();
+        // The plan comes from the model already decided — a share `read` or an
+        // offer's content-closure walk. This layer must never learn which.
+        match &output.selected_pull {
+            Some(plan) => {
+                let actions = ctx.actions.clone();
+                let rp = ctx.repaint.clone();
+                let peer_id = output.peer_id.clone();
+                let target = output.selected_target.clone();
+                let plan = plan.clone();
+                ctx.listen(&btn, "click", move |_| {
+                    if target.is_empty() {
+                        return;
+                    }
+                    actions.borrow_mut().push(Action::PullFile {
+                        peer_id: peer_id.clone(),
+                        target: target.clone(),
+                        plan: plan.clone(),
+                        keep,
+                    });
+                    rp();
                 });
-                rp();
-            });
+            }
+            None => {
+                components::disable(&btn);
+            }
         }
-        None => {
-            components::disable(&btn);
-        }
+        util::append(parent, &btn);
     }
-    util::append(parent, &btn);
 }
 
 /// Byte counts read the same here as in the model's own messages — one
@@ -368,7 +378,7 @@ fn human_size(n: u64) -> String {
 /// harness cannot open a native file dialog and drives the input directly
 /// instead (assigning `files` and dispatching `change` — the same entry point a
 /// real choice takes).
-fn file_picker(
+pub(crate) fn file_picker(
     parent: &Element,
     ctx: &DomCtx,
     label: &str,
@@ -593,6 +603,9 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
             },
         );
     }
+    // A file already in this entity system — an app's output, a save — is
+    // offered from File Manager, where those files live.
+    util::append(&card, &open_files_button(ctx, "filetransfer.offer_from_files", "ft-offer-from-files"));
 
     render_offer_status(&card, ctx);
 
@@ -686,6 +699,31 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
     util::append(parent, &card);
 }
 
+/// Files apps kept **privately** (`crate::kept_files`) live in File Manager now,
+/// one home for this device's own files; this card only says how many there are
+/// and opens it. Nothing renders when there are none.
+fn render_kept_files(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    if output.kept_files.is_empty() {
+        return;
+    }
+    let card = components::card(&crate::i18n::t("filetransfer.kept_title", &[]));
+    card.set_attribute("data-field", "ft-kept-pointer").ok();
+    let hint = util::create_element("p");
+    hint.set_attribute("style", theme::NOTE).ok();
+    util::set_text(&hint, &crate::i18n::t("filetransfer.kept_moved", &[("n", &output.kept_files.len().to_string())]));
+    util::append(&card, &hint);
+    util::append(&card, &open_files_button(ctx, "filetransfer.open_files", "ft-open-files"));
+    util::append(parent, &card);
+}
+
+/// Opens File Manager, or shows the one already open.
+fn open_files_button(ctx: &DomCtx, label_key: &str, field: &str) -> Element {
+    let b = components::button_el(&crate::i18n::t(label_key, &[]), components::ButtonKind::Secondary);
+    b.set_attribute("data-field", field).ok();
+    ctx.on_action(&b, "click", Action::OpenWindow { type_name: crate::views::files::TYPE_NAME });
+    b
+}
+
 /// What became of the last file offered, **beside the button that offered it**.
 ///
 /// Every failure this button has — a file over the ceiling, an unrouted local
@@ -700,7 +738,7 @@ fn render_offer_controls(parent: &Element, output: &FileTransferOutput, ctx: &Do
 /// immediately below, which is the authority on what is being served — a
 /// success line above a list containing the same file is noise, and worse, it
 /// would survive a withdrawal and contradict the list it sits on.
-fn render_offer_status(parent: &Element, ctx: &DomCtx) {
+pub(crate) fn render_offer_status(parent: &Element, ctx: &DomCtx) {
     use crate::offer_attempt::OfferOutcome;
     let Some((filename, outcome)) = ctx.offer_attempt.read() else { return };
     let el = match outcome {

@@ -114,6 +114,10 @@ pub struct FileTransferOutput {
     /// (Read from our own tree, so it needs the offers prefix subscribed — see
     /// `FileTransferWindow::window_type`.)
     pub own_offers: Vec<OwnOffer>,
+    /// Files apps handed the host, kept **privately** (`crate::kept_files`) —
+    /// listed apart from `own_offers` because nobody else can discover them. Each
+    /// row can be saved to this device, or deliberately offered to peers.
+    pub kept_files: Vec<OwnOffer>,
     /// The stated ceiling on one offered file (`file_offer::MAX_OFFER_BYTES`),
     /// carried so the window can say it **before** a picker refuses.
     pub offer_limit: u64,

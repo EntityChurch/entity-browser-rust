@@ -255,7 +255,7 @@ def visit(n):
             rq("POST", f"/session/{sid}/frame/parent", {})
             pressed = poll(sid, APPS + r"""
                 const b = sec && sec.querySelector('[data-field="app-file-save"]');
-                if (!b || b.hidden || b.getAttribute('data-offer-name') !== 'café.txt') return null;
+                if (!b || b.hidden || b.getAttribute('data-file-name') !== 'café.txt') return null;
                 window.__ftSaved = [];
                 const blobs = new Map();
                 if (!URL.__ftOrig) URL.__ftOrig = URL.createObjectURL;
@@ -360,6 +360,26 @@ def visit(n):
             check("received files came back with the home directory", rx == "RX-first-second-accented-", repr(rx))
             qb, _ = guest(sid, "echo QB-$(cat ~/quick.txt)-", r"QB-[^\r\n$]*-")
             check("the unasked save survived a close with no warning", qb == f"QB-{QUICK}-", f"got {qb} want QB-{QUICK}-")
+            # packs (build-guest.sh 3c3): a named tool set, as the line it would install.
+            pk, _ = guest(sid, "packs show c", r"apk add [^\r\n]*")
+            check("packs names the C tool set", pk == "apk add tcc tcc-libs-static musl-dev make", repr(pk))
+            # ...and it WORKS: the set installs offline, and tcc compiles, LINKS and runs a
+            # program. Linking is the half that fails on a bare Alpine 3.22 x86 tcc (it looks
+            # for crt1.o under /usr/lib/i386-linux-gnu; build-guest.sh 3c4 puts it there).
+            cc, body = guest(sid, "packs add c >/tmp/packs.log 2>&1; echo PK-C-$?; "
+                                  "printf '#include <stdio.h>\\nint main(void){printf(\"CC-%%d-OK\\\\n\", 6*7);return 0;}\\n' > /tmp/h.c; "
+                                  "tcc -o /tmp/h /tmp/h.c && /tmp/h", r"CC-42-OK", 300)
+            check("packs add c installs tcc, and tcc compiles, links and runs C", cc == "CC-42-OK", repr(body[-400:]))
+            # ⓘ: the component table, then the package rows read from what shipped
+            # (about.json, fetched through the host the first time the panel opens).
+            js(sid, "document.getElementById('info').click(); return 1;")
+            about = poll(sid, """const p = document.getElementById('aboutpanel');
+              const rows = p.querySelectorAll('tbody[data-filterable] tr').length;
+              return p.hidden ? null : {rows, text: p.textContent.slice(0, 4000)};""",
+              lambda v: bool(v) and v["rows"] > 0, 30) or {}
+            check("ⓘ lists the kernel's licence and the shipped packages", "GPL-2.0-only" in (about.get("text") or "") and about.get("rows", 0) >= 297,
+                  f"rows={about.get('rows')}")
+            js(sid, "document.body.click(); return 1;")
 
         final_assets = js(sid, "return window.__m1.assets;")
         rq("POST", f"/session/{sid}/frame/parent", {})

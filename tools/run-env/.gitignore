@@ -25,3 +25,12 @@ alpine-guest/boot-noinitrd.js
 
 # ./package-app.sh output (the entity-app dist: page + asset bundles)
 app-dist*/
+# package-survey.py: cached Alpine indexes
+.survey/
+
+# kolibri/fetch-image.sh output (the pinned floppy image, its snapshot) and the
+# engine links it makes. The vm-sdk links in both page directories ARE committed.
+kolibri/guest/
+kolibri/build
+kolibri/bios
+kolibri/.build/

@@ -109,6 +109,59 @@ pub struct PeerConnectionsModel {
     meet: Arc<Mutex<Option<crate::rendezvous::MeetSession>>>,
     /// Why the last Meet press did nothing, when it did nothing.
     meet_notice: Arc<Mutex<Option<crate::views::peer_connections::output::ConnectorNotice>>>,
+    /// Where the last *Find peers here* press has got to. In memory, like the
+    /// meet it starts.
+    find: Arc<Mutex<Option<FindPeers>>>,
+}
+
+/// **Where a *Find peers here* press has got to.**
+///
+/// The press is three steps the user used to perform by hand, in three cards:
+/// dial the address, add the same address as a rendezvous node (and select it),
+/// then open *Meet at a name* and start a lobby meet. Each step reports here, in
+/// the card that has the button, because the whole point is that the user no
+/// longer has to go looking for which card moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FindPeers {
+    /// Dialing the address; the rendezvous row is written when it answers.
+    Adding { addr: String },
+    /// The node answered and its row is written. Waiting for it to be the node
+    /// in force before the meet starts — the write is dispatched, and a meet
+    /// started a frame early would run at whatever node was in force before.
+    Switching { addr: String, node: String, frames_left: u32 },
+    /// A lobby meet is running at the node.
+    Meeting { addr: String, node: String },
+    /// Stopped, with the reason in the words of the step that failed.
+    Failed { addr: String, reason: String },
+}
+
+/// How many frames [`FindPeers::Switching`] waits for the selection to land
+/// before it gives up. About ten seconds at 60 fps; the Direct arm lands it on
+/// the next frame, the Worker arm on the next mirror event.
+pub const FIND_SWITCH_FRAMES: u32 = 600;
+
+/// One frame of [`FindPeers::Switching`], decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindStep {
+    /// The node we added is not in force yet; keep waiting.
+    Wait,
+    /// It is in force — start the lobby meet now.
+    StartMeet,
+    /// It never became the node in force. Saying so beats a meet at a
+    /// different node, which is the silent version of the same failure.
+    GiveUp,
+}
+
+/// Decide a [`FindPeers::Switching`] frame. Pure, so the ordering — *in force*
+/// outranks *out of time* — is gated natively.
+pub fn find_step(node: &str, in_force: Option<&str>, frames_left: u32) -> FindStep {
+    if in_force == Some(node) {
+        return FindStep::StartMeet;
+    }
+    if frames_left == 0 {
+        return FindStep::GiveUp;
+    }
+    FindStep::Wait
 }
 
 impl PeerConnectionsModel {
@@ -120,6 +173,7 @@ impl PeerConnectionsModel {
             connector_notice: Arc::new(Mutex::new(None)),
             meet: Arc::new(Mutex::new(None)),
             meet_notice: Arc::new(Mutex::new(None)),
+            find: Arc::new(Mutex::new(None)),
             hydrated: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -431,7 +485,56 @@ impl PeerConnectionsModel {
             connector_reload_pending,
             connector_notice: self.connector_notice.lock().unwrap().clone(),
             meet,
+            find: self.find.lock().unwrap().clone(),
         }
+    }
+
+    // -- Find peers here --
+
+    /// Shared handle to the find state, so the async add can move it on.
+    pub fn find_handle(&self) -> Arc<Mutex<Option<FindPeers>>> {
+        self.find.clone()
+    }
+
+    /// One frame of a *Find peers here* press: once the node it added is the one
+    /// in force, start a lobby meet there. Returns `true` when the visible state
+    /// moved.
+    pub fn pump_find(&self, peers: &Peers) -> bool {
+        let (addr, node, frames_left) = match self.find.lock().ok().and_then(|f| f.clone()) {
+            Some(FindPeers::Switching { addr, node, frames_left }) => (addr, node, frames_left),
+            _ => return false,
+        };
+        let sys = peers.system_peer_id().to_string();
+        let in_force = crate::connectors::node_in_force(peers, &sys).map(|c| c.node_peer_id);
+        let next = match find_step(&node, in_force.as_deref(), frames_left) {
+            FindStep::Wait => {
+                if let Ok(mut f) = self.find.lock() {
+                    *f = Some(FindPeers::Switching { addr, node, frames_left: frames_left - 1 });
+                }
+                return false;
+            }
+            FindStep::GiveUp => FindPeers::Failed {
+                reason: crate::i18n::t("peerconn.find_not_in_use", &[("addr", &addr)]),
+                addr,
+            },
+            FindStep::StartMeet => match self.start_meet(peers, crate::rendezvous::Mode::Lobby) {
+                Ok(()) => {
+                    // The same reachability warning a Meet press gives, in the
+                    // same slot — a lobby meet from this button is a meet.
+                    self.set_meet_notice(
+                        meet_reach_for(peers, &self.peer_id)
+                            .message_key()
+                            .map(|k| (crate::i18n::t(k, &[]), true)),
+                    );
+                    FindPeers::Meeting { addr, node }
+                }
+                Err(reason) => FindPeers::Failed { addr, reason },
+            },
+        };
+        if let Ok(mut f) = self.find.lock() {
+            *f = Some(next);
+        }
+        true
     }
 
     // -- Meet (crate::rendezvous) --
@@ -1358,5 +1461,32 @@ mod meet_reach_tests {
         assert_eq!(meet_reach_with_engine(true, false, true, false), MeetReach::NoNode);
         assert_eq!(meet_reach_with_engine(true, false, true, true), MeetReach::NeedsReload);
         assert_eq!(meet_reach_with_engine(true, false, false, true), MeetReach::NotThisPeer);
+    }
+}
+
+/// *Find peers here* — the one decision in the flow that is not somebody
+/// else's function: when to start the meet.
+#[cfg(test)]
+mod find_peers_tests {
+    use super::{find_step, FindStep};
+
+    /// The node we added is in force: start. This must win even on the last
+    /// frame, or a selection that lands exactly at the deadline is reported as
+    /// a failure the user can see working.
+    #[test]
+    fn the_node_in_force_starts_the_meet_even_on_the_last_frame() {
+        assert_eq!(find_step("2KNode", Some("2KNode"), 5), FindStep::StartMeet);
+        assert_eq!(find_step("2KNode", Some("2KNode"), 0), FindStep::StartMeet);
+    }
+
+    /// **A different node in force is not a reason to start.** Starting would
+    /// run the lobby meet at a node the user did not type — the silent version
+    /// of the failure this button exists to remove.
+    #[test]
+    fn a_different_node_in_force_waits_and_then_gives_up() {
+        assert_eq!(find_step("2KNode", Some("2KOther"), 5), FindStep::Wait);
+        assert_eq!(find_step("2KNode", None, 5), FindStep::Wait);
+        assert_eq!(find_step("2KNode", Some("2KOther"), 0), FindStep::GiveUp);
+        assert_eq!(find_step("2KNode", None, 0), FindStep::GiveUp);
     }
 }

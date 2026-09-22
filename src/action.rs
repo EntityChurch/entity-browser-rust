@@ -10,13 +10,43 @@ use crate::window::WindowId;
 #[allow(dead_code)]
 pub enum Action {
     // -- Window management --
-    /// Spawn a new window of the given type name, optionally bound to a specific peer.
-    SpawnWindow { type_name: &'static str, peer_id: Option<String> },
+    /// Spawn a new window of the given type name, optionally bound to a specific
+    /// peer, optionally **aimed at an address**.
+    ///
+    /// The three fields are three different facts and the middle one used to do
+    /// two jobs. `peer_id` is the store the window READS; `target` is the subject
+    /// it is looking at, and they are usually different peers —
+    /// `views/registry_browser/output.rs:open_target` narrates the shipped bug
+    /// that came of conflating them. `target: None` is the ordinary open (the
+    /// command palette, a taskbar button): nothing was named, so nothing is
+    /// aimed, and a window that invented a subject here would be `app_source`'s
+    /// guess (AP54) with a new door.
+    ///
+    /// See [`crate::open_target`] for which viewer an address routes to, and
+    /// [`crate::window::WindowView::aim`] for what a viewer does with one.
+    SpawnWindow {
+        type_name: &'static str,
+        peer_id: Option<String>,
+        target: Option<crate::entity_ref::EntityRef>,
+    },
     /// Close a specific window instance.
     CloseWindow(WindowId),
+    /// Show an open window of this type, or open one on the primary peer.
+    OpenWindow { type_name: &'static str },
+    /// Open the Entity Tree (the open one, or a new one on the primary peer)
+    /// with `path` selected — "where is this in the tree?" from any window
+    /// that lists entities under another name (the File Manager's files).
+    RevealInEntityTree { path: String },
+    /// Bring a window into view: restore any OTHER maximized window and scroll
+    /// this one's section into view. Changes no tree state.
+    ShowWindow(WindowId),
     /// Maximize a window into the full-screen surface, or restore it if it is
     /// already the maximized one (reframe §4-B Surfaces, one-deep).
     ToggleMaximizeWindow(WindowId),
+    /// Remember a height for this window's size key (`None` forgets it, so the
+    /// window goes back to its default). Changes no window state and marks
+    /// nothing dirty — see `crate::window_size`.
+    SetWindowSize(WindowId, Option<crate::window_size::SizePref>),
 
     // -- Per-window actions (targeted by window ID) --
     /// Navigate to a tree path in a specific window.
@@ -91,6 +121,9 @@ pub enum Action {
         /// The peer serving the file.
         target: String,
         plan: PullPlan,
+        /// Keep the pulled bytes in My files (`crate::user_files`) instead of
+        /// handing them to the browser as a download.
+        keep: bool,
     },
     /// Push a file from *this* device up to a (typically remote) peer's
     /// writable share via `local/files:write`. The browser file picker
@@ -146,6 +179,25 @@ pub enum Action {
         offer_id: String,
         /// The download's file name.
         filename: String,
+    },
+    /// Save a privately kept file to this device — an app's (`crate::kept_files`)
+    /// or one of My files (`crate::user_files`).
+    SaveKeptFile {
+        peer_id: String,
+        /// Hex of the blob hash — the kept file's path segment.
+        file_id: String,
+        filename: String,
+        /// Which private store holds the bytes.
+        store: crate::user_files::PrivateStore,
+    },
+    /// Share a privately kept file: offer it to peers. The ONLY way a private
+    /// file becomes an offer (field report 2026-09-14: keeping one used to offer
+    /// it).
+    OfferKeptFile {
+        peer_id: String,
+        file_id: String,
+        filename: String,
+        store: crate::user_files::PrivateStore,
     },
     /// Refresh the **backend-auth observability** surface for one backend
     /// (`DESIGN-AUTHORIZE-GATE-INCREMENT-3 §3 Step 3`). Reads B's
@@ -345,7 +397,7 @@ mod tests {
 
     #[test]
     fn action_variants_constructible() {
-        let _ = Action::SpawnWindow { type_name: "Entity Tree", peer_id: None };
+        let _ = Action::SpawnWindow { type_name: "Entity Tree", peer_id: None, target: None };
         let _ = Action::CloseWindow(1);
         let _ = Action::Navigate(1, "docs/test".into());
         let _ = Action::NavigateUp(1);

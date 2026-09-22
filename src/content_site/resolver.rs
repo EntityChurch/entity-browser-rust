@@ -280,10 +280,16 @@ pub struct MultiResolver {
 
 impl MultiResolver {
     pub fn new(our_peer_id: String, repaint: RepaintCell) -> Self {
+        Self::for_window(our_peer_id, repaint, None)
+    }
+
+    /// A resolver whose fetches are counted against `window` in the System
+    /// Monitor ([`crate::monitor::CountingSource`]).
+    pub fn for_window(our_peer_id: String, repaint: RepaintCell, window: Option<crate::window::WindowId>) -> Self {
         Self {
             our_peer_id,
             local: LocalTreeResolver,
-            http: HttpPollResolver::new(repaint.clone()),
+            http: HttpPollResolver::new(repaint.clone(), window),
             pending_since: RefCell::new(HashMap::new()),
             persisted: RefCell::new(HashSet::new()),
             manifest_persisted: RefCell::new(HashSet::new()),
@@ -678,14 +684,17 @@ pub struct HttpPollResolver {
     cache: Rc<RefCell<HashMap<Location, CacheState>>>,
     lists: Rc<RefCell<HashMap<SiteKey, ListState>>>,
     repaint: RepaintCell,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    window: Option<crate::window::WindowId>,
 }
 
 impl HttpPollResolver {
-    fn new(repaint: RepaintCell) -> Self {
+    fn new(repaint: RepaintCell, window: Option<crate::window::WindowId>) -> Self {
         Self {
             cache: Rc::new(RefCell::new(HashMap::new())),
             lists: Rc::new(RefCell::new(HashMap::new())),
             repaint,
+            window,
         }
     }
 
@@ -750,10 +759,11 @@ impl HttpPollResolver {
     fn spawn_list_fetch(&self, key: SiteKey, origin: String) {
         let lists = self.lists.clone();
         let repaint = self.repaint.clone();
+        let src = crate::monitor::CountingSource::new(super::http_poll::FetchBinSource, self.window);
         wasm_bindgen_futures::spawn_local(async move {
             let (peer, site) = (&key.0, &key.1);
             let state =
-                match super::http_poll::fetch_pages_list(&super::http_poll::FetchBinSource, &origin, peer, site)
+                match super::http_poll::fetch_pages_list(&src, &origin, peer, site)
                     .await
                 {
                     Ok(slugs) => ListState::Done(slugs),
@@ -784,9 +794,10 @@ impl HttpPollResolver {
     fn spawn_fetch(&self, loc: Location, origin: String) {
         let cache = self.cache.clone();
         let repaint = self.repaint.clone();
+        let src = crate::monitor::CountingSource::new(super::http_poll::FetchBinSource, self.window);
         wasm_bindgen_futures::spawn_local(async move {
             let result =
-                super::http_poll::resolve_closure_via(&super::http_poll::FetchBinSource, &origin, &loc)
+                super::http_poll::resolve_closure_via(&src, &origin, &loc)
                     .await;
             let state = match result {
                 Ok(rp) => CacheState::Done(rp),
@@ -1272,7 +1283,7 @@ mod tests {
     #[test]
     fn http_failed_within_backoff_renders_error_then_retries_after() {
         let repaint = repaint_cell();
-        let http = HttpPollResolver::new(repaint);
+        let http = HttpPollResolver::new(repaint, None);
         let loc = Location { peer_id: Some("PEERB".into()), site_id: "labs".into(), page: String::new() };
 
         // Within backoff (retry_at in the future) → render the cached error,

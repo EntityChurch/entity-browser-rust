@@ -17,16 +17,16 @@ use crate::dom::theme;
 use crate::dom::util;
 use crate::dom::DomCtx;
 use crate::views::games::{
-    SAVES_BACKUP_EVENT, SAVES_DROP_EVENT, SAVES_FOCUS_EVENT, SAVES_IMPORT_EVENT,
-    SAVES_PANEL_EVENT, SAVES_RESTORE_EVENT, SAVES_SCAN_EVENT, SAVES_SEND_EVENT,
-    SAVES_TARGET_EVENT,
+    SAVES_BACKUP_EVENT, SAVES_DOWNLOAD_EVENT, SAVES_DROP_EVENT, SAVES_FOCUS_EVENT,
+    SAVES_IMPORT_EVENT, SAVES_PANEL_EVENT, SAVES_PICKED_EVENT, SAVES_RESTORE_EVENT,
+    SAVES_SCAN_EVENT, SAVES_SEND_EVENT, SAVES_TARGET_EVENT,
 };
 
 /// Everything the panel renders, resolved by the window.
 pub struct SavesView<'a> {
-    /// Every live save on this peer, and its display name where the catalog
-    /// still knows one.
-    pub saves: Vec<(SaveRow, String)>,
+    /// Every live save on this peer, its display name where the catalog still
+    /// knows one, and how many backups it has.
+    pub saves: Vec<(SaveRow, String, usize)>,
     /// `"{set}/{id}"` whose backups are expanded, `""` for none.
     pub focus: &'a str,
     /// The expanded row's backups, newest first. Empty unless `focus` names one.
@@ -42,6 +42,8 @@ pub struct SavesView<'a> {
     pub busy: bool,
     /// Heads the back button — the launcher's own title.
     pub back_label: &'a str,
+    /// Where a picked save file waits for the window (`SavesUi::picked`).
+    pub saves_ui: std::rc::Rc<std::cell::RefCell<crate::views::games::SavesUi>>,
 }
 
 /// Render the panel into `container`.
@@ -78,6 +80,7 @@ pub fn render(container: &Element, ctx: &DomCtx, view: &SavesView) {
     }
 
     util::append(&wrap, &saves_card(ctx, view));
+    util::append(&wrap, &file_card(ctx, view));
     util::append(&wrap, &import_card(ctx, view));
     util::append(container, &wrap);
 }
@@ -96,7 +99,7 @@ fn saves_card(ctx: &DomCtx, view: &SavesView) -> Element {
         &crate::i18n::t("saves.col_size", &[]),
         "",
     ]);
-    for (row, name) in &view.saves {
+    for (row, name, backup_count) in &view.saves {
         let key = format!("{}/{}", row.set, row.id);
         let expanded = view.focus == key;
 
@@ -112,6 +115,7 @@ fn saves_card(ctx: &DomCtx, view: &SavesView) -> Element {
                 &key,
             ),
         );
+        util::append(&actions, &download_button(ctx, &key));
         util::append(
             &actions,
             &components::button_value(
@@ -128,10 +132,10 @@ fn saves_card(ctx: &DomCtx, view: &SavesView) -> Element {
             &actions,
             &components::button_value(
                 ctx,
-                &crate::i18n::t(
-                    "saves.backups",
-                    &[("n", &view.backups.len().to_string())],
-                ),
+                // This row's own count. It used to read `view.backups`, which
+                // holds only the EXPANDED row's backups, so every other row
+                // showed that row's number (found by the Saves panel e2e).
+                &crate::i18n::t("saves.backups", &[("n", &backup_count.to_string())]),
                 ButtonKind::Small,
                 SAVES_FOCUS_EVENT,
                 if expanded { "" } else { &key },
@@ -192,6 +196,7 @@ fn backups_cell(ctx: &DomCtx, view: &SavesView, key: &str) -> Element {
                 &reference,
             ),
         );
+        util::append(&row, &download_button(ctx, &reference));
         util::append(
             &row,
             &components::button_value(
@@ -205,6 +210,59 @@ fn backups_cell(ctx: &DomCtx, view: &SavesView, key: &str) -> Element {
         util::append(&cell, &row);
     }
     cell
+}
+
+/// "Download save file" for a save (`{set}/{id}`) or a backup
+/// (`{set}/{id}/{stamp}`) — the same words the Files window uses for the same act.
+fn download_button(ctx: &DomCtx, reference: &str) -> Element {
+    let b = components::button_value(
+        ctx,
+        &crate::i18n::t("files.download_save", &[]),
+        ButtonKind::Small,
+        SAVES_DOWNLOAD_EVENT,
+        reference,
+    );
+    b.set_attribute("data-field", "saves-download").ok();
+    b.set_attribute("data-save-ref", reference).ok();
+    b
+}
+
+/// The device half: bring a `.entitysave` file in from this device — a save
+/// someone handed over on a USB stick, or one this profile downloaded before.
+fn file_card(ctx: &DomCtx, view: &SavesView) -> Element {
+    let card = components::card(&crate::i18n::t("saves.file_heading", &[]));
+    let hint = util::create_element("p");
+    util::set_attr(&hint, "style", theme::HINT);
+    util::set_text(&hint, &crate::i18n::t("saves.file_hint", &[]));
+    util::append(&card, &hint);
+    let row = util::create_element("div");
+    util::set_attr(&row, "style", theme::ROW_INLINE);
+    let actions = ctx.actions.clone();
+    let rp = ctx.repaint.clone();
+    let window_id = ctx.window_id;
+    let attempt = ctx.offer_attempt.clone();
+    let ui = view.saves_ui.clone();
+    crate::dom::file_transfer::file_picker(
+        &row,
+        ctx,
+        &crate::i18n::t("files.import_save", &[]),
+        ButtonKind::Secondary,
+        "saves-import-file",
+        move |name, bytes| {
+            // Not an offer: clear the shared slot the picker reports a slow read
+            // on, and let the panel's own status line take over.
+            attempt.clear();
+            ui.borrow_mut().picked = Some((name, bytes));
+            actions.borrow_mut().push(crate::action::Action::WindowEvent {
+                window_id,
+                event: SAVES_PICKED_EVENT.into(),
+                value: String::new(),
+            });
+            rp();
+        },
+    );
+    util::append(&card, &row);
+    card
 }
 
 /// The cross-peer half: choose a peer, ask what it offers, take one.
@@ -273,7 +331,7 @@ fn import_card(ctx: &DomCtx, view: &SavesView) -> Element {
 /// `toLocaleString` rather than a hand-rolled `YYYY-MM-DD`, which would be one
 /// more place the app decides what a date looks like for someone whose
 /// convention it does not know.
-fn stamp_label(stamp_ms: u64) -> String {
+pub(crate) fn stamp_label(stamp_ms: u64) -> String {
     let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(stamp_ms as f64));
     let s: String = d.to_locale_string("default", &js_sys::Object::new()).into();
     if s.is_empty() {

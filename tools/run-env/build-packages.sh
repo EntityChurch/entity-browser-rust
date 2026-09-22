@@ -33,7 +33,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$(cd "${1:-$HERE/alpine-guest}" && pwd)"
-ALPINE="${ALPINE:-3.21}"
+ALPINE="${ALPINE:-3.22}"
 IMAGE="docker.io/i386/alpine:${ALPINE}"
 LIST="${PACKAGES_LIST:-$HERE/packages.txt}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1757600000}"

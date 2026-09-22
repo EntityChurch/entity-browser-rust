@@ -40,12 +40,12 @@
 //!
 //! ## Where a file lands
 //!
-//! In [`crate::file_offer`]: our own `system/content` plus an offer manifest.
-//! That is deliberate reuse, not convenience — an offer is already listed by the
-//! file-transfer surface and already pullable by another peer, so *an app
-//! emitted a file* reaches *a peer on another machine has it* with no new path.
-//! The size limit is therefore that module's ([`crate::file_offer::MAX_OFFER_BYTES`]),
-//! not a second number.
+//! In [`crate::kept_files`]: our own `system/content` plus a PRIVATE manifest
+//! under the app's own directory (`apps/{set}/files/{app}/`). **Not an offer.**
+//! Until 2026-09-14 it was one — reuse that looked free and shared every file a
+//! person pulled out of an app with every peer they were connected to. Sharing is
+//! now a separate, deliberate step (File Transfer's "Offer to peers"). The size
+//! limit is still [`crate::file_offer::MAX_OFFER_BYTES`], one number.
 //!
 //! ## Why the host cannot open a file picker on request
 //!

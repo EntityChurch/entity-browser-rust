@@ -151,6 +151,31 @@ fn render_connect_outcome(card: &Element, output: &PeerConnectionsOutput) {
     util::append(card, &line);
 }
 
+/// Where the last *Find peers here* press has got to, beside the button.
+fn render_find_outcome(card: &Element, output: &PeerConnectionsOutput) {
+    use crate::views::peer_connections::model::FindPeers;
+    let Some(find) = &output.find else {
+        return;
+    };
+    let line = match find {
+        FindPeers::Adding { addr } => {
+            components::loading(&crate::i18n::t("peerconn.connect_dialing", &[("addr", addr)]))
+        }
+        FindPeers::Switching { addr, .. } => {
+            components::loading(&crate::i18n::t("peerconn.find_switching", &[("addr", addr)]))
+        }
+        FindPeers::Meeting { addr, .. } => {
+            components::success(&crate::i18n::t("peerconn.find_meeting", &[("addr", addr)]))
+        }
+        FindPeers::Failed { addr, reason } => components::error(&crate::i18n::t(
+            "peerconn.find_failed",
+            &[("addr", addr), ("reason", reason)],
+        )),
+    };
+    line.set_attribute("data-field", "find-status").ok();
+    util::append(card, &line);
+}
+
 /// Outbound: devices we've reached before, each with its live status. A proper
 /// table (S7) — Device · Status · Address · action. Status comes from the
 /// subscribed connection-health mirror (S4 chip), so a live device reads
@@ -302,12 +327,56 @@ fn render_connect(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx
             }
         });
     }
-    util::append(&card, &btn);
+
+    // **Find peers here** — the same address, used as a meeting point. What
+    // used to be five steps across three cards (connect, add the address again
+    // as a rendezvous node, choose it, scroll to Meet, pick Lobby, press Meet).
+    let find = components::button_el(
+        &crate::i18n::t("peerconn.find_peers", &[]),
+        components::ButtonKind::Secondary,
+    );
+    find.set_attribute("data-field", "find-peers").ok();
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let drafts = ctx.drafts.clone();
+        let initial = output.address_input_initial.clone();
+        let wid = output.window_id;
+        ctx.listen(&find, "click", move |_| {
+            let addr = drafts
+                .borrow()
+                .get(ADDRESS_FIELD)
+                .cloned()
+                .unwrap_or_else(|| initial.clone());
+            // Dispatched even when empty: the add refuses an empty address with
+            // a sentence, and a silently ignored press is a dead button.
+            actions.borrow_mut().push(Action::WindowEvent {
+                window_id: wid,
+                event: "find_peers".to_string(),
+                value: addr,
+            });
+            rp();
+        });
+    }
+    let row = util::create_element("div");
+    row.set_attribute("style", theme::BTN_ROW).ok();
+    util::append(&row, &btn);
+    util::append(&row, &find);
+    util::append(&card, &row);
+
+    // What the second button does, said once where it is pressed — including
+    // that the other side sees this device, because a lobby is public to
+    // anyone at that node.
+    let hint = util::create_element("p");
+    hint.set_attribute("style", theme::HINT).ok();
+    util::set_text(&hint, &crate::i18n::t("peerconn.find_hint", &[]));
+    util::append(&card, &hint);
 
     // What happened to the last press. Without this the action was silent in
     // both directions — a failure showed nothing, and a success whose row the
     // user wasn't watching also showed nothing (D13, the reported bug).
     render_connect_outcome(&card, output);
+    render_find_outcome(&card, output);
 
     // Scan a device's QR to populate the address (outbound: I scan them).
     render_scan_qr(&card, ctx);
@@ -639,6 +708,9 @@ fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
         "",
         "",
     ]);
+    // Tagged so a gate reads WHO was found, not any peer id the window happens
+    // to show (its own, the node's).
+    table.set_attribute("data-field", "meet-found").ok();
     for found in &status.found {
         // The id in full beside the short form: this is the value the user
         // hands to `connect` or a Chat, and a truncated id is not one.

@@ -1,0 +1,21 @@
+# packs.txt -- ready-made tool sets for the Alpine machine, one line each:
+#
+#   name | what it is for (one line, shown by `packs`) | apk names
+#
+# Installed in the guest as /usr/local/share/entity/packs.txt and listed by `packs`
+# (build-guest.sh 3c3). EVERY NAME MUST BE INSTALLABLE WITH NO NETWORK: build-about.py
+# refuses a pack naming something neither the image nor the package set provides, so
+# a pack that would fail offline fails the build instead. Sizes measured 2026-09-14
+# against 3.21 x86 (DESIGN-2026-09-14 §4.5), `c` against 3.22.5 x86: MiB downloaded / installed. Installs live
+# in the machine's 256 MiB of memory until restart, so two big packs may not fit.
+#
+# tcc since the 3.22 rebase (decision D8); pcc and p7zip are not built for x86 in 3.22.
+c         | compile, link and run C programs with tcc (3 / 7 MiB)                    | tcc tcc-libs-static musl-dev make
+scripting | Python with image, YAML, Markdown and PDF libraries; Lua; JavaScript (15 / 39 MiB) | python3 py3-pillow py3-yaml py3-markdown py3-pypdf py3-tabulate lua5.4 quickjs
+data      | search, filter and reshape text, JSON, YAML, CSV, XML and SQLite (17 / 53 MiB) | ripgrep fd fzf sd gawk jq yq-go miller datamash xmlstarlet jless sqlite-tools
+media     | convert and shrink images and audio, look at pictures in the terminal (12 / 38 MiB) | imagemagick optipng jpegoptim pngquant libwebp-tools flac lame opus-tools sox viu
+documents | pull text out of PDFs, split and merge them, read and strip metadata (26 / 78 MiB) | poppler-utils qpdf exiftool
+writing   | write and spell-check Markdown, keep a calendar, tasks and a spreadsheet (13 / 31 MiB) | micro mandoc lowdown cmark aspell aspell-en calcurse task sc
+archives  | open any archive, build FAT, squashfs and ISO images (5 / 11 MiB)        | 7zip zip unzip libarchive-tools zstd xz lz4 cabextract mtools dosfstools squashfs-tools xorriso
+monitor   | watch the machine, find what uses the disk, trace and time programs (6 / 15 MiB) | btop htop fastfetch ncdu dust tree lsof strace procps-ng psmisc pv hyperfine
+games     | classic terminal games and toys (7 / 18 MiB)                             | bsd-games nethack zangband gnuchess tty-solitaire micro-tetris treedude qqwing cmatrix fortune figlet sl cbonsai

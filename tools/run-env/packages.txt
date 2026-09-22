@@ -1,42 +1,71 @@
 # The package set the Alpine Environment can `apk add` with no network.
 #
-# One Alpine package name per line; `#` starts a comment. build-packages.sh
-# fetches every name here PLUS its dependency closure from Alpine v3.21 (x86),
-# drops what the image already ships at the same version, and signs the index.
-# A visitor downloads only what they install; the cost of a longer list is
-# hosting and publish time (PLAN-2026-09-13-THE-VM-RELEASE §5, decision D4).
+# One Alpine package name per line (or several per line); `#` starts a comment.
+# build-packages.sh fetches every name here PLUS its dependency closure from
+# Alpine v3.21 (x86), drops what the image already ships at the same version,
+# and signs the index. A visitor downloads only what they install; the cost of a
+# longer list is hosting and publish time (PLAN-2026-09-13-THE-VM-RELEASE §5, D4).
 #
-# This is a STARTER set, chosen to build the mechanism. The list is the
-# operator's call. Measured closures, 2026-09-13, before the image's own
-# packages are dropped:
-#   file tools + editors + python3 + git   51 apks  37 MiB
-#   documents and images                   60 apks  34 MiB
-#   gcc + musl-dev + make (tier 2 below)   16 apks  63 MiB
-# NOT AVAILABLE on x86: pandoc (Alpine builds it for x86_64 and aarch64 only).
+# THE RULE FOR WHAT GOES IN: useful with no network, on files you move in and
+# out; small; exists for 32-bit x86. Nothing that only talks to a network (curl,
+# wget, ssh clients): the machine has none, so they install and do nothing.
+#
+# Sizes are download MiB for what each group ADDS, dependencies included,
+# measured against the 3.21 x86 index on 2026-09-14 (a resolver over APKINDEX;
+# the real build is authoritative and has come out ~10% larger). The survey,
+# with what was left out and why: PLAN-2026-09-13-THE-VM-RELEASE §10.
 
+# ── the starter set, 2026-09-13 ────────────────────────────── ~55 MiB ──
 # files
-zip
-unzip
-p7zip
-file
-jq
-xxd
-rsync
-sqlite
-
+zip unzip 7zip file jq xxd rsync sqlite
 # editors, shells, work
-vim
-tmux
-git
-python3
-
+vim tmux git python3
 # documents and images
-poppler-utils
-qpdf
-imagemagick
-exiftool
+poppler-utils qpdf imagemagick exiftool
 
-# tier 2 -- toolchain, +63 MiB. Uncomment to include.
-# gcc
-# musl-dev
-# make
+# ── added 2026-09-14 ─────────────────────────────────────── ~60 MiB ──
+# see what the machine is doing                                       4.9
+btop htop fastfetch ncdu dust tree lsof strace procps-ng psmisc pv hyperfine
+# find and change text                                                5.3
+ripgrep fd fzf sd gawk diffutils patch dos2unix entr rlwrap bc units
+# files, archives, disk images                                        6.2
+nnn mc libarchive-tools zstd xz lz4 cabextract mtools dosfstools squashfs-tools xorriso
+# hashes, signatures, encryption (all offline)                        3.7
+b3sum rhash openssl age minisign openssh-keygen
+# structured data                                                    10.4
+jless sqlite-tools datamash xmlstarlet yq-go miller
+# writing and organising                                              4.9
+mandoc lowdown cmark w3m aspell aspell-en calcurse task sc
+# code: a newcomer's editor, two small languages, and a C compiler   13.3
+# tcc (3.22): tcc + tcc-libs-static + musl-dev + make compiles, links and runs a
+# C program in ~3.4 MiB (verified on 3.22.5 x86; build-guest.sh 3c4 adds the crt
+# links it needs). pcc is not built for x86 in 3.22, so tcc is the C compiler.
+# 7zip replaced p7zip in 3.22 (same `7z` command).
+micro lua5.4 quickjs tcc tcc-libs-static musl-dev binutils make
+# images and audio                                                    4.0
+optipng jpegoptim pngquant libwebp-tools flac lame opus-tools sox viu libqrencode-tools
+# python libraries that work offline                                  1.4
+py3-pillow py3-yaml py3-markdown py3-pypdf py3-tabulate
+# games and toys                                                      5.6
+# bsd-games: adventure, atc, battlestar, cribbage, gomoku, hangman, robots,
+# sail, snake, worm, wump and more.
+bsd-games nethack zangband gnuchess tty-solitaire micro-tetris treedude qqwing
+cmatrix asciiquarium fortune figlet sl cbonsai
+
+# ── tier 2: the size steps. Uncomment to include. ──────────────────────
+# gcc                          # +54 MiB on top of the C tools above
+# nodejs                       # +21
+# py3-numpy                    # +15
+# py3-pandas py3-matplotlib    # +35 (numpy included)
+# ffmpeg                       # +30
+# ghostscript                  # +17
+# graphviz gnuplot             # +6 / +5
+# neovim helix                 # +6 / +4
+# zsh fish                     # +2 / +3
+# groff man-pages              # +2 / +3  (tool manuals are the *-doc
+#                              #  subpackages: 147 of them, +37 MiB)
+# go / rust / clang            # +112 / +183 / +159
+#
+# NOT AVAILABLE for x86 in 3.21: pandoc, tcc, neofetch, tldr, glow, visidata,
+# gron, duf, git-delta, cowsay, and most small curses games (nudoku, ninvaders,
+# vitetris, bastet, nsnake, moon-buggy, greed, angband, crawl, brogue).

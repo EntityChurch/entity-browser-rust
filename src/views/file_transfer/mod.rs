@@ -218,6 +218,14 @@ impl FileTransferWindow {
                     &own_pid,
                     crate::app_paths::offers_prefix(crate::app_paths::APP_ID, &own_pid),
                 );
+                // Files apps kept privately, one prefix per app set.
+                for set in crate::apps::paths::APP_SETS {
+                    pm.watch_prefix(
+                        &mut window.watch,
+                        &own_pid,
+                        crate::app_paths::app_files_prefix(crate::app_paths::APP_ID, &own_pid, set),
+                    );
+                }
                 // Reachability of the target — the axis this window lacked. The
                 // registry above answers "do we know this peer"; only the kernel
                 // liveness surface answers "can we reach it right now", and the

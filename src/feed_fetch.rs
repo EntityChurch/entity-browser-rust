@@ -840,6 +840,8 @@ mod tests {
             &rows,
             &[],
             1_757_000_111,
+            &[],
+            crate::feed_publish::DEFAULT_PAGE_SIZE,
         )
         .expect("the gather plans");
 
@@ -861,10 +863,18 @@ mod tests {
         for c in &plan.carried {
             origin.0.insert((c.peer.clone(), c.key.clone()), c.entity.clone());
         }
-        origin.0.insert(
-            (gatherer.to_string(), crate::feed::MirrorSubject::timeline(&author).key()),
-            plan.record.to_entity().unwrap(),
-        );
+        // The head AND §6.0a's pages — `entries` moved off the head, so a double
+        // serving only the head serves a mirror of nothing.
+        let subject = crate::feed::MirrorSubject::timeline(&author);
+        for page in &plan.pages {
+            origin.0.insert(
+                (gatherer.to_string(), subject.page_key(page.page)),
+                page.to_entity().unwrap(),
+            );
+        }
+        origin
+            .0
+            .insert((gatherer.to_string(), subject.key()), plan.record.to_entity().unwrap());
 
         // Not connected, no origin registered — and one gatherer we know of.
         let route = crate::feed_route::plan(

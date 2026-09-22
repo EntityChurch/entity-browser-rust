@@ -1,0 +1,542 @@
+
+==================== chrome-corp-r2  (chrome 151.0.7922.108) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=true | worker=true | srcdoc=false | urlSame=true | urlOpaque=false
+  origin             top=http://127.0.0.1:8298 | worker=http://127.0.0.1:8298 | srcdoc=null | urlSame=http://127.0.0.1:8298 | urlOpaque=null
+  SAB ctor           top=8 | worker=8 | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=8 | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top={"usedJSHeapSize":1279642,"totalJSHeapSize":2411590,"jsHeapSizeLimit": | worker=undefined | srcdoc={"usedJSHeapSize":812458,"totalJSHeapSize":1864926,"jsHeapSizeLimit":4 | urlSame={"usedJSHeapSize":1403181,"totalJSHeapSize":3722797,"jsHeapSizeLimit": | urlOpaque={"usedJSHeapSize":1130289,"totalJSHeapSize":2389941,"jsHeapSizeLimit":
+  mUASM typeof       top=function | worker=undefined | srcdoc=undefined | urlSame=function | urlOpaque=undefined
+  deviceMemory       top=32 | worker=32 | srcdoc=32 | urlSame=32 | urlOpaque=32
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":{}} | worker={"usage":0,"quota":10737418240,"usageDetails":{}} | srcdoc=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera | urlSame={"usage":0,"quota":10737418240,"usageDetails":{}} | urlOpaque=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag
+  connection         top={"effectiveType":"4g","downlink":1.7,"rtt":100,"saveData":false} | worker={"effectiveType":"4g","downlink":1.7,"rtt":100,"saveData":false} | srcdoc={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | urlSame={"effectiveType":"4g","downlink":1.7,"rtt":100,"saveData":false} | urlOpaque={"effectiveType":"4g","downlink":1.45,"rtt":100,"saveData":false}
+  battery            top={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | worker=undefined | srcdoc={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlSame={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlOpaque={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null}
+  PressureObserver   top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  uaData high        top={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | worker={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | srcdoc={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlSame={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlOpaque={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand",
+  now() res 1M min   top=0.004999995231628418 | worker=0.004999995231628418 | srcdoc=0.09999999403953552 | urlSame=0.004999995231628418 | urlOpaque=0.09999999403953552
+  now() res 10k min  top=0.004999995231628418 | worker=0.004999995231628418 | srcdoc=0.09999999403953552 | urlSame=0.004999995231628418 | urlOpaque=0.09999999403953552
+  now() distinct     top=[0.005,0.01,0.015,0.02,0.025,0.03] | worker=[0.005,0.01,0.02,0.025,0.03,0.035] | srcdoc=[0.1,0.2] | urlSame=[0.005,0.01,0.015,0.02,0.025,0.035] | urlOpaque=[0.1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=function | worker=n/a | srcdoc=function | urlSame=function | urlOpaque=function
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | worker=["mark","measure","resource"] | srcdoc=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlSame=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlOpaque=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig
+  gpu/wakeLock       top=["object","object"] | worker=["object","undefined"] | srcdoc=["object","object"] | urlSame=["object","object"] | urlOpaque=["object","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.3 t10=  10.1 ping=None  entries=[]
+    top            rAF= 315.4 t10= 300.5 ping=None  entries=[('longtask', 'self', 300, [('window', '', '')], []), ('long-animation-frame', 'long-animation-frame', 315.4, [], [('TimerHandler:setTimeout', '', 'self', 300.1)])]
+    worker         rAF=  17.4 t10=  10.1 ping=240  entries=[]
+    srcdoc         rAF=  17.4 t10=  10.3 ping=240  entries=[]
+    urlSame        rAF= 304.4 t10= 300.6 ping=0  entries=[('longtask', 'same-origin-descendant', 300, [('iframe', 'f-urlSame', 'frame.html?kind=urlSame')], []), ('long-animation-frame', 'long-animation-frame', 300.5, [], [('TimerHandler:setTimeout', 'http://127.0.0.1:8298/frame.js', 'descendant', 300.2)])]
+    urlOpaque      rAF=  17.4 t10=  10.1 ping=240  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 2, 'long-animation-frame': 2}, 'urlSame': {'longtask': 4, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 2, 'long-animation-frame': 2}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 188
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 0, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 0, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('worker.js', 'other', 1093), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8298/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8298/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":15727.379999995232},{"source":"cpu","state":"nominal","time":16727.640000000596},{"source":"cpu","state":"nominal","time":17728.030000001192},{"source":"cpu","state":"nominal","time":
+    worker     {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":21706.259999990463},{"source":"cpu","state":"nominal","time":22707.265000000596},{"source":"cpu","state":"nominal","time":23708.765000000596},{"source":"cpu","state":"nominal","time":
+    srcdoc     {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+    urlSame    {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":27731.780000001192},{"source":"cpu","state":"nominal","time":28732.05499999225},{"source":"cpu","state":"nominal","time":29732.269999995828},{"source":"cpu","state":"nominal","time":3
+    urlOpaque  {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+  -- memory
+    top        {"elapsedMs":12001,"bytes":1615418,"breakdown":[{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-urlOpaque","src":"frame.html?kind=urlOpaque"}}]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-srcdoc","src":""}}]},{"bytes":360557,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/worker.js","scope":"DedicatedWorkerGlobalScope"}]},{"bytes":348275,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/frame.html?kind=urlSame","scope":"Window","container":{"id":"f-urlSame","src":"frame.html?kind=urlSame"}}]},{"bytes":413800,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/index.html","scope":"Window"}]},{"bytes":0,"types":[],"attribution":[]},{"bytes":30992,"types":["DOM"],"attribution":[]},{"bytes":461794,"types":["Shared"],"attribution":[]}]}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"elapsedMs":10001,"bytes":1619983,"breakdown":[{"bytes":480044,"types":["Shared"],"attribution":[]},{"bytes":0,"types":[],"attribution":[]},{"bytes":357877,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/worker.js","scope":"DedicatedWorkerGlobalScope"}]},{"bytes":30992,"types":["DOM"],"attribution":[]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-srcdoc","src":""}}]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-urlOpaque","src":"frame.html?kind=urlOpaque"}}]},{"bytes":342304,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/frame.html?kind=urlSame","scope":"Window","container":{"id":"f-urlSame","src":"frame.html?kind=urlSame"}}]},{"bytes":408766,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/index.html","scope":"Window"}]}]}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== chrome-corp  (chrome 151.0.7922.108) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=true | worker=true | srcdoc=false | urlSame=true | urlOpaque=false
+  origin             top=http://127.0.0.1:8298 | worker=http://127.0.0.1:8298 | srcdoc=null | urlSame=http://127.0.0.1:8298 | urlOpaque=null
+  SAB ctor           top=8 | worker=8 | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=8 | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top={"usedJSHeapSize":1211278,"totalJSHeapSize":2410254,"jsHeapSizeLimit": | worker=undefined | srcdoc={"usedJSHeapSize":812458,"totalJSHeapSize":1864926,"jsHeapSizeLimit":4 | urlSame={"usedJSHeapSize":1385628,"totalJSHeapSize":3721480,"jsHeapSizeLimit": | urlOpaque={"usedJSHeapSize":1078021,"totalJSHeapSize":2389941,"jsHeapSizeLimit":
+  mUASM typeof       top=function | worker=undefined | srcdoc=undefined | urlSame=function | urlOpaque=undefined
+  deviceMemory       top=32 | worker=32 | srcdoc=32 | urlSame=32 | urlOpaque=32
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":{}} | worker={"usage":0,"quota":10737418240,"usageDetails":{}} | srcdoc=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera | urlSame={"usage":0,"quota":10737418240,"usageDetails":{}} | urlOpaque=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag
+  connection         top={"effectiveType":"4g","downlink":1.6,"rtt":100,"saveData":false} | worker={"effectiveType":"4g","downlink":1.6,"rtt":100,"saveData":false} | srcdoc={"effectiveType":"4g","downlink":1.7,"rtt":100,"saveData":false} | urlSame={"effectiveType":"4g","downlink":1.6,"rtt":100,"saveData":false} | urlOpaque={"effectiveType":"4g","downlink":1.65,"rtt":100,"saveData":false}
+  battery            top={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | worker=undefined | srcdoc={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlSame={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlOpaque={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null}
+  PressureObserver   top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  uaData high        top={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | worker={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | srcdoc={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlSame={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlOpaque={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand",
+  now() res 1M min   top=0.004999995231628418 | worker=0.004999995231628418 | srcdoc=0.09999999403953552 | urlSame=0.004999995231628418 | urlOpaque=0.09999999403953552
+  now() res 10k min  top=0.004999995231628418 | worker=0.004999995231628418 | srcdoc=0.09999999403953552 | urlSame=0.004999995231628418 | urlOpaque=0.09999999403953552
+  now() distinct     top=[0.005,0.01,0.015,0.02,0.025,0.03] | worker=[0.005,0.01,0.015,0.02,0.025,0.03] | srcdoc=[0.1] | urlSame=[0.005,0.01,0.015,0.02,0.025,0.03] | urlOpaque=[0.1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=function | worker=n/a | srcdoc=function | urlSame=function | urlOpaque=function
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | worker=["mark","measure","resource"] | srcdoc=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlSame=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlOpaque=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig
+  gpu/wakeLock       top=["object","object"] | worker=["object","undefined"] | srcdoc=["object","object"] | urlSame=["object","object"] | urlOpaque=["object","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.4 t10=  10.1 ping=None  entries=[]
+    top            rAF= 303.6 t10= 300.5 ping=None  entries=[('longtask', 'self', 300, [('window', '', '')], []), ('long-animation-frame', 'long-animation-frame', 300.3, [], [('TimerHandler:setTimeout', '', 'self', 300.1)])]
+    worker         rAF=  17.4 t10=  10.1 ping=240  entries=[]
+    srcdoc         rAF=  17.5 t10=  10.3 ping=241  entries=[]
+    urlSame        rAF= 302.8 t10= 300.7 ping=0  entries=[('longtask', 'same-origin-descendant', 300, [('iframe', 'f-urlSame', 'frame.html?kind=urlSame')], []), ('long-animation-frame', 'long-animation-frame', 300.5, [], [('TimerHandler:setTimeout', 'http://127.0.0.1:8298/frame.js', 'descendant', 300.2)])]
+    urlOpaque      rAF=  17.4 t10=  10.2 ping=240  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 2, 'long-animation-frame': 2}, 'urlSame': {'longtask': 4, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 2, 'long-animation-frame': 2}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 188
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 0, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 0, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('worker.js', 'other', 1093), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8298/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8298/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":15849.199999988079},{"source":"cpu","state":"nominal","time":16849.55499999225},{"source":"cpu","state":"nominal","time":17850.014999985695},{"source":"cpu","state":"nominal","time":1
+    worker     {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":21763.42499999702},{"source":"cpu","state":"nominal","time":22764.17499999702},{"source":"cpu","state":"nominal","time":23765.22999998927},{"source":"cpu","state":"nominal","time":247
+    srcdoc     {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+    urlSame    {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":27829.615000009537},{"source":"cpu","state":"nominal","time":28830.02500000596},{"source":"cpu","state":"nominal","time":29830.454999998212},{"source":"cpu","state":"nominal","time":3
+    urlOpaque  {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+  -- memory
+    top        {"elapsedMs":15391,"bytes":1614813,"breakdown":[{"bytes":30992,"types":["DOM"],"attribution":[]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-urlOpaque","src":"frame.html?kind=urlOpaque"}}]},{"bytes":403648,"types":["Shared"],"attribution":[]},{"bytes":0,"types":[],"attribution":[]},{"bytes":477864,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/index.html","scope":"Window"}]},{"bytes":360557,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/worker.js","scope":"DedicatedWorkerGlobalScope"}]},{"bytes":341752,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/frame.html?kind=urlSame","scope":"Window","container":{"id":"f-urlSame","src":"frame.html?kind=urlSame"}}]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-srcdoc","src":""}}]}]}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"elapsedMs":14001,"bytes":1618106,"breakdown":[{"bytes":30992,"types":["DOM"],"attribution":[]},{"bytes":357877,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/worker.js","scope":"DedicatedWorkerGlobalScope"}]},{"bytes":390839,"types":["Shared"],"attribution":[]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-srcdoc","src":""}}]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-urlOpaque","src":"frame.html?kind=urlOpaque"}}]},{"bytes":357374,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/frame.html?kind=urlSame","scope":"Window","container":{"id":"f-urlSame","src":"frame.html?kind=urlSame"}}]},{"bytes":481024,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8298/index.html","scope":"Window"}]},{"bytes":0,"types":[],"attribution":[]}]}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== chrome-credentialless  (chrome 151.0.7922.108) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=true | worker=true | srcdoc=false | urlSame=true | urlOpaque=false
+  origin             top=http://127.0.0.1:8299 | worker=http://127.0.0.1:8299 | srcdoc=null | urlSame=http://127.0.0.1:8299 | urlOpaque=null
+  SAB ctor           top=8 | worker=8 | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=8 | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top={"usedJSHeapSize":1279690,"totalJSHeapSize":2411590,"jsHeapSizeLimit": | worker=undefined | srcdoc={"usedJSHeapSize":812458,"totalJSHeapSize":2127070,"jsHeapSizeLimit":4 | urlSame={"usedJSHeapSize":1376817,"totalJSHeapSize":3722797,"jsHeapSizeLimit": | urlOpaque={"usedJSHeapSize":1101489,"totalJSHeapSize":2652085,"jsHeapSizeLimit":
+  mUASM typeof       top=function | worker=undefined | srcdoc=undefined | urlSame=function | urlOpaque=undefined
+  deviceMemory       top=32 | worker=32 | srcdoc=32 | urlSame=32 | urlOpaque=32
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":{}} | worker={"usage":0,"quota":10737418240,"usageDetails":{}} | srcdoc=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera | urlSame={"usage":0,"quota":10737418240,"usageDetails":{}} | urlOpaque=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag
+  connection         top={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | worker={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | srcdoc={"effectiveType":"4g","downlink":1.7,"rtt":100,"saveData":false} | urlSame={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | urlOpaque={"effectiveType":"4g","downlink":1.65,"rtt":100,"saveData":false}
+  battery            top={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | worker=undefined | srcdoc={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlSame={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlOpaque={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null}
+  PressureObserver   top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  uaData high        top={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | worker={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | srcdoc={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlSame={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlOpaque={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand",
+  now() res 1M min   top=0.004999995231628418 | worker=0.004999995231628418 | srcdoc=0.09999999403953552 | urlSame=0.004999995231628418 | urlOpaque=0.09999999403953552
+  now() res 10k min  top=0.004999995231628418 | worker=0.004999995231628418 | srcdoc=0.09999999403953552 | urlSame=0.004999995231628418 | urlOpaque=0.09999999403953552
+  now() distinct     top=[0.005,0.01,0.015,0.02,0.03,0.05] | worker=[0.005,0.01,0.015,0.02,0.025,0.03] | srcdoc=[0.1] | urlSame=[0.005,0.01,0.015,0.02,0.025] | urlOpaque=[0.1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=function | worker=n/a | srcdoc=function | urlSame=function | urlOpaque=function
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | worker=["mark","measure","resource"] | srcdoc=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlSame=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlOpaque=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig
+  gpu/wakeLock       top=["object","object"] | worker=["object","undefined"] | srcdoc=["object","object"] | urlSame=["object","object"] | urlOpaque=["object","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.4 t10=  10.1 ping=None  entries=[]
+    top            rAF= 317.3 t10= 300.4 ping=None  entries=[('longtask', 'self', 300, [('window', '', '')], []), ('long-animation-frame', 'long-animation-frame', 310.4, [], [('TimerHandler:setTimeout', '', 'self', 300.1)])]
+    worker         rAF=  17.4 t10=  10.3 ping=240  entries=[]
+    srcdoc         rAF=  17.4 t10=  10.1 ping=241  entries=[]
+    urlSame        rAF=   313 t10= 300.6 ping=0  entries=[('longtask', 'same-origin-descendant', 300, [('iframe', 'f-urlSame', 'frame.html?kind=urlSame')], []), ('long-animation-frame', 'long-animation-frame', 310.6, [], [('TimerHandler:setTimeout', 'http://127.0.0.1:8299/frame.js', 'descendant', 300.2)])]
+    urlOpaque      rAF=  17.4 t10=  10.1 ping=240  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 2, 'long-animation-frame': 2}, 'urlSame': {'longtask': 4, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 2, 'long-animation-frame': 2}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 188
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 0, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 0, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('worker.js', 'other', 1093), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8299/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8299/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":15832.679999992251},{"source":"cpu","state":"nominal","time":16833.144999995828},{"source":"cpu","state":"nominal","time":17833.355000004172},{"source":"cpu","state":"nominal","time":
+    worker     {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":21813.019999995828},{"source":"cpu","state":"nominal","time":22814.084999993443},{"source":"cpu","state":"nominal","time":23815.019999995828},{"source":"cpu","state":"nominal","time":
+    srcdoc     {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+    urlSame    {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":27838.689999997616},{"source":"cpu","state":"nominal","time":28838.944999992847},{"source":"cpu","state":"nominal","time":29839.295000001788},{"source":"cpu","state":"nominal","time":
+    urlOpaque  {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+  -- memory
+    top        {"elapsedMs":14001,"bytes":1618810,"breakdown":[{"bytes":30992,"types":["DOM"],"attribution":[]},{"bytes":293233,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8299/frame.html?kind=urlSame","scope":"Window","container":{"id":"f-urlSame","src":"frame.html?kind=urlSame"}}]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-urlOpaque","src":"frame.html?kind=urlOpaque"}}]},{"bytes":0,"types":[],"attribution":[]},{"bytes":360397,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8299/worker.js","scope":"DedicatedWorkerGlobalScope"}]},{"bytes":476728,"types":["Shared"],"attribution":[]},{"bytes":457460,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8299/index.html","scope":"Window"}]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-srcdoc","src":""}}]}]}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"elapsedMs":15002,"bytes":1620139,"breakdown":[{"bytes":469185,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8299/index.html","scope":"Window"}]},{"bytes":279363,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8299/frame.html?kind=urlSame","scope":"Window","container":{"id":"f-urlSame","src":"frame.html?kind=urlSame"}}]},{"bytes":0,"types":[],"attribution":[]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-srcdoc","src":""}}]},{"bytes":30992,"types":["DOM"],"attribution":[]},{"bytes":0,"types":["JavaScript"],"attribution":[{"url":"cross-origin-url","scope":"cross-origin-aggregated","container":{"id":"f-urlOpaque","src":"frame.html?kind=urlOpaque"}}]},{"bytes":482818,"types":["Shared"],"attribution":[]},{"bytes":357781,"types":["JavaScript"],"attribution":[{"url":"http://127.0.0.1:8299/worker.js","scope":"DedicatedWorkerGlobalScope"}]}]}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== chrome-plain-r2  (chrome 151.0.7922.108) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=false | worker=false | srcdoc=false | urlSame=false | urlOpaque=false
+  origin             top=http://127.0.0.1:8297 | worker=http://127.0.0.1:8297 | srcdoc=null | urlSame=http://127.0.0.1:8297 | urlOpaque=null
+  SAB ctor           top=THROW ReferenceError: SharedArrayBuffer is not defined | worker=THROW ReferenceError: SharedArrayBuffer is not defined | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=THROW ReferenceError: SharedArrayBuffer is not defined | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top={"usedJSHeapSize":1281954,"totalJSHeapSize":2411590,"jsHeapSizeLimit": | worker=undefined | srcdoc={"usedJSHeapSize":812458,"totalJSHeapSize":2127070,"jsHeapSizeLimit":4 | urlSame={"usedJSHeapSize":1607013,"totalJSHeapSize":2936365,"jsHeapSizeLimit": | urlOpaque={"usedJSHeapSize":1094217,"totalJSHeapSize":2652085,"jsHeapSizeLimit":
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=32 | worker=32 | srcdoc=32 | urlSame=32 | urlOpaque=32
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":{}} | worker={"usage":0,"quota":10737418240,"usageDetails":{}} | srcdoc=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera | urlSame={"usage":0,"quota":10737418240,"usageDetails":{}} | urlOpaque=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag
+  connection         top={"effectiveType":"4g","downlink":1.45,"rtt":100,"saveData":false} | worker={"effectiveType":"4g","downlink":1.45,"rtt":100,"saveData":false} | srcdoc={"effectiveType":"4g","downlink":1.65,"rtt":100,"saveData":false} | urlSame={"effectiveType":"4g","downlink":1.45,"rtt":100,"saveData":false} | urlOpaque={"effectiveType":"4g","downlink":1.6,"rtt":100,"saveData":false}
+  battery            top={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | worker=undefined | srcdoc={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlSame={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlOpaque={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null}
+  PressureObserver   top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  uaData high        top={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | worker={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | srcdoc={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlSame={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlOpaque={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand",
+  now() res 1M min   top=0.09999999403953552 | worker=0.09999999403953552 | srcdoc=0.09999999403953552 | urlSame=0.09999999403953552 | urlOpaque=0.09999999403953552
+  now() res 10k min  top=0.09999999403953552 | worker=0.09999999403953552 | srcdoc=0.09999999403953552 | urlSame=0.09999999403953552 | urlOpaque=0.09999999403953552
+  now() distinct     top=[0.1] | worker=[0.1,0.2,0.7,0.9] | srcdoc=[0.1] | urlSame=[0.1] | urlOpaque=[0.1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=function | worker=n/a | srcdoc=function | urlSame=function | urlOpaque=function
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | worker=["mark","measure","resource"] | srcdoc=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlSame=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlOpaque=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig
+  gpu/wakeLock       top=["object","object"] | worker=["object","undefined"] | srcdoc=["object","object"] | urlSame=["object","object"] | urlOpaque=["object","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.4 t10=  10.3 ping=None  entries=[]
+    top            rAF= 302.9 t10= 300.2 ping=None  entries=[('longtask', 'self', 300, [('window', '', '')], []), ('long-animation-frame', 'long-animation-frame', 300.1, [], [('TimerHandler:setTimeout', '', 'self', 300)])]
+    worker         rAF=  17.4 t10=  10.2 ping=240  entries=[]
+    srcdoc         rAF=  17.4 t10=  10.2 ping=240  entries=[]
+    urlSame        rAF= 307.5 t10= 300.6 ping=0  entries=[('longtask', 'same-origin-descendant', 300, [('iframe', 'f-urlSame', 'frame.html?kind=urlSame')], []), ('long-animation-frame', 'long-animation-frame', 300.5, [], [('TimerHandler:setTimeout', 'http://127.0.0.1:8297/frame.js', 'descendant', 300.1)])]
+    urlOpaque      rAF=  17.4 t10=  10.2 ping=240  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 2, 'long-animation-frame': 2}, 'urlSame': {'longtask': 4, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 2, 'long-animation-frame': 2}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 188
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 0, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 0, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('frame.js', 'fetch', 2195), ('worker.js', 'other', 1093), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8297/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8297/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":15863.40000000596},{"source":"cpu","state":"nominal","time":16863.5},{"source":"cpu","state":"nominal","time":17864.20000000298},{"source":"cpu","state":"nominal","time":18865.2000000
+    worker     {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":21855.19999998808},{"source":"cpu","state":"nominal","time":22856.29999999702},{"source":"cpu","state":"nominal","time":23857.19999998808},{"source":"cpu","state":"nominal","time":248
+    srcdoc     {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+    urlSame    {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":27867.89999999106},{"source":"cpu","state":"nominal","time":28868.69999998808},{"source":"cpu","state":"nominal","time":29869.59999999404},{"source":"cpu","state":"nominal","time":308
+    urlOpaque  {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== chrome-plain  (chrome 151.0.7922.108) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=false | worker=false | srcdoc=false | urlSame=false | urlOpaque=false
+  origin             top=http://127.0.0.1:8297 | worker=http://127.0.0.1:8297 | srcdoc=null | urlSame=http://127.0.0.1:8297 | urlOpaque=null
+  SAB ctor           top=THROW ReferenceError: SharedArrayBuffer is not defined | worker=THROW ReferenceError: SharedArrayBuffer is not defined | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=THROW ReferenceError: SharedArrayBuffer is not defined | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top={"usedJSHeapSize":1257275,"totalJSHeapSize":2411599,"jsHeapSizeLimit": | worker=undefined | srcdoc={"usedJSHeapSize":812467,"totalJSHeapSize":2127079,"jsHeapSizeLimit":4 | urlSame={"usedJSHeapSize":1626310,"totalJSHeapSize":2936374,"jsHeapSizeLimit": | urlOpaque={"usedJSHeapSize":1161186,"totalJSHeapSize":2652094,"jsHeapSizeLimit":
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=32 | worker=32 | srcdoc=32 | urlSame=32 | urlOpaque=32
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":{}} | worker={"usage":0,"quota":10737418240,"usageDetails":{}} | srcdoc=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera | urlSame={"usage":0,"quota":10737418240,"usageDetails":{}} | urlOpaque=TypeError: Failed to execute 'estimate' on 'StorageManager': The opera
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: Failed to execute 'persisted' on 'Storag
+  connection         top={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | worker={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | srcdoc={"effectiveType":"4g","downlink":1.45,"rtt":100,"saveData":false} | urlSame={"effectiveType":"4g","downlink":1.5,"rtt":100,"saveData":false} | urlOpaque={"effectiveType":"4g","downlink":1.7,"rtt":100,"saveData":false}
+  battery            top={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | worker=undefined | srcdoc={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlSame={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null} | urlOpaque={"level":1,"charging":true,"chargingTime":0,"dischargingTime":null}
+  PressureObserver   top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  uaData high        top={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | worker={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | srcdoc={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlSame={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand", | urlOpaque={"architecture":"x86","bitness":"64","brands":[{"brand":"Not=A?Brand",
+  now() res 1M min   top=0.09999999403953552 | worker=0.09999999403953552 | srcdoc=0.09999999403953552 | urlSame=0.09999999403953552 | urlOpaque=0.09999999403953552
+  now() res 10k min  top=0.09999999403953552 | worker=0.09999999403953552 | srcdoc=0.09999999403953552 | urlSame=0.09999999403953552 | urlOpaque=0.09999999403953552
+  now() distinct     top=[0.1] | worker=[0.1] | srcdoc=[0.1] | urlSame=[0.1] | urlOpaque=[0.1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=function | worker=n/a | srcdoc=function | urlSame=function | urlOpaque=function
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | worker=["mark","measure","resource"] | srcdoc=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlSame=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig | urlOpaque=["element","event","first-input","interaction-contentful-paint","largest-contentful-paint","layout-shift","long-animation-frame","longtask","mark","measure","navigation","paint","resource","soft-navig
+  gpu/wakeLock       top=["object","object"] | worker=["object","undefined"] | srcdoc=["object","object"] | urlSame=["object","object"] | urlOpaque=["object","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.6 t10=  10.2 ping=None  entries=[]
+    top            rAF= 312.9 t10= 300.4 ping=None  entries=[('longtask', 'self', 300, [('window', '', '')], []), ('long-animation-frame', 'long-animation-frame', 310.5, [], [('TimerHandler:setTimeout', '', 'self', 300)])]
+    worker         rAF=  17.4 t10=  10.2 ping=240  entries=[]
+    srcdoc         rAF=  17.5 t10=  10.2 ping=241  entries=[]
+    urlSame        rAF= 308.6 t10= 300.5 ping=0  entries=[('longtask', 'same-origin-descendant', 300, [('iframe', 'f-urlSame', 'frame.html?kind=urlSame')], []), ('long-animation-frame', 'long-animation-frame', 300.3, [], [('TimerHandler:setTimeout', 'http://127.0.0.1:8297/frame.js', 'descendant', 300.1)])]
+    urlOpaque      rAF=  17.4 t10=  10.3 ping=240  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 2, 'long-animation-frame': 2}, 'urlSame': {'longtask': 4, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 2, 'long-animation-frame': 2}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 188
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 0, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 0, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('frame.js', 'fetch', 2195), ('worker.js', 'other', 1093), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8297/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"THROW SecurityError: Failed to construct 'Worker': Script at 'http://127.0.0.1:8297/worker.js' cannot be accessed from origin 'null'.","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":15868.70000000298},{"source":"cpu","state":"nominal","time":16869.29999999702},{"source":"cpu","state":"nominal","time":17869.59999999404},{"source":"cpu","state":"nominal","time":188
+    worker     {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":21861.89999999106},{"source":"cpu","state":"nominal","time":22863},{"source":"cpu","state":"nominal","time":23864},{"source":"cpu","state":"nominal","time":24864.89999999106},{"source
+    srcdoc     {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+    urlSame    {"typeof":"function","knownSources":["cpu"],"observe":"resolved","records":[{"source":"cpu","state":"nominal","time":27877.10000000894},{"source":"cpu","state":"nominal","time":28878},{"source":"cpu","state":"nominal","time":29878.60000000894},{"source":"cpu","state":"nominal","time":30878.700000002
+    urlOpaque  {"typeof":"function","knownSources":["cpu"],"observe":"NotAllowedError: Failed to execute 'observe' on 'PressureObserver': Access to the feature \"compute pressure\" is disallowed by permissions policy."}
+    STRESS {"workers":12,"loadStart":34933,"loadEnd":43934,"records":[{"state":"nominal","time":33934},{"state":"nominal","time":34937},{"state":"critical","time":35946},{"state":"critical","time":36943},{"state":"critical","time":37946},{"state":"critical","time":38947},{"state":"critical","time":39946},{"state":"critical","time":40947},{"state":"critical","time":41950},{"state":"critical","time":42949},{"state":"nominal","time":43950},{"state":"nominal","time":44950},{"state":"nominal","time":45951},{"state":"nominal","time":46952}]}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== firefox-corp-r2  (firefox 149.0.2) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  origin             top=http://127.0.0.1:8298 | worker=http://127.0.0.1:8298 | srcdoc=null | urlSame=http://127.0.0.1:8298 | urlOpaque=null
+  SAB ctor           top=8 | worker=8 | srcdoc=8 | urlSame=8 | urlOpaque=8
+  perf.memory        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | worker={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | srcdoc=TypeError: estimate() called for opaque origin | urlSame={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | urlOpaque=TypeError: estimate() called for opaque origin
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: persisted() called for opaque origin"} | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: persisted() called for opaque origin"}
+  connection         top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  battery            top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  PressureObserver   top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  uaData high        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  now() res 1M min   top=0.01999999999998181 | worker=0.01999999999998181 | srcdoc=0.01999999999998181 | urlSame=0.01999999999998181 | urlOpaque=0.01999999999998181
+  now() res 10k min  top=0.01999999999998181 | worker=0.01999999999998181 | srcdoc=0.01999999999998181 | urlSame=0.01999999999998181 | urlOpaque=0.01999999999998181
+  now() distinct     top=[0.02] | worker=[0.02,0.04,0.06,0.1] | srcdoc=[0.02,0.06,0.08,0.1,0.14,0.76] | urlSame=[0.02,0.04,0.08] | urlOpaque=[0.02,0.04,0.06]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=n/a | worker=n/a | srcdoc=n/a | urlSame=n/a | urlOpaque=n/a
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | worker=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | srcdoc=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlSame=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlOpaque=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"]
+  gpu/wakeLock       top=["undefined","object"] | worker=["undefined","undefined"] | srcdoc=["undefined","object"] | urlSame=["undefined","object"] | urlOpaque=["undefined","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.1 t10=  10.2 ping=None  entries=[]
+    top            rAF= 308.1 t10= 305.1 ping=None  entries=[]
+    worker         rAF=  17.1 t10=  10.1 ping=240  entries=[]
+    srcdoc         rAF= 315.7 t10=   304 ping=0  entries=[]
+    urlSame        rAF= 302.6 t10= 304.8 ping=1  entries=[]
+    urlOpaque      rAF= 307.2 t10= 304.9 ping=0  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 0, 'long-animation-frame': 0}, 'urlSame': {'longtask': 0, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 0, 'long-animation-frame': 0}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 0
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 65536, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 65536, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('frame.js', 'fetch', 2195), ('worker.js', 'other', 1093), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== firefox-corp  (firefox 149.0.2) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  origin             top=http://127.0.0.1:8298 | worker=http://127.0.0.1:8298 | srcdoc=null | urlSame=http://127.0.0.1:8298 | urlOpaque=null
+  SAB ctor           top=8 | worker=8 | srcdoc=8 | urlSame=8 | urlOpaque=8
+  perf.memory        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | worker={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | srcdoc=TypeError: estimate() called for opaque origin | urlSame={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | urlOpaque=TypeError: estimate() called for opaque origin
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: persisted() called for opaque origin"} | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: persisted() called for opaque origin"}
+  connection         top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  battery            top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  PressureObserver   top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  uaData high        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  now() res 1M min   top=0.01999999999998181 | worker=0.01999999999998181 | srcdoc=0.01999999999998181 | urlSame=0.01999999999998181 | urlOpaque=0.01999999999998181
+  now() res 10k min  top=0.01999999999998181 | worker=0.01999999999999602 | srcdoc=0.01999999999998181 | urlSame=0.01999999999998181 | urlOpaque=0.01999999999998181
+  now() distinct     top=[0.02,0.04] | worker=[0.02] | srcdoc=[0.02] | urlSame=[0.02,0.04] | urlOpaque=[0.02,0.04,0.08]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=n/a | worker=n/a | srcdoc=n/a | urlSame=n/a | urlOpaque=n/a
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | worker=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | srcdoc=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlSame=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlOpaque=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"]
+  gpu/wakeLock       top=["undefined","object"] | worker=["undefined","undefined"] | srcdoc=["undefined","object"] | urlSame=["undefined","object"] | urlOpaque=["undefined","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=    19 t10=  11.7 ping=None  entries=[]
+    top            rAF= 311.2 t10= 302.9 ping=None  entries=[]
+    worker         rAF=  17.2 t10=  10.1 ping=240  entries=[]
+    srcdoc         rAF=   302 t10= 300.2 ping=0  entries=[]
+    urlSame        rAF= 305.8 t10= 304.4 ping=1  entries=[]
+    urlOpaque      rAF= 310.4 t10=   304 ping=0  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 0, 'long-animation-frame': 0}, 'urlSame': {'longtask': 0, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 0, 'long-animation-frame': 0}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 0
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 65536, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 65536, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('worker.js', 'other', 1093), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== firefox-credentialless  (firefox 149.0.2) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  origin             top=http://127.0.0.1:8299 | worker=http://127.0.0.1:8299 | srcdoc=null | urlSame=http://127.0.0.1:8299 | urlOpaque=null
+  SAB ctor           top=8 | worker=8 | srcdoc=8 | urlSame=8 | urlOpaque=8
+  perf.memory        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | worker={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | srcdoc=TypeError: estimate() called for opaque origin | urlSame={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | urlOpaque=TypeError: estimate() called for opaque origin
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: persisted() called for opaque origin"} | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: persisted() called for opaque origin"}
+  connection         top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  battery            top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  PressureObserver   top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  uaData high        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  now() res 1M min   top=0.01999999999998181 | worker=0.01999999999998181 | srcdoc=0.01999999999998181 | urlSame=0.01999999999998181 | urlOpaque=0.01999999999998181
+  now() res 10k min  top=0.01999999999998181 | worker=0.01999999999999602 | srcdoc=0.01999999999998181 | urlSame=0.01999999999998181 | urlOpaque=0.01999999999998181
+  now() distinct     top=[0.02,0.04] | worker=[0.02,0.04] | srcdoc=[0.02,0.04,0.5] | urlSame=[0.02,0.04] | urlOpaque=[0.02]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=n/a | worker=n/a | srcdoc=n/a | urlSame=n/a | urlOpaque=n/a
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | worker=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | srcdoc=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlSame=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlOpaque=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"]
+  gpu/wakeLock       top=["undefined","object"] | worker=["undefined","undefined"] | srcdoc=["undefined","object"] | urlSame=["undefined","object"] | urlOpaque=["undefined","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=  17.3 t10=    11 ping=None  entries=[]
+    top            rAF= 303.8 t10= 304.8 ping=None  entries=[]
+    worker         rAF=  17.1 t10=  10.1 ping=240  entries=[]
+    srcdoc         rAF= 311.9 t10= 302.4 ping=0  entries=[]
+    urlSame        rAF= 315.9 t10=   304 ping=1  entries=[]
+    urlOpaque      rAF= 303.4 t10= 304.9 ping=0  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 0, 'long-animation-frame': 0}, 'urlSame': {'longtask': 0, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 0, 'long-animation-frame': 0}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 0
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 65536, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 65536, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('worker.js', 'other', 1093), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== firefox-plain-r2  (firefox 149.0.2) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=false | worker=false | srcdoc=false | urlSame=false | urlOpaque=false
+  origin             top=http://127.0.0.1:8297 | worker=http://127.0.0.1:8297 | srcdoc=null | urlSame=http://127.0.0.1:8297 | urlOpaque=null
+  SAB ctor           top=THROW ReferenceError: SharedArrayBuffer is not defined | worker=THROW ReferenceError: SharedArrayBuffer is not defined | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=THROW ReferenceError: SharedArrayBuffer is not defined | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | worker={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | srcdoc=TypeError: estimate() called for opaque origin | urlSame={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | urlOpaque=TypeError: estimate() called for opaque origin
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: persisted() called for opaque origin"} | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: persisted() called for opaque origin"}
+  connection         top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  battery            top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  PressureObserver   top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  uaData high        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  now() res 1M min   top=1 | worker=1 | srcdoc=1 | urlSame=1 | urlOpaque=1
+  now() res 10k min  top=null | worker=1 | srcdoc=1 | urlSame=1 | urlOpaque=null
+  now() distinct     top=[1] | worker=[1] | srcdoc=[1] | urlSame=[1] | urlOpaque=[1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=n/a | worker=n/a | srcdoc=n/a | urlSame=n/a | urlOpaque=n/a
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | worker=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | srcdoc=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlSame=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlOpaque=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"]
+  gpu/wakeLock       top=["undefined","object"] | worker=["undefined","undefined"] | srcdoc=["undefined","object"] | urlSame=["undefined","object"] | urlOpaque=["undefined","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=    18 t10=    11 ping=None  entries=[]
+    top            rAF=   307 t10=   305 ping=None  entries=[]
+    worker         rAF=    18 t10=    11 ping=239  entries=[]
+    srcdoc         rAF=   312 t10=   298 ping=0  entries=[]
+    urlSame        rAF=   301 t10=   305 ping=1  entries=[]
+    urlOpaque      rAF=   305 t10=   303 ping=0  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 0, 'long-animation-frame': 0}, 'urlSame': {'longtask': 0, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 0, 'long-animation-frame': 0}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 0
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 65536, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 65536, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('worker.js', 'other', 1093), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+
+==================== firefox-plain  (firefox 149.0.2) fatal=None
+  isSecureContext    top=true | worker=true | srcdoc=true | urlSame=true | urlOpaque=true
+  crossOriginIsolated top=false | worker=false | srcdoc=false | urlSame=false | urlOpaque=false
+  origin             top=http://127.0.0.1:8297 | worker=http://127.0.0.1:8297 | srcdoc=null | urlSame=http://127.0.0.1:8297 | urlOpaque=null
+  SAB ctor           top=THROW ReferenceError: SharedArrayBuffer is not defined | worker=THROW ReferenceError: SharedArrayBuffer is not defined | srcdoc=THROW ReferenceError: SharedArrayBuffer is not defined | urlSame=THROW ReferenceError: SharedArrayBuffer is not defined | urlOpaque=THROW ReferenceError: SharedArrayBuffer is not defined
+  perf.memory        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  mUASM typeof       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  deviceMemory       top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  hwConcurrency      top=12 | worker=12 | srcdoc=12 | urlSame=12 | urlOpaque=12
+  storage.estimate   top={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | worker={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | srcdoc=TypeError: estimate() called for opaque origin | urlSame={"usage":0,"quota":10737418240,"usageDetails":"undefined"} | urlOpaque=TypeError: estimate() called for opaque origin
+  persisted          top={"ok":true,"v":false} | worker={"ok":true,"v":false} | srcdoc={"ok":false,"err":"TypeError: persisted() called for opaque origin"} | urlSame={"ok":true,"v":false} | urlOpaque={"ok":false,"err":"TypeError: persisted() called for opaque origin"}
+  connection         top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  battery            top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  PressureObserver   top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  uaData high        top=undefined | worker=undefined | srcdoc=undefined | urlSame=undefined | urlOpaque=undefined
+  now() res 1M min   top=1 | worker=1 | srcdoc=1 | urlSame=1 | urlOpaque=1
+  now() res 10k min  top=1 | worker=1 | srcdoc=1 | urlSame=1 | urlOpaque=1
+  now() distinct     top=[1] | worker=[1] | srcdoc=[1,2] | urlSame=[1] | urlOpaque=[1]
+  scheduler.yield    top=function | worker=function | srcdoc=function | urlSame=function | urlOpaque=function
+  isInputPending     top=n/a | worker=n/a | srcdoc=n/a | urlSame=n/a | urlOpaque=n/a
+  wasm grow          top={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | worker={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | srcdoc={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlSame={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":" | urlOpaque={"before":65536,"growReturned":1,"after":1048576,"toResizableBuffer":"
+  wasm shared mem    top={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | worker={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | srcdoc={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlSame={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"} | urlOpaque={"byteLength":65536,"bufferType":"[object SharedArrayBuffer]"}
+  entryTypes         top=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | worker=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | srcdoc=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlSame=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"] | urlOpaque=["event","first-input","largest-contentful-paint","mark","measure","navigation","paint","resource"]
+  gpu/wakeLock       top=["undefined","object"] | worker=["undefined","undefined"] | srcdoc=["undefined","object"] | urlSame=["undefined","object"] | urlOpaque=["undefined","object"]
+  -- busy windows (top rAF maxGap / top 10ms-timeout maxGap / ping rtt / top-visible entries)
+    idle-baseline  rAF=    18 t10=    11 ping=None  entries=[]
+    top            rAF=   303 t10=   305 ping=None  entries=[]
+    worker         rAF=    18 t10=    11 ping=240  entries=[]
+    srcdoc         rAF=   310 t10=   304 ping=0  entries=[]
+    urlSame        rAF=   314 t10=   303 ping=1  entries=[]
+    urlOpaque      rAF=   300 t10=   304 ping=0  entries=[]
+  frame own entries (count by type): {'srcdoc': {'longtask': 0, 'long-animation-frame': 0}, 'urlSame': {'longtask': 0, 'long-animation-frame': 0}, 'urlOpaque': {'longtask': 0, 'long-animation-frame': 0}}
+  topObserve: {'longtask': 'observe() returned', 'long-animation-frame': 'observe() returned'}  topEntriesAll: 0
+  -- resource timing, each ctx's OWN entries: (name, transfer, encoded)
+    top        [('blob.bin?from=top', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=top', 65836, 65536, 'http/1.0')]
+    worker     [('blob.bin?from=worker', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=worker', 65836, 65536, 'http/1.0')]
+    srcdoc     [('blob.bin?from=srcdoc', 0, 65536, ''), ('blob-tao.bin?from=srcdoc', 65836, 65536, 'http/1.0')]
+    urlSame    [('blob.bin?from=urlSame', 65836, 65536, 'http/1.0'), ('blob-tao.bin?from=urlSame', 65836, 65536, 'http/1.0')]
+    urlOpaque  [('blob.bin?from=urlOpaque', 0, 65536, ''), ('blob-tao.bin?from=urlOpaque', 65836, 65536, 'http/1.0')]
+    TOP sees: [('collect.js', 'script', 9615), ('collect.js', 'fetch', 9615), ('worker.js', 'other', 1093), ('frame.js', 'fetch', 2195), ('frame.html?kind=urlSame', 'iframe', 440), ('frame.html?kind=urlOpaque', 'iframe', 440), ('blob.bin?from=top', 'fetch', 65836), ('blob-tao.bin?from=top', 'fetch', 65836)]
+  frameWorkers: {"srcdoc":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}},"urlSame":{"relativeUrl":{"ok":true,"reply":"object"},"blobUrl":{"ok":true,"reply":"object"}},"urlOpaque":{"relativeUrl":"Error: worker error event: ","blobUrl":{"ok":true,"reply":"object"}}}
+  -- pressure
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}
+    STRESS {"typeof":"undefined"}
+  -- memory
+    top        {"typeof":"undefined"}
+    worker     {"typeof":"undefined"}
+    srcdoc     {"typeof":"undefined"}
+    urlSame    {"typeof":"undefined"}
+    urlOpaque  {"typeof":"undefined"}

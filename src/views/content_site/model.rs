@@ -379,7 +379,7 @@ impl ContentSiteModel {
     pub fn new(window_id: WindowId, peer_id: String) -> Self {
         let state_path =
             crate::app_paths::window_state_path(crate::app_paths::APP_ID, &peer_id, window_id);
-        Self::with_state_path(peer_id, state_path)
+        Self::with_state_path(peer_id, state_path, Some(window_id))
     }
 
     /// The Site Mode overlay's model — navigation state persists at an
@@ -387,12 +387,14 @@ impl ContentSiteModel {
     /// surface, not a window.
     pub fn new_overlay(peer_id: String) -> Self {
         let state_path = crate::session_config::overlay_location_path(&peer_id);
-        Self::with_state_path(peer_id, state_path)
+        Self::with_state_path(peer_id, state_path, None)
     }
 
-    fn with_state_path(peer_id: String, state_path: String) -> Self {
+    fn with_state_path(peer_id: String, state_path: String, window: Option<WindowId>) -> Self {
         let repaint: RepaintCell = Rc::new(RefCell::new(None));
-        let resolver = Box::new(MultiResolver::new(peer_id.clone(), repaint.clone()));
+        // A window's page fetches are counted against it in the System Monitor;
+        // the overlay is not a window and is not listed there.
+        let resolver = Box::new(MultiResolver::for_window(peer_id.clone(), repaint.clone(), window));
         let inner = Inner {
             // Hydrated from config in `initialize` / `hydrate_durable`; the demo
             // site is the build-default home, so this is a safe pre-hydration
@@ -706,17 +708,6 @@ impl ContentSiteModel {
     /// signal the directory surfaces) — the one place we count a visit, so it
     /// counts explicit opens, not per-frame renders.
     pub fn open_site(&self, peer: &str, site: &str, peers: &Peers) {
-        self.open_page(peer, site, "", peers)
-    }
-
-    /// [`open_site`](Self::open_site) at a named page rather than the site root —
-    /// the entry point a [`crate::window::WindowView::aim`] uses, since an
-    /// `open_target` address may name `{site}/pages/{page}` and arriving at the
-    /// root would silently drop the half the caller cared about.
-    ///
-    /// `page` empty = the site's root page, which is what makes `open_site` one
-    /// line rather than a second expression of the same act.
-    pub fn open_page(&self, peer: &str, site: &str, page: &str, peers: &Peers) {
         let peer_id = Some(peer.to_string()).filter(|p| !p.is_empty());
         // The provenance/prefs ledger keys by the concrete owning peer; an
         // owned site keys by my own id (`peer` empty → my bound peer).
@@ -729,7 +720,7 @@ impl ContentSiteModel {
             |p| p.visit_count = p.visit_count.saturating_add(1),
         );
         self.go_to(
-            Location { peer_id, site_id: site.to_string(), page: page.to_string() },
+            Location { peer_id, site_id: site.to_string(), page: String::new() },
             peers,
         );
     }

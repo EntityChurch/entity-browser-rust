@@ -8,7 +8,7 @@
 
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
-use crate::views::storage::output::{BackendStoreView, OriginEstimate, PeerStorage, StorageOutput};
+use crate::views::storage::output::{BackendStoreView, EstimateUnavailable, OriginEstimate, PeerStorage, StorageOutput};
 
 use web_sys::Element;
 
@@ -16,6 +16,8 @@ const CARD: &str = "background:var(--surface-sunken,#0a0a1a);border:1px solid \
     var(--border,#2a2a4e);border-radius:6px;padding:10px;margin:8px 0";
 const STAT_ROW: &str =
     "display:flex;justify-content:space-between;gap:12px;font-size:13px;margin:2px 0";
+/// A small heading over a list of stat rows inside a card.
+const SUBHEAD: &str = "margin-top:6px;font-size:11px;color:var(--text-dim,#888)";
 const BADGE: &str = "font-size:10px;font-weight:bold;padding:1px 6px;border-radius:8px;\
     background:var(--surface,#2a2a4e);color:var(--text-dim,#888);margin-inline-start:8px";
 
@@ -48,8 +50,10 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     util::append(&wrapper, &hint);
 
     // Origin-wide disk estimate.
-    if let Some(est) = &output.estimate {
-        util::append(&wrapper, &origin_block(est));
+    match &output.estimate {
+        Some(Ok(est)) => util::append(&wrapper, &origin_block(est)),
+        Some(Err(why)) => util::append(&wrapper, &origin_unavailable(*why)),
+        None => {}
     }
 
     // The native system backend's store — a remote peer over the pool, so it
@@ -73,14 +77,30 @@ pub fn render(container: &Element, output: &StorageOutput, ctx: &DomCtx) {
     util::append(container, &wrapper);
 }
 
+fn origin_title() -> Element {
+    let title = util::create_element("div");
+    title.set_attribute("style", "font-weight:bold;font-size:13px;margin-bottom:4px").ok();
+    util::set_text(&title, &crate::i18n::t("storage.origin_disk", &[]));
+    title
+}
+
+fn origin_unavailable(why: EstimateUnavailable) -> Element {
+    let block = util::create_element("div");
+    block.set_attribute("style", CARD).ok();
+    block.set_attribute("data-field", "storage-estimate-unavailable").ok();
+    util::append(&block, &origin_title());
+    let p = util::create_element("p");
+    p.set_attribute("style", theme::HINT).ok();
+    util::set_text(&p, &why.explanation());
+    util::append(&block, &p);
+    block
+}
+
 fn origin_block(est: &OriginEstimate) -> Element {
     let block = util::create_element("div");
     block.set_attribute("style", CARD).ok();
 
-    let title = util::create_element("div");
-    title.set_attribute("style", "font-weight:bold;font-size:13px;margin-bottom:4px").ok();
-    util::set_text(&title, &crate::i18n::t("storage.origin_disk", &[]));
-    util::append(&block, &title);
+    util::append(&block, &origin_title());
 
     let pct = if est.quota_bytes > 0.0 {
         format!(" ({:.1}%)", est.usage_bytes / est.quota_bytes * 100.0)
@@ -179,6 +199,7 @@ fn peer_card(peer: &PeerStorage) -> Element {
     // Headline stats.
     util::append(&card, &stat_row(&crate::i18n::t("storage.content_blobs", &[]), &peer.content_blobs.to_string()));
     util::append(&card, &stat_row(&crate::i18n::t("storage.live_paths", &[]), &peer.live_paths.to_string()));
+    util::append(&card, &stat_row(&crate::i18n::t("storage.live_bytes", &[]), &format_bytes(peer.live_bytes as f64)));
     let orphans = peer.approx_orphans();
     util::append(
         &card,
@@ -205,14 +226,36 @@ fn peer_card(peer: &PeerStorage) -> Element {
         util::append(&card, &note);
     } else if !peer.buckets.is_empty() {
         let sub = util::create_element("div");
-        sub.set_attribute("style", "margin-top:6px;font-size:11px;color:var(--text-dim,#888)").ok();
+        sub.set_attribute("style", SUBHEAD).ok();
         util::set_text(&sub, &crate::i18n::t("storage.by_path", &[]));
         util::append(&card, &sub);
 
         let mut buckets: Vec<&_> = peer.buckets.iter().collect();
         buckets.sort_by(|a, b| b.count.cmp(&a.count).then(a.label.cmp(&b.label)));
         for b in buckets {
-            util::append(&card, &stat_row(&format!("  {}/", b.label), &b.count.to_string()));
+            util::append(
+                &card,
+                &stat_row(&format!("  {}/", b.label), &format!("{} · {}", b.count, format_bytes(b.bytes as f64))), // i18n-ignore — a path label, a count and a byte size
+            );
+        }
+    }
+
+    // What is using the space, in the File Manager's own words — and the way to
+    // act on it, since this window only reads.
+    if !peer.files.is_empty() {
+        let sub = util::create_element("div");
+        sub.set_attribute("style", SUBHEAD).ok();
+        sub.set_attribute("data-field", "storage-files").ok();
+        util::set_text(&sub, &crate::i18n::t("storage.by_file_place", &[]));
+        util::append(&card, &sub);
+        for f in &peer.files {
+            let row = stat_row(
+                &format!("  {}", crate::dom::files::place_label(f.place)), // i18n-ignore — indentation before a localized label
+                &format!("{} · {}", f.files, format_bytes(f.bytes as f64)), // i18n-ignore — a count and a byte size
+            );
+            row.set_attribute("data-place", f.place.key()).ok();
+            row.set_attribute("data-bytes", &f.bytes.to_string()).ok();
+            util::append(&card, &row);
         }
     }
 

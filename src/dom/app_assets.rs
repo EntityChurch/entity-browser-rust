@@ -57,6 +57,8 @@ pub struct AssetHost {
     writer: WriterHandle,
     frame: web_sys::HtmlIFrameElement,
     bundles: RefCell<HashMap<String, BundleState>>,
+    /// The window the app runs in — what the System Monitor charges its data to.
+    window: crate::window::WindowId,
 }
 
 impl AssetHost {
@@ -68,6 +70,7 @@ impl AssetHost {
         me: &str,
         source: AssetSource,
         frame: &web_sys::HtmlIFrameElement,
+        window: crate::window::WindowId,
     ) -> Option<Rc<Self>> {
         if source.bundles.is_empty() {
             return None;
@@ -81,6 +84,7 @@ impl AssetHost {
             writer,
             frame: frame.clone(),
             bundles: RefCell::new(HashMap::new()),
+            window,
         });
         for bundle in &source.bundles {
             let what = ForeignArtifact::AppAssetIndex {
@@ -231,7 +235,13 @@ impl AssetHost {
                 wasm_bindgen_futures::spawn_local(async move {
                     let src = crate::content_site::http_poll::FetchBinSource;
                     let out = match foreign_cache::ensure_content(&src, &host.writer, &origin, &entry.blob).await {
-                        Ok(()) => assets::resolve_entry(&entry, |h| host.writer.content_get(h)),
+                        Ok(()) => {
+                            let out = assets::resolve_entry(&entry, |h| host.writer.content_get(h));
+                            if let Ok(bytes) = &out {
+                                crate::monitor::sampler::note_app_data(host.window, 0.0, bytes.len() as f64);
+                            }
+                            out
+                        }
                         Err(e) => Err(Refusal::Unavailable(e.to_string())),
                     };
                     host.reply(&id, &bundle, &key, out);
@@ -256,6 +266,7 @@ impl AssetHost {
         let transfer = js_sys::Array::new();
         let stamp = match &outcome {
             Ok(bytes) => {
+                crate::monitor::sampler::note_app_data(self.window, bytes.len() as f64, 0.0);
                 let arr = js_sys::Uint8Array::from(bytes.as_slice());
                 let buf = arr.buffer();
                 set("size", &JsValue::from_f64(bytes.len() as f64));

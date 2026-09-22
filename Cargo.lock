@@ -660,6 +660,7 @@ dependencies = [
  "entity-network",
  "entity-peer",
  "entity-registry",
+ "entity-revision",
  "entity-sdk",
  "entity-shell",
  "entity-signaling",

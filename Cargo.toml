@@ -171,13 +171,6 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 ciborium = "0.2"
 serde_json = "1"
 
-# One digest, for one derivation: `APP-CONVENTION-FEED` §6.0.1's live mirror
-# coordinate is `content_hash` of a **path**, and every corpus primitive for that
-# (`Hash::compute`) takes a type argument the clause does not supply. See
-# `feed::path_coordinate` for the reading we take and what is routed about it.
-# Already in the graph — `entity-hash` depends on it — so this edge only names it.
-sha2 = "0.10"
-
 # Error handling
 thiserror = "2"
 
@@ -314,6 +307,15 @@ web-sys = { version = "0.3", features = [
     "EventTarget",
     "Event",
     "MouseEvent",
+    # The window resize grip captures the pointer for the length of a drag
+    # (src/dom/mod.rs `build_size_grip`), which needs the pointer's id.
+    "PointerEvent",
+    # The Apps player re-fits a window to its app's screen when the frame's
+    # width changes (src/dom/games.rs, `crate::window_size`).
+    "ResizeObserver",
+    # Files dropped onto the File Manager land in My files (src/dom/files.rs).
+    "DragEvent",
+    "DataTransfer",
     "KeyboardEvent",
     "CssStyleDeclaration",
     "DomTokenList",

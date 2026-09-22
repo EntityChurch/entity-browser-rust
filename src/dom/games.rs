@@ -103,6 +103,8 @@ border-radius:10px;background:var(--surface, #15151a);}\
 .gm-frame{flex:1;width:100%;min-height:0;display:block;border:0;\
 background:var(--surface, #15151a);}\
 .gm-bar-actions{margin-inline-start:auto;flex-shrink:0;display:flex;gap:8px;}\
+.gm-back{white-space:nowrap;flex-shrink:0;}\
+.gm-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}\
 .gm-bar-btn{cursor:pointer;\
 background:var(--surface-hover, #22223a);color:var(--text, #e2e2ea);\
 border:1px solid var(--border, #2a2a3e);border-radius:6px;padding:5px 12px;\
@@ -121,6 +123,10 @@ height:auto;align-self:stretch;border:0;border-radius:0;}\
 .gm-stage{max-width:none;max-height:none;height:auto;align-self:stretch;\
 border:0;border-radius:0;}\
 .gm-expand-btn{display:none;}\
+.gm-bar{flex-wrap:wrap;row-gap:6px;gap:8px !important;padding:6px 8px !important;}\
+.gm-bar-actions{flex-wrap:wrap;gap:6px;}\
+.gm-bar-btn{padding:5px 9px;}\
+.gm-file-status{order:10;flex-basis:100%;}\
 }";
 
 /// Inline `style` for the stage element — the per-axis size resolution. Sets the
@@ -522,6 +528,11 @@ pub struct GamesHostConfig {
     /// [`crate::apps::workspace`]). `None` and the app runs against exactly the
     /// host it always had.
     pub workspace: Option<crate::apps::workspace::WorkspaceSource>,
+    /// The window's size key while this app runs ([`crate::window_size::size_key`])
+    /// — what the player files a fitted height under. It must be the key the
+    /// renderer's reconcile computes for the same window, or a fit is never
+    /// applied.
+    pub size_key: String,
 }
 
 /// The host loop's lifetime-bound state, kept alive by the window. Beyond the
@@ -538,6 +549,10 @@ pub struct HostListener {
     /// Persist any pending save immediately (put + retention reclaim). Called
     /// on the debounce timer AND on teardown so the latest save is never lost.
     flush: Rc<dyn Fn()>,
+    /// Watches the frame's size so a fitted window follows a width change.
+    /// Disconnected on teardown — its callback is owned here, and an observer
+    /// that outlived it would call a dropped closure.
+    resize: Option<(web_sys::ResizeObserver, Closure<dyn FnMut()>)>,
 }
 
 /// Render the player: a back bar + the sandboxed iframe running the bundle, with
@@ -567,7 +582,10 @@ pub fn render_player(
     );
 
     // Back bar: "← Games" returns to the launcher grid (empty selection).
-    let bar = util::create_element("div");
+    // `gm-bar` / `gm-back` / `gm-name`: the narrow-screen rules in GAMES_PLAYER_CSS.
+    // Measured at 390 px (2026-09-14): "← Apps" broke onto two lines, a two-word
+    // app name wrapped, and "Send a file" ran off the right edge.
+    let bar = util::create_element_with_class("div", "gm-bar"); // i18n-ignore — CSS class names
     util::set_attr(
         &bar,
         "style",
@@ -577,6 +595,7 @@ pub fn render_player(
          font-family:system-ui,-apple-system,sans-serif;",
     );
     let back = util::create_element("button");
+    util::set_attr(&back, "class", "gm-back"); // i18n-ignore — CSS class names
     util::set_attr(
         &back,
         "style",
@@ -588,7 +607,7 @@ pub fn render_player(
     util::set_text(&back, &format!("← {}", cfg.back_label));
     ctx.on_window_event(&back, "click", SELECT_EVENT, "");
     util::append(&bar, &back);
-    let name = util::create_element("div");
+    let name = util::create_element_with_class("div", "gm-name"); // i18n-ignore — CSS class names
     util::set_attr(&name, "style", "font-size:14px;font-weight:600;color:var(--text, #e2e2ea);");
     util::set_text(&name, &cfg.game_name);
     util::append(&bar, &name);
@@ -618,6 +637,22 @@ pub fn render_player(
     if fullscreen_available {
         util::append(&actions, &full_btn);
     }
+
+    // ⤓ Fit — size the WINDOW so the app's whole screen shows at this width
+    // (`crate::window_size`). Hidden until the app says what its screen is
+    // (`x-view`); an app that never does has nothing to fit.
+    let fit_btn = util::create_element_with_class("button", "gm-bar-btn gm-fit-btn"); // i18n-ignore — CSS class names
+    util::set_attr(&fit_btn, "type", "button");
+    util::set_attr(&fit_btn, "data-field", "app-fit-screen");
+    util::set_attr(&fit_btn, "hidden", "");
+    util::set_text(&fit_btn, &format!("\u{2195} {}", crate::i18n::t("btn.fit_screen", &[])));
+    util::set_attr(&fit_btn, "title", &crate::i18n::t("tooltip.fit_screen", &[]));
+    ctx.on_action(
+        &fit_btn,
+        "click",
+        crate::action::Action::SetWindowSize(ctx.window_id, Some(crate::window_size::SizePref::Fit)),
+    );
+    util::append(&actions, &fit_btn);
 
     // File verbs — drawn ONLY for an app whose catalog entry opted in
     // (`x-files`, `crate::app_files`). Wired below once the frame exists.
@@ -860,6 +895,65 @@ pub fn render_player(
         Err(_) => return None,
     };
 
+    // --- Fitting the window to the app's screen (`crate::window_size`) --------
+    // The player measures; the renderer applies. `refit` computes the section
+    // height that shows the whole screen at the frame's current width and files
+    // it under this window's size key; it asks for a frame only when the figure
+    // changed, because the observer below fires on the very height it produces.
+    let app_view: Rc<Cell<Option<crate::window_size::AppView>>> = Rc::new(Cell::new(None));
+    let refit: Rc<dyn Fn()> = {
+        let (app_view, frame, wrapper) = (app_view.clone(), frame_iframe.clone(), wrapper.clone());
+        let (key, wid, repaint) = (cfg.size_key.clone(), ctx.window_id, ctx.repaint.clone());
+        Rc::new(move || {
+            let Some(view) = app_view.get() else { return };
+            // Fit is for the windowed case: full screen and maximized are the
+            // screen's size, and measuring them would file the wrong height.
+            if util::is_fullscreen(&wrapper) {
+                return;
+            }
+            let Ok(Some(section)) = frame.closest("section.window") else { return };
+            if section.class_list().contains("maximized") {
+                return;
+            }
+            let Some(section_h) = section.dyn_ref::<web_sys::HtmlElement>().map(|e| e.offset_height() as f64) else {
+                return;
+            };
+            let (frame_w, frame_h) = (frame.client_width() as f64, frame.client_height() as f64);
+            if frame_w <= 0.0 {
+                return;
+            }
+            // The window area's visible height, less its own padding. Read at
+            // each fit, deliberately NOT observed: on a phone the on-screen
+            // keyboard shrinks the area, and a machine window that resized
+            // itself every time the keyboard opened would be a worse bug than
+            // the one this fixes.
+            let room = section.parent_element().map(|a| a.client_height() as f64 - 8.0).unwrap_or(0.0);
+            let px = crate::window_size::fit_section_height(view, section_h, frame_w, frame_h, room);
+            if crate::window_size::set_fit(wid, &key, px) {
+                let _ = frame.set_attribute("data-fit-px", &px.to_string());
+                repaint();
+            }
+        })
+    };
+    // The frame's width is what a fit depends on; follow it.
+    let resize = {
+        let refit = refit.clone();
+        let cb = Closure::wrap(Box::new(move || refit()) as Box<dyn FnMut()>);
+        web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()).ok().map(|o| {
+            o.observe(&frame_iframe);
+            (o, cb)
+        })
+    };
+    {
+        // Leaving full screen or the maximized surface changes nothing the
+        // frame observer is guaranteed to see at the right moment; paint again.
+        let refit = refit.clone();
+        for event in ["fullscreenchange", "webkitfullscreenchange"] {
+            let refit = refit.clone();
+            ctx.listen(&wrapper, event, move |_| refit());
+        }
+    }
+
     if let Some(ui) = &file_ui {
         wire_file_picker(
             ctx,
@@ -873,7 +967,7 @@ pub fn render_player(
     let asset_host = cfg
         .assets
         .clone()
-        .and_then(|source| crate::dom::app_assets::AssetHost::mount(peers, &cfg.peer_id, source, &frame_iframe));
+        .and_then(|source| crate::dom::app_assets::AssetHost::mount(peers, &cfg.peer_id, source, &frame_iframe, ctx.window_id));
     let workspace_host = cfg
         .workspace
         .clone()
@@ -891,6 +985,7 @@ pub fn render_player(
     let file_save = file_ui.as_ref().map(|u| u.save.clone());
     let file_input = file_ui.as_ref().map(|u| u.input.clone());
     let app_label = cfg.game_id.clone();
+    let window_id = ctx.window_id;
     // What an offer records as its origin (`file_offer::OfferSource`), so File
     // Transfer can say which app a file came from.
     let file_source = crate::file_offer::OfferSource {
@@ -1129,6 +1224,34 @@ pub fn render_player(
                     schedule();
                 }
             }
+            // The app's own account of its load — a local extension, read only
+            // while a System Monitor is open (the sampler drops it otherwise).
+            // The app's screen, so the window can be sized to show all of it.
+            Some(crate::window_size::MSG_VIEW) => {
+                let num = |k: &str| js_sys::Reflect::get(&data, &JsValue::from_str(k)).ok().and_then(|v| v.as_f64());
+                let view = match (num("screen_w"), num("screen_h")) {
+                    (Some(w), Some(h)) => {
+                        crate::window_size::AppView::new(w, h, num("extra_w").unwrap_or(0.0), num("extra_h").unwrap_or(0.0))
+                    }
+                    _ => None,
+                };
+                match view {
+                    Some(v) => {
+                        if app_view.get() != Some(v) {
+                            app_view.set(Some(v));
+                            let _ = fit_btn.remove_attribute("hidden");
+                            refit();
+                        }
+                    }
+                    None => tracing::warn!(app = %app_label, "app view: x-view that describes no screen — ignored"),
+                }
+            }
+            Some(crate::monitor::MSG_STATS) => {
+                let num = |k: &str| js_sys::Reflect::get(&data, &JsValue::from_str(k)).ok().and_then(|v| v.as_f64());
+                if let (Some(busy), Some(span)) = (num("busy_ms"), num("span_ms")) {
+                    crate::monitor::sampler::note_app_stats(window_id, busy, span, num("instructions"), num("memory_bytes"));
+                }
+            }
             Some(crate::apps::assets::MSG_GET) => match &asset_host {
                 Some(assets) => assets.handle_get(&data),
                 // Not declared: dropped without a reply, the `x-files` rule —
@@ -1206,6 +1329,7 @@ pub fn render_player(
         timer_id,
         _timer_cb: timer_cb,
         flush,
+        resize,
     })
 }
 
@@ -1233,7 +1357,7 @@ fn wire_file_picker(
         let status = ui.status.clone();
         ctx.listen(&ui.save, "click", move |_| {
             let (Some(id), Some(name)) =
-                (save.get_attribute("data-offer-id"), save.get_attribute("data-offer-name"))
+                (save.get_attribute("data-file-id"), save.get_attribute("data-file-name"))
             else {
                 return;
             };
@@ -1255,7 +1379,7 @@ fn wire_file_picker(
                 Err(e) => return failed(e),
             };
             wasm_bindgen_futures::spawn_local(async move {
-                let saved = match crate::file_offer::read_own_offer(&dispatch, &blob).await {
+                let saved = match crate::kept_files::read_bytes(&dispatch, &blob).await {
                     Ok(bytes) => crate::ops::download::save_bytes(&name, &bytes).map(|()| bytes.len()),
                     Err(e) => Err(e),
                 };
@@ -1368,7 +1492,8 @@ pub(crate) fn bytes_of(v: &JsValue) -> Option<js_sys::Uint8Array> {
     file_bytes(v)
 }
 
-/// App → host: decide on an `x-file`, keep it as a `file_offer`, and ALWAYS
+/// App → host: decide on an `x-file`, keep it PRIVATELY (`crate::kept_files` —
+/// never as an offer: a file pulled out of an app is not shared), and ALWAYS
 /// answer a declared app with `x-file-result`. See [`crate::app_files`].
 fn receive_file(
     data: &JsValue,
@@ -1410,7 +1535,7 @@ fn receive_file(
     let source = source.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let app = source.app.clone();
-        let outcome = crate::file_offer::offer_file_from(&dispatch, &kept_name, &raw, Some(source))
+        let outcome = crate::kept_files::keep(&dispatch, &kept_name, &raw, source)
             .await
             .map(|offer| offer.id())
             .map_err(crate::app_files::Refusal::StoreFailed);
@@ -1438,12 +1563,12 @@ fn file_result(
     let (code, detail) = match &outcome {
         Ok(id) => {
             let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_str(id));
-            tracing::info!(app = %app, name = %name, offer = %id, "app file: kept");
+            tracing::info!(app = %app, name = %name, file = %id, "app file: kept privately");
             // Point the save button at this file and show it. A refusal leaves
             // it naming the previous kept file, which is still a real file.
             if let Some(b) = save {
-                let _ = b.set_attribute("data-offer-id", id);
-                let _ = b.set_attribute("data-offer-name", name);
+                let _ = b.set_attribute("data-file-id", id);
+                let _ = b.set_attribute("data-file-name", name);
                 let _ = b.remove_attribute("hidden");
             }
             ("kept", crate::i18n::t("apps.file.kept", &[("name", name)]))
@@ -1488,6 +1613,9 @@ pub fn remove_listener(listener: &HostListener) {
         if let Some(id) = listener.timer_id.take() {
             win.clear_timeout_with_handle(id);
         }
+    }
+    if let Some((observer, _)) = &listener.resize {
+        observer.disconnect();
     }
     (listener.flush)();
 }
