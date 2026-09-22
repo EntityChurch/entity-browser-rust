@@ -374,6 +374,21 @@ path      = "docs/architecture/reviews"
 kind      = "archive"
 publishes = false
 
+# The earned-lesson ledger, entered through its INDEX.md. 131 entries that used to
+# sit in AGENTS.md under a heading that described none of them, moved out verbatim
+# when that file was brought back under its size cap.
+#
+# It does NOT publish, and the reason is in the entries rather than in the policy:
+# they cite internal symbol paths, sibling repo names, routing-packet filenames,
+# seat-to-seat asks and internal commit SHAs, because that is what makes them
+# usable by the next session. A published version is not these files with the
+# names removed — it would be a different document, written for a stranger, and
+# nobody has written it.
+[[area]]
+path      = "docs/agents/memory"
+kind      = "memory"
+publishes = false
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Durable, edited in place, and internal
 # ═════════════════════════════════════════════════════════════════════════════
