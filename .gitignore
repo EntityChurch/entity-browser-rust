@@ -100,3 +100,10 @@ __pycache__/
 # ecosystem standard was one `git add` away from being violated by accident.
 AGENTS.local.md
 /.agents/
+
+# Staging directory for a manual publish proof: `--ingest` wants one root holding
+# every site, so a run that proves the pipeline against somebody else's corpus
+# copies their pages in here first. It is scratch, it is THEIR bytes, and it was
+# committed once by accident — which put eleven pages of another repo's content
+# in this tree, under our name, on the way to the published surface.
+/.feedproof-staged-sites/

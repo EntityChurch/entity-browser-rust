@@ -8,7 +8,10 @@
 #
 # Pins:
 #   - Rust 1.94.1            -> rust-toolchain.toml (channel)
-#   - Trunk 0.21.14         -> mise.toml ("cargo:trunk")
+#   - Trunk 0.21.14         -> TRUNK_VERSION below, with a sha256 per arch.
+#                              (This line named `mise.toml` until 2026-09-20.
+#                              There has never been one in this repo, and the
+#                              README built a whole host-bootstrap recipe on it.)
 #   - wasm32-unknown-unknown target -> rust-toolchain.toml / Cargo build target
 #
 # Trunk downloads its own wasm-bindgen-cli (version-matched to the project's
@@ -239,7 +242,7 @@ RUN apt-get update \
 RUN rustup component add clippy rustfmt \
     && rustup target add wasm32-unknown-unknown
 
-# Trunk 0.21.14, the version the project expects (mise.toml).
+# Trunk 0.21.14, the version the project expects (pinned below, nowhere else).
 #
 # === WE DOWNLOAD TRUNK, WE DO NOT COMPILE IT — and that is a measured decision ==
 #

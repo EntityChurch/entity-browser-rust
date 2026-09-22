@@ -1,9 +1,17 @@
 # entity-browser-rust — status
 
-_Updated: 2026-09-09 · version **0.9.0** in the manifests, with a substantial body of
-post-0.9.0 work on the development branch: deployment recovery, connection liveness after a
-device sleeps, and reproducible build identity. The gate table below was re-run in one pass
-at that tip — **every row, including the end-to-end suite**._
+_Updated: 2026-09-20 · version **0.9.0** in the manifests, with a large body of post-0.9.0
+work on the development branch. Two arcs: **deployment recovery** (a bad build has somewhere
+to fall back to, a stuck visitor has a way out, a returning reader keeps their place), and
+then **writing to the tree rather than only reading from it** — a feed you can follow, read
+and post to, and three new windows (Feed, Files, System Monitor) that make the device you are
+on legible. The gate table below was re-run in one pass at that tip — **every row, including
+the end-to-end suite and the connectivity gates**._
+
+_The next release is **0.10.0**, not 0.9.1: `publish` now refuses a silent site arm, which is
+a breaking change to the publisher command line. Everything else measured on the contract
+surface is additive — no flag, make target, top-level verb, deployment-config field, entity
+type or window was removed._
 
 _A build is identified by a **pair** — this application's commit and the `entity-core-rust`
 commit it was linked against — because the two are joined by path dependency with no
@@ -32,19 +40,42 @@ Maturity is **research preview**: suitable for evaluation and exploration, not a
 production deployment. HTML DOM is the only render path; the legacy native/egui renderer is gone
 and `make native` prints a deprecation redirect.
 
+**What a person can do in it today**, which is wider than it was at 0.9.0: browse and read
+published content sites; run embedded HTML/JS apps, including virtual machines, and move files
+between them and the device; connect to another peer, chat, and transfer files; publish a site, a
+set of apps and a feed under one signed root; and — new since 0.9.0 — **follow publishers, read
+their feeds with every post verified against its author's own signature, and post to a feed of
+their own**, where the write into their tree *is* the publish. Three windows were added with that
+arc: **Feed**, **Files** (what is on this device, and which places other devices can see) and
+**System Monitor** (what this browser tab is spending its time on, and what the browser will not
+tell it). None was removed.
+
 ## Gate state
 
-Re-measured **2026-09-09** rather than quoted — **all six rows re-run at one development tip,
-from a clean tree**, including the end-to-end suite:
+Re-measured **2026-09-20** rather than quoted — **every row re-run at one development tip,
+from a clean tree on both halves of the build pair**, including the end-to-end suite and the
+connectivity gates:
 
 | Gate | Result |
 |---|---|
-| `make test` | **1575 / 0 / 19-ignored** across **20** test binaries. It has moved 1300 → 1484 → 1501 → 1575. Re-run it; do not quote this line |
+| `make test` | **2225 / 0 / 26-ignored** across **21** test binaries (main binary 2106). It has moved 1300 → 1484 → 1501 → 1575 → 2225. Re-run it; do not quote this line |
 | `make test-tauri` | **59 / 0** across 4 binaries. (`src-tauri` is workspace-excluded, so it is not in the number above.) **Run it serially** — it embeds `dist/`, so any concurrent build that rewrites that directory fails it on a stale asset name |
-| `make lint` | **exit 0 — twelve checks**, not the seven this row carried through 0.9.0. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `net-lint` matches baseline · `foreign-cache-lint` matches baseline · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable), which runs the doc check · `ecf-lint` matches baseline · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **774** keys · `i18n-callsite-check` **702** call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored. Note `cargo clippy --features e2e --tests` is the only thing in the tree that compiles the end-to-end suite at all |
-| `make e2e-worker` | **68 passed / 0 failed, 695.42 s** — unfiltered, on a fresh `make e2e-grid`. **The invocation is part of the number:** `env -u WAYLAND_DISPLAY -u DISPLAY make e2e-worker`. With a display attached, the Tauri WebView phase is a standing red on this host and the same tree returns 68/1, so a bare "68/0" is not reproducible without the invocation |
-| `make wasm` | exit 0 |
-| `make site-dist` | green — `check-dist` consistent, and `publish --verify` on the emitted tree reports **17 pointers / 17 verified / 0 broken; 19 blobs / 0 orphaned**. Built against a pinned kernel commit; the closing summary prints the pair it was made of |
+| `make lint` | **exit 0 — seventeen checks**, not the seven this row carried through 0.9.0. `ui-lint` atoms=6 styles=133 hex=4 across 23 files · `net-lint`, `foreign-cache-lint`, `ecf-lint`, `fidelity-lint`, `vocab-lint` all match their baselines · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable), which runs the doc check · `publish-doc-check` 27 flags · `webrtc-slot-check` · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **1002** keys · `i18n-callsite-check` **893** call sites · `i18n-untranslated` 7 allowlisted · **`i18n-drift` 1002 keys with zero `stale` rows** — every overlay swept against the English it was translated from · `tree-hygiene` no tracked path is gitignored. Note `cargo clippy --features e2e --tests` is the only thing in the tree that compiles the end-to-end suite at all |
+| `make e2e-worker` | **88 passed / 2 failed, 884.38 s** — unfiltered. **Both failures are filed, open and bounded; neither is a regression** (see below). **The invocation is part of the number:** `env -u WAYLAND_DISPLAY -u DISPLAY make e2e-worker WEBDRIVER=http://localhost:<free> E2E_HTTP_PORT=<free>`, on a **private** grid — this box routinely carries other seats' Selenium on `:4444` and a shared `:8092`, and a collision there answers with someone else's build rather than refusing. With a display attached the Tauri WebView phase is a standing red on this host |
+| `make wasm` | exit 0 — build id `f81e65c5a029b555` |
+| `make site-dist` | green — `check-dist` consistent, and `publish --verify` on the emitted tree reports **13 pointers / 13 verified / 0 broken; 15 blobs / 0 orphaned**, signed root verifies against the publisher key. Release build id `91aca59a6a39aa3f`; the closing summary prints the pair it was made of |
+| `e2e-webrtc-{chat,meet,vanish,file}` | **4 / 4 PASS**, and **§11.5 deposits at 4/side on every one** — inside the O(1) bound of 8, and the figure the 2026-09-09 audit recorded as RED at 16/8/12/8. One run each; this metric is variable, so that is evidence it is not over, not proof it is fixed |
+| `make fleet-probe` × 6 domains | exit **0** — fleet uniform, no mutable URL cached beyond correction anywhere |
+
+**The two end-to-end failures, so a reader does not mistake them for new.** Both are recorded in
+this repo's agent guidance with their bounds. `an_app_republished_…_on_the_worker_arm` is a
+returning profile keeping an old app after the publisher republished — **intermittent at ~44% with
+clustered outcomes**, and reachable only under `?worker=1`, which is opt-in; the shipped Direct
+arm's twin stayed green. `a_drag_on_a_windows_grip_survives_the_window_rebuilding_under_it` is
+intermittent with **the cause still open**, and the assertion that fires is not the one that
+matters — it reports a rebuild mid-drag when the measured run shows none, while the drag itself
+silently failed to land. A green unfiltered run on this tree is a run that won two coin flips; it
+is not evidence either defect is gone.
 
 **`i18n-lint raw=0` — the baseline file is empty, which is the floor.** It read `raw=90` earlier on
 2026-09-03 (`doctor.rs` 66 + `content_site/mod.rs` 24) and both halves are closed, differently and
@@ -69,8 +100,7 @@ often looks like English, so no mechanical signal separates a cognate from a ski
 were translated in the same pass and graded by eye; 17 values out of 1,470 remain identical to their
 English source because the correct word is the same word (*Chat* in de/nl/it/cs/da/no/ro, French
 *Source* and *Message…*, *byte* as a unit). **The two 17s are a coincidence** — 17 languages, 17
-strings — and conflating them is what made the first write-up unreadable. Record:
-`docs/status/STATUS-2026-08-23-b-the-i18n-backlog-is-translated-and-the-ratchet-is-an-allowlist.md`.
+strings — and conflating them is what made the first write-up unreadable.
 
 **Say which suite you mean, and re-run before quoting.** These numbers have gone stale in hours,
 repeatedly. The 19 ignores are 4 `crossimpl_go_live` (needs core-go's live publisher), **13 fixture
@@ -108,9 +138,8 @@ covered is two devices on two *different networks*.
 saying otherwise was stale.** On 2026-08-21 the operator ran it outside any rig: **two browsers
 exchanged chat over WebRTC and then transferred a file between them, rendezvousing through a
 desktop Tori on the same network** — no peer id retyped, no harness, no `podman network create`.
-`docs/RUNBOOK-TWO-MACHINES.md` §5 is a transcript now, not a plan, and that run is what exposed six
-defects no gate we own could see (record:
-`docs/status/STATUS-2026-08-21-two-browsers-chatted-and-moved-a-file-through-a-desktop.md`).
+That run is what exposed six defects no gate we own could see; four are fixed and two are listed
+below as open.
 
 **What remains untested is two *networks*, not two computers** — a peer behind one ISP reaching a
 peer behind another, i.e. the port-forwarding / CGNAT / symmetric-NAT half. That needs a second
@@ -143,8 +172,8 @@ task. Same-LAN is proven on real devices; off-LAN is proven only in the containe
    `make tauri-run`, open Apps, launch something, press ⛶ and leave it running.
 5. **Two real devices on two real NETWORKS — blocked on hardware nobody here has, and note the
    same-network half is already DONE.** Two devices on one LAN, meeting through a desktop Tori and
-   moving a file, was run on real hardware on 2026-08-21 and is a transcript in
-   `docs/RUNBOOK-TWO-MACHINES.md` §5. What is untested is the cross-*network* case — one ISP to
+   moving a file, was run on real hardware on 2026-08-21 and recorded step by step. What is
+   untested is the cross-*network* case — one ISP to
    another — which needs a second network, i.e. a second physical location. Not an open engineering
    task; a standing item for whenever the hardware exists. What no rig on this box can produce: a
    phone on cellular, a captive portal, an ISP CGNAT, or a symmetric NAT.
@@ -207,9 +236,7 @@ dropped, because a backlog that only grows is not being read.
 - Offline-wipe: a hard refresh while the server is unreachable wipes local state. Needs a
   hash/version handshake and an offline-keeps-local design.
 
-**Connectivity & liveness** — the wake arc, `docs/plans/DESIGN-CONNECTION-RECOVERY-AND-WAKE-2026-09-08.md`
-(read its **§9 corrections** before §4/§5; two findings there were written from reasoning and are
-wrong). Items A and B shipped 2026-09-08; the rest is open.
+**Connectivity & liveness** — the wake arc. Items A and B shipped 2026-09-08; the rest is open.
 - **THE UI FREEZE AFTER WAKE — unexplained, and it needs a reproduction, not more analysis.**
   Reported 2026-09-07/08: on wake the app *"would not close windows"*. A mechanism is identified —
   a `borrow_mut()` held across an await makes the rAF loop's `try_borrow_mut()` fail every frame
@@ -282,7 +309,8 @@ wrong). Items A and B shipped 2026-09-08; the rest is open.
   closes; a server-role peer that only ever answers does not.
 - ~~**Item C — no `connectionstatechange` handler**~~ — **shipped 2026-09-08**, in
   `entity-core-rust` `bindings/wasm-worker-proxy/src/webrtc_session.rs` (**quote the pair**: our
-  `dev` + kernel `0f858df`). The data channel's `close` and the peer connection's
+  `dev` + the kernel commit it was built against, which the shipped page stamps as
+  `entity-core-ref`). The data channel's `close` and the peer connection's
   `connectionstatechange → failed` now post the zero-length EOF sentinel `PortReader` already
   surfaces, so a dead channel fails the connection immediately instead of on the 30 s
   `DEFAULT_REQUEST_TIMEOUT` — or, when idle, not at all. `Disconnected` is deliberately **not**
@@ -302,7 +330,8 @@ wrong). Items A and B shipped 2026-09-08; the rest is open.
   work is extending a derived read-model, **not** adding a state. Needs i18n across 30 locales
   (`i18n-lint` baseline is empty — `raw=0` — and must stay that way).
 - **`MeetReach::NoNode` / `NeedsReload` still tell the user to reload.** The late-arm fix
-  (`f9bb540`) made that advice obsolete on the Direct arm; it remains correct on Worker. The same
+  (`src/late_establish.rs`) made that advice obsolete on the Direct arm; it remains correct on
+  Worker. The same
   stale row survives in `RUNBOOK-TWO-MACHINES` §5 (`FAIL rendezvous … reload the page`).
 - **The establisher is primary-only.** Nothing technical requires it — an artifact of the seam
   being a constructor argument on the primary's keypair, recorded in `peers.rs` as deliberate
@@ -312,13 +341,13 @@ wrong). Items A and B shipped 2026-09-08; the rest is open.
 - **Cross-domain `site:` links — the fail-loudly half is CLOSED on both sides.** Measured
   2026-08-23: the corpus carried **seven**, three files, all on `entity-church-foundation`, all
   outbound; under per-domain publishing they resolve against the publishing peer and 404.
-  `entity-core-papers` swept them to absolute URLs (`ef3f662`) and added its own gate; our
+  `entity-core-papers` swept them to absolute URLs and added its own gate; our
   exporter **reports** every out-of-set target and now **refuses by default**. Re-verified here
   rather than taken on report: **0** cross-domain refs across all five domains, all four domains
   publishing clean under the refusal (412 pages, 0 dangling), an injected target refused with 7
   errors and exit 1. Hatch: `ALLOW_OUT_OF_SET_LINKS=1`; `STRICT_LINKS=1` is accepted and is now a
-  no-op. Making such a link *work* is backlog **B-4** —
-  `docs/plans/DESIGN-CROSS-DOMAIN-SITE-LINKS.md`, which carries the questions for arch.
+  no-op. Making such a link *work* is backlog **B-4**, and it is a protocol question before it is
+  an implementation one.
 - **Latent, filed not fixed:** the Registry Browser writes a resolved origin under
   `system_peer_id()` while the Site Browser reads under its **bound** peer. They coincide only
   because `system_peer_id()` is still an alias for `primary_peer_id`; a Site Browser on any
@@ -416,8 +445,7 @@ that, not a set of loose ends.
    `#[cfg(target_arch = "wasm32")]` so no native test can reach them even in principle, and the e2e
    asserts only that the Saves panel opens.
    - **The blocked leg is the desktop one, and it is blocked for a known reason:** the Linux
-     desktop WebView ships **no `RTCPeerConnection` at all**
-     (`docs/status/FINDING-2026-08-22-the-linux-desktop-webview-has-no-webrtc.md`), so offer/pull is
+     desktop WebView ships **no `RTCPeerConnection` at all**, so offer/pull is
      dead in both directions browser↔WebView — each end would have to dispatch at a peer it cannot
      reach.
    - **The shape that does not need a relay, and is the thing to try first:** both parties can read
@@ -462,9 +490,9 @@ that, not a set of loose ends.
      (`notBefore`/`notAfter` plus OCSP `nextUpdate`); JWT carries `exp` plus a separate
      introspection policy. Plain DNS needs no validity half because it has **no revocation concept
      at all** — it has *fewer* parameters, not a different model.
-   - **Arch has already scoped the fix and we are not proposing a mechanism.** Their
-     `docs/research/explorations/EXPLORATION-NON-INTERACTIVE-FRESHNESS-AND-ANTI-REPLAY.md` §B4 names
-     this seam (*"canonical and cross-referenced but un-quantified"*) and **Knob 2** is exactly this
+   - **The fix is already scoped upstream and we are not proposing a mechanism.** The protocol
+     side's own exploration of non-interactive freshness names this seam
+     (*"canonical and cross-referenced but un-quantified"*) and its **Knob 2** is exactly this
      split — a declared `revocation_propagation_bound` making the window `min(TTL, declared-bound)`.
      Part E puts it at **W7, not before-freeze**; the recommended proposal is **not written yet**
      (checked — only the exploration and its companion analysis exist). What we asked for is the

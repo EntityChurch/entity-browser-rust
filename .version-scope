@@ -1,0 +1,21 @@
+# .version-scope — the paths whose version number is NOT this repo's release version.
+#
+# One path or path-prefix per line; `#` comments allowed. A prefix covers everything
+# beneath it, so a whole helper tree is one line.
+#
+# Read it as a SCOPE, not as a mute switch. Every version-bearing file outside this
+# list is expected to carry the number in CHANGELOG.md, and a file that disagrees is
+# still an error — listing a path here says "this one was never on that axis", which
+# is a different claim from "ignore this one".
+
+# ── End-to-end test helpers ───────────────────────────────────────────────────
+# tools/e2e/ holds small standalone crates that exist only to drive the end-to-end
+# connectivity runs. Each is its own cargo workspace, is never published to a
+# registry, and is built only by the scenario it belongs to. Nothing depends on one,
+# so there is nothing a version number on it could tell anybody.
+#
+# They are pinned at 0.0.0 — the usual way a Rust crate says "not versioned" — and
+# that is deliberate. Tracking the browser's release number instead would mean these
+# crates announced a version on every cut while nothing about them had changed, which
+# is a number that means less than no number at all.
+tools/e2e

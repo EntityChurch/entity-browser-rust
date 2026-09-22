@@ -11,6 +11,27 @@ renamed from `egui-entity-core-rust` to match. HTML DOM is the
 **only** render path — the legacy native/egui renderer is gone, `EntityApp` is
 wasm-only, and plain `cargo build` produces a deprecation stub.
 
+### The public surface — what a version promises
+
+**IN: what somebody else's work is built against.** The `entity-browser` CLI — its
+verbs, flags, exit codes and refusals; the `make` verbs; and every format this repo
+reads or writes **for another party**: the `--ingest` / `--ingest-feed` / `--gather`
+source layouts, `/entity-deployment.json`, `/builds.json`, the published tree a
+consumer fetches over HTTP (its paths and the entity type tags in it), the durable
+tree shapes a returning profile is read back from (`app/entity-browser/…`,
+`app/state/*`), and the `?`-query affordances an operator is told to type
+(`?build=`, `?systemrecovery=`, `?worker=`).
+
+**OUT: every Rust symbol in this crate.** Nothing depends on `entity-browser-rust`
+as a library — it has no external consumer and no published crate — so the module
+layout, the window models, the DOM structure, `tests/`, `tools/` and the e2e
+harness move freely and never make a release breaking. The SDK is not ours either;
+it lives upstream in `entity-core-rust` and versions on its line, not this one.
+
+**So "breaking" here means:** an invocation, a deployment document, an authored
+source directory, a published tree or a stored profile that worked at the last
+version and does not now.
+
 ## How we work here — Disciplines & Doctrines · tier **FULL**
 
 This repo runs the entity-OS **Disciplines & Doctrines** methodology at the **Full** tier —

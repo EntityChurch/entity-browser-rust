@@ -5150,6 +5150,68 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   provenance instead: `git -C ../entity-core-rust status --short` empty and `HEAD`
   equal to the pin, **checked before and after**, which makes the unpinned build
   provably that commit's bytes.
+- ⭐⭐ **A VERSION BUMP IS NOT "EVERY LINE THAT SAYS YOUR VERSION" — 40 OF OUR 41 WERE THE
+  KERNEL'S (2026-09-20, the 0.9.0 → 0.10.0 cut).** `Cargo.lock` carries **40** lines reading
+  `version = "0.9.0"` and **one** of them is ours; the other 39 are `entity-core-rust` crates,
+  which version on their own line. `src-tauri/Cargo.lock` is 50 and 1. A `sed -i` over the
+  version string — the obvious way to do this — silently relabels the whole kernel in our
+  lockfiles, and the build still works, so nothing says so until somebody reads a lockfile to
+  answer *which kernel is this*. ⇒ ***match on the `name =` line above, never on the version***;
+  the release-prep guide states the rule in one line (*"a dependency's version is not your
+  version"*) and the lockfile is where it has teeth, because that is the file where yours and
+  theirs are the same string in the same syntax.
+  **The five files are now the guard, and the guard said three.** `check_dist_version`
+  (Makefile) covered `Cargo.toml`, `src-tauri/Cargo.toml` and `tauri.conf.json` — the three
+  that decide what an installer advertises. **The two lockfiles fail differently and that is
+  why they were missed:** cargo *rewrites* a stale entry on the next build rather than
+  refusing, which dirties the tree, and a dirty tree is what `build-pair --check` refuses — so
+  the symptom arrives as *"this release is not reproducible"*, one subsystem away from the
+  cause. Widened and falsified (lock at `0.9.0` → red naming both files; restored → green), and
+  it **refuses rather than passes** when it cannot find our own package in a lockfile at all.
+- ⭐⭐ **THE CLONE TEST'S FINDING WAS NOT A BUILD FAILURE — IT WAS A 25-LINE RECIPE BUILT ON A
+  FILE THAT HAS NEVER EXISTED IN THIS REPO (2026-09-20).** `git clone` into a clean parent,
+  clone the kernel beside it, `make build && make test`: **exit 0, 2225 passed / 0 failed across
+  21 binaries**, identical to in-repo. A stranger with `make` + `podman` really does get a
+  working build, which is the claim the README has been making since 0.8.0 and which nobody had
+  executed. **What the test found instead was the prose.** README §Prerequisites named
+  **`mise.toml`** as the pin for rustup-init and trunk, and walked the reader through
+  `mise install` → run `~/.local/share/mise/installs/http-rustup-init/1.28.2/rustup-init` →
+  `mise install` again. There is no `mise.toml`, there is none on `master`, and `git log` finds
+  none ever: `mise install` finds no config, installs nothing, and step 2 names a path that
+  cannot exist. The **Dockerfile cites the same missing file twice**, in its own pins table, at
+  the top of the block whose actual pin is `ARG TRUNK_VERSION` forty lines below it. And
+  `AGENTS-STANDARD` says *avoid mise* outright, so the recipe was against the ecosystem
+  convention as well as against the tree. ⇒ ***a `ls` of every path your setup section names
+  costs one command, and a wrong instruction is worse than a missing one*** — a missing line
+  sends the reader to look, a wrong one sends them down a hole. The same sweep caught README §B
+  claiming the serve/demo targets *"always run on the host (they need host `python3`)"* when all
+  four are containerized; the two targets that **do** shell out to a host `python3` —
+  `fleet-probe` and `noscript-check` — were not among them.
+- ⭐ **A PUBLISHED DOCUMENT CITING AN INTERNAL ONE IS A DEAD END BY CONSTRUCTION, AND IT IS
+  MEASURABLE IN ONE SCRIPT (2026-09-20).** `docs/plans/`, `docs/status/` and `docs/archive/` are
+  undeclared, so the release filter drops them — which means every `docs/plans/DESIGN-….md`
+  reference inside a **declared** document resolves to nothing in the public tree, whether or
+  not the file exists here. Measured at the cut: **69 such references across 16 declared files.**
+  The three a downloader actually opens (`CHANGELOG.md`, `docs/STATUS.md`, `README.md`) are
+  clean now — nine were rewritten to *say the thing* rather than cite it, and the one genuinely
+  operator-facing target, the service-worker kill-switch runbook, was **declared** instead,
+  because the changelog tells a deployer it is the only mechanism that removes a bad worker and
+  then named a file that was not in the tree they downloaded. **The remaining 60 are in the
+  architecture guides and in `AGENTS.md` itself and are NOT fixed** — pre-existing, and a
+  60-reference sweep at the end of a release session is the operation this file's own
+  *verify-a-scripted-edit* entry was written about. The script is four lines of `re.findall`
+  over the declared set; run it, do not re-derive it.
+- ⚠ **SCRATCH THAT HOLDS SOMEBODY ELSE'S BYTES GETS A `.gitignore` ROW THE MOMENT YOU CREATE IT
+  (2026-09-20).** `--ingest` wants one root holding every site, so a manual run proving the
+  publish pipeline against `entity-core-papers`' corpus staged their pages into
+  `.feedproof-staged-sites/`. It was never ignored, so a feed commit swept **13 files — eleven
+  pages of another repo's spec content — into this tree**, where they sat for four days on the
+  way to our published surface. Nothing referenced them; the only mention anywhere was the
+  handoff recipe that created them. Caught by listing prose that is **new since `master` and
+  outside `docs/`** — the set that `[[doc]]` cannot protect you from, because the keep-list only
+  drops prose loose at the root or under a doc root. ⇒ **before a cut, diff the published file
+  set both ways**; the withdrawal direction is the one the guide asks about, and the *addition*
+  direction is the one that ships somebody else's work under your name.
 
 ## Testing & the gates
 

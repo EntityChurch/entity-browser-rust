@@ -6,6 +6,12 @@
 #
 # A comment-only or blank file declares nothing.
 
+# ── 0.10.0 removes nothing ────────────────────────────────────────────────────
+# Measured against the 0.9.0 tree rather than assumed: every one of the 739 files
+# published at 0.9.0 is still here, and every document that was in the reading
+# order still is. One document was ADDED to it — the service-worker kill-switch
+# runbook, which the 0.9.0 release notes referred you to without shipping.
+
 # ── STATUS.md moved up one directory ──────────────────────────────────────────
 # 2026-08-24. The rolling status document was at `docs/status/STATUS.md`. Everything
 # else in `docs/status/` is dated, session-scoped material that is not part of the

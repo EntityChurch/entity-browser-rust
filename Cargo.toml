@@ -3,7 +3,7 @@ exclude = ["src-tauri"]
 
 [package]
 name = "entity-browser-rust"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Entity Browser — web-sys DOM renderer for entity system data"
@@ -58,6 +58,14 @@ entity-content = { path = "../entity-core-rust/extensions/content" }
 # execute that drives the reconnect graph (`app.rs` backend auto-connect).
 # Already compiled via `entity-peer/network`; direct edge names the const.
 entity-network = { path = "../entity-core-rust/extensions/network" }
+# EXTENSION-REVISION §3.1's `prefix_hash` — the ONE expression of the
+# derive-to-meet path coordinate, which `APP-CONVENTION-FEED` §6.0.1 imports by
+# reference (`FEED-R33` makes any other derivation a MUST NOT). We CALL it
+# rather than restate it: both sides of the derivation have to meet on the
+# byte, so a second expression here is C15's drift with a wire event on the
+# other end. Already compiled via `entity-peer/revision`; this edge names the
+# function. WASM-safe (its own `cfg(target_arch = "wasm32")` deps).
+entity-revision = { path = "../entity-core-rust/extensions/revision" }
 
 # Peer runtime (WASM-safe with default-features=false). Direct because
 # `Peer`/`Connection`/`MemoryConnector` etc. are referenced by app-tier
@@ -170,6 +178,13 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # Serialization
 ciborium = "0.2"
 serde_json = "1"
+
+# One digest, for one derivation: `APP-CONVENTION-FEED` §6.0.1's live mirror
+# coordinate is `content_hash` of a **path**, and every corpus primitive for that
+# (`Hash::compute`) takes a type argument the clause does not supply. See
+# `feed::path_coordinate` for the reading we take and what is routed about it.
+# Already in the graph — `entity-hash` depends on it — so this edge only names it.
+sha2 = "0.10"
 
 # Error handling
 thiserror = "2"

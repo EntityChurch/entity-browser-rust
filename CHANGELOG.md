@@ -12,20 +12,35 @@ downloading the artifact.
 
 ## [Unreleased]
 
-One theme, which is what a research preview earns the release after its first
-big one: **what happens when a deployment goes wrong.** `0.9.0` could publish a
-site, connect two peers and move a file between them. It could also — these
-observed rather than reasoned about — serve a stale app indefinitely because a
-copy was already on disk, blank the screen for the whole of a slow boot with the
-recovery hatch hidden behind it, and put a returning reader back on the front
-page having silently discarded where they were. And structurally, with no
-incident needed to prove it, a bad service worker could pin a broken build in a
-visitor's browser with no way out that did not involve developer tools — which
-is not an incident but a brick, and is unavailable on the device most stuck
-visitors are holding.
+Nothing yet.
+
+## [0.10.0] — 2026-09-20
+
+Two themes, in the order they were built.
+
+The first is what a research preview earns the release after its first big one:
+**what happens when a deployment goes wrong.** `0.9.0` could publish a site,
+connect two peers and move a file between them. It could also — these observed
+rather than reasoned about — serve a stale app indefinitely because a copy was
+already on disk, blank the screen for the whole of a slow boot with the recovery
+hatch hidden behind it, and put a returning reader back on the front page having
+silently discarded where they were. And structurally, with no incident needed to
+prove it, a bad service worker could pin a broken build in a visitor's browser
+with no way out that did not involve developer tools — which is not an incident
+but a brick, and is unavailable on the device most stuck visitors are holding.
 
 Every one of those is fixed here, and the ones that cannot be prevented now have
-a stated recovery path rather than an implied one. Still a **research preview**.
+a stated recovery path rather than an implied one.
+
+The second theme arrived once that work was done: **the tree is something you
+write to, not only something you read.** `0.9.0` could publish a site from a
+directory and show it to someone else. This release adds a **feed** — you follow
+publishers, read what they posted, and post yourself from inside the app, where
+the write into your own tree *is* the publish — and three windows that make the
+device you are on legible: what files are here, what is using the space, and
+what this tab is spending its time on.
+
+Still a **research preview**.
 
 ### Added — recovery, when the deployed build is the problem
 
@@ -70,8 +85,9 @@ a stated recovery path rather than an implied one. Still a **research preview**.
 
 - **The health checks, the recovery copy and the insecure-origin warning are
   translated**, so the surfaces you reach when something is wrong speak the same
-  language as the rest of the app. Localization is 30 locales × 769 strings, up
-  from 702.
+  language as the rest of the app. Localization is 30 locales × **1002**
+  strings, up from 702 at `0.9.0` — the feed, the three new windows and the
+  status bar are all translated, not English-only surfaces bolted on.
 - **The insecure-origin warning now names all three things you lose**, not two:
   it previously mentioned background storage and the camera and omitted the
   offline shell, which is the one a person actually notices — it is why a phone
@@ -333,9 +349,171 @@ a stated recovery path rather than an implied one. Still a **research preview**.
   `CORE_RUST_REF=<ref>` now *builds* the kernel commit you name rather than
   requiring it to already be checked out.
 
+---
+
+*Everything above is the first theme — a deployment going wrong, and getting
+out of it. What follows is the second: writing to the tree rather than only
+reading from it.*
+
+### Added — a feed, and posting into your own tree
+
+- **A Feed window.** Follow publishers, read what they posted, and post
+  yourself. It opens on the reading pane; *Your feed* and *Manage sources* are
+  tabs beside it rather than sections stacked underneath, because with a real
+  archive on screen anything below the first pane is a screen and a half down.
+- **You do not need a peer id to start.** The window lists *Publishers you can
+  reach* — the peers this deployment already knows how to route to — and you
+  pick one. Pasting a peer id still works and is the way to reach someone the
+  deployment has never heard of; it is the escape hatch, not the front door.
+  A publisher you have named yourself is shown under your own name for them.
+- **Posts carry dates, and long ones are read whole.** A post too large to
+  store inline is published as a pointer to its own content, and the reader
+  resolves it — previously such a post arrived showing only its title.
+- **Every post says whether it is signed, and by whom.** Each entry is
+  verified against a signature the author minted for that post specifically, and
+  the result is one of seven distinct answers — *verified*, *unsigned — nobody is
+  named for this post*, *could not be checked — this peer id carries no key*,
+  *signed by someone other than the author*, and so on. **A post we could not
+  check is never shown as one that passed.** Verification needs no second
+  fetch and no key exchange, and works with the publisher's origin switched off.
+- **A feed can be read two ways, and the window tells you which it used** —
+  *Read live, directly from this publisher* or *Read from this publisher's
+  published site*. If one route answers with nothing, that is not taken as
+  evidence about the other.
+- **You can read through someone else's collection.** *Read through* lets you
+  name a peer who gathers other people's posts, and read the authors they carry
+  — each entry still verified against **its own author's** signature, not the
+  gatherer's. The list is typed in rather than discovered, because nothing in
+  the protocol yet says where a gatherer is or that one exists.
+- **Posting, and what removing means.** *Your feed* writes a post into your own
+  tree, which is what publishing is — there is no separate upload step, and the
+  post survives a reload. *Remove* is reported honestly as what it is:
+  *"Removed from your feed — people who already have it still have it."* It is
+  never called deletion, because it is not.
+- **A tab running on a temporary identity can still post.** When another tab
+  already owns this profile's storage, or the browser is storing nothing at all,
+  this tab runs as a real peer holding a key minted for the session. It may
+  post, and the post is genuinely its own and signed; it is told once — and can
+  put the notice away — that what it writes goes when the tab does. Being
+  temporary is not a reason to withhold the control.
+- **Publishing a feed from the command line.** `publish --ingest-feed=<dir>`
+  publishes authored posts alongside sites and apps under one signed root
+  (`make site FEED=<dir>`), and `publish --gather=<peer>@<dir>` republishes
+  another publisher's posts under your own namespace, carrying their bytes and
+  their signatures unchanged (`GATHER=`).
+
+### Added — three new windows, and a status bar
+
+- **Files** — one home for what is on this device, in five places that differ in
+  **who can see them**, stated on each: *My files* and *Working files* and
+  *Kept by apps* are private and not listed to other devices; *Offered* says
+  *"devices you connect to can see these files and pull them."* Add files from
+  the device or drop them on the window, download a whole place as `.zip` or
+  `.tar.gz`, and *Show in Entity Tree* for any file. Saves can be downloaded as
+  a file and imported on another device.
+- **System Monitor** — what this browser tab is actually doing, and what the
+  browser refuses to tell it. Time the tab spent frozen in the last second,
+  split into drawing this app's windows versus other work on the same thread,
+  with a plain reading of what that means for you (*"Smooth: taps and keys are
+  answered right away"* / *"Struggling…"*). Per-window download totals, and per
+  app the CPU and memory it reports about itself — with apps that report nothing
+  named as such rather than counted as zero. Where a figure is unavailable the
+  window says which browser capability is missing instead of showing a blank.
+- **Storage** now says **what** is using the space, in bytes: content-store
+  blobs, live entity data, save-state paths, and files by their place in the
+  File Manager — rather than one total.
+- **A status bar** across the bottom, with small inline gauges: how much of each
+  second this tab was held past one frame (*"the time taps and keys waited"*),
+  how much of that was this app drawing its own windows, and the busiest app
+  that reports its own work. A healthy profile is a bare mark, not a number.
+
+### Added — apps
+
+- **An app can hand the host a file, and ask for one back.** Opt-in and
+  namespaced, so an app that does not use it is unaffected; a file an app hands
+  over names the app it came from and can be saved to the device or offered to
+  peers.
+- **Asset bundles.** An app asks the host for a key and boots from what is in
+  the tree, rather than carrying everything in its own bundle.
+- **A running app is no longer torn down by another window's download.** A
+  foreign catalog or bundle arriving while you were mid-game used to remount
+  the player.
+
+### Added — sites, publishers, and finding people
+
+- **A figure opens at full size.** Previously a diagram rendered at whatever
+  size fit the column, which on a phone is a corner of it. It is a plain link
+  where there is no JavaScript and an overlay where a link cannot do the job.
+- **The Registry Browser asks a publisher what they carry** instead of guessing
+  and opening a window that may have nothing in it. The answer comes from the
+  publisher's own signed tree, so *"they publish none"* is a verified negative
+  rather than a third party's claim about somebody else.
+- **Find peers here** — one button from an address to a meet, instead of
+  composing the steps yourself.
+- **Waiting to meet someone is now a duration, not a counter.** The search runs
+  for two minutes and says how long is left, at roughly half the network traffic
+  the old thirty-second window used.
+- **A window keeps the height you give it**, and an app's screen fits the window
+  it is in.
+- **If the app itself dies, the page says so.** A failure that stops the
+  application from running is now reported by a layer outside it, with a
+  Reload and a link to System Recovery — previously every detector we had lived
+  inside the thing that had stopped.
+
+### Changed in ways that can break an existing caller
+
+Two: one on the publisher command line, one in the published tree. Nothing in the
+deployment document, the authored source layouts or a stored profile moved — a
+`0.9.0` deployment config and a `0.9.0` `--ingest` directory are read unchanged,
+and a profile from `0.9.0` comes back without a migration.
+
+- ⚠️ **`publish` no longer assumes what to publish when you do not say.** It now
+  requires exactly one of `--ingest=<dir>`, `--demo-sites` or `--no-sites`
+  (`INGEST=` / `DEMO_SITES=1` / `NO_SITES=1` through `make`), and refuses
+  silence. **This is a breaking change to the publisher command line:** an
+  invocation that worked at `0.9.0` will now exit non-zero and tell you which
+  three words to choose between. Silence used to mean `--demo-sites`, and
+  because the publish is wholesale, a command that meant `--ingest` and omitted
+  it replaced a domain's real sites with the bundled demo set, under that
+  domain's own identity, and exited `0`.
+- ⚠️ **A site asset over 16 KiB is published as a pointer, and a `0.9.0` reader
+  cannot follow one.** The convention caps an inlined payload at 16 KiB, so
+  anything larger is now stored as a content-addressed pointer with its blob and
+  chunks in the published closure. **This release reads both**, so a tree
+  published at `0.9.0` still resolves. The other direction does not: a tree
+  published at `0.10.0` and read by a `0.9.0` build shows nothing where those
+  assets were, which on a real published site was **629 of 1,346 assets — most of
+  the figures**. It matters if something other than this app reads your published
+  trees, or if a visitor is pinned to a retained `0.9.0` shell; an ordinary
+  visitor is carried to the new build on the next load and never sees it.
+
 ### Known limitations
 
 New in this release, or newly stated:
+
+- **A post you can read is not necessarily a post you can find.** The feed lists
+  publishers this deployment already routes to, and lets you paste a peer id for
+  anyone else. There is no mechanism for learning that a publisher exists whom
+  you have no route to — that is a protocol question nobody has answered yet,
+  and the window does not paper over it by guessing.
+- **Nothing in the app publishes a gathered feed.** You can read through a
+  gatherer, and `publish --gather` builds one from the command line, but there
+  is no in-app surface for gathering — the capability is complete and verified
+  end to end, and a person cannot reach it.
+- **A long post shows only its title in two places.** Resolved for a feed read
+  from a publisher's own site; a post read through a gatherer, and one of your
+  own, still show the title, and say so rather than appearing empty.
+- **Permission enforcement is off.** A peer you are connected to can read any
+  path in your tree. Sharing is expressed and recorded, and nothing refuses a
+  read yet — so treat a connection as full read access to that profile.
+- **Your own files live under an application-scoped path.** The address is
+  non-conformant with where a person's own content is supposed to sit; moving a
+  durable user-content root with no export path is the destructive direction, so
+  it moves together with the work that reworks how private and shared files are
+  distinguished.
+- **There is still no export path.** Nothing in the app can hand you your whole
+  tree, which is why every recovery action here is scoped to app code and
+  refuses to touch your data.
 
 - **Rollback is partial.** A retained shell runs against the **current** service
   worker and the current `sw.js` — those are unhashed and the origin serves

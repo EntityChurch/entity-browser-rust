@@ -165,16 +165,21 @@ target, any local build, or any test.
 
 ## Prerequisites
 
-All toolchain versions are pinned — nothing fetches "latest." The chain:
-**mise** (on PATH) → **rustup-init 1.28.2** (pinned + sha256 in `mise.toml`)
-→ **Rust 1.94.1** (pinned in `rust-toolchain.toml`, installed by rustup)
-→ **trunk 0.21.14** (pinned in `mise.toml`, compiled by cargo).
+**None of this is needed for the containerized path (A).** It applies only if you
+want `cargo` and `trunk` on the host — `make dist-native`, or building without
+podman.
+
+All toolchain versions are pinned — nothing fetches "latest":
+
+| what | version | pinned in |
+|---|---|---|
+| Rust (+ `wasm32-unknown-unknown`, clippy, rustfmt) | 1.94.1 | `rust-toolchain.toml` |
+| Trunk | 0.21.14 | `Dockerfile` (`TRUNK_VERSION`, with a sha256 per architecture) |
 
 ### 1. System packages
 
-A C compiler is required before anything Rust-related — cargo builds
-trunk from source, and trunk pulls C-linker-backed crates. Install this
-first.
+A C compiler is required before anything Rust-related — several dependencies are
+C-linker-backed. Install this first.
 
 Fedora:
 ```bash
@@ -198,48 +203,42 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
 
 **Windows:** WebView2 runtime (preinstalled on Win11 / current Win10).
 
-### 2. Bootstrap the Rust toolchain (one-time, via mise)
+### 2. Bootstrap the Rust toolchain (one-time)
 
-Install [mise](https://mise.jdx.dev/) first (system package manager or
-their install script). Then, from this directory:
+Install [rustup](https://rustup.rs/) however your platform prefers. You do not
+choose a Rust version: `rust-toolchain.toml` pins 1.94.1 along with the `wasm32`
+target, clippy and rustfmt, and rustup installs exactly that on the first `cargo`
+invocation inside this directory.
 
 ```bash
-# 1. Fetches rustup-init 1.28.2 with checksum verification.
-mise install
-
-# 2. Run rustup-init once to set up ~/.cargo and ~/.rustup.
-#    --default-toolchain none skips installing a Rust version here;
-#    rustup will pick up 1.94.1 from rust-toolchain.toml on first cargo use.
-~/.local/share/mise/installs/http-rustup-init/1.28.2/rustup-init \
-    --default-toolchain none -y
-
-# 3. Put cargo/rustup on PATH for the current shell (add to your rc file
-#    for future shells — rustup-init offers to do this for you).
-source ~/.cargo/env
-
-# 4. Re-run mise install. Now that cargo exists, it compiles trunk 0.21.14
-#    (~3–5 min; ~400 crates). The first cargo invocation also triggers
-#    rustup to download Rust 1.94.1 per rust-toolchain.toml.
-mise install
+cargo --version   # cargo 1.94.1 — rustup resolves it from rust-toolchain.toml
 ```
 
-After this, `cargo`, `rustc`, `clippy`, `rustfmt`, and `trunk` are all
-available at pinned versions. Verify:
+### 3. Trunk
+
+Trunk builds the WASM bundle and is **not** a cargo dependency, so it does not
+come with the toolchain. Either take the same prebuilt binary the image does —
 
 ```bash
-cargo --version   # cargo 1.94.1
-rustc --version   # rustc 1.94.1
+curl -fsSLO https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz
+sha256sum trunk-x86_64-unknown-linux-gnu.tar.gz   # f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+sudo tar -xzf trunk-x86_64-unknown-linux-gnu.tar.gz -C /usr/local/bin trunk
 trunk --version   # trunk 0.21.14
 ```
 
-### 3. Known unpinned fetch (caveat)
+— or build it yourself with `cargo install --locked trunk@0.21.14` (~3 minutes).
+Both give you a working trunk. They do not give you the *same bytes*: two rounds
+of `make image-verify` measured a compiled trunk differing from itself across
+builds in 4 MB of a 32 MB binary, with no embedded path to blame, which is why
+the image downloads rather than compiles. The `aarch64` sum is in the
+`Dockerfile` beside the `x86_64` one.
 
-`trunk` itself downloads `wasm-bindgen-cli` on first WASM build to match
-the `wasm-bindgen` crate version in `Cargo.lock`. Trunk chooses the
-version; it is not pinned in our config. Since `Cargo.lock` is checked
-in, the `wasm-bindgen` crate version is fixed, but the CLI binary trunk
-fetches to match it comes from trunk's internal resolver. This is the
-one remaining link in the chain not directly pinned by us.
+### 4. Known unpinned fetch (caveat)
+
+`trunk` downloads `wasm-bindgen-cli` on the first WASM build, matching it to the
+`wasm-bindgen` crate version in `Cargo.lock`. That crate version is fixed by the
+checked-in lockfile, but trunk's internal resolver chooses the CLI binary, and we
+do not pin it. It is the one remaining link in the chain that is not ours.
 
 ---
 
@@ -273,8 +272,11 @@ the host down (see [Resource caps](#resource-caps)).
 ### B. Host toolchain (native dev — Trunk/cargo on PATH)
 
 The same `make wasm` / `make test` targets work directly if you provision the
-host toolchain (see [Prerequisites](#prerequisites)). The serve / demo targets
-always run on the host (they need host `python3`):
+host toolchain (see [Prerequisites](#prerequisites)).
+
+The serve and demo targets below are **not** part of this path — they run in the
+container like everything else, and are listed here only because this is where
+people look for them:
 
 ```bash
 make serve         # serve dist/ on :8081 (plain browser, no Tauri)
@@ -283,6 +285,15 @@ make tauri-run     # build WASM + Tauri shell, launch with stdout logs
 make site-serve    # publish all demo sites + serve one origin
 make native        # prints deprecation redirect (active modes are wasm / tauri)
 ```
+
+They serve over `--network host` rather than a published port, because rootless
+port-publishing is unreliable under pasta/slirp. `make tauri-run` launches the
+desktop GUI from inside the image onto the host's display, so the one thing it
+needs that podman cannot supply is **a display** — Wayland or X11. A genuinely
+headless box has no window to present, and that is the only limit.
+
+Two targets do shell out to a host `python3`: `make fleet-probe` (it queries live
+origins) and `make noscript-check` (it drives a Selenium grid). Nothing else does.
 
 ### Building a release
 

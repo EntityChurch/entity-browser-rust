@@ -17,7 +17,7 @@ application — a multi-window manager, content sites, and embedded HTML/JS apps
 all with the entity tree as the single source of truth — and ships as a WASM
 browser app (primary) and a Tauri desktop shell. It depends on entity-core-rust;
 nothing depends on it. The only rendering path is HTML DOM (the legacy
-egui/native renderer was removed). This is a 0.9 research preview — a reference paradigm, not a
+egui/native renderer was removed). This is a 0.10 research preview — a reference paradigm, not a
 mandate, and not a hardened production deployment. Confidence: the browser path
 is solid and exercised; Tauri/WebKitGTK durability is exploratory (see README
 release notes).
@@ -39,6 +39,16 @@ group = "Overview"
 path  = "docs/architecture/specs/REFERENCE-BOOT-AVAILABILITY-AND-RECOVERY.md"
 title = "Boot, updates, and recovery"
 blurb = "How the app starts, how a new build reaches a browser that has visited before, and what recovers a bad state. The entry-vs-asset file split and the cache rules that follow from it — including the one deployment mistake that has no clean recovery; why updating is silent and automatic; the secure-context requirement, and why a plain-HTTP LAN address has no offline capability at all; what System Recovery does and does not answer; and a frank list of the current limits (no export, no version selection, no build id reported)."
+group = "Overview"
+
+# The changelog tells a deployer this is the ONLY mechanism that removes a
+# service worker breaking navigation, and then named a file that was not in the
+# published tree. Either the sentence goes or the runbook does; the runbook is
+# 130 lines, written for a stranger, and cites nothing internal.
+[[doc]]
+path  = "docs/RUNBOOK-SERVICE-WORKER-KILL-SWITCH.md"
+title = "Runbook — the service-worker kill switch"
+blurb = "What to do when a deployed service worker is breaking the app for returning visitors and an ordinary hotfix is not reaching them: how to tell that failure from a merely-bad build, what serving the self-destruct worker costs (the offline shell, and nothing else — it does not touch the entity tree), and the step that decides everything, which is whether you can still serve your own /sw.js."
 group = "Overview"
 
 [[doc]]
@@ -308,3 +318,115 @@ path  = "SECURITY.md"
 title = "Security"
 blurb = "How to report a vulnerability."
 group = "Project"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# What each directory IS
+# ═════════════════════════════════════════════════════════════════════════════
+# Added 2026-09-20. Nothing below changes what publishes. Every one of these
+# directories was already internal, and had been since the day it was made — but
+# it was internal BY SILENCE. The header of this file says dated handoffs, audits
+# and reviews are "ephemeral and deliberately NOT listed", and the keep-list then
+# proves it by not listing them. That works, and it is indistinguishable from
+# having forgotten. A decision nobody can read is one somebody re-litigates.
+#
+# `publishes = false` does not withdraw anything and does not override the list
+# above: a file declared [[doc]] still ships from a directory marked false. What
+# it states is that the directory is a doc root whose UNDECLARED prose is this
+# project's development history — the derivation, not the product — and is not
+# addressed to a public reader.
+
+[[area]]
+path      = "docs/status"
+kind      = "status"
+publishes = false
+
+# The finished-work archive. Dated by design and permanently kept: a handoff from
+# 2026-07 is the record of that week and does not get truer or staler.
+[[area]]
+path      = "docs/archive"
+kind      = "archive"
+publishes = false
+
+# Routing packets we have sent to other repos in this ecosystem. Addressed to a
+# named recipient, never to a reader.
+[[area]]
+path      = "docs/outbox"
+kind      = "outbox"
+publishes = false
+
+# The working design record — audits, punchlists, architecture notes, each written
+# at a moment and about that moment. "status" rather than "archive" on purpose:
+# this material ages out. A punchlist is overtaken, an audit is superseded, and the
+# ones that stopped being true are still here because we do not delete them.
+[[area]]
+path      = "docs/plans"
+kind      = "status"
+publishes = false
+
+# Design reviews, proposals and analyses. Mixed on purpose and the mix is the point:
+# four documents in here are declared above and ship, because they describe what the
+# thing IS. The rest are how we got there — the option we did not take, the review
+# that found the defect, the proposal that was written before the shape was known.
+# Dated where it is dated, and the date is provenance rather than filing, so these
+# are kept rather than aged out.
+[[area]]
+path      = "docs/architecture/reviews"
+kind      = "archive"
+publishes = false
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Durable, edited in place, and internal
+# ═════════════════════════════════════════════════════════════════════════════
+# These are not dated and they are not ephemeral — they are maintained, and they
+# will still be here in a year. They are also written to us rather than to a
+# reader, and that is the only reason they do not ship. Until this block existed
+# the only way to say "durable" was to declare it canonical, which publishes it;
+# the honest answer was unavailable, so the answer given was silence.
+
+# Per-counterpart trackers: what is open between this repo and another one.
+[[living]]
+glob     = "docs/status/TRACKER-*.md"
+internal = true
+
+# The run-log entries that used to live in AGENTS.md, moved out when that file was
+# split. Self-described as internal, and it is.
+[[living]]
+path     = "docs/status/AGENTS-MD-SESSION-HISTORY.md"
+internal = true
+
+# How we run the project — curation, promotion, tagging. Its own first line says
+# never published.
+[[living]]
+path     = "docs/status/RELEASE-COORDINATION-INTERNAL.md"
+internal = true
+
+# The build-and-package half of a release, for whoever is doing the building. It
+# opens by pointing at a document outside this repo and its version numbers are
+# stale by construction; both make it unreadable to anyone who is not us.
+[[living]]
+path     = "docs/RELEASE-READINESS.md"
+internal = true
+
+# The two-machine acceptance run. The procedure in it is genuinely useful, but the
+# document around it is an internal test record — it counts our defects, cites our
+# punchlist, and is framed as a gate we owed ourselves. A version for a reader would
+# be a different document, not this one with the header removed.
+[[living]]
+path     = "docs/RUNBOOK-TWO-MACHINES.md"
+internal = true
+
+# Gaps and ambiguities we hit in the specification, logged here and routed upstream
+# as review hand-offs. Append-only. It is a record of questions asked of another
+# repo, and half of it is answered by now in documents that are not this one.
+[[living]]
+path     = "docs/SPEC-AMBIGUITIES.md"
+internal = true
+
+# The L5 application ABI, described from two shipped instances. Its own header
+# already made this call and gave the reason: the evidence it argues from is
+# internal symbol paths. It also names what a published version would be — sections
+# 1-4 with the evidence column dropped — so this is a decision to write that
+# document later, not a decision that the material is uninteresting.
+[[living]]
+path     = "docs/architecture/guides/GUIDE-L5-APPLICATION-ABI.md"
+internal = true

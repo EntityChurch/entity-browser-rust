@@ -674,7 +674,7 @@ federation-vectors:
 # type-checks surfaces its compile errors 11 minutes into a Selenium run, on the
 # box that happens to have a grid. It needs NO grid to compile.
 lint: image
-	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && python3 tools/publish-doc-check.py && ./tools/ecf-lint.sh && python3 tools/fidelity-lint.py && ./tools/vocab-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
+	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && python3 tools/publish-doc-check.py && ./tools/ecf-lint.sh && python3 tools/fidelity-lint.py && ./tools/vocab-lint.sh && ./tools/webrtc-slot-check.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && python3 tools/i18n_drift_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image
@@ -834,6 +834,26 @@ E2E_TIMEOUT ?= 35m
 # suite dialled somewhere else is a green preflight for a grid nobody uses.
 WEBDRIVER ?= http://localhost:4444
 E2E_WD_ENV = -e E2E_WEBDRIVER_URL=$(strip $(WEBDRIVER))
+
+# E2E_HTTP_PORT / E2E_BLACKHOLE_PORT — the two fixed, well-known ports every seat
+# on this box shares, and the ONLY way to move them off a collision.
+#
+# THEY WERE NEVER FORWARDED INTO THE CONTAINER. `make e2e-worker E2E_HTTP_PORT=8490`
+# set a make variable and nothing else: the suite runs via $(call RUN,…), the test
+# binary inside reads `std::env::var("E2E_HTTP_PORT")`, found nothing, and took its
+# 8092 default. So the documented isolation spelling — printed by
+# `refuse_if_port_is_already_served` itself, and recorded in GOTCHAS under the
+# commit that added it — silently did not isolate anything.
+#
+# Measured 2026-09-17, on a LIVE run: another seat's `make e2e-worker
+# WEBDRIVER=http://localhost:4455 E2E_HTTP_PORT=8490 SKIP_BUILD=1` had a child
+# `python3 -m http.server 8092 --directory dist`. They had done everything right.
+#
+# That makes 487b100e's refusal a dead end rather than a guard: you are refused,
+# told how to move the port, and the way out does not work. AP37 — a documented
+# invocation is a coupling no compiler maintains; run it before you write it down.
+E2E_PORT_ENV = $(if $(strip $(E2E_HTTP_PORT)),-e E2E_HTTP_PORT=$(strip $(E2E_HTTP_PORT)),) \
+               $(if $(strip $(E2E_BLACKHOLE_PORT)),-e E2E_BLACKHOLE_PORT=$(strip $(E2E_BLACKHOLE_PORT)),)
 #
 # It also REPORTS an occupied slot rather than refusing on one: `setup()` reaps
 # stale sessions, so a slot left behind by a failing test is recoverable and
@@ -924,7 +944,7 @@ endif
 	# never fires on one; it exists so a hang FAILS instead of sitting silent
 	# forever in CI or an agent loop. --signal=KILL because a wedged podman
 	# child may not honour TERM.
-	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1 $(strip $(E2E_EXTRA)),--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV) $(E2E_WD_ENV))
+	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1 $(strip $(E2E_EXTRA)),--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV) $(E2E_WD_ENV) $(E2E_PORT_ENV))
 
 # The MULTI-HOST federation origin — the publisher on its own host, so a
 # consumer's fetches are real network hops rather than loopback ones. Prints the
@@ -1137,6 +1157,26 @@ fleet-probe:
 noscript-check: wasm
 	python3 tools/noscript-check.py $(DIST)
 
+# RTC_SLOT — which parallel copy of the WebRTC rig every target below uses.
+#
+# This box has six worktrees and the rig's names, networks, ports and /tmp paths
+# were all fixed literals. Every `e2e-webrtc-*` target opens with a `teardown`,
+# so a second seat starting any WebRTC gate did not collide with an in-flight
+# run — it DEMOLISHED it, and the victim's failure read as a product defect.
+# 487b100e closed the same hazard for `e2e-worker` with a refusal; the WebRTC rig
+# is the entry point that fix did not enumerate.
+#
+# The rig now refuses an occupied slot and names this variable as the way out.
+# Slot 0 is byte-identical to every invocation before it existed; slots 1-9 each
+# get their own containers, networks, ports (offset by slot*10) and /tmp files.
+#
+#   make e2e-webrtc-meet RTC_SLOT=1
+#
+# `export` rather than threading it through fourteen recipes: a knob that each
+# target has to remember to pass is one the next target added here will not.
+RTC_SLOT ?= 0
+export RTC_SLOT
+
 # The two-browser §6.5 WebRTC gate — the terminal S5 validation. Unlike
 # `e2e-worker` (ONE Selenium session on :4444), this stands up TWO firefox
 # containers on a shared podman bridge + a real signaling node: the only
@@ -1225,6 +1265,121 @@ endif
 	@rc=0; NO_RELOAD=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
 	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet-noreload: PASS"; else echo ">>> e2e-webrtc-meet-noreload: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+.PHONY: e2e-webrtc-stall
+# ONE SIDE STALLS — the long-running-peer report, in a browser.
+#
+# Two browsers meet and chat, then A's main thread is blocked so its frames stop
+# the way a backgrounded tab's do, while B keeps its Chat open and keeps
+# offering. Then both send again. This is the configuration the report describes
+# and the one NO gate here has ever run: every other WebRTC gate drives both
+# browsers continuously.
+#
+# It is the browser evidence for H1/H2, which are fixed in `entity-core-rust` at
+# `c3f2b76` and — until this runs — only ever in THEIR unit tests. Both fixes
+# are present at `ad52ab0`: `find_counterpart_offer` takes the newest offer and
+# carries an `already_answered` guard, and `carrier::connection` re-dials when
+# the cached node connection's reader has ended.
+#
+# STALL_SECS has ONE validity bound and then CLASSIFIES — `stall_preconditions`
+# prints which case the run is testing, because they answer different questions:
+#   <= 30s   REFUSED — `wake_probe::decide` returns NoGap, so nothing re-checks
+#            anything and a green run would be satisfied by its fallback
+#    40s     stale-offers    gap noticed, offers still in the bucket, link UP
+#    90s     gap-only        offers expired, link still believed up
+#   150s     connection-dies past the 130s liveness deadline
+#            (max_missed 3 x (interval 30s + timeout 10s) + 10s grace) — the
+#            REPORTED shape, and the only one reaching the establishment path
+#
+# MEASURED 2026-09-15, kernel ad52ab0, and both results are worth knowing:
+#   40s  → PASS. gap 40013ms seen by A, none by B (control), channel SURVIVED
+#          (opens 1->1), delivery resumed on the first send.
+#   150s → INCONCLUSIVE (exit 2), and far more informative than a pass: A's gap
+#          was 150007ms, yet the channel STILL survived — so nothing had to
+#          re-establish — while B logged **9 §6.5 failures** at
+#          `role=answerer, sdp_exchange=INCOMPLETE, bucket 8->0 msg(s)`, which
+#          is a CORRELATION failure by `WebRtcError::Timeout`'s own definition.
+#          ⇒ B was rebuilding a path it still had. The reported END state is
+#          still not reproduced, because a one-sided freeze does not kill the
+#          existing data channel; that needs the node-restart variant.
+# Direct arm (it implies NO_RELOAD, like the other in-session gates).
+e2e-webrtc-stall:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-stall SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-stall BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-stall: meet, chat, freeze ONE side $(or $(STALL_SECS),40)s, chat again"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 STALL_SECS=$(or $(STALL_SECS),40) SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-stall: PASS"; \
+	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-stall: INCONCLUSIVE (rc=2) — the run could not put the mechanism at risk; see the precondition line above"; \
+	 else echo ">>> e2e-webrtc-stall: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+.PHONY: e2e-webrtc-node-restart
+# THE NODE GOES AWAY AND COMES BACK — H2's discriminator, in a browser.
+#
+# H2 is *"the WebRTC carrier holds a dead connection to the rendezvous node
+# forever"*. It was fixed upstream at `c3f2b76` (`carrier::connection` checks
+# `reader_ended()` and re-dials) and, until this target, only ever in THEIR unit
+# tests — no rig here had taken the node away, so nothing here had seen either
+# the defect or the fix.
+#
+# ⭐ THE DISCRIMINATING ACTION MUST NEED THE NODE. Two browsers with an open data
+# channel keep talking with the node in the bin, so a gate asserting delivery
+# passes with the carrier permanently wedged. The assertion is therefore a
+# SECOND MEET at a fresh tag — a round trip through the node by construction —
+# plus the un-assertion that the conversation they already had is untouched,
+# because a node is an introducer and not a relay (§1.3).
+#
+# The node returns at the SAME peer id (`--keypair`, a stable identity the rig
+# generates per run and removes on teardown). Ephemeral is the node's own
+# default and is right for a stateless introducer; here it would make a failure
+# to reconnect explained by the identity change, which is a different finding.
+# The restart subcommand asserts the identity did not move before returning.
+#
+# Three states, like its siblings: a restart that failed, or one that ran before
+# the peers had ever spoken, is INCONCLUSIVE and not a pass.
+e2e-webrtc-node-restart:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-node-restart SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-node-restart BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-node-restart: meet, chat, KILL THE NODE, meet again"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 NODE_RESTART=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-node-restart: PASS"; \
+	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-node-restart: INCONCLUSIVE (rc=2) — the run could not put the mechanism at risk; see the panel above"; \
+	 else echo ">>> e2e-webrtc-node-restart: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+.PHONY: e2e-webrtc-node-restart-control
+# THE CONTROL FOR THE GATE ABOVE, AND IT IS NOT OPTIONAL READING.
+#
+# Identical run with the node NOT restarted. It exists because two earlier cuts
+# of that gate's assertion measured nothing and this arm is what caught both:
+# `met_ids` scrapes a CUMULATIVE shell scrollback, so a membership test was
+# already true before the second meet; and read as a count it does not move in
+# EITHER arm, because a second meet never re-announces a peer the shell has
+# already introduced. A flat count would have been published as H2 reproduced.
+#
+# Run it whenever the restart gate's verdict changes. If this arm also reports
+# `node lines after the mark: A=0 B=0`, the observable is broken and the other
+# arm's red is a rig fault, not a finding.
+e2e-webrtc-node-restart-control:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> SKIPPED: podman not found on host"; exit 0; }
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first"; exit 1; }
+	@echo ">>> e2e-webrtc-node-restart-control: the same run, node untouched"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 NODE_RESTART=1 NODE_RESTART_CONTROL=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> control: PASS — the observable works, so a red on the restart arm is a finding"; \
+	 else echo ">>> control: rc=$$rc — the observable itself is in question; do NOT read the restart arm"; fi; \
 	 exit $$rc
 
 .PHONY: e2e-signaling-node
@@ -2467,16 +2622,32 @@ define check_cross_supported
 	fi
 endef
 
-# Guard: the version string lives in three files that a release must agree on.
+# Guard: the version string lives in FIVE files that a release must agree on.
 # Cheap to check, and the failure it prevents (an installer that advertises
 # 0.8.0 while the binary is 0.9.0) is invisible until a user reports it.
+#
+# It said "three" until 2026-09-20 and checked three. The two lockfiles are the
+# ones a bump forgets, and they fail differently: cargo silently REWRITES a stale
+# entry on the next build, which dirties the tree — and a dirty tree is what
+# `build-pair --check` refuses, so the symptom arrives as "this release is not
+# reproducible" rather than as "you missed a version".
+#
+# ⚠ Each lockfile carries ~40 OTHER crates at our old version — they are
+# entity-core-rust's, which versions on its own line. Match on the `name =` line
+# above, never on the version alone; a blind bump relabels the whole kernel.
 define check_dist_version
 	@v='$(DIST_VERSION)'; [ -n "$$v" ] || { echo "dist: could not read version from Cargo.toml"; exit 1; }; \
 	t=$$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' src-tauri/Cargo.toml | head -1); \
 	j=$$(sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1); \
-	[ "$$v" = "$$t" ] && [ "$$v" = "$$j" ] || { \
+	lr=$$(awk '/^name = "entity-browser-rust"$$/{getline; sub(/^version = "/,""); sub(/"$$/,""); print; exit}' Cargo.lock); \
+	lt=$$(awk '/^name = "entity-browser-tauri"$$/{getline; sub(/^version = "/,""); sub(/"$$/,""); print; exit}' src-tauri/Cargo.lock); \
+	[ -n "$$lr" ] && [ -n "$$lt" ] || { \
+	  echo "dist: could not find our own package in a lockfile (Cargo.lock='$$lr' src-tauri/Cargo.lock='$$lt')"; \
+	  echo "      that is a broken check, not a passing one — fix it before releasing."; exit 1; }; \
+	[ "$$v" = "$$t" ] && [ "$$v" = "$$j" ] && [ "$$v" = "$$lr" ] && [ "$$v" = "$$lt" ] || { \
 	  echo "dist: version mismatch — Cargo.toml=$$v src-tauri/Cargo.toml=$$t tauri.conf.json=$$j"; \
-	  echo "      all three must match before a release can be built."; exit 1; }
+	  echo "                         Cargo.lock=$$lr src-tauri/Cargo.lock=$$lt"; \
+	  echo "      all five must match before a release can be built."; exit 1; }
 endef
 
 # Preflight for the native runner: in the container these are guaranteed by
