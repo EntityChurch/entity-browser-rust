@@ -605,23 +605,61 @@ mod tests {
         AdoptedOnlyOnFirstContact(&'static str),
     }
 
+    /// **Does a warm boot re-read this field from the document, and by what?**
+    ///
+    /// The second axis, added after the ownership one had been green for two
+    /// days over two fields that were never refreshed at all. `Owned` asks
+    /// *whose value wins*; it does not ask *does the deployer's value ever
+    /// arrive*, and the two fields that answered the first question correctly
+    /// (`name_registry_pin` — `PinSource`; `name_resolver_max_ttl_ms` —
+    /// deployer-only) were exactly the two whose refresh was broken. A census
+    /// with one column reports on the column it has.
+    ///
+    /// The rule this encodes is R1's, and it is the trust boundary from
+    /// `DESIGN-RESILIENCE…` §8: **routing facts may be adopted on every warm
+    /// boot; preferences may not.** So each row also says which side of that
+    /// line it is on, and a row claiming `EveryWarmBoot` names the code that
+    /// does it.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Refreshed {
+        /// A **routing fact**, re-read from the document on every boot that
+        /// obtained one. Name the mechanism.
+        EveryWarmBoot(&'static str),
+        /// A **preference / posture**. Deliberately reaches only a profile that
+        /// has never read a document, because adopting it later would overwrite
+        /// something the end user is entitled to have changed. Say why.
+        FirstContactOnly(&'static str),
+    }
+
     /// The census. One row per `DeploymentConfig` field, in declaration order.
     #[test]
     fn every_deployment_declared_field_says_who_owns_it() {
-        let rows: Vec<(&str, Owned)> = vec![
+        let rows: Vec<(&str, Owned, Refreshed)> = vec![
             (
                 "surface",
                 Owned::AdoptedOnlyOnFirstContact(
                     "HomeDecision::FirstContact — apply_to runs on a profile that never \
                      read a document; the warm-boot arms never touch posture",
                 ),
+                Refreshed::FirstContactOnly(
+                    "posture, not routing — a returning user may have changed how the app \
+                     opens, and a later publish must not undo that (design §8)",
+                ),
             ),
-            ("window_type", Owned::AdoptedOnlyOnFirstContact("with `surface`")),
+            (
+                "window_type",
+                Owned::AdoptedOnlyOnFirstContact("with `surface`"),
+                Refreshed::FirstContactOnly("with `surface`"),
+            ),
             (
                 "home_site",
                 Owned::UserMayOverride(
                     "session_config::HomeSource — stamped `User` by set_home_site, \
                      `Deployment` by apply_to; read by decide_home",
+                ),
+                Refreshed::EveryWarmBoot(
+                    "session_config::decide_home — AdoptDeclared adopts, KeptUserChoice \
+                     reports and keeps",
                 ),
             ),
             (
@@ -630,16 +668,48 @@ mod tests {
                     "content_site::origins `source: deployment | user`, with \
                      Adoption::KeptUserOverride",
                 ),
+                Refreshed::EveryWarmBoot(
+                    "content_site::origins::adopt_deployment_origin, in boot_phase2's \
+                     registration loop — gated on a document being read, not on the home",
+                ),
             ),
-            ("site_mode", Owned::AdoptedOnlyOnFirstContact("with `surface`")),
-            ("fast_paint", Owned::AdoptedOnlyOnFirstContact("with `surface`")),
-            ("peer_creation_enabled", Owned::DeployerOnly),
-            ("name_resolver_max_ttl_ms", Owned::DeployerOnly),
+            (
+                "site_mode",
+                Owned::AdoptedOnlyOnFirstContact("with `surface`"),
+                Refreshed::FirstContactOnly("with `surface`"),
+            ),
+            (
+                "fast_paint",
+                Owned::AdoptedOnlyOnFirstContact("with `surface`"),
+                Refreshed::FirstContactOnly("with `surface`"),
+            ),
+            (
+                "peer_creation_enabled",
+                Owned::DeployerOnly,
+                Refreshed::FirstContactOnly(
+                    "capability posture (MAP §10 item 1b), not a routing fact — it changes \
+                     what the UI offers, so it rides `surface`'s rule. Deliberate: a \
+                     deployer who needs it to move today republishes the surface with it",
+                ),
+            ),
+            (
+                "name_resolver_max_ttl_ms",
+                Owned::DeployerOnly,
+                Refreshed::EveryWarmBoot(
+                    "session_config::decide_routing_refresh, in boot_phase2 — the §6a \
+                     resolver ceiling is a routing fact and protects the consumer against \
+                     the registry, so a deployer tightening it must reach returning profiles",
+                ),
+            ),
             (
                 "name_registry_pin",
                 Owned::UserMayOverride(
                     "session_config::pinned_registry — the user's mirror above the \
                      deployment's seed, PinSource::{User, Deployment}",
+                ),
+                Refreshed::EveryWarmBoot(
+                    "session_config::decide_routing_refresh, in boot_phase2 — refreshes the \
+                     DEPLOYMENT's seed only; the user's pin outranks it at every read",
                 ),
             ),
         ];
@@ -652,31 +722,54 @@ mod tests {
             9,
             "a field was added to or removed from DeploymentConfig without classifying it. \
              MODEL-STAKEHOLDERS-AND-OWNERSHIP §5: answer 1 (which role owns it) and 5 (who \
-             can fix it) before shipping"
+             can fix it) before shipping — and say whether a warm boot re-reads it"
         );
 
-        // No row may claim a mechanism it does not name.
-        for (field, owned) in &rows {
+        // No row may claim a mechanism it does not name, on EITHER axis.
+        for (field, owned, refreshed) in &rows {
             match owned {
                 Owned::UserMayOverride(m) | Owned::AdoptedOnlyOnFirstContact(m) => assert!(
                     !m.trim().is_empty(),
-                    "{field} claims a mechanism without naming one — that is the shape the \
-                     census exists to catch"
+                    "{field} claims an ownership mechanism without naming one — that is the \
+                     shape the census exists to catch"
                 ),
                 Owned::DeployerOnly => {}
             }
+            let (Refreshed::EveryWarmBoot(m) | Refreshed::FirstContactOnly(m)) = refreshed;
+            assert!(
+                !m.trim().is_empty(),
+                "{field} does not say whether a warm boot re-reads it, or why not. A \
+                 deployer-owned value nobody re-reads is a correct publish that never \
+                 reaches a returning profile — the `origins` CDN-move bug, once per field"
+            );
         }
 
-        // …and the two fields the reconcile actually adopts over an ESTABLISHED
-        // value must both be `UserMayOverride`. This is the assertion that would
-        // have failed before the fix.
+        // …and the two fields the reconcile adopts over an ESTABLISHED value
+        // must both be `UserMayOverride`. This is the assertion that would have
+        // failed before the AP49 fix.
         for field in ["home_site", "name_registry_pin"] {
-            let row = rows.iter().find(|(f, _)| *f == field).expect("row present");
+            let row = rows.iter().find(|(f, ..)| *f == field).expect("row present");
             assert!(
                 matches!(row.1, Owned::UserMayOverride(_)),
                 "{field} is adopted on a WARM boot over a value the user may have set, and \
                  nothing distinguishes the two. That is AP49, and it is how a deliberate \
                  setting gets silently overwritten"
+            );
+        }
+
+        // **The second axis's own assertion, and the one that would have failed
+        // before this fix.** Every field the design classifies as a ROUTING fact
+        // must be re-read on a warm boot. `name_registry_pin` was reachable only
+        // through `HomeDecision::AdoptDeclared` (an unrelated trigger) and
+        // `name_resolver_max_ttl_ms` through no warm path at all, while both sat
+        // in a census that was green because it only asked who owned them.
+        for field in ["home_site", "origins", "name_registry_pin", "name_resolver_max_ttl_ms"] {
+            let row = rows.iter().find(|(f, ..)| *f == field).expect("row present");
+            assert!(
+                matches!(row.2, Refreshed::EveryWarmBoot(_)),
+                "{field} is a ROUTING fact (design §8: routing may be adopted, preferences \
+                 may not), so a deployment that changes it must reach a profile that has \
+                 already booted. AP36 — put the guard on the decision, not the acquisition"
             );
         }
     }

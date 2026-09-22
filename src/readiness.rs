@@ -622,11 +622,13 @@ pub fn collect(peers: &crate::peers::Peers, bound_peer_id: &str) -> Facts {
 /// direction for staleness (no cache, so no stale cache) and a real loss of
 /// availability, and those are different facts.
 ///
-/// **The user-facing banner still names only two**, because its
-/// `readiness.insecure_origin` string is translated into 30 locales and the
-/// i18n parity check is by KEY, not by content — editing the English value
-/// silently leaves 30 stale translations and no gate would say so. Recorded as
-/// owed rather than half-done.
+/// **The banner names all three as of 2026-09-03.** It named two for a day,
+/// deliberately: the `readiness.insecure_origin` string is translated into 30
+/// locales and the i18n parity check is by KEY, not by content, so editing the
+/// English value silently leaves 30 stale translations and no gate would say
+/// so. It was recorded as owed rather than half-done, and paid in the release's
+/// translation pass — the English and all 30 overlays moved in one commit,
+/// which is the only shape that debt has.
 ///
 /// **It does NOT categorically cost you WebRTC, and this banner used to say it
 /// did.** Measured against Firefox 149 at an http LAN origin,

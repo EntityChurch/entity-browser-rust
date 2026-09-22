@@ -1480,9 +1480,23 @@ fn count_panics(lines: &[String]) -> Vec<&String> {
 }
 
 /// Poll the captured browser console until `"Frame loop started"`
-/// appears (boot finished) or `timeout_ms` elapses. Used to replace
-/// fixed `sleep(Duration::from_secs(6))` after `client.refresh()`.
-/// Sleeps 100ms between polls so we don't hammer the WebDriver.
+/// appears or `timeout_ms` elapses. Sleeps 100ms between polls so we don't
+/// hammer the WebDriver.
+///
+/// **This is PHASE 1 ONLY, and since 2026-09-02 that is no longer "boot
+/// finished".** The two-phase boot made the deferred order the default: the
+/// frame loop arms after phase 1's local reads (measured 258–287 ms), while
+/// everything that depends on `/entity-deployment.json` — the origins adoption,
+/// the supersession persist/revalidate, the startup surface, and the
+/// `boot_diagnostics` routing mirror — runs in a **spawned** `boot_phase2`
+/// behind it. So a gate that calls this and then immediately navigates away, or
+/// reads a phase-2 product, is racing a bounded network fetch it cannot see.
+///
+/// **Use [`wait_for_phase2`] when the thing you are about to assert is decided
+/// in phase 2.** This function stays as-is for the ~100 call sites that only
+/// need the app to be alive and painting; widening it would make every gate pay
+/// phase 2's deadline, and would break the two-phase gate, which exists to
+/// observe the window between the two.
 async fn wait_for_boot(
     client: &Client,
     timeout_ms: u64,
@@ -1521,6 +1535,71 @@ async fn wait_for_boot(
                 "wait_for_boot: never saw 'Frame loop started' in {timeout_ms}ms \
                  ({} log lines captured). Last {} of them:\n  {}",
                 log.len(),
+                tail.len(),
+                tail.join("\n  ")
+            )
+            .into());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Poll until **phase 2 has handed the page over** — i.e. `boot_phase2` ran to
+/// completion and everything that depends on `/entity-deployment.json` is in the
+/// tree and in localStorage.
+///
+/// The marker is `boot_progress::surface_down`'s line, *"boot surface down — the
+/// app owns the page"*, which is emitted on all three exits and names which one
+/// in its `reason` field (`phase 2 complete` / `phase 2 failed` / `hold
+/// failsafe`). We wait for the line and **return the reason**, rather than
+/// asserting `phase 2 complete` here: a caller that wants to tolerate the
+/// failsafe can, and a caller that does not gets the word it needs for its own
+/// message. Collapsing three outcomes into a bool is the AP40 shape the boot
+/// code itself was fixed for.
+///
+/// **Why this exists.** `wait_for_boot` returns when the frame loop arms, which
+/// is phase 1. A gate that then navigates away — `client.goto(bios_url)` — can
+/// cut phase 2 off mid-flight, so whatever phase 2 was going to write is simply
+/// never written, and the assertion downstream fails naming the *product*
+/// instead of the race. That is not hypothetical: it is
+/// `the_recovery_console_names_a_stranded_profile` reading an incomplete routing
+/// mirror, red 1 run in 3 unfiltered and 0 in 12 filtered — the signature of a
+/// race that needs the surrounding suite's timing to show up, which is why
+/// running the gate alone to "check" it proves nothing.
+///
+/// **Do not reach for this by default.** Most gates want the app alive, not the
+/// document settled, and `?boot=inline` deliberately makes the two the same
+/// moment. Use it when the assertion's subject is decided in phase 2.
+async fn wait_for_phase2(
+    client: &Client,
+    timeout_ms: u64,
+) -> Result<String, Box<dyn std::error::Error>> {
+    const MARKER: &str = "boot surface down";
+    let start = std::time::Instant::now();
+    loop {
+        let log = capture_log(client).await?;
+        if let Some(line) = log.iter().find(|l| l.contains(MARKER)) {
+            // The reason rides in the tracing line; report it verbatim rather
+            // than re-deriving a verdict the emitter already decided.
+            let reason = ["phase 2 complete", "phase 2 failed", "hold failsafe"]
+                .into_iter()
+                .find(|r| line.contains(r))
+                .unwrap_or("unnamed")
+                .to_string();
+            return Ok(reason);
+        }
+        if start.elapsed().as_millis() as u64 > timeout_ms {
+            let tail: Vec<String> = log
+                .iter()
+                .rev()
+                .take(30)
+                .rev()
+                .map(|l| l.chars().take(220).collect())
+                .collect();
+            return Err(format!(
+                "wait_for_phase2: never saw {MARKER:?} in {timeout_ms}ms. Phase 2 owns the \
+                 deployment document, the origins adoption, the supersession records and the \
+                 routing mirror — none of those are written yet. Last {} log lines:\n  {}",
                 tail.len(),
                 tail.join("\n  ")
             )
@@ -12895,6 +12974,9 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     client.goto(&url27).await?;
     let phase27_boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
     println!("  phase 27 boot: {phase27_boot_ms}ms");
+    // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+    // `boot_phase2`, behind the bounded deployment-document fetch.
+    wait_for_phase2(&client, 30_000).await?;
 
     // Poll for the published home to render. Fast-paint's pre-peer paint is
     // DISABLED for the consolidation, so the LIVE overlay is the sole
@@ -14851,6 +14933,9 @@ async fn default_idb_boots_into_remote_deployment_home(
             .goto(&format!("http://localhost:{}/?log=trace", http_server_port()))
             .await?;
         wait_for_boot(&client, 30_000).await?;
+        // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+        // `boot_phase2`, behind the bounded deployment-document fetch.
+        wait_for_phase2(&client, 30_000).await?;
 
         let read_site =
             r#"const sl=document.getElementById('site-layer');return sl?(sl.textContent||'').trim():'';"#;
@@ -15109,6 +15194,9 @@ async fn rekey_scenario(
 
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
+        // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+        // `boot_phase2`, behind the bounded deployment-document fetch.
+        wait_for_phase2(&client, 30_000).await?;
 
         let home_text = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
         let cold = capture_log(&client).await?;
@@ -16811,6 +16899,9 @@ async fn demo_pull_scenario(
         wipe_all_storage(&client).await?;
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
+        // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+        // `boot_phase2`, behind the bounded deployment-document fetch.
+        wait_for_phase2(&client, 30_000).await?;
 
         let home_text = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
         let cold = capture_log(&client).await?;
@@ -17252,6 +17343,9 @@ async fn supersession_revalidate_scenario(
 
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
+        // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+        // `boot_phase2`, behind the bounded deployment-document fetch.
+        wait_for_phase2(&client, 30_000).await?;
         let _ = poll_rendered(&client, read_site, "Welcome to the Entity Demo Site").await?;
         let adopted = capture_log(&client).await?;
         assert!(
@@ -18174,8 +18268,15 @@ async fn a_name_resolves_cross_origin_to_a_verified_page_in_a_browser(
 /// **Hardlinks, and inside `target/`**, so the 28 MB debug wasm is not copied and
 /// the link cannot fail across filesystems. Served on its own port, which also
 /// makes it a distinct browser ORIGIN from the dist server — that is what
-/// guarantees a **cold** boot (separate localStorage/IDB), and a cold boot is the
-/// only one that reads a deployment document at all.
+/// guarantees the FIRST load is a **cold** boot (separate localStorage/IDB).
+///
+/// **"a cold boot is the only one that reads a deployment document at all" —
+/// that used to be written here and B2 made it false.** Every warm boot reads
+/// the document now (for origins, supersession revalidation and reportability);
+/// what a cold boot uniquely does is take `apply_to`. The distinction is the
+/// whole subject of
+/// `a_deployment_that_moves_its_registry_pin_reaches_a_returning_profile`, which
+/// reuses this rig for a second, warm load.
 fn stage_pinned_spa(
     registry_pid: &str,
     registry_origin: &str,
@@ -18333,6 +18434,148 @@ async fn a_deployment_that_seeds_a_registry_pin_resolves_a_name_with_nothing_typ
     assert!(panics.is_empty(), "a window panicked during the seeded-pin boot: {panics:?}");
 
     println!("  a deployment seeded the pin and the browser resolved a name with nothing typed");
+    client.close().await.ok();
+    Ok(())
+}
+
+/// **A deployment that MOVES its registry pin reaches a profile that has already
+/// booted — AP50, the warm half the test above does not cover.**
+///
+/// The gate above proves the pin is installed on a **cold** boot. That is a
+/// different property, and the distance between them was a live defect: the pin
+/// was adopted only inside `HomeDecision::AdoptDeclared`, so a deployment that
+/// added or moved its registry pin reached a returning profile **only if the home
+/// peer happened to change in the same publish** — an unrelated trigger. Its
+/// sibling `name_resolver_max_ttl_ms` was refreshed on no warm boot at all.
+///
+/// Why this needs a browser at all, when `decide_routing_refresh` is pure and
+/// natively gated: the sibling gate's own doc comment is the argument, and it
+/// applies verbatim here — *"none of that is evidence that a browser boot
+/// installs it"*. The decision function is reachable natively; the **wiring** in
+/// `boot_phase2` sits in a `cfg(wasm32)` block no native test can enter, which is
+/// exactly where the defect lived.
+///
+/// **The document deliberately declares ONLY the pin — no `home_site`.** That is
+/// what makes this a real falsifier rather than a re-run of the cold gate: with
+/// no home declared, `decide_home` returns `Unchanged`, the `AdoptDeclared` arm
+/// never runs, and the old code had no path to the new pin at all. A document
+/// that also moved the home would pass under the defect and prove nothing —
+/// a gate satisfied by its fallback.
+///
+/// **Falsifier:** delete the `RoutingRefresh::Adopt` arm for the pin in
+/// `boot_phase2` and this reds on step (3), reporting the FIRST pin after the
+/// second was published.
+#[tokio::test]
+async fn a_deployment_that_moves_its_registry_pin_reaches_a_returning_profile(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let fed = federation_target()?;
+    let first_pid = fed.registry_pid.clone();
+    // The second pin is synthetic on purpose. What is under test is *does the
+    // new value arrive*, not *does it resolve* — and a second real registry
+    // would need a second federation fixture for no added evidence. It is
+    // well-formed (`2K…`, canonical length) so nothing rejects it as garbage.
+    let second_pid = format!("2K{}", "Moved9SecondRegistryPeerIdForTheWarmRefreshGate");
+    let second_pid = second_pid[..first_pid.len().max(20).min(second_pid.len())].to_string();
+
+    let spa_port = pick_free_port()?;
+    let registry_origin = format!("{}/registry", fed.base);
+    let (_spa, staged) = stage_pinned_spa(&first_pid, &registry_origin, spa_port)?;
+
+    // (1) COLD boot against the first pin. This establishes the durable config —
+    // without it the second load would still be a cold boot and would take
+    // `apply_to`, which never had the defect.
+    //
+    // The retrying curl is a READINESS WAIT, not decoration: `stage_pinned_spa`
+    // spawns the server and returns immediately, so a `goto` issued straight
+    // after it races the bind and Firefox reports `connectionFailure` — measured,
+    // first run of this gate, and it reads like a product failure. It doubles as
+    // the same staging precondition the sibling gate asserts.
+    let staged_doc = format!("http://localhost:{spa_port}/entity-deployment.json");
+    let first_served = std::process::Command::new("curl")
+        .args(["-fsS", "--retry", "20", "--retry-all-errors", "--retry-delay", "1", &staged_doc])
+        .output()?;
+    let first_body = String::from_utf8_lossy(&first_served.stdout).to_string();
+    assert!(
+        first_body.contains(&first_pid),
+        "the staged deployment document is not being served (staged at {}): {first_body:?}",
+        staged.display()
+    );
+    client.goto(&format!("http://localhost:{spa_port}/?log=trace")).await?;
+    wait_for_boot(&client, 30_000).await?;
+    sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        click_spawn_btn(&client, "+ Shell").await?,
+        "clicked",
+        "couldn't open the Shell window"
+    );
+    sleep(Duration::from_millis(500)).await;
+    let before = shell_submit(&client, "name pins", 1500).await?;
+    assert!(
+        before.contains(&first_pid[..8.min(first_pid.len())]),
+        "PRECONDITION: the first pin was never seeded, so this gate cannot measure the \
+         refresh — scrollback:\n{before}"
+    );
+    println!("  cold boot seeded {}", &first_pid[..12.min(first_pid.len())]);
+
+    // (2) The deployer republishes the document with a DIFFERENT pin. Same
+    // origin, same profile, same everything else — the one bit that moves is the
+    // pin, which is what makes step (3) unambiguous.
+    std::fs::write(
+        staged.join("entity-deployment.json"),
+        format!(
+            "{{\n  \"name_registry_pin\": {{ \"peer_id\": \"{second_pid}\", \"origin\": \"{registry_origin}\" }}\n}}\n"
+        ),
+    )?;
+    // Confirm the ORIGIN serves the new bytes before blaming the client. Without
+    // this, a stale-file or cache-header problem is indistinguishable from the
+    // defect under test — the same rule the sibling gate states about staging.
+    let served = std::process::Command::new("curl")
+        .args(["-fsS", "--retry", "10", "--retry-all-errors", "--retry-delay", "1", &staged_doc])
+        .output()?;
+    let body = String::from_utf8_lossy(&served.stdout).to_string();
+    assert!(
+        body.contains(&second_pid) && !body.contains(&first_pid),
+        "the origin is still serving the OLD document, so nothing downstream is evidence \
+         about the client: {body:?}"
+    );
+
+    // (3) WARM boot — a plain reload of the same origin, with a durable config
+    // already in place. The new pin must be in force.
+    client.goto(&format!("http://localhost:{spa_port}/?log=trace")).await?;
+    wait_for_boot(&client, 30_000).await?;
+    sleep(Duration::from_millis(800)).await;
+    assert_eq!(
+        click_spawn_btn(&client, "+ Shell").await?,
+        "clicked",
+        "couldn't open the Shell window after the warm boot"
+    );
+    sleep(Duration::from_millis(500)).await;
+    let after = shell_submit(&client, "name pins", 2000).await?;
+    assert!(
+        after.contains(&second_pid[..8.min(second_pid.len())]),
+        "THE MOVED PIN DID NOT LAND. The deployment published a new name-registry pin and a \
+         returning profile is still on the old one — a correct publish that never arrives \
+         (AP50/AP36). scrollback:\n{after}"
+    );
+    assert!(
+        !after.contains(&first_pid[..8.min(first_pid.len())]),
+        "the shell reports BOTH pins — the refresh added rather than replaced, which leaves \
+         two answers to 'which registry is in force'. scrollback:\n{after}"
+    );
+    assert!(
+        after.contains("seeded by this deployment"),
+        "the moved pin must still be reported as the DEPLOYMENT's, not silently promoted to \
+         the user's — a pin nobody in this tab chose may never read as one they did (AP25). \
+         scrollback:\n{after}"
+    );
+
+    let log_lines = capture_log(&client).await?;
+    let panics = count_panics(&log_lines);
+    assert!(panics.is_empty(), "a window panicked during the warm pin refresh: {panics:?}");
+
+    println!("  a moved registry pin reached a profile that had already booted");
     client.close().await.ok();
     Ok(())
 }
@@ -20590,6 +20833,9 @@ async fn a_first_contact_that_missed_the_deployment_config_recovers(
         wipe_all_storage(&client).await?;
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
+        // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+        // `boot_phase2`, behind the bounded deployment-document fetch.
+        wait_for_phase2(&client, 30_000).await?;
         let first = capture_log(&client).await?;
         assert!(
             !first.iter().any(|l| l.contains("deployment-config: applied")),
@@ -20712,18 +20958,61 @@ async fn the_recovery_console_names_a_stranded_profile(
         run_rekey_fixture("emit_rekey_fixture_before", &root);
         let peer_a = deployment_home_peer(&root);
 
-        client.goto(&app_url).await?;
-        wipe_all_storage(&client).await?;
+        // **Settle this boot BEFORE wiping.** `wipe_all_storage` deletes the peer
+        // databases synchronously while the first visit's `boot_phase2` is still
+        // in flight; phase 2 then resolves its session config against a store
+        // that has just vanished, lands on the build default — whose
+        // `home_site.peer_id` is EMPTY, the documented "this profile's own peer"
+        // sentinel — and writes *that* into the routing mirror. This is half of
+        // the 1-in-3 unfiltered red; it poisons the mirror.
         client.goto(&app_url).await?;
         wait_for_boot(&client, 30_000).await?;
+        wait_for_phase2(&client, 30_000).await?;
+        wipe_all_storage(&client).await?;
+
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        // **The other half: phase 1 is not "booted" any more.** The mirror is
+        // written by `boot_phase2`, behind the bounded `/entity-deployment.json`
+        // fetch, while `wait_for_boot` returns when the frame loop arms.
+        // Navigating to the BIOS on the next line cut phase 2 off mid-flight, so
+        // the good mirror was never written and the poisoned one above survived
+        // to be read — present, timestamped, `"home_peer":""`, and the console
+        // correctly reporting "recorded no publisher to compare" for a profile
+        // that had simply not finished booting.
+        let handover = wait_for_phase2(&client, 30_000).await?;
+        assert_eq!(
+            handover, "phase 2 complete",
+            "phase 2 did not complete on the healthy boot, so the routing mirror this gate \
+             is about was never written from a settled config. Nothing below this line \
+             measures the console."
+        );
 
         client.goto(&bios_url).await?;
         let healthy = routing(&client).await?;
+        // **Assert on the PROFILE line, not on the card.** `healthy.contains(peer_a)`
+        // was vacuous: the card also renders "this domain publishes as {peer_a}",
+        // straight from the deployment-document fetch the console makes itself, so
+        // the assertion passed with an entirely EMPTY mirror and the gate only ever
+        // failed one step later, naming the wrong thing. A gate satisfied by evidence
+        // from the half it is not testing measures nothing.
         assert!(
-            healthy.contains(&peer_a),
-            "the console does not name the publisher this profile is pointed at ({peer_a}). \
-             The routing mirror is the only channel across the L1/L5 boundary — if it is \
-             absent, `boot_diagnostics::write_routing_mirror` did not run. Got: {healthy:?}"
+            healthy.contains(&format!("this profile is pointed at {peer_a}")),
+            "the console does not name the publisher THIS PROFILE is pointed at ({peer_a}) — \
+             note the domain half of the card may still name it, which is why this asserts the \
+             profile line specifically. The routing mirror is the only channel across the \
+             L1/L5 boundary; if the profile line reads \"could not determine\", \
+             `boot_diagnostics::write_routing_mirror` ran with an unsettled config (phase 2 \
+             raced) or did not run at all. Got: {healthy:?}\n\
+             Raw mirror: {}",
+            client
+                .execute(
+                    "return localStorage.getItem('entity_routing_mirror') || '(absent)';",
+                    vec![]
+                )
+                .await?
+                .as_str()
+                .unwrap_or("(unreadable)")
         );
         assert!(
             !healthy.contains("STRANDED"),
@@ -20765,18 +21054,32 @@ async fn the_recovery_console_names_a_stranded_profile(
         // ── 3. One normal boot reconciles it ─────────────────────────────────
         client.goto(&app_url).await?;
         wait_for_boot(&client, 30_000).await?;
+        // Phase 2 is what adopts the new publisher AND rewrites the mirror; the
+        // navigation below would otherwise cut it off. Same fix as step 1.
+        let handover = wait_for_phase2(&client, 30_000).await?;
+        assert_eq!(
+            handover, "phase 2 complete",
+            "phase 2 did not complete on the reconciling boot, so nothing below measures \
+             whether R1 adopted {peer_b}"
+        );
         client.goto(&bios_url).await?;
         let healed = routing(&client).await?;
+        // **Both of these used to pass on an EMPTY mirror.** With no `believed`
+        // the console takes its last arm — "recorded no publisher to compare" —
+        // which contains no "STRANDED", and the card still names `peer_b` on the
+        // *domain* line. So step 3 could report a successful reconcile for a
+        // profile that had recorded nothing at all. Assert the profile line.
+        assert!(
+            healed.contains(&format!("this profile is pointed at {peer_b}")),
+            "after reconciling, the console does not show THIS PROFILE pointed at {peer_b} \
+             (the domain line naming it is not evidence — that comes from the console's own \
+             fetch). Either R1 did not adopt, or the routing mirror was not rewritten \
+             afterwards. Got: {healed:?}"
+        );
         assert!(
             !healed.contains("STRANDED"),
             "the profile still reads as stranded after a boot that should have reconciled \
-             it to {peer_b}. Either R1 did not adopt, or the routing mirror was not \
-             rewritten afterwards. Got: {healed:?}"
-        );
-        assert!(
-            healed.contains(&peer_b),
-            "after reconciling, the console does not show the profile pointed at {peer_b}. \
-             Got: {healed:?}"
+             it to {peer_b}. Got: {healed:?}"
         );
 
         println!("  BIOS: agree → STRANDED({peer_a} vs {peer_b}) → reconciled, all at L1");
@@ -22346,6 +22649,9 @@ async fn a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration
         wipe_all_storage(&client).await?;
         client.goto(&url).await?;
         wait_for_boot(&client, 30_000).await?;
+        // `wait_for_boot` is PHASE 1. The marker asserted below is written by
+        // `boot_phase2`, behind the bounded deployment-document fetch.
+        wait_for_phase2(&client, 30_000).await?;
         let cold = capture_log(&client).await?;
         if !cold.iter().any(|l| l.contains("deployment-config: applied")) {
             print_log(&cold);

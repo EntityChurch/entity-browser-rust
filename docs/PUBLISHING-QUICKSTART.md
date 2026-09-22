@@ -607,6 +607,76 @@ Deeper: [`GUIDE-REPUBLISH-AND-INCREMENTAL.md`](architecture/guides/GUIDE-REPUBLI
 has the per-change table (edit / add / delete a page, and the dangling-nav
 gotcha).
 
+### 8.1 Several publishers on one domain
+
+One domain can host more than one publisher. Give each its own identity and its
+own hosting prefix, and publish them into the same output directory:
+
+```bash
+make site-dist PREFIX=alpha IDENTITY_SEED=$(cat alpha.seed) OUT=dist-site
+make site-dist PREFIX=beta  IDENTITY_SEED=$(cat beta.seed)  OUT=dist-site
+```
+
+Each publisher's content lands under its own prefix (`/alpha/…`, `/beta/…`) and
+`/entity-deployment.json` accumulates one entry per publisher:
+
+```json
+"origins": { "2KFQsG…": "/alpha", "2KG742…": "/beta" }
+```
+
+**That file describes the domain, not the last publish.** The first publish sets
+the domain's home site and startup surface; later ones add only their own origin
+entry and print a line saying so. To move the home onto a different publisher,
+say so:
+
+```bash
+make site-dist PREFIX=beta IDENTITY_SEED=$(cat beta.seed) OUT=dist-site SET_HOME=1
+```
+
+**Moving the home is not cosmetic.** For anyone who has already visited, the new
+home peer replaces the old one *and the old one is recorded as retired*, which
+redirects their saved references to it. That is correct when you are genuinely
+re-keying a domain onto a new identity, and wrong when you are simply adding a
+second publisher — which is why it takes a flag.
+
+### 8.2 Prefix, or share one?
+
+You do not have to give each publisher a prefix. Publishing them all into the
+same location works too — their trees tell them apart — and it is usually what
+you want, because it is the only way they share storage:
+
+|  | Share one location | A prefix each |
+|---|---|---|
+| Content storage | **shared — stored once** | one store per prefix, **duplicated** |
+| `transport-profile`, `sites/index.html` | **one each, describing the last publisher** | isolated, correct |
+
+`--prefix` is the *hosting* scope — where a publisher's files sit. The peer id is
+the *authority* scope — who signed them — and it is a path segment inside. Both
+are always present; the prefix is the part you choose.
+
+**If you share one location, publishing prints what it is doing** and names the
+two files that are one-per-location. Give a publisher its own prefix when that
+matters to you; otherwise share, and get the deduplication.
+
+Three limits worth knowing before you plan a large multi-publisher domain:
+
+- **Content is stored once per prefix**, so publishers on *separate* prefixes do
+  not share storage even for byte-identical files.
+- **`transport-profile` and `sites/index.html` are one per location.** A visitor
+  arriving cold at a shared location is told about whichever publisher published
+  last; the others are still reachable, just not advertised there.
+- **If one of the non-home publishers ever changes identity**, nothing detects
+  it: a deployment configuration can say *who* publishes, but has no way to say
+  that one publisher *replaced* another. Keep a publisher's seed.
+
+**Verify each publisher, not just the last one.** `--verify` checks one identity
+at a time, so on a shared location run it per seed:
+
+```bash
+make site OUT=dist-site VERIFY=1 IDENTITY_SEED=$(cat alpha.seed)
+make site OUT=dist-site VERIFY=1 IDENTITY_SEED=$(cat beta.seed)
+```
+
 ---
 
 ## 9. Optional — names

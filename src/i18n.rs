@@ -2025,10 +2025,12 @@ pub const EN: &[(&str, Message)] = &[
     (
         "readiness.insecure_origin",
         Message::Simple(
-            "This page is not on a secure origin ({origin}). Background storage and \
-             the camera are unavailable here, so QR pairing will not work — paste \
-             the pairing line instead. Peer connections may still work; run `net` \
-             in the Shell for details. Production sites should use https://.",
+            "This page is not on a secure origin ({origin}). The offline shell, \
+             background storage and the camera are unavailable here — so this page \
+             cannot be reopened while the computer serving it is asleep, and QR \
+             pairing will not work; paste the pairing line instead. Peer \
+             connections may still work; run `net` in the Shell for details. \
+             Production sites should use https://.",
         ),
     ),
     (
@@ -2232,6 +2234,390 @@ pub const EN: &[(&str, Message)] = &[
             (PluralCategory::One, "{n} dedicated worker"),
             (PluralCategory::Other, "{n} dedicated workers"),
         ]),
+    ),
+    // --- Problems / health checks (`src/doctor.rs`) ------------------------
+    // Extracted 2026-09-03. This surface shipped English-only by the operator's
+    // call -- build it, look at it, then translate -- and this is the "then".
+    // The reasoning for each string stays in `doctor.rs` beside the code that
+    // chooses it; a catalog has nowhere to put a paragraph explaining why a
+    // verdict must not read as reassuring.
+    (
+        "doctor.title",
+        Message::Simple(
+            "Problems",
+        ),
+    ),
+    (
+        "doctor.all_clear",
+        Message::Simple(
+            "No problems found.",
+        ),
+    ),
+    (
+        "doctor.checked",
+        Message::Simple(
+            "{n} checks ran just now.",
+        ),
+    ),
+    (
+        "doctor.checked_with_gaps",
+        Message::Simple(
+            "{n} checks ran just now; {q} had nothing to compare against yet.",
+        ),
+    ),
+    (
+        "doctor.checking",
+        Message::Simple(
+            "Checking…",
+        ),
+    ),
+    (
+        "doctor.recheck",
+        Message::Simple(
+            "Check again",
+        ),
+    ),
+    (
+        "doctor.belief",
+        Message::Simple(
+            "This machine:",
+        ),
+    ),
+    (
+        "doctor.source",
+        Message::Simple(
+            "Checked against:",
+        ),
+    ),
+    (
+        "doctor.some_undetermined",
+        Message::Simple(
+            "Some checks could not be completed, so this is not a clean bill of health.",
+        ),
+    ),
+    (
+        "doctor.check.domain_identity.title",
+        Message::Simple(
+            "Who publishes this site",
+        ),
+    ),
+    (
+        "doctor.check.fetch_failure.title",
+        Message::Simple(
+            "Whether a publisher is still answering",
+        ),
+    ),
+    (
+        "doctor.check.catalog_completeness.title",
+        Message::Simple(
+            "Whether everything finished loading",
+        ),
+    ),
+    (
+        "doctor.chip.diverges",
+        Message::Simple(
+            "needs attention",
+        ),
+    ),
+    (
+        "doctor.chip.undetermined",
+        Message::Simple(
+            "could not check",
+        ),
+    ),
+    (
+        "doctor.chip.source_silent",
+        Message::Simple(
+            "nothing to compare",
+        ),
+    ),
+    (
+        "doctor.chip.nothing_to_check",
+        Message::Simple(
+            "not checked yet",
+        ),
+    ),
+    (
+        "doctor.chip.agrees",
+        Message::Simple(
+            "all good",
+        ),
+    ),
+    (
+        "doctor.chip.user_owned",
+        Message::Simple(
+            "your choice",
+        ),
+    ),
+    (
+        "doctor.remedy.retry.label",
+        Message::Simple(
+            "Try loading them again",
+        ),
+    ),
+    (
+        "doctor.remedy.retry.effect",
+        Message::Simple(
+            "Asks any open Apps window to fetch the sets that failed, once more. Nothing is deleted, overwritten or reset, and anything already loaded stays as it is.",
+        ),
+    ),
+    (
+        "doctor.remedy.outcome.requested",
+        Message::Simple(
+            "Asked. This section updates on its own when the retry finishes — if the publisher still does not have them, it will say so again.",
+        ),
+    ),
+    (
+        "doctor.remedy.outcome.nobody_listening",
+        Message::Simple(
+            "Nothing happened: the Apps window is not open, and it is what does the loading. Open it and the sets that failed will be tried again.",
+        ),
+    ),
+    (
+        "doctor.check1.belief_none",
+        Message::Simple(
+            "no publisher recorded",
+        ),
+    ),
+    (
+        "doctor.check1.source.unheard",
+        Message::Simple(
+            "this domain did not answer",
+        ),
+    ),
+    (
+        "doctor.check1.detail.unheard",
+        Message::Simple(
+            "Nothing was heard from the domain, so nothing could be compared and nothing is known — this is not a clean bill of health. Everything already on this machine is unaffected and still accurate. Try again when you are back online.",
+        ),
+    ),
+    (
+        "doctor.check1.source.origin_error",
+        Message::Simple(
+            "this domain answered with an error (HTTP {status})",
+        ),
+    ),
+    (
+        "doctor.check1.detail.origin_error",
+        Message::Simple(
+            "The domain is reachable but returned a fault instead of its configuration, so nothing could be compared. That is a problem at the domain, not on this machine, and it says nothing about whether your publisher is current.",
+        ),
+    ),
+    (
+        "doctor.check1.source.unreadable",
+        Message::Simple(
+            "this domain's configuration could not be read (HTTP {status})",
+        ),
+    ),
+    (
+        "doctor.check1.detail.unreadable",
+        Message::Simple(
+            "The domain answered with something this app could not parse — a truncated or half-written file, or an error page served as a success. Nothing could be compared, and nothing here is a statement about your machine.",
+        ),
+    ),
+    (
+        "doctor.check1.source.no_document",
+        Message::Simple(
+            "this domain serves no deployment document",
+        ),
+    ),
+    (
+        "doctor.check1.detail.no_document",
+        Message::Simple(
+            "The domain answered and publishes no configuration, which is a legitimate choice and not a fault. There is nothing here to check against.",
+        ),
+    ),
+    (
+        "doctor.check1.source.no_publisher",
+        Message::Simple(
+            "this domain's document names no publisher",
+        ),
+    ),
+    (
+        "doctor.check1.detail.no_publisher",
+        Message::Simple(
+            "The domain answered, and its configuration does not say who publishes it. There is nothing to compare against.",
+        ),
+    ),
+    (
+        "doctor.check1.source.declares",
+        Message::Simple(
+            "this domain publishes as {d}",
+        ),
+    ),
+    (
+        "doctor.check1.detail.nothing_to_check",
+        Message::Simple(
+            "This profile has not recorded a publisher of its own yet, so there is no belief to check. It will adopt the domain's on the next boot.",
+        ),
+    ),
+    (
+        "doctor.check1.detail.agrees",
+        Message::Simple(
+            "This profile is pointed at the publisher the domain currently declares. Routing is not your problem.",
+        ),
+    ),
+    (
+        "doctor.check1.detail.user_owned",
+        Message::Simple(
+            "This profile points somewhere you chose, which is not the site this domain publishes. That is not a fault and nothing will change it back — your choice is kept on every load. Change it in Settings if you want the domain's own home again.",
+        ),
+    ),
+    (
+        "doctor.check1.detail.diverges",
+        Message::Simple(
+            "This profile is pointed at a publisher this domain no longer uses. Everything already in your tree keeps rendering and nothing looks broken, but every request for anything new goes to the old publisher and comes back empty. Opening the app again repairs this on the next load; your content is not affected and must not be cleared.",
+        ),
+    ),
+    (
+        "doctor.check2.peer_refused",
+        Message::Simple(
+            "{peer} ({w} request(s) refused)",
+        ),
+    ),
+    (
+        "doctor.check2.belief.asking",
+        Message::Simple(
+            "this profile is asking {named}",
+        ),
+    ),
+    (
+        "doctor.check2.source.has_none",
+        Message::Simple(
+            "the publisher answered, and said it has none of it",
+        ),
+    ),
+    (
+        "doctor.check2.detail.diverges",
+        Message::Simple(
+            "The publisher is reachable and is refusing every single thing this profile asks it for. That is the signature of a publisher that moved: the address still resolves, and nothing is behind it any more. Check \"{check1}\" above — if that says the domain now names someone else, this is the same fault seen from the other end.",
+        ),
+    ),
+    (
+        "doctor.check2.belief.nothing_fetched",
+        Message::Simple(
+            "nothing has been fetched from a publisher yet",
+        ),
+    ),
+    (
+        "doctor.check2.source.no_request",
+        Message::Simple(
+            "no request has been made this session",
+        ),
+    ),
+    (
+        "doctor.check2.detail.nothing_to_check",
+        Message::Simple(
+            "This is recorded from the moment the app starts and is cleared by a reload, so an empty list means nothing has been asked for yet — not that everything succeeded. Open the Apps window and come back.",
+        ),
+    ),
+    (
+        "doctor.check2.belief.requests_made",
+        Message::Simple(
+            "{n} request(s) made this session",
+        ),
+    ),
+    (
+        "doctor.check2.source.truncated",
+        Message::Simple(
+            "more was asked than this session can keep track of",
+        ),
+    ),
+    (
+        "doctor.check2.detail.truncated",
+        Message::Simple(
+            "This session made more requests than the list can hold, so some are not represented and nothing can be concluded about them. Nothing here says anything is wrong; it says this check could not be completed.",
+        ),
+    ),
+    (
+        "doctor.check2.source.all_served",
+        Message::Simple(
+            "every publisher asked has served something",
+        ),
+    ),
+    (
+        "doctor.check2.detail.agrees",
+        Message::Simple(
+            "No publisher refused everything it was asked for, so nothing here points at a publisher that has moved.",
+        ),
+    ),
+    (
+        "doctor.check3.belief.nothing_loaded",
+        Message::Simple(
+            "nothing has been loaded from a publisher yet",
+        ),
+    ),
+    (
+        "doctor.check3.source.no_set_asked",
+        Message::Simple(
+            "no set has been asked for this session",
+        ),
+    ),
+    (
+        "doctor.check3.detail.nothing_to_check",
+        Message::Simple(
+            "Nothing has tried to load yet, so there is nothing to be missing. This is not the same as everything having loaded.",
+        ),
+    ),
+    (
+        "doctor.check3.belief.sets_loaded",
+        Message::Simple(
+            "{n} set(s) loaded",
+        ),
+    ),
+    (
+        "doctor.check3.source.attempts",
+        Message::Simple(
+            "{n} attempt(s) this session",
+        ),
+    ),
+    (
+        "doctor.check3.detail.agrees_truncated",
+        Message::Simple(
+            "Everything recorded loaded — but this session made more requests than the list can hold, so some are not represented here.",
+        ),
+    ),
+    (
+        "doctor.check3.detail.agrees",
+        Message::Simple(
+            "Everything this session asked a publisher for arrived. Nothing is missing from what you are looking at.",
+        ),
+    ),
+    (
+        "doctor.check3.failed_item",
+        Message::Simple(
+            "{what} (from {peer})",
+        ),
+    ),
+    (
+        "doctor.check3.belief.did_not_load",
+        Message::Simple(
+            "{failed} of {total} set(s) did not load: {named}",
+        ),
+    ),
+    (
+        "doctor.check3.source.withheld_all",
+        Message::Simple(
+            "the publisher answered and does not have them",
+        ),
+    ),
+    (
+        "doctor.check3.source.unreachable_all",
+        Message::Simple(
+            "the publisher could not be reached",
+        ),
+    ),
+    (
+        "doctor.check3.source.mixed",
+        Message::Simple(
+            "some were refused, some could not be reached",
+        ),
+    ),
+    (
+        "doctor.check3.detail.diverges",
+        Message::Simple(
+            "What you are looking at is incomplete, and it does not say so on its own — a set that fails to load leaves the others rendering, so the screen looks finished. Nothing of yours was lost. If they were refused rather than unreachable, retrying will not help and the publisher no longer has them.",
+        ),
     ),
 ];
 

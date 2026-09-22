@@ -2465,13 +2465,13 @@ impl EntityApp {
                                 cfg.home_site_source =
                                     crate::session_config::HomeSource::Deployment;
                             }
-                            // The pin is a routing fact by the same argument.
-                            // The USER's pin still outranks it —
-                            // `restore_user_registry_pin()` below runs after
-                            // this and is where that precedence lives.
-                            if let Some(pin) = dc.name_registry_pin.clone() {
-                                cfg.name_registry_pin = Some(pin);
-                            }
+                            // NOTE: the pin used to be adopted HERE, and that was
+                            // the defect. It is a routing fact, so it is
+                            // refreshed by the block below on every boot that
+                            // read a document — not only on the boots where the
+                            // home peer also happened to move. Two writers of one
+                            // value is the drift shape (C15); there is one now.
+                            //
                             // Record the supersession DURABLY. This is what
                             // repairs every *other* durable reference to the
                             // retired peer — every window's nav state, the
@@ -2535,6 +2535,83 @@ impl EntityApp {
                         );
                     }
                     crate::session_config::HomeDecision::Unchanged => {}
+                }
+            }
+            // REFRESH the remaining deployer-owned ROUTING knobs from the
+            // document — every boot that read one, not only the boots where the
+            // home peer moved.
+            //
+            // R1 established *routing facts may be adopted, preferences may not*
+            // and then applied it to `home_site` and `origins`, leaving these two
+            // behind in different shapes of the same defect (AP36 — the guard
+            // answering one question while standing in for another):
+            //
+            //   * `name_registry_pin` was written inside the `AdoptDeclared` arm
+            //     above, so a deployment that ADDED or MOVED its registry pin
+            //     reached a returning profile only if the home peer changed in
+            //     the same publish. `entitychurchfoundation.org` declares a pin
+            //     whose peer differs from its home peer, so this is the deployed
+            //     shape, not a hypothetical one.
+            //   * `name_resolver_max_ttl_ms` was refreshed on NO warm boot at
+            //     all — only by `apply_to` on a cold one — so a deployer
+            //     tightening the §6a resolver ceiling reached nobody who had
+            //     already booted. That is the knob that protects the consumer
+            //     against the registry, which makes it the worse of the two to
+            //     leave stale.
+            //
+            // Same reachability as the origins loop below: gated on *a document
+            // was read*, never on what the home did. Posture (`surface`,
+            // `window_type`, `site_mode`, `fast_paint`, `peer_creation_enabled`)
+            // is deliberately NOT here — the trust boundary (design §8) is that
+            // routing is adopted and preferences are not, and the census in
+            // `deployment_config.rs` records which side each field is on.
+            if let Some(dc) = &deployment {
+                use crate::session_config::{decide_routing_refresh, RoutingRefresh};
+                // The pin. `cfg.name_registry_pin` is only ever the DEPLOYMENT's
+                // seed — a user's pin lives in the localStorage mirror and wins
+                // at every read via `pinned_registry()` — so refreshing this
+                // cannot overwrite a user's choice. Guarding it "for safety"
+                // would instead freeze the deployment's own value, which is the
+                // `put_if_absent` mistake `origins` already paid for.
+                let pin_decision = decide_routing_refresh(
+                    cfg.name_registry_pin.as_ref(),
+                    dc.name_registry_pin.as_ref(),
+                );
+                if let RoutingRefresh::Adopt(pin) = &pin_decision {
+                    tracing::warn!(
+                        pin_peer = %pin.peer_id,
+                        pin_origin = %pin.origin,
+                        was = ?cfg.name_registry_pin.as_ref().map(|p| p.peer_id.clone()),
+                        "boot_load: the domain declares a DIFFERENT name-registry pin; \
+                         adopting it (the user's own pin, if any, still outranks it)"
+                    );
+                    cfg.name_registry_pin = Some(pin.clone());
+                } else {
+                    tracing::debug!(
+                        decision = pin_decision.label(),
+                        "boot_load: name-registry pin not refreshed"
+                    );
+                }
+                // The §6a resolver ceiling. Deployer-only — there is no surface
+                // where a user sets it — so the document is authoritative
+                // whenever it speaks, and silence leaves the held value alone.
+                let ttl_decision = decide_routing_refresh(
+                    cfg.name_resolver_max_ttl_ms.as_ref(),
+                    dc.name_resolver_max_ttl_ms.as_ref(),
+                );
+                if let RoutingRefresh::Adopt(ms) = &ttl_decision {
+                    tracing::warn!(
+                        max_ttl_ms = %ms,
+                        was = ?cfg.name_resolver_max_ttl_ms,
+                        "boot_load: the domain declares a DIFFERENT name-resolver TTL \
+                         ceiling; adopting it"
+                    );
+                    cfg.name_resolver_max_ttl_ms = Some(*ms);
+                } else {
+                    tracing::debug!(
+                        decision = ttl_decision.label(),
+                        "boot_load: name-resolver TTL ceiling not refreshed"
+                    );
                 }
             }
             // (F2) REVALIDATE the durable supersession records against the live

@@ -1,6 +1,7 @@
 # entity-browser-rust — status
 
-_Updated: 2026-08-24 · version **0.9.0**_
+_Updated: 2026-09-03 · version **0.9.0** in the manifests; the next tag's number is not yet
+decided — see `docs/status/CHECKPOINT-2026-09-03-release-closeout.md`_
 
 Where the product is, what is proven and on what, and what is open. It cites files, symbols and
 measurements rather than commit SHAs, which do not resolve for a reader outside this tree (see
@@ -24,17 +25,24 @@ and `make native` prints a deprecation redirect.
 
 ## Gate state
 
-Re-measured **2026-08-24 (release audit)** rather than quoted — `test`, `test-tauri` and `lint` all
-re-run from a clean tree at `dev` HEAD in the same pass, with the sibling `entity-core-rust`
-checkout verified clean first (a concurrent seat editing a path dependency is this repo's known way
-to get a build that measured a moving target):
+Re-measured **2026-09-03 (release closeout)** rather than quoted — `test`, `test-tauri` and `lint`
+all re-run from a clean tree at `dev` HEAD in the same pass:
 
 | Gate | Result |
 |---|---|
-| `make test` | **1300 / 0 / 8-ignored** across **16** test binaries — re-measured 2026-08-24 at this tip. It has moved 1283 → 1289 → 1293 → 1296 → 1300 over four days, twice while a session was in progress, which is how the denominator changes without anyone noticing. Re-run it; do not quote this line |
-| `make test-tauri` | **55 / 0** across 4 binaries — **re-measured 2026-08-24**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) Unchanged since 08-23, as expected: nothing since then went near `src-tauri` |
-| `make lint` | clean, **re-measured 2026-08-24** — all seven checks, clippy **zero warnings**. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `i18n-lint` raw=24 phys=0 · `i18n-locale-check` 30 locales × 702 keys · `i18n-callsite-check` 640 call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
-| `make e2e-worker` | **25 passed / 0 failed, 383.95 s** — unfiltered, **re-run 2026-08-24 in the release audit**, R1 green. Carries Phase 14.3 (a refused file picker must report); test COUNT is unchanged because a phase is not a test — quote the phase, not the denominator. Run against a **private Selenium grid** (`E2E_WEBDRIVER_URL`): there were **twelve** other seats' grids on the box, and `setup()` reaps *every* session on whatever grid it is pointed at, so the shared grid would both corrupt this run and take other people's work down. 368.95 s earlier the same day; 374.28 s the day before |
+| `make test` | **1484 / 0 / 17-ignored** across **17** test binaries — re-measured 2026-09-03 at this tip. It has moved 1300 → 1484 over ten days. Re-run it; do not quote this line |
+| `make test-tauri` | **56 / 0** across 4 binaries — **re-measured 2026-09-03**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) |
+| `make lint` | **exit 0, re-measured 2026-09-03 — eleven checks**, not the seven this row carried through 0.9.0. The two added since: `cargo clippy --features e2e --tests`, which is the only thing in the tree that compiles `tests/e2e_worker.rs` at all, plus the cache-policy pair. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `net-lint` matches baseline · `foreign-cache-lint` matches baseline · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable) · `cache-policy-doc-check` ok · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **769** keys · `i18n-callsite-check` **699** call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
+| `make e2e-worker` | **64 passed / 0 failed, 674.73 s** — unfiltered, run **2026-09-03 at `3b96b47`**, the `sw.js` rollback fix, *with* that change in. **Not re-run at this tip, and that is deliberate rather than an omission:** every commit since is documentation, so no input to the suite has moved. Said explicitly so three fresh numbers above do not imply a fresh fourth |
+
+**`i18n-lint raw=0` — the baseline file is empty, which is the floor.** It read `raw=90` earlier on
+2026-09-03 (`doctor.rs` 66 + `content_site/mod.rs` 24) and both halves are closed, differently and
+on purpose: the health checks were **translated into all 30 locales**, and the demo site's manifest
+title, nav labels and page titles moved into `demo_content.rs`, which carries a file-level
+`i18n-ignore-file` because **a published site's content is the publisher's words, not the app's
+chrome** — the app does not translate the pages it renders. The axis is *who wrote the string*, not
+*who paints it*; that distinction is written up in that file's header, where it had previously been
+drawn on the render path and left 24 strings in a state no correct action could clear.
 
 **Read the two i18n gates as the different things they are.** `i18n-locale-check`'s *30 locales ×
 701 keys clean* is **structural** — parity, slots, plural categories, homoglyphs — and says nothing
@@ -54,10 +62,12 @@ strings — and conflating them is what made the first write-up unreadable. Reco
 `docs/status/STATUS-2026-08-23-b-the-i18n-backlog-is-translated-and-the-ratchet-is-an-allowlist.md`.
 
 **Say which suite you mean, and re-run before quoting.** These numbers have gone stale in hours,
-repeatedly. The 8 ignores are 4 `crossimpl_go_live` (needs core-go's live publisher), 3 fixture
-emitters the e2e drives with `--ignored`, and 1 live-backend upload. Note that `make test`
-compiles `tests/e2e_worker.rs` to **nothing** (`#![cfg(feature = "e2e")]`), so a green `make test`
-is no evidence that file even parses.
+repeatedly. The 17 ignores are 4 `crossimpl_go_live` (needs core-go's live publisher), **11 fixture
+emitters** the e2e drives with `--ignored`, 1 static-export demo emitter, and 1 live-backend upload —
+enumerated 2026-09-03, because "8 ignored" sat here while the fixture set nearly doubled behind it.
+Note that `make test` compiles `tests/e2e_worker.rs` to **nothing** (`#![cfg(feature = "e2e")]`), so
+a green `make test` is no evidence that file even parses — **`make lint` is what compiles it**, and
+only since 2026-09-02. Before that, ~25k lines were type-checked by nothing but a Selenium run.
 
 ## What is proven, and on what
 

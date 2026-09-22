@@ -207,10 +207,10 @@ fn render_health(
 ) {
     use crate::doctor::{copy, Verdict};
 
-    let card = components::card(copy::TITLE);
+    let card = components::card(&copy::title());
 
     if !health.ran {
-        util::append(&card, &components::loading(copy::CHECKING));
+        util::append(&card, &components::loading(&copy::checking()));
         util::append(parent, &card);
         return;
     }
@@ -226,24 +226,21 @@ fn render_health(
     if problems.is_empty() {
         let line = util::create_element("p");
         line.set_attribute("style", theme::NOTE).ok();
-        util::set_text(&line, copy::ALL_CLEAR);
+        util::set_text(&line, &copy::all_clear());
         util::append(&card, &line);
 
         // …but say what "no problems" was based on. A clear line with no count
         // behind it cannot be told from a section that never ran, and a check
         // that found no source has not cleared anything.
         let quiet = health.findings.iter().filter(|f| !f.verdict.is_clear()).count();
-        let n = health.findings.len().to_string();
         let when = util::create_element("p");
         when.set_attribute("style", theme::HINT).ok();
         util::set_text(
             &when,
             &if quiet == 0 {
-                copy::CHECKED_FMT.replace("{n}", &n)
+                copy::checked(health.findings.len())
             } else {
-                copy::CHECKED_WITH_GAPS_FMT
-                    .replace("{n}", &n)
-                    .replace("{q}", &quiet.to_string())
+                copy::checked_with_gaps(health.findings.len(), quiet)
             },
         );
         util::append(&card, &when);
@@ -256,7 +253,7 @@ fn render_health(
         // One honest banner when anything could not be established, so the
         // absence of a warning is never read as an all-clear.
         if sorted.iter().any(|f| f.verdict == Verdict::Undetermined) {
-            util::append(&card, &components::notice(copy::SOME_UNDETERMINED));
+            util::append(&card, &components::notice(&copy::some_undetermined()));
         }
 
         for f in sorted {
@@ -276,13 +273,13 @@ fn render_health(
     let row = util::create_element("div");
     row.set_attribute("style", theme::BTN_ROW).ok();
     if health.checking {
-        util::append(&row, &components::loading(copy::CHECKING));
+        util::append(&row, &components::loading(&copy::checking()));
     } else {
         util::append(
             &row,
             &components::button(
                 ctx,
-                copy::RECHECK,
+                &copy::recheck(),
                 components::ButtonKind::Small,
                 crate::views::system_overview::HEALTH_RECHECK_EVENT,
             ),
@@ -303,16 +300,16 @@ fn health_finding(f: &crate::doctor::Finding, ctx: &DomCtx) -> Element {
     let head = util::create_element("div");
     head.set_attribute("style", theme::ROW_INLINE).ok();
     let name = util::create_element("strong");
-    util::set_text(&name, f.check.title());
+    util::set_text(&name, &f.check.title());
     util::append(&head, &name);
-    util::append(&head, &components::health_chip(f.verdict.chip(), f.verdict.tone()));
+    util::append(&head, &components::health_chip(&f.verdict.chip(), f.verdict.tone()));
     util::append(&block, &head);
 
     // The audit pair. A finding that says only "something is wrong" is an
     // opinion; belief + source is what makes it checkable by the person
     // reading it.
     for (label, value) in
-        [(crate::doctor::copy::BELIEF, &f.belief), (crate::doctor::copy::SOURCE, &f.source)]
+        [(crate::doctor::copy::belief(), &f.belief), (crate::doctor::copy::source(), &f.source)]
     {
         let row = util::create_element("p");
         row.set_attribute("style", theme::HINT).ok();
@@ -328,7 +325,7 @@ fn health_finding(f: &crate::doctor::Finding, ctx: &DomCtx) -> Element {
     if let Some(remedy) = f.remedy {
         let effect = util::create_element("p");
         effect.set_attribute("style", theme::HINT).ok();
-        util::set_text(&effect, remedy.effect());
+        util::set_text(&effect, &remedy.effect());
         util::append(&block, &effect);
 
         let row = util::create_element("div");
@@ -337,7 +334,7 @@ fn health_finding(f: &crate::doctor::Finding, ctx: &DomCtx) -> Element {
             &row,
             &components::button_value(
                 ctx,
-                remedy.label(),
+                &remedy.label(),
                 components::ButtonKind::Primary,
                 crate::views::system_overview::HEALTH_REMEDY_EVENT,
                 remedy.key(),

@@ -68,23 +68,37 @@
 //! module keeps the design's name so the code is traceable to the document that
 //! argued for it.
 //!
-//! # i18n — a stated debt, not an oversight
+//! # i18n — a debt that was stated, and then paid
 //!
-//! **Every string a person reads lives in this file**, including the section's
-//! own chrome ([`copy`]), so translating this surface is one extraction from
-//! one module rather than a hunt through a renderer. Today it is English only:
-//! the operator's instruction (2026-09-01) was to build it and look at it
-//! before committing 30 locales to wording that is still moving.
+//! **Translated into all 30 locales on 2026-09-03**, in the release's
+//! translation pass. Every user-visible string here resolves through
+//! `crate::i18n::t` against a `doctor.*` key; what stays in this file is the
+//! *reasoning* for each string, which is the half a catalog has nowhere to put
+//! and the half a translator most needs — that a verdict must not read as
+//! reassuring, that two outcomes rendered alike lose the distinction they exist
+//! to carry.
 //!
-//! **The debt is made visible rather than left to be discovered.** This module
-//! never touches the DOM, so `tools/i18n_prose_scan.py` — whose file set is
-//! *"can it reach `set_text` / `components::` / a banner"* — would not have seen
-//! it at all, and `make lint` would have stayed green with a whole surface
-//! un-extracted. That is the same shape as the gap the scanner itself was
-//! written to close (AUDIT-I18N-COVERAGE-GAP-2026-07-19: the metric read 0
-//! while ~440 strings sat un-extracted). So this file is **added to the
-//! scanner's set** and its count is recorded in the baseline: the debt is a
-//! number in a checked-in file that only ratchets down.
+//! **The mechanical cost, recorded because it is the whole of what this
+//! shape charges:** [`copy`]'s items were `const &str` and had to become
+//! functions, since a `const` cannot consult the active locale. Nothing else
+//! about the design moved.
+//!
+//! **The debt was made visible rather than left to be discovered, and that is
+//! what got it paid.** This module never touches the DOM, so
+//! `tools/i18n_prose_scan.py` — whose file set is *"can it reach `set_text` /
+//! `components::` / a banner"* — would not have seen it at all, and `make lint`
+//! would have stayed green with a whole surface un-extracted. That is the same
+//! shape as the gap the scanner itself was written to close
+//! (AUDIT-I18N-COVERAGE-GAP-2026-07-19: the metric read 0 while ~440 strings
+//! sat un-extracted). So this file was **added to the scanner's set** and its
+//! count recorded in the baseline — a number in a checked-in file that only
+//! ratchets down, which it now has, to zero. **A debt nobody can see is a debt
+//! nobody pays; the instrument is what made the deadline real.**
+//!
+//! One limit, unchanged by the pass and stated where it applies: the 17
+//! Latin-script locales cannot be machine-checked for *whether a value was
+//! translated at all* — correct German often looks like English — so
+//! `i18n-untranslated` covers 13 of 30 and says so in its own pass line.
 //!
 //! # Why the checks are pure functions
 //!
@@ -95,6 +109,7 @@
 //! reading the deployment document) lives in the window.
 
 use crate::deployment_config::DocumentRead;
+use crate::i18n::t;
 use crate::refresh_ledger::{RefreshOutcome, Snapshot};
 
 /// Which question a finding answers. The numbering is the design's (§7.2), kept
@@ -112,13 +127,17 @@ pub enum Check {
 }
 
 impl Check {
-    /// The heading a person reads. Not the enum name.
-    pub fn title(&self) -> &'static str {
-        match self {
-            Check::DomainIdentity => "Who publishes this site",
-            Check::FetchFailureByPeer => "Whether a publisher is still answering",
-            Check::CatalogCompleteness => "Whether everything finished loading",
-        }
+    /// The heading a person reads. Not the enum name, and not [`key`](Self::key)
+    /// — this one is translated, that one must stay a stable token.
+    pub fn title(&self) -> String {
+        crate::i18n::t(
+            match self {
+                Check::DomainIdentity => "doctor.check.domain_identity.title",
+                Check::FetchFailureByPeer => "doctor.check.fetch_failure.title",
+                Check::CatalogCompleteness => "doctor.check.catalog_completeness.title",
+            },
+            &[],
+        )
     }
 
     /// Stable identifier for logs and gates — never the display string, which
@@ -232,18 +251,24 @@ impl Verdict {
     /// none says *"error"* either. Three of the six mean *this was not
     /// established*, and the surface has to carry that difference rather than
     /// rounding it to a tick or a cross.
-    pub fn chip(&self) -> &'static str {
-        match self {
-            Verdict::Diverges => "needs attention",
-            Verdict::Undetermined => "could not check",
-            Verdict::SourceSilent => "nothing to compare",
-            Verdict::NothingToCheck => "not checked yet",
-            Verdict::Agrees => "all good",
-            // Not "all good" — the same words for a match and for a deliberate
-            // mismatch would throw away the only distinction this state exists
-            // to carry.
-            Verdict::UserOwned => "your choice",
-        }
+    pub fn chip(&self) -> String {
+        crate::i18n::t(
+            match self {
+                Verdict::Diverges => "doctor.chip.diverges",
+                Verdict::Undetermined => "doctor.chip.undetermined",
+                Verdict::SourceSilent => "doctor.chip.source_silent",
+                Verdict::NothingToCheck => "doctor.chip.nothing_to_check",
+                Verdict::Agrees => "doctor.chip.agrees",
+                // Not "all good" — the same words for a match and for a
+                // deliberate mismatch would throw away the only distinction
+                // this state exists to carry. **Six keys, never five**: a
+                // translator who renders two of these identically reintroduces
+                // the collapse in one locale only, which is why they are
+                // separate keys rather than one shared string.
+                Verdict::UserOwned => "doctor.chip.user_owned",
+            },
+            &[],
+        )
     }
 
     /// How much of the user's attention this deserves. **Three bands from six
@@ -263,36 +288,59 @@ impl Verdict {
     }
 }
 
-/// The section's own copy. Kept here with everything else a person reads, so
-/// there is **one file** to extract when this is translated — see the module
-/// note on i18n.
+/// The section's own copy.
+///
+/// **These were `const &str` until 2026-09-03 and are functions now**, which is
+/// the whole of what translating this surface cost structurally: a `const`
+/// cannot consult the active locale, so every one of them had to become a call.
+/// The keys live in `src/i18n.rs` with the rest of the catalog; what stays here
+/// is the reasoning for each string, which is the part a translator needs and
+/// a catalog has nowhere to put.
 pub mod copy {
+    use crate::i18n::t;
+
     /// The heading. Not "Doctor" — the operator's call, and the right one: this
     /// is the place you look when something is wrong, not a branded feature.
-    pub const TITLE: &str = "Problems";
+    pub fn title() -> String {
+        t("doctor.title", &[])
+    }
     /// The quiet state. *If there are no problems you do not go to the doctor* —
     /// so a healthy system gets one line, not a dashboard of green ticks.
-    pub const ALL_CLEAR: &str = "No problems found.";
+    pub fn all_clear() -> String {
+        t("doctor.all_clear", &[])
+    }
     /// …but a diagnostic that renders nothing when healthy cannot be told from
     /// one that never ran, so the quiet line still says when it last looked.
-    /// The quiet line's second half. It names how many checks ran and how many
-    /// had nothing to compare against, because *"no problems"* on its own is
-    /// indistinguishable from *"nothing ran"* — and a check that could not find
-    /// a source has not cleared anything.
-    pub const CHECKED_FMT: &str = "{n} checks ran just now.";
-    pub const CHECKED_WITH_GAPS_FMT: &str =
-        "{n} checks ran just now; {q} had nothing to compare against yet.";
-    pub const CHECKING: &str = "Checking…";
-    pub const RECHECK: &str = "Check again";
+    /// It names how many checks ran and how many had nothing to compare
+    /// against, because *"no problems"* on its own is indistinguishable from
+    /// *"nothing ran"* — and a check that could not find a source has not
+    /// cleared anything.
+    pub fn checked(n: usize) -> String {
+        t("doctor.checked", &[("n", &n.to_string())])
+    }
+    pub fn checked_with_gaps(n: usize, q: usize) -> String {
+        t("doctor.checked_with_gaps", &[("n", &n.to_string()), ("q", &q.to_string())])
+    }
+    pub fn checking() -> String {
+        t("doctor.checking", &[])
+    }
+    pub fn recheck() -> String {
+        t("doctor.recheck", &[])
+    }
     /// Labels for the two halves of every finding — the design's *belief ·
     /// source* pair, which is what makes a finding auditable instead of an
     /// opinion.
-    pub const BELIEF: &str = "This machine:";
-    pub const SOURCE: &str = "Checked against:";
+    pub fn belief() -> String {
+        t("doctor.belief", &[])
+    }
+    pub fn source() -> String {
+        t("doctor.source", &[])
+    }
     /// Shown when at least one check could not be run. It is deliberately not
-    /// reassuring.
-    pub const SOME_UNDETERMINED: &str =
-        "Some checks could not be completed, so this is not a clean bill of health.";
+    /// reassuring, and a translation that softens it defeats the string.
+    pub fn some_undetermined() -> String {
+        t("doctor.some_undetermined", &[])
+    }
 }
 
 /// A repair a finding offers. **This is the pattern, not a special case** —
@@ -321,21 +369,26 @@ pub enum Remedy {
 
 impl Remedy {
     /// The button.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Remedy::RetryFailedRefreshes => "Try loading them again",
-        }
+    pub fn label(&self) -> String {
+        crate::i18n::t(
+            match self {
+                Remedy::RetryFailedRefreshes => "doctor.remedy.retry.label",
+            },
+            &[],
+        )
     }
 
-    /// What it would change, shown **before** it is pressed.
-    pub fn effect(&self) -> &'static str {
-        match self {
-            Remedy::RetryFailedRefreshes => {
-                "Asks any open Apps window to fetch the sets that failed, once more. \
-                 Nothing is deleted, overwritten or reset, and anything already loaded \
-                 stays as it is."
-            }
-        }
+    /// What it would change, shown **before** it is pressed. The promise this
+    /// string makes — *nothing is deleted, overwritten or reset* — is the one
+    /// `is_non_destructive` enforces; a translation that drops the guarantee
+    /// makes the button ask for trust the code is still earning.
+    pub fn effect(&self) -> String {
+        crate::i18n::t(
+            match self {
+                Remedy::RetryFailedRefreshes => "doctor.remedy.retry.effect",
+            },
+            &[],
+        )
     }
 
     /// Stable identifier for the action wire and for gates.
@@ -417,18 +470,18 @@ pub enum RemedyOutcome {
 }
 
 impl RemedyOutcome {
-    /// What to tell the user. Note what it does NOT say: not "fixed".
-    pub fn message(&self) -> &'static str {
-        match self {
-            RemedyOutcome::Requested => {
-                "Asked. This section updates on its own when the retry finishes — if the \
-                 publisher still does not have them, it will say so again."
-            }
-            RemedyOutcome::NobodyListening => {
-                "Nothing happened: the Apps window is not open, and it is what does the \
-                 loading. Open it and the sets that failed will be tried again."
-            }
-        }
+    /// What to tell the user. Note what it does NOT say: not "fixed" — in any
+    /// language. These are two keys because they are two facts (AP40); a
+    /// locale that renders them alike loses the distinction the variant was
+    /// added to carry.
+    pub fn message(&self) -> String {
+        crate::i18n::t(
+            match self {
+                RemedyOutcome::Requested => "doctor.remedy.outcome.requested",
+                RemedyOutcome::NobodyListening => "doctor.remedy.outcome.nobody_listening",
+            },
+            &[],
+        )
     }
 }
 
@@ -487,7 +540,7 @@ pub fn check_domain_identity(
 
     let belief = match believed {
         Some(p) if !p.is_empty() => p.to_string(),
-        _ => "no publisher recorded".to_string(),
+        _ => t("doctor.check1.belief_none", &[]),
     };
 
     // The arms are written out. A `_ =>` here would be the AP40 mistake in its
@@ -496,11 +549,8 @@ pub fn check_domain_identity(
     let (verdict, source, detail) = match (believed.filter(|p| !p.is_empty()), doc, declared) {
         (_, DocumentRead::Unheard, _) => (
             Verdict::Undetermined,
-            "this domain did not answer".to_string(),
-            "Nothing was heard from the domain, so nothing could be compared and nothing is \
-             known — this is not a clean bill of health. Everything already on this machine \
-             is unaffected and still accurate. Try again when you are back online."
-                .to_string(),
+            t("doctor.check1.source.unheard", &[]),
+            t("doctor.check1.detail.unheard", &[]),
         ),
         // **`OriginError` and `Unreadable` are Undetermined, not silent.** A 502
         // or a truncated document says nothing at all about who publishes this
@@ -510,47 +560,38 @@ pub fn check_domain_identity(
         // would put the same false claim in front of a user.
         (_, DocumentRead::OriginError { status }, _) => (
             Verdict::Undetermined,
-            format!("this domain answered with an error (HTTP {status})"),
-            "The domain is reachable but returned a fault instead of its configuration, so \
-             nothing could be compared. That is a problem at the domain, not on this \
-             machine, and it says nothing about whether your publisher is current."
-                .to_string(),
+            t("doctor.check1.source.origin_error", &[("status", &status.to_string())]),
+            t("doctor.check1.detail.origin_error", &[]),
         ),
         (_, DocumentRead::Unreadable { status }, _) => (
             Verdict::Undetermined,
-            format!("this domain's configuration could not be read (HTTP {status})"),
-            "The domain answered with something this app could not parse — a truncated or \
-             half-written file, or an error page served as a success. Nothing could be \
-             compared, and nothing here is a statement about your machine."
-                .to_string(),
+            t("doctor.check1.source.unreadable", &[("status", &status.to_string())]),
+            t("doctor.check1.detail.unreadable", &[]),
         ),
         (_, DocumentRead::NoDocument { .. }, _) => (
             Verdict::SourceSilent,
-            "this domain serves no deployment document".to_string(),
-            "The domain answered and publishes no configuration, which is a legitimate \
-             choice and not a fault. There is nothing here to check against."
-                .to_string(),
+            t("doctor.check1.source.no_document", &[]),
+            t("doctor.check1.detail.no_document", &[]),
         ),
         (_, DocumentRead::Served(_), None) => (
             Verdict::SourceSilent,
-            "this domain's document names no publisher".to_string(),
-            "The domain answered, and its configuration does not say who publishes it. \
-             There is nothing to compare against."
-                .to_string(),
+            t("doctor.check1.source.no_publisher", &[]),
+            t("doctor.check1.detail.no_publisher", &[]),
         ),
+        // The four arms below share ONE source key — the sentence really is the
+        // same fact ("this domain publishes as {d}") and only the detail differs.
+        // Splitting it into four identical keys would invite four translations
+        // that drift apart, which is exactly what `i18n_locale_check`'s
+        // consistency rule exists to catch.
         (None, DocumentRead::Served(_), Some(d)) => (
             Verdict::NothingToCheck,
-            format!("this domain publishes as {d}"),
-            "This profile has not recorded a publisher of its own yet, so there is no \
-             belief to check. It will adopt the domain's on the next boot."
-                .to_string(),
+            t("doctor.check1.source.declares", &[("d", d)]),
+            t("doctor.check1.detail.nothing_to_check", &[]),
         ),
         (Some(b), DocumentRead::Served(_), Some(d)) if b == d => (
             Verdict::Agrees,
-            format!("this domain publishes as {d}"),
-            "This profile is pointed at the publisher the domain currently declares. \
-             Routing is not your problem."
-                .to_string(),
+            t("doctor.check1.source.declares", &[("d", d)]),
+            t("doctor.check1.detail.agrees", &[]),
         ),
         // **The belief axis is enumerated too now, and this is the arm that
         // was missing.** A home the user chose, or one that is this profile's
@@ -569,23 +610,14 @@ pub fn check_domain_identity(
         {
             (
                 Verdict::UserOwned,
-                format!("this domain publishes as {d}"),
-                "This profile points somewhere you chose, which is not the site this domain \
-                 publishes. That is not a fault and nothing will change it back — your \
-                 choice is kept on every load. Change it in Settings if you want the \
-                 domain's own home again."
-                    .to_string(),
+                t("doctor.check1.source.declares", &[("d", d)]),
+                t("doctor.check1.detail.user_owned", &[]),
             )
         }
         (Some(_), DocumentRead::Served(_), Some(d)) => (
             Verdict::Diverges,
-            format!("this domain publishes as {d}"),
-            "This profile is pointed at a publisher this domain no longer uses. Everything \
-             already in your tree keeps rendering and nothing looks broken, but every \
-             request for anything new goes to the old publisher and comes back empty. \
-             Opening the app again repairs this on the next load; your content is not \
-             affected and must not be cleared."
-                .to_string(),
+            t("doctor.check1.source.declares", &[("d", d)]),
+            t("doctor.check1.detail.diverges", &[]),
         ),
     };
 
@@ -628,20 +660,25 @@ pub fn check_fetch_failure_by_peer(ledger: &Snapshot) -> Finding {
     if !suspect.is_empty() {
         let named = suspect
             .iter()
-            .map(|(p, w)| format!("{} ({w} request(s) refused)", short(p)))
+            .map(|(p, w)| {
+                t("doctor.check2.peer_refused", &[("peer", &short(p)), ("w", &w.to_string())])
+            })
             .collect::<Vec<_>>()
             .join(", ");
         return Finding {
             check: Check::FetchFailureByPeer,
             verdict: Verdict::Diverges,
-            belief: format!("this profile is asking {named}"),
-            source: "the publisher answered, and said it has none of it".to_string(),
-            detail: "The publisher is reachable and is refusing every single thing this \
-                     profile asks it for. That is the signature of a publisher that moved: \
-                     the address still resolves, and nothing is behind it any more. Check \
-                     \"Who publishes this site\" above — if that says the domain now names \
-                     someone else, this is the same fault seen from the other end."
-                .to_string(),
+            belief: t("doctor.check2.belief.asking", &[("named", &named)]),
+            source: t("doctor.check2.source.has_none", &[]),
+            // The detail quotes check 1's heading back at the reader, so the
+            // two halves of one fault can be joined by eye. It takes the
+            // heading as a SLOT rather than repeating the words, or a
+            // translated heading and an untranslated quotation of it would
+            // drift apart in every locale but English.
+            detail: t(
+                "doctor.check2.detail.diverges",
+                &[("check1", &Check::DomainIdentity.title())],
+            ),
             remedy: None,
         };
     }
@@ -652,12 +689,9 @@ pub fn check_fetch_failure_by_peer(ledger: &Snapshot) -> Finding {
         return Finding {
             check: Check::FetchFailureByPeer,
             verdict: Verdict::NothingToCheck,
-            belief: "nothing has been fetched from a publisher yet".to_string(),
-            source: "no request has been made this session".to_string(),
-            detail: "This is recorded from the moment the app starts and is cleared by a \
-                     reload, so an empty list means nothing has been asked for yet — not \
-                     that everything succeeded. Open the Apps window and come back."
-                .to_string(),
+            belief: t("doctor.check2.belief.nothing_fetched", &[]),
+            source: t("doctor.check2.source.no_request", &[]),
+            detail: t("doctor.check2.detail.nothing_to_check", &[]),
             remedy: None,
         };
     }
@@ -669,23 +703,18 @@ pub fn check_fetch_failure_by_peer(ledger: &Snapshot) -> Finding {
         return Finding {
             check: Check::FetchFailureByPeer,
             verdict: Verdict::Undetermined,
-            belief: format!("{} request(s) made this session", ledger.attempted),
-            source: "more was asked than this session can keep track of".to_string(),
-            detail: "This session made more requests than the list can hold, so some are \
-                     not represented and nothing can be concluded about them. Nothing here \
-                     says anything is wrong; it says this check could not be completed."
-                .to_string(),
+            belief: t("doctor.check2.belief.requests_made", &[("n", &ledger.attempted.to_string())]),
+            source: t("doctor.check2.source.truncated", &[]),
+            detail: t("doctor.check2.detail.truncated", &[]),
             remedy: None,
         };
     }
     Finding {
         check: Check::FetchFailureByPeer,
         verdict: Verdict::Agrees,
-        belief: format!("{} request(s) made this session", ledger.attempted),
-        source: "every publisher asked has served something".to_string(),
-        detail: "No publisher refused everything it was asked for, so nothing here points \
-                 at a publisher that has moved."
-            .to_string(),
+        belief: t("doctor.check2.belief.requests_made", &[("n", &ledger.attempted.to_string())]),
+        source: t("doctor.check2.source.all_served", &[]),
+        detail: t("doctor.check2.detail.agrees", &[]),
         remedy: None,
     }
 }
@@ -710,27 +739,21 @@ pub fn check_catalog_completeness(ledger: &Snapshot) -> Finding {
             return Finding {
                 check: Check::CatalogCompleteness,
                 verdict: Verdict::NothingToCheck,
-                belief: "nothing has been loaded from a publisher yet".to_string(),
-                source: "no set has been asked for this session".to_string(),
-                detail: "Nothing has tried to load yet, so there is nothing to be missing. \
-                         This is not the same as everything having loaded."
-                    .to_string(),
+                belief: t("doctor.check3.belief.nothing_loaded", &[]),
+                source: t("doctor.check3.source.no_set_asked", &[]),
+                detail: t("doctor.check3.detail.nothing_to_check", &[]),
                 remedy: None,
             };
         }
         return Finding {
             check: Check::CatalogCompleteness,
             verdict: Verdict::Agrees,
-            belief: format!("{} set(s) loaded", ledger.records.len()),
-            source: format!("{} attempt(s) this session", ledger.attempted),
+            belief: t("doctor.check3.belief.sets_loaded", &[("n", &ledger.records.len().to_string())]),
+            source: t("doctor.check3.source.attempts", &[("n", &ledger.attempted.to_string())]),
             detail: if ledger.truncated {
-                "Everything recorded loaded — but this session made more requests than the \
-                 list can hold, so some are not represented here."
-                    .to_string()
+                t("doctor.check3.detail.agrees_truncated", &[])
             } else {
-                "Everything this session asked a publisher for arrived. Nothing is missing \
-                 from what you are looking at."
-                    .to_string()
+                t("doctor.check3.detail.agrees", &[])
             },
             remedy: None,
         };
@@ -739,27 +762,29 @@ pub fn check_catalog_completeness(ledger: &Snapshot) -> Finding {
     let withheld = failed.iter().filter(|r| r.outcome == RefreshOutcome::Withheld).count();
     let named = failed
         .iter()
-        .map(|r| format!("{} (from {})", r.what, short(&r.peer_id)))
+        .map(|r| t("doctor.check3.failed_item", &[("what", &r.what), ("peer", &short(&r.peer_id))]))
         .collect::<Vec<_>>()
         .join(", ");
 
     Finding {
         check: Check::CatalogCompleteness,
         verdict: Verdict::Diverges,
-        belief: format!("{} of {} set(s) did not load: {named}", failed.len(), ledger.records.len()),
+        belief: t(
+            "doctor.check3.belief.did_not_load",
+            &[
+                ("failed", &failed.len().to_string()),
+                ("total", &ledger.records.len().to_string()),
+                ("named", &named),
+            ],
+        ),
         source: if withheld == failed.len() {
-            "the publisher answered and does not have them".to_string()
+            t("doctor.check3.source.withheld_all", &[])
         } else if withheld == 0 {
-            "the publisher could not be reached".to_string()
+            t("doctor.check3.source.unreachable_all", &[])
         } else {
-            "some were refused, some could not be reached".to_string()
+            t("doctor.check3.source.mixed", &[])
         },
-        detail: "What you are looking at is incomplete, and it does not say so on its own \
-                 — a set that fails to load leaves the others rendering, so the screen \
-                 looks finished. Nothing of yours was lost. If they were refused rather \
-                 than unreachable, retrying will not help and the publisher no longer has \
-                 them."
-            .to_string(),
+        detail: t("doctor.check3.detail.diverges", &[]),
         // **Only when retrying can actually change the answer.** The detail
         // above says, correctly, that a *withheld* set will not come back by
         // asking again — the publisher answered and does not have it. Offering
@@ -1205,8 +1230,8 @@ mod tests {
     fn every_remedy_states_its_own_effect() {
         use std::collections::BTreeSet;
         let keys: BTreeSet<&str> = ALL_REMEDIES.iter().map(|r| r.key()).collect();
-        let labels: BTreeSet<&str> = ALL_REMEDIES.iter().map(|r| r.label()).collect();
-        let effects: BTreeSet<&str> = ALL_REMEDIES.iter().map(|r| r.effect()).collect();
+        let labels: BTreeSet<String> = ALL_REMEDIES.iter().map(|r| r.label()).collect();
+        let effects: BTreeSet<String> = ALL_REMEDIES.iter().map(|r| r.effect()).collect();
         assert_eq!(keys.len(), ALL_REMEDIES.len());
         assert_eq!(labels.len(), ALL_REMEDIES.len());
         assert_eq!(effects.len(), ALL_REMEDIES.len(), "two remedies share an effect sentence");
@@ -1319,7 +1344,7 @@ mod tests {
     #[test]
     fn every_remedy_outcome_has_its_own_sentence() {
         let all = [RemedyOutcome::Requested, RemedyOutcome::NobodyListening];
-        let msgs: std::collections::BTreeSet<&str> = all.iter().map(|o| o.message()).collect();
+        let msgs: std::collections::BTreeSet<String> = all.iter().map(|o| o.message()).collect();
         assert_eq!(msgs.len(), all.len(), "two outcomes share a sentence");
         assert_eq!(all.len(), 2, "an outcome was added without updating this count");
     }
@@ -1426,7 +1451,7 @@ mod tests {
             Verdict::NothingToCheck,
             Verdict::Agrees,
         ];
-        let chips: BTreeSet<&str> = all.iter().map(|v| v.chip()).collect();
+        let chips: BTreeSet<String> = all.iter().map(|v| v.chip()).collect();
         assert_eq!(chips.len(), all.len(), "two verdicts render the same chip");
         for v in all {
             assert_ne!(
@@ -1511,7 +1536,7 @@ mod tests {
     fn every_check_has_its_own_key_and_title() {
         let all = [Check::DomainIdentity, Check::FetchFailureByPeer, Check::CatalogCompleteness];
         let keys: std::collections::BTreeSet<&str> = all.iter().map(|c| c.key()).collect();
-        let titles: std::collections::BTreeSet<&str> = all.iter().map(|c| c.title()).collect();
+        let titles: std::collections::BTreeSet<String> = all.iter().map(|c| c.title()).collect();
         assert_eq!(keys.len(), all.len());
         assert_eq!(titles.len(), all.len());
         assert_eq!(all.len(), 3, "checks 4-8 of design §7.2 are not built; update this count");

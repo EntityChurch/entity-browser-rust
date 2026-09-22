@@ -4213,20 +4213,25 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
         --format '{{.Name}} {{.ProcessLabel}}'; done
   practical_hugle  system_u:system_r:container_t:s0:c122,c874    # ← the tree's label, exactly
   ```
-  **The fix is cooperative, not a fight:** `chcon -R -l s0 .` over our own subtree returns it to
-  the shared level (no categories), which every `container_t` can read — that is what `:z` means,
-  and it does not take anything away from the other container. Re-run after that.
-  **It is not enough on its own, and here is the part that decides whether you can run at all.**
-  Our path deps live in `../entity-core-rust`, under the *same* shared parent, so that tree needs
-  the same treatment or the build dies at `failed to read …/core/capability/Cargo.toml:
-  Permission denied` before any test starts. And **the relabel is stolen back on every container
-  start**: measured 2026-09-02, a sibling seat's `make test-each-native` (golang, mounting the
-  same parent) spawned a fresh container roughly **every four minutes**, each one stamping a new
-  MCS pair on the tree. Four unfiltered runs in a row died that way — 21, 28, 23 failed, then a
-  build failure — while a **filtered** run of one gate finished inside the window and passed.
-  So: relabel, then either run **filtered**, or wait until `podman ps` shows no sibling container
-  bound to `<shared-parent>`. **Do not kill the other container to get a green run** — and
-  when you report, say the unfiltered run was *blocked*, not that it was green.
+  **FIXED STRUCTURALLY 2026-09-03 — the workaround below is retired; do not perform it.** The
+  advice used to be `chcon -R -l s0 .` over our subtree *and* `../entity-core-rust` (path deps
+  live under the same parent), then run **filtered** because the relabel was stolen back on every
+  sibling container start — measured at roughly one every four minutes during a sibling's
+  `make test-each-native`, which is shorter than an unfiltered run. Four unfiltered runs died that
+  way. That was a **relabel war**, and our `:z` was us taking part in it: `:z` "fixes" the problem
+  by stamping the shared tree back to `s0` on every single `make` invocation, so the loser is
+  whichever seat ran least recently, and we paid a recursive relabel of the whole parent per
+  container start.
+  **What replaced it:** `PODMAN_LABEL_OPT := --security-opt label=disable` on every `podman run`
+  in our Makefile, and **no `:z` anywhere**. We neither stamp the other seat's tree nor depend on
+  ours, which is cooperative in both directions and entirely inside our repo. Falsified both ways
+  with `chcon -R -l s0:c111,c222 ./tools` and a read-back in the image: without the flag,
+  `ls: cannot access 'tools/ui-lint.sh': Permission denied`; with it, readable. The security delta
+  is ≈ nil — these are rootless containers already running as the invoking user over an explicit
+  bind mount of the tree they build.
+  **So: do not `chcon` anything, do not run filtered to dodge a sibling, and do not report an
+  unfiltered run as "blocked by the other seat".** *"Never kill the other seat's container"* still
+  stands, and always did.
   **Two things to carry.** (1) **This is not the `:4444` folklore.** That note is about a single
   Selenium container and says the "other seats" story was never evidenced; here the evidence is
   a running container, its mount, and its label matching the tree's byte for byte. Different
@@ -4234,6 +4239,11 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   first casualty was an ordinary boot gate failing with *"0 log lines captured"*, which reads
   like an app that never started; everything after it inherited a message about a port. Check
   `ls -ldZ dist/index.html` before believing any of it.
+  **(3), earned by the fix:** *a documented workaround is a defect nobody has finished fixing.*
+  This entry existed for a day, was accurate, was followed — and every session that followed it
+  paid the cost and left the cause in place. **When you write a workaround into GOTCHAS, ask what
+  the structural fix is and whether it is genuinely more expensive.** Here it was four lines of
+  Makefile.
 - **`tree put: stored` IS NOT DURABILITY on the Direct-IDB arm — a gate that reloads on the
   put races the flush.** The IDB store is **write-behind**: puts queue and drain on a 250 ms
   debounce (`DEBOUNCE_MS`, `entity-core-rust/core/store/src/idb.rs`), and only

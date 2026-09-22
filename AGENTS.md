@@ -30,7 +30,7 @@ D12–D16 here are ours, earned on our own bugs.
   enforcement points, and **on the ladder's early-promotion terms**: reviewed against a
   third instance found by someone else, removed if unearned within a release cycle);
   candidates at D17, D18, D22. The per-diff review questions (nine + 5b), anti-pattern
-  catalog AP1–AP49.
+  catalog AP1–AP53.
 - **Doctrines** (Feature/Audit procedures — the *how*):
   `docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md` — open the Feature
   Development Doctrine (F0–F8) for "build X", the Audit Doctrine (A0–A12) for "Y is broken".
@@ -63,7 +63,9 @@ must make us stronger, not weaker*).
 - WASM toolchain (trunk-style build into `dist/`) for the browser/WebView target;
   `src-tauri/` is the native desktop backend (Rust over IPC).
 - Build is `make` over **podman** (see AGENTS-STANDARD). `make e2e-worker` needs
-  a Selenium container (headless Firefox) on `:4444`; recipe in `tools/e2e/README.md`.
+  a Selenium container (headless Firefox) on `:4444` — **`make e2e-grid` stands up a
+  correctly-configured fresh one** (2 GB `/dev/shm`; podman's default silently
+  destabilises Firefox). Details in `tools/e2e/README.md`.
 - **Host needs only `make` + `podman`** — every target MUST run in the image
   (`serve`/`build-serve` serve via a containerized `python3` over `--network host`;
   rootless `-p` port-publish is unreliable under pasta/slirp, so serve uses
@@ -116,6 +118,7 @@ make pair-serve    # build-serve with THIS machine's signaling node BAKED IN —
                    # that merely loads http://<this-ip>:8081 is already paired
 make tauri-run     # build WASM + Tauri, launch with stdout logs (active desktop path)
 make host-run      # build in the container, run the binary natively (needs webkit2gtk)
+make e2e-grid      # FRESH Selenium node, correctly configured (shm 2g). Run this FIRST.
 make e2e-worker    # Worker-mode E2E, headless Firefox; Selenium :4444, serves :8092
 make e2e-phases    # list the e2e test names + phase labels the filters accept
 make noscript-check # the apex as a NO-JS agent sees it (crawler/text browser). Needs the
@@ -144,7 +147,11 @@ make native        # DEPRECATED — prints redirect, no native UI build
 
 **Do not quote a test count from this file.** It goes stale in hours, the binary count
 moves too, and "the main binary" and "the full suite" are different denominators that
-session notes have quoted interchangeably. Re-measure, and say what you measured.
+session notes have quoted interchangeably. Re-measure, and say what you measured —
+**and with what invocation.** `make e2e-worker` unfiltered scores differently with and
+without a display on this host (the Tauri WebView phase is a standing red here, bisected
+2026-09-03), so a bare *"unfiltered, 64/0"* is not reproducible and cost a session a
+false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY make e2e-worker`.
 
 - **Always run `make wasm` after changes.** Native tests run against the Direct arm and
   the native target; they cannot catch WASM/Worker-only breakage (cfg-gated code, missing
@@ -612,11 +619,20 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   *accepts and never answers*, and the ~3 s deadline is what makes the *Checking…* window
   observable rather than a race. **Still uncovered:** the remedy button reaching an open Apps
   window — that needs check 3 to fire, i.e. a publisher that withholds a set, which is a different
-  rig; `RemedyOutcome` is gated natively. And **`doctor.rs` is English-only by
-  decision**; every user-facing string is in that one file, and its count is declared debt in
-  `tools/i18n-lint-baseline.txt`. That line **went UP** (59 → 66) on 2026-09-02, deliberately and
-  on the operator's call — the audit's fixes needed new outcomes to have their own words. It is
-  the one place the i18n ratchet has been spent upward; translate before release and it goes to 0.
+  rig; `RemedyOutcome` is gated natively. And **`doctor.rs` was English-only by decision and is
+  translated into all 30 locales as of 2026-09-03** — `tools/i18n-lint-baseline.txt` is now
+  **empty**, the floor, and `make lint` reads `raw=0`. Its count had gone **UP** (59 → 66) on
+  2026-09-02, deliberately and on the operator's call, because the audit's fixes needed new
+  outcomes to have their own words: the one time this ratchet has been spent upward, and it was
+  spent against a stated deadline (*translate before release*) which is what made it a loan rather
+  than a concession. **The pattern is the transferable half — a debt with an instrument behind it
+  gets paid; one that lives in a sentence does not.** The mechanical cost was `copy`'s items going
+  from `const &str` to functions, since a `const` cannot consult the active locale; nothing about
+  the design moved. **Keep the reasoning in `doctor.rs` and the wording in the catalog** — a
+  translator needs to know that a verdict must not read as reassuring and that two outcomes
+  rendered alike lose the distinction they exist to carry, and a JSON catalog has nowhere to say
+  it. Note the standing limit this does not touch: `i18n-untranslated` covers **13 of 30** locales,
+  because in the 17 Latin-script ones a cognate is indistinguishable from a skipped string.
 - **A value with no PROVENANCE cannot be refreshed from its source, and a heuristic on the value
   is not provenance — D25** (ratified 2026-09-02; AP49 stays as the incident record).
   `MODEL-STAKEHOLDERS-AND-OWNERSHIP` §2.2 states it outright: *a value
@@ -658,6 +674,193 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   and removed if unearned within a release cycle. What the census does **not** see is a value
   adopted from a registry or a peer; it only covers fields the deployment document declares.
   Audit: `docs/plans/AUDIT-HEAL-PATH-AND-THE-OWNERSHIP-GAP-2026-09-01.md`.
+- **A ROUTING fact the client never re-reads is a correct publish that never arrives — and the
+  ownership census could not see it, because it had one column (AP50).** D25's census
+  (`every_deployment_declared_field_says_who_owns_it`) asks *whose value wins on the next boot*.
+  It did not ask *does the deployer's value ever arrive*, and **the two fields that answered the
+  first question best were the two whose refresh was broken**: `name_registry_pin` was adopted
+  only inside `HomeDecision::AdoptDeclared` — so a deployment that added or moved its registry pin
+  reached a returning profile only if the **home peer** changed in the same publish, an unrelated
+  trigger — and `name_resolver_max_ttl_ms` was refreshed on **no** warm boot at all, only by
+  `apply_to` on a cold one. That is the §6a ceiling protecting the consumer *against* the
+  registry, so a deployer tightening it reached nobody who had already visited. **The deployed
+  document already names two peers**: `entitychurchfoundation.org` declares a pin whose peer id
+  differs from its home peer.
+  **The direction of the miss is why it survived three audits of this area.** Everything else in
+  this arc is *the client acted on something stale*; this is *the client never learned something
+  true* — nothing renders wrong, no request fails, and the profile that has never booted is fine
+  while the returning one is not. It is the `origins` CDN-move bug once per field left out.
+  **It was deferred in writing, not forgotten, and that is the transferable half.**
+  `DESIGN-RESILIENCE…` §1.1b's *"What it does NOT cover"* said so outright. The deferral lived
+  only there, while the instrument built two weeks later for exactly this class did not encode it
+  — and **a census that is green reads as coverage**. Same shape as `make lint` not compiling the
+  e2e suite while this file recorded the `make test` half of that hole: *recording a gap is what
+  makes it look handled.*
+  **The fix is a column, not a patch.** `session_config::decide_routing_refresh` is the one pure
+  expression (three outcomes — `Adopt | Unchanged | NotDeclared`, and the last two must not merge:
+  *the document agrees* and *the document said nothing* are different facts, and D23's deadline
+  makes the second more common). It is wired in `boot_phase2` gated on **a document was read**,
+  the same reachability as the origins loop, never on what the home did — and the pin's adoption
+  was **removed** from the `AdoptDeclared` arm rather than duplicated, because two writers of one
+  value is the drift shape C15 exists to stop. The census now carries
+  `Refreshed::{EveryWarmBoot, FirstContactOnly}` with the routing set asserted, so a new field must
+  answer both questions. **The trust boundary is unchanged and bounds this:** routing is adopted,
+  posture is not — `surface`, `window_type`, `site_mode`, `fast_paint` and
+  `peer_creation_enabled` stay first-contact-only, each now with its reason on the row.
+  Gates: the decision natively on both arms, plus
+  `make e2e-worker T=a_deployment_that_moves_its_registry_pin` — falsified, reporting the FIRST
+  pin after the second was published. Its document declares **only the pin and no `home_site`**,
+  deliberately: with a home declared, `AdoptDeclared` fires and the gate passes under the defect,
+  which is a gate satisfied by its fallback. **Stated bound:** the browser gate covers the pin; the
+  TTL shares the block and the function but has no surface that displays it, so its wiring rides
+  the pin's falsification of that block rather than an assertion of its own.
+  Design: `DESIGN-RESILIENCE-RECONCILIATION-AND-ENTITY-DOCTOR.md` §1.1e.
+- **Re-key recovery is SINGLE-PUBLISHER, and `stale_against` will delete a correct multi-peer
+  record — do not widen the writer alone.** A deployment may declare several peers (`origins` is a
+  map; `boot_phase2` logs `hosted_peer_origins` and calls `>1` a multi-tenant umbrella). The
+  mechanism is three parts and only **Repair** generalizes: `resolve()` is already keyed by peer,
+  **Detect** compares the single `home_site.peer_id`, and **Revalidate** (`stale_against`) takes
+  *one* publisher and drops every chain not ending at it. So a correct `A_old → A_new` for a
+  non-home hosted peer is written on one boot and deleted on the next, forever — the fix and the
+  guard are incompatible as written. Pinned by
+  `a_record_for_a_peer_that_is_not_the_home_publisher_is_dropped` and
+  `a_non_home_chain_is_dropped_however_well_formed_it_is`, which assert **today's** behaviour so
+  the assumption is visible to whoever crosses it.
+  **Succession must be DECLARED, not inferred:** the home case works only because one slot changing
+  *means* replacement; `origins` is a map, where a key vanishing as another appears is ambiguous
+  between a re-key and one tenant leaving as another joins — and guessing writes a false
+  supersession, which is F2's brick with a wider trigger.
+  The three pieces it needs are in `DESIGN-RESILIENCE…` §1.1f; item 1 is new document surface.
+  **Do not describe re-key recovery as multi-peer until they land.**
+- **`/entity-deployment.json` is DOMAIN-managed and describes the whole domain — the publisher
+  used to clobber it down to the last peer (fixed 2026-09-03).** `emit_deployment_config` built a
+  fresh single-entry `origins` map and `fs::write`'d over the file, so publishing a second peer
+  under its own `--prefix` — the multi-peer-at-one-origin shape the tooling has supported since
+  prefixes existed, and which `DESIGN-DEPLOYMENT-GENERATIONS` §7 specifies as *"names peers, their
+  prefixes, their active generations"* — dropped the first peer's origin **and** moved `home_site`
+  by publish order. **And that flip wrote a FALSE supersession**: `decide_home` sees
+  `AdoptDeclared`, boot persists `alpha → beta` against a peer that is alive and serving, and
+  revalidation *keeps* it because the document does agree beta is home. F2's brick through a
+  different door. It merges now: **the home publish owns the domain-level fields; a secondary
+  publish contributes only its `origins` entry**, `home_claim` is the pure four-way decision, and
+  `--set-home` is the deliberate act that moves a home. An unreadable existing document is a hard
+  stop — starting fresh there performs the exact clobber being fixed.
+  **The methodological half, and it is the reason this was missed twice.** The first pass sampled
+  the emitted documents, found one origin in each of six, and concluded multi-peer was unused and
+  therefore not a live defect. **Backwards:** every document had one origin *because the emitter
+  could not write two*, so the sample that looked like evidence of disuse was the defect's own
+  fingerprint. **When the question is what a tool can express, read the tool — a survey of its
+  output cannot distinguish "nobody asked for this" from "it cannot do this".** Measured by
+  publishing two peers and looking, which took four minutes and overturned the write-up.
+  Gates: `two_peers_on_one_domain_both_survive_in_the_document`,
+  `a_second_peer_defers_to_the_domains_existing_home`,
+  `an_unreadable_domain_document_is_not_overwritten`. The re-key fixtures pass `--set-home`, which
+  is semantics and not a workaround — a re-key *is* a deliberate home move, and without it the
+  fixture would emit a domain that never re-keyed.
+- **Several publishers may share ONE hosting scope, and until 2026-09-03 publishing the second one
+  DESTROYED the first (AP52/AP53). Read this before touching `publish`'s clean or `DirFetcher`.**
+  The typical topology is peers sharing an origin with their **trees** telling them apart —
+  `--prefix` is the *hosting* scope, `peer_id` is the *authority* scope, and the layout is
+  peer-scoped at `{peer}/…` and `sites/{peer}/…` with `content/` a **shared, content-addressed
+  store**. Two things were scoped to the wrong level:
+  **(1) The clean deleted `{base}/sites` and `{base}/content`** — the container, not the peer — so
+  a second publish removed the first peer's signature blob and its whole projection.
+  `publish --verify` on the first: *"1 BROKEN entry — this tree is not safe to serve"*, *"a pinned
+  consumer resolves NOTHING from this tree."* Its tree directory survived, which is what made it
+  quiet. Now `sites/{peer_id}`, and **`content/` is never deleted when a sibling publisher is
+  present** — accumulating orphans (which `--verify` lists) is recoverable; deleting another
+  publisher's signature is not. §7's origin-wide keep-set is the real answer.
+  **(2) `transport-profile` is ONE artifact per hosting scope with PER-PEER contents, and
+  `DirFetcher` followed it blindly** — *"in order of authority: what the publisher advertised, then
+  our own convention"* — so reading peer A followed peer B's layout and looked for A's manifest
+  where B's lives. **This was filed as cosmetic and a gate written for (1) failed on it**: two
+  independent defects, one symptom, against a tree that was by then completely intact. The rule
+  now: **an advertised layout that DECLARES a different peer is not authority for this one**
+  (`profile_peer_id`), and **absence is trusted** — a conformant publisher need not emit `peer_id`,
+  so only a positive mismatch disqualifies, or we would stop being able to read core-go.
+  **Still bounded, publisher side:** one `transport-profile` URL per scope, so an origin serving
+  several publishers advertises one of them to a cold consumer; `sites/index.html` likewise names
+  only the last publisher; and content is **duplicated per prefix** (measured 17 of 19 blobs).
+  Publishing prints all three when a sibling is present. Gates:
+  `a_second_publisher_at_one_origin_does_not_break_the_first` (asserts through `publish --verify`,
+  because **a file count passes the entire time the tree is broken** — both peers publish the same
+  set) and `a_profile_names_the_peer_it_is_about_and_silence_is_not_a_mismatch`.
+  Audit: `docs/plans/AUDIT-MULTI-PEER-HOSTING-AND-THE-HOME-SITE-2026-09-03.md`.
+  **And the fix removed an isolation property 24 e2e tests were silently relying on.** `publish`'s
+  destructive clean had been doing double duty: `emit_deployment_config_fixture` publishes into
+  `dist/`, every isolated scenario stages itself with `link_tree("dist", &root)` — which
+  **hardlinks that `/entity-deployment.json` in** — and once the document merges rather than
+  clobbers, each fixture *deferred* to the previous scenario's home and emitted a domain that was
+  not the one under test. **41 passed / 24 failed unfiltered, and every one of the 24 green when
+  run alone.** *Filtered green + unfiltered red = shared state, not a product defect.* Fixed by
+  passing **`--set-home` in every fixture emitter** — semantics, not a workaround: each one defines
+  the domain its scenario boots against. **When you make a destructive operation safe, ask what was
+  depending on the destruction** — nothing had ever declared that a `rm -rf` was what isolated the
+  fixtures.
+- **WE HOST THE TREE. A site is ONE L5 application projected out of it, and the HTML is a
+  projection for browsers only — read this before designing anything that publishes.** A domain is
+  a way to host a tree; what is in the tree may be sites, apps, compute programs, a follow feed,
+  comms, relay notes or backups, and a consumer that is not a browser (workbench-go) goes to the
+  **tree**, never to the HTML. `EXTENSION-NETWORK` §6.5.3 says it in those terms — *"has published
+  its **tree + content**… the bytes-on-wire ARE entity-encoded"* — and **Amendment 9 already ruled
+  the layering**: the reserved-word table is explicitly extensible, each L5 convention registers its
+  own projection prefix, and *"NETWORK does NOT enumerate the registered extensions."*
+  **What is already right, and a feed inherits all of it for free:** the consumer is generic
+  (`SignedSession::resolve(src, relative_key)` / `enumerate(prefix)` walk **arbitrary peer-relative
+  tree keys**); the endpoint describes a tree, not a site (`PublishLayout`'s five fields name no
+  site); **`publish --verify` and the clean are already tree-shaped** (`run_verify` walks
+  `base.join(peer_id)` — every `.bin` under the peer, whatever wrote it); and `apps` is deliberately
+  **not** a reserved word, living at `/{peer}/apps/{set}/…` sibling to `/{peer}/sites/{site}/…`
+  inside the tree. **Copy the `apps` shape, not the `sites` shape**, for anything new.
+  **The one thing that is backwards, and it is publisher-side only: what ENTERS the projection is a
+  hardcoded enumeration of two L5 conventions, not a policy over the tree.** `publish` is
+  `emit_owned_sites(sites)` + `for set in app_sets { emit_app_set }` + `root.finish()`, and
+  `RootProjector`'s doc states the consequence — *"the root commits to the bytes we projected, not
+  to the tree we read from… never over the source peer's whole tree, which holds keys and app state
+  a publish must not commit to."* **That reason is sound and must survive any fix** — so the real
+  requirement is a *publication policy* (which subgraphs are public), and today there is none: a
+  grep for `publishable` finds a comment. Adding follows touches five mechanical per-axis sites
+  (`resolve_publish_source`, the emit block, `run_plan`, the `warn_replaced_*`/`projected_*` pair,
+  the `http_poll` URL builders) — AP44 reaching a third subsystem. **Fix it structurally WITH
+  follows, not speculatively before.** (`ForeignArtifact` staying a hand-edited closed enum is
+  **correct** — that is D24 forcing the currency question per kind.)
+  **And the gap that is larger than it looks: `publish` cannot publish a peer's tree.**
+  `resolve_publish_source` builds a **fresh in-memory peer** each run and seeds it (demo set, or
+  `--ingest` of a `render/` dir); the *keypair* is durable, the *content* is assembled at publish
+  time. Every CLI flag is site- or app-shaped — there is **no verb naming a peer and no flag naming
+  a subtree**. Its sibling: §6.5.6 **live serving mode is unimplemented** — `src-tauri`'s
+  `app_server` looks paths up by exact key in the embedded SPA map and serves **no** tree routes, so
+  the one component with a real durable tree cannot expose it. Both are documented deferrals, not
+  regressions; F3 is the cheaper one.
+  Full review, with the citations: `docs/plans/REVIEW-2026-09-03-b-THE-TREE-IS-THE-PRODUCT-AND-THE-SITE-IS-ONE-PROJECTION.md`.
+  **Naming warning:** the transport lives in the wrong namespace — `http_poll.rs`, `signed_root.rs`,
+  `signed_fetch.rs`, `publish_layout.rs`, `origins.rs`, `foreign_cache.rs` are all under
+  `src/content_site/` and **none of them is a site concern**. Nothing depends on it; it is simply
+  what makes the next author reach for a site-shaped answer. Split it as part of the first change
+  that proves the boundary, never as a standalone rename.
+- **A `home_site` is a `(peer, site, page)` triple — NOT the domain, the root, or a URL.**
+  `SiteRef { peer_id, id, loc }`: which publisher, which of their sites, which page (empty `loc` =
+  the manifest root; empty `peer_id` = the documented sentinel for *this profile's own peer*). It
+  answers *where does this deployment open*, and it is **resolved, not addressed** —
+  `origins[peer_id]` supplies the origin and the URL is assembled. So moving where a publisher is
+  hosted does not touch `home_site` at all; they are orthogonal by design. Two consequences:
+  **a domain has exactly one home**, so with several publishers exactly one holds it and that is a
+  *deployment* decision rather than a property of any publish; and **moving it between publishers
+  is not cosmetic** — for a returning profile the old home peer is recorded as *retired* and every
+  stored reference to it is rewritten, which is right for a re-key and wrong for merely adding a
+  second publisher. Hence `--set-home` / `SET_HOME=1`.
+- **The three tiers of reference, and only one is stable — read this before designing anything
+  that stores a peer id.** Every fetch is `{origin}/{peer_id}/…` with the **hosting prefix riding
+  inside the origin** (`deploy_origin` → `{live}/{prefix}` or `/{prefix}`), so the two mutable
+  things move independently: **(1) Domain** — `/entity-deployment.json` at a fixed path; the path
+  is the stable thing, the deployer manages it, and it *is* the current truth, re-read every warm
+  boot. **(2) Name** — a registry binding; the *name* is stable, and the binding carries **both**
+  the new peer id and the new origin (`arch D10`: every peer-issued binding must carry one), so a
+  re-key and a CDN move are the same act to a consumer resolving by name. **(3) Raw peer id** —
+  stable in nothing; it is in every URL and a re-key changes all of them.
+  So: **a prefix/CDN move is already multi-peer-correct** (it changes `origins[peer]`, adopted
+  per declared peer on every warm boot); **a re-key is the half with the gap**, and a raw peer id
+  is the weakest handle we have. Prefer the document or a name wherever one is available.
 - **The refresh ledger is fed by `foreign_cache::ensure_current`, NOT by its callers.** It was fed
   by **one of three** consumers — the Apps window — so the health section's check 2, documented as
   *"the signature from incident A"*, could not see incident A's own fetches (the boot content-site
@@ -1038,42 +1241,97 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   neuter is actually run instead of reasoned about. The rule the handoffs already carry —
   *a neuter that passes has two possible causes and you owe both* — has a **third**: the neuter
   landed, the gate is sound, and **the thing you neutered does not do what you thought it did**.
-- **`:4444` is usually held by `perf-firefox`, an UNOWNED long-lived container — and the
-  "another seat is using it" story is folklore. Measured 2026-09-01.** Nothing in this repo
-  creates, names or removes it (`grep -rn perf-firefox` hits **only handoffs**, from
-  2026-07-15 onward, each repeating the previous one's framing). The operator confirms no other
-  party should be using Selenium on this box. So treat it as **an orphan left by an earlier
-  session**, not as someone else's work — and do not write the "other seats" sentence again;
-  this bullet exists because four handoffs did.
-  **What is actually true, and it is the part that bites:** the node is `maxSessions=1`, and
-  `setup()` reaps *every* session on whatever grid it is pointed at. Both only matter for
-  **concurrent** runs. One run at a time on the shared grid is fine and is what six weeks of
-  green gates were measured on. **Do not "fix" this by building grid lifecycle management** —
-  that solves a problem nobody has.
-  **`WEBDRIVER=http://localhost:<port>` runs against a private grid** when you do want
-  isolation (a second run, or a suspect grid). The preflight probes the same URL it hands the
-  suite — it used to hardcode `:4444`, which would have been a green preflight for a grid
-  nobody dialled. Standalone needs **all three** ports moved, not just HTTP; the ZeroMQ event
-  bus collides otherwise and the container dies with `ZMQException: Address already in use`:
-  `-e SE_OPTS="--port 4455" -e SE_EVENT_BUS_PUBLISH_PORT=4452 -e SE_EVENT_BUS_SUBSCRIBE_PORT=4453`.
-- **A mass e2e failure blaming `:8092` is usually SELinux, and there IS a real cross-repo
-  collision on this box — a different resource from the `:4444` folklore above.** Two unfiltered
-  runs came back 21/61 and 28/61 failed, every message after the first saying *"something else is
-  holding :8092 and answering"*. Nothing held it; the server could not **read** `dist/`. Our
-  Makefile bind-mounts the **shared parent** (`<shared-parent>`), a sibling repo's container
-  mounts the same parent, and its private SELinux MCS categories landed on the whole tree
-  mid-run. Unlike the `:4444` story this one is evidenced: the tree's label matched a running
-  container's `ProcessLabel` exactly. `chcon -R -l s0 . ../entity-core-rust` fixes it
-  cooperatively (both trees — our path deps are under the same parent) and takes nothing from the
-  other container. **Check `ls -ldZ dist/index.html` before believing the port message** — and
-  note the cascade's *first* casualty was a boot gate failing with *"0 log lines captured"*,
-  which reads like the app.
-  **The relabel is stolen back on every sibling container start** — measured at roughly one every
-  four minutes during a `make test-each-native` loop, which is shorter than an unfiltered run, so
-  four attempts in a row died and a filtered single-gate run passed. Relabel, then run
-  **filtered**, or wait for `podman ps` to show nothing bound to `<shared-parent>`. **Do not
-  kill the other seat's container**, and report a blocked unfiltered run as blocked. Full
-  write-up in [GOTCHAS — Testing & the gates](docs/architecture/guides/GOTCHAS.md#testing--the-gates).
+- **`wait_for_boot` MEANS PHASE 1, and since the two-phase boot became the default (2026-09-02) that
+  is no longer "booted" — `wait_for_phase2` is the one to use when your assertion's subject is
+  decided by the deployment document.** `wait_for_boot` polls for *"Frame loop started"*, which
+  arms after phase 1's local reads (258–287 ms measured); the origins adoption, the supersession
+  persist/revalidate, the startup surface and the `boot_diagnostics` routing mirror all run in a
+  **spawned** `boot_phase2` behind a bounded network fetch. So `wait_for_boot(); client.goto(…)`
+  **cuts phase 2 off mid-flight** — whatever it was going to write is simply never written, and the
+  assertion downstream fails naming the *product* instead of the race. `wait_for_phase2` polls for
+  `surface_down`'s line and **returns the reason** (`phase 2 complete` / `phase 2 failed` / `hold
+  failsafe`) rather than a bool, because those are three different facts (AP40 — the same fix the
+  boot code itself got). **Do not widen `wait_for_boot`**: ~100 call sites only need the app alive
+  and painting, and the two-phase gate exists to observe the window between the two.
+  **It is a CLASS, not a gate — seven live sites, and the census is `tests/e2e_phase2_barrier_census.rs`.**
+  Every assertion in the e2e suite keying on a phase-2 log line (`deployment-config: applied`,
+  `peer-supersession: recorded`, `the domain now publishes under a DIFFERENT identity`) was
+  guarded by `wait_for_boot` and nothing else. Five were saved by an incidental `poll_rendered`
+  standing in as a barrier; **two had none at all**, and the second of those is the shape that
+  matters: `!first.iter().any(|l| l.contains("deployment-config: applied"))` — a **negative**
+  assertion, which a lost race makes pass **silently and forever**, where a positive one merely
+  reds and blames the product. *Ask which direction your race fails in.* The census runs in
+  **`make test`** (it reads `e2e_worker.rs` as text, so it needs no grid and no `--features e2e`),
+  pins the marker table **by count**, carries an anti-vacuity floor, and **ships its own two-way
+  falsifier** — the `window_hydration_census` lesson, applied on the way in rather than after.
+  Falsified against the real file: delete one guard → red, naming the file, line, marker, the
+  barrier it found instead, and the fix.
+  **Measured instance, and note it takes TWO halves — the second is the one people will miss.**
+  `the_recovery_console_names_a_stranded_profile`, red 1 unfiltered run in 3 and **0 in 12
+  filtered**. (a) `wipe_all_storage` deletes the peer databases *while the first visit's phase 2 is
+  in flight*, so phase 2 resolves its config against a store that just vanished, lands on the build
+  default — whose `home_site.peer_id` is **empty**, the documented "own peer" sentinel — and writes
+  that into the mirror. (b) The next boot's phase 2, which would have overwritten it, is cut off by
+  the navigation to the BIOS. **The poison and the thing that would have cleaned it up are separate
+  bugs, and fixing only (b) leaves a gate that is green because it re-wrote a value it should never
+  have had.** Both closed; falsified by neutering `write_routing_mirror` to `""`, which reds with
+  `Raw mirror: {"home_peer":"",…}` — the flake's exact state.
+  **And the gate that caught it could not have caught it, which is the transferable half.** Its
+  healthy-case assertion was `healthy.contains(&peer_a)` against the whole card — but the card
+  renders *"this domain publishes as {peer}"* from **the console's own fetch**, so it passed with an
+  entirely empty mirror and only failed one step later, naming the wrong thing. Step 3's reconcile
+  check had it twice over: with no `believed` the console takes its *"recorded no publisher to
+  compare"* arm, which contains no `"STRANDED"`, and the domain line still names the new peer — so
+  **a successful reconcile was reportable for a profile that had recorded nothing at all.**
+  *When a surface renders two sources side by side, assert the LINE, never the card* — and when a
+  gate reds at step N, check whether step N-1 was capable of failing.
+- **`make e2e-grid` before you run the suite. "Flaky e2e" on this box was TWO INFRASTRUCTURE
+  DEFECTS (here) plus ONE GATE DEFECT (the entry above) — all three fixed 2026-09-03. Do not write
+  the word "flaky" again without re-reading both.** Unfiltered runs before the infrastructure fixes:
+  41/24, 63/2, 64/1, reds moving between unrelated subsystems and each passing filtered.
+  Immediately after them: 65/0, **64/1**, 65/0 — which is what made the residual a *findable single
+  gate* instead of noise; fixing that one surfaced a **second** gate of the same class, which is
+  what turned a gate fix into the sweep and the census. After all of it: **65/0, 65/0, 65/0**,
+  three consecutive unfiltered runs on a fresh grid each (nine unfiltered runs this session in
+  total; the full ladder is in `HANDOFF-2026-09-03-d`).
+  **The lesson in the sequencing: fix the infrastructure first, because a real defect cannot be
+  seen through it** — and then keep going, because the first real defect you find under it is not
+  necessarily the only one. The 24-red run diagnosed the day before was a third separate cause
+  again (fixture isolation); reading them all as one "flakiness" is what kept every one of them
+  open.
+  **(1) The grid had podman's default `/dev/shm` (512 MB) and had been up for six days.** Firefox
+  renders through shared memory; under that ceiling a content process dies mid-test and the
+  assertion that happens to be running fails. That is *exactly* the signature — failures that move
+  and pass alone — and it had been read as a product-side race for weeks. Selenium's own image
+  docs call `--shm-size=2g` a requirement, not a tuning knob. `make e2e-grid` always **replaces**
+  the node, so a run starts on a cold browser with the right shm; `GRID_PORT=4455` moves all three
+  ports (HTTP + both ZeroMQ bus ports — moving only HTTP dies with `ZMQException: Address already
+  in use`). `make e2e-grid-down` when you are finished.
+  **(2) Our containers took part in an SELinux relabel war over the SHARED PARENT.** Our bind
+  mount is `<shared-parent>` (sibling path-deps resolve through it) and a sibling repo's
+  container mounts the same parent with a private relabel, stamping its MCS categories across the
+  whole tree mid-run; a container whose categories do not match then gets **EPERM on every file**,
+  which surfaces as *"something else is holding :8092 and answering"* — because the server could
+  not **read** `dist/` — and whose *first* casualty is usually a boot gate reporting *"0 log lines
+  captured"*, which reads like the app. The old mitigation was `:z` on our own mounts, i.e.
+  relabelling the shared tree back on **every** `make` invocation: joining the war, whose loser is
+  whichever seat ran least recently, and paying a recursive relabel per container start.
+  `PODMAN_LABEL_OPT := --security-opt label=disable` plus **no `:z` anywhere** means we neither
+  stamp the other seat's tree nor depend on ours. **Falsified both ways** with
+  `chcon -R -l s0:c111,c222 ./tools`: without the flag `ls: cannot access 'tools/ui-lint.sh':
+  Permission denied`; with it, readable. Security delta ≈ nil — rootless containers already
+  running as the invoking user over an explicit bind mount of the tree they build.
+  **So do not `chcon` anything, do not run filtered to dodge a sibling, and do not report an
+  unfiltered run as "blocked by the other seat"** — that advice is retired, and the two entries it
+  lived in are replaced by this one. **Never kill the other seat's container** still stands.
+  **What is unchanged and still bites:** the node is `maxSessions=1` and `setup()` reaps *every*
+  session on whatever grid it is pointed at, so **one run at a time**. `make e2e-worker` now
+  preflights through `tools/e2e/wait-grid.py --preflight`, which **reports** an occupied slot and
+  proceeds (the reaper exists to rescue a leaked session; refusing would block the runs it is for)
+  — silence there is what used to become a 240 s stall watchdog naming the wrong phase.
+  **The grid's `ready` flag means "a slot is free", not "the hub is up"** — measured: it reads
+  `false` while a run holds the slot. That makes it right for `e2e-grid` (fresh container) and
+  wrong as a hard preflight, which is why the two use it differently.
 - **A FAILING e2e test leaks its WebDriver session, and the next run then hangs wearing the
   costume of a product wedge.** An assertion panics *before* `client.close()`, so the session is
   never quit; the node is `maxSessions=1` and Selenium's `sessionTimeout` is **300 s**, so the

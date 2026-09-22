@@ -106,6 +106,37 @@ PODMAN_BUILD_CAPS := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) $(_cap_cgp)
 PODMAN_RUN_CAPS   := --memory=$(CAP_MEM) --memory-swap=$(CAP_SWAP) \
                      --pids-limit=$(CAP_PIDS) --cpus=$(CAP_CPUS) $(_cap_cgp)
 
+# ---------------------------------------------------------------------------
+# SELinux: we neither RELABEL the shared tree nor DEPEND on its label.
+#
+# Our bind mount is the SHARED PARENT (`$(PARENT)` = <shared-parent>), because
+# sibling path-deps resolve through it. At least one sibling repo's container
+# mounts the SAME parent with a private-relabel option, which stamps its own MCS
+# categories (`s0:cNNN,cMMM`) across the whole tree mid-run. A container whose
+# categories do not match then gets EPERM on every file — measured as a mass e2e
+# failure whose every message blamed `:8092`, because the server could not READ
+# `dist/` and reported that as a port conflict.
+#
+# This was previously mitigated with `:z` on our own mounts, which "fixed" it by
+# relabelling the shared tree back to `s0` on every single `make` invocation —
+# i.e. by joining a relabel war whose loser is whichever seat ran least recently,
+# and paying a recursive relabel of the whole parent per container start.
+#
+# `--security-opt label=disable` runs our container unconfined w.r.t. SELinux, so
+# it reads the tree at ANY label, and dropping `:z` means we stop stamping the
+# other seat's tree. Cooperative in both directions, and entirely inside our repo.
+#
+# Falsified both ways, 2026-09-03, by stealing the label with
+# `chcon -R -l s0:c111,c222 ./tools` and reading a file back in the image:
+#   without the flag → `ls: cannot access 'tools/ui-lint.sh': Permission denied`
+#   with    the flag → readable
+# The security delta is ~nil: these are ROOTLESS containers already running with
+# the invoking user's uid and an explicit bind mount of the tree they build.
+#
+# `RUN_GUI` has carried this flag since the Wayland work for an unrelated reason
+# (the compositor socket); it keeps it, and loses its `:z` for the reason above.
+PODMAN_LABEL_OPT := --security-opt label=disable
+
 .PHONY: image build help fmt fmt-check check clean test-tauri
 
 # ============================================================================
@@ -174,10 +205,10 @@ image:
 # build. Resource caps (PODMAN_RUN_CAPS) bound every container.
 define RUN
 	mkdir -p $(CARGO_CACHE) $(TRUNK_CACHE)
-	podman run --rm $(PODMAN_RUN_CAPS) $(2) \
-		-v $(PARENT):/src/entity-systems:z \
-		-v $(CARGO_CACHE):/usr/local/cargo/registry:z \
-		-v $(TRUNK_CACHE):/root/.cache:z \
+	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) $(2) \
+		-v $(PARENT):/src/entity-systems \
+		-v $(CARGO_CACHE):/usr/local/cargo/registry \
+		-v $(TRUNK_CACHE):/root/.cache \
 		-e CARGO_TARGET_DIR=$(TARGET_DIR) \
 		$(EXTRA_RUN_ENV) \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
@@ -258,8 +289,8 @@ SCHEME   := $(if $(TLS),https,http)
 
 define RUN_SERVE
 	$(if $(TLS),$(call RUN_SERVE_NET,sh -c 'tools/dev-cert.sh $(CERT_SAN)'),)
-	podman run --rm $(PODMAN_RUN_CAPS) --network host $(2) \
-		-v $(PARENT):/src/entity-systems:z \
+	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) --network host $(2) \
+		-v $(PARENT):/src/entity-systems \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		python3 tools/cors-serve.py $(1) $(PORT) \
@@ -270,8 +301,8 @@ endef
 # see the real interfaces it must put in the cert's SANs — under the default
 # rootless network it would mint a cert for an address no test device can reach.
 define RUN_SERVE_NET
-	podman run --rm $(PODMAN_RUN_CAPS) --network host \
-		-v $(PARENT):/src/entity-systems:z \
+	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) --network host \
+		-v $(PARENT):/src/entity-systems \
 		-w /src/entity-systems/$(notdir $(CURDIR)) \
 		$(IMAGE) \
 		$(1)
@@ -341,7 +372,7 @@ define RUN_GUI
 	  $(if $(HOST_HOME),\
 	    -e HOME=$(HOME) -e XDG_CACHE_HOME=$(HOME)/.cache -v $(HOME):$(HOME),\
 	    -e HOME=/tmp/tauri-home -e XDG_CACHE_HOME=/tmp/tauri-home/.cache -v $(CURDIR)/$(TAURI_HOME):/tmp/tauri-home $(if $(SHARE_DIR),-v $(abspath $(SHARE_DIR)):/tmp/tauri-home/.entity/tori-share,)) \
-	  -v $(PARENT):/src/entity-systems:z \
+	  -v $(PARENT):/src/entity-systems \
 	  -w /src/entity-systems/$(notdir $(CURDIR)) \
 	  $(IMAGE) \
 	  $(1)
@@ -628,11 +659,55 @@ E2E_TIMEOUT ?= 15m
 # suite dialled somewhere else is a green preflight for a grid nobody uses.
 WEBDRIVER ?= http://localhost:4444
 E2E_WD_ENV = -e E2E_WEBDRIVER_URL=$(strip $(WEBDRIVER))
-E2E_PREFLIGHT = python3 -c "import urllib.request as u; u.urlopen(\"$(strip $(WEBDRIVER))/status\", timeout=3)" 2>/dev/null \
-	|| { echo; echo "e2e preflight: nothing answering on $(strip $(WEBDRIVER)) — start Selenium first:"; \
-	     echo "  podman run -d --rm --name e2e-firefox --network=host docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404"; \
-	     echo "  (a private grid: add --port <n> and pass WEBDRIVER=http://localhost:<n>)"; \
-	     echo "  (details: tools/e2e/README.md)"; echo; exit 1; }
+#
+# It also REPORTS an occupied slot rather than refusing on one: `setup()` reaps
+# stale sessions, so a slot left behind by a failing test is recoverable and
+# refusing would block the runs the reaper exists to rescue. What it must not do
+# is stay silent — an occupied slot otherwise surfaces four minutes later as the
+# stall watchdog naming whichever phase happened to be running.
+E2E_PREFLIGHT = python3 tools/e2e/wait-grid.py $(strip $(WEBDRIVER)) --preflight
+
+# ---------------------------------------------------------------------------
+# `make e2e-grid` — stand up a FRESH, correctly-configured Selenium node.
+#
+# It exists because the hand-rolled `podman run …/standalone-firefox` this file
+# used to print is WRONG in one invisible way: it inherits podman's default
+# **64 MB… in practice 512 MB — /dev/shm**, and Firefox renders through shared
+# memory. Under that ceiling a content process dies mid-test, which surfaces as
+# an assertion failing in whatever phase happened to be running — i.e. as
+# failures that MOVE between unrelated subsystems and each pass when run alone.
+# That is the signature this box has been reporting as "flaky tests" for weeks.
+# Selenium's own image documentation calls `--shm-size=2g` the requirement, not
+# a tuning knob.
+#
+# The second reason is age: a node left up for days accumulates profile and
+# memory state. `e2e-grid` always REPLACES, so a run starts from a cold browser.
+#
+# GRID_PORT moves ALL THREE ports — HTTP plus the two ZeroMQ event-bus ports.
+# Moving only the HTTP one collides on the bus and the container dies with
+# `ZMQException: Address already in use`, which reads as "the image is broken".
+SELENIUM_IMAGE ?= docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404
+GRID_PORT      ?= 4444
+GRID_NAME      ?= e2e-firefox$(if $(filter-out 4444,$(GRID_PORT)),-$(GRID_PORT),)
+GRID_SHM       ?= 2g
+.PHONY: e2e-grid e2e-grid-down
+e2e-grid: image
+	@podman rm -f $(GRID_NAME) >/dev/null 2>&1 || true
+	@podman run -d --rm --name $(GRID_NAME) --network=host --shm-size=$(GRID_SHM) \
+	  -e SE_NODE_MAX_SESSIONS=1 -e SE_NODE_SESSION_TIMEOUT=300 \
+	  $(if $(filter-out 4444,$(GRID_PORT)),\
+	    -e SE_OPTS="--port $(GRID_PORT)" \
+	    -e SE_EVENT_BUS_PUBLISH_PORT=$$(( $(GRID_PORT) - 2 )) \
+	    -e SE_EVENT_BUS_SUBSCRIBE_PORT=$$(( $(GRID_PORT) - 1 )),) \
+	  $(SELENIUM_IMAGE) >/dev/null
+	@printf '>>> %s on :%s (shm %s, fresh)' "$(GRID_NAME)" "$(GRID_PORT)" "$(GRID_SHM)"
+	# The wait runs IN THE IMAGE, so the host still needs only make + podman.
+	@$(call RUN,python3 tools/e2e/wait-grid.py http://localhost:$(GRID_PORT),--network host) \
+	  || { podman logs --tail 20 $(GRID_NAME); exit 1; }
+
+e2e-grid-down:
+	@podman rm -f $(GRID_NAME) >/dev/null 2>&1 && echo ">>> removed $(GRID_NAME)" || echo ">>> $(GRID_NAME) was not running"
+
 e2e-worker: image
 	@$(call RUN,$(E2E_PREFLIGHT),--network host)
 	# The e2e dist is built WITH `--features demo-apps`: the launcher→player
@@ -1326,7 +1401,7 @@ tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
@@ -1344,8 +1419,8 @@ tauri-bundle-run: tauri-bundle
 # Needs the sibling checkouts ../entity-workbench-go and ../entity-core-go.
 program-fixtures:
 	mkdir -p assets/programs
-	podman run --rm \
-		-v $(PARENT):/src:z \
+	podman run --rm $(PODMAN_LABEL_OPT) \
+		-v $(PARENT):/src \
 		-v program-dump-gocache:/go/pkg/mod \
 		-w /src/$(notdir $(CURDIR))/tools/program-dump \
 		golang:1.25-bookworm \
@@ -1610,7 +1685,7 @@ site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 
 # ============================================================================
@@ -1776,7 +1851,7 @@ site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR):z)
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
 	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="
@@ -1784,7 +1859,7 @@ site-serve: wasm
 	@echo "  ▶ static published sites:     http://localhost:$(PORT)/sites/   (banner → live)"
 	@echo "  (hard-refresh once if an older build is cached)"
 	@echo ""
-	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR):z)
+	$(call RUN_SERVE,$(SERVE_DIR),-v $(SERVE_DIR):$(SERVE_DIR))
 
 # ============================================================================
 # === dist — ADR-0023 Mode 1: the shippable artifact for THIS host ===========

@@ -558,9 +558,27 @@ impl DirFetcher {
         self.base.join("content").join(&hex[0..2]).join(&hex[2..4]).join(&hex)
     }
 
-    /// The publisher's emitted endpoint, if it shipped one beside the site.
+    /// The publisher's emitted endpoint, if it shipped one beside the site
+    /// **and it is about the peer we are reading**.
+    ///
+    /// `transport-profile` is ONE artifact per hosting scope and its contents are
+    /// per-peer, so where several publishers share an origin the last publish
+    /// wins. Following it blindly then locates *the other peer's* tree — measured
+    /// 2026-09-03 as `publish --verify` reporting *"the signed root is not
+    /// walkable — a pinned consumer resolves NOTHING from this tree"* against a
+    /// tree that was completely intact.
+    ///
+    /// A **positive mismatch** disqualifies; a profile that names no peer is
+    /// still trusted, because absence is not evidence of a different peer and
+    /// rejecting on it would break reading conformant publishers that omit the
+    /// field (see `profile_peer_id`).
     fn discovered_layout(&self) -> Option<super::publish_layout::PublishLayout> {
         let bytes = fs::read(self.base.join("transport-profile")).ok()?;
+        if let Some(declared) = super::publish_layout::PublishLayout::profile_peer_id(&bytes) {
+            if declared != self.peer_id {
+                return None;
+            }
+        }
         super::publish_layout::PublishLayout::from_profile_artifact(&bytes)
     }
 

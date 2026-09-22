@@ -13,8 +13,6 @@ mod demo_content;
 pub mod model;
 pub mod output;
 
-use demo_content::{DEMO_DOCUMENT_HTML, DEMO_FIGURE_SVG, SHOWCASE_MD};
-
 #[allow(unused_imports)]
 use crate::action::Action;
 #[allow(unused_imports)]
@@ -22,8 +20,7 @@ use crate::peers::Peers;
 #[allow(unused_imports)]
 use crate::window::{WindowId, WindowType, WindowView};
 
-use crate::content_site::format::{SiteAsset, SITE_MANIFEST_TYPE};
-use crate::content_site::{paths, NavItem, SiteManifest, SitePage};
+use crate::content_site::paths;
 use crate::window_watch::WindowWatch;
 use model::ContentSiteModel;
 
@@ -293,179 +290,10 @@ impl WindowView for ContentSiteWindow {
     }
 }
 
-/// Seed the bundled demo site into `peer_id`'s tree if it isn't there
-/// yet. Idempotent (gated on the manifest's presence). Synchronous L0
-/// writes so the first render resolves without waiting on a dispatch
-/// round-trip — the Direct-arm path the Content Site window opens on.
-/// (Worker-arm-bound sites are a later concern, like the rest of
-/// cross-peer/transport work.)
-pub fn ensure_demo_site(peers: &Peers, peer_id: &str) {
-    // Re-seed when the manifest is absent OR carries the OLD type tag.
-    // Worker mode (default) is durable: pre-migration demo entities
-    // persist in OPFS under the old `content/site/*` tags at this same
-    // path. Gating on path-presence alone (the original guard) would
-    // serve a stale-typed ghost forever; gate on the CURRENT type so the
-    // rename actually takes (D16 — the durable-Worker orphan trap).
-    let manifest_current = |site: &str| {
-        peers
-            .get_entity(peer_id, &paths::manifest_path(peer_id, site))
-            .map(|e| e.entity_type == SITE_MANIFEST_TYPE)
-            .unwrap_or(false)
-    };
-    // Re-seed unless BOTH the primary demo AND its cross-site companion are
-    // present at the current type — adding the companion to an existing install
-    // (durable Worker) must trigger a re-seed, not serve a half-seeded demo.
-    if manifest_current(DEMO_SITE_ID) && manifest_current(DEMO_NOTES_SITE_ID) {
-        return;
-    }
-
-    // A genuinely *deep* demo site (2- and 3-level page paths under a
-    // "Guide" section) so the overlay exercises nested navigation +
-    // active-trail, not just flat pages — the deep-site cycle's live
-    // surface. Top-level nav still carries Home/About/Theory
-    // (Phase 19/20 assert these) plus the Guide section.
-    let manifest = SiteManifest::new(
-        DEMO_SITE_ID,
-        "Entity Demo Site",
-        "index",
-        vec![
-            // Nav targets are root-absolute (`/slug`): nav is a site-global
-            // menu rendered on every page, so it must resolve identically from
-            // any current page (the link-resolution convention, location.rs).
-            NavItem::new("Home", "/index"),
-            // Guide is a section (its pages nest under guide/*); the format
-            // can now carry a children sub-menu (GAP3), but until a sidebar
-            // renderer consumes children we keep the demo's declared nav ==
-            // what's rendered (a flat top bar) — no unrendered data (AP10).
-            NavItem::new("Guide", "/guide/intro"),
-            NavItem::new("About", "/about"),
-            NavItem::new("Theory", "/theory"),
-            NavItem::new("Showcase", "/showcase"),
-        ],
-    );
-
-    let pages = [
-        (
-            "index",
-            SitePage::markdown(
-                "Welcome",
-                "# Welcome to the Entity Demo Site\n\nThis page is a **content-addressed entity** rendered as HTML — you're browsing it inside a full entity peer, but it looks like any other site.\n\n::embed[Entity Demo Figure — a content-addressed SVG asset, embedded via the ::embed directive]{ref=assets/figures/demo.svg}\n\n- It's just markdown stored in the tree.\n- Links navigate within the entity system.\n- The overlay toggle reveals the peer underneath.\n\nStart with the [Guide](./guide/intro), read [About](./about) or the [Theory](./theory), open a [Pre-Rendered Document](./document), hop to the companion [Field Notes](site:demo-notes/index) site, or visit [the web](https://example.com).\n",
-            ),
-        ),
-        (
-            "guide/intro",
-            SitePage::markdown(
-                "Guide — Intro",
-                "# Guide: Intro\n\nThis page lives at `guide/intro` — a **nested** content entity. The *Guide* nav item stays highlighted across the whole section (active-trail).\n\nNext: [Install](install), or jump straight to the [Internals](advanced/internals).\n\nBack to [Home](../index).\n",
-            ),
-        ),
-        (
-            "guide/install",
-            SitePage::markdown(
-                "Guide — Install",
-                "# Guide: Install\n\nStill in the Guide section (`guide/install`). Notice *Guide* is still the active nav item.\n\nBack to the [Intro](intro), or deeper to [Internals](advanced/internals).\n",
-            ),
-        ),
-        (
-            "guide/advanced/internals",
-            SitePage::markdown(
-                "Guide — Internals",
-                "# Guide: Internals\n\nThree levels deep (`guide/advanced/internals`) and still resolving from the tree by path. The *Guide* section nav stays lit the whole way down.\n\nBack to the [Intro](../intro).\n",
-            ),
-        ),
-        (
-            "about",
-            SitePage::markdown(
-                "About",
-                "# About\n\nThe Entity Demo Site is a tiny showcase of **Site Mode**: content-addressed static sites with reactivity, served from the entity system.\n\n```\nsite/demo/\n  manifest\n  pages/{index,about,theory}\n  pages/guide/{intro,install}\n  pages/guide/advanced/internals\n```\n\nBack to [Home](./index).\n",
-            ),
-        ),
-        (
-            "theory",
-            SitePage::markdown(
-                "Theory",
-                "# Theory\n\nA *site* is a content subgraph rooted at a signed manifest. Pages are markdown entities; links are entity-native and resolve across sites and peers.\n\n> Format ⊥ transport: the same page renders from the local tree, a peer, or a CDN.\n\nBack to [Home](./index).\n",
-            ),
-        ),
-        // A full markdown feature showcase — the one page that exercises every
-        // rendered construct (tables w/ alignment, fenced code, blockquotes,
-        // nested + task lists, strikethrough, hr, embedded image) so rendering
-        // fidelity is evaluable at a glance in both the live overlay and the
-        // static export. Authored as a raw string (real newlines/indent) below.
-        ("showcase", SitePage::markdown("Markdown Showcase", SHOWCASE_MD)),
-        // The document tier's visible artifact (§3.1 web tier) — a page whose
-        // body is a whole pre-rendered HTML file rather than markdown. It
-        // renders in a restricted sandbox, so it is also the one demo page
-        // whose content our own DOM never touches. See `DEMO_DOCUMENT_HTML`.
-        // A demo site's page title is content, like every other title in this
-        // list; the app does not translate the pages it renders.
-        ("document", SitePage::html("Pre-Rendered Document", DEMO_DOCUMENT_HTML)), // i18n-ignore
-    ];
-
-    // Arm-aware seed write via the blessed `Peers::seed_write` router
-    // method: Direct (native, Tauri WebView, tests) → synchronous L0 put
-    // so the demo is readable in the same render pass (the sync `#[test]`s
-    // depend on it); Worker (browser) → async `dispatch_write`, the
-    // resolver's `Pending`/repaint seam absorbs the delay. This replaced
-    // an open-coded `direct_peer_context` reach-through whose original
-    // unconditional `store().put()` panicked on Worker spawn and froze the
-    // rAF loop — routing it removes the hatch *and* the panic class.
-    peers.seed_write(peer_id, paths::manifest_path(peer_id, DEMO_SITE_ID), manifest.to_entity());
-    // The figure the index page embeds — a small, human-authored SVG so the
-    // asset path has a *visible* artifact end-to-end (independent of the
-    // papers compute-figure pipeline, whose PNGs may be unpinned placeholders).
-    // SVG is text, content-addressed like any asset, and safe in an <img>.
-    peers.seed_write(
-        peer_id,
-        paths::asset_path(peer_id, DEMO_SITE_ID, "figures/demo.svg"),
-        SiteAsset::new("image/svg+xml", DEMO_FIGURE_SVG.as_bytes().to_vec()).to_entity(),
-    );
-    for (slug, page) in pages {
-        peers.seed_write(peer_id, paths::page_path(peer_id, DEMO_SITE_ID, slug), page.to_entity());
-    }
-
-    // --- Companion site (cross-site nav) -------------------------------------
-    // A SECOND owned site on this same peer, reached from the primary demo via
-    // the `site:demo-notes/index` link above. Opening it exercises `site:`
-    // cross-site navigation (location.rs → CrossSite → go_to) through the exact
-    // shared `rewrite_links` path the Site Browser window and the overlay both
-    // use — so the bundled demo proves the feature billslab ships on. The return
-    // trip is a `site:demo/index` link back.
-    let mut notes_manifest = SiteManifest::new(
-        DEMO_NOTES_SITE_ID,
-        "Entity Demo — Field Notes",
-        "index",
-        vec![
-            NavItem::new("Notes", "/index"),
-            NavItem::new("First Entry", "/entries/first"),
-        ],
-    );
-    // The companion declares a manifest theme (S-T2) — the bundled demo
-    // showcases per-site theming live: following the cross-site link flips
-    // the palette to light (in "Site's theme" mode), returning flips back.
-    notes_manifest.params.insert("theme".into(), "light".into());
-    let notes_pages = [
-        (
-            "index",
-            SitePage::markdown(
-                "Field Notes",
-                "# Field Notes\n\nYou followed a **cross-site link** to get here — a `site:demo-notes/index` target that stayed inside the entity system, hopping from one owned site to another on the same peer.\n\nNotice the light palette: this site's manifest declares `\"theme\": \"light\"`, so in **Site's theme** mode it renders with its own registered theme while the Demo next door stays dark. (Your Settings → Site appearance override always wins.)\n\nRead the [First Entry](entries/first), or head [back to the Demo](site:demo/index).\n",
-            ),
-        ),
-        (
-            "entries/first",
-            SitePage::markdown(
-                "Field Notes — First Entry",
-                "# First Entry\n\nA nested page (`entries/first`) in the companion site. Cross-site links land on a site's pages the same way in-site links resolve within one.\n\nBack to the [Notes index](index), or [back to the Demo](site:demo/index).\n",
-            ),
-        ),
-    ];
-    peers.seed_write(
-        peer_id,
-        paths::manifest_path(peer_id, DEMO_NOTES_SITE_ID),
-        notes_manifest.to_entity(),
-    );
-    for (slug, page) in notes_pages {
-        peers.seed_write(peer_id, paths::page_path(peer_id, DEMO_NOTES_SITE_ID, slug), page.to_entity());
-    }
-}
+/// Seed the bundled demo site into `peer_id`'s tree if it isn't there yet.
+///
+/// **Lives in [`demo_content`]**, with the page bodies it writes — a demo
+/// site's manifest title, nav labels and page titles are that site's
+/// content, authored by whoever published it, and the app does not
+/// translate the pages it renders. See that module's header.
+pub use demo_content::ensure_demo_site;

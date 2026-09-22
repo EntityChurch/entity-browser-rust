@@ -24,20 +24,40 @@ the test file.
 ## Running
 
 ```bash
-# Terminal 1 (once): start the Selenium container. --network=host lets
-# it reach the host's test http.server.
-podman run -d --rm --name e2e-firefox --network=host \
-    docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404
-
-# Terminal 2: build wasm + run the test.
-make e2e-worker            # = `make wasm` then `cargo test --test e2e_worker -- --nocapture`
-
-# When done:
-podman stop e2e-firefox
+make e2e-grid              # a FRESH, correctly-configured Selenium node on :4444
+make e2e-worker            # build wasm + run the suite
+make e2e-grid-down         # when done
 ```
 
-`make e2e-worker` fails in ~2 s with the start-Selenium command if nothing is
-answering on :4444, rather than after a wasted wasm build.
+**Use `make e2e-grid`; do not hand-roll the `podman run`.** The obvious
+invocation inherits podman's default `/dev/shm` (512 MB), and Firefox renders
+through shared memory: under that ceiling a content process dies mid-test and
+whichever assertion happened to be running fails. That produces failures that
+**move between unrelated subsystems and each pass when run alone** — read as
+product-side flakiness on this box for weeks (unfiltered: 41/24, 63/2, 64/1;
+after: 65/0, 64/1, 65/0, with the residual a single real gate defect). Selenium's
+own image documentation calls `--shm-size=2g` a requirement, not a tuning knob.
+`e2e-grid` always **replaces** the node, so a run starts on a cold browser rather
+than one that has been up for days.
+
+A private grid, when you want isolation from another run:
+
+```bash
+make e2e-grid GRID_PORT=4455
+make e2e-worker WEBDRIVER=http://localhost:4455
+```
+
+`GRID_PORT` moves **all three** ports — HTTP plus both ZeroMQ event-bus ports.
+Moving only the HTTP one collides on the bus and the container dies with
+`ZMQException: Address already in use`, which reads as a broken image.
+
+`make e2e-worker` preflights the grid in ~2 s rather than after a wasted wasm
+build. The preflight **reports** an occupied slot and proceeds — `setup()` reaps
+stale sessions, so a slot left behind by a failing test is recoverable and
+refusing would block the runs the reaper exists to rescue. Note the grid's
+`ready` flag means *"a slot is free"*, not *"the hub is up"*: it reads `false`
+while a run holds the single slot, which is why `e2e-grid` (fresh container) may
+wait on it and the preflight may not.
 
 **On a machine WITH a display, first build the Tauri binary** — Phase 14 spawns
 `./src-tauri/target/debug/entity-browser-tauri` for the ConnectPeer test and

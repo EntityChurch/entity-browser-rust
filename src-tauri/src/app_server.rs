@@ -44,6 +44,49 @@
 //! Not a public web server. It binds the LAN, speaks no TLS, serves a fixed
 //! asset map and nothing from the filesystem, and refuses every method but
 //! `GET`/`HEAD`. Off unless the user turns it on.
+//!
+//! # Why no TLS, and what it would actually take (asked 2026-09-03)
+//!
+//! Everything this origin loses is gated on being a SECURE CONTEXT, whose only
+//! plain-HTTP exceptions are `localhost` / `127.0.0.1` — which is this desktop,
+//! never the phone. Three losses, and they are not equal:
+//! **the service worker** (so no offline shell: the phone cannot open the app
+//! when this machine sleeps), **OPFS** (degrades gracefully — the Worker arm
+//! falls back to Direct/IndexedDB, which works fine here), and
+//! **`getUserMedia`** — the sharp one, because the QR scanner exists precisely
+//! to stop people retyping a Base58 peer-id and it is dead on exactly the
+//! origin that forces the retyping.
+//!
+//! **A self-signed cert does not fix this, and is worse than not trying.**
+//! Chrome refuses to register a service worker on a cert-error origin *even
+//! after the user clicks through the interstitial* (`SecurityError: Failed to
+//! register a ServiceWorker: An SSL certificate error occurred when fetching
+//! the script`); Firefox honours a manually-added exception. So it would work
+//! on one engine and not the other, which reads to a user as a browser bug.
+//! `tools/dev-cert.sh` is where that was measured.
+//!
+//! **What works is a certificate the DEVICE already trusts, and there are only
+//! two shapes of that.** (1) Install a private CA on the phone — which is what
+//! `dev-cert.sh` mints for development, and its own header says never install
+//! it on a device you care about. Not shippable. (2) A publicly-trusted cert
+//! for a real DNS name whose A record points at the **private** IP — the
+//! `plex.direct` model, and the thing routers do with `routerlogin.net`. That
+//! genuinely works: valid cert, valid name, real secure context, no
+//! interstitial.
+//!
+//! **The reason (2) is not simply "the answer" is that it inverts the
+//! product.** It requires owning a domain and running DNS, and the leaf's
+//! private key would ship inside every install — so it is effectively public,
+//! and a CA is obliged to revoke a knowingly-disclosed key. Per-install ACME
+//! (DNS-01) avoids the shared key but then **two machines on the same LAN
+//! cannot pair unless our infrastructure is reachable**, for a product whose
+//! premise is that they do not need us. That is an architectural trade to be
+//! decided, not a TODO to be closed — and it is why this is documented here
+//! rather than filed as a defect.
+//!
+//! Note what already softens the sharp loss: the redirect above provisions the
+//! node automatically, so the common path types nothing, and pasting the
+//! pairing line covers the camera's job without a secure context.
 
 use std::net::SocketAddr;
 use std::sync::{

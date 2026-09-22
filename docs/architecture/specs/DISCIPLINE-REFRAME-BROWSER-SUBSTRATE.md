@@ -2186,6 +2186,129 @@ these shipped in this repo.
   `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration`,
   `AUDIT-HEAL-PATH-AND-THE-OWNERSHIP-GAP-2026-09-01.md`]
 
+- **AP50 — A census with one column reports on the column it has: the field said who OWNED it
+  and never said whether anybody RE-READS it.** 2026-09-03, found reviewing re-key recovery at
+  release closeout, no failing symptom. `every_deployment_declared_field_says_who_owns_it` was
+  built as D25's enforcement point and is a good census — falsified, count-asserted, every row
+  naming its mechanism. It asks *whose value wins on the next boot*. It does not ask *does the
+  deployer's value ever arrive*, and **the two fields that answered the first question best were
+  exactly the two whose refresh was broken**: `name_registry_pin` (provenance via `PinSource`,
+  and adopted only inside `HomeDecision::AdoptDeclared` — so a deployment that added or moved its
+  registry pin reached a returning profile only if the *home peer* changed in the same publish,
+  an unrelated trigger) and `name_resolver_max_ttl_ms` (deployer-only, and refreshed on **no**
+  warm boot at all — only by `apply_to` on a cold one).
+  **This is AP36's third instance** — the guard on the acquisition rather than the decision — and
+  R1's own comment, ten lines above the defect, states the rule it breaks: *"the guard moves off
+  the FETCH and onto the ADOPTION, which is where it always belonged."*
+  **And it was not forgotten — it was DEFERRED, in writing, and the deferral outlived its
+  reader.** `DESIGN-RESILIENCE…` §1.1b's *"What it does NOT cover"* says it plainly: *"Divergence
+  in anything but identity. If the peer is unchanged, nothing is adopted… widening it silently
+  would have been scope creep."* That was a defensible call at the time. What made it a defect is
+  that the deferral lived **only** in a design doc's exclusion list, while the instrument built
+  two weeks later to enforce exactly this class — the ownership census — did not encode it, and a
+  census that is green is read as coverage. **A known gap recorded in prose and absent from the
+  gate that was later built for its class is indistinguishable from a closed one.** Same shape as
+  `make lint` not compiling the e2e suite while `AGENTS.md` recorded the `make test` half of that
+  hole: *recording a gap is what makes it look handled.*
+  **Three things worth carrying.**
+  **(1) The direction of the miss is what makes it hard to see.** Every other bug in this arc is
+  *the client acted on something stale*; this one is *the client never learned something true*.
+  There is no wrong value on screen and no failing request — a correct publish simply does not
+  arrive, indefinitely, and the profile that has never booted is fine while the returning one is
+  not. That is the `origins` CDN-move bug exactly, once per field that was left out.
+  **(2) The worse of the two to leave stale is the one with no user-facing surface.**
+  `name_resolver_max_ttl_ms` is the §6a ceiling that protects the *consumer against the registry*
+  — a deployer tightening it is doing security work that reached nobody who had already visited.
+  A field being invisible is a reason to gate it harder, not a reason it matters less.
+  **(3) The fix is a column, not a patch.** `Refreshed::{EveryWarmBoot, FirstContactOnly}` is now
+  the census's second axis, each row naming its mechanism or its reason, with the routing set
+  asserted — so a field added tomorrow has to answer *both* questions. Patching the two fields
+  and leaving one column would have made the third instance identical to the first two.
+  [AP36, AP40, AP44, D25, `session_config::decide_routing_refresh`,
+  `every_deployment_declared_field_says_who_owns_it`,
+  `a_changed_routing_knob_is_adopted_regardless_of_what_the_home_did`,
+  `a_users_registry_pin_still_wins_after_the_seed_refreshes`]
+
+- **AP51 — A survey of a tool's OUTPUT cannot tell *"nobody asked for this"* from *"the tool
+  cannot express this"*, and the uniformity that reassures you is the defect's own fingerprint.**
+  2026-09-03, caught by the operator, not by me. Asked what multi-peer-at-one-domain costs the
+  re-key design, I surveyed every `/entity-deployment.json` on hand — both live domains, four
+  local `dist-*` trees — found **exactly one origin in each**, and wrote *"measured exposure:
+  zero; design work, not a live defect."* Every one of those documents had a single origin
+  **because `emit_deployment_config` built a fresh single-entry map and `fs::write`-clobbered the
+  file**. The sample was unanimous because the emitter had no other behaviour. Publishing two
+  peers to one out-dir — four minutes — showed the second publish erasing the first peer's origin,
+  moving `home_site` by publish order, and thereby writing a **false supersession record** against
+  a peer that was alive and serving.
+  **Three things worth carrying.**
+  **(1) The word "measured" was doing false work.** The measurement was real and the *inference*
+  was the error: artifact uniformity was treated as evidence about demand when it was evidence
+  about the producer. **Name what your sample is a sample OF.** Six documents were a sample of one
+  emitter, not of six deployment intentions.
+  **(2) The capability was documented as working the whole time** — `--prefix` is *"the per-peer
+  hosting scope"*, `DESIGN-DEPLOYMENT-GENERATIONS` §7 says the document *"names peers, their
+  prefixes, their active generations"* and even calls multi-peer *"built and unexercised"*. **Read
+  the tool against its spec, not against its output**; the spec said what it should do and the
+  output could not have revealed that it didn't.
+  **(3) It is AP34/AP35 moved off the test population and onto the artifact corpus.** *Green
+  because the failing configuration was not in the population* has a twin: *reassured because the
+  corpus was produced by the thing under assessment.* Ask who generated your evidence.
+  [AP34, AP35, AP44, `home_claim`, `two_peers_on_one_domain_both_survive_in_the_document`,
+  `DESIGN-RESILIENCE…` §1.1g, `DESIGN-DEPLOYMENT-GENERATIONS` §7]
+
+- **AP52 — An operation scoped to the CONTAINER of a shared resource, in a layout that is scoped
+  per-owner one level down.** 2026-09-03. `publish`'s clean deleted `{base}/sites` and
+  `{base}/content` — the *hosting scope* — while the layout is peer-scoped at `sites/{peer}/…` and
+  `content/` is a **shared, content-addressed store**. Publishing a second peer at one origin
+  therefore deleted the first one's signature blob and its whole projection; `publish --verify` on
+  the first: *"1 BROKEN entry — this tree is not safe to serve"*, *"a pinned consumer resolves
+  NOTHING from this tree."* The peer's own tree directory survived, which is what made it quiet —
+  a successful publish and a directory that still looks right.
+  **Three things worth carrying.**
+  **(1) The comment named the case it handled and read as if it handled the other.** It said the
+  clean is *"scoped to this prefix so a sibling peer's tree survives"* — true of a sibling at
+  **another** prefix, silent about a sibling at the **same** one, which is the topology the guide
+  has described from the start. *Check which sibling a scoping claim protects.*
+  **(2) Content-addressing makes writing safe and says nothing about deleting.** A hash is a
+  self-certifying name, so two peers writing the same blob cannot hurt each other — which is
+  precisely why the store is shared, and precisely why a per-publish `rm -rf` of it is wrong. The
+  correct shape is an origin-wide keep-set (design §7), and until it exists **not deleting is the
+  right default: accumulating bytes is recoverable, deleting another publisher's signature is
+  not.**
+  **(3) A file count could not have seen it.** Both peers published the same site set, so the blob
+  count was identical before and after. The gate asserts through `publish --verify` — the repo's
+  own consumer-shaped walker — because the property is *is this still serveable*, not *are there
+  still files*. **Before reasoning about whether an artifact survived, check whether the repo
+  already ships a walker that answers it.**
+  [AP44, AP51, `a_second_publisher_at_one_origin_does_not_break_the_first`,
+  `AUDIT-MULTI-PEER-HOSTING-AND-THE-HOME-SITE-2026-09-03.md` F1,
+  `DESIGN-DEPLOYMENT-GENERATIONS` §7]
+
+- **AP53 — A discovery artifact that is SHARED by path and PER-OWNER by content, followed without
+  checking whose it is.** 2026-09-03, and it was filed as cosmetic first — the correction is the
+  entry. `transport-profile` lives at `{base}/transport-profile`, one per hosting scope, and its
+  contents describe one peer (`tree_url_prefix = {origin}/{peer_id}`). `DirFetcher::manifest_path`
+  resolves *"in order of authority: what the publisher advertised, then our own convention"* — so
+  at an origin serving two publishers, reading peer **A** followed peer **B's** advertised layout
+  and looked for A's manifest where B's lives. Verdict: *"the signed root is not walkable — a
+  pinned consumer resolves NOTHING from this tree"* — **against a tree that was completely
+  intact.**
+  **The transferable half is how it was found: it was filed as bounded/cosmetic and a gate written
+  for a DIFFERENT finding failed on it.** Two independent defects wearing one symptom. A severity
+  judgement made from reading ("bindings reference the profile by hash, so the standalone artifact
+  is only a convenience") was wrong because it enumerated the *documented* consumers and missed the
+  one in our own reader. **When you downgrade a finding to cosmetic, name the consumers you checked
+  — and grep for the ones you did not.**
+  **The fix is a rule, not a special case: an advertised layout that DECLARES a different peer is
+  not authority for this one.** And the arm that matters is the default: **absence is trusted**,
+  because a conformant publisher need not emit `peer_id` and absence is not evidence of a
+  *different* peer — only a positive mismatch disqualifies. Rejecting on absence would have broken
+  reading core-go, a live cross-impl path. Same shape as `peer_supersession::revalidate`'s *absence
+  of evidence is never evidence*, one layer out.
+  [AP40, AP52, `PublishLayout::profile_peer_id`,
+  `a_profile_names_the_peer_it_is_about_and_silence_is_not_a_mismatch`,
+  `AUDIT-MULTI-PEER-HOSTING-AND-THE-HOME-SITE-2026-09-03.md` F3]
+
 ---
 
 ## 6. Naming, decision, and "what stays"

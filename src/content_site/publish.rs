@@ -73,6 +73,17 @@ const INFO_SITE_ID: &str = "entity-info";
 ///   `?chrome=1`). `--config-site=ID` (default: demo, else first) sets the home
 ///   site. The origin is the `--live` value if given, else `""` (same-origin —
 ///   the SPA expands it to its own origin at runtime). Projection mode only.
+///
+///   **It MERGES onto an existing document.** The file is domain-managed and
+///   names every peer hosted here, so publishing a second peer under its own
+///   `--prefix` adds an `origins` entry and leaves the domain's home alone. Use
+///   `--set-home` to move the home onto the peer being published — a deliberate
+///   act, because the flip also records the previous home peer as *retired* in
+///   every returning visitor's browser. An existing document that cannot be
+///   parsed stops the publish rather than being replaced.
+/// - `--set-home` — with `--deployment-config`, take this domain's `home_site`
+///   even though the existing document names a different peer. What a re-key
+///   uses, and what the second peer on a shared domain must NOT do by accident.
 /// - `--identity-seed=<64-hex>` — publish under a **specific system identity**
 ///   (the same 32-byte hex seed form as the runtime `entity_system_seed`), so
 ///   each site/deployment gets its own stable peer-id (`sites/{peer}/…`).
@@ -125,6 +136,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let config_locked = args.iter().any(|a| a == "--locked");
     let config_site: Option<String> =
         args.iter().find_map(|a| a.strip_prefix("--config-site=").map(str::to_string));
+    // `--set-home` — move this domain's home onto the peer being published.
+    // Needed only when a document already names a DIFFERENT peer as home; see
+    // `HomeClaim`. Without it a second publish defers, which is what stops the
+    // last publish silently re-homing a domain (and writing a supersession
+    // record against a peer that is still alive).
+    let config_set_home = args.iter().any(|a| a == "--set-home");
     // `--registry-pin=PEER_ID@ORIGIN` — the §7.4 preloaded registry this
     // deployment seeds. Same `PEER_ID@ORIGIN` spelling as `registry --bind`,
     // because it is the same pair and a second spelling is a second thing to get
@@ -323,6 +340,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 site: config_site,
                 origin,
                 registry_pin,
+                set_home: config_set_home,
             }
         });
         run_projection(
@@ -399,6 +417,74 @@ struct DeployConfigSpec {
     /// where the operator can read the refusal, never emitted for a consumer to
     /// drop silently (audit F9's rule, one artifact along).
     registry_pin: Option<crate::session_config::RegistryPin>,
+    /// **`--set-home`: this publish becomes the domain's home**, replacing a
+    /// home an existing document already names for a *different* peer.
+    ///
+    /// Off by default, and that default is the whole fix: without it the second
+    /// peer published to a domain silently re-homed every returning visitor onto
+    /// itself (see [`merge_deployment_doc`]). Moving a domain's home is a
+    /// deliberate act, so it gets a word.
+    set_home: bool,
+}
+
+/// What a publish is allowed to do to a domain's existing
+/// `/entity-deployment.json`.
+///
+/// **The document is DOMAIN-managed and describes the whole domain**, not the
+/// last publish — `DESIGN-DEPLOYMENT-GENERATIONS` §7: *"`/entity-deployment.json`
+/// ← names peers, their prefixes, their active generations."* A domain may host
+/// several publishers, each under its own `--prefix`, and the tooling has
+/// supported that since prefixes existed.
+///
+/// It did not survive contact with a second publish. Measured 2026-09-03 by
+/// publishing two peers to one out-dir: both trees emitted correctly and
+/// completely, and the document came out naming **only the second**, because
+/// this emitter built a fresh single-entry `origins` map and `fs::write`-clobbered
+/// the file. Three consequences, in ascending order of cost:
+///
+/// 1. The first peer's origin entry is **gone**, so a browser booting that
+///    domain never learns where its artifacts live.
+/// 2. `home_site` flips to whoever published **last** — a domain-level decision
+///    made by publish order.
+/// 3. **And that flip writes a false supersession record.** A returning profile
+///    holds `home = alpha` marked `Deployment`; the document now says `beta`;
+///    `decide_home` returns `AdoptDeclared`; boot persists `alpha → beta` — a
+///    durable record asserting a peer that is **alive and serving** was retired,
+///    after which `resolve()` silently rewrites every stored reference to alpha
+///    onto beta. Revalidation *keeps* it, correctly by its own rule, because the
+///    document does agree that beta is home. That is F2's brick reached through
+///    a different door: not a bad document, but a correct-for-one-peer document
+///    on a domain that has two.
+///
+/// So the rule is: **the home publish owns the domain-level fields; a secondary
+/// publish contributes only its own `origins` entry.**
+#[derive(Debug, PartialEq, Eq)]
+enum HomeClaim {
+    /// No document yet, or it names no usable home — this publish defines the
+    /// domain.
+    Defines,
+    /// The existing document already names *this* peer as home. An ordinary
+    /// republish; rewrite the domain-level fields as before.
+    Republishes,
+    /// The document names a **different** peer as home and `--set-home` was not
+    /// given. Keep every domain-level field; contribute only `origins[peer]`.
+    Defers { to: String },
+    /// A different peer is home and the operator asked for it to move.
+    Takes { from: String },
+}
+
+/// Decide what this publish may claim, given the home peer an existing document
+/// names. **Pure**, because this branch is the whole safety argument and the
+/// alternative is proving it through the filesystem.
+///
+/// `existing_home` is the `home_site.peer` already on the domain, if any.
+fn home_claim(existing_home: Option<&str>, peer_id: &str, set_home: bool) -> HomeClaim {
+    match existing_home.map(str::trim).filter(|p| !p.is_empty()) {
+        None => HomeClaim::Defines,
+        Some(h) if h == peer_id => HomeClaim::Republishes,
+        Some(h) if set_home => HomeClaim::Takes { from: h.to_string() },
+        Some(h) => HomeClaim::Defers { to: h.to_string() },
+    }
 }
 
 /// Parse `--registry-pin=PEER_ID[@ORIGIN]`. `Err` is the operator-facing
@@ -1546,11 +1632,66 @@ fn run_projection(
             return ExitCode::FAILURE;
         }
     };
-    let mut clean: Vec<std::path::PathBuf> = vec![base.join(SITE_URL_PREFIX)];
+    // **Peers already published at THIS base, other than us.** The publish
+    // layout is peer-scoped where it matters — `{peer}/…` and `sites/{peer}/…` —
+    // but `content/` and the `sites/` parent are **shared at a prefix root**, so
+    // a clean scoped to the *prefix* rather than to the *peer* deletes a
+    // sibling's bytes. The comment above used to say this clean protects "a
+    // sibling peer's prefix", and it does: what it did not protect is a sibling
+    // peer at the SAME prefix, which is the topology where several publishers
+    // share one origin and their trees tell them apart.
+    //
+    // Measured 2026-09-03, two peers published into one out-dir with no prefix:
+    // peer A's signature blob was deleted, its `sites/` projection was gone, and
+    // `publish --verify` on A reported *"1 BROKEN entry — this tree is not safe
+    // to serve"* and *"a pinned consumer resolves NOTHING from this tree."*
+    // Publishing B destroyed A.
+    let siblings: Vec<String> = projected_peer_ids(out_dir, prefix)
+        .into_iter()
+        .filter(|p| p != peer_id)
+        .collect();
+
+    // `sites/{peer}` — not `sites/`. Our projection only; a sibling's stays.
+    let mut clean: Vec<std::path::PathBuf> = vec![base.join(SITE_URL_PREFIX).join(peer_id)];
     if emit_bin {
-        clean.push(base.join("content"));
         clean.push(base.join(peer_id));
+        // **`content/` is a SHARED, content-addressed store** — design §7:
+        // *"a hash is a self-certifying name, so two peers referencing the same
+        // hash are referencing the same bytes, and neither can affect the other
+        // by writing."* Writing into it is therefore always safe; **deleting
+        // from it is not**, and this clean is a republish-hygiene mechanism that
+        // predates anyone publishing two peers here.
+        //
+        // With a sibling present we do not delete it. The cost is that this
+        // peer's own superseded blobs accumulate as orphans — which
+        // `publish --verify` already enumerates, and which §7's origin-wide GC
+        // (keep-set = the union across every peer's retained generations) is the
+        // real answer to. **Accumulating bytes is recoverable; deleting another
+        // publisher's signature is not.**
+        if siblings.is_empty() {
+            clean.push(base.join("content"));
+        }
     }
+    // D13: a publish that is sharing a hosting scope must say so, and say what
+    // that costs. Silence here is how the destructive version went unnoticed —
+    // the operator saw a clean, successful publish and a tree that no longer
+    // served.
+    if !siblings.is_empty() {
+        println!(
+            "  shared hosting scope: {} other publisher(s) already at this {} — \
+             cleaning only this peer's tree and projection, leaving the shared \
+             content store alone (superseded blobs accumulate as orphans; \
+             `--verify` lists them)",
+            siblings.len(),
+            if prefix.is_empty() { "origin root".to_string() } else { format!("prefix /{prefix}") }
+        );
+        println!(
+            "  NOTE: `transport-profile` and `sites/index.html` are ONE artifact per \
+             hosting scope and this publish rewrites both — they will describe this \
+             peer. Give each publisher its own --prefix if that matters."
+        );
+    }
+
     for root in clean {
         if root.exists() {
             if let Err(e) = std::fs::remove_dir_all(&root) {
@@ -1767,8 +1908,108 @@ fn emit_deployment_config(
     }
 
     let path = out_dir.join("entity-deployment.json");
-    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&doc)?))?;
+
+    // MERGE onto whatever this domain already declares — never clobber it. See
+    // `HomeClaim` for what a clobber cost and why the default is to defer.
+    let existing = read_existing_deployment(&path)?;
+    let existing_home = existing.as_ref().and_then(|o| {
+        o.get("home_site")
+            .and_then(|v| v.as_object())
+            .and_then(|h| h.get("peer"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    });
+    let claim = home_claim(existing_home.as_deref(), peer_id, spec.set_home);
+
+    let merged = match (&claim, existing) {
+        // This publish defines or rewrites the domain's own fields. Keep any
+        // origins siblings already registered — they are other peers' routing
+        // facts and none of this publish's business.
+        (HomeClaim::Defines | HomeClaim::Republishes | HomeClaim::Takes { .. }, prior) => {
+            let mut out = doc.as_object().expect("json! built an object").clone();
+            if let Some(prior) = prior {
+                if let Some(prior_origins) = prior.get("origins").and_then(|v| v.as_object()) {
+                    let out_origins =
+                        out.get_mut("origins").and_then(|v| v.as_object_mut()).expect("origins");
+                    for (k, v) in prior_origins {
+                        if k != peer_id {
+                            out_origins.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            out
+        }
+        // A secondary peer. Touch exactly one key.
+        (HomeClaim::Defers { .. }, Some(mut prior)) => {
+            let origins = prior
+                .entry("origins")
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if !origins.is_object() {
+                *origins = serde_json::Value::Object(serde_json::Map::new());
+            }
+            origins
+                .as_object_mut()
+                .expect("origins is an object")
+                .insert(peer_id.to_string(), serde_json::Value::String(spec.origin.clone()));
+            prior
+        }
+        // Unreachable: `Defers` is only produced from an existing document.
+        (HomeClaim::Defers { .. }, None) => {
+            unreachable!("home_claim cannot defer with no existing document")
+        }
+    };
+
+    // D13: say what was done to a document this publish did not author. Silence
+    // here is how the clobber went unnoticed for as long as it did.
+    match &claim {
+        HomeClaim::Defers { to } => println!(
+            "  deployment config: MERGED as a secondary peer — this domain's home stays \
+             {to} (pass --set-home to move it)"
+        ),
+        HomeClaim::Takes { from } => println!(
+            "  deployment config: HOME MOVED from {from} to this peer (--set-home)"
+        ),
+        HomeClaim::Republishes | HomeClaim::Defines => {}
+    }
+
+    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&merged)?))?;
     Ok(path)
+}
+
+/// Read the domain's existing deployment document, if it has one.
+///
+/// **A malformed document is a hard stop, never an implicit fresh start.** Same
+/// rule as `BuildsManifest::from_json`, and for a sharper reason here: starting
+/// fresh on an unreadable document is *exactly* the clobber this merge exists to
+/// prevent, so the one error path must not quietly perform it. *"There is none"*
+/// and *"there is one and I cannot read it"* decide different things.
+fn read_existing_deployment(
+    path: &Path,
+) -> std::io::Result<Option<serde_json::Map<String, serde_json::Value>>> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} exists but is not valid JSON ({e}). Refusing to overwrite it — a domain \
+                 document names every peer hosted here, and replacing an unreadable one with \
+                 a single-peer document is how the other peers get dropped. Fix or remove it.",
+                path.display()
+            ),
+        )
+    })?;
+    match value {
+        serde_json::Value::Object(o) => Ok(Some(o)),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} exists but is not a JSON object — refusing to overwrite it", path.display()),
+        )),
+    }
 }
 
 /// Bare-root mode: ONE site rendered at the domain root (no prefix, no
@@ -2447,6 +2688,215 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    // ── The domain document is DOMAIN-managed, not last-publish-managed ──────
+
+    /// The four claims, enumerated. `Defers` is the one that did not exist and
+    /// whose absence was the defect.
+    #[test]
+    fn a_second_peer_defers_to_the_domains_existing_home() {
+        assert_eq!(home_claim(None, "2KAlpha", false), HomeClaim::Defines);
+        assert_eq!(home_claim(Some(""), "2KAlpha", false), HomeClaim::Defines);
+        assert_eq!(home_claim(Some("2KAlpha"), "2KAlpha", false), HomeClaim::Republishes);
+        assert_eq!(
+            home_claim(Some("2KAlpha"), "2KBeta", false),
+            HomeClaim::Defers { to: "2KAlpha".into() },
+            "a second peer published to a domain must NOT take its home — that flip \
+             re-homes every returning visitor AND writes a supersession record against \
+             a peer that is still alive"
+        );
+        assert_eq!(
+            home_claim(Some("2KAlpha"), "2KBeta", true),
+            HomeClaim::Takes { from: "2KAlpha".into() },
+            "moving a domain's home is available, it just has to be asked for"
+        );
+    }
+
+    /// **The measured defect, as a test.** Publish two peers, each under its own
+    /// `--prefix`, into one out-dir — the multi-peer-at-one-domain shape the
+    /// tooling has supported since prefixes existed
+    /// (`DESIGN-DEPLOYMENT-GENERATIONS` §7: the document *"names peers, their
+    /// prefixes"*). Before the merge, the second publish clobbered the document
+    /// and the first peer's origin vanished.
+    #[test]
+    fn two_peers_on_one_domain_both_survive_in_the_document() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-multipeer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.to_string_lossy().to_string();
+
+        let publish = |seed_hex: &str, prefix: &str| {
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                format!("--identity-seed={seed_hex}"),
+                format!("--prefix={prefix}"),
+            ])
+        };
+        let a = "c1".repeat(32);
+        let b = "c2".repeat(32);
+        assert_eq!(publish(&a, "alpha"), ExitCode::SUCCESS);
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(tmp.join("entity-deployment.json")).unwrap(),
+        )
+        .unwrap();
+        let home_a = doc["home_site"]["peer"].as_str().unwrap().to_string();
+        assert_eq!(doc["origins"][&home_a].as_str(), Some("/alpha"));
+
+        assert_eq!(publish(&b, "beta"), ExitCode::SUCCESS);
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(tmp.join("entity-deployment.json")).unwrap(),
+        )
+        .unwrap();
+        let origins = doc["origins"].as_object().expect("origins is an object");
+
+        assert_eq!(
+            origins.len(),
+            2,
+            "both peers hosted on this domain must be declared — the document is \
+             domain-managed, not a record of the last publish. Got: {origins:?}"
+        );
+        assert_eq!(
+            origins.get(&home_a).and_then(|v| v.as_str()),
+            Some("/alpha"),
+            "the FIRST peer's origin was dropped by the second publish"
+        );
+        assert_eq!(
+            doc["home_site"]["peer"].as_str(),
+            Some(home_a.as_str()),
+            "the second publish silently re-homed the domain onto itself"
+        );
+
+        // …and `--set-home` still moves it, deliberately.
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                "--set-home".to_string(),
+                format!("--identity-seed={b}"),
+                "--prefix=beta".to_string(),
+            ]),
+            ExitCode::SUCCESS
+        );
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(tmp.join("entity-deployment.json")).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(doc["home_site"]["peer"].as_str(), Some(home_a.as_str()));
+        assert_eq!(
+            doc["origins"].as_object().unwrap().len(),
+            2,
+            "moving the home must not drop the peer that used to hold it"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **Publishing a second peer at a shared hosting scope must not destroy the
+    /// first one — asserted with `--verify`, this repo's own walker.**
+    ///
+    /// The topology: several publishers on one origin, no prefix, told apart by
+    /// their tree paths (`{peer}/…`). Before the fix, peer B's publish deleted
+    /// the shared `content/` store and the whole `sites/` parent, so peer A lost
+    /// its signature blob and its projection — `--verify` on A reported *"1
+    /// BROKEN entry — this tree is not safe to serve"* and *"a pinned consumer
+    /// resolves NOTHING from this tree."*
+    ///
+    /// **`--verify` is the assertion deliberately**, rather than counting files:
+    /// it walks the signed root and every pointer the way a consumer does, so it
+    /// answers *is A still serveable*, which is the actual property. A file count
+    /// would have passed the whole time the tree was broken — both peers publish
+    /// the same demo set, so the blob count is identical before and after.
+    #[test]
+    fn a_second_publisher_at_one_origin_does_not_break_the_first() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-sharedscope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.to_string_lossy().to_string();
+
+        let seed_a = "d1".repeat(32);
+        let seed_b = "d2".repeat(32);
+        let publish = |seed: &str| {
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                format!("--identity-seed={seed}"),
+            ])
+        };
+        let verify = |seed: &str| {
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--verify".to_string(),
+                format!("--identity-seed={seed}"),
+            ])
+        };
+
+        assert_eq!(publish(&seed_a), ExitCode::SUCCESS);
+        assert_eq!(
+            verify(&seed_a),
+            ExitCode::SUCCESS,
+            "PRECONDITION: the first publish must verify, or this gate measures nothing"
+        );
+
+        assert_eq!(publish(&seed_b), ExitCode::SUCCESS);
+        assert_eq!(
+            verify(&seed_a),
+            ExitCode::SUCCESS,
+            "publishing a SECOND peer at the same hosting scope broke the FIRST one's \
+             tree — its signature blob or its projection was deleted by a clean scoped \
+             to the prefix instead of to the peer. A pinned consumer of peer A now \
+             resolves nothing."
+        );
+        assert_eq!(verify(&seed_b), ExitCode::SUCCESS, "the second peer must verify too");
+
+        // And the first peer is still *addressable*: its projection survives, so
+        // a deep link into it is not a 404.
+        let a_peer = std::fs::read_dir(tmp.join("sites"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .count();
+        assert_eq!(a_peer, 2, "both publishers must keep a site projection under sites/");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A malformed document is a **hard stop**, never an implicit fresh start —
+    /// the same rule `BuildsManifest::from_json` follows, and sharper here:
+    /// silently starting fresh on an unreadable document performs exactly the
+    /// clobber this merge exists to prevent.
+    #[test]
+    fn an_unreadable_domain_document_is_not_overwritten() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-baddoc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("entity-deployment.json"), b"{not json at all").unwrap();
+
+        assert_ne!(
+            run(&[
+                "publish".to_string(),
+                tmp.to_string_lossy().to_string(),
+                "--deployment-config".to_string(),
+                "--demo-identity".to_string(),
+            ]),
+            ExitCode::SUCCESS,
+            "an unreadable domain document must stop the publish, not be replaced"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("entity-deployment.json")).unwrap(),
+            "{not json at all",
+            "the operator's file must still be there to fix"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn verify_proves_a_published_tree_and_catches_a_tampered_body() {
         let tmp =
@@ -2894,10 +3344,19 @@ mod tests {
         // default `--surface=window` boots a maximized Site Browser *window*
         // (`mode-dom`), so relying on the default here would (silently) emit the
         // wrong surface for those overlay assertions.
+        // **`--set-home` on every fixture emitter, and it is semantics.** Each of
+        // these DEFINES the domain its scenario boots against, and the document
+        // merges rather than clobbers now — so without the flag a fixture run
+        // into a tree that already carries a document (a staged copy of `dist/`
+        // hardlinks one in as soon as any earlier fixture has published there)
+        // would DEFER, keep the other scenario's home, and quietly emit a domain
+        // that is not the one under test. Measured: 24 unfiltered failures, all
+        // publish-fixture-driven, every one of them green when run alone.
         let _ = run(&[
             "publish".to_string(),
             "dist".to_string(),
             "--deployment-config".to_string(),
+            "--set-home".to_string(),
             "--surface=site".to_string(),
             "--locked".to_string(),
         ]);
@@ -2955,10 +3414,20 @@ mod tests {
     fn emit_rekey_fixture(seed: [u8; 32], surface_args: &[&str]) {
         let out = std::env::var("ENTITY_REKEY_OUT").unwrap_or_else(|_| "dist".to_string());
         let hex = crate::vault_codec::seed_to_hex(&seed);
+        // `--set-home` is REQUIRED here and is not a workaround: the `_after`
+        // publish puts a *different* identity into a tree whose document already
+        // names the `_before` peer as home, and a re-key is precisely the
+        // deliberate home move that flag names. Without it the publish would
+        // (correctly) defer, the document would keep naming the retired peer,
+        // and the fixture would emit a domain that never re-keyed — a fixture
+        // silently not reproducing its own incident. Harmless on `_before`,
+        // which publishes into a tree with no document at all (`make wasm`'s
+        // `dist/` carries none) and so DEFINES rather than takes.
         let mut args = vec![
             "publish".to_string(),
             out.clone(),
             "--deployment-config".to_string(),
+            "--set-home".to_string(),
             format!("--identity-seed={hex}"),
         ];
         args.extend(surface_args.iter().map(|s| s.to_string()));
@@ -3211,6 +3680,8 @@ mod tests {
             "publish".to_string(),
             out.clone(),
             "--deployment-config".to_string(),
+            // Defines this scenario's domain — see `emit_deployment_config_fixture`.
+            "--set-home".to_string(),
             "--surface=chrome".to_string(),
             format!("--identity-seed={hex}"),
             format!("--ingest-apps={}", apps_dist.display()),
@@ -3301,6 +3772,8 @@ mod tests {
             "publish".to_string(),
             out.clone(),
             "--deployment-config".to_string(),
+            // Defines this scenario's domain — see `emit_deployment_config_fixture`.
+            "--set-home".to_string(),
             "--surface=site".to_string(),
             format!("--config-site={MR_HOME_SITE}"),
             format!("--identity-seed={hex}"),
@@ -3420,6 +3893,7 @@ mod tests {
             site: None,            // → demo
             origin: String::new(), // same-origin
             registry_pin: None,
+            set_home: false,
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
         assert_eq!(path.file_name().unwrap(), "entity-deployment.json");
@@ -3513,6 +3987,7 @@ mod tests {
             site: None,
             origin: String::new(),
             registry_pin: Some(pin.clone()),
+            set_home: false,
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
         let cfg = DeploymentConfig::parse(&std::fs::read_to_string(&path).unwrap())
@@ -3531,6 +4006,7 @@ mod tests {
             site: None,
             origin: String::new(),
             registry_pin: None,
+            set_home: false,
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec_none).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -3558,6 +4034,7 @@ mod tests {
             site: None,
             origin: String::new(),
             registry_pin: None,
+            set_home: false,
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
         let cfg = DeploymentConfig::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();

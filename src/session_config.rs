@@ -300,6 +300,89 @@ pub fn decide_home(
     }
 }
 
+/// What a warm boot should do with a **deployer-owned routing knob** the
+/// deployment document declares.
+///
+/// Three outcomes rather than an `Option`, and the two that look alike are the
+/// point (AP40): *"the document says the same thing we hold"* and *"the document
+/// said nothing"* are different facts, and only the second one is a case where a
+/// truncated or half-served document is in play. Collapsing them is how a
+/// diagnostic ends up unable to tell a healthy no-op from a document nobody
+/// could read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoutingRefresh<T> {
+    /// The document declares a value and it differs from the one held. Adopt it.
+    Adopt(T),
+    /// The document declares exactly what is already held. No write.
+    Unchanged,
+    /// **The document is silent.** Keep what we have — absence of evidence is
+    /// not evidence, the same rule `peer_supersession::revalidate` states and
+    /// for the same reason: D23's deadline makes the silent case *more* common,
+    /// not less, so it must never be able to clear a value.
+    NotDeclared,
+}
+
+impl<T> RoutingRefresh<T> {
+    /// One word for the log line and for gates.
+    pub fn label(&self) -> &'static str {
+        match self {
+            RoutingRefresh::Adopt(_) => "adopt",
+            RoutingRefresh::Unchanged => "unchanged",
+            RoutingRefresh::NotDeclared => "not-declared",
+        }
+    }
+}
+
+/// **Decide whether a deployer-owned routing knob is refreshed from the
+/// document.** Pure; every input is an argument.
+///
+/// # Why this exists as its own function
+///
+/// `boot_load`'s R1 reconcile established the rule in prose — *routing facts may
+/// be adopted, preferences may not* — and then applied it to `home_site` and
+/// `origins`, leaving every other routing field to whoever remembered. Both of
+/// the ones that were left behind had the same defect in different shapes
+/// (AP36 — a guard that answers one question standing in for another):
+///
+/// * **`name_registry_pin`** was adopted only inside the `AdoptDeclared` arm, so
+///   a deployment that added or moved its registry pin reached a returning
+///   profile only if the *home peer* happened to change in the same publish —
+///   an unrelated trigger. The comment directly above that arm states the rule
+///   it broke: *"the guard moves off the FETCH and onto the ADOPTION, which is
+///   where it always belonged."*
+/// * **`name_resolver_max_ttl_ms`** was never refreshed on a warm boot at all,
+///   only by `apply_to` on a cold one. It is the §6a resolver ceiling — the half
+///   that protects *us* against a registry — so a deployer tightening it reached
+///   nobody who had already booted.
+///
+/// This is the same class as the `origins` CDN-move bug (a routing fact the
+/// client never re-reads, so a correct deployment change strands every returning
+/// profile forever) and it is fixed the same way: put the guard on the decision,
+/// never on the acquisition. One expression, two call sites, gated by
+/// `make test` on both arms rather than only through a browser.
+///
+/// # What this deliberately does NOT decide
+///
+/// **User precedence, for the pin.** `cfg.name_registry_pin` is only ever the
+/// *deployment's seed*; a user's pin lives in the `user_registry_pin`
+/// localStorage mirror and wins at every read through [`pinned_registry`].
+/// Refreshing the seed therefore cannot overwrite a user's choice, and adding a
+/// guard here to "protect" it would instead freeze the deployment's own value —
+/// which is exactly the mistake `origins` made with `put_if_absent`. The
+/// enforcing test is `a_users_registry_pin_still_wins_after_the_seed_refreshes`.
+pub fn decide_routing_refresh<T: PartialEq + Clone>(
+    held: Option<&T>,
+    declared: Option<&T>,
+) -> RoutingRefresh<T> {
+    let Some(declared) = declared else {
+        return RoutingRefresh::NotDeclared;
+    };
+    if held == Some(declared) {
+        return RoutingRefresh::Unchanged;
+    }
+    RoutingRefresh::Adopt(declared.clone())
+}
+
 /// The content-site overlay's posture (availability / chrome toggle /
 /// lockdown). `locked` is a **held seam** — stored and readable, but no
 /// behavior gates on it yet (§4-C).
@@ -1912,6 +1995,91 @@ mod tests {
             "a home the DEPLOYMENT seeded must still be adopted — that is incident A, and \
              the re-key repair must not be lost to the provenance fix"
         );
+    }
+
+    // ── The routing-knob refresh (AP36, the class the pin and the TTL were in) ─
+
+    /// The three outcomes, and the pair that must never merge.
+    ///
+    /// *"The document agrees with what we hold"* and *"the document said
+    /// nothing"* look the same from the outside — both write nothing — and are
+    /// different facts (AP40). Only the second one is a case where a truncated,
+    /// half-served or deadline-expired document is in play, which is what a
+    /// diagnostic needs to be able to say.
+    #[test]
+    fn a_silent_document_and_an_agreeing_one_are_different_answers() {
+        assert_eq!(
+            decide_routing_refresh(Some(&"held".to_string()), None),
+            RoutingRefresh::NotDeclared,
+            "silence must never clear a held routing value — D23's deadline makes this \
+             case MORE common, not less"
+        );
+        assert_eq!(
+            decide_routing_refresh(Some(&"same".to_string()), Some(&"same".to_string())),
+            RoutingRefresh::Unchanged
+        );
+        assert_ne!(
+            RoutingRefresh::<String>::NotDeclared.label(),
+            RoutingRefresh::<String>::Unchanged.label(),
+            "two outcomes rendered alike lose the distinction they exist to carry"
+        );
+    }
+
+    /// The repair itself: a document that declares something different is
+    /// adopted, **whatever the home peer did**. This is the assertion that would
+    /// have failed before the fix — the pin was reachable only through
+    /// `HomeDecision::AdoptDeclared`, an unrelated trigger.
+    #[test]
+    fn a_changed_routing_knob_is_adopted_regardless_of_what_the_home_did() {
+        assert_eq!(
+            decide_routing_refresh(Some(&"2KOldRegistry".to_string()), Some(&"2KNewRegistry".to_string())),
+            RoutingRefresh::Adopt("2KNewRegistry".to_string())
+        );
+        // The ADD case, which is the likelier one in practice: a deployment that
+        // did not declare this knob before now does. A returning profile holds
+        // nothing, so an "only if it changed" test that skipped `None` would
+        // miss exactly the deployments that are adopting the feature.
+        assert_eq!(
+            decide_routing_refresh(None, Some(&900_000u64)),
+            RoutingRefresh::Adopt(900_000u64)
+        );
+    }
+
+    /// **The guard that must NOT be added.** `cfg.name_registry_pin` is only ever
+    /// the deployment's seed; the user's pin lives in the localStorage mirror and
+    /// wins at read time through `pinned_registry`. So refreshing the seed cannot
+    /// overwrite a user's choice — and a well-meaning guard here would instead
+    /// freeze the deployment's own value, which is the `put_if_absent` mistake
+    /// `origins` already paid for once.
+    #[test]
+    fn a_users_registry_pin_still_wins_after_the_seed_refreshes() {
+        let seeded = RegistryPin { peer_id: "2KDeployment".into(), origin: String::new() };
+        let chosen = RegistryPin { peer_id: "2KUserPicked".into(), origin: String::new() };
+        set_active_registry_pin(Some(seeded.clone()));
+        set_user_registry_pin(Some(chosen.clone()));
+        let (in_force, source) = pinned_registry().expect("a pin is in force");
+        assert_eq!(in_force.peer_id, chosen.peer_id);
+        assert_eq!(source, PinSource::User);
+
+        // Now the deployment moves its seed — the refresh this fix performs.
+        // The user's pin is still the one that resolves.
+        set_active_registry_pin(Some(RegistryPin {
+            peer_id: "2KDeploymentMoved".into(),
+            origin: String::new(),
+        }));
+        let (still, source) = pinned_registry().expect("a pin is still in force");
+        assert_eq!(
+            still.peer_id, chosen.peer_id,
+            "the seed refreshing must not disturb the user's pin"
+        );
+        assert_eq!(source, PinSource::User);
+
+        // …and with no user pin, the refreshed seed is what is in force.
+        set_user_registry_pin(None);
+        let (seed, source) = pinned_registry().expect("the seed is in force");
+        assert_eq!(seed.peer_id, "2KDeploymentMoved");
+        assert_eq!(source, PinSource::Deployment);
+        set_active_registry_pin(None);
     }
 
     /// Unmarked (a profile written before provenance existed) reads as the

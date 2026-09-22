@@ -160,6 +160,53 @@ impl PublishLayout {
         }
     }
 
+    /// **Which peer a transport-profile artifact declares itself to be about**,
+    /// or `None` when it does not say.
+    ///
+    /// The endpoint fields answer *where to fetch*; this answers *whose*, and
+    /// they are different questions. [`PublishLayout`] deliberately keeps only
+    /// the first, so this reads the artifact rather than the parsed layout.
+    ///
+    /// **Why it exists.** `transport-profile` is **one artifact per hosting
+    /// scope** while its contents are per-peer, so at an origin serving several
+    /// publishers the last publish wins — and a consumer that follows the
+    /// advertised layout blindly then resolves *the wrong peer's* tree. Measured
+    /// 2026-09-03: after a second publisher published at one origin,
+    /// `publish --verify` on the first reported *"the signed root is not walkable
+    /// — a pinned consumer resolves NOTHING from this tree"*, because
+    /// `DirFetcher` located its manifest through a profile describing the other
+    /// peer.
+    ///
+    /// **`None` is trusted, deliberately.** core-go's profile carries `peer_id`
+    /// and ours does, but a conformant publisher need not — and a profile that
+    /// does not name a peer is not evidence it names a *different* one. Rejecting
+    /// on absence would break reading any implementation that omits it, which is
+    /// a live cross-impl path (`crossimpl_go`). Only a **positive mismatch**
+    /// disqualifies.
+    pub fn profile_peer_id(bytes: &[u8]) -> Option<String> {
+        let outer: entity_ecf::Value = ciborium::from_reader(bytes).ok()?;
+        let data = outer.as_map()?.iter().find_map(|(k, v)| match k {
+            entity_ecf::Value::Text(s) if s == "data" => Some(v),
+            _ => None,
+        })?;
+        let inner_owned: entity_ecf::Value;
+        let map = match data {
+            entity_ecf::Value::Map(_) => data,
+            entity_ecf::Value::Bytes(b) => {
+                inner_owned = ciborium::from_reader(&b[..]).ok()?;
+                &inner_owned
+            }
+            _ => return None,
+        };
+        map.as_map()?
+            .iter()
+            .find_map(|(k, v)| match k {
+                entity_ecf::Value::Text(s) if s == "peer_id" => v.as_text().map(str::to_string),
+                _ => None,
+            })
+            .filter(|p| !p.is_empty())
+    }
+
     /// `{content_url_prefix}/{layout-path}/{hash}`.
     pub fn content_url(&self, h: &Hash) -> String {
         let hex = h.to_hex();
@@ -260,6 +307,30 @@ impl PublishLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A profile says whose it is, and the absent case is trusted on purpose.**
+    ///
+    /// `transport-profile` is one artifact per hosting scope with per-peer
+    /// contents, so at a shared origin the last publish wins and a consumer must
+    /// be able to notice the profile is not about the peer it is reading. Only a
+    /// **positive mismatch** may disqualify: a conformant publisher need not emit
+    /// `peer_id`, and rejecting on absence would break reading one that does not
+    /// (core-go's fixture does emit it, which is why the real one is checked
+    /// here rather than only a synthetic).
+    #[test]
+    fn a_profile_names_the_peer_it_is_about_and_silence_is_not_a_mismatch() {
+        let real = std::fs::read("tests/fixtures/crossimpl-go-site/transport-profile")
+            .expect("the go fixture ships a transport-profile");
+        assert_eq!(
+            PublishLayout::profile_peer_id(&real).as_deref(),
+            Some("2KLv2nhwtPrLFd4BZFQuNK1ujtE74q8cVg7y8cYdcZZ5BL"),
+            "a foreign publisher's profile declares its own peer, and that is the \
+             discriminator a shared hosting scope needs"
+        );
+        // Garbage is silence, not a mismatch — it must not disqualify a layout.
+        assert_eq!(PublishLayout::profile_peer_id(b"not a profile"), None);
+        assert_eq!(PublishLayout::profile_peer_id(&[]), None);
+    }
 
     /// The two arms' advertised manifest locations are **both** conformant and
     /// **not** each other — which is the entire content of the v1.8 MUST.

@@ -12,7 +12,291 @@ downloading the artifact.
 
 ## [Unreleased]
 
-_Nothing yet._
+One theme, which is what a research preview earns the release after its first
+big one: **what happens when a deployment goes wrong.** `0.9.0` could publish a
+site, connect two peers and move a file between them. It could also — these
+observed rather than reasoned about — serve a stale app indefinitely because a
+copy was already on disk, blank the screen for the whole of a slow boot with the
+recovery hatch hidden behind it, and put a returning reader back on the front
+page having silently discarded where they were. And structurally, with no
+incident needed to prove it, a bad service worker could pin a broken build in a
+visitor's browser with no way out that did not involve developer tools — which
+is not an incident but a brick, and is unavailable on the device most stuck
+visitors are holding.
+
+Every one of those is fixed here, and the ones that cannot be prevented now have
+a stated recovery path rather than an implied one. Still a **research preview**.
+
+### Added — recovery, when the deployed build is the problem
+
+- **A bad build has somewhere to fall back to.** `entity-browser builds <DIR>`
+  (or `make builds-manifest`, run automatically by `make site-dist`) retains each
+  published shell at `/builds/<build-id>/index.html` and writes a `/builds.json`
+  listing them. `?build=<id>` boots a retained one. A build is identified by its
+  **bundle hash**, not the commit — two docs-only commits produce byte-identical
+  code and are one build, which is what a rollback target has to mean.
+- **The pin is a lease, not a deed.** A rollback a visitor cannot fall *out* of
+  is a brick with better manners, so it expires on a TTL, clears itself when the
+  live origin stops serving what it rolled away from, and heals via an attempt
+  counter if the build it names is missing — which is the case that matters,
+  because at a 404 none of our code runs to fix anything. The recovery console
+  is exempt from redirection, since it is the surface that can clear a pin.
+- **A last-resort kill switch for a service worker that breaks navigation.**
+  `assets/sw-selfdestruct.js` ships with every build and is registered by
+  nothing; served at `/sw.js` during an incident it unregisters the bad worker
+  and navigates the pages it controls back to a working app. This is the only
+  mechanism that exists — the spec deliberately does not unregister on a failing
+  response, so deleting `sw.js` (404, 410, wrong MIME type) leaves a bad worker
+  installed. Runbook: `docs/RUNBOOK-SERVICE-WORKER-KILL-SWITCH.md`. It is lossy
+  by design: it removes the offline shell and touches no peer data.
+- **The recovery console can now act.** `?systemrecovery=1` previously
+  enumerated service workers and cache storage and could do nothing about
+  either — its printed advice was *"use your browser's developer tools"*, which
+  is not advice on a phone, where a stuck visitor usually is. It has one
+  confirm-gated action, **Reset the cached program**, scoped to the two stores
+  holding app code. It does not touch your entity tree or local storage, and it
+  reports what it observed afterwards rather than what the API returned, so
+  *"there was nothing to remove"* cannot render as *"fixed"*. Its own copy used
+  to tell you that clearing site data *"only removes the cached program"*, which
+  was false and would have destroyed your data; that is corrected.
+- **The console can name your version and who you are pointed at.** It reports
+  the build the profile is running and the publisher it is routed to, separately
+  from who actually publishes the site — the distinction that turns *"the app is
+  broken"* into a diagnosis. This tier runs before the app boots, deliberately,
+  because anything that needs the app to start in order to escape a build that
+  will not start is not a recovery mechanism.
+
+### Added — everything new here is in 30 languages
+
+- **The health checks, the recovery copy and the insecure-origin warning are
+  translated**, so the surfaces you reach when something is wrong speak the same
+  language as the rest of the app. Localization is 30 locales × 769 strings, up
+  from 702.
+- **The insecure-origin warning now names all three things you lose**, not two:
+  it previously mentioned background storage and the camera and omitted the
+  offline shell, which is the one a person actually notices — it is why a phone
+  loading the app from a desktop over plain `http` cannot open it again once the
+  desktop sleeps.
+
+### Added — the app checks its own health
+
+- **A *Problems* card in System Overview**, with three checks: who publishes
+  this site, whether a publisher is still answering, and whether everything
+  finished loading. A check that **could not run** is put in front of you rather
+  than counted as healthy — *"I could not check"* rendering as *"you are fine"*
+  is the failure mode a health surface exists to avoid.
+- **Some findings offer a remedy**, and no remedy is destructive — there is no
+  export path yet, so nothing here may cost you data to repair. A remedy reports
+  what it actually did, including *"nothing was listening"* when the window that
+  would carry out the retry is not open.
+
+### Added — publisher and operator tooling
+
+- **`make fleet-probe`** — one command answers what is deployed across your
+  domains and, critically, whether it can be *fixed*: it checks that every
+  mutable URL (`/`, `/index.html`, `/sw.js`, `/entity-deployment.json`) is served
+  revalidating rather than pinned, which is what decides whether a hotfix can
+  reach anyone. It judges uniformity by bundle hash, printing the commit label
+  beside it rather than as the verdict.
+- **`make serve TLS=1`** serves the dev tree over HTTPS with a locally-trusted
+  certificate. The service-worker and offline tiers only exist on a secure
+  origin, so before this they were not testable off `localhost` at all.
+- **`make serve DIST=<dir>`** now honours the directory you pass it. It silently
+  served `dist/` regardless — including when `make site-dist` printed the
+  `DIST=dist-site` invocation as its own closing advice, so the one command for
+  reviewing the uploadable tree served the wrong one, and the two trees differ in
+  exactly what you would be comparing them for.
+
+### Fixed — boot
+
+- **The screen was blank for the whole of a slow boot, and the escape hatch went
+  down with it.** The loading surface was taken down before the application tier
+  started rather than when something was ready to replace it, so a boot behind a
+  slow or unreachable origin showed nothing at all — with the always-visible
+  *Open System Recovery* hatch, which lives inside that surface, gone at the
+  moment it was needed. The surface now comes down when the replacement is live.
+- **A slow origin no longer holds up the whole boot.** Boot is two phases: local
+  reads happen first and the app's frame loop goes live behind them, and
+  everything depending on the network read happens after, behind a painted page.
+  A phase that never reports back cannot hold the page hostage — a failsafe hands
+  it over regardless. You see exactly one transition, the same one as before.
+- **Network reads on the boot path are bounded.** An origin that accepts a
+  connection and never answers — the case a static file server cannot even
+  simulate — used to hang boot indefinitely. Every boot-path fetch now has a
+  deadline, in both the app and the service worker.
+- **A profile with a local home stopped reading its domain's configuration
+  entirely**, which withheld origins, publisher-change detection and every log
+  line about the document from exactly the profiles most likely to need them. The
+  document is read unconditionally now; only whether it is *adopted* depends on
+  your setting.
+- **"Is there a deployment configuration?" is no longer one answer.** A domain
+  that serves none on purpose, one that answered with a fault, one that is
+  unreachable, and one whose document could not be parsed are four different
+  facts, and the log says which. A 502 is not a deployer choosing to serve no
+  configuration.
+
+### Fixed — your session comes back
+
+- **A reload put you back on the deployment's front page.** Every window read its
+  saved state synchronously at construction — which, in the storage mode the
+  browser build actually ships, reads from a cache that has not filled yet. So a
+  returning reader was silently put back on the build default and shown *"No site
+  manifest at 'demo'"* for a site that was there. Measured on the shipped mode as
+  an intermittent 1-in-3, and on the opt-in Worker mode as every time. All eight
+  affected surfaces now read the durable tree.
+- **A Shell window did not merely forget its state — it overwrote it.** Opening
+  one discarded the persisted working directory, command history and draft.
+  That was data loss rather than lost session state, and unrecoverable after the
+  fact.
+- **Windows now return to their own slots, whatever order you reopen them in.**
+  Window ids restart at 1 each session, so window 2's saved state was whatever
+  window 2 was *last* time — of any type. There is now an index recording which
+  window each saved entity belongs to, and every decoder checks what wrote a slot
+  before adopting it. Previously, measured, the Entity Tree adopted the Knowledge
+  Base's expanded-path list.
+- **A Shell after a reload rendered nothing.** Re-running the last command
+  produced a byte-identical saved entity, and the window was waiting on a change
+  to that entity to redraw — so the output existed and was never painted.
+
+### Fixed — content, publishers and caches
+
+- **A republished app kept serving the old bytes, indefinitely.** Any copy of a
+  publisher's content held on disk was treated as current merely because it was
+  present, so no request was issued and no cache anywhere downstream got a
+  chance to be right. Every foreign artifact now goes through one freshness
+  check, which is a 58-byte pointer fetch in the common case. An origin that
+  cannot be reached leaves the held copy alone — a cache that drops what it
+  cannot re-verify turns an outage into a missing app.
+- **A publisher that changes identity now heals on the next load.** A deployment
+  that re-keys used to leave every stored reference pointing at the retired
+  publisher. The record of a change is also re-checked against the domain and
+  dropped when the domain contradicts it, so an ordinary mistake at the source
+  does not become permanent state in your browser.
+- **A home site you chose was overwritten by the deployment's declaration.** If
+  you picked a cached site from another publisher as your home, the next boot
+  replaced it *and* wrote down a durable record naming your own choice as
+  retired, which then rewrote every stored reference to it. A value the
+  deployment seeded and a value you deliberately chose are byte-identical in
+  storage; they are now marked, and yours wins.
+- **Publishing a second publisher to a domain destroyed the first one's site.**
+  Where several publishers share one domain — told apart by their trees rather
+  than by separate hosting prefixes — each publish cleaned the whole shared area
+  rather than its own part of it, deleting the earlier publisher's signature and
+  its published pages. The tree directory was left behind, so the output still
+  looked right; running the publisher's own `--verify` on the earlier publisher
+  reported that nothing in it could be resolved. A publish now cleans only its
+  own publisher's tree and pages, and never removes shared content — surplus
+  files can be swept later, whereas another publisher's signature cannot be
+  brought back.
+- **Reading one publisher could follow another publisher's address layout.** The
+  small file a publisher ships to describe where its content lives is shared by
+  everyone at the same location, so where two publishers shared one, the second
+  one's description was used to look for the first one's pages — reporting a
+  perfectly intact site as unresolvable. A description that names a different
+  publisher is no longer treated as authoritative; one that names nobody still
+  is, since not every publisher includes it.
+- **Publishing a second peer to a domain erased the first one from that domain's
+  configuration.** A domain can host several publishers, each under its own
+  `--prefix`, and its `/entity-deployment.json` is meant to name all of them.
+  Instead each publish overwrote the file with a single-peer document, so the
+  earlier peer's serving origin vanished and the domain's home site moved to
+  whoever published last — which, for anyone who had already visited, also
+  recorded the previous publisher as *retired* and silently redirected every
+  saved reference to it, while that publisher was alive and serving. Publishing
+  now merges: the home publish owns the domain-level settings, a secondary
+  publish adds only its own entry, and `--set-home` is how you deliberately move
+  a domain's home. A configuration file that cannot be read is left alone rather
+  than replaced.
+- **A deployment that moved its name registry never reached anyone who had
+  already visited.** Two settings a domain publishes for routing — which name
+  registry to trust, and the ceiling this app puts on how long a name binding
+  stays valid — were only re-read when the *publisher's identity* also changed,
+  which is an unrelated event. A deployer who added or moved either one reached
+  first-time visitors and nobody else, indefinitely. Both are now re-read on
+  every load that obtains the domain's configuration. Settings you control —
+  how the app opens, the site posture, and a registry you pinned yourself — are
+  still yours and are still never overwritten.
+- **A withheld app cost nine seconds of waiting before saying so.** The retry
+  ladder treated a publisher's 404 the same as a dropped connection, so an answer
+  that arrived in the first 200 ms was argued with five times. A 404 or 410 is
+  terminal; a 5xx, a timeout or a truncated body is not.
+- **"The site is not here" is four different facts**, and both the warm and cold
+  surfaces now say which — a withdrawn site, a wrong host, an unreachable origin
+  and an origin that faulted previously all produced the same sentence, one of
+  them with advice that could not work.
+- **A Site Browser bound to any peer but the primary one reported every site as
+  unreachable.** The two surfaces that register a site's origin wrote it under
+  the system peer while the reader looked under the peer its window was bound
+  to; `open "Site Browser" @somepeer` reached this today.
+- **One rule now decides which files may be cached forever.** It was written four
+  times, no two the same, while the documentation asserted they could not
+  disagree. Both directions were wrong in the field: one spelling pinned mutable
+  HTML for a year on any site whose source tree is named `content/` (Hugo, Zola
+  and Lektor all are), and the other silently dropped long-lived caching from
+  every prefixed deployment. The rule is self-verifying — a content-addressed
+  path whose directory shards match its own hash — and the two Rust servers, the
+  dev server and the published recipe are all held to one shared vector file.
+
+### Fixed — the service worker
+
+- **A rollback poisoned the offline shell.** The worker cached every navigation
+  under the canonical `/`, which was correct while `/` was the only navigable
+  document. Booting a retained build then overwrote the offline shell with the
+  rolled-back one — and that entry outlived all three of the pin's ways out,
+  since each of them only runs on a load of `/`, which was being served from it.
+  A retained build now caches under its own address, which also makes a pinned
+  build work offline for the first time.
+
+### Known limitations
+
+New in this release, or newly stated:
+
+- **Rollback is partial.** A retained shell runs against the **current** service
+  worker and the current `sw.js` — those are unhashed and the origin serves
+  exactly one of each. So if the defect you are rolling back from lives in the
+  worker or in `sw.js`, rolling back the shell does not escape it. The converse
+  also holds: a change confined to unhashed assets does not produce a new build
+  id, and so is not a distinct rollback slot.
+- **Content is stored once per hosting prefix, not once per domain.** Two
+  publishers sharing an origin do not share the content store, so byte-identical
+  blobs are uploaded and billed under each prefix — measured at 17 of 19 blobs
+  duplicated for two peers publishing the same site set. Content addressing makes
+  sharing safe (a hash is a self-certifying name); the store simply is not global
+  yet.
+- **Recovery from a publisher changing identity covers the domain's home
+  publisher only.** A deployment may host several publishers at one origin. If
+  one of the others changes identity, nothing detects it and stored references to
+  it are not repaired — a deployment configuration can state *who* publishes but
+  has no way to say that one publisher *replaced* another, and guessing from a
+  peer appearing as another disappears would be wrong as often as right. No
+  deployment we publish hosts more than one publisher today, so this is a gap in
+  what the mechanism covers rather than a fault you can currently meet.
+- **Nothing sets a durable build pin yet.** `?build=<id>` is real for an operator
+  or for support walking someone through a recovery, and inert for everyone else;
+  no crash-loop detection arms it automatically.
+- **The desktop app has rollback exposure without rollback machinery.** Its data
+  directory carries no version, and reinstalling the previous installer is
+  ordinary behaviour when someone hits a bug — so an older build can read data a
+  newer one wrote, with no schema floor and no version check. There is no
+  updater to carry anyone forward, which makes the exposure less likely to be met
+  and open-ended once it is.
+- **The desktop app's LAN publishing has no TLS**, so a phone loading the app
+  from `http://<desktop-ip>` is on an insecure origin and loses three things
+  uniformly: service workers (so no offline shell — that browser cannot open the
+  app while the desktop sleeps, even though its data is on the device), OPFS
+  (which degrades to IndexedDB and is not user-visible), and camera access — so
+  the QR scanner, which exists to save you retyping a peer id, is unavailable on
+  precisely the origin that forces the retyping. A self-signed certificate does
+  not fix this: Chrome refuses to register a service worker on a certificate-error
+  origin even after you click through, while Firefox honours a manual exception,
+  so it would work on one engine and not the other.
+- **Automatic checking cannot confirm the 17 Latin-script translations.** Correct
+  German often looks like English, so no mechanical signal separates a genuine
+  translation from a skipped one; the gate covers the 13 non-Latin locales and
+  says so in its own output. Those 17 were translated in the same pass and read
+  by eye. If you find a string in your language that is wrong or still in
+  English, that is worth reporting — it is the one part of the localization we
+  cannot prove.
 
 ## [0.9.0] — 2026-08-24
 
@@ -256,6 +540,12 @@ deployment.
 
 ### Changed
 
+- **`ENTITY_PROFILE` is gone.** The opaque `full` / `tutorial` / `strict-site`
+  build presets are replaced by `ENTITY_STARTUP_SURFACE` (`chrome` / `site` /
+  `window`, plus `ENTITY_STARTUP_WINDOW_TYPE`), which bakes only the cold-boot
+  surface; the granular posture — site mode, whether visitors may create peers, a
+  locked kiosk — is a per-domain `entity-deployment.json` concern rather than
+  something compiled in. Setting `ENTITY_PROFILE` now does nothing.
 - **`make publish` → `make site`** (also `publish-bare` → `site-bare`,
   `publish-serve` → `site-serve`). `publish` is a reserved verb fleet-wide,
   meaning "push a package to its language's native registry" (ADR-0023

@@ -551,6 +551,46 @@ mod tests {
         assert!(stale_against(&BTreeMap::new(), "2KC").is_empty());
     }
 
+    /// **The single-publisher assumption, made visible.**
+    ///
+    /// `stale_against` takes ONE publisher — the home peer — and rule 2 condemns
+    /// every chain that ends anywhere else. A domain that hosts several peers
+    /// (`DeploymentConfig::origins` is a map, and `boot_load` logs
+    /// `hosted_peer_origins` as the multi-tenant signal) therefore has exactly one
+    /// peer whose supersession records can survive a boot.
+    ///
+    /// This is not a live defect today, because the adoption path is the only
+    /// writer and it only ever compares `home_site.peer_id` — so a record keyed on
+    /// a non-home peer is never created in the first place. It is pinned here
+    /// because it is the trap waiting for whoever fixes that: recording a
+    /// non-home re-key WITHOUT widening this predicate produces a record that is
+    /// written on one boot and deleted on the next, forever.
+    #[test]
+    fn a_record_for_a_peer_that_is_not_the_home_publisher_is_dropped() {
+        // The domain hosts two publishers: 2KHome (home) and 2KOther. 2KOther
+        // re-keys to 2KOtherNew. The record is correct and the domain agrees
+        // with it — and it is condemned anyway, because rule 2 measures every
+        // chain against the home peer alone.
+        let m = map_of(&[("2KOther", "2KOtherNew")]);
+        assert_eq!(
+            stale_against(&m, "2KHome"),
+            vec!["2KOther".to_string()],
+            "rule 2 is single-publisher: a true record about a non-home peer is stale"
+        );
+    }
+
+    /// The same shape one step on: even a chain that is internally consistent and
+    /// ends at a peer the domain still hosts is dropped. Pins that the predicate
+    /// is not "ends at a peer this domain publishes" but the narrower "ends at
+    /// THE home peer" — the distinction a multi-publisher fix has to cross.
+    #[test]
+    fn a_non_home_chain_is_dropped_however_well_formed_it_is() {
+        let m = map_of(&[("2KA", "2KB"), ("2KB", "2KOtherNew")]);
+        let mut stale = stale_against(&m, "2KHome");
+        stale.sort();
+        assert_eq!(stale, vec!["2KA".to_string(), "2KB".to_string()]);
+    }
+
     /// A chain longer than the bound must still terminate and return a peer,
     /// never panic or spin.
     #[test]
