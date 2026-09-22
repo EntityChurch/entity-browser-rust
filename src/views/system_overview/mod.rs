@@ -23,6 +23,30 @@ use crate::window::WindowId;
 use crate::window_watch::WindowWatch;
 use model::SystemOverviewModel;
 
+/// Re-run the health checks. Raised by the *Problems* card's own button.
+pub const HEALTH_RECHECK_EVENT: &str = "health_recheck";
+/// Apply a remedy. `value` is the remedy's stable key
+/// ([`crate::doctor::Remedy::key`]) — resolved through `Remedy::from_key`,
+/// which returns `None` for anything unrecognised rather than guessing.
+pub const HEALTH_REMEDY_EVENT: &str = "health_remedy";
+
+/// The *Problems* section's state, held by the window because it is a
+/// point-in-time answer rather than a projection of the tree.
+///
+/// **Deliberately not persisted.** It is derived entirely from things that are
+/// already durable (the session config) or already session-scoped (the refresh
+/// ledger, the deployment document), so writing it down would create a second
+/// copy of a fact we can re-derive — and a durable record of a remote
+/// assertion carries an obligation to re-check it (AP30). Re-deriving costs one
+/// bounded read.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct HealthState {
+    ran: bool,
+    findings: Vec<crate::doctor::Finding>,
+    remedy_message: Option<String>,
+}
+
 pub struct SystemOverviewWindow {
     // Used only on the WASM render path; native sees it as unused.
     #[allow(dead_code)]
@@ -32,6 +56,15 @@ pub struct SystemOverviewWindow {
     /// This instance's id — window-local button events (`Clear`) carry it so
     /// `handle_action` can ignore events meant for other windows.
     window_id: WindowId,
+    /// The health checks' latest answer.
+    #[cfg(target_arch = "wasm32")]
+    health: std::rc::Rc<std::cell::RefCell<HealthState>>,
+    /// Set when the checks should be (re-)run on the next render. True at open,
+    /// and again on the section's own button. Same one-shot stash-then-mark
+    /// shape as `StorageWindow`'s disk-estimate probe — a guard against
+    /// re-spawning the probe every frame.
+    #[cfg(target_arch = "wasm32")]
+    needs_health: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl SystemOverviewWindow {
@@ -41,6 +74,10 @@ impl SystemOverviewWindow {
             watch: WindowWatch::new(),
             peer_id,
             window_id,
+            #[cfg(target_arch = "wasm32")]
+            health: std::rc::Rc::new(std::cell::RefCell::new(HealthState::default())),
+            #[cfg(target_arch = "wasm32")]
+            needs_health: std::rc::Rc::new(std::cell::Cell::new(true)),
         }
     }
 
@@ -193,6 +230,49 @@ impl WindowView for SystemOverviewWindow {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _ = value;
             }
+            HEALTH_RECHECK_EVENT => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // Clear the previous remedy note: it described the last
+                    // action, and leaving it above a fresh set of findings
+                    // would read as a report on *these* results.
+                    self.health.borrow_mut().remedy_message = None;
+                    self.needs_health.set(true);
+                    self.watch.mark_dirty();
+                }
+            }
+            HEALTH_REMEDY_EVENT => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // `from_key` returns `None` for anything unrecognised. A
+                    // surface that fell back to "the only remedy we have" would
+                    // run a repair nobody asked for the day there are two.
+                    match crate::doctor::Remedy::from_key(value) {
+                        Some(remedy) => {
+                            let outcome = remedy.apply();
+                            let mut h = self.health.borrow_mut();
+                            h.remedy_message = Some(outcome.message().to_string());
+                            // Do NOT re-run the checks here. The retry is
+                            // asynchronous — re-reading the ledger this instant
+                            // would report the state *before* the repair had a
+                            // chance, i.e. "still broken", which is both wrong
+                            // and the most discouraging thing to show someone
+                            // who has just pressed a fix. The section repaints
+                            // when the retry lands, and the user can press
+                            // "Check again".
+                        }
+                        None => {
+                            tracing::warn!(
+                                requested = %value,
+                                "health: ignoring an unknown remedy key"
+                            );
+                        }
+                    }
+                    self.watch.mark_dirty();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = value;
+            }
             "sb_set_port_mapping" => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -244,6 +324,60 @@ impl WindowView for SystemOverviewWindow {
             }
         }
 
-        crate::dom::system_overview::render(container, &output, &overview, ctx);
+        // Run the health checks if one is pending (window-open, or the section's
+        // own button). One-shot: the flag is cleared before the spawn, so a
+        // repaint while the probe is in flight cannot start a second one.
+        //
+        // **The config is read with `get_entity_async`, not the sync
+        // `get_entity`** (AP41): the sync read answers from the per-prefix cache
+        // mirror, which is empty on the Worker arm and races the store on the
+        // Direct one. A health check that read a stale or absent config would
+        // compare the *build default* against the domain and announce a
+        // divergence that does not exist — the diagnostic manufacturing the
+        // fault it is looking for.
+        if self.needs_health.replace(false) {
+            let cfg_fut = peers.get_entity_async(
+                &self.peer_id,
+                &crate::session_config::state_path(&self.peer_id),
+            );
+            let slot = self.health.clone();
+            let flag = self.watch.flag();
+            wasm_bindgen_futures::spawn_local(async move {
+                // What this profile believes. An errored or absent read is
+                // `None`, which check 1 reports as "nothing to check" — never
+                // as agreement (AP30 corollary: an errored round-trip is not an
+                // answer).
+                let believed = match cfg_fut.await {
+                    Ok(Some(e)) => {
+                        let home = crate::session_config::SessionConfig::from_entity(&e).home_site;
+                        Some(home.peer_id).filter(|p| !p.is_empty())
+                    }
+                    _ => None,
+                };
+                // What the domain says. Bounded by D23 — this is the same
+                // reader boot uses, deadline and all, so a black-holing origin
+                // cannot wedge the window that is supposed to explain it.
+                let doc = crate::deployment_config::read_document().await;
+                let ledger = crate::refresh_ledger::snapshot();
+
+                let findings = crate::doctor::run_checks(believed.as_deref(), &doc, &ledger);
+                let mut h = slot.borrow_mut();
+                h.findings = findings;
+                h.ran = true;
+                drop(h);
+                flag.mark();
+            });
+        }
+
+        let health = {
+            let h = self.health.borrow();
+            crate::views::system_overview::output::HealthView {
+                ran: h.ran,
+                findings: h.findings.clone(),
+                remedy_message: h.remedy_message.clone(),
+            }
+        };
+
+        crate::dom::system_overview::render(container, &output, &overview, &health, ctx);
     }
 }

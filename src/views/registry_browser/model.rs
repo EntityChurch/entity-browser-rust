@@ -164,8 +164,12 @@ impl RegistryBrowserModel {
             sessions: crate::content_site::session_cache::len(),
             browser_only: cfg!(not(target_arch = "wasm32")),
             // The store `open_in_site_browser` writes into, and so the only one
-            // an opened Site Browser can read those sites from.
-            local_peer: peers.system_peer_id().to_string(),
+            // an opened Site Browser can read those sites from. **One accessor,
+            // not a second `system_peer_id()` call** — the write and the window
+            // binding agreeing is the whole correctness argument here, and two
+            // independent expressions that happen to be equal is a coincidence
+            // a future edit gets to break silently (AP44).
+            local_peer: Self::reader_peer(peers),
             pin_error: self.pin_error.borrow().clone(),
         }
     }
@@ -336,9 +340,23 @@ impl RegistryBrowserModel {
     ///
     /// Fire-and-forget and manifest-pinned, as at boot: a publisher that is down
     /// leaves the rail empty rather than blocking the open.
+    /// The peer whose store an *Open in Site Browser* writes into **and** which
+    /// the spawned window is bound to. Both must be this one value; see
+    /// `local_peer` on the output, and
+    /// `the_open_writes_into_the_same_store_the_spawned_window_reads`.
+    ///
+    /// It is the **system** peer, not the target: the sites are cached in our
+    /// tree, not the publisher's. A window bound to any other local peer reads
+    /// its own empty registry — which is real, and is what
+    /// [`crate::content_site::origins::mirror_origins`] repairs at spawn for the
+    /// windows that get bound elsewhere.
+    fn reader_peer(peers: &Peers) -> String {
+        peers.system_peer_id().to_string()
+    }
+
     pub fn open_in_site_browser(&self, peers: &Peers, target: &ResolvedName) -> Option<String> {
         let origin = target.origin.clone()?;
-        let system_pid = peers.system_peer_id().to_string();
+        let system_pid = Self::reader_peer(peers);
         crate::content_site::origins::set_origin(peers, &system_pid, &target.peer_id, &origin);
         crate::content_site::discovery::warm_peer_sites(
             peers,
@@ -483,5 +501,44 @@ mod tests {
         assert_eq!(m.pinned().map(|p| p.origin), Some(String::new()));
 
         crate::session_config::set_user_registry_pin(None);
+    }
+
+    /// **The whole correctness argument of *Open in Site Browser*, in one
+    /// assertion.** The click writes the resolved origin into one peer's store
+    /// and binds the new window to another value; if those two ever name
+    /// different peers, the window opens onto an empty registry and reports a
+    /// site that resolved perfectly as unreachable — measured once already, as
+    /// `the_rail_reads_my_store_so_a_foreign_bound_window_sees_nothing`.
+    ///
+    /// They agree today because both come from `reader_peer`. This asserts the
+    /// *observable* pair — the origin actually landed in the store the output
+    /// names — so it survives either side being rewritten, which a test
+    /// comparing two calls to `system_peer_id()` would not.
+    ///
+    /// **Falsified:** hard-coding `local_peer` to another peer reds it.
+    #[test]
+    fn the_open_writes_into_the_same_store_the_spawned_window_reads() {
+        let peers = Peers::new_direct();
+        let m = RegistryBrowserModel::new(1);
+        let target = ResolvedName {
+            name: "pub.example".to_string(),
+            peer_id: "PUBPEER".to_string(),
+            origin: Some("https://pub.example".to_string()),
+            association_committed: true,
+            name_checked: true,
+            revocation_checked: true,
+            expires_at_ms: 0,
+            clamped: None,
+        };
+
+        assert!(m.open_in_site_browser(&peers, &target).is_some(), "the open proceeds");
+
+        let bound_to = m.render_output(&peers).local_peer;
+        assert_eq!(
+            crate::content_site::origins::get_origin(&peers, &bound_to, "PUBPEER").as_deref(),
+            Some("https://pub.example"),
+            "the window is bound to a peer whose registry does not carry the origin \
+             the click just resolved — the site will report as unreachable"
+        );
     }
 }

@@ -6,6 +6,16 @@
 //! `source_window` dropped. Entity type `app/state/selection` per
 //! the guide §5 slot table.
 //!
+//! **§5.4 is five numbered rules, not one schema.** Which line answers each,
+//! because being clean on emit is not being conformant and reading it that way
+//! cost us two months (AP45): rule 1/2 (emit-side MUST NOT / MUST) — `to_entity`,
+//! gated by `the_legacy_gate_is_scoped_to_the_selection_type_not_to_the_field_name`
+//! decoding our own output; rule 3 (read-side MUST log a violation) —
+//! [`legacy_field_violation`] and [`Selection::decode`]; rule 4 (never re-emit on
+//! the round trip) — holds by construction, since a legacy field never reaches
+//! [`Selection`], pinned by `a_legacy_field_is_not_re_emitted_on_the_round_trip`;
+//! rule 5 (post-publication tolerance) — deferred upstream, nothing owed here.
+//!
 //! **Two slots, same schema.** A panel that publishes a navigate /
 //! select event writes both:
 //! - **Per-panel:** `{peer_id}/app/{aid}/workspace/panels/{panel_id}/selection`
@@ -27,6 +37,50 @@
 #![allow(dead_code)]
 
 use entity_entity::Entity;
+
+/// Entity type of both selection slots (guide §5.4).
+///
+/// A constant because [`legacy_field_violation`] is **scoped to this type**, not
+/// to the field names it looks for: `content_type` is a retired spelling here
+/// and a *required* one on `app/state/window-index`, which §4.2a calls out by
+/// name. A gate written on the field alone would fire on the window index.
+pub const SELECTION_TYPE: &str = "app/state/selection";
+
+/// Why a field in a received `app/state/selection` payload is a violation, or
+/// `None` if it is merely unknown.
+///
+/// **The `None` arm is load-bearing.** V7 §2.6 open-types means genuinely
+/// unknown fields MUST still be skipped silently — this must stay a small,
+/// named set plus the one namespace §5.4 closes, never "anything I don't
+/// recognize".
+///
+/// - The three named spellings are §5.4 **rule 3**, the read-side MUST that
+///   makes silent tolerance non-conformant.
+/// - Any other `source_*` is a §5.4 **rule 1** violation (emit-side MUST NOT,
+///   stated for the whole prefix) that we can see from the read side. Reporting
+///   it is a superset of rule 3, and it is the case rule 3's fixed list cannot
+///   catch: `source_panel_id` is exactly the emitter bug this exists to surface.
+fn legacy_field_violation(name: &str) -> Option<&'static str> {
+    match name {
+        "source_window" | "source_panel" | "content_type" => {
+            Some("§5.4 rule 3 — retired field; the emitter is non-conformant")
+        }
+        _ if name.starts_with("source_") => {
+            Some("§5.4 rule 1 — no `source_*` field may be emitted on this slot")
+        }
+        _ => None,
+    }
+}
+
+/// One legacy field found in a received selection payload, and the rule it
+/// violates. Carries the rule text so the WARN line names *which* MUST was
+/// broken — "retired field" and "no `source_*` at all" are two different
+/// messages to the person who has to go fix the emitter (AP40).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyField {
+    pub name: String,
+    pub rule: &'static str,
+}
 
 /// One selection record. Stored as CBOR at the per-panel and
 /// app-aggregate slots. Optional fields are omitted from the CBOR map
@@ -66,14 +120,55 @@ impl Selection {
     /// Decode from an entity body. Tolerant of records missing
     /// optional fields. Returns a default `Selection` (empty path,
     /// zero updated_at) when the CBOR shape is unrecognized.
+    ///
+    /// # Legacy fields are reported, not tolerated silently — §5.4 rule 3
+    ///
+    /// A retired `source_window` / `source_panel` / `content_type` logs a WARN
+    /// and is then dropped. We take the MUST and decline the MAY: rule 3 permits
+    /// refusing such an entity outright, but refusing would turn one
+    /// non-conformant emitter into a dead co-orientation surface for the reader,
+    /// and the reader is not who is wrong. The field never reaches [`Selection`],
+    /// so rule 4 (never re-emit on the round trip) holds by construction rather
+    /// than by a second rule someone has to remember — AP44.
+    ///
+    /// **A stated bound: this logs once per decode, not once per offending
+    /// entity.** `consume_from_source` decodes on every render pass, so a legacy
+    /// entity parked in a slot warns repeatedly. That is deliberate — §5.4's
+    /// stated reason for the rule is that *"silent tolerance hides
+    /// non-conformant emitters that should be fixed"*, so the noise is the
+    /// point, and de-duplicating would need per-call-site state this pure
+    /// decoder has no business holding.
     pub fn from_entity(entity: &Entity) -> Self {
+        let (sel, violations) = Self::decode(entity);
+        for v in &violations {
+            tracing::warn!(
+                entity_type = %entity.entity_type,
+                field = %v.name,
+                rule = %v.rule,
+                "legacy field in a received selection entity — dropping it, but the \
+                 emitter needs fixing"
+            );
+        }
+        sel
+    }
+
+    /// The decode itself, with the violations returned rather than logged.
+    ///
+    /// Split out so a native test can assert **what gets reported**, not merely
+    /// that the offending field failed to land in the struct — the second is
+    /// also true of doing nothing at all. AP44: the predicate is easy to keep
+    /// right and the *wiring* is what decays, so the test has to reach the
+    /// wiring, and with no `tracing-subscriber` in this crate's dev-deps a
+    /// returned value is how it reaches it.
+    pub fn decode(entity: &Entity) -> (Self, Vec<LegacyField>) {
+        let mut violations = Vec::new();
         let value: ciborium::Value = match ciborium::from_reader(entity.data.as_slice()) {
             Ok(v) => v,
-            Err(_) => return Self::default(),
+            Err(_) => return (Self::default(), violations),
         };
         let map = match value.as_map() {
             Some(m) => m,
-            None => return Self::default(),
+            None => return (Self::default(), violations),
         };
         let mut sel = Self::default();
         for (k, v) in map {
@@ -100,10 +195,23 @@ impl Selection {
                 Some("updated_at") => {
                     sel.updated_at = v.as_integer().and_then(|i| u64::try_from(i).ok()).unwrap_or(0);
                 }
+                // Scoped to the selection type, never to the field name — see
+                // `legacy_field_violation`. Anything else falls through to the
+                // silent skip V7 open-types requires. The field is *not* kept:
+                // that is rule 4 (never re-emit on the round trip) holding by
+                // construction.
+                Some(name) if entity.entity_type == SELECTION_TYPE => {
+                    if let Some(rule) = legacy_field_violation(name) {
+                        violations.push(LegacyField {
+                            name: name.to_string(),
+                            rule,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
-        sel
+        (sel, violations)
     }
 
     /// Encode to an entity body. Optional fields omitted when
@@ -131,7 +239,7 @@ impl Selection {
             entity_ecf::Value::Integer(self.updated_at.into()),
         ));
         let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(pairs));
-        Entity::new("app/state/selection", data).unwrap()
+        Entity::new(SELECTION_TYPE, data).unwrap()
     }
 }
 
@@ -255,28 +363,113 @@ mod tests {
         assert_eq!(decoded, original);
     }
 
+    fn selection_entity(pairs: Vec<(&str, entity_ecf::Value)>) -> Entity {
+        typed_entity(SELECTION_TYPE, pairs)
+    }
+
+    fn typed_entity(ty: &str, pairs: Vec<(&str, entity_ecf::Value)>) -> Entity {
+        let pairs: Vec<(entity_ecf::Value, entity_ecf::Value)> = pairs
+            .into_iter()
+            .map(|(k, v)| (entity_ecf::Value::Text(k.into()), v))
+            .collect();
+        Entity::new(ty, entity_ecf::to_ecf(&entity_ecf::Value::Map(pairs))).unwrap()
+    }
+
+    /// V7 §2.6 open-types: a field we simply do not know is skipped **without a
+    /// word**. This is the half §5.4 rule 3 must not swallow — the previous
+    /// single test covered this and the legacy case together, which is why the
+    /// silence read as intentional for two months.
     #[test]
-    fn from_entity_tolerates_unknown_fields() {
-        // Build a CBOR map with extra fields that should be ignored
-        // (legacy `paths[]`, `source_window`, future additions).
-        let pairs: Vec<(entity_ecf::Value, entity_ecf::Value)> = vec![
+    fn from_entity_skips_genuinely_unknown_fields_silently() {
+        let entity = selection_entity(vec![
+            ("path", entity_ecf::text("/p/y")),
+            // `paths[]` is in §5.4's own schema and we do not consume it;
+            // `screen_id` is a plausible future addition. Neither is legacy.
             (
-                entity_ecf::Value::Text("path".into()),
-                entity_ecf::text("/p/y"),
-            ),
-            (
-                entity_ecf::Value::Text("source_window".into()),
-                entity_ecf::Value::Integer(7.into()),
-            ),
-            (
-                entity_ecf::Value::Text("paths".into()),
+                "paths",
                 entity_ecf::Value::Array(vec![entity_ecf::text("/p/y"), entity_ecf::text("/p/z")]),
             ),
-        ];
-        let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(pairs));
-        let entity = Entity::new("app/state/selection", data).unwrap();
-        let decoded = Selection::from_entity(&entity);
+            ("screen_id", entity_ecf::text("main")),
+        ]);
+        let (decoded, violations) = Selection::decode(&entity);
         assert_eq!(decoded.path, "/p/y");
-        // Other fields default.
+        assert!(
+            violations.is_empty(),
+            "an unknown field is not a violation — reporting it would make the \
+             WARN worthless as a signal: {violations:?}"
+        );
+    }
+
+    /// §5.4 rule 3: the three retired spellings are **reported**, not tolerated
+    /// silently. Asserts the report, not only that the field failed to land —
+    /// doing nothing at all also satisfies the second.
+    #[test]
+    fn from_entity_reports_every_retired_field_rather_than_tolerating_it() {
+        for field in ["source_window", "source_panel", "content_type"] {
+            let entity = selection_entity(vec![
+                ("path", entity_ecf::text("/p/y")),
+                (field, entity_ecf::text("whatever")),
+            ]);
+            let (decoded, violations) = Selection::decode(&entity);
+            assert_eq!(
+                violations.len(),
+                1,
+                "{field} is retired by §5.4 and silent tolerance is NON-CONFORMANT"
+            );
+            assert_eq!(violations[0].name, field);
+            assert!(violations[0].rule.contains("rule 3"));
+            assert_eq!(decoded.path, "/p/y", "the rest of the record still decodes");
+        }
+    }
+
+    /// §5.4 rule 1 closes the whole `source_*` prefix, so a spelling outside
+    /// rule 3's fixed list is still a violation we can see from the read side.
+    /// This is the case a three-name allowlist cannot catch.
+    #[test]
+    fn an_unlisted_source_field_is_still_reported_under_rule_one() {
+        let entity = selection_entity(vec![("source_panel_id", entity_ecf::text("7"))]);
+        let (_, violations) = Selection::decode(&entity);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].rule.contains("rule 1"));
+    }
+
+    /// **The trap §4.2a names by hand.** `content_type` is retired on
+    /// `app/state/selection` and *required* on `app/state/window-index`. The
+    /// gate is scoped to the type, so our own ruled index schema does not trip
+    /// it — if this ever fails, the gate was written on the field name.
+    #[test]
+    fn the_legacy_gate_is_scoped_to_the_selection_type_not_to_the_field_name() {
+        let index_row = typed_entity(
+            crate::window_index::INDEX_TYPE,
+            vec![("content_type", entity_ecf::text("Shell"))],
+        );
+        let (_, violations) = Selection::decode(&index_row);
+        assert!(
+            violations.is_empty(),
+            "`content_type` is required on the window index; only the selection \
+             slot retired it: {violations:?}"
+        );
+
+        // And the round trip our own encoder produces is clean, which is the
+        // emit-side MUST (rule 1/2) restated as a test.
+        let (_, own) = Selection::decode(&Selection::entity("/p/x", "peer").to_entity());
+        assert!(own.is_empty(), "we emit a conformant payload: {own:?}");
+    }
+
+    /// §5.4 rule 4 — a reader that loads a legacy entity and re-publishes MUST
+    /// NOT re-emit the legacy field. Holds by construction here (the field never
+    /// reaches `Selection`), and this pins that it stays that way.
+    #[test]
+    fn a_legacy_field_is_not_re_emitted_on_the_round_trip() {
+        let entity = selection_entity(vec![
+            ("path", entity_ecf::text("/p/y")),
+            ("source_window", entity_ecf::Value::Integer(7.into())),
+        ]);
+        let re_emitted = Selection::from_entity(&entity).to_entity();
+        let (_, violations) = Selection::decode(&re_emitted);
+        assert!(
+            violations.is_empty(),
+            "we re-emitted a field §5.4 retired: {violations:?}"
+        );
     }
 }

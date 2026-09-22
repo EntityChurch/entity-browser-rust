@@ -37,7 +37,8 @@
 //!    id, so [`crate::app_paths::window_state_path`] lands on its own state
 //!    whatever order the user opens things in. This is the indirection that
 //!    gets what type-scoping the path would have got, **without touching a
-//!    cosigned MUST**.
+//!    cosigned MUST** — though see the correction below: the MUST is narrower than
+//!    this once claimed, and the withdrawal stands on design grounds instead.
 //! 2. **A floor for `next_id`.** Fresh ids are allocated above every id the
 //!    index knows, so an unclaimed window can never land on a stranger's slot.
 //! 3. **An exact sweep.** State whose id is in neither the index nor a claim is
@@ -66,13 +67,49 @@
 //! (`app_paths::roster_prefix`, `system/roster/`), which is a different durable
 //! list of a different thing.
 //!
-//! # Type name
+//! # Corrected 2026-09-01 by arch's ruling (`bd8f463`, `ROUTING-2026-08-31-n`)
 //!
-//! `app/entity-browser/window-index` — app-internal per the workbench guide
-//! §4.1.1, *not* `app/state/...`, because no cross-impl schema for this exists
-//! yet. If arch takes the proposal this feeds, §4.1.1's own type-name promotion
-//! path is how it becomes portable. **We do not get to write `app/state/` for
-//! something one impl invented this week.**
+//! **The "cosigned MUST" above was an overclaim.** §1's MUST is the
+//! `app/{app-id}/workspace/...` **prefix**; the segments beneath it are not
+//! closed — §3.1 blesses two sub-shapes and workbench-go runs two more without
+//! objection. The guide's §3 now says so outright. Re-keying the path is still
+//! the wrong move, on **design** grounds: it does not solve two windows of the
+//! same type (the ordinal moves one segment inward), it duplicates into a
+//! per-app path what `entity_type` already carries (two sources of truth that
+//! can disagree — exactly what §4.1.1's split prevents), and it breaks the one
+//! thing §1 *does* pin, since `window_id` would no longer locate a window's
+//! state. Recorded because **a design withdrawn for a reason that does not hold
+//! is one a later session reopens, correctly, and gets wrong.**
+//!
+//! # Type name and wire schema
+//!
+//! `app/state/window-index`, and the encoded map is
+//! `windows: [ { id, content_type, peer_id } ]` — **the ruled cross-impl
+//! schema**, guide §4.2a. This shipped first (on `dev` only) as the app-internal
+//! `app/entity-browser/window-index` with `type` / `peer` map keys, because no
+//! cross-impl schema for it existed yet; arch ruled the proposal this module
+//! feeds, landed §4.2a from our schema, and the promotion is §4.1.1's own path.
+//! Holding the app-internal name until a schema existed was the right call.
+//!
+//! **The Rust struct field names stay ours** ([`WindowIndexEntry::type_name`]) —
+//! the ruling is about the encoded map, and the map keys are snake per
+//! `STYLE-NAMING-CONVENTIONS` §2 (kebab is the namespace axis, snake is the
+//! data-structure-key axis).
+//!
+//! **No compatibility read for the old name, deliberately.** A `dev` profile
+//! carrying one decodes as `None` → [`IndexLoad::Malformed`] → **claims nothing
+//! and sweeps nothing**, which is precisely the safe arm, and the next frame's
+//! witness write replaces it. Self-healing by construction; a compatibility read
+//! would be a durable record of a transient fact.
+//!
+//! # `content_type` means something else on `app/state/selection`
+//!
+//! On this slot `content_type` is **required** and names the window's own
+//! content type. On `app/state/selection` the same spelling is a **retired**
+//! source-attribution field that §5.4 rule 3 makes us log a violation for. Both
+//! are true at once, which is why [`crate::selection`]'s legacy gate is scoped
+//! to the selection type rather than to the field name — see §4.2a's own
+//! callout, and the test of that name there.
 //!
 //! [AP30, AP40, AP41, AP42, AP44, D13, D16, `docs/SPEC-AMBIGUITIES.md` §1,
 //!  `docs/plans/DESIGN-WINDOW-STATE-LIFECYCLE-AND-SESSION-RESUMPTION.md`]
@@ -84,13 +121,24 @@ use entity_entity::Entity;
 use crate::peers::Peers;
 use crate::window::WindowId;
 
-/// Entity type of the window index.
+/// Entity type of the window index — the ruled cross-impl name (guide §4.2a).
 ///
-/// App-internal (`app/{app-id}/{type}`), not `app/state/{type}` — see the module
-/// docs. Checked on decode: this path is not a window-state path, so AP42's
-/// reuse hazard does not reach it, but a decoder that trusts its path is the
-/// habit that produced AP42 in the first place.
-pub const INDEX_TYPE: &str = "app/entity-browser/window-index";
+/// Checked on decode: this path is not a window-state path, so AP42's reuse
+/// hazard does not reach it, but a decoder that trusts its path is the habit
+/// that produced AP42 in the first place.
+pub const INDEX_TYPE: &str = "app/state/window-index";
+
+/// The three encoded map keys of one `windows[]` row, per guide §4.2a.
+///
+/// Named as constants rather than spelled inline because they are a
+/// **cross-impl** contract now, not an internal encoding choice — and because
+/// `the_encoded_map_uses_the_ruled_schema_field_names` pins them against the
+/// guide. `KEY_CONTENT_TYPE` is the field the module docs warn is a retired
+/// spelling on `app/state/selection` and a required one here.
+const KEY_ID: &str = "id";
+const KEY_CONTENT_TYPE: &str = "content_type";
+const KEY_PEER_ID: &str = "peer_id";
+const KEY_WINDOWS: &str = "windows";
 
 /// One live window, as the durable record sees it.
 ///
@@ -128,7 +176,7 @@ impl WindowIndex {
         let map = value.as_map()?;
         let mut entries = Vec::new();
         for (k, v) in map {
-            if k.as_text() != Some("windows") {
+            if k.as_text() != Some(KEY_WINDOWS) {
                 continue;
             }
             let arr = v.as_array()?;
@@ -143,9 +191,11 @@ impl WindowIndex {
                 let mut peer_id: Option<String> = None;
                 for (fk, fv) in fields {
                     match fk.as_text() {
-                        Some("id") => id = fv.as_integer().and_then(|i| WindowId::try_from(i).ok()),
-                        Some("type") => type_name = fv.as_text().map(str::to_string),
-                        Some("peer") => peer_id = fv.as_text().map(str::to_string),
+                        Some(KEY_ID) => {
+                            id = fv.as_integer().and_then(|i| WindowId::try_from(i).ok())
+                        }
+                        Some(KEY_CONTENT_TYPE) => type_name = fv.as_text().map(str::to_string),
+                        Some(KEY_PEER_ID) => peer_id = fv.as_text().map(str::to_string),
                         _ => {}
                     }
                 }
@@ -169,22 +219,22 @@ impl WindowIndex {
             .map(|e| {
                 entity_ecf::Value::Map(vec![
                     (
-                        entity_ecf::Value::Text("id".into()),
+                        entity_ecf::Value::Text(KEY_ID.into()),
                         entity_ecf::Value::Integer(e.id.into()),
                     ),
                     (
-                        entity_ecf::Value::Text("type".into()),
+                        entity_ecf::Value::Text(KEY_CONTENT_TYPE.into()),
                         entity_ecf::text(&e.type_name),
                     ),
                     (
-                        entity_ecf::Value::Text("peer".into()),
+                        entity_ecf::Value::Text(KEY_PEER_ID.into()),
                         entity_ecf::text(&e.peer_id),
                     ),
                 ])
             })
             .collect();
         let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![(
-            entity_ecf::Value::Text("windows".into()),
+            entity_ecf::Value::Text(KEY_WINDOWS.into()),
             entity_ecf::Value::Array(rows),
         )]));
         Entity::new(INDEX_TYPE, data).expect("window index entity is well-formed")
@@ -507,6 +557,75 @@ mod tests {
         assert!(decoded.entries.is_empty());
     }
 
+    /// The cross-impl contract, pinned against guide §4.2a by **literal**, not
+    /// by the module's own constants — a test written in terms of `KEY_*` would
+    /// follow any rename we made and could never catch one. This is the whole
+    /// enforcement point for the ruled schema: type name, map key, row keys.
+    #[test]
+    fn the_encoded_map_uses_the_ruled_schema_field_names() {
+        let entity = index(vec![entry(3, "Shell", "PEER1")]).to_entity();
+        assert_eq!(entity.entity_type, "app/state/window-index");
+
+        let value: ciborium::Value =
+            ciborium::from_reader(entity.data.as_slice()).expect("decodes as CBOR");
+        let map = value.as_map().expect("is a map");
+        let keys: Vec<&str> = map.iter().filter_map(|(k, _)| k.as_text()).collect();
+        assert_eq!(keys, vec!["windows"], "§4.2a names the array `windows`");
+
+        let rows = map[0].1.as_array().expect("windows is an array");
+        let row = rows[0].as_map().expect("a row is a map");
+        // A **set**, not a sequence: `to_ecf` canonicalizes map key order
+        // (length, then lexical), so `peer_id` lands before `content_type` and
+        // the encoder does not get a say. Asserting the order would pin the
+        // serializer's rule, not §4.2a's schema.
+        let row_keys: std::collections::BTreeSet<&str> =
+            row.iter().filter_map(|(k, _)| k.as_text()).collect();
+        assert_eq!(
+            row_keys,
+            ["content_type", "id", "peer_id"].into_iter().collect(),
+            "§4.2a's row is {{ id, content_type, peer_id }} — `type`/`peer` were \
+             the pre-ruling spelling and must not come back"
+        );
+    }
+
+    /// The migration path, asserted rather than asserted-in-prose: the shape
+    /// that shipped on `dev` before the ruling decodes as `None` → `Malformed`
+    /// → claims nothing, sweeps nothing. **This is why no compatibility read is
+    /// owed** — the safe arm is already where an old profile lands, and the next
+    /// witness write replaces it.
+    #[test]
+    fn the_pre_ruling_shape_lands_on_the_safe_arm_rather_than_needing_a_migration() {
+        let data = entity_ecf::to_ecf(&entity_ecf::Value::Map(vec![(
+            entity_ecf::Value::Text("windows".into()),
+            entity_ecf::Value::Array(vec![entity_ecf::Value::Map(vec![
+                (
+                    entity_ecf::Value::Text("id".into()),
+                    entity_ecf::Value::Integer(1i64.into()),
+                ),
+                (
+                    entity_ecf::Value::Text("type".into()),
+                    entity_ecf::text("Shell"),
+                ),
+                (
+                    entity_ecf::Value::Text("peer".into()),
+                    entity_ecf::text("PEER1"),
+                ),
+            ])]),
+        )]));
+        let old_type = Entity::new("app/entity-browser/window-index", data.clone())
+            .expect("well-formed");
+        assert!(
+            WindowIndex::from_entity(&old_type).is_none(),
+            "the old type name is not ours to decode"
+        );
+
+        // And the type guard is not the only thing standing here: even carried
+        // under the new type name, the old row spelling fails the whole index
+        // rather than yielding a short one.
+        let new_type_old_rows = Entity::new(INDEX_TYPE, data).expect("well-formed");
+        assert!(WindowIndex::from_entity(&new_type_old_rows).is_none());
+    }
+
     /// AP42's habit, applied where the reuse hazard does not reach: decode by
     /// type, never by path. A window-state entity must not read as an index.
     #[test]
@@ -532,15 +651,15 @@ mod tests {
                         entity_ecf::Value::Integer(1i64.into()),
                     ),
                     (
-                        entity_ecf::Value::Text("type".into()),
+                        entity_ecf::Value::Text("content_type".into()),
                         entity_ecf::text("Shell"),
                     ),
                     (
-                        entity_ecf::Value::Text("peer".into()),
+                        entity_ecf::Value::Text("peer_id".into()),
                         entity_ecf::text("PEER1"),
                     ),
                 ]),
-                // No `peer` field — a row we cannot place.
+                // No `peer_id` field — a row we cannot place.
                 entity_ecf::Value::Map(vec![(
                     entity_ecf::Value::Text("id".into()),
                     entity_ecf::Value::Integer(2i64.into()),

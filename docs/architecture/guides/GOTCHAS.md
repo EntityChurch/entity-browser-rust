@@ -273,6 +273,24 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Peers, SDK arms & the WASM substrate
 
+- **`Peers` IS NOT `Clone`, AND `peers.clone()` COMPILES ANYWAY — it clones the reference.** A
+  task spawned from a window factory that does `let peers = peers.clone(); spawn_local(async
+  move { … })` is holding a `&Peers` across the await, and the borrow dies there. **Only `make
+  wasm` reports it** (`borrowed data escapes outside of function`), because the factory hooks
+  are wasm-only — `make test` stays green, which is one more reason the mandatory `make wasm`
+  is mandatory. Measured 2026-09-01 building the site-origin mirror.
+  **Know which escape hatch fits before you design the flow, because two of the three do not
+  carry a read.** `WriterHandle` is fire-and-forget and **write-only**. `DispatchHandle` is the
+  awaited twin but is **single-peer** and exposes only `execute` / `put` / `local_peer_id` —
+  there is no `get` and no listing. Every `Peers` L1 method returns an **owning** future, so a
+  flow that can create *all* its futures up front is fine (`spawn_hydrate_durable` is exactly
+  that shape, and is why it works). **A conversation is not** — list a prefix, then read each
+  row before deciding whether to write it, where step N+1's arguments come from step N's
+  result. For those, the only place the borrow lives long enough today is an `async fn` on the
+  app itself (`boot_load`, which awaits `adopt_deployment_origin` in a loop). If your repair
+  wants to be per-spawn and ends up per-boot, that is why — **say what the resulting bound is
+  at the function**, rather than letting the next reader assume the hook fires where it reads
+  like it should.
 - **A sync read at CONSTRUCTION time reads nothing on the Worker arm, RACES the store on the
   Direct one, and if you keep the result the surface is wrong for the whole session (AP41).** `Peers::get_entity` /
   `tree_listing` answer from the per-prefix cache mirror, which holds only prefixes some
@@ -4565,6 +4583,27 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   Budgets are upper bounds, so be generous: a healthy run returns on the first poll.
   **~191 fixed sleeps remain** suite-wide — the known systemic source of load-dependent
   flake; converting one is a `poll_json` one-liner.
+- **…but `poll_json` is a WAIT, not a CHECK — it returns `Ok(last_value)` when the budget
+  runs out (AP47).** Read its four lines: `if ready(&value) || Instant::now() >= deadline
+  { return Ok(value) }`. That is deliberate and right for the normal caller, which polls and
+  then asserts on what came back. The trap is the *other* shape:
+  ```rust
+  poll_json(&c, "return !!document.getElementById('reset-go');", ..)
+      .await
+      .map_err(|e| format!("the reset never offered a confirmation step ({e})"))?;   // ← NOT a check
+  ```
+  The `?` can only fire on a WebDriver transport error. The timeout it was written for
+  returns `Ok(false)` and passes straight through, so the message names a condition the code
+  cannot detect — and the gate silently stops measuring the thing it exists for.
+  **Bind the result and assert on it:** `let v = poll_json(..).await?; assert!(v.as_bool()
+  .unwrap_or(false), "…")`. Three checks in one new gate were written the wrong way; the
+  only reason it was caught is that the gate was falsified afterwards.
+  **The meta-rule that actually found it: a neuter that PASSES has two possible causes and
+  you owe both** — the gate does not measure that property, or your neuter never reached the
+  browser. Here both were true at once (the check was inert *and* a `str.replace(a, b, 1)`
+  had patched an inner call site whose text was a superstring of the anchor). Fixing only
+  the visible one leaves a gate that can never see its own subject. **Grep the served bytes
+  (`dist/`), not the source, before concluding a neuter landed.**
 - **A new window/feature must extend `tests/e2e_worker.rs`** with a phase that clicks it and
   asserts on output, not just ride the boot-spawn loop — the loop only checks for panics, so a
   window that renders nothing at all rides it green. (**Correction, measured 2026-08-19:** the

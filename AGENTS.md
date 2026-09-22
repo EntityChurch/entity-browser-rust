@@ -26,7 +26,7 @@ D12–D16 here are ours, earned on our own bugs.
   and **D24** (any durable copy of someone else's bytes is a cache and needs a currency
   trigger — ratified 2026-08-29 on a gate observed red, with both enforcement points);
   candidates at D17, D18, D22. The per-diff review questions (nine + 5b), anti-pattern
-  catalog AP1–AP35.
+  catalog AP1–AP45.
 - **Doctrines** (Feature/Audit procedures — the *how*):
   `docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md` — open the Feature
   Development Doctrine (F0–F8) for "build X", the Audit Doctrine (A0–A12) for "Y is broken".
@@ -179,6 +179,25 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   rendered marker, never that a fetch happened (AP31) — and note it runs on the Direct arm,
   because on the Worker arm the presence read answers from an asynchronously-filled mirror and
   can go green for the wrong reason.
+- **`make e2e-worker T=a_new_build_reaches` is THE HOTFIX GATE — release-risk R-2's live half,
+  and the property the whole deploy story rests on.** *We will ship bugs, so a fix must be picked
+  up on the next refresh and heal the profile.* If a service worker can pin a broken shell, a bad
+  deploy is not an incident, it is a **brick** (matrix cell #10, recoverable only via C17's
+  self-destruct worker — **not built, never rehearsed**). It stages an isolated SPA copy, boots
+  it, **asserts a service worker is CONTROLLING the page**, moves the shell's `entity-build`
+  stamp, reloads once, and asserts the app reports the new build. Run it for any change to
+  `assets/sw.js`, `index.html`'s registration block, or the cache headers.
+  **It existed as a sentence, not a gate, until 2026-09-01** — the deploy transition was recorded
+  in `the_worker_bundle_is_fetched_once_per_build_not_once_per_load`'s doc comment as
+  *"mutation-checked in both directions"*, i.e. a manual check months ago, on the path we can
+  least afford to be wrong about (AP37).
+  **The anti-vacuity half is the design, not decoration:** a reload picking up a new document
+  proves nothing if no worker was in the path — that is plain HTTP wearing R-2's name. Falsified
+  three ways: a `networkFirst` that serves its cached copy first reds with *"THE HOTFIX DID NOT
+  LAND"*; a page with no registration reds **VACUOUS**; and the positive passes. **Scope, stated:
+  it moves the shell, not the hashed bundle** — the pinning risk is entirely the mutable shell,
+  since `index.html` names every hashed asset and those are `cacheFirst` by content-addressed
+  URL, where a changed URL *is* the invalidation.
 - **A durable record of a REMOTE assertion carries the path back to that assertion — AP30.**
   Anything written down because a deployment doc, registry or peer said so must be re-checked
   whenever the source is in hand, and dropped when the source contradicts it; a write path
@@ -189,9 +208,12 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   state — and D23's deadline makes that case *more* common), and **revalidate strictly after
   adopting**, or a legitimate second divergence reads as a stale record. And the corollary that
   looks like an optimization: **an origin's "I have none" is a fact you may REPORT, never one
-  you may write down.** `deployment_config::read_document` is four-state (`Served |
-  NoDocument | Unreadable | Unheard`) so the log can tell a domain that ships no config on
-  purpose from one nobody could reach — but caching that 404 to skip the next probe would be
+  you may write down.** `deployment_config::read_document` is **five**-state (`Served |
+  NoDocument{status} | OriginError{status} | Unreadable{status} | Unheard`) so the log can tell a
+  domain that ships no config on purpose from one nobody could reach, **and both of those from a
+  domain that answered with a fault** — `OriginError` was split out later and this line said
+  "four" until 2026-09-01, which is the stale-doc shape AP40 warns about one layer up: a 502 is
+  not a deployer choosing to serve no config. Caching that 404 to skip the next probe would be
   AP30 with a shorter fuse: a deployment that *adds* the document later would never reach a
   returning profile. Only `origin_answered()` may be branched on.
 - **When you SPLIT a collapsed value, the default arm gets the WEAKEST claim — AP40.** Twice in
@@ -329,9 +351,21 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   type guard is a **guard and not a fix**: *with ordinals and no index, whether you get your state
   back depends on the order you re-open windows in* — the guard turns wrong-adoption into
   no-adoption and never makes the right state findable. One entity at
-  `app/{app-id}/workspace/window-index` (type `app/entity-browser/window-index` — **app-internal
-  per guide §4.1.1, not `app/state/…`**; one impl does not name a portable type for something it
-  invented this week) lists the live windows as `(id, type_name, peer_id)` and buys claiming, an
+  `app/{app-id}/workspace/window-index` — type **`app/state/window-index`**, encoded
+  `windows: [ { id, content_type, peer_id } ]`, which is guide **§4.2a's ruled cross-impl
+  schema** (it was ours; arch landed it near-verbatim). It shipped on `dev` first as the
+  app-internal `app/entity-browser/window-index` with `(id, type, peer)` keys, because one impl
+  does not name a portable type for something it invented this week; promotion followed §4.1.1's
+  own path once the schema existed, and **the Rust struct field names stayed ours**
+  (`type_name`) — the ruling is about the encoded map. **No compatibility read, deliberately:**
+  an old-shape profile decodes as `Malformed`, which claims and sweeps nothing, and the next
+  witness write replaces it — a compatibility read would be a durable record of a transient fact
+  (`the_pre_ruling_shape_lands_on_the_safe_arm_rather_than_needing_a_migration`). The wire
+  schema is pinned **by literal, not by the module's own `KEY_*` constants**, in
+  `the_encoded_map_uses_the_ruled_schema_field_names` — a test spelled in the constants follows
+  any rename and can never catch one — and it asserts the row keys as a **set**, because
+  `to_ecf` canonicalizes map key order (length, then lexical) and the encoder gets no say.
+  It lists the live windows as `(id, type_name, peer_id)` and buys claiming, an
   `next_id` floor, and an exact sweep. `(type, peer)` is not new here — `boot_load` already calls
   that pair *"the stable identifier"* for `BootSurface::Window`, and `find_open` uses it for
   singletons. **Three things it costs to get right:** (1) a boot that re-opens nothing must not
@@ -347,16 +381,54 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   — **both are gates, not a gate and a control**, because the defect is arm-independent (unlike
   AP41's); falsified on both arms with the production symptom.
   **Do NOT "fix" this by type-scoping the path** (an earlier handoff recommended it; withdrawn
-  2026-08-31). `app/{app-id}/workspace/windows/{id}/state` is a cosigned cross-impl convention
-  at **MUST** tier (`GUIDE-ENTITY-WORKBENCH-APP.md` §1/§3, three-impl consensus we cosigned;
-  `entity-workbench-go/entitysdk/workspace_state.go:397` builds the identical path). The
-  guide's §8 leaves the *lifecycle* to us in two named arms — *persist if the app offers
-  session resumption; MAY be ephemeral otherwise* — and **we are in neither**: we persist
-  per-window state and offer no resumption, which is what manufactures the collision. That
-  decision is open and is the operator's:
+  2026-08-31) — but **not for the reason this file gave until 2026-09-01, which was wrong.**
+  §1's MUST is the `app/{app-id}/workspace/...` **prefix**; the segments beneath it are *not*
+  closed (§3.1 blesses two sub-shapes, and workbench-go runs two more without objection). The
+  guide's §3 now says so outright. **The withdrawal stands on design grounds:** re-keying does
+  not solve two windows of the same type (the ordinal just moves one segment inward); it writes a
+  portable type name into a per-app instance path, duplicating what `entity_type` already carries
+  — two sources of truth that can disagree, which is what §4.1.1's split exists to prevent; and it
+  breaks the one thing §1 *does* pin, since `window_id` would no longer locate a window's state.
+  **A design withdrawn for a reason that does not hold is one a later session reopens, correctly,
+  and gets wrong** — which is why arch corrected it rather than letting it stand.
+  The path itself is still shared —
+  `entity-workbench-go/entitysdk/workspace_state.go:397` builds the identical one.
+  **§8 is no longer two open arms — it is a checkable disjunction (arch `bd8f463`).** An app
+  persisting per-window state MUST be able to say, at startup, which window each persisted entity
+  belongs to, and satisfies that by **maintaining an `app/state/window-index` OR sweeping
+  `workspace/windows/` before allocating any id**; an app doing neither **MUST NOT persist**
+  per-window state. **We satisfy it via the index.** Note what else §8 now says, because it bears
+  directly on the still-open resumption question: *the ephemeral arm is a correct and conformant
+  choice, not a lesser one.* That decision is open and is the operator's:
   `docs/plans/DESIGN-WINDOW-STATE-LIFECYCLE-AND-SESSION-RESUMPTION.md`. Our per-content-type
   state names are the slot table's long-term shape, so AP42's guard is the convention working,
   not a local invention.
+- **A test can ASSERT the non-conformance, and its NAME is what makes it read as a decision —
+  AP45.** The two faces above are silent (green by fallback; green by depending on the defect);
+  this one speaks. `GUIDE-ENTITY-WORKBENCH-APP` §5.4 rule 3 has been normative since the v0.8.0
+  release on **2026-06-21**: a reader MUST log a violation (WARN minimum) on a legacy
+  `source_window` / `source_panel` / `content_type` field in a received `app/state/selection`, and
+  *"silent tolerance is NON-CONFORMANT."* We dropped all three on a bare `_ => {}` — and
+  `from_entity_tolerates_unknown_fields` built an entity carrying `source_window` and asserted we
+  **ignore it quietly**. Two months green. *Nobody re-reads a rule a passing test says they
+  satisfy.* **The transferable half is the mechanism: one test name spanning two obligations,
+  where we met one.** V7 §2.6 open-types really does require unknown fields to be skipped
+  *silently*; §5.4 carves three named spellings out of that set and requires the opposite, so one
+  test could only assert one and asserted the one already done. **When a rule carves an exception
+  out of a rule you satisfy, the exception needs its own test.** Second-order cause: **we were
+  conformant on emit and read only the emit half** — §5.4 is five numbered rules, ours was clean,
+  the section read as *done*. Enumerate the rules and say which line answers each (1, 3 and 4 now
+  each have a test naming its number). **And the trap that decides the fix's shape:
+  `content_type` is retired on `app/state/selection` and REQUIRED on `app/state/window-index`**
+  (§4.2a says so by hand) — so `legacy_field_violation` is gated on the **entity type**, never the
+  field spelling, or our own ruled index schema trips it. Two more choices worth knowing:
+  we take rule 3's MUST and decline its MAY-reject (refusing would make one bad emitter a dead
+  co-orientation surface, and the reader is not who is wrong); and `Selection::decode` **returns**
+  the violations rather than only logging them, because this crate has no `tracing-subscriber` in
+  its dev-deps and a pure-predicate test would leave the *wiring* — the half that decays — unmeasured.
+  Stated bound: it warns once per decode, and `consume_from_source` decodes every render pass, so
+  a legacy entity parked in a slot is loud. That is deliberate; §5.4's stated reason for the rule
+  is that silence hides emitters that should be fixed.
 - **An idempotent write is not an event — a surface that shows UNPERSISTED state marks its own
   watch dirty (AP43).** The store is content-addressed, so an identical put at the same path
   fires no subscription and is indistinguishable from no write at all. The Shell signalled its
@@ -416,6 +488,116 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   which `python3 -m http.server` cannot do and which is why this whole failure class was
   previously unreachable from the harness. Run it for any change to the boot path, `sw.js`, or
   `deployment_config`.
+- **The recovery console takes EXACTLY ONE action, and the gate is about what it does NOT
+  touch.** `?systemrecovery=1` was report-only by design and that was half right: it enumerated
+  service workers and Cache Storage and could act on neither, so its printed advice was *"use
+  your browser's developer tools"* — impossible on a phone, which is where a stuck visitor is.
+  It now has a confirm-gated **"Reset the cached program"** scoped to the two app-code stores.
+  **The scope is the whole safety argument:** there is no export path yet, so a reset that took
+  IndexedDB or localStorage with it would be strictly worse than the stale worker it clears, and
+  unrecoverable. `make e2e-worker T=the_recovery_console_resets_the_program_and_keeps_the_tree`
+  asserts the peer databases and localStorage keys are the **same set** afterwards, before it
+  asserts anything about the reset working. Run it for any change to that console, to the
+  registration block in `index.html`, or to `sw.js`. Three things it cost to get right:
+  **(a)** `index.html` registers a worker on *every* load, so the console must skip registration
+  when `__ENTITY_RECOVERY__` is set — otherwise the one screen that can remove a bad worker
+  reinstalls it on the way in, and only a **re-scan** step in the gate can see that;
+  **(b)** the outcome is decided by a **witness** — re-enumerating after — not by what
+  `unregister()` returned, and the four outcomes stay apart (AP40): *"there was nothing to
+  remove"* must never render as *"fixed"*; **(c)** it does **not** close heal-path row 9 — a
+  worker that breaks navigation takes this page down with it, and that is still C17, unbuilt and
+  never drilled. The console's own copy also told users *"clear site data … only removes the
+  cached program"*, which is **false and destroys the tree**; corrected in the same change.
+- **The health checks live in System Overview's *Problems* card — not a window, and never called
+  "Doctor" on screen.** `src/doctor.rs` is the pure verdict logic (checks 1–3 of the resilience
+  design §7.2: domain identity, fetch-failure-by-peer, catalog completeness) and
+  `src/refresh_ledger.rs` is the session-scoped recording seam a failed refresh lands in. Both are
+  native, so `make test` gates the whole product; the window only places the strings.
+  **Four things to know before touching it.**
+  **(1) "I could not check" must never render as "healthy"** — `Verdict` has five states, three of
+  which establish nothing, and only `Agrees` is clear.
+  **(2) The render filter is `warrants_attention`, NOT `!is_clear()`** — that mistake put three
+  non-problems under a heading that says *Problems* on a perfectly healthy profile (AP48). The
+  predicate lives on the model so no renderer re-derives it.
+  **(3) Anything added to `dom::system_overview::render` must go ABOVE the `!output.tauri` early
+  return** or it ships to the desktop app only — which is how the section first shipped, invisible
+  in the browser where both incidents actually happened.
+  **(4) A remedy may never be destructive** — `no_remedy_is_destructive` asserts it of every
+  variant, because there is still no export path (design §5). Remedies report what they *did*
+  ("Asked"), never a repair they cannot yet observe.
+  **The known gap: there is no browser gate on this surface** — placement, quietness and the
+  retry button reaching the launcher are all unmeasured. And **`doctor.rs` is English-only by
+  decision**; every user-facing string is in that one file, and its count is declared debt in
+  `tools/i18n-lint-baseline.txt`.
+- **`poll_json` returns `Ok(last_value)` on timeout — it does NOT error, so `.await?` is not a
+  check (AP47).** That is the right design for its common caller (poll, *then* assert), and a
+  trap for the other one: `poll_json(..).await.map_err(|e| "X never happened")?` describes a
+  condition it cannot detect. **Assert on the value it returned.** Found because a neuter written
+  to falsify a new gate came back **green** — and the first explanation to hand (a mis-anchored
+  `replace` that patched an inner call site with identical text) was *also* true. **A neuter that
+  passes has two possible causes and you owe both:** the gate does not measure it, or the neuter
+  did not land. Check the served bytes before concluding either.
+- **The boot surface stays up until the frame loop arms — AP46.** `start()` used to hide
+  `#loading` before peer construction, i.e. before `boot_load`'s ~14 awaits, and with
+  `boot_fast_paint` `DISABLED_FOR_CONSOLIDATION` **nothing painted in its place** — so the page
+  was blank for the whole application-tier boot (bounded worst case tens of seconds) and the
+  always-visible *"Open System Recovery"* hatch, which lives inside that same div, was gone at
+  the moment it was needed. **Take a fallback down on *the replacement is LIVE*, never *it has
+  STARTED*.** `boot_progress::armed()` is the structural half and has exactly ONE call site,
+  after the first `requestAnimationFrame`, so a boot that dies earlier keeps the surface for
+  free rather than via a handler someone has to remember (AP44); `boot_progress::step()` names
+  the running step and is **best-effort by design** — a missing call costs one line in a bug
+  report and nothing else. Its labels are `// i18n-ignore`: this is the same tier as the L1
+  recovery console, and `index.html` carries no i18n at all. Gate:
+  `a_stalled_boot_shows_the_boot_surface_instead_of_a_blank_page` — run on the **black-hole
+  rig**, because there the stall is load-bearing and ~3 s wide while a healthy boot makes
+  catching the surface a race. Falsified both ways.
+  **It does NOT make an app-tier step non-fatal.** That is boot-B-1's two-phase boot, and
+  `AUDIT-BOOT-PATH-2026-08-27.md` **§4a** names the constraint: `boot_load` takes `&mut self`
+  while the rAF closure `try_borrow_mut()`s the same cell every frame, so spawning it behind an
+  armed loop reproduces the blank page with a `FRAME SKIP` line under it.
+  **The way out is `DispatchHandle`, NOT a shareable `Peers` — §4a's first answer was mine and
+  was wrong, corrected the same day.** `DispatchHandle` is already cloneable, arm-agnostic and
+  transport-owning, built for exactly *"several L1 calls in a row from a spawned task"*; take
+  the handles in Phase 1, then await holding no `Ref<EntityApp>`. The *"single-peer with no
+  read"* line from the B-3 handoff describes today's API surface only — `PeerContext` already
+  has capability-checked async `get`/`put`/`list`, so it is a pass-through to add, not a router
+  rewrite. **Observability and non-fatality are separable; only the first was cheap.**
+- **`:4444` is usually held by `perf-firefox`, an UNOWNED long-lived container — and the
+  "another seat is using it" story is folklore. Measured 2026-09-01.** Nothing in this repo
+  creates, names or removes it (`grep -rn perf-firefox` hits **only handoffs**, from
+  2026-07-15 onward, each repeating the previous one's framing). The operator confirms no other
+  party should be using Selenium on this box. So treat it as **an orphan left by an earlier
+  session**, not as someone else's work — and do not write the "other seats" sentence again;
+  this bullet exists because four handoffs did.
+  **What is actually true, and it is the part that bites:** the node is `maxSessions=1`, and
+  `setup()` reaps *every* session on whatever grid it is pointed at. Both only matter for
+  **concurrent** runs. One run at a time on the shared grid is fine and is what six weeks of
+  green gates were measured on. **Do not "fix" this by building grid lifecycle management** —
+  that solves a problem nobody has.
+  **`WEBDRIVER=http://localhost:<port>` runs against a private grid** when you do want
+  isolation (a second run, or a suspect grid). The preflight probes the same URL it hands the
+  suite — it used to hardcode `:4444`, which would have been a green preflight for a grid
+  nobody dialled. Standalone needs **all three** ports moved, not just HTTP; the ZeroMQ event
+  bus collides otherwise and the container dies with `ZMQException: Address already in use`:
+  `-e SE_OPTS="--port 4455" -e SE_EVENT_BUS_PUBLISH_PORT=4452 -e SE_EVENT_BUS_SUBSCRIBE_PORT=4453`.
+- **A FAILING e2e test leaks its WebDriver session, and the next run then hangs wearing the
+  costume of a product wedge.** An assertion panics *before* `client.close()`, so the session is
+  never quit; the node is `maxSessions=1` and Selenium's `sessionTimeout` is **300 s**, so the
+  next run blocks on the slot and dies at the suite's own 240 s stall watchdog — which prints
+  *"Something below the assertions wedged — a hung renderer, a browser that stopped painting"*
+  and names the wrong layer entirely.
+  `setup()` calls `reap_stale_sessions()` for exactly this, **and it was reaping the wrong grid
+  until 2026-09-01**: its URL was hardcoded to `:4444` while `connect()` honoured
+  `E2E_WEBDRIVER_URL`, so a `WEBDRIVER=` run got the worst of both — the leak on the grid in use
+  was never cleared, *and* live sessions on `:4444` were deleted by a run that was not using it.
+  Fixed; both call sites read `webdriver_url()`. **Grep `4444` before adding a third** — the
+  preflight had the identical hardcoding and was fixed in the same session, one hour apart,
+  which is how a second instance gets missed.
+  Verified rather than asserted: with a session deliberately left holding the only slot
+  (`ready:false`), a filtered run now reaps it and completes in ~3 s instead of queueing.
+  And **prefer one session per test** — a gate that opens a second `connect_browser()` contends
+  with its own first one on a single-slot node (measured: 60 s, then a 240 s watchdog).
 - **Run `make e2e-worker` for any peer-routing / arm-dispatch / peer-display change** —
   worker peer routes register *asynchronously*, so a fresh peer can be invisible while
   compile and unit tests stay green. The default browser arm is Worker-or-IDB, never

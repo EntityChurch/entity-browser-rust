@@ -1722,6 +1722,7 @@ impl EntityApp {
         // unwatched roster prefix as silently empty → re-backfill every boot).
         // Runs after primary construction, so it captures the cold-boot fresh
         // primary already written to set A during construction (app.rs ~516).
+        crate::boot_progress::step("peer roster"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
         let roster_migrated_before = crate::persistence::roster_migration_done(&system_pid);
         if durable_substrate && !roster_migrated_before {
             let entries = crate::persistence::load_all_peer_entries();
@@ -1857,6 +1858,7 @@ impl EntityApp {
         // same tree. (Session config sits on the system peer because it is
         // global; this is not.) The two are the same id today.
         {
+            crate::boot_progress::step("window index"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
             let resolution = crate::window_index::resolve_at_boot(
                 &self.peer_manager,
                 &primary_pid,
@@ -1898,6 +1900,7 @@ impl EntityApp {
         // the overlay's session-config subscription) so the first
         // `apply_site_mode` reads the correct surface — no boot-write race.
         {
+            crate::boot_progress::step("session config"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
             let cfg_path = crate::session_config::state_path(&system_pid);
             let durable = self
                 .peer_manager
@@ -1932,6 +1935,9 @@ impl EntityApp {
             // document.
             let mut doc_outcome = "not-read";
             let mut deployment = if durable.is_none() {
+                // The first of the two D23-bounded network reads on this path,
+                // and the longest single await a cold boot takes.
+                crate::boot_progress::step("deployment document"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
                 let read = crate::deployment_config::read_document().await;
                 doc_outcome = read.label();
                 read.into_config()
@@ -1997,6 +2003,7 @@ impl EntityApp {
             // decodes its stored location before this lands would resolve
             // against an empty map and keep the dead peer for the life of that
             // session. See `peer_supersession`.
+            crate::boot_progress::step("publisher records"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
             crate::peer_supersession::load(&self.peer_manager, &system_pid).await;
 
             let mut adopted_identity = false;
@@ -2101,6 +2108,7 @@ impl EntityApp {
                 // fetch within one boot — the regression that took G1 from
                 // 3244 ms to 6195 ms and that only a budget printing on success
                 // caught.
+                crate::boot_progress::step("deployment document"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
                 let read = crate::deployment_config::read_document().await;
                 doc_outcome = read.label();
                 deployment = read.into_config();
@@ -2409,6 +2417,9 @@ impl EntityApp {
             // origin. That is map-B2, and until it lands the CDN-move repair
             // covers the deployed content-site profiles and not the rest.
             if let Some(dc) = &deployment {
+                // Four of these at a 5 s seed timeout each is the bulk of the
+                // bounded worst case the boot audit measures (§2).
+                crate::boot_progress::step("content origins"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
                 // Collect the resolved (peer, origin) pairs as we register them,
                 // to hand to the site-discovery warm-up below — sourced here
                 // rather than read back via `list_origins` because the Worker-arm
@@ -2484,6 +2495,24 @@ impl EntityApp {
                 );
             }
 
+            // Make the origin writers reach every reader. Both production
+            // writers — the adopt above and the Registry Browser's *Open in
+            // Site Browser* — register under the SYSTEM peer, while a Site
+            // Browser reads the registry of the peer it is BOUND to
+            // (`resolver.rs` `get_origin(peers, &self.our_peer_id, …)`). Those
+            // agree only for a window on the system peer. A window bound
+            // elsewhere — `open "Site Browser" @somepeer` in the Shell binds any
+            // window to any local peer — reads an empty registry and reports a
+            // site that resolved perfectly as unreachable.
+            //
+            // The read is deliberately NOT widened: the registry has to sit on
+            // the same peer as the content cache (`site_cache_prefix`,
+            // `resolve_from_my_store`), which is what makes a reload and an
+            // offline read work. So the writers come to the readers instead.
+            // Runs after the adopt loop, so the source is final before it is
+            // copied. See `origins::mirror_to_all_local_peers` for the bound.
+            crate::content_site::origins::mirror_to_all_local_peers(&self.peer_manager).await;
+
             // (1.4) Provision the home site — thin-lens, not eager warehouse
             // (boot-closure reframe). The bundled demo is seeded
             // ONLY when `home_site` is the LOCAL demo (empty/system peer +
@@ -2497,6 +2526,7 @@ impl EntityApp {
             // deployment's home site actually is (D5 — boot deps are owned and
             // sequenced, not a construction side-effect; D9 — we seed only what
             // we chose to). Idempotent (gated on the manifest), arm-aware.
+            crate::boot_progress::step("home site"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
             let home_peer = cfg.home_site.peer_id.clone();
             let home_id = cfg.home_site.id.clone();
             let home_loc = cfg.home_site.loc.clone();

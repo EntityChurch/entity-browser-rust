@@ -366,11 +366,35 @@ def files():
     #                                  ("no window", "anchor is not an
     #                                  HtmlElement"), the same dev-facing class
     #                                  as any other log line.
+    # doctor.rs         ADDED 2026-09-01 — and it CORRECTS the principle above,
+    #                          which is why it is worth reading before adding
+    #                          the next file. "Can it reach the DOM" was the
+    #                          right test for a renderer and is the wrong test
+    #                          in general: `doctor.rs` never touches the DOM,
+    #                          calls no `set_text`, imports no `components::` —
+    #                          and holds every word of the System Overview
+    #                          *Problems* section, because the checks compose
+    #                          their own sentences and the renderer only places
+    #                          them. Under the closed-set rule it would have
+    #                          been invisible, and `make lint` would have stayed
+    #                          green with a whole user-facing surface
+    #                          un-extracted — the exact shape of the gap this
+    #                          scanner was written to close
+    #                          (AUDIT-I18N-COVERAGE-GAP-2026-07-19: the metric
+    #                          read 0 while ~440 strings sat un-extracted).
+    #                          **The test that would have caught it is "does a
+    #                          string this file produces reach a user", not
+    #                          "does this file put it there."** Its count is
+    #                          carried in the baseline as declared debt: the
+    #                          section ships English-first by the operator's
+    #                          call (build it, look at it, then translate), and
+    #                          the number only ratchets down.
     for extra in ('src/app.rs', 'src/window.rs', 'src/peer_display.rs',
                   'src/storage_durability.rs', 'src/format.rs',
                   'src/backend_auth.rs', 'src/watchdog.rs',
                   'src/session_config.rs', 'src/boot_fast_paint.rs',
-                  'src/content_site/render.rs', 'src/theme_tokens.rs'):
+                  'src/content_site/render.rs', 'src/theme_tokens.rs',
+                  'src/doctor.rs'):
         out.append(extra)
     return sorted(set(out))
 

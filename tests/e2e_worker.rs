@@ -244,19 +244,33 @@ fn arm_stall_watchdog() {
             }
             let label = label.clone();
             drop(p);
+            // **Measure before blaming.** This used to assert the cause — "a
+            // hung renderer, a browser that stopped painting" — and it was
+            // wrong both times it fired in anger: the real cause was a WebDriver
+            // slot still held by a previously-panicked test, which is a
+            // different layer with a different fix. A watchdog that names a
+            // cause it cannot observe sends the next reader to the wrong place,
+            // so this now reports what the grid actually says and lists causes
+            // as candidates.
+            let grid = grid_state_summary();
             eprintln!(
                 "\n\n=== E2E STALL WATCHDOG ===\n\
                  No progress for {}s (limit {}s). Last phase entered: {label}\n\
-                 Something below the assertions wedged — a hung renderer, a\n\
-                 browser that stopped painting, or a dead Selenium container.\n\
-                 WebDriver round-trips are the only unbounded waits here, so\n\
-                 that is where to look; `target/e2e-tauri-stderr.log` covers the\n\
+                 Grid ({}): {grid}\n\
+                 If the grid reports a session that is NOT this run's, the stall is\n\
+                 slot contention, not the product — `setup()` reaps on the way in,\n\
+                 so a session appearing here means something outside the run holds\n\
+                 it (or a single test opened a second one against a 1-slot node).\n\
+                 Otherwise: a wedged renderer, a browser that stopped painting, or\n\
+                 a dead Selenium container. WebDriver round-trips are the only\n\
+                 unbounded waits here; `target/e2e-tauri-stderr.log` covers the\n\
                  Tauri phases. Raise with E2E_STALL_SECS=<n> if a phase legitimately\n\
                  needs longer.\n\
                  Killing the run so it fails loudly instead of hanging forever.\n\
                  ==========================\n",
                 stuck.as_secs(),
-                budget.as_secs()
+                budget.as_secs(),
+                webdriver_url(),
             );
             // The test thread is wedged in a syscall we cannot unwind, so a
             // panic would not reach it — exiting the process is the only way
@@ -296,6 +310,53 @@ macro_rules! phase_gate {
     };
 }
 
+/// What the WebDriver grid reports right now, in one line, for a diagnostic that
+/// would otherwise be guessing.
+///
+/// Deliberately best-effort and never panicking: this is called from the stall
+/// watchdog, on a thread, while the run is already failing. A probe that could
+/// itself hang or unwind would replace one bad diagnostic with a worse one, so
+/// the timeout is short and every failure becomes a printable string.
+fn grid_state_summary() -> String {
+    let out = Command::new("python3")
+        .arg("-c")
+        .arg(
+            r#"
+import json, sys, urllib.request
+try:
+    st = json.load(urllib.request.urlopen(sys.argv[1] + "/status", timeout=4))
+except Exception as e:
+    print("unreachable (%s)" % type(e).__name__); raise SystemExit(0)
+v = st.get("value", {})
+ids = []
+def walk(o):
+    if isinstance(o, dict):
+        s = o.get("session")
+        if isinstance(s, dict) and s.get("sessionId"):
+            ids.append(s["sessionId"])
+        for x in o.values(): walk(x)
+    elif isinstance(o, list):
+        for x in o: walk(x)
+walk(v)
+print("ready=%s, %d session(s) held%s" % (
+    v.get("ready"), len(ids), (": " + ", ".join(ids)) if ids else ""))
+"#,
+        )
+        .arg(webdriver_url())
+        .output();
+    match out {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() {
+                "probe produced no output".to_string()
+            } else {
+                s
+            }
+        }
+        Err(e) => format!("could not probe ({e})"),
+    }
+}
+
 /// Delete any WebDriver session a previous run left behind, before asking for
 /// a new one.
 ///
@@ -310,13 +371,31 @@ macro_rules! phase_gate {
 ///
 /// Driven through `python3`, which this suite already requires for its own
 /// `http.server` — not a new dependency.
-fn reap_stale_sessions() {
+///
+/// **It reaps the grid this run actually dials ([`webdriver_url`]), which it did
+/// not until 2026-09-01.** The URL was hardcoded to `:4444` while `connect()`
+/// honoured `E2E_WEBDRIVER_URL`, so pointing the suite at a private grid broke
+/// the reaper **both ways at once**: it never cleared the leaked session on the
+/// grid in use — so a red test still cost the next one a 300 s queue and a
+/// bogus stall-watchdog "wedge" (observed, twice, blamed on the product) — while
+/// it *did* delete live sessions on `:4444`, a grid this run was not using. The
+/// override existed to stop exactly that. Two call sites read the same value now;
+/// **grep `4444` before adding a third.**
+///
+/// **Returns whether the grid's slot is usable.** `false` means the reap ran and
+/// the slot is *still* held — at which point the caller must fail fast, because
+/// the alternative is `connect()` silently QUEUEING for the 300 s session
+/// timeout and the run dying at the 240 s stall watchdog, which then blames a
+/// hung renderer. Observed twice before this returned anything.
+#[must_use]
+fn reap_stale_sessions() -> bool {
+    let base = webdriver_url();
     let out = Command::new("python3")
         .arg("-c")
         .arg(
             r#"
-import json, urllib.request
-BASE = "http://localhost:4444"
+import json, sys, urllib.request
+BASE = sys.argv[1]
 try:
     st = json.load(urllib.request.urlopen(BASE + "/status", timeout=5))
 except Exception:
@@ -372,8 +451,14 @@ if ids:
         print("WARN-slot-still-busy")
 "#,
         )
+        .arg(&base)
         .output();
-    if let Ok(out) = out {
+    let Ok(out) = out else {
+        // The probe itself could not run. Not evidence the slot is busy — say so
+        // by allowing the connect, which reports its own failure honestly.
+        return true;
+    };
+    {
         let reaped = String::from_utf8_lossy(&out.stdout);
         let mut reaped: Vec<&str> = reaped.split_whitespace().collect();
         // The slot never came free. Say so LOUDLY: the next `connect()` will
@@ -383,9 +468,10 @@ if ids:
         if let Some(i) = stuck {
             reaped.remove(i);
             eprintln!(
-                "  WARNING: reaped {} session(s) but the grid still reports one busy after 30s. \
-                 The next connect() will QUEUE (session-timeout 300s), and its error will not \
-                 mention any of this. Something outside the suite is probably driving :4444.",
+                "  WARNING: reaped {} session(s) but the grid at {base} still reports one busy \
+                 after 30s. The next connect() will QUEUE (session-timeout 300s), and its error \
+                 will not mention any of this. Something outside the suite is probably driving \
+                 that grid.",
                 reaped.len()
             );
         }
@@ -396,6 +482,7 @@ if ids:
                 reaped.join(", ")
             );
         }
+        stuck.is_none()
     }
 }
 
@@ -1555,7 +1642,29 @@ async fn setup(
 
     // Hand back any session a previous (failed / interrupted / E2E_UNTIL-cut)
     // run left holding the standalone's single slot.
-    reap_stale_sessions();
+    //
+    // **Fail fast if it is still held.** The alternative is not "we try anyway"
+    // — `connect()` against a busy single-slot grid does not error, it QUEUES
+    // for `--session-timeout` (300 s), so the run dies at the 240 s stall
+    // watchdog with a message about hung renderers. Observed twice. An honest
+    // error here costs one line; the queue costs four minutes and a wrong
+    // diagnosis.
+    if !reap_stale_sessions() {
+        return Err(format!(
+            "the WebDriver grid at {} still reports its slot busy after reaping.\n\
+             Nothing this suite left behind is holding it, so something outside this run is \
+             driving that grid — another agent, another `make e2e-worker`, or a browser \
+             attached by hand.\n\
+             Failing now rather than queueing: a `connect()` here would wait for the grid's \
+             300s session-timeout and then surface as a stall watchdog blaming the renderer.\n\
+             Check:  curl -s {}/status\n\
+             Use your own grid:  make e2e-worker WEBDRIVER=http://localhost:<port>  \
+             (see AGENTS.md for the three ports standalone needs moved).",
+            webdriver_url(),
+            webdriver_url()
+        )
+        .into());
+    }
 
     let server = start_dist_server().map_err(|e| {
         format!(
@@ -14104,7 +14213,19 @@ async fn system_recovery_renders_readonly_inventory_without_booting(
         )
         .await?;
     let text = text_v.as_str().unwrap_or("");
-    for needle in ["Storage Inventory", "IndexedDB", "localStorage", "no writes and no deletes"] {
+    // `no other writes and no other deletes` replaced `no writes and no
+    // deletes` when the console gained its single confirm-gated action
+    // (2026-09-01). The needle was updated rather than dropped **because the
+    // scoping claim is the one that has to survive**: the console may take one
+    // action, and the sentence that bounds it to app code is what makes that
+    // safe. A test that stopped asserting anything here would let the bound be
+    // widened silently.
+    for needle in [
+        "Storage Inventory",
+        "IndexedDB",
+        "localStorage",
+        "no other writes and no other deletes",
+    ] {
         assert!(
             text.contains(needle),
             "recovery console missing the {needle:?} section. Got: {text:?}"
@@ -18298,6 +18419,532 @@ async fn the_worker_bundle_is_fetched_once_per_build_not_once_per_load(
     Ok(())
 }
 
+/// **THE HOTFIX PATH — a new build must reach a browser the service worker
+/// already controls.** Release-risk R-2's live half.
+///
+/// This is the one property the whole deploy story rests on: *we will ship
+/// bugs, so a fix must be picked up on the next refresh and heal the profile.*
+/// If a service worker can pin a broken shell, a bad deploy is not an incident,
+/// it is a **brick** — matrix cell #10, recoverable only through C17's
+/// self-destruct worker, which **is not built and has never been rehearsed**.
+///
+/// **It was covered by a sentence, not a gate.** `the_worker_bundle_is_fetched_
+/// once_per_build_not_once_per_load` above proves caching *within* one build,
+/// and its doc comment records the deploy transition as *"mutation-checked in
+/// both directions"* — a manual check, months ago, in prose. That is precisely
+/// the coupling no compiler maintains (AP37), on the path we can least afford
+/// to be wrong about.
+///
+/// **What is exercised, and what is not.** The pinning risk lives entirely in
+/// the *shell*: `index.html` is the mutable document that names every hashed
+/// asset, so if it updates the new bundles follow it by URL, and if it does NOT
+/// update nothing else can. So this moves the shell's `entity-build` stamp and
+/// asserts the running app reports the new one. It does **not** swap the hashed
+/// bundle itself — those are `cacheFirst` by content-addressed filename, where a
+/// changed URL *is* the invalidation and there is nothing to pin.
+///
+/// **Anti-vacuity is the whole design here.** A reload picking up a new document
+/// proves nothing if no service worker was in the path — that is just HTTP. The
+/// gate therefore asserts a controlling worker **before** the swap, and fails
+/// loudly if there is none rather than passing on a technicality.
+#[tokio::test]
+async fn a_new_build_reaches_a_browser_the_service_worker_already_controls(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // A synthetic stamp no real build can produce, so a pass cannot be an
+    // accident of two builds sharing a commit.
+    const HOTFIX_STAMP: &str = "hotfix0-deadbeef";
+
+    let (client, _server) = setup().await?;
+
+    // Isolated copy on its own port — `dist/` is never written (the Phase 27
+    // lesson: a test that can only be trusted when it runs alone is not a gate).
+    let root = "target/e2e-hotfix-shell".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let index_path = format!("{root}/index.html");
+    let shell_a = std::fs::read_to_string(&index_path)?;
+    let stamp_a = shell_a
+        .split("name=\"entity-build\" content=\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .ok_or("the staged shell carries no entity-build stamp — run `make wasm`")?
+        .to_string();
+    assert_ne!(
+        stamp_a, HOTFIX_STAMP,
+        "the staged build already carries the synthetic hotfix stamp, so the swap below \
+         could not be observed"
+    );
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    // ── Build A, and a service worker that actually controls the page ────────
+    // Reset first: `pick_free_port` can hand back a port an earlier test used,
+    // and a stale registration there would make the baseline unreadable.
+    client.goto(&url).await?;
+    let _ = client
+        .execute_async(
+            r#"const cb = arguments[arguments.length - 1];
+               (async () => {
+                   try {
+                       const rs = await navigator.serviceWorker.getRegistrations();
+                       for (const r of rs) { try { await r.unregister(); } catch (e) {} }
+                   } catch (e) {}
+                   try {
+                       const ks = await caches.keys();
+                       for (const k of ks) { try { await caches.delete(k); } catch (e) {} }
+                   } catch (e) {}
+                   cb('reset');
+               })();"#,
+            vec![],
+        )
+        .await?;
+    wipe_all_storage(&client).await?;
+
+    client.goto(&url).await?;
+    wait_for_boot(&client, 30_000).await?;
+
+    // The service worker installs and claims asynchronously, so poll for the
+    // controller rather than reading once. `clients.claim()` in `activate` is
+    // what makes this arrive without a second navigation.
+    let controller = poll_json(
+        &client,
+        "return navigator.serviceWorker && navigator.serviceWorker.controller \
+         ? (navigator.serviceWorker.controller.scriptURL || 'controller-no-url') : '';",
+        Duration::from_millis(10_000),
+        |v| !v.as_str().unwrap_or("").is_empty(),
+    )
+    .await?;
+    let controller = controller.as_str().unwrap_or("").to_string();
+    assert!(
+        controller.ends_with("/sw.js"),
+        "VACUOUS: no service worker is controlling the page, so a reload picking up new \
+         bytes would prove nothing about service-worker pinning — this would be a plain \
+         HTTP-cache test wearing R-2's name. Controller was {controller:?}. (A secure \
+         context is required; `localhost` is one.)"
+    );
+
+    let reported_a = capture_log(&client)
+        .await?
+        .into_iter()
+        .find(|l| l.contains("WASM init: build"))
+        .ok_or("build A never logged a 'WASM init: build' line")?;
+    assert!(
+        reported_a.contains(&stamp_a),
+        "before the swap the app already disagreed with the served shell.\n  served: \
+         {stamp_a}\n  logged: {reported_a}"
+    );
+
+    // ── Deploy the hotfix: the shell moves, nothing else ─────────────────────
+    let shell_b = shell_a.replace(
+        &format!("name=\"entity-build\" content=\"{stamp_a}\""),
+        &format!("name=\"entity-build\" content=\"{HOTFIX_STAMP}\""),
+    );
+    assert_ne!(shell_a, shell_b, "the stamp rewrite matched nothing");
+    std::fs::write(&index_path, &shell_b)?;
+
+    // ── The returning browser reloads exactly once ───────────────────────────
+    client.goto(&url).await?;
+    wait_for_boot(&client, 30_000).await?;
+    let reported_b = capture_log(&client)
+        .await?
+        .into_iter()
+        .find(|l| l.contains("WASM init: build"))
+        .ok_or("after the deploy the app never logged a 'WASM init: build' line")?;
+
+    let still_controlled = client
+        .execute(
+            "return !!(navigator.serviceWorker && navigator.serviceWorker.controller);",
+            vec![],
+        )
+        .await?;
+    client.close().await.ok();
+
+    assert!(
+        still_controlled.as_bool().unwrap_or(false),
+        "the service worker stopped controlling the page across the reload, so the load \
+         that picked up the new build bypassed it — the gate's subject was not exercised. \
+         Logged: {reported_b}"
+    );
+    assert!(
+        reported_b.contains(HOTFIX_STAMP),
+        "R-2 RED — THE HOTFIX DID NOT LAND. A service worker was controlling the page, the \
+         shell on the server moved from {stamp_a} to {HOTFIX_STAMP}, and one full reload \
+         later the app still reports:\n  {reported_b}\n\
+         This is brick-matrix cell #10: a deploy that cannot reach a returning browser. The \
+         shell must stay on `networkFirst` with `cache: 'reload'` in assets/sw.js — a \
+         cacheFirst navigation, or a conditional request the server can answer 304 to, pins \
+         the old build for as long as the cache survives."
+    );
+
+    println!(
+        "  R-2: sw.js controlling ({}), shell {stamp_a} → {HOTFIX_STAMP} picked up on one \
+         reload.",
+        controller.rsplit('/').next().unwrap_or("sw.js")
+    );
+    Ok(())
+}
+
+/// What this origin is holding, read from the **browser**, not from the
+/// recovery console's own report.
+///
+/// The console's claims are the subject under test here, so they cannot also be
+/// its evidence — a console that printed "cleared" while deleting nothing would
+/// pass a gate that read its own output. Names, not counts, so a failure can say
+/// *which* database went missing.
+async fn origin_contents(
+    client: &Client,
+) -> Result<(u64, Vec<String>, Vec<String>, Vec<String>), Box<dyn std::error::Error>> {
+    let v = client
+        .execute_async(
+            r#"const cb = arguments[arguments.length - 1];
+               (async () => {
+                   const out = { sw: -1, caches: [], dbs: [], ls: [] };
+                   try {
+                       out.sw = (await navigator.serviceWorker.getRegistrations()).length;
+                   } catch (e) {}
+                   try { out.caches = await caches.keys(); } catch (e) {}
+                   try {
+                       out.dbs = (await indexedDB.databases())
+                           .map(d => d && d.name).filter(Boolean);
+                   } catch (e) {}
+                   try { out.ls = Object.keys(localStorage); } catch (e) {}
+                   cb(out);
+               })();"#,
+            vec![],
+        )
+        .await?;
+    // Sorted, because none of these three APIs promises an order.
+    // `Object.keys(localStorage)` and `indexedDB.databases()` are
+    // implementation-defined, and the assertions downstream compare a before
+    // set to an after set — an order change would read as DATA LOSS, which is
+    // the one message in this gate that must never be able to cry wolf.
+    let strs = |key: &str| -> Vec<String> {
+        let mut out: Vec<String> = v
+            .get(key)
+            .and_then(|x| x.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out
+    };
+    let sw = v.get("sw").and_then(|x| x.as_i64()).unwrap_or(-1);
+    if sw < 0 {
+        return Err("the service-worker registration count could not be read".into());
+    }
+    Ok((sw as u64, strs("caches"), strs("dbs"), strs("ls")))
+}
+
+/// **THE PROGRAM RESET — heal-path row 9's common case, and the tree it must
+/// not touch.**
+///
+/// *The gap.* The L1 recovery console already *enumerated* service-worker
+/// registrations and Cache Storage and could act on neither. Its printed advice
+/// was *"unregister the service worker from your browser's developer tools"* — a
+/// developer instruction handed to an end user, and **not possible at all on
+/// mobile**, which is where a stuck visitor most likely is. The console now
+/// takes exactly one action, and this gate is what bounds it.
+///
+/// **The load-bearing assertion is the one about what SURVIVES.** A button that
+/// clears the app code is easy; a button on the screen a panicking user reaches,
+/// that is one scope mistake away from `indexedDB.deleteDatabase`, is not. There
+/// is no export path yet (resilience design §5), so a reset that took the tree
+/// with it would be the exact loss this console exists to prevent — worse than
+/// the stale worker, because it is not recoverable. So the gate asserts the
+/// entity-peer databases and the localStorage keys are **byte-for-byte the same
+/// set** afterwards, and it would fail on a scope widening even if the reset
+/// half worked perfectly.
+///
+/// **Anti-vacuity, both halves.** *(a)* If no worker were registered and no
+/// cache populated, "everything was removed" is trivially true — so the
+/// preconditions are asserted and the run aborts loudly if the staging did not
+/// produce them. *(b)* If the tree were empty, "the tree survived" is equally
+/// trivial — so a non-empty database set and a non-empty localStorage are
+/// asserted before the reset, for the same reason.
+///
+/// **The outcome is read twice, from two sources.** The console's own
+/// `data-outcome` (its report to the user — the D13 channel, which can lie) and
+/// an independent enumeration through WebDriver (the fact). Both are asserted:
+/// a console that removed everything and said nothing would leave the user
+/// exactly as stuck as before, and a console that said "cleared" while removing
+/// nothing is the failure this whole section of the map is about.
+///
+/// **Scope, stated:** this covers the case where the page still loads. A worker
+/// that breaks navigation itself takes this console down with it, and that case
+/// still needs C17's self-destruct worker — unbuilt, never drilled. Do not read
+/// a green here as closing row 9.
+#[tokio::test]
+async fn the_recovery_console_resets_the_program_and_keeps_the_tree(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    // Isolated copy on its own port — this test unregisters workers and deletes
+    // caches, which on the shared `dist/` origin would be sabotage of whatever
+    // runs next.
+    let root = "target/e2e-recovery-reset".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let app_url = format!("http://localhost:{port}/?log=trace");
+    let bios_url = format!("http://localhost:{port}/?systemrecovery=1");
+
+    // ── Stage: a real boot, so there is a real worker and a real tree ────────
+    // `pick_free_port` can hand back a port an earlier test used, so start from
+    // a known-clean origin rather than inheriting one.
+    client.goto(&app_url).await?;
+    wipe_all_storage(&client).await?;
+    client.goto(&app_url).await?;
+    wait_for_boot(&client, 30_000).await?;
+
+    // Poll for the controller: `clients.claim()` makes it arrive without a
+    // second navigation, but not synchronously with boot.
+    //
+    // **`poll_json` returns the LAST value when the budget runs out — it does
+    // not error.** So every poll here is followed by an assertion on what it
+    // returned. Writing `poll_json(..).await.map_err(..)?` reads like a check
+    // and is not one; the first version of this gate did exactly that, and the
+    // neuter written to falsify the confirmation step passed because of it.
+    let controlled = poll_json(
+        &client,
+        "return !!(navigator.serviceWorker && navigator.serviceWorker.controller);",
+        Duration::from_millis(10_000),
+        |v| v.as_bool().unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        controlled.as_bool().unwrap_or(false),
+        "VACUOUS STAGING: no service worker took control of the staged app at {app_url}. \
+         The reset below would then have nothing to remove and this gate would pass on a \
+         technicality. A secure context is required; `localhost` is one."
+    );
+
+    let (sw_before, caches_before, dbs_before, ls_before) = origin_contents(&client).await?;
+    let peer_dbs_before: Vec<String> = dbs_before
+        .iter()
+        .filter(|n| n.starts_with("entity-peer-"))
+        .cloned()
+        .collect();
+
+    assert!(
+        sw_before >= 1 && !caches_before.is_empty(),
+        "VACUOUS STAGING: the app booted with {sw_before} service-worker registration(s) and \
+         caches {caches_before:?}. With no cached program present, \"the cached program was \
+         removed\" is true of doing nothing at all, and this run proves nothing."
+    );
+    assert!(
+        !peer_dbs_before.is_empty() && !ls_before.is_empty(),
+        "VACUOUS STAGING: the origin holds no entity-peer database and/or an empty \
+         localStorage (dbs={dbs_before:?}, localStorage keys={ls_before:?}). The assertion \
+         that matters here is that the user's tree and identity SURVIVE the reset, and an \
+         empty tree survives everything."
+    );
+
+    // ── The console, and its one action ──────────────────────────────────────
+    client.goto(&bios_url).await?;
+    let armable = poll_json(
+        &client,
+        "return !!document.getElementById('reset-arm');",
+        Duration::from_millis(10_000),
+        |v| v.as_bool().unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        armable.as_bool().unwrap_or(false),
+        "the recovery console rendered no reset affordance. Row 9's common case is back to \
+         \"use your browser's developer tools\", which a phone does not have."
+    );
+
+    client
+        .execute("document.getElementById('reset-arm').click(); return true;", vec![])
+        .await?;
+
+    // The confirmation step is not decoration: it is where the console states
+    // what it would change before changing it (Doctor design §7.4). If it were
+    // ever collapsed into one click, this is what notices.
+    let confirmed = poll_json(
+        &client,
+        "return !!document.getElementById('reset-go');",
+        Duration::from_millis(10_000),
+        |v| v.as_bool().unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        confirmed.as_bool().unwrap_or(false),
+        "the reset never offered a confirmation step — the button acted on the first click. \
+         On this screen the user is already stuck and frightened; the console must say what \
+         it would change before it changes it (resilience design §7.4)."
+    );
+
+    let confirm_text = client
+        .execute(
+            "const s = document.getElementById('reset-state'); return s ? s.textContent : '';",
+            vec![],
+        )
+        .await?;
+    let confirm_text = confirm_text.as_str().unwrap_or("").to_string();
+    assert!(
+        confirm_text.contains("not touch") && confirm_text.contains("IndexedDB"),
+        "the confirmation does not tell the user what is NOT being removed. On this screen \
+         that sentence is the difference between a repair and a leap of faith. Got: \
+         {confirm_text:?}"
+    );
+
+    client
+        .execute("document.getElementById('reset-go').click(); return true;", vec![])
+        .await?;
+
+    let outcome = poll_json(
+        &client,
+        "const e = document.querySelector('#reset-state [data-outcome]'); \
+         return e ? e.getAttribute('data-outcome') : '';",
+        Duration::from_millis(20_000),
+        |v| !v.as_str().unwrap_or("").is_empty(),
+    )
+    .await?;
+    let outcome = outcome.as_str().unwrap_or("").to_string();
+
+    // ── The witness: what the browser says, not what the page claims ─────────
+    let (sw_after, caches_after, dbs_after, ls_after) = origin_contents(&client).await?;
+    let peer_dbs_after: Vec<String> = dbs_after
+        .iter()
+        .filter(|n| n.starts_with("entity-peer-"))
+        .cloned()
+        .collect();
+
+    let report = client
+        .execute(
+            "const s = document.getElementById('reset-state'); return s ? s.textContent : '';",
+            vec![],
+        )
+        .await?;
+    let report = report.as_str().unwrap_or("").to_string();
+
+    // ── And it must STAY removed across a re-scan ────────────────────────────
+    // The console's own "Re-scan this page" reloads it, and `index.html`
+    // registers a service worker on every load. Without the
+    // `!window.__ENTITY_RECOVERY__` guard on that registration the console puts
+    // back what the user just removed — the reset would look like it failed,
+    // on the screen they opened because things already looked broken. Nothing
+    // else in the suite can see that guard: every assertion above passes with
+    // it deleted, because the re-registration only happens on the NEXT load.
+    client.goto(&bios_url).await?;
+    let rescanned = poll_json(
+        &client,
+        "return !!document.getElementById('reset-arm');",
+        Duration::from_millis(10_000),
+        |v| v.as_bool().unwrap_or(false),
+    )
+    .await?;
+    assert!(
+        rescanned.as_bool().unwrap_or(false),
+        "the recovery console did not come back after the reset — re-opening it is the \
+         first thing a user does, and the assertion below would be reading a page that \
+         never rendered."
+    );
+    let (sw_rescan, caches_rescan, _, _) = origin_contents(&client).await?;
+
+    client.close().await.ok();
+
+    // The half that keeps this from ever becoming a data-loss bug. Asserted
+    // FIRST: if the reset took the tree, nothing else about it matters.
+    //
+    // **Disappeared, not "differs".** The property is that nothing of the
+    // user's was REMOVED, and an equality check would also fail on an
+    // *addition* — a late async write landing between the two reads would then
+    // red as DATA LOSS, which is the one message here that must never be able
+    // to cry wolf.
+    let gone = |before: &[String], after: &[String]| -> Vec<String> {
+        before
+            .iter()
+            .filter(|k| !after.contains(k))
+            .cloned()
+            .collect()
+    };
+    let dbs_gone = gone(&peer_dbs_before, &peer_dbs_after);
+    assert!(
+        dbs_gone.is_empty(),
+        "DATA LOSS — the program reset removed the user's entity tree: {dbs_gone:?} is gone.\
+         \n  before: {peer_dbs_before:?}\n  after:  {peer_dbs_after:?}\n\
+         The recovery console may remove app code (service workers, Cache Storage) and \
+         NOTHING else. There is no export path yet, so this is unrecoverable, and it is a \
+         strictly worse outcome than the stale worker the button exists to clear."
+    );
+    let ls_gone = gone(&ls_before, &ls_after);
+    assert!(
+        ls_gone.is_empty(),
+        "DATA LOSS — the program reset removed localStorage keys {ls_gone:?}, which is where \
+         the system seed (the root of identity) and the key vault live.\n  before: \
+         {ls_before:?}\n  after:  {ls_after:?}"
+    );
+
+    // And the half it exists for.
+    assert_eq!(
+        (sw_after, caches_after.len()),
+        (0, 0),
+        "ROW 9 RED — the console reported {outcome:?} but the cached program is still here: \
+         {sw_after} service-worker registration(s), caches {caches_after:?} (before: \
+         {sw_before} / {caches_before:?}).\n\
+         A stuck visitor pressing this button is left exactly where they were, on the one \
+         screen that was supposed to be their way out.\n\
+         Console said: {report}"
+    );
+    assert_eq!(
+        outcome, "cleared",
+        "the program WAS removed but the console reported {outcome:?} — a silent repair on \
+         the screen a user reaches when they already believe the app is broken tells them \
+         nothing, so they will go on to clear site data and lose the tree this test just \
+         proved survived. Console said: {report}"
+    );
+
+    assert_eq!(
+        (sw_rescan, caches_rescan.len()),
+        (0, 0),
+        "the reset was undone by the recovery console itself: after re-opening \
+         ?systemrecovery=1 the origin holds {sw_rescan} service-worker registration(s) and \
+         caches {caches_rescan:?} again.\n\
+         `index.html` registers a service worker on every load, so the console must skip \
+         that registration when `__ENTITY_RECOVERY__` is set — otherwise the one screen \
+         that can remove a bad worker reinstalls it on the way in, and the user is told \
+         nothing worked."
+    );
+
+    println!(
+        "  row 9: {sw_before} worker + {} cache(s) removed and still gone after a re-scan; \
+         {} peer database(s) and {} localStorage key(s) untouched.",
+        caches_before.len(),
+        peer_dbs_before.len(),
+        ls_before.len()
+    );
+    Ok(())
+}
+
 /// A running app must survive its own save.
 ///
 /// The Apps window watches the save prefix — the Saves panel lists it, and on
@@ -19205,6 +19852,252 @@ async fn blackholed_boot_scenario(
         "  {label}: booted in {boot_ms}ms with {asked} black-holed \
          /entity-deployment.json request(s) ({stalled} stalled at the wire). \
          Expect ~3s (the deadline) + a healthy boot."
+    );
+    Ok(())
+}
+
+/// **B-1, observability half — a stalled boot is VISIBLE, and names the step.**
+///
+/// The gates above prove the boot *survives* a black-holing origin. They say
+/// nothing about what the user is looking at for the ~3.2 s it takes, and until
+/// 2026-09-01 the answer was **a blank page**: `start()` hid `#loading` before
+/// peer construction, `boot_fast_paint` is `DISABLED_FOR_CONSOLIDATION` so
+/// nothing replaced it, and the always-visible *"Open System Recovery"* hatch
+/// went down inside the same div. The boot audit's phrasing is the whole point —
+/// **"bounded is not the same as observable"** (`AUDIT-BOOT-PATH-2026-08-27.md`
+/// §2). A bounded 3 s stall and a permanent brick rendered identically.
+///
+/// This is deliberately the black-hole rig rather than a healthy boot: on a
+/// healthy boot the surface is up for ~200 ms and catching it is a race, while
+/// here the stall is *load-bearing* and ~3 s wide. The scenario that produced
+/// the defect is the one that gates it.
+///
+/// **Anti-vacuity matters more than usual here.** The closing assertion is
+/// *"`#loading` is hidden"*, which is trivially true of an element that does not
+/// exist — a renamed id would turn this gate green while deleting the feature.
+/// So the mid-boot poll asserts `present` first, and only then that it was
+/// visible and had named a step.
+///
+/// **One arm, stated.** Unlike AP41's class this is arm-independent — it is
+/// main-thread DOM with no store read on either side — so a Worker twin would
+/// re-measure the same code. Falsified by restoring the early hide in `start()`
+/// (the surface is then already down when the poll runs) and, separately, by
+/// deleting the `boot_progress::armed()` call (the surface never comes down).
+#[tokio::test]
+async fn a_stalled_boot_shows_the_boot_surface_instead_of_a_blank_page(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const PROBE: &str = r#"
+        var l = document.getElementById('loading');
+        var s = document.getElementById('loading-substep');
+        var r = l && l.querySelector('.recovery-link');
+        var vis = function(e) {
+            if (!e) return false;
+            var c = getComputedStyle(e);
+            if (c.display === 'none' || c.visibility === 'hidden') return false;
+            return e.getClientRects().length > 0;
+        };
+        return {
+            present: !!l,
+            visible: vis(l),
+            step: (s && s.textContent) || '',
+            // The PAYLOAD, not the container. AP46 is that the escape hatch went
+            // down inside this div — a gate that only checks the div is visible
+            // would stay green if the link were removed from it.
+            hatch_visible: vis(r),
+            hatch_href: (r && r.getAttribute('href')) || ''
+        };
+    "#;
+
+    let _server = start_blackhole_server(&["/entity-deployment.json"])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+    let url = format!("http://localhost:{port}/?log=trace");
+    client.goto(&url).await?;
+
+    // DURING the stall: the surface is up and has named a boot step. The budget
+    // is comfortably inside the ~3.2 s the deployment-document deadline buys.
+    let during = poll_json(
+        &client,
+        PROBE,
+        Duration::from_millis(2_500),
+        |v| {
+            v["visible"].as_bool().unwrap_or(false)
+                && !v["step"].as_str().unwrap_or("").is_empty()
+        },
+    )
+    .await?;
+
+    assert!(
+        during["present"].as_bool().unwrap_or(false),
+        "VACUOUS: there is no #loading element on the page at all, so every other \
+         assertion here is about nothing — the boot surface was renamed or removed. \
+         Probe returned: {during}"
+    );
+    assert!(
+        during["visible"].as_bool().unwrap_or(false),
+        "B-1 RED — the page is BLANK while boot stalls on a black-holed \
+         /entity-deployment.json. This is the defect: a bounded 3 s wait and a \
+         permanent brick look identical to the user, and the 'Open System Recovery' \
+         hatch is hidden with the div. Probe returned: {during}"
+    );
+    let step = during["step"].as_str().unwrap_or("").to_string();
+    assert!(
+        !step.is_empty(),
+        "the boot surface is up but names no step, so a bug report still cannot say \
+         WHICH of boot_load's awaits it sat on — `boot_progress::step` is not wired. \
+         Probe returned: {during}"
+    );
+    // **The payload, and it is the actual subject of AP46.** The defect was not
+    // "a div was hidden" — it was that the ONE escape hatch a wedged boot offers
+    // went down inside that div. A gate asserting only `visible` above would stay
+    // green if the link were deleted, which is the same measuring-the-container
+    // mistake in a different costume.
+    assert!(
+        during["hatch_visible"].as_bool().unwrap_or(false),
+        "the boot surface is up but the System Recovery hatch inside it is NOT \
+         rendered — a user watching a stalled boot still has no way out, which is \
+         the half of AP46 that actually costs them something. Probe returned: {during}"
+    );
+    assert!(
+        during["hatch_href"]
+            .as_str()
+            .unwrap_or("")
+            .contains("systemrecovery"),
+        "the hatch renders but does not point at System Recovery, so it is decoration. \
+         Probe returned: {during}"
+    );
+
+    // AFTER: the frame loop arms and the surface comes down. This is
+    // `boot_progress::armed()`'s single structural call site.
+    let boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    let after = poll_json(&client, PROBE, Duration::from_millis(3_000), |v| {
+        !v["visible"].as_bool().unwrap_or(true)
+    })
+    .await?;
+    client.close().await.ok();
+
+    assert!(
+        !after["visible"].as_bool().unwrap_or(true),
+        "the frame loop armed but the boot surface is STILL up, covering the app \
+         (it is position:fixed, z-index 100) — `boot_progress::armed()` did not run. \
+         Probe returned: {after}"
+    );
+
+    println!(
+        "  B-1: boot surface visible through a {boot_ms}ms stalled boot, naming step \
+         {step:?}, and down once the frame loop armed."
+    );
+    Ok(())
+}
+
+/// **B-1, the stall reporter — the branch that only runs on the bad day.**
+///
+/// Split out from the gate above deliberately. That one proves the surface is up
+/// and carries the hatch; this one proves the *escalation* — the note that tells
+/// a user this is no longer a normal wait, and the hatch promoted from grey to
+/// something they will actually click.
+///
+/// **It exists because the branch was otherwise unreachable from the harness.**
+/// The threshold ships at 10 s, above a healthy boot and below the bounded worst
+/// case; but D23 caps the deployment-document read at 3 s, so the black-hole rig
+/// — the only stall the harness can construct — tops out around 3.2 s and the
+/// timer could never fire inside it. Shipping the branch untested was the option
+/// on the table, and `?bootstall=<ms>` is the alternative: a test affordance
+/// nothing in the product sets, which makes the real code path reachable rather
+/// than re-implementing it in the test.
+///
+/// **Negative half, and it is the one that makes this a gate rather than a
+/// demo:** the same page with the default threshold must NOT show the note
+/// during the same stall. Without that, `display:block` hard-coded into the
+/// markup would pass — the reporter would be "working" on every boot, including
+/// the healthy ones, and the escalation would mean nothing.
+#[tokio::test]
+async fn a_boot_that_stalls_past_the_threshold_says_so_and_promotes_the_hatch(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const PROBE: &str = r#"
+        var slow = document.getElementById('loading-slow');
+        var l = document.getElementById('loading');
+        var r = l && l.querySelector('.recovery-link');
+        var shown = function(e) {
+            return !!e && getComputedStyle(e).display !== 'none'
+                && e.getClientRects().length > 0;
+        };
+        return {
+            present: !!slow,
+            slow_shown: shown(slow),
+            hatch_underlined: !!r && getComputedStyle(r).textDecorationLine.indexOf('underline') !== -1
+        };
+    "#;
+
+    let _server = start_blackhole_server(&["/entity-deployment.json"])?;
+    let port = blackhole_server_port();
+
+    // **ONE session for both halves, deliberately.** The grid this suite runs
+    // against is `maxSessions=1`, so a second `connect_browser()` blocks on the
+    // slot the first one has not released yet — measured while falsifying this
+    // gate: one neuter took 60s and another hit the 240s stall watchdog, both
+    // reporting as a wedge in the product rather than as slot contention in the
+    // test. A second `goto` is a full page load and gives the same clean boot.
+    let client = connect_browser().await?;
+
+    // POSITIVE: threshold well inside the ~3.2s stall.
+    client
+        .goto(&format!("http://localhost:{port}/?log=trace&bootstall=400"))
+        .await?;
+    // Wait for the WHOLE escalation, not just the note. If this polled on
+    // `slow_shown` alone it would return the instant the note appeared — which,
+    // for a note wrongly hard-coded visible in the markup, is *before the timer
+    // has run at all*. The gate would then red on the hatch assertion below and
+    // never reach the negative half that is supposed to catch exactly that.
+    // Measured while falsifying: it did precisely that.
+    let fired = poll_json(&client, PROBE, Duration::from_millis(2_500), |v| {
+        v["slow_shown"].as_bool().unwrap_or(false)
+            && v["hatch_underlined"].as_bool().unwrap_or(false)
+    })
+    .await?;
+
+    assert!(
+        fired["present"].as_bool().unwrap_or(false),
+        "VACUOUS: there is no #loading-slow element, so this gate is about nothing. \
+         Probe returned: {fired}"
+    );
+    assert!(
+        fired["slow_shown"].as_bool().unwrap_or(false),
+        "boot stalled well past the threshold and the surface never said so — the \
+         reporter in index.html did not fire, so a user cannot tell a 3s wait from a \
+         wedge. Probe returned: {fired}"
+    );
+    assert!(
+        fired["hatch_underlined"].as_bool().unwrap_or(false),
+        "the stall note fired but the recovery hatch was not promoted, so the one \
+         action available stays as quiet as it was before anything went wrong. \
+         Probe returned: {fired}"
+    );
+
+    // NEGATIVE: same stall, default threshold — the note must stay down. This is
+    // what separates "the reporter fired" from "the markup is always visible".
+    // Asserted at the moment the surface is still up but the 10s timer cannot
+    // have run, which is the only window where the two are distinguishable.
+    client
+        .goto(&format!("http://localhost:{port}/?log=trace"))
+        .await?;
+    let quiet = poll_json(&client, PROBE, Duration::from_millis(1_500), |v| {
+        v["present"].as_bool().unwrap_or(false)
+    })
+    .await?;
+    let boot_ms = wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    client.close().await.ok();
+
+    assert!(
+        !quiet["slow_shown"].as_bool().unwrap_or(true),
+        "the 'taking longer than usual' note is showing after a {boot_ms}ms boot that \
+         completed normally under the DEFAULT threshold — it is not gated on the timer \
+         at all, so it would cry wolf on every healthy boot. Probe returned: {quiet}"
+    );
+
+    println!(
+        "  B-1 stall reporter: fired under ?bootstall=400 and promoted the hatch; \
+         silent at the default threshold on the same {boot_ms}ms stalled boot."
     );
     Ok(())
 }

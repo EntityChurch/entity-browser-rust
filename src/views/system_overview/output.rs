@@ -31,6 +31,27 @@ pub struct BackendStatusView {
     pub port_mapping_note: Option<String>,
 }
 
+/// The *Problems* section — Entity Doctor's checks, rendered inside System
+/// Overview rather than in a window of their own (`doctor.rs`, "Where this
+/// appears").
+///
+/// `ran` is not decoration and is not the same as `findings.is_empty()`: an
+/// empty list before the first run and an empty list after a clean run are the
+/// same value and opposite facts. The renderer shows *"Checking…"* for one and
+/// *"No problems found"* for the other, and it can only tell them apart from
+/// this flag.
+#[derive(Debug, Clone, Default)]
+pub struct HealthView {
+    /// Whether the checks have completed at least once this window-open.
+    pub ran: bool,
+    /// Every finding, including the clear ones — the renderer decides what to
+    /// show. Handing it only the problems would make "quiet when healthy" a
+    /// property of the model, where nothing can see it change.
+    pub findings: Vec<crate::doctor::Finding>,
+    /// What the last applied remedy reported, if one was applied this session.
+    pub remedy_message: Option<String>,
+}
+
 /// Everything the System Backend window renders.
 #[derive(Clone, Debug)]
 pub struct SystemOverviewOutput {

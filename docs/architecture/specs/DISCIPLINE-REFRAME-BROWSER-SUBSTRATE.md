@@ -1894,6 +1894,143 @@ these shipped in this repo.
   `a_command_run_during_the_read_is_not_clobbered`,
   `tests/window_hydration_census.rs`]
 
+- **AP45 — A test that ASSERTS the non-conformance, under a name that makes it read as a
+  decision.** Not AP41's *green by fallback* (the gate's expected value equalled its fallback,
+  so it measured nothing) and not the KB gate's *green by depending on the defect* (it had
+  encoded a symptom of state loss as its precondition). This is the third face and the worst
+  of them, because both of those are silent and this one **speaks**: the suite states the
+  wrong behaviour as the requirement, in a sentence, and every reader after that is reading a
+  ratified mistake.
+  **Measured 2026-09-01.** `GUIDE-ENTITY-WORKBENCH-APP` §5.4 rule 3 has been normative since
+  the v0.8.0 public release on **2026-06-21**: an implementation MUST log a violation (WARN
+  minimum) on encountering a legacy `source_window` / `source_panel` / `content_type` field in
+  a received `app/state/selection`, and *"silent tolerance is NON-CONFORMANT."*
+  `Selection::from_entity` dropped all three on a bare `_ => {}` — and
+  `from_entity_tolerates_unknown_fields` **constructed an entity carrying `source_window` and
+  asserted we ignore it quietly.** Over two months green, and green is not the problem; the
+  word *tolerates* is. Nobody re-reads a rule a passing test says they already satisfy.
+  **The mechanism, and it is the transferable half: one test name covering two obligations,
+  where we met one of them.** V7 §2.6 open-types genuinely does require unknown fields to be
+  skipped **silently**, and that is what the test was written for and what it correctly
+  proved. §5.4 rule 3 carves three *named* spellings out of exactly that set and requires the
+  opposite. A single test spanning both could only assert one, and it asserted the one we had
+  already done. **When a rule carves an exception out of a rule you satisfy, the exception
+  needs its own test, or the general case will stand in for it and pass.**
+  **The second-order cause: we were conformant on emit and read only the emit half.** §5.4 is
+  five numbered rules — two emit-side, one read-side, one round-trip, one deferred. Our
+  emitter was clean, so the section read as *done*. **A normative section is not satisfied by
+  the arm your code happens to sit on** — enumerate the rules and say which line answers each,
+  which is the only reason rules 1, 3 and 4 now each have a test naming its own number.
+  **And the trap sitting next to it, which is why the gate is scoped to the entity type and
+  not the field name:** `content_type` is *retired* on `app/state/selection` and **required**
+  on `app/state/window-index` (§4.2a says so by hand). A read-side gate written on the field
+  spelling would fire on our own ruled index schema. The same string, two slots, opposite
+  obligations — check what a field name means *on the slot you are on*.
+  [AP31, AP39, AP40, AP44, D12, `selection.rs` `legacy_field_violation` /
+  `Selection::decode` (violations returned, not only logged, so the *wiring* is testable
+  without a subscriber), `from_entity_skips_genuinely_unknown_fields_silently`,
+  `from_entity_reports_every_retired_field_rather_than_tolerating_it`,
+  `an_unlisted_source_field_is_still_reported_under_rule_one`,
+  `the_legacy_gate_is_scoped_to_the_selection_type_not_to_the_field_name`,
+  `a_legacy_field_is_not_re_emitted_on_the_round_trip`]
+
+- **AP46 — The fallback surface is taken down on "the replacement STARTED", not "the
+  replacement is LIVE" — so it disappears exactly when it becomes necessary.**
+  **Measured 2026-09-01.** `start()` hid `#loading` immediately after setting the DOM-mode
+  class — *before* peer construction and before `boot_load`'s ~14 awaits. The signal it acted
+  on was *WASM is running*; the signal it needed was *the app can render*. Those differ by the
+  entire application-tier boot: a bounded worst case of tens of seconds (one 3 s
+  deployment-document deadline plus four 5 s origin writes), with no frame loop and no
+  watchdog behind any of it, because both install after `boot_load` returns.
+  **Three facts stacked to make the gap total rather than a worst case**, and the third is
+  what turns this from untidy into the catalog: (1) the hide ran first; (2) the one early-paint
+  path that could have covered it, `boot_fast_paint`, is `DISABLED_FOR_CONSOLIDATION` and so
+  paints nothing on any deployment; (3) the always-visible *"Stuck here? Open System
+  Recovery →"* hatch lives **inside that same div**, so the escape hatch built for precisely
+  this failure was removed at the moment it started to matter. A bounded 3 s stall and a
+  permanent brick rendered identically, and neither offered a way out.
+  **The transferable half: tear a fallback down on the signal that the replacement is LIVE,
+  never on the signal that it has STARTED — and prefer a signal with ONE call site.**
+  `boot_progress::armed()` is called from one place, after the first `requestAnimationFrame`
+  is scheduled. The correct behaviour on a boot that dies earlier then comes *free from the
+  placement* rather than from a handler somebody has to remember (AP44): the surface stays up,
+  carrying the recovery link. The pre-fix code had the exact inverse — a boot that died left a
+  blank page indistinguishable from a finished one.
+  **Second-order cause, and it is the reusable one: bounding a wait and rendering something
+  during it are different obligations.** The boot audit measured the bound and wrote the
+  sentence — *"bounded is not the same as observable"* (`AUDIT-BOOT-PATH-2026-08-27.md` §2) —
+  and then the three sessions of work that followed treated only the bound, because D23 has an
+  enforcement point and the other half had none. **A phrase in an audit is not an enforcement
+  point.** Note also what this does NOT close: an application-tier step can still prevent the
+  window manager. That is B-1's two-phase boot, and it is blocked on a substrate constraint the
+  audit's §4 does not name — `boot_load` holds `&mut EntityApp` across every await while the
+  rAF closure `try_borrow_mut()`s the same cell each frame, so spawning it behind the loop
+  reproduces the blank page with a `FRAME SKIP` line under it. (**The remedy first written
+  here — "make `Peers` shareable" — was overstated and is withdrawn**: `DispatchHandle` is
+  already cloneable, arm-agnostic and transport-owning, and is the blessed shape. See
+  `AUDIT-BOOT-PATH-2026-08-27.md` §4a.) **Observability and non-fatality are separable, and
+  only the first was cheap.**
+  [D13, AP3, AP36, AP44, `boot_progress.rs` (`armed`, one call site after the rAF arm;
+  `step`, best-effort by design and said so), `index.html` boot stall reporter,
+  `a_stalled_boot_shows_the_boot_surface_instead_of_a_blank_page` — falsified in both
+  directions: restoring the early hide reds it with the production symptom, neutering `armed`
+  reds it with the surface left covering the app]
+
+- **AP47 — A wait that returns its LAST OBSERVATION when the budget runs out is not an
+  assertion, and `?` on it reads exactly like one.** **Measured 2026-09-01.** `poll_json`
+  (`tests/e2e_worker.rs`) returns `Ok(value)` on timeout — deliberately, because most callers
+  poll and *then* assert on what came back, and that is the correct shape. The failure is the
+  other shape: `poll_json(..).await.map_err(|e| "the console never offered X")?`, which is how
+  three checks in a new gate were written. The `?` can only fire on a **WebDriver transport
+  error**; the timeout it was written for returns `Ok` and sails straight through, so the
+  message names a condition the code cannot detect.
+  **What makes this catalog-worthy rather than a typo: it was found by a neuter that PASSED.**
+  The gate was falsified five ways; the neuter for the confirmation step came back green, and
+  the first explanation to hand — a mis-anchored `str.replace` that hit an inner call site with
+  the same text — was *also* true. Two independent defects behind one green, and fixing only
+  the visible one would have left a gate that could never see the thing it was written for.
+  **A neuter that passes has two possible causes and you owe both:** the gate does not measure
+  it, or the neuter did not land. Check the served bytes before concluding either.
+  **The rule: after a bounded wait, assert on the value it returned.** Say what you saw, not
+  what you were waiting for. And note the shape it shares with AP45 and AP37 — a mechanism
+  documented in prose (here, an error message) that no compiler maintains, on a path where the
+  documentation is the only thing anyone reads.
+  [D10, AP37, AP45, `poll_json` (returns `Ok(last)` by design — the caller asserts),
+  `the_recovery_console_resets_the_program_and_keeps_the_tree` (six neuters, six distinct
+  reds, all observed after the fix)]
+
+- **AP48 — An exhaustively-tested model says nothing about the surface that consumes it, and the
+  consumer is where a preserved distinction gets thrown away.** **Measured 2026-09-01.**
+  `doctor.rs` shipped with 33 passing native tests, including ones asserting that its five
+  verdicts have five distinct words, that only one counts as clear, and that an unreachable
+  source can never report as healthy. Two defects survived all of it, and **neither was
+  reachable from any test of the model**:
+  (a) the section was appended **below a platform early-return** in
+  `dom::system_overview::render`, so it existed in the Tauri desktop build and **not in a
+  browser** — where both of the incidents it answers actually happened, one of them on a phone.
+  (b) the renderer filtered findings on `!verdict.is_clear()`, which is four of the five states,
+  so *"nothing to compare"* and *"not checked yet"* were listed as findings and an ordinary
+  healthy profile rendered **three paragraphs of non-problems under a heading that says
+  Problems** — the screen people learn to close, which costs exactly the attention the real
+  finding will need.
+  **(b) is the transferable half: AP40 has to hold at the CONSUMER, not only at the decision.**
+  The model split the outcomes correctly and the last hop collapsed them back into a boolean.
+  Enumerating states buys nothing if the surface re-merges them, and no test of the enum can see
+  it happen — the collapse lives in the caller.
+  **The structural fix is to put the predicate beside the states, not in the renderer.**
+  `Verdict::warrants_attention` is now a method on the model with its reasoning attached, so no
+  renderer has to remember which verdicts count as a problem (AP44's shape), and it is gated in
+  both directions: a healthy profile shows zero rows, and a real divergence is still put in
+  front of the user. A one-way test would have passed the silent version.
+  **And the honest note about how both were found: by running the app.** Not by review, not by a
+  gate. A surface's *placement* and its *noise level* are correctness properties, and this repo
+  had no gate that could observe either. That is a standing hole, named here rather than
+  papered over.
+  [AP40, AP44, D13, `doctor::Verdict::warrants_attention`,
+  `nothing_to_compare_is_not_a_problem_and_a_divergence_always_is`,
+  `a_real_divergence_is_always_put_in_front_of_the_user`,
+  `dom/system_overview.rs` (the `!output.tauri` return, with the reason at the call site)]
+
 ---
 
 ## 6. Naming, decision, and "what stays"

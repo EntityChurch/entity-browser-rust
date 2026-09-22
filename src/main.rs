@@ -111,6 +111,15 @@ mod tree_click;
 mod tauri_ipc;
 #[cfg(target_arch = "wasm32")]
 mod boot_fast_paint;
+// The pre-frame-loop boot surface — the observability half of boot audit B-1.
+#[cfg(target_arch = "wasm32")]
+mod boot_progress;
+// Entity Doctor — "do my beliefs still match the world?" (heal-path row 11).
+// Both halves are arch-independent and native: `refresh_ledger` is the
+// recording seam a failed refresh lands in, and `doctor` is the pure verdict
+// logic, so the checks are gated by `make test` and not only through a browser.
+mod doctor;
+mod refresh_ledger;
 mod views;
 mod window;
 mod window_hydration;
@@ -409,15 +418,14 @@ pub async fn start() -> Result<(), JsValue> {
         return app_host::run(&program).await;
     }
 
-    // Hide loading indicator.
-    if let Some(loading) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("loading"))
-    {
-        let _ = loading
-            .dyn_ref::<web_sys::HtmlElement>()
-            .map(|e| e.style().set_property("display", "none"));
-    }
+    // The loading indicator STAYS UP until the frame loop is armed
+    // (`boot_progress::armed()`, below). It used to be hidden right here —
+    // before peer construction and before `boot_load`'s ~14 awaits — which,
+    // with `boot_fast_paint` disabled for the site-surface consolidation, left
+    // the page **blank** for the whole application-tier boot and took the
+    // always-visible "Open System Recovery" hatch down with it. Boot audit §2:
+    // *bounded is not the same as observable*. See `boot_progress`.
+    boot_progress::step("starting");
 
     // DOM-only mode — set CSS class.
     dom::util::set_mode_class("mode-dom", "DOM");
@@ -517,6 +525,7 @@ pub async fn start() -> Result<(), JsValue> {
     let try_worker = try_worker && !multitab_secondary;
 
     use storage_durability::BootStorageStatus;
+    boot_progress::step("opening storage");
     let (app, storage_status) = if try_worker {
         match app::EntityApp::new_wasm_worker().await {
             Ok(app) => (app, BootStorageStatus::DurableWorker),
@@ -700,6 +709,13 @@ pub async fn start() -> Result<(), JsValue> {
             .request_animation_frame(cb.as_ref().unchecked_ref())
             .ok();
     }
+
+    // The app owns the page from here — take the boot surface down. This is
+    // `boot_progress`'s ONE structural signal: placed after the first frame is
+    // scheduled, so the surface comes down when there is something behind it,
+    // and a boot that dies earlier leaves it up carrying the recovery link
+    // rather than exposing a blank page that looks like a finished one.
+    boot_progress::armed();
 
     let boot_ms = perf_now() - wasm_start_ms;
     tracing::info!(

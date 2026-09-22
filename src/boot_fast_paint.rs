@@ -86,6 +86,18 @@ pub fn maybe_paint_home() {
     // Do NOT re-enable until the overlay is the sole `#site-layer` owner and
     // fast-paint feeds it (stash the prefetched output) rather than writing the
     // `mode-site` class itself.
+    //
+    // **AND ONE MORE THING BEFORE YOU FLIP IT (added 2026-09-01, AP46).** The
+    // boot surface `#loading` now stays up until the frame loop arms
+    // (`boot_progress::armed`), and it is `position:fixed; z-index:100` over the
+    // whole viewport. So a re-enabled fast paint would render *underneath it* and
+    // be invisible — the pre-peer paint would appear to do nothing, which is a
+    // confusing way to lose an afternoon. Whoever re-enables this owns taking the
+    // boot surface down at the moment content is actually on screen. That is a
+    // SECOND legitimate "the replacement is live" signal, so give it its own
+    // function rather than calling `armed()` — `armed` means *the frame loop is
+    // running* and its one-call-site property is load-bearing (AP44), not
+    // incidental.
     if DISABLED_FOR_CONSOLIDATION {
         tracing::debug!("fast-paint: disabled (site-surface consolidation; HANDOFF-SITE-SURFACE-AUDIT §5)");
         return;

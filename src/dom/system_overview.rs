@@ -22,6 +22,7 @@ pub fn render(
     container: &Element,
     output: &SystemOverviewOutput,
     overview: &SystemPeersOutput,
+    health: &crate::views::system_overview::output::HealthView,
     ctx: &DomCtx,
 ) {
     util::clear_children(container);
@@ -73,6 +74,22 @@ pub fn render(
     // System peers + posture (always — this is the browser view too). The
     // native peer's identity card here is terse; its live detail follows below.
     crate::dom::system_peers::render_system_peers(&wrapper, overview);
+
+    // --- Problems (the health checks) ---
+    //
+    // **Above the `!output.tauri` early return, and that placement is the whole
+    // point.** This function returns here in a plain browser, so a section
+    // added anywhere below it would exist only in the desktop app — and both
+    // incidents this answers happened in a browser, one of them on a phone. It
+    // was written below the return first, and looking at the running app is
+    // what caught it: the window rendered perfectly and the section simply was
+    // not there.
+    //
+    // Above the topology cards too: if something is wrong with this profile's
+    // beliefs, that is why a person opened this window. Under the log tail it
+    // would be the "diagnostic you have to remember" trap one scroll down
+    // instead of one window over.
+    render_health(&wrapper, health, ctx);
 
     if !output.tauri {
         // Not a dead end — the backend simply isn't reachable from a plain
@@ -168,6 +185,161 @@ pub fn render(
 /// Nothing here is a control and nothing here is a string to carry to another
 /// machine. If a row you are adding is either of those, it belongs in card B or
 /// card C.
+/// The *Problems* card.
+///
+/// **Quiet when there is nothing wrong** — the operator's framing, and the
+/// right one: *if there are no problems you do not go to the doctor*, so a
+/// healthy profile gets one line rather than a wall of green ticks that trains
+/// people to stop reading it.
+///
+/// But *quiet* is not *silent*. A section that renders nothing when healthy
+/// cannot be told from one that never ran or crashed, so the clear state still
+/// says it checked. That is the same distinction the model's `ran` flag exists
+/// for, carried through to the screen.
+///
+/// Every string here comes from `doctor::copy` or from the finding itself; this
+/// function contributes none of its own, which is what keeps the whole
+/// surface's copy in one file for translation.
+fn render_health(
+    parent: &Element,
+    health: &crate::views::system_overview::output::HealthView,
+    ctx: &DomCtx,
+) {
+    use crate::doctor::{copy, Verdict};
+
+    let card = components::card(copy::TITLE);
+
+    if !health.ran {
+        util::append(&card, &components::loading(copy::CHECKING));
+        util::append(parent, &card);
+        return;
+    }
+
+    // Only what `warrants_attention` says — a divergence, or a check that tried
+    // and could not tell. NOT `!is_clear()`: on an ordinary healthy profile all
+    // three come back "nothing to compare"/"not checked yet", and listing those
+    // put three paragraphs of non-problems under a heading that says
+    // **Problems**. See the note on `Verdict::warrants_attention`.
+    let problems: Vec<&crate::doctor::Finding> =
+        health.findings.iter().filter(|f| f.verdict.warrants_attention()).collect();
+
+    if problems.is_empty() {
+        let line = util::create_element("p");
+        line.set_attribute("style", theme::NOTE).ok();
+        util::set_text(&line, copy::ALL_CLEAR);
+        util::append(&card, &line);
+
+        // …but say what "no problems" was based on. A clear line with no count
+        // behind it cannot be told from a section that never ran, and a check
+        // that found no source has not cleared anything.
+        let quiet = health.findings.iter().filter(|f| !f.verdict.is_clear()).count();
+        let n = health.findings.len().to_string();
+        let when = util::create_element("p");
+        when.set_attribute("style", theme::HINT).ok();
+        util::set_text(
+            &when,
+            &if quiet == 0 {
+                copy::CHECKED_FMT.replace("{n}", &n)
+            } else {
+                copy::CHECKED_WITH_GAPS_FMT
+                    .replace("{n}", &n)
+                    .replace("{q}", &quiet.to_string())
+            },
+        );
+        util::append(&card, &when);
+    } else {
+        // Worst first. `Verdict` orders by severity, so this needs no second
+        // table to stay in step with a new verdict.
+        let mut sorted = problems;
+        sorted.sort_by_key(|f| f.verdict);
+
+        // One honest banner when anything could not be established, so the
+        // absence of a warning is never read as an all-clear.
+        if sorted.iter().any(|f| f.verdict == Verdict::Undetermined) {
+            util::append(&card, &components::notice(copy::SOME_UNDETERMINED));
+        }
+
+        for f in sorted {
+            util::append(&card, &health_finding(f, ctx));
+        }
+    }
+
+    if let Some(msg) = &health.remedy_message {
+        util::append(&card, &components::success(msg));
+    }
+
+    let row = util::create_element("div");
+    row.set_attribute("style", theme::BTN_ROW).ok();
+    util::append(
+        &row,
+        &components::button(
+            ctx,
+            copy::RECHECK,
+            components::ButtonKind::Small,
+            crate::views::system_overview::HEALTH_RECHECK_EVENT,
+        ),
+    );
+    util::append(&card, &row);
+
+    util::append(parent, &card);
+}
+
+/// One finding: what this machine believes, what it was checked against, what
+/// that means, and — where one exists — the repair, with what it would change
+/// stated **beside the button rather than after pressing it**.
+fn health_finding(f: &crate::doctor::Finding, ctx: &DomCtx) -> Element {
+    let block = util::create_element("div");
+    block.set_attribute("style", theme::SECTION_GROUP).ok();
+
+    let head = util::create_element("div");
+    head.set_attribute("style", theme::ROW_INLINE).ok();
+    let name = util::create_element("strong");
+    util::set_text(&name, f.check.title());
+    util::append(&head, &name);
+    util::append(&head, &components::health_chip(f.verdict.chip(), f.verdict.tone()));
+    util::append(&block, &head);
+
+    // The audit pair. A finding that says only "something is wrong" is an
+    // opinion; belief + source is what makes it checkable by the person
+    // reading it.
+    for (label, value) in
+        [(crate::doctor::copy::BELIEF, &f.belief), (crate::doctor::copy::SOURCE, &f.source)]
+    {
+        let row = util::create_element("p");
+        row.set_attribute("style", theme::HINT).ok();
+        util::set_text(&row, &format!("{label} {value}"));
+        util::append(&block, &row);
+    }
+
+    let detail = util::create_element("p");
+    detail.set_attribute("style", theme::NOTE).ok();
+    util::set_text(&detail, &f.detail);
+    util::append(&block, &detail);
+
+    if let Some(remedy) = f.remedy {
+        let effect = util::create_element("p");
+        effect.set_attribute("style", theme::HINT).ok();
+        util::set_text(&effect, remedy.effect());
+        util::append(&block, &effect);
+
+        let row = util::create_element("div");
+        row.set_attribute("style", theme::BTN_ROW).ok();
+        util::append(
+            &row,
+            &components::button_value(
+                ctx,
+                remedy.label(),
+                components::ButtonKind::Primary,
+                crate::views::system_overview::HEALTH_REMEDY_EVENT,
+                remedy.key(),
+            ),
+        );
+        util::append(&block, &row);
+    }
+
+    block
+}
+
 fn render_device_card(parent: &Element, output: &SystemOverviewOutput, b: &BackendStatusView) {
     let card = components::card(&crate::i18n::t("sysoverview.card_device", &[]));
     add_row(

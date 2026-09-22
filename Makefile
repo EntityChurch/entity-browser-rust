@@ -607,9 +607,23 @@ E2E_TIMEOUT ?= 15m
 # Preflight: the suite's own connect error is good, but it only surfaces on the
 # far side of the trunk build — a minute burnt on the commonest mistake. Probe
 # :4444 first (in-container python3, so the host still needs only make+podman).
-E2E_PREFLIGHT = python3 -c "import urllib.request as u; u.urlopen(\"http://localhost:4444/status\", timeout=3)" 2>/dev/null \
-	|| { echo; echo "e2e preflight: nothing answering on :4444 — start Selenium first:"; \
+#
+# WEBDRIVER ?= a PRIVATE grid. This box routinely carries other seats' Selenium
+# containers on the default :4444, and `setup()` reaps EVERY session on whatever
+# grid it is pointed at — so a shared grid both corrupts this run and takes the
+# other seat's work down. Point this at your own and nothing is shared:
+#   podman run -d --rm --name e2e-firefox-mine --network=host \
+#     docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404 \
+#     --port 4455
+#   make e2e-worker WEBDRIVER=http://localhost:4455
+# The preflight probes the SAME url it hands the suite — probing :4444 while the
+# suite dialled somewhere else is a green preflight for a grid nobody uses.
+WEBDRIVER ?= http://localhost:4444
+E2E_WD_ENV = -e E2E_WEBDRIVER_URL=$(strip $(WEBDRIVER))
+E2E_PREFLIGHT = python3 -c "import urllib.request as u; u.urlopen(\"$(strip $(WEBDRIVER))/status\", timeout=3)" 2>/dev/null \
+	|| { echo; echo "e2e preflight: nothing answering on $(strip $(WEBDRIVER)) — start Selenium first:"; \
 	     echo "  podman run -d --rm --name e2e-firefox --network=host docker.io/selenium/standalone-firefox:149.0.2-geckodriver-0.36.0-20260404"; \
+	     echo "  (a private grid: add --port <n> and pass WEBDRIVER=http://localhost:<n>)"; \
 	     echo "  (details: tools/e2e/README.md)"; echo; exit 1; }
 e2e-worker: image
 	@$(call RUN,$(E2E_PREFLIGHT),--network host)
@@ -652,7 +666,7 @@ endif
 	# never fires on one; it exists so a hang FAILS instead of sitting silent
 	# forever in CI or an agent loop. --signal=KILL because a wedged podman
 	# child may not honour TERM.
-	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1 $(strip $(E2E_EXTRA)),--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV))
+	$(call RUN,timeout --signal=KILL $(E2E_TIMEOUT) cargo test --features e2e --test e2e_worker $(strip $(T)) -- --nocapture --test-threads=1 $(strip $(E2E_EXTRA)),--network host $(E2E_DISPLAY_ARGS) $(E2E_UNTIL_ENV) $(E2E_WD_ENV))
 
 # The MULTI-HOST federation origin — the publisher on its own host, so a
 # consumer's fetches are real network hops rather than loopback ones. Prints the

@@ -374,6 +374,60 @@ pub fn conn_chip(state: ConnState) -> Element {
     chip(g, w, c)
 }
 
+/// Health-verdict chip (S4) — the System Overview *Problems* section.
+///
+/// A fourth chip family rather than a reuse of [`ServiceState`], because the
+/// vocabulary genuinely differs and S4's rule is *one vocabulary per kind of
+/// status*, not *one chip for everything*: a service is on or off, and a check
+/// can be **unestablished**, which is a state no service chip has a word for.
+/// Folding "could not check" into `Pending` or `Off` is precisely the collapse
+/// `doctor::Verdict` exists to prevent.
+///
+/// **Three glyphs, not two, and none of them is a tick.** Colour alone is not a
+/// state anyone can read on a bad monitor (the note on [`ServiceState`]), and
+/// more importantly the *unknown* band must not borrow either the good or the
+/// bad one — a check that could not run is neither.
+///
+/// The word is passed in rather than looked up, because these strings live with
+/// the rest of the section's copy in `doctor::Verdict::chip` — one file to
+/// extract when this surface is translated.
+#[allow(dead_code)] // wasm-only consumer
+pub fn health_chip(word: &str, tone: HealthTone) -> Element {
+    let (glyph, color) = match tone {
+        HealthTone::Attention => ("\u{26a0}", "var(--status-warn,#fc9)"), // ⚠
+        HealthTone::Unknown => ("\u{25cc}", "var(--text-dim,#888)"),      // ◌
+        HealthTone::Clear => ("\u{25cf}", "var(--status-ok,#4c4)"),       // ●
+    };
+    let el = util::create_element("span");
+    el.set_attribute(
+        "style",
+        &format!(
+            "display:inline-flex;align-items:center;gap:{};font-size:11px;\
+             padding:2px 8px;border-radius:10px;white-space:nowrap;\
+             color:{color};border:1px solid {color}",
+            theme::SP_1
+        ),
+    )
+    .ok();
+    util::set_text(&el, &format!("{glyph} {word}"));
+    el
+}
+
+/// The three bands a health verdict renders in. Note there are three, not five:
+/// the five verdicts differ in *what they mean*, and the chip only has to say
+/// how much of the user's attention this deserves. The distinction survives in
+/// the words beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // wasm-only consumer
+pub enum HealthTone {
+    /// Something is wrong and the user can see the effects.
+    Attention,
+    /// Not established — never rendered as either good or bad.
+    Unknown,
+    /// Checked, and fine.
+    Clear,
+}
+
 /// Authorization-status chip (S4). Use everywhere an authorization state is
 /// shown — the authoritative surface AND read-only reflections (File Transfer).
 pub fn auth_chip(state: AuthState) -> Element {

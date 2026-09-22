@@ -188,6 +188,16 @@ impl WindowView for ContentSiteWindow {
     /// `nav_generation` guard refuses to clobber a navigation that landed
     /// during the await, and a sync read that already answered short-circuits
     /// the round-trip entirely).
+    ///
+    /// **The site-origin mirror is deliberately NOT here**, though this is where
+    /// it belongs on paper. A window bound to a non-system peer reads an empty
+    /// origin registry (`origins::mirror_origins`), and the repair has to be a
+    /// *conversation* — list the source, then read each destination record
+    /// before deciding to write — which a task spawned from a factory cannot
+    /// hold, because `Peers` is a non-`Clone` router and the borrow dies at the
+    /// first await. It runs from `boot_load` instead
+    /// (`origins::mirror_to_all_local_peers`), which owns the borrow long
+    /// enough; the residual bound is written down there.
     fn hydrate_durable(&self, _peers: &Peers) {
         #[cfg(target_arch = "wasm32")]
         self.model.spawn_hydrate_durable(_peers);

@@ -424,6 +424,22 @@ impl FetchWhat {
         }
     }
 
+    /// How this artifact is named in the refresh ledger, and from there in the
+    /// health section's report.
+    ///
+    /// **Identifiers, not prose.** The sentence around them is composed in
+    /// `doctor.rs`, which keeps every user-facing string on this path in one
+    /// file — the thing that makes translating that surface one extraction
+    /// rather than a hunt. Distinct from [`key`](Self::key) only in intent
+    /// today; kept separate because `key` is an in-flight de-dup token that is
+    /// free to change shape, and this one is read by a person.
+    fn ledger_name(&self, set: &str) -> String {
+        match self {
+            FetchWhat::Catalog => set.to_string(),
+            FetchWhat::Bundle(id) => format!("{set}/{id}"),
+        }
+    }
+
     /// The foreign artifact this is, for
     /// [`foreign_cache`](crate::content_site::foreign_cache) — the single entry
     /// point that owns presence **and currency**. Both kinds are somebody
@@ -549,6 +565,18 @@ pub struct AppWindow {
     /// sees newly-published apps. One-shot (not per-render) to avoid a storm.
     #[cfg(target_arch = "wasm32")]
     refreshed: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// The retry generation this window has already acted on.
+    ///
+    /// `refreshed` above makes a failed set unrecoverable for the life of the
+    /// window — the guard cannot tell "already fetched" from "already failed",
+    /// so incident B's only escape was to close and re-open. System Overview's
+    /// health section can now ask for a retry
+    /// ([`Remedy::RetryFailedRefreshes`](crate::doctor::Remedy)); it bumps a
+    /// global counter rather than addressing this window, because the surface
+    /// reporting the problem does not know which launchers exist and should not
+    /// have to (AP44 — no listener registry to keep in step).
+    #[cfg(target_arch = "wasm32")]
+    retry_seen: std::cell::Cell<u64>,
 }
 
 impl AppWindow {
@@ -565,6 +593,11 @@ impl AppWindow {
             fetching: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             #[cfg(target_arch = "wasm32")]
             refreshed: std::cell::RefCell::new(std::collections::HashSet::new()),
+            // Start at the CURRENT generation, not zero: a window opened after
+            // a retry was requested has already re-fetched from scratch, and
+            // arming it again would fire a second round of fetches for nothing.
+            #[cfg(target_arch = "wasm32")]
+            retry_seen: std::cell::Cell::new(crate::refresh_ledger::retry_generation()),
         }
     }
 
@@ -1031,6 +1064,9 @@ impl AppWindow {
         let dirty = self.watch.flag();
         let origin = origin.to_string();
         let apps_peer = apps_peer.to_string();
+        // What this attempt is called in Doctor's report. Built here, where the
+        // set name is still in scope, rather than reconstructed from `key`.
+        let ledger_label = what.ledger_name(set);
         wasm_bindgen_futures::spawn_local(async move {
             use crate::content_site::foreign_cache::{ensure_current, Currency};
             use crate::content_site::http_poll::FetchBinSource;
@@ -1051,6 +1087,15 @@ impl AppWindow {
                     // has already written it durably. Flip dirty so the surface
                     // re-renders against the new bytes.
                     Currency::Fetched(_) => {
+                        // Recorded on SUCCESS too. Without this, Doctor cannot
+                        // tell "nothing failed" from "nothing was attempted",
+                        // and an untouched session would render as a clean bill
+                        // of health — the `warn!` bug with better typography.
+                        crate::refresh_ledger::record(
+                            &apps_peer,
+                            &ledger_label,
+                            crate::refresh_ledger::RefreshOutcome::Current,
+                        );
                         dirty.mark();
                         break;
                     }
@@ -1058,7 +1103,18 @@ impl AppWindow {
                     // rebuild here would replace the player's `<iframe>` and
                     // restart a running app for no reason (the same hazard the
                     // save-write gate in `create_apps` exists for).
-                    Currency::Unchanged => break,
+                    Currency::Unchanged => {
+                        // Our copy IS current, which is the same fact about the
+                        // world as `Fetched` and must record identically —
+                        // otherwise a steady-state session (where nothing ever
+                        // moves) looks like a session that never asked.
+                        crate::refresh_ledger::record(
+                            &apps_peer,
+                            &ledger_label,
+                            crate::refresh_ledger::RefreshOutcome::Current,
+                        );
+                        break;
+                    }
                     Currency::Unavailable(_) if attempt < MAX_ATTEMPTS => {
                         // 600ms, 1.2s, 2.4s, 4.8s — ~9s of coverage for a blip.
                         let backoff = 600u32.saturating_mul(1 << (attempt - 1)).min(5000);
@@ -1068,9 +1124,31 @@ impl AppWindow {
                     // we already hold is still there and still renders — an
                     // unreachable origin never removes a working app.
                     Currency::Unavailable(e) => {
+                        // **This is incident B's exact line.** Until now the
+                        // only report was the `warn!` below — "reopen the window
+                        // to retry", in a console nobody has on a phone — while
+                        // the other set rendered and the grid looked complete.
+                        // The ledger is where that fact goes so a surface can
+                        // state it (design §2, §3: a failed refresh is a fact
+                        // about the belief, not a no-op).
+                        //
+                        // The 404/network split is `PollError`'s, not ours, and
+                        // it is carried rather than flattened: waiting fixes one
+                        // and never the other, so Doctor gives different advice.
+                        use crate::content_site::http_poll::PollError;
+                        let outcome = match &e {
+                            PollError::NotFound(_) => {
+                                crate::refresh_ledger::RefreshOutcome::Withheld
+                            }
+                            other => crate::refresh_ledger::RefreshOutcome::Unreachable(
+                                other.to_string(),
+                            ),
+                        };
+                        crate::refresh_ledger::record(&apps_peer, &ledger_label, outcome);
                         tracing::warn!(
                             peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
-                            "apps: live fetch failed after retries — reopen the window to retry"
+                            "apps: live fetch failed after retries — reopen the window to retry \
+                             (recorded for Entity Doctor)"
                         );
                         break;
                     }
@@ -1193,6 +1271,37 @@ impl WindowView for AppWindow {
 
     fn watch(&self) -> &WindowWatch {
         &self.watch
+    }
+
+    /// Pick up a retry asked for from somewhere else in the app.
+    ///
+    /// **This belongs in `tick`, not in `render_dom`.** `render_dom` runs only
+    /// when the window is dirty, and the whole situation being repaired is one
+    /// where nothing is changing: a set failed to load, no write landed, no
+    /// subscription fired, and the window is sitting still showing an
+    /// incomplete grid. A check placed on the render path would wait for a
+    /// repaint that is not coming — the button would appear to do nothing, and
+    /// then work later for an unrelated reason, which is worse than not
+    /// shipping it. `tick` runs every frame regardless, and marking dirty here
+    /// is what makes the fetch loop run.
+    ///
+    /// Cheap by construction: one `Cell` compare per frame in the common case.
+    #[cfg(target_arch = "wasm32")]
+    fn tick(&mut self, _peers: &Peers) {
+        let generation = crate::refresh_ledger::retry_generation();
+        if self.retry_seen.get() == generation {
+            return;
+        }
+        self.retry_seen.set(generation);
+        // The guard cannot tell "already fetched" from "already failed", which
+        // is exactly why a failed set stayed missing until the window was
+        // closed and re-opened. Dropping it is the repair.
+        self.refreshed.borrow_mut().clear();
+        self.watch.mark_dirty();
+        tracing::info!(
+            generation,
+            "apps: retry requested — dropped the once-per-open fetch guard"
+        );
     }
 
     fn handle_action(&mut self, action: &Action, peers: &Peers) {

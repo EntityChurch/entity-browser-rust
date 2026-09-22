@@ -109,11 +109,30 @@
         // L1 "BIOS" — System Recovery / Storage Inventory console.
         // Activated by ?systemrecovery=1 (or bare ?systemrecovery). Pure JS,
         // runs INSTEAD of the WASM app (main.rs start() bails on the same
-        // param), so it works even when the peer (L2) won't boot. REPORT-ONLY:
-        // performs NO writes and NO deletes. Defensive throughout — every probe
-        // is independently try/caught so one unsupported API can't blank the
-        // rest. Reachable offline (the SW serves the cached shell for
-        // navigations via ignoreSearch; this needs no network).
+        // param), so it works even when the peer (L2) won't boot. Defensive
+        // throughout — every probe is independently try/caught so one
+        // unsupported API can't blank the rest. Reachable offline (the SW
+        // serves the cached shell for navigations via ignoreSearch; this needs
+        // no network).
+        //
+        // REPORTS, plus EXACTLY ONE ACTION. Every probe is read-only. The one
+        // exception is "Reset the cached program" — confirm-gated, and scoped
+        // to the two APP-CODE stores (service-worker registrations and Cache
+        // Storage). It must never touch IndexedDB, localStorage or OPFS: those
+        // are the user's tree and identity, there is no export path yet (§5 of
+        // the resilience design), and the console cannot offer an action whose
+        // worst case is the loss it exists to prevent. The scoping is gated by
+        // `the_recovery_console_resets_the_program_and_keeps_the_tree`.
+        //
+        // Why an action at all, when this console was report-only by design:
+        // the report-only posture was right about disclosure and wrong to offer
+        // nothing (Doctor design §7.4). A stale worker serving a broken shell is
+        // the common half of heal-path row 9, and the advice this replaces was
+        // "use your browser's developer tools" — a developer instruction handed
+        // to an end user, and not possible AT ALL on mobile, which is where a
+        // stuck visitor most likely is. It does NOT close row 9: a worker that
+        // breaks navigation itself takes this page down with it, and that case
+        // still needs the self-destruct worker (C17), unbuilt and never drilled.
         //
         // This is the full inventory ported from the standalone staging copy
         // (recovery-preview.html, kept in the repo as the dev/preview source):
@@ -170,12 +189,27 @@
     color: #6b7280; font-size: 12px; }
   #entity-recovery button.re { background: #232936; color: #cdd5e0; border: 1px solid #313a4b;
     border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
+  #entity-recovery .act { margin: 10px 0 2px; padding: 12px 14px; background: #131722;
+    border: 1px solid #313a4b; border-radius: 8px; }
+  #entity-recovery .act p { margin: 0 0 8px; color: #c2cad6; font-size: 13px; }
+  #entity-recovery .act p:last-child { margin-bottom: 0; }
+  #entity-recovery .act b { color: #e7ebf1; } #entity-recovery .act code { color: #9fb4cf; }
+  #entity-recovery .act ul { margin: 0 0 8px; padding-left: 20px; }
+  #entity-recovery .act li { color: #c2cad6; font-size: 12.5px; margin: 0 0 3px; }
+  #entity-recovery .act .good { color: #4f9d69; }
+  #entity-recovery .act .warn { color: #d8b87a; }
+  #entity-recovery .act .bad { color: #c0563e; }
+  #entity-recovery button.go { background: #2f6ea3; color: #fff; border: 1px solid #4a90c2;
+    border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  #entity-recovery button.go[disabled] { opacity: .5; cursor: default; }
+  #entity-recovery button.no { background: transparent; color: #cdd5e0; border: 1px solid #313a4b;
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; margin-left: 8px; }
 `;
 
             var RECOVERY_BODY = `
 <div class="wrap" id="entity-recovery">
   <h1>Entity Browser — Storage Inventory</h1>
-  <p class="sub">Read-only &middot; origin <code id="origin">…</code> &middot; <span id="ts">…</span>
+  <p class="sub">Report &middot; origin <code id="origin">…</code> &middot; <span id="ts">…</span>
      &middot; <button class="re" onclick="location.reload()">Re-scan</button>
      &middot; <button class="re" onclick="location.href=location.pathname">Boot normally →</button></p>
   <h2>Version identity</h2>
@@ -197,21 +231,34 @@
     <ul>
       <li><b>Close every tab</b> open on this origin (<code id="origin3">…</code>), then
           open a fresh one. This lets the updated service worker take over and purge the
-          stale cache automatically — the most reliable fix.</li>
-      <li>Or unregister the service worker for this origin from your browser’s developer
-          tools (look under “Application”, “Storage”, or “Service Workers”), then reload.</li>
-      <li>Or clear site data for this origin (it only removes the cached program — your
-          tree lives in IndexedDB and is listed below).</li>
+          stale cache automatically — the most reliable fix, and it changes nothing.</li>
+      <li>Or use <b>the button below</b> to remove the cached program from here. It does what
+          unregistering the service worker in your browser’s developer tools would do — and
+          it is the only route on a phone, where those tools do not exist.</li>
+      <li><b>Do not “clear site data” for this origin.</b> That is not a program reset: it
+          erases <b>IndexedDB as well</b>, which is your entity tree and your identity —
+          everything listed further down this page. There is no export yet, so it cannot be
+          undone. The button below removes the program and nothing else.</li>
     </ul>
     <p class="legend">Note: after a new version is deployed, the fix reaches a browser only
        after one <b>online</b> load — service workers update from the network.</p>
+
+    <!-- The one action this console takes. Everything else here reports. -->
+    <div class="act" id="reset">
+      <p><b>Reset the cached program.</b> This removes only the
+         <span class="tag code">app code</span> — the service worker and the Cache Storage
+         entries listed below. Your entity tree, your identity, your settings and your
+         localStorage are <b>not</b> touched, and this page will show you what it removed.</p>
+      <p id="reset-state"><button class="go" id="reset-arm">Reset the cached program…</button></p>
+    </div>
   </div>
   <div class="intro">
     <p><b>What is this?</b> Entity Browser is a <b>local-first</b> application: your content and
        your identity live in an <i>entity tree</i> stored inside <i>this browser</i> — not on a
        remote server. Each identity is a <i>peer</i>; the tree is the single source of truth, and
        the app works offline because everything it needs is already on your machine. This page is a
-       read-only inventory of everything Entity Browser has saved here.</p>
+       inventory of everything Entity Browser has saved here — read-only, apart from the one
+       confirm-gated program reset described above.</p>
     <p><b>What "here" means — scope.</b> Browsers partition storage by <b>origin</b> =
        protocol + host + <b>port</b> (this one is <code id="origin2">…</code>). Everything below
        belongs to that origin. The URL <b>path does not matter</b>: every page on this origin and
@@ -258,8 +305,11 @@
   <div id="ss"><div class="empty">probing…</div></div>
 
   <div class="foot">
-    This page performs <b>no writes and no deletes</b> — it is the read-only report shown before any
-    future confirm-gated reset / export (not yet available). Nothing leaves this machine.
+    Everything on this page is a <b>read-only report</b>, with one exception: the confirm-gated
+    <b>“Reset the cached program”</b> button above, which removes the service worker and Cache
+    Storage — the <span class="tag code">app code</span> — and nothing else. This page performs
+    <b>no other writes and no other deletes</b>: it will never touch IndexedDB, localStorage or
+    OPFS. An export path does not exist yet. Nothing leaves this machine.
   </div>
 </div>
 `;
@@ -288,7 +338,8 @@
             }
 
             // The probing logic (ported verbatim from recovery-preview.html).
-            // Self-contained, read-only; each probe independently try/caught.
+            // Self-contained; every probe is read-only and independently
+            // try/caught. `wireReset()` at the end is the one action.
             function runProbes() {
                 const $ = (id) => document.getElementById(id);
                 const fmtBytes = (n) => {
@@ -355,6 +406,16 @@
                 };
                 const unknown = '<span class="empty">could not determine</span>';
 
+                // Did the origin answer? Three states, not two, and the reset
+                // confirmation below branches on all three (AP40 — the arm you
+                // fall into by default gets the WEAKEST claim). `null` means the
+                // probe has not finished or never ran, which is NOT the same as
+                // "unreachable" and must not be reported as it: clearing the
+                // cached program while the origin is genuinely down leaves
+                // nothing to boot from, so the user is owed the difference
+                // between "we checked and it is down" and "we do not know".
+                let originReachable = null;
+
                 (async () => {
                     const el = $("version");
                     try {
@@ -407,7 +468,13 @@
                         try {
                             const r = await fetchWithDeadline("/index.html", PROBE_DEADLINE_MS);
                             if (r && r.ok) { reachable = true; origin = stampOf(await r.text()); }
-                        } catch (_) { /* offline, or the origin is not answering */ }
+                            originReachable = reachable;
+                        } catch (_) {
+                            // Measured, not assumed: the request was made and it
+                            // failed or timed out. That is a stronger statement
+                            // than the `null` this started as.
+                            originReachable = false;
+                        }
 
                         const row = (label, value, note) =>
                             `<span>${esc(label)} <b>${value == null ? "" : esc(value)}</b>` +
@@ -756,6 +823,205 @@
                         }).join("");
                     } catch (e) { setErr(el, "sessionStorage probe failed: " + e); }
                 })();
+
+                // --- Reset the cached program — THE ONE ACTION ---------------
+                //
+                // Scope is the whole safety argument: service-worker
+                // registrations and Cache Storage, which this page's own legend
+                // already classifies as "app code, safe to discard — you lose
+                // nothing but a re-download". There is deliberately no
+                // `indexedDB.deleteDatabase`, no `localStorage.clear`, no OPFS
+                // removal anywhere in this block, and a gate asserts the tree
+                // and the identity survive a reset rather than trusting that
+                // sentence.
+                //
+                // The outcome is decided by a WITNESS, not by what the calls
+                // returned (AP44): `unregister()` resolving `true` is a claim,
+                // and `getRegistrations()` coming back empty afterwards is the
+                // fact. They can differ — another tab can hold a registration
+                // alive — and when they do, the fact wins and the report says
+                // what is still there.
+                //
+                // Four outcomes, kept apart on purpose (AP40). "There was
+                // nothing to remove" must never be reported as "fixed": on this
+                // screen that would tell a user whose problem is something else
+                // entirely that they just repaired it.
+                wireReset();
+
+                function wireReset() {
+                    const box = $("reset");
+                    if (!box) return;
+                    const state = $("reset-state");
+                    const swOk = ("serviceWorker" in navigator) &&
+                        !!(navigator.serviceWorker && navigator.serviceWorker.getRegistrations);
+                    const cacheOk = ("caches" in self);
+
+                    // Fails closed, and says why. A disabled button with a
+                    // reason beats a live button that throws.
+                    if (!swOk && !cacheOk) {
+                        state.innerHTML = `<span class="empty">This browser exposes neither the ` +
+                            `Service Worker nor the Cache Storage API, so there is no cached ` +
+                            `program here to remove.</span>`;
+                        return;
+                    }
+
+                    const enumerate = async () => {
+                        const out = { regs: [], names: [], errs: [] };
+                        if (swOk) {
+                            try { out.regs = await navigator.serviceWorker.getRegistrations(); }
+                            catch (e) { out.errs.push("service workers: " + e); }
+                        }
+                        if (cacheOk) {
+                            try { out.names = await caches.keys(); }
+                            catch (e) { out.errs.push("cache storage: " + e); }
+                        }
+                        return out;
+                    };
+
+                    // The honest sentence about what happens next, in three
+                    // states. Clearing the cached program is only safe if a
+                    // fresh one can be fetched; offline, it is the difference
+                    // between a broken app and no app.
+                    const reachNote = () => {
+                        if (originReachable === true) {
+                            return `<span class="good">This origin answered a moment ago</span>, ` +
+                                `so a fresh copy of the program can be downloaded on the next load.`;
+                        }
+                        if (originReachable === false) {
+                            return `<span class="bad">This origin did not serve a usable copy of ` +
+                                `the program</span> when this page checked. If that is still true ` +
+                                `after the reset, Entity Browser will not load at all until the ` +
+                                `origin is back — the cached copy is what makes it work offline. ` +
+                                `Your data is unaffected either way.`;
+                        }
+                        return `<span class="warn">Whether this origin can serve a fresh copy was ` +
+                            `not determined</span>, so this page cannot promise the program will ` +
+                            `come back on the next load. If the origin is down, it will not.`;
+                    };
+
+                    const arm = async () => {
+                        const now = await enumerate();
+                        const n = now.regs.length, m = now.names.length;
+                        // Nothing to do is a legitimate answer and is given
+                        // BEFORE the confirmation, not after it: making someone
+                        // confirm a no-op teaches them the button does nothing.
+                        if (!n && !m) {
+                            state.innerHTML =
+                                `<p data-outcome="nothing"><b>There is no cached program to ` +
+                                `remove.</b> No service worker is registered here and Cache ` +
+                                `Storage is empty, so a stale program cannot be what is wrong. ` +
+                                `Check <b>Version identity</b> at the top of this page.</p>` +
+                                (now.errs.length
+                                    ? `<p class="warn">${esc(now.errs.join(" · "))}</p>` : "");
+                            return;
+                        }
+                        state.innerHTML =
+                            `<p><b>This will remove:</b></p>` +
+                            `<ul>` +
+                            (n ? `<li><b>${n}</b> service worker registration${n === 1 ? "" : "s"}` +
+                                `${now.regs.map((r) => ` <code>${esc(r.scope)}</code>`).join("")}</li>` : "") +
+                            (m ? `<li><b>${m}</b> cache${m === 1 ? "" : "s"}` +
+                                `${now.names.map((x) => ` <code>${esc(x)}</code>`).join("")}</li>` : "") +
+                            `</ul>` +
+                            `<p><b>It will not touch</b> IndexedDB (your entity tree), ` +
+                            `localStorage (your identity and key vault), or OPFS. Those are ` +
+                            `listed below and stay exactly as they are.</p>` +
+                            // An enumeration that partly failed means the list
+                            // above is a floor, not a total. Say so here rather
+                            // than only in the empty branch, or the confirmation
+                            // understates what it is about to do.
+                            (now.errs.length
+                                ? `<p class="warn">Part of this could not be read ` +
+                                  `(${esc(now.errs.join(" · "))}), so there may be more here ` +
+                                  `than is listed.</p>`
+                                : "") +
+                            `<p>${reachNote()}</p>` +
+                            `<p><button class="go" id="reset-go">Yes, reset the program</button>` +
+                            `<button class="no" id="reset-cancel">Cancel</button></p>`;
+                        $("reset-go").addEventListener("click", act);
+                        $("reset-cancel").addEventListener("click", () => {
+                            state.innerHTML =
+                                `<button class="go" id="reset-arm">Reset the cached program…</button>`;
+                            $("reset-arm").addEventListener("click", arm);
+                        });
+                    };
+
+                    const act = async () => {
+                        const go = $("reset-go"), no = $("reset-cancel");
+                        if (go) go.disabled = true;
+                        if (no) no.disabled = true;
+                        const lines = [];
+                        let before;
+                        try {
+                            before = await enumerate();
+                            // Unregister BEFORE deleting caches: a worker that is
+                            // still active can repopulate a cache it is told to
+                            // serve from, and the reverse order leaves a race
+                            // whose loser is the user.
+                            for (const r of before.regs) {
+                                try {
+                                    const gone = await r.unregister();
+                                    lines.push([r.scope, gone ? "unregistered" : "refused to unregister"]);
+                                } catch (e) { lines.push([r.scope, "failed: " + e]); }
+                            }
+                            for (const name of before.names) {
+                                try {
+                                    const gone = await caches.delete(name);
+                                    lines.push([name, gone ? "deleted" : "was already gone"]);
+                                } catch (e) { lines.push([name, "failed: " + e]); }
+                            }
+                        } catch (e) {
+                            state.innerHTML =
+                                `<p data-outcome="failed" class="bad"><b>The reset could not ` +
+                                `run.</b> ${esc(String(e))}</p>` +
+                                `<p>Nothing was removed, and nothing else on this page has ` +
+                                `changed. Closing every tab on this origin does the same job ` +
+                                `without this page.</p>`;
+                            return;
+                        }
+
+                        const after = await enumerate();
+                        const left = after.regs.length + after.names.length;
+                        const detail =
+                            `<ul>${lines.map(([k, v]) =>
+                                `<li><code>${esc(k)}</code> — ${esc(v)}</li>`).join("")}</ul>`;
+
+                        if (left === 0) {
+                            state.innerHTML =
+                                `<p data-outcome="cleared" class="good"><b>The cached program is ` +
+                                `gone.</b> Load the app again and the browser will fetch a fresh ` +
+                                `copy from the origin.</p>` + detail +
+                                `<p>Your entity tree and identity were not touched — the sections ` +
+                                `below are unchanged. ${reachNote()}</p>` +
+                                `<p><button class="go" id="reset-boot">Load Entity Browser →` +
+                                `</button><button class="no" id="reset-rescan">Re-scan this page` +
+                                `</button></p>`;
+                            $("reset-boot").addEventListener("click",
+                                () => { location.href = location.pathname; });
+                            $("reset-rescan").addEventListener("click",
+                                () => { location.reload(); });
+                            return;
+                        }
+
+                        // The weakest arm, and the one you land in by default.
+                        // Something survived; say what, and say the likeliest
+                        // reason rather than claiming a repair that did not
+                        // happen.
+                        state.innerHTML =
+                            `<p data-outcome="partial" class="warn"><b>Part of the cached program ` +
+                            `is still here.</b> ${after.regs.length} service worker ` +
+                            `registration(s) and ${after.names.length} cache(s) remain after the ` +
+                            `reset.</p>` + detail +
+                            `<p>The usual cause is <b>another tab open on this origin</b> holding ` +
+                            `the worker alive. Close every other tab on ` +
+                            `<code>${esc(location.origin)}</code> and press the button again. ` +
+                            `Nothing of yours was removed.</p>` +
+                            `<p><button class="go" id="reset-again">Try again</button></p>`;
+                        $("reset-again").addEventListener("click", arm);
+                    };
+
+                    $("reset-arm").addEventListener("click", arm);
+                }
             }
 
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render);
@@ -822,6 +1088,49 @@
                 sessionStorage.removeItem(KEY);
                 appStarted = true;
             });
+
+            // Boot stall reporter (boot audit B-1, observability half).
+            //
+            // `TrunkApplicationStarted` fires when the WASM module starts, NOT
+            // when the app is usable — `boot_load` then awaits ~14 more steps
+            // with no frame loop and no watchdog behind them (both install
+            // after it returns). So this keys off the one signal that means
+            // the app actually owns the page: `boot_progress::armed()` hiding
+            // #loading. Anything else would report a stalled boot as a healthy
+            // one, which is the failure this exists to end.
+            //
+            // The threshold sits above a normal boot and below the bounded
+            // worst case (one 3 s deployment-document deadline + four 5 s
+            // origin writes), so it fires during the bad case and never during
+            // a merely slow one.
+            // `?bootstall=<ms>` overrides the threshold. This exists so the
+            // reporter is REACHABLE from a gate: the black-hole rig stalls boot
+            // for ~3.2s (D23's deadline bounds it), so a fixed 10s timer could
+            // never fire inside any scenario the harness can build, and this
+            // whole branch would ship untested. A test affordance, not a knob —
+            // nothing in the product sets it.
+            var BOOT_STALL_MS = 10000;
+            try {
+                var _bs = new URLSearchParams(location.search).get('bootstall');
+                if (_bs !== null && /^[0-9]+$/.test(_bs)) BOOT_STALL_MS = parseInt(_bs, 10);
+            } catch (e) { /* no URLSearchParams → keep the default */ }
+            setTimeout(function() {
+                var loading = document.getElementById('loading');
+                // Gone (booted) or replaced (System Recovery / app-host clear
+                // the body) — nothing to report either way.
+                if (!loading || getComputedStyle(loading).display === 'none') return;
+                var slow = document.getElementById('loading-slow');
+                if (slow) slow.style.display = 'block';
+                // Make the escape hatch impossible to miss. It has been in the
+                // markup all along; it was hidden with the whole div before the
+                // application-tier boot even began.
+                var link = loading.querySelector('.recovery-link');
+                if (link) { link.style.color = 'var(--accent, #9fb4cf)'; link.style.textDecoration = 'underline'; }
+                var step = document.getElementById('loading-substep');
+                console.warn('[Entity Browser] boot has not armed the frame loop after '
+                    + BOOT_STALL_MS + 'ms; last step: '
+                    + ((step && step.textContent) || '(none reported)'));
+            }, BOOT_STALL_MS);
         })();
     </script>
     <script>
@@ -883,7 +1192,14 @@
             else if (document.body) { document.body.insertBefore(banner, document.body.firstChild); }
         }
 
-        if ('serviceWorker' in navigator && location.hostname !== 'e2e-no-sw') {
+        // NOT on the recovery console. That page exists to inspect and, since
+        // 2026-09-01, to REMOVE the service worker; registering one on the way
+        // in would put back what the user just took out the moment they pressed
+        // "Re-scan this page", and the reset would read as not having worked.
+        // It is also the one page that must stay meaningful when the worker is
+        // the thing that is broken. A normal boot is unaffected.
+        if ('serviceWorker' in navigator && location.hostname !== 'e2e-no-sw' &&
+            !window.__ENTITY_RECOVERY__) {
             // True only if a SW already controls this page at load time, i.e.
             // a real UPDATE is possible (vs the very first install). Guards the
             // auto-reload path against reloading on first-ever visit (our SW
@@ -1087,6 +1403,17 @@
     <div class="loading" id="loading">
         <div style="text-align:center">
             <div id="loading-status">Loading Entity Browser...</div>
+            <!-- Which boot step is running, written from WASM (`boot_progress::step`).
+                 Technical and English on purpose: this is the same tier as the L1
+                 recovery console — it has to render when the app cannot, which is
+                 exactly when the i18n catalog is what might be missing. -->
+            <div id="loading-substep" style="margin-top:8px;font-size:12px;color:var(--text-faint, #7e8696)"></div>
+            <!-- Shown by the stall timer below when boot has not armed the frame
+                 loop in time. Before this existed, a boot stalled on one of
+                 boot_load's ~14 awaits was indistinguishable from a brick. -->
+            <div id="loading-slow" style="display:none;margin-top:14px;font-size:13px;color:var(--text-muted, #c0c0c0)">
+                This is taking longer than usual.
+            </div>
             <div id="loading-retry" style="display:none;margin-top:16px">
                 <div style="color:#f88;margin-bottom:8px">WASM failed to load after multiple attempts.</div>
                 <button onclick="sessionStorage.removeItem('entity_browser_wasm_retry');location.reload()" style="padding:6px 16px;cursor:pointer;background:var(--surface, #2a2a4e);color:#ccc;border:1px solid var(--text-faint, #666);border-radius:4px">Try Again</button>
