@@ -61,7 +61,9 @@ use entity_entity::Entity;
 
 use crate::content_site::http_poll::BinSource;
 use crate::content_site::signed_fetch::{PinnedPublisher, SignedFetchError, SignedSession};
-use crate::feed_read::{FeedSource, ReadEntry};
+use crate::dispatch_handle::DispatchHandle;
+use crate::feed_read::{read_feed, FeedSource, ReadEntry};
+use crate::feed_route::{reduce, Leg, Resolution, Route};
 
 /// How long a failed read is shown before the next poll refetches.
 ///
@@ -81,16 +83,40 @@ pub const LIMIT: usize = 50;
 // ---------------------------------------------------------------------------
 
 /// What this surface holds for one author, between frames.
+///
+/// **The outcome is a whole [`Resolution`] rather than three states**, because
+/// the route is a ladder: *served by the live leg*, *both legs answered and they
+/// have nothing*, *one answered empty and the other could not be checked* and
+/// *nothing could be read at all* are four facts, and splitting them across
+/// enum variants here would be re-collapsing what [`feed_route::reduce`] exists
+/// to keep apart.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeedState {
     /// A `spawn_local` is in flight.
     Loading,
-    /// The walk completed. Held for the session.
-    Ready(Vec<ReadEntry>),
-    /// The walk failed. Rendered until `retry_at_ms`, then refetched — so a
-    /// transient origin fault is recoverable rather than permanent, which is
-    /// finding #1 of the content-site report arriving one convention over.
-    Failed { error: String, retry_at_ms: f64 },
+    /// The route resolved. Held for the session.
+    Done {
+        resolution: Resolution<ReadEntry>,
+        /// When to walk again. **`Some` only for a total failure** — an author
+        /// who answered and has nothing is not re-walked on a timer, and a
+        /// transient fault is recoverable rather than permanent, which is
+        /// finding #1 of the content-site report arriving one convention over.
+        retry_at_ms: Option<f64>,
+    },
+}
+
+impl FeedState {
+    /// Record a resolution, arming the backoff only if nothing could be read.
+    ///
+    /// **One constructor, so the *"which outcomes retry"* rule has one
+    /// expression.** A call site deciding it for itself is C15's drift with a
+    /// user-visible symptom: a surface that re-walks a publisher who simply has
+    /// no posts hammers their origin for ever.
+    pub fn done(resolution: Resolution<ReadEntry>, now: f64) -> Self {
+        let retry_at_ms = matches!(resolution, Resolution::Failed { .. })
+            .then_some(now + RETRY_BACKOFF_MS);
+        FeedState::Done { resolution, retry_at_ms }
+    }
 }
 
 /// What a frame should do about an author it is being asked to render.
@@ -127,9 +153,9 @@ pub fn feed_step(state: Option<&FeedState>, now: f64) -> FeedStep {
     match state {
         None => FeedStep::Start,
         Some(FeedState::Loading) => FeedStep::Wait,
-        Some(FeedState::Ready(_)) => FeedStep::Serve,
-        Some(FeedState::Failed { retry_at_ms, .. }) => {
-            if now < *retry_at_ms {
+        Some(FeedState::Done { retry_at_ms: None, .. }) => FeedStep::Serve,
+        Some(FeedState::Done { retry_at_ms: Some(at), .. }) => {
+            if now < *at {
                 FeedStep::Serve // show the error; do not storm the origin
             } else {
                 FeedStep::Retry
@@ -215,6 +241,53 @@ impl<B: BinSource + 'static> FeedSource for OriginFeedSource<B> {
 }
 
 // ---------------------------------------------------------------------------
+// Walking the ladder
+// ---------------------------------------------------------------------------
+
+/// Try each leg of a route in order and reduce what they said.
+///
+/// **`make_source` is the only thing that differs between a browser and a
+/// gate**, which is what makes the sequencing — the half with the interesting
+/// mistakes in it — reachable from `make test`. The browser hands back a
+/// `FetchBinSource`-backed origin source and a `DispatchHandle`-backed live one;
+/// a gate hands back a directory and a map.
+///
+/// A source that cannot be *built* is a failed leg, not a panic and not a
+/// skipped one: *this author's peer id cannot pin a tree* is a reason the reader
+/// deserves, and dropping the leg silently would make a two-leg route report as
+/// a one-leg one.
+pub async fn walk_route<F>(
+    author: &str,
+    route: &Route,
+    mut make_source: F,
+) -> Resolution<ReadEntry>
+where
+    F: FnMut(&Leg) -> Result<Box<dyn FeedSource>, String>,
+{
+    let mut results = Vec::with_capacity(route.legs.len());
+    for leg in &route.legs {
+        let result = match make_source(leg) {
+            Err(why) => Err(why),
+            Ok(src) => read_feed(src.as_ref(), author, LIMIT).await.map_err(|e| e.to_string()),
+        };
+        // **A leg that carried posts ENDS the walk.** That is what makes this a
+        // priority list rather than a fan-out: without it, a reader served by
+        // the first leg would still fetch the second every time — a whole
+        // signed-root walk of somebody's CDN for an answer already in hand.
+        //
+        // Note which condition stops it. **Serving stops it; answering does
+        // not** — an empty leg falls through, for the reason `reduce`'s own doc
+        // gives, and the two must not be collapsed into *"the leg answered"*.
+        let served = matches!(&result, Ok(entries) if !entries.is_empty());
+        results.push((leg.clone(), result));
+        if served {
+            break;
+        }
+    }
+    reduce(results)
+}
+
+// ---------------------------------------------------------------------------
 // The pump
 // ---------------------------------------------------------------------------
 
@@ -238,7 +311,33 @@ impl FeedPoller {
     /// `HttpPollResolver::resolve`'s shape and not an accident: this cache is
     /// read during a render pass, and a `RefCell` double-borrow inside the frame
     /// loop is the panic that shows up as a frozen window.
-    pub fn poll(&self, author: &str, origin: &str, now: f64) -> Option<FeedState> {
+    /// `route` is built fresh by the caller each frame
+    /// ([`feed_route::plan`]), never cached here: whether we are connected to an
+    /// author changes under us, and a retained route is AP41's retention defect
+    /// wearing a routing costume — a window that cached *"not connected"* at
+    /// construction would keep reading a published tree after the author came
+    /// online, for as long as it stayed open.
+    /// `dispatch` is a **parameter and not a field**, deliberately (AP44). A
+    /// handle stored on the poller and set by a `set_dispatch` call is a step
+    /// the next author has to remember, and forgetting it makes the live leg
+    /// fail silently on a route that asked for it. As an argument the compiler
+    /// asks the question, and a caller passing `None` is making a statement.
+    pub fn poll(
+        &self,
+        author: &str,
+        route: &Route,
+        dispatch: Option<&DispatchHandle>,
+        now: f64,
+    ) -> Option<FeedState> {
+        // **Nothing to ask is not a walk that failed**, and it must not consume
+        // a cache slot: the surface says something different for it, and
+        // recording it would make the answer stick after a connection arrives.
+        if route.is_unreachable() {
+            return Some(FeedState::Done {
+                resolution: Resolution::Unreachable,
+                retry_at_ms: None,
+            });
+        }
         let step = {
             let cache = self.cache.borrow();
             feed_step(cache.get(author), now)
@@ -247,7 +346,7 @@ impl FeedPoller {
             FeedStep::Serve | FeedStep::Wait => {}
             FeedStep::Start | FeedStep::Retry => {
                 self.cache.borrow_mut().insert(author.to_string(), FeedState::Loading);
-                self.spawn_walk(author.to_string(), origin.to_string());
+                self.spawn_walk(author.to_string(), route.clone(), dispatch.cloned());
             }
         }
         self.cache.borrow().get(author).cloned()
@@ -263,24 +362,34 @@ impl FeedPoller {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn spawn_walk(&self, author: String, origin: String) {
+    fn spawn_walk(&self, author: String, route: Route, dispatch: Option<DispatchHandle>) {
         use crate::content_site::http_poll::FetchBinSource;
         let cache = self.cache.clone();
         let repaint = self.repaint.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let state = match OriginFeedSource::new(&origin, &author, Rc::new(FetchBinSource)) {
-                Ok(src) => match crate::feed_read::read_feed(&src, &author, LIMIT).await {
-                    Ok(entries) => FeedState::Ready(entries),
-                    Err(e) => FeedState::Failed {
-                        error: e.to_string(),
-                        retry_at_ms: crate::dom::programs::now_ms() + RETRY_BACKOFF_MS,
-                    },
-                },
-                Err(e) => FeedState::Failed {
-                    error: e,
-                    retry_at_ms: crate::dom::programs::now_ms() + RETRY_BACKOFF_MS,
-                },
-            };
+            let subject = author.clone();
+            let resolution = walk_route(&author, &route, |leg| match leg {
+                Leg::Published(origin) => {
+                    OriginFeedSource::new(origin, &subject, Rc::new(FetchBinSource))
+                        .map(|s| Box::new(s) as Box<dyn FeedSource>)
+                }
+                Leg::Live => dispatch
+                    .clone()
+                    .map(|d| {
+                        Box::new(crate::feed_peer::PeerFeedSource::new(d, subject.clone()))
+                            as Box<dyn FeedSource>
+                    })
+                    // The route said live and the caller supplied no handle:
+                    // an unrouted peer. **A reason, never a silently dropped
+                    // leg** — see `walk_route`.
+                    .ok_or_else(|| format!("no dispatch handle for {subject}")),
+            })
+            .await;
+            // **Every resolution reports, including the ordinary one** — a
+            // surface that logs only its failures cannot be told from one that
+            // never ran (`window_hydration::report`'s lesson).
+            tracing::info!("{}", crate::feed_route::describe(&author, &resolution));
+            let state = FeedState::done(resolution, crate::dom::programs::now_ms());
             cache.borrow_mut().insert(author, state);
             // `RepaintCell` is an optional callback, not an object with a
             // method — the same two lines every other pump in this crate uses.
@@ -290,11 +399,14 @@ impl FeedPoller {
         });
     }
 
-    /// Native builds have no `spawn_local` and no origin to walk. The slot stays
-    /// `Loading` for ever, which is correct: a native `poll` is not a fetch that
-    /// failed, it is one that was never made.
+    /// Native builds have no `spawn_local`. The slot stays `Loading` for ever,
+    /// which is correct: a native `poll` is not a fetch that failed, it is one
+    /// that was never made.
+    ///
+    /// **The walk itself is not wasm-only** — [`walk_route`] is plain async and
+    /// is gated natively. What is missing here is an executor, not the logic.
     #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_walk(&self, _author: String, _origin: String) {}
+    fn spawn_walk(&self, _author: String, _route: Route, _dispatch: Option<DispatchHandle>) {}
 
     /// Seed a slot directly. **Gates only** — it is how a native test drives the
     /// states the pump would otherwise have to reach through a browser.
@@ -311,8 +423,34 @@ mod tests {
     const NOW: f64 = 1_000_000.0;
     const ORIGIN: &str = "http://publisher.example";
 
+    /// A one-leg published route — what every one of these gates had before the
+    /// ladder existed, so they keep measuring the same property.
+    fn published() -> Route {
+        crate::feed_route::plan(false, Some(ORIGIN), crate::feed_route::Preference::Unstated)
+    }
+
     fn failed(retry_at_ms: f64) -> FeedState {
-        FeedState::Failed { error: "the origin hung up".into(), retry_at_ms }
+        FeedState::Done {
+            resolution: Resolution::Failed {
+                attempts: vec![crate::feed_route::Attempt {
+                    leg: "published",
+                    outcome: crate::feed_route::AttemptOutcome::Failed("the origin hung up".into()),
+                }],
+            },
+            retry_at_ms: Some(retry_at_ms),
+        }
+    }
+
+    fn served_nothing() -> FeedState {
+        FeedState::Done {
+            resolution: Resolution::NoPosts {
+                attempts: vec![crate::feed_route::Attempt {
+                    leg: "published",
+                    outcome: crate::feed_route::AttemptOutcome::Empty,
+                }],
+            },
+            retry_at_ms: None,
+        }
     }
 
     /// **Every combination of (state × clock) has a step, and the four stay
@@ -327,7 +465,7 @@ mod tests {
         assert_eq!(feed_step(None, NOW), FeedStep::Start, "never asked");
         assert_eq!(feed_step(Some(&FeedState::Loading), NOW), FeedStep::Wait, "in flight");
         assert_eq!(
-            feed_step(Some(&FeedState::Ready(Vec::new())), NOW),
+            feed_step(Some(&served_nothing()), NOW),
             FeedStep::Serve,
             "an EMPTY feed is a real answer and must not be re-walked for ever"
         );
@@ -365,9 +503,9 @@ mod tests {
     #[test]
     fn polling_twice_starts_one_walk() {
         let poller = FeedPoller::new(Default::default());
-        assert_eq!(poller.poll("QmAuthor", ORIGIN, NOW), Some(FeedState::Loading), "the first poll starts it");
+        assert_eq!(poller.poll("QmAuthor", &published(), None, NOW), Some(FeedState::Loading), "the first poll starts it");
         assert_eq!(
-            poller.poll("QmAuthor", ORIGIN, NOW),
+            poller.poll("QmAuthor", &published(), None, NOW),
             Some(FeedState::Loading),
             "and the second finds it in flight rather than starting a second"
         );
@@ -378,10 +516,10 @@ mod tests {
     #[test]
     fn forgetting_an_author_makes_the_next_poll_walk_again() {
         let poller = FeedPoller::new(Default::default());
-        poller.seed("QmAuthor", FeedState::Ready(Vec::new()));
-        assert!(matches!(poller.poll("QmAuthor", ORIGIN, NOW), Some(FeedState::Ready(_))));
+        poller.seed("QmAuthor", served_nothing());
+        assert!(matches!(poller.poll("QmAuthor", &published(), None, NOW), Some(FeedState::Done { .. })));
         poller.forget("QmAuthor");
-        assert_eq!(poller.poll("QmAuthor", ORIGIN, NOW), Some(FeedState::Loading));
+        assert_eq!(poller.poll("QmAuthor", &published(), None, NOW), Some(FeedState::Loading));
     }
 
     /// Two authors do not share a slot. Obvious, and the kind of thing a
@@ -390,9 +528,116 @@ mod tests {
     #[test]
     fn each_author_has_their_own_slot() {
         let poller = FeedPoller::new(Default::default());
-        poller.seed("QmA", FeedState::Ready(Vec::new()));
-        assert_eq!(poller.poll("QmB", ORIGIN, NOW), Some(FeedState::Loading));
-        assert!(matches!(poller.poll("QmA", ORIGIN, NOW), Some(FeedState::Ready(_))));
+        poller.seed("QmA", served_nothing());
+        assert_eq!(poller.poll("QmB", &published(), None, NOW), Some(FeedState::Loading));
+        assert!(matches!(poller.poll("QmA", &published(), None, NOW), Some(FeedState::Done { .. })));
+    }
+
+    // -- walking the ladder -------------------------------------------------
+    //
+    // These are the sequencing gates. The *ordering* is `feed_route::plan`'s and
+    // the *verdict* is `reduce`'s, both pure and gated in their own module; what
+    // is only reachable here is what happens BETWEEN the legs — which of them
+    // gets consulted, in what order, and what stops the walk.
+
+    use crate::feed_read::Tree;
+    use crate::feed_route::Preference;
+
+    /// A route with both legs, live first — what `plan` produces for an author
+    /// who is connected and also published.
+    fn both_legs() -> Route {
+        crate::feed_route::plan(true, Some(ORIGIN), Preference::Unstated)
+    }
+
+    /// Drive a two-leg walk over map-backed trees, recording which legs were
+    /// actually consulted.
+    fn walk(
+        author: &str,
+        route: &Route,
+        live: Tree,
+        published: Tree,
+    ) -> (Resolution<ReadEntry>, Vec<&'static str>) {
+        let consulted = std::cell::RefCell::new(Vec::new());
+        let resolution = crate::feed_read::block_on(walk_route(author, route, |leg| {
+            consulted.borrow_mut().push(leg.name());
+            Ok(match leg {
+                Leg::Live => Box::new(live.clone()) as Box<dyn FeedSource>,
+                Leg::Published(_) => Box::new(published.clone()) as Box<dyn FeedSource>,
+            })
+        }));
+        (resolution, consulted.into_inner())
+    }
+
+    /// ⭐ **The ladder's reason for existing, end to end.**
+    ///
+    /// A publisher who serves from a CDN *because they cannot carry the load*
+    /// has a live tree with no feed in it. The first leg answers honestly and
+    /// carries nothing; stopping there reports *"this author has posted
+    /// nothing"* to somebody one hop from their whole archive.
+    #[test]
+    fn a_live_author_with_nothing_in_their_tree_falls_through_to_what_they_published() {
+        let (published, author, _) = crate::feed_publish::tests::published_tree(3);
+        let (resolution, consulted) = walk(&author, &both_legs(), Tree::default(), published);
+        match resolution {
+            Resolution::Served { via, entries } => {
+                assert_eq!(via, "published");
+                assert_eq!(entries.len(), 3);
+            }
+            other => panic!("the empty live leg swallowed the feed: {other:?}"),
+        }
+        assert_eq!(consulted, vec!["live", "published"], "and both were asked");
+    }
+
+    /// **Serving stops the walk.** Without this the reader fetches a whole
+    /// signed-root tree off somebody's CDN for an answer it already has.
+    ///
+    /// Note what the assertion is: not *"the result came from live"* — which
+    /// `reduce` guarantees on its own and which would pass with no
+    /// short-circuit at all — but *"the second leg was never consulted"*.
+    #[test]
+    fn a_leg_that_serves_stops_the_ladder_and_the_next_one_is_never_asked() {
+        let (live, author, _) = crate::feed_publish::tests::published_tree(2);
+        let (other, _, _) = crate::feed_publish::tests::published_tree(5);
+        let (resolution, consulted) = walk(&author, &both_legs(), live, other);
+        assert!(matches!(resolution, Resolution::Served { via: "live", .. }));
+        assert_eq!(consulted, vec!["live"], "the published origin was fetched anyway");
+    }
+
+    /// A source that cannot be built is a **failed leg**, not a silently
+    /// dropped one — an author whose peer id cannot pin a tree is a reason a
+    /// reader deserves, and a dropped leg makes a two-leg route report as a
+    /// one-leg one.
+    #[test]
+    fn a_leg_whose_source_cannot_be_built_is_a_failure_with_a_reason() {
+        let route = both_legs();
+        let resolution: Resolution<ReadEntry> =
+            crate::feed_read::block_on(walk_route("QmAuthor", &route, |leg| match leg {
+                Leg::Live => Err("no dispatch handle".to_string()),
+                Leg::Published(_) => Err("that peer id carries no key".to_string()),
+            }));
+        match resolution {
+            Resolution::Failed { attempts } => {
+                assert_eq!(attempts.len(), 2, "both legs are in the report");
+                let rendered = format!("{attempts:?}");
+                assert!(rendered.contains("no dispatch handle"), "{rendered}");
+                assert!(rendered.contains("carries no key"), "{rendered}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// An author who is genuinely silent everywhere. **The one case where
+    /// *"they have posted nothing"* is the true sentence** — and it is reached
+    /// only after every leg answered.
+    #[test]
+    fn an_author_with_nothing_on_either_leg_is_no_posts_and_both_were_asked() {
+        let (resolution, consulted) =
+            walk("QmAuthor", &both_legs(), Tree::default(), Tree::default());
+        // Neither tree has an index, so both legs report a read failure rather
+        // than an empty feed — which is the honest answer here and is NOT
+        // `NoPosts`: we could not read either one.
+        assert!(matches!(resolution, Resolution::Failed { .. }), "{resolution:?}");
+        assert_eq!(consulted, vec!["live", "published"]);
     }
 
     // -- the real source, against a real published origin -------------------

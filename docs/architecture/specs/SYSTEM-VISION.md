@@ -137,13 +137,55 @@ inbound connections.
 
 The browser is the **primary management interface**. The native
 peer is the **persistent participant**. Together they cover the
-deployment surface. A typical user might run a browser peer on
-their laptop (UI, inspection), a native peer on the same laptop
-(storage, network, keys), and connect to other peers on other
-devices. All speak the same protocol; none is privileged.
+deployment surface. All speak the same protocol; none is
+privileged.
 
 See `GUIDE-DEPLOYMENT-AND-CONFIGURATION.md` for the concrete
 deployment modes.
+
+#### The deployment thesis (revised 2026-09-11)
+
+This pillar used to describe a typical user as running *both* a
+browser peer and a native peer on the same laptop. **The topology
+we are actually building for is different, and the difference is
+strategic rather than cosmetic.**
+
+**One native peer, browser everywhere else.** A user installs the
+native application on *one* machine — for the rendezvous node,
+durable storage and keys — and every other device they own simply
+opens the website. Those devices are full peers that find each
+other and connect over WebRTC. Nothing else is installed anywhere.
+
+**Three reasons this is the right default, and only one of them
+is technical:**
+
+1. **Reach.** Static CDNs are everywhere, the artifact is public,
+   and every platform and architecture already ships a
+   sophisticated browser. A WASM peer is a standard environment we
+   do not have to port. Nothing else we could build reaches as far
+   for as little.
+2. **Trust.** *Not wanting to install an executable is a
+   legitimate position, including for people who trust
+   themselves.* A tab is a much smaller ask than a binary, and it
+   is revocable by closing it. Treating the browser as the entry
+   point respects that instead of arguing with it.
+3. **Speed to a real user.** It is not the ideal deployment model
+   and it does not have to be. It is the one that gets a working
+   peer-to-peer network into someone's hands today.
+
+**Native is the upgrade, not the target.** The site detects the
+platform and offers the download; taking it buys SQLite-backed
+storage, inbound listening, filesystem access, higher performance
+and the ability to run heavier workloads locally. Declining it
+leaves you with a working system. **That asymmetry is the product
+decision** — the web version must be good enough to stay on
+permanently, not a trial.
+
+**What this obliges us to do** is make the web deployment
+*durable*: the progressive-web-app surface, boot availability,
+build slots, the hotfix path and offline behaviour stop being
+hygiene and become the thing the whole model rests on. Much of
+that is already built for other reasons; this is what it was for.
 
 ### Entity-Backed State
 
@@ -483,6 +525,83 @@ the reason the product reads as thin on P2P while the transport is green: the ne
 This does not change the pillars. It says the entity-backed-state pillar has a network-facing
 half we had only been building bottom-up.
 
+### Run Environments, and Why the VM Is Not the Point
+
+A Linux machine running in a browser tab is not a new idea and
+there are working demos of it. **If we build one, the VM is the
+part that is already solved and belongs to somebody else.** What
+would make ours worth having is the part nobody has built: **what
+happens to the data that goes in and comes out.**
+
+The shape, smallest first:
+
+1. **A small environment.** A BusyBox/Buildroot-class Linux in a
+   tab, on the order of 5–10 MB, with no package manager and no
+   ambitions. Enough to be a real shell.
+2. **The data boundary — and this is the actual product.** Inject
+   files from the entity tree into the environment; pull files
+   back out of it into the tree. **Abstract that boundary well
+   and everything downstream is additive.**
+3. **Then packages.** Nix, or images, or whatever the store
+   layer turns out to be — added *behind* the boundary, not as a
+   precondition for it.
+4. **Then determinism.** Pinned environments, content-addressed
+   inputs and outputs, build attestations. At which point the
+   thing is a pipeline, and the pipeline was never a separate
+   project.
+
+**The integration is the differentiator, stated as a sequence:** a
+file is emitted from the environment through a standard contract →
+it is an ordinary entity in the tree → any part of the tree syncs
+to any other peer → it can be re-injected into a different
+environment somewhere else. *Work on files with dedicated tools in
+one place, pull them out, carry them to another device, open them
+in a different environment.* None of those steps is VM-specific,
+and only the first one is new.
+
+**This is why the ports work (RT-7/RT-8's `(role, shape)` ABI with
+a `stream` kind) comes before the VM rather than after.** A
+terminal's boundary contract is a byte stream; so is a file
+transfer, a log tail and a peer link. Build the port and the VM
+console is one more driver. Build the VM first and the port gets
+shaped by it.
+
+### Nobody Knows What a Peer-to-Peer Distributed OS Is — Including Us
+
+This is worth writing down plainly because it is the honest state
+of the question, and pretending otherwise produces features nobody
+wanted.
+
+**The concrete picture we are aiming at**, which is more useful
+than the phrase: I have several computers. I open the same website
+on each. They become aware of each other. I put them into a shared
+mode and each one takes up a role or a display. They are
+CRDT-connected and synchronized. I am working on one, I walk into
+another room, I open the tab that is already there, and I continue
+— different peers, one interface, no transfer step. Files move.
+Media streams. An app's output can be connected to another
+device's audio.
+
+**The reason to state it as a scenario rather than a definition**
+is that it doubles as an acceptance test, and every part of it is
+checkable. Most of it is not built.
+
+**What is already real, and it is not a hypothetical:** an audio
+file recorded in an app on a phone was moved to a desktop by
+opening a browser on each, connecting the two over WebRTC,
+offering the file and downloading it. Two Firefoxes, no server, no
+account, no cable, no install. **That is the whole thesis working
+at the smallest possible scale** — and the gap between it and the
+picture above is mechanism, not concept.
+
+**So the strategy is to widen that, deliberately:** more kinds of
+thing that can be emitted into the tree, and generic infrastructure
+for syncing any part of a tree to any peer and re-injecting it.
+Every capability that lands this way makes the abstraction less
+abstract. **The distributed OS is not a thing we will one day
+switch on; it is what this becomes if enough ordinary transfers
+work.**
+
 ### Knowledge Base as the First Application
 
 The knowledge base wiki PoC isn't just one of many possible
@@ -617,7 +736,19 @@ the end-user story for the cross-team substrate. We'll learn the
 answers by building. The vision is robust enough to absorb
 multiple answers.
 
-The next concrete work: knowledge base wiki PoC built in the model
-pattern, per-path subscriptions, and the pipeline builder for
-backend peer setup. Each is a stage along the pillars described
-above.
+**Revised 2026-09-11.** Two things changed at the strategic level
+and are recorded above rather than in a plan: the **deployment
+thesis** (one native peer, browser everywhere else — reach and
+trust, with native as the upgrade and not the target), and the
+**run-environment direction** (a small Linux environment in a tab
+where the data boundary, not the VM, is the product). Both feed
+the same end: *nobody knows what a peer-to-peer distributed
+operating system is, so we are building toward a scenario we can
+check rather than a definition we can argue about.*
+
+The stale line this replaces named the wiki PoC and the pipeline
+builder as "next concrete work"; the first shipped long ago. **A
+vision document that carries a next-actions list will always be
+the most out-of-date part of it** — what is next lives in
+`docs/STATUS.md` and the plans, and this document should say where
+we are going, not what is queued.

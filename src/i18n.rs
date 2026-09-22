@@ -1702,11 +1702,23 @@ pub const EN: &[(&str, Message)] = &[
     (
         "feed.no_route",
         Message::Simple(
-            "This deployment does not know where this publisher is hosted, so \
-             there is nowhere to ask.",
+            "You are not connected to this publisher, and this deployment does \
+             not know where they are hosted — so there is nowhere to ask.",
         ),
     ),
     ("feed.loading", Message::Simple("Reading this feed…")),
+    // **Which of the two ways this feed arrived.** Not decoration: a live read
+    // is as fresh as the author is and a published one is as fresh as their
+    // last publish, so a reader asking whether they are seeing the newest post
+    // cannot answer it without this line.
+    (
+        "feed.via.live",
+        Message::Simple("Read live, directly from this publisher."),
+    ),
+    (
+        "feed.via.published",
+        Message::Simple("Read from this publisher's published site."),
+    ),
     (
         "feed.no_posts",
         Message::Simple("This publisher has not posted anything."),
@@ -2535,6 +2547,18 @@ pub const EN: &[(&str, Message)] = &[
         "doctor.check1.detail.origin_error",
         Message::Simple(
             "The domain is reachable but returned a fault instead of its configuration, so nothing could be compared. That is a problem at the domain, not on this machine, and it says nothing about whether your publisher is current.",
+        ),
+    ),
+    (
+        "doctor.check1.source.refused",
+        Message::Simple(
+            "this domain would not serve its configuration (HTTP {status})",
+        ),
+    ),
+    (
+        "doctor.check1.detail.refused",
+        Message::Simple(
+            "The domain is reachable and refused to hand its configuration to this app. That is an access rule at the domain, not a fault and not a problem on this machine. Nothing could be compared, so nothing is known about whether your publisher is current.",
         ),
     ),
     (

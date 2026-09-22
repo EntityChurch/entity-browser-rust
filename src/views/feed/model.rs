@@ -29,6 +29,7 @@
 use crate::feed_follows::{self, FollowOutcome};
 use crate::feed_fetch::{FeedPoller, FeedState};
 use crate::feed_read::{Attribution, Unattributed};
+use crate::feed_route::{self, Resolution};
 use crate::peers::Peers;
 use crate::window::WindowId;
 
@@ -105,25 +106,34 @@ impl FeedModel {
 
         let panel = match &self.selected {
             None => FeedPanel::NobodySelected,
-            // **The route is looked up per render through `get_origin`**, which
-            // is the accessor that resolves supersession — never a registry read
-            // of our own. AP54 is a surface that skipped this chokepoint and
-            // kept serving a retired publisher after a re-key.
-            Some(author) => match crate::content_site::origins::get_origin(
-                peers,
-                our_peer_id,
-                author,
-            ) {
-                None => FeedPanel::NoRoute,
-                Some(origin) => match self.poller.poll(author, &origin, now) {
+            Some(author) => {
+                // **Both inputs are read fresh every render, and neither is
+                // cached on this model.** Whether we are connected changes under
+                // us and so does an origin registration; a route captured once
+                // is AP41's retention defect with a routing symptom — a window
+                // that decided *"not connected"* when it opened would keep
+                // reading a published tree after the author came online.
+                //
+                // `get_origin` is the accessor that resolves supersession, never
+                // a registry read of our own: AP54 is a surface that skipped
+                // this chokepoint and kept serving a retired publisher.
+                let connected =
+                    crate::peer_liveness::liveness_of(peers, author).is_connected();
+                let origin =
+                    crate::content_site::origins::get_origin(peers, our_peer_id, author);
+                let route = feed_route::plan(
+                    connected,
+                    origin.as_deref(),
+                    feed_route::Preference::Unstated,
+                );
+                // Bound to **our** peer — it is the handle we dispatch *from*;
+                // the author is the target and travels separately.
+                let dispatch = peers.dispatch_handle(our_peer_id);
+                match self.poller.poll(author, &route, dispatch.as_ref(), now) {
                     None | Some(FeedState::Loading) => FeedPanel::Loading,
-                    Some(FeedState::Failed { error, .. }) => FeedPanel::Failed { detail: error },
-                    Some(FeedState::Ready(entries)) if entries.is_empty() => FeedPanel::NoPosts,
-                    Some(FeedState::Ready(entries)) => {
-                        FeedPanel::Entries(entries.iter().map(entry_row).collect())
-                    }
-                },
-            },
+                    Some(FeedState::Done { resolution, .. }) => panel_for(&resolution),
+                }
+            }
         };
 
         FeedOutput {
@@ -133,6 +143,50 @@ impl FeedModel {
             panel,
             notice: self.notice,
         }
+    }
+}
+
+/// Which panel a resolved route renders as — **one arm per fact, and the four
+/// facts are [`Resolution`]'s.**
+///
+/// The one that earns its keep is `Unreachable` staying apart from `NoPosts`:
+/// *we had no way to ask* and *we asked and they have nothing* are a statement
+/// about us and a statement about them, and rendering the first as the second
+/// tells somebody a publisher has written nothing on the strength of a check we
+/// never made.
+fn panel_for(resolution: &Resolution<crate::feed_read::ReadEntry>) -> FeedPanel {
+    match resolution {
+        Resolution::Served { via, entries } => {
+            FeedPanel::Entries { via: via_key(via), rows: entries.iter().map(entry_row).collect() }
+        }
+        Resolution::NoPosts { .. } => FeedPanel::NoPosts,
+        // **The detail is the legs' own words**, joined — a reader whose live
+        // leg was refused and whose origin 504'd is looking at two different
+        // problems, and one summary line that named only the last would send
+        // them at the wrong one.
+        Resolution::Failed { attempts } => FeedPanel::Failed {
+            detail: attempts
+                .iter()
+                .filter_map(|a| match &a.outcome {
+                    crate::feed_route::AttemptOutcome::Failed(d) => Some(format!("{}: {d}", a.leg)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" · "),
+        },
+        Resolution::Unreachable => FeedPanel::NoRoute,
+    }
+}
+
+/// Catalog key for the leg that served a feed.
+///
+/// **A `match` rather than `format!("feed.via.{via}")`**, so a new leg is a
+/// compile-time decision about what to call it rather than a key that silently
+/// resolves to nothing in thirty locales.
+fn via_key(via: &str) -> &'static str {
+    match via {
+        "live" => "feed.via.live",
+        _ => "feed.via.published",
     }
 }
 
@@ -190,6 +244,21 @@ mod tests {
     fn peer_id(seed: u8) -> String {
         let kp = entity_crypto::Keypair::from_seed([seed; 32]);
         entity_crypto::PeerId::from_public_key(&kp.public_key_bytes()).to_string()
+    }
+
+    /// A route that answered and carried nothing — *"we asked and they have no
+    /// posts"*, which is the fact `NoPosts` renders and which must stay apart
+    /// from the two that look like it.
+    fn no_posts() -> FeedState {
+        FeedState::Done {
+            resolution: Resolution::NoPosts {
+                attempts: vec![crate::feed_route::Attempt {
+                    leg: "published",
+                    outcome: crate::feed_route::AttemptOutcome::Empty,
+                }],
+            },
+            retry_at_ms: None,
+        }
     }
 
     fn model() -> (FeedModel, Peers, String) {
@@ -290,14 +359,26 @@ mod tests {
         );
 
         // The walk completes with nothing in it: a real, different answer.
-        m.poller.seed(&them, FeedState::Ready(Vec::new()));
+        m.poller.seed(&them, no_posts());
         assert_eq!(m.render_output(&peers, &me, CLOCK).panel, FeedPanel::NoPosts);
 
-        m.poller.seed(&them, FeedState::Failed { error: "no route".into(), retry_at_ms: f64::MAX });
+        m.poller.seed(
+            &them,
+            FeedState::Done {
+                resolution: Resolution::Failed {
+                    attempts: vec![crate::feed_route::Attempt {
+                        leg: "published",
+                        outcome: crate::feed_route::AttemptOutcome::Failed("no route".into()),
+                    }],
+                },
+                retry_at_ms: Some(f64::MAX),
+            },
+        );
         assert_eq!(
             m.render_output(&peers, &me, CLOCK).panel,
-            FeedPanel::Failed { detail: "no route".into() },
-            "and a failure is a fourth"
+            FeedPanel::Failed { detail: "published: no route".into() },
+            "and a failure is a fourth — naming the leg, because a two-leg route \
+             fails for two reasons and one summary line would hide one of them"
         );
     }
 
@@ -353,7 +434,7 @@ mod tests {
         let them = peer_id(43);
         route(&peers, &me, &them);
         m.follow(&peers, &me, &them, NOW_MS);
-        m.poller.seed(&them, FeedState::Ready(Vec::new()));
+        m.poller.seed(&them, no_posts());
         assert_eq!(m.render_output(&peers, &me, CLOCK).panel, FeedPanel::NoPosts);
 
         m.unfollow(&peers, &me, &them);
@@ -392,18 +473,20 @@ mod tests {
     fn an_entry_row_shows_the_authored_fallback_and_the_entrys_own_hash() {
         use crate::embed::{EmbedData, EmbedNode, EmbedPayload};
         use crate::feed::FeedEntry;
-        use crate::feed_read::ReadEntry;
+        use crate::feed_read::{Obtained, ReadEntry};
 
         let body = EmbedNode::new(
             "text/plain",
             EmbedData::new(EmbedPayload::Inline(b"hello".to_vec()), "hello"),
         );
         let entry = FeedEntry::new("QmAuthor", NOW_MS, body);
-        let hash = entry.to_entity().unwrap().content_hash;
+        let entity = entry.to_entity().unwrap();
+        let hash = entity.content_hash;
         let row = entry_row(&ReadEntry {
             hash,
             entry,
             attribution: Attribution::Unattributed(Unattributed::NoSignature),
+            obtained: Obtained { entity, signature: None },
         });
 
         assert_eq!(row.text, "hello");

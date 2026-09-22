@@ -292,19 +292,89 @@ help:
 	@echo "    crossimpl-go         our reader vs entity-core-go's LIVE publisher, two hosts"
 	@echo "  — see the Makefile header for the full target catalogue."
 
+# === the build environment is an artifact, so it is built reproducibly ========
+#
+# `--source-date-epoch` + `--rewrite-timestamp` are podman's two knobs for
+# clamping file and metadata timestamps, which are otherwise the largest single
+# source of image non-determinism. Present since podman 5.x; ours is 5.6.2.
+#
+# **The epoch is the last commit that touched the Dockerfile, NOT HEAD.** That
+# distinction is the whole point: the build environment must be a function of
+# its own inputs, so an unrelated commit to `src/` must not move the image
+# digest. Using HEAD would make every commit a new environment and
+# `build_env_digest` would name a moving target again, which is the thing the
+# pins in the Dockerfile exist to stop.
+#
+# Falls back to 0 outside a checkout (a tarball export, a fresh clone mid-fetch)
+# rather than to `now` — an unknown date must not silently become a unique one.
+#
+# **This makes the image deterministic in its timestamps, which is NOT the same
+# as reproducible.** The four `apt-get` blocks still float (see the Dockerfile
+# header). `make image-verify` is the instrument that settles it; do not claim
+# reproducibility from the presence of these flags. The field's own
+# documentation is explicit that they improve it and do not guarantee it.
+IMAGE_EPOCH := $(shell git log -1 --format=%ct -- Dockerfile 2>/dev/null || echo 0)
+PODMAN_REPRO := --source-date-epoch=$(IMAGE_EPOCH) --rewrite-timestamp
+
 # Build the toolchain image (rust 1.94.1 + wasm32 + trunk + binaryen + webkit2gtk).
 image:
-	podman build $(PODMAN_BUILD_CAPS) -t $(IMAGE) .
+	podman build $(PODMAN_BUILD_CAPS) $(PODMAN_REPRO) -t $(IMAGE) .
+	@echo "==> build-env: $$(podman image inspect --format '{{.Id}}' $(IMAGE))  (epoch $(IMAGE_EPOCH))"
+
+# Is the build environment reproducible? Build it twice from scratch and compare
+# the image IDs. THE CACHE IS THE ENEMY HERE — a second build that reuses layers
+# proves only that podman can read its own cache, so both arms pass --no-cache.
+#
+# Prints the id of each arm and the verdict. A DIFFERENCE IS A RESULT, not a
+# failure of the target: it names the thing to go and pin next. This is the
+# apko discipline (build twice, hash both, diff) and it is the only honest
+# instrument for the claim — the flags above are an input to it, never evidence.
+#
+# Expensive: two cold toolchain builds. Run it deliberately.
+image-verify:
+	@echo "==> arm A (no cache)"
+	podman build $(PODMAN_BUILD_CAPS) $(PODMAN_REPRO) --no-cache -t $(IMAGE)-repro-a . >/dev/null
+	@echo "==> arm B (no cache)"
+	podman build $(PODMAN_BUILD_CAPS) $(PODMAN_REPRO) --no-cache -t $(IMAGE)-repro-b . >/dev/null
+	@a=$$(podman image inspect --format '{{.Id}}' $(IMAGE)-repro-a); \
+	 b=$$(podman image inspect --format '{{.Id}}' $(IMAGE)-repro-b); \
+	 echo "  A: $$a"; echo "  B: $$b"; \
+	 if [ "$$a" = "$$b" ]; then \
+	   echo "  REPRODUCIBLE — two cold builds of this Dockerfile agree."; \
+	 else \
+	   echo "  NOT REPRODUCIBLE — two cold builds differ."; \
+	   echo "  Next: diff the layer digests to name the drifting input."; \
+	   podman image inspect --format '{{range .RootFS.Layers}}{{println .}}{{end}}' $(IMAGE)-repro-a > /tmp/ebr-layers-a.txt; \
+	   podman image inspect --format '{{range .RootFS.Layers}}{{println .}}{{end}}' $(IMAGE)-repro-b > /tmp/ebr-layers-b.txt; \
+	   diff -u /tmp/ebr-layers-a.txt /tmp/ebr-layers-b.txt || true; \
+	 fi
 
 # Run a command inside the toolchain image with the parent meta dir mounted at
 # /src/entity-systems (sibling path-deps resolve) and workdir = this repo. The
 # cargo registry/cache is a persistent volume so deps aren't re-downloaded every
 # build. Resource caps (PODMAN_RUN_CAPS) bound every container.
+# THE THIRD LEG OF THE PROVENANCE. `build-pair` names our commit and the sibling
+# kernel's; neither says which TOOLCHAIN compiled the bytes, and a build is a
+# function of all three. This is the value `build_env_digest` means in
+# `PROPOSAL-EXTENSION-PACKAGE` §2, read from the image that is about to run.
+#
+# RECURSIVE (`=`), not `:=`, and that is load-bearing: `:=` resolves at parse
+# time, so a `make image wasm` in one invocation would stamp the id of the image
+# that existed BEFORE the rebuild — a confident wrong answer, which is worse
+# than none. Same reasoning `CARGO_TARGET` is recursive for.
+#
+# `unknown` when there is no image to ask about (a NATIVE=1 build has no
+# container at all). Unstamped and "we could not tell" are different facts and
+# the stamp keeps them apart — the rule `entity-core-ref` already follows.
+BUILD_ENV_ID = $(shell podman image inspect --format '{{.Id}}' $(IMAGE) 2>/dev/null || echo unknown)
+BUILD_ENV_RUN_ENV = -e ENTITY_BUILD_ENV=$(BUILD_ENV_ID)
+
 define RUN
 	mkdir -p $(CARGO_CACHE) $(TRUNK_CACHE)
 	podman run --rm $(PODMAN_RUN_CAPS) $(PODMAN_LABEL_OPT) $(2) \
 		-v $(PARENT):/src/entity-systems \
 		$(CORE_PIN_MOUNT) \
+		$(BUILD_ENV_RUN_ENV) \
 		-v $(CARGO_CACHE):/usr/local/cargo/registry \
 		-v $(TRUNK_CACHE):/root/.cache \
 		-e CARGO_TARGET_DIR=$(CARGO_TARGET) \

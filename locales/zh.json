@@ -751,6 +751,8 @@
   "doctor.check1.detail.unheard": "没有收到该域名的任何回应，因此无从比较，也一无所知 — 这并不是一份干净的健康证明。本机上已有的一切均未受影响，仍然准确。等您重新联网后再试。",
   "doctor.check1.source.origin_error": "此域名以错误应答（HTTP {status}）",
   "doctor.check1.detail.origin_error": "该域名可以访问，但返回的是故障而非其配置，因此无从比较。这是域名一侧的问题，而不是本机的问题，也不能说明您的发布者是否为最新。",
+  "doctor.check1.source.refused": "该域拒绝提供其配置（HTTP {status}）",
+  "doctor.check1.detail.refused": "该域可以访问，但拒绝将其配置交给此应用。这是该域的访问规则，既不是故障，也不是这台机器上的问题。没有可比较的内容，因此无法得知你的发布者是否为最新。",
   "doctor.check1.source.unreadable": "无法读取此域名的配置（HTTP {status}）",
   "doctor.check1.detail.unreadable": "该域名返回了此应用无法解析的内容 — 一个被截断或只写了一半的文件，或者以成功状态提供的错误页面。无从比较，且此处的任何内容都不是对您本机的判断。",
   "doctor.check1.source.no_document": "此域名未提供部署文档",
@@ -796,6 +798,8 @@
   "feed.no_follows": "你还没有关注任何人。",
   "feed.nobody_selected": "在上方选择一位发布者以阅读其动态。",
   "feed.loading": "正在读取此动态…",
+  "feed.via.live": "已实时读取，直接来自该发布者。",
+  "feed.via.published": "已从该发布者已发布的站点读取。",
   "feed.no_posts": "该发布者尚未发布任何内容。",
   "feed.failed": "无法读取此动态。",
   "feed.notice.followed": "已关注。",
@@ -809,5 +813,5 @@
   "feed.attr.wrong_target": "未签名 — 签名对应的是另一条帖子",
   "feed.attr.not_the_author": "未签名 — 由作者以外的人签名",
   "feed.attr.bad_signature": "未签名 — 签名无效",
-  "feed.no_route": "此部署不知道该发布者托管在何处，因此无处可询。"
+  "feed.no_route": "您未连接到该发布者，并且此部署也不知道他们托管在何处——因此无处可问。"
 }

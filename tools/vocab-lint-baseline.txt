@@ -72,10 +72,27 @@
 #   to implement any of them. They clear as workbench-go models them; there is
 #   nothing for us to fix.
 #
-#   `collection` and `mirror` are the two we did NOT build, so the family reads
-#   6 declared / 4 implemented. That gap is stage-1 scope, not an omission: the
+#   `collection` and `mirror` were the two we did NOT build, so the family read
+#   6 declared / 4 implemented. That gap was stage-1 scope, not an omission: the
 #   mirror is phase 4 and needs the byte-fidelity republication path rather than
 #   a codec, and the collection has no consumer yet.
+#
+# app/feed/mirror — FIFTH ROW, 2026-09-11, and it is the one the prior paragraph
+#   said was waiting on the byte-fidelity republication path. That path is built
+#   (`src/feed_mirror.rs`), so the type is: the family now reads 6 declared /
+#   5 implemented, and `collection` is the only one left.
+#
+#   Honest and NOT debt we chose, on the same terms as its four siblings: arch
+#   ruled `D20` the same morning and asked for the closure path to be built
+#   FIRST, which makes us the first seat by request rather than by accident. It
+#   clears as workbench-go models the type; there is nothing for us to fix.
+#
+#   ⚠ Worth keeping beside this row, because it is what the build found: §2.2
+#   defines `reference` as pinned-only, so §6's `subject` pins ONE ENTITY — a
+#   thread. The replication proposal's own closure trace is a gatherer
+#   republishing three authors' TIMELINES, which are growing prefixes and cannot
+#   be pinned. We implemented what the convention says and routed the gap, per
+#   G-PIN-4's rule that whoever publishes first becomes the baseline.
 #
 # ⚠ THE ANALYZER CANNOT SEE A PARAMETRIC FAMILY BEING IMPLEMENTED, and this run
 #   is where that surfaced. `spec vocab` reports the `embed` family as
@@ -107,5 +124,6 @@ single-seat	app/feed/entry
 single-seat	app/feed/follow
 single-seat	app/feed/index-head
 single-seat	app/feed/index-page
+single-seat	app/feed/mirror
 single-seat	app/site-asset
 single-seat	app/user

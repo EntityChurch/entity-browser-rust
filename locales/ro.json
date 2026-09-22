@@ -765,6 +765,8 @@
   "doctor.check1.detail.unheard": "Nu s-a auzit nimic de la domeniu, deci nu s-a putut compara nimic și nu se știe nimic — acesta nu este un certificat de sănătate curat. Tot ce se află deja pe această mașină este neatins și în continuare exact. Încercați din nou când veți fi iar online.",
   "doctor.check1.source.origin_error": "acest domeniu a răspuns cu o eroare (HTTP {status})",
   "doctor.check1.detail.origin_error": "Domeniul este accesibil, dar a returnat o defecțiune în loc de configurația sa, deci nu s-a putut compara nimic. Este o problemă la domeniu, nu pe această mașină, și nu spune nimic despre cât de actual este editorul dumneavoastră.",
+  "doctor.check1.source.refused": "acest domeniu nu a vrut să își predea configurația (HTTP {status})",
+  "doctor.check1.detail.refused": "Domeniul este accesibil și a refuzat să predea configurația sa acestei aplicații. Este o regulă de acces la nivelul domeniului, nu o defecțiune și nu o problemă a acestei mașini. Nu a existat nimic de comparat, deci nu se știe dacă editorul dumneavoastră este actual.",
   "doctor.check1.source.unreadable": "configurația acestui domeniu nu a putut fi citită (HTTP {status})",
   "doctor.check1.detail.unreadable": "Domeniul a răspuns cu ceva ce această aplicație nu a putut interpreta — un fișier trunchiat sau scris pe jumătate, ori o pagină de eroare servită ca succes. Nu s-a putut compara nimic, iar nimic din toate acestea nu este o afirmație despre mașina dumneavoastră.",
   "doctor.check1.source.no_document": "acest domeniu nu servește niciun document de implementare",
@@ -810,6 +812,8 @@
   "feed.no_follows": "Nu urmăriți încă pe nimeni.",
   "feed.nobody_selected": "Alegeți un editor mai sus pentru a-i citi fluxul.",
   "feed.loading": "Se citește acest flux…",
+  "feed.via.live": "Citit în direct, direct de la acest editor.",
+  "feed.via.published": "Citit de pe site-ul publicat al acestui editor.",
   "feed.no_posts": "Acest editor nu a postat nimic.",
   "feed.failed": "Acest flux nu a putut fi citit.",
   "feed.notice.followed": "Urmăriți.",
@@ -823,5 +827,5 @@
   "feed.attr.wrong_target": "nesemnat — semnătura acoperă altă postare",
   "feed.attr.not_the_author": "nesemnat — semnat de altcineva decât autorul",
   "feed.attr.bad_signature": "nesemnat — semnătura nu este validă",
-  "feed.no_route": "Această instalare nu știe unde este găzduit acest editor, așa că nu are pe cine să întrebe."
+  "feed.no_route": "Nu sunteți conectat la acest editor, iar această implementare nu știe unde este găzduit — deci nu are pe cine întreba."
 }

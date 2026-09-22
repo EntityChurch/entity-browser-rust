@@ -176,11 +176,22 @@ fn render_panel(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
             util::set_text(&d, detail); // i18n-ignore — verbatim transport detail
             util::append(parent, &d);
         }
-        FeedPanel::Entries(rows) => render_entries(parent, rows),
+        FeedPanel::Entries { via, rows } => render_entries(parent, via, rows),
     }
 }
 
-fn render_entries(parent: &Element, rows: &[EntryRow]) {
+fn render_entries(parent: &Element, via: &str, rows: &[EntryRow]) {
+    // **Which leg served this, on screen rather than only in the log.** A live
+    // read is as fresh as the author is; a published one is as fresh as their
+    // last publish. Somebody asking *"am I seeing their latest?"* cannot answer
+    // it without knowing which they got.
+    let src = util::create_element("div");
+    src.set_attribute("style", theme::HINT).ok();
+    let _ = src.set_attribute("data-field", "feed-via");
+    let _ = src.set_attribute("data-via", via);
+    util::set_text(&src, &crate::i18n::t(via, &[]));
+    util::append(parent, &src);
+
     let list = util::create_element("div");
     let _ = list.set_attribute("data-field", "feed-entries");
     let _ = list.set_attribute("data-count", &rows.len().to_string());

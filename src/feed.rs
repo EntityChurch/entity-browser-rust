@@ -137,6 +137,15 @@ pub const FEED_INDEX_HEAD_TYPE: &str = "app/feed/index-head";
 /// newest-first within the page.
 pub const FEED_INDEX_PAGE_TYPE: &str = "app/feed/index-page";
 
+/// `app/feed/mirror` — **what one reader gathered, published so the next reader
+/// does not have to gather it again** (§6).
+///
+/// The gatherer signs *this record*; the entries it names are **republished
+/// unmodified**, each travelling with its author's own detached signature, so a
+/// mirror carries authorship it did not mint and cannot forge. §6.1 rule 2:
+/// *a mirror can omit but never substitute.*
+pub const FEED_MIRROR_TYPE: &str = "app/feed/mirror";
+
 /// `app/feed/follow` — a reader's durable subscription to a peer's feed.
 ///
 /// **A distinct type from `app/share/follow`, and the discriminator is the
@@ -668,6 +677,140 @@ impl IndexPage {
             Some(v) => reference_list(v, "entries", true)?,
         };
         Ok(IndexPage { page, entries, updated_at: required_uint(&map, "updated_at")? })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// app/feed/mirror
+// ---------------------------------------------------------------------------
+
+/// The tree prefix a mirror is bound under. ⚠ **OURS, not the convention's.**
+///
+/// §6 pins **no path at all** — unlike §4.2, which names the index head and its
+/// pages by hand precisely because *"an index nobody can find is not an entry
+/// point"*. A mirror has the identical problem and no answer: §2's cross-impl
+/// contract is the type tag, so finding one is a type-filtered query, which a
+/// static origin cannot serve (`A-38`). Routed; this is a local binding choice
+/// and a cross-impl consumer must not depend on it.
+const MIRROR_PREFIX_REL: &str = "/app/feed/mirrors/";
+
+/// The tree prefix a mirror is bound under. Ours; see [`MIRROR_PREFIX_REL`].
+pub fn mirror_prefix() -> &'static str {
+    MIRROR_PREFIX_REL.trim_start_matches('/')
+}
+
+/// Where a gatherer binds its mirror of `subject` — **keyed by the subject's own
+/// hash, so the address is DERIVABLE.**
+///
+/// That is the whole reason for the choice. §6 gives a reader no way to discover
+/// that a gatherer holds a mirror, and enumeration is unavailable over a static
+/// origin — but a reader who already holds the subject can compute
+/// `{gatherer}/app/feed/mirrors/{hex(subject)}` and simply ask. *A derivable
+/// address is an entry point that needs no index.*
+///
+/// It is also **mutable at a stable key**, which is the shape it has to be: a
+/// gatherer republishes as it reads more, and §1.3 makes that monotone — the
+/// view lengthens and never contradicts itself.
+pub fn mirror_key(subject: &Hash) -> String {
+    format!("{}{}", mirror_prefix(), subject.to_hex())
+}
+
+/// §6's `app/feed/mirror` — one reader's gathered view of one subject.
+///
+/// ## What `subject` may be, and the gap underneath the question
+///
+/// §2.2 defines `reference` as **`pinned-ref`** — the live shape is spelled
+/// `live-reference` and a site has to say it takes one. §6's CDDL says
+/// `subject: reference`, so **the subject is a pin to one entity**, and its
+/// comment agrees: *"the root entry this view is of."* That is a **thread**
+/// mirror, and §6.2's rationale is written about exactly that — *"a conversation
+/// spans publishers, and no single publisher holds all of it."*
+///
+/// ⚠ **Which leaves the case the replication proposal's own closure trace turns
+/// on with no type.** There, a gatherer follows three authors and publishes
+/// *their timelines*; a timeline is a **growing prefix**, not an entity, so it
+/// cannot be pinned and cannot be a `subject`. Pinning the author's *index-head
+/// entity* encodes, and it makes the address underivable (you need the head hash
+/// before you can ask, which means reaching the author first — the hop the
+/// mirror exists to save). **Implemented as the convention specifies and routed
+/// rather than stretched**, because whichever shape publishes first is the
+/// baseline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedMirror {
+    /// §6 — the subject this view is of. A pin (§2.2).
+    pub subject: EntityRef,
+    /// Pinned references to what this mirror holds, **republished unmodified**.
+    /// Order is the gatherer's; nothing in §6 makes it authoritative.
+    pub entries: Vec<EntityRef>,
+    pub gathered_at: u64,
+    /// The key that assembled it. **Never an authorship claim** — §6.1 rule 3:
+    /// attribution follows `entry.author`, and a renderer naming the gatherer is
+    /// non-conformant.
+    pub gathered_by: String,
+}
+
+impl FeedMirror {
+    pub fn new(
+        subject: EntityRef,
+        entries: Vec<EntityRef>,
+        gathered_at: u64,
+        gathered_by: impl Into<String>,
+    ) -> Self {
+        Self { subject, entries, gathered_at, gathered_by: gathered_by.into() }
+    }
+
+    pub fn data_value(&self) -> Value {
+        Value::Map(vec![
+            (text("subject"), self.subject.to_value()),
+            (
+                text("entries"),
+                Value::Array(self.entries.iter().map(EntityRef::to_value).collect()),
+            ),
+            (text("gathered_at"), uinteger(self.gathered_at)),
+            (text("gathered_by"), text(self.gathered_by.clone())),
+        ])
+    }
+
+    pub fn to_entity(&self) -> Result<Entity, String> {
+        Entity::new(FEED_MIRROR_TYPE, to_ecf(&self.data_value()))
+            .map_err(|e| format!("feed mirror: {e}"))
+    }
+
+    /// Decode a mirror read out of `namespace`'s tree.
+    ///
+    /// **`gathered_by` is cross-checked against the namespace**, for `FEED-R1`'s
+    /// reason one type over: the record is the gatherer's own signed statement,
+    /// and a body naming somebody else as the assembler would be a claim the
+    /// structure already contradicts. Same move as `Share`'s dropped `from`
+    /// field — where the structure supplies the fact, a field restating it is an
+    /// untrusted second source — except that here §6's CDDL requires the field,
+    /// so it is checked rather than ignored.
+    ///
+    /// ⚠ **There is no `complete` field and §6.1 rule 2 says there never will
+    /// be.** A short mirror is not a defective one.
+    pub fn from_entity(entity: &Entity, namespace: &str) -> Result<Self, FeedError> {
+        let map = body_map(entity, FEED_MIRROR_TYPE)?;
+        let subject = match field(&map, "subject") {
+            None => return Err(FeedError::Malformed("subject")),
+            Some(v) => reference(v, "subject", true)?,
+        };
+        let entries = match field(&map, "entries") {
+            None => return Err(FeedError::Malformed("entries")),
+            Some(v) => reference_list(v, "entries", true)?,
+        };
+        let gathered_by = required_text(&map, "gathered_by")?;
+        if gathered_by != namespace {
+            return Err(FeedError::AuthorIsNotTheNamespace {
+                author: gathered_by,
+                namespace: namespace.to_string(),
+            });
+        }
+        Ok(FeedMirror {
+            subject,
+            entries,
+            gathered_at: required_uint(&map, "gathered_at")?,
+            gathered_by,
+        })
     }
 }
 

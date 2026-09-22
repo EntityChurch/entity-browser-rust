@@ -149,7 +149,8 @@ def probe_domain(base, timeout):
         "domain": base,
         "build": None,      # the commit LABEL
         "build_id": None,   # the bundle hash — the IDENTITY (§3.1)
-        "core_ref": None,   # the SIBLING KERNEL commit — the other half of the pair
+        "core_ref": None,   # the SIBLING KERNEL commit — the second leg of the triple
+        "build_env": None,  # the TOOLCHAIN IMAGE id — the third leg
         "reachable": False,
         "rows": [],
         "notes": [],
@@ -183,6 +184,18 @@ def probe_domain(base, timeout):
             "before 2026-09-05, so the kernel half of its build pair is unrecoverable "
             "from the artifact"
         )
+
+    # THE THIRD LEG. Two commits name the SOURCE; neither names the TOOLCHAIN,
+    # and the same source built in two images is two artifacts. Read through the
+    # same one helper as the others (C15 — three hand-written regexes was the
+    # defect this file already fixed once).
+    #
+    # REPORTED, never a verdict. Identity stays the bundle hash (design §3.1):
+    # two toolchain images can legitimately produce one bundle when the
+    # difference did not reach the output, so a probe that failed a fleet for a
+    # moved image id would invent non-uniformity the way the commit-label
+    # version did in 2026-09-02.
+    out["build_env"] = meta_content("entity-build-env", shell)
 
     paths = list(ALWAYS)
     for ref in sorted(set(HASHED_REF.findall(shell))):
@@ -236,9 +249,15 @@ def main():
             print(f"  {r['domain']:<44} UNREACHABLE")
             continue
         bundles = ", ".join(b.rsplit("/", 1)[-1] for b in r.get("bundles", [])) or "—"
+        # The image id is a 64-hex sha; abbreviate for the inventory line only.
+        # The full value stays in the JSON, because an abbreviation is for a
+        # human scanning a column and is not something to compare builds by.
+        env = r.get("build_env")
+        env = (env[:12] if env and env != "unknown" else (env or "(unstamped)"))
         print(
             f"  {r['domain']:<44} build={r.get('build_id') or '(unidentified)'}"
-            f"  pair=({r['build'] or '(unstamped)'}, {r.get('core_ref') or '(unstamped)'})"
+            f"  triple=({r['build'] or '(unstamped)'}, {r.get('core_ref') or '(unstamped)'}"
+            f", {env})"
             f"  {bundles}"
         )
 

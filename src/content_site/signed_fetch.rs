@@ -157,9 +157,38 @@ pub enum SignedFetchError {
     /// The origin could not be reached, or served nothing at a URL we need.
     /// Retryable.
     Transport(String),
-    /// The chain does not hold: bad signature, wrong key, `seq` rollback, or a
-    /// body that does not hash to its address. **Terminal** — never retry.
+    /// The chain does not hold: bad signature, wrong key, or a body that does
+    /// not hash to its address. **Terminal** — never retry.
+    ///
+    /// **This is the PUBLISHER's defect**, and the line above used to end
+    /// *"…, `seq` rollback, …"*, which is a different party's — see
+    /// [`Declined`](Self::Declined).
     Verify(String),
+    /// ⭐ **We refused it, and everything about it was fine.**
+    ///
+    /// The signature verified, the bytes hash to their address, the chain
+    /// holds — and this reader declined the root on **its own** policy. Today
+    /// there is exactly one such policy and it is the anti-rollback floor: a
+    /// published root whose `seq` went backwards is a correctly-signed root
+    /// being replayed, so the refusal is deliberately made *after* verification
+    /// and cannot be made before it.
+    ///
+    /// **Split out of [`Verify`](Self::Verify) on 2026-09-11**, which had been
+    /// enumerating the collapse in its own doc comment. The cost was not the
+    /// merged value, it was the sentence: a reader told *"verification failed:
+    /// seq rollback"* has been handed **the publisher's defect** for something
+    /// the publisher did nothing wrong in — and the case that produces it is
+    /// the publisher's **own second machine** (`multi_device_sequence`, measured
+    /// 2026-09-09: two out-dirs under one keypair are two independent sequences,
+    /// and a consumer that read one refuses the other). *Their laptop is not an
+    /// attack, and the report said it was.*
+    ///
+    /// **Terminal like `Verify`, and terminal for the opposite reason.** There
+    /// the origin failed to prove itself; here it proved itself and we said no.
+    /// Retrying changes neither, and it is the destination that differs: a
+    /// verification failure sends a person to the publisher, this sends them to
+    /// their own reader's floor.
+    Declined(String),
     /// The key is genuinely not in the signed tree. Not a failure of the
     /// origin; a fabricated binding cannot appear here, which is the point.
     Absent,
@@ -190,11 +219,31 @@ pub enum SignedFetchError {
     Budget,
 }
 
+/// Whose defect a terminal published-root failure is.
+///
+/// **One expression, because there are two call sites** and they had the
+/// identical `SignedFetchError::Verify(e.to_string())` — the shape where one of
+/// them grows a case and the other does not (C15). It is also the only place
+/// the kernel's error taxonomy is read for *attribution* rather than for
+/// control flow, so a new kernel variant lands here and nowhere else.
+fn classify_root_error(e: PublishedRootError) -> SignedFetchError {
+    match e {
+        // ⭐ **The reader-owned one.** Everything verified and we said no.
+        PublishedRootError::SeqRollback { .. } => SignedFetchError::Declined(e.to_string()),
+        other => SignedFetchError::Verify(other.to_string()),
+    }
+}
+
 impl std::fmt::Display for SignedFetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Transport(e) => write!(f, "transport: {e}"),
             Self::Verify(e) => write!(f, "verification failed: {e}"),
+            Self::Declined(e) => write!(
+                f,
+                "this reader declined a root that verified correctly: {e} — \
+                 a policy of ours, not a fault of theirs"
+            ),
             Self::Absent => write!(f, "not in the signed tree"),
             Self::IncompleteWalk(e) => {
                 write!(f, "the origin withheld an entity its signed root declares: {e}")
@@ -326,7 +375,7 @@ impl SignedSession {
                 // re-enters the pump; anything else is the origin failing to
                 // prove itself, and retrying gives it unbounded attempts.
                 Err(e) if !matches!(e, PublishedRootError::Fetch(_)) => {
-                    return Err(SignedFetchError::Verify(e.to_string()))
+                    return Err(classify_root_error(e))
                 }
                 // `Ok(None)` (a miss inside the walk, or a genuine absence) and
                 // `Err(Fetch)` (a miss on the leaf, or a genuine transport
@@ -568,7 +617,7 @@ impl SignedSession {
                     self.pump_once(src).await?;
                     continue;
                 }
-                Err(e) => return Err(SignedFetchError::Verify(e.to_string())),
+                Err(e) => return Err(classify_root_error(e)),
             };
 
             match self.walk_keys(root.root_hash, prefix, budget)? {
@@ -1229,9 +1278,29 @@ mod tests {
 
         let older = DirSource::new(v1.path());
         let rolled_back = block_on(session.resolve(&older, KEY));
+        // ⭐ **`Declined`, NOT `Verify`** — and the change of variant is the
+        // whole point rather than a rename. Everything about v1 is correct: the
+        // key is right, the signature verifies, every body hashes to its
+        // address. What refused it is **this reader's** monotonicity floor, and
+        // it necessarily runs *after* verification because a rollback is a
+        // correctly-signed root being replayed. Reporting it as *"verification
+        // failed"* hands a publisher's defect to a publisher who has none — and
+        // the case that produces it in the field is their **own second machine**
+        // (`multi_device_sequence`).
         assert!(
-            matches!(&rolled_back, Err(SignedFetchError::Verify(e)) if e.contains("rollback")),
-            "a session must refuse an older seq: {rolled_back:?}"
+            matches!(&rolled_back, Err(SignedFetchError::Declined(e)) if e.contains("rollback")),
+            "a session must refuse an older seq, and must not blame the publisher \
+             for it: {rolled_back:?}"
+        );
+
+        // And a genuinely bad chain still lands on `Verify`, so the split is a
+        // discrimination and not a relabelling of everything terminal.
+        assert!(
+            matches!(
+                classify_root_error(PublishedRootError::SignatureInvalid),
+                SignedFetchError::Verify(_)
+            ),
+            "every terminal outcome became the reader's own — then nothing was split"
         );
 
         // The mutation: the one-shot path has no floor, so it takes v1 happily.

@@ -405,8 +405,14 @@ fn a_session_that_has_seen_one_device_refuses_the_other_as_a_rollback() {
 
     // MEASUREMENT: the same publisher's other machine.
     let refused = block_on(session.resolve(&Device::at(b.path()), KEY));
+    // ⭐ **`Declined`, not `Verify`, as of 2026-09-11 — and the variant is half
+    // of what C-2 measured.** The refusal is unchanged and still the finding.
+    // What changed is who the report blames: this is **our** monotonicity floor
+    // refusing a root that verified perfectly, and until the split it arrived as
+    // *"verification failed"* — the publisher's defect, for a publisher whose
+    // only mistake was owning two computers. *Their laptop is not an attack.*
     assert!(
-        matches!(&refused, Err(SignedFetchError::Verify(e)) if e.contains("rollback")),
+        matches!(&refused, Err(SignedFetchError::Declined(e)) if e.contains("rollback")),
         "device B must be refused as a rollback — that is the finding, not a bug in the rig: {refused:?}"
     );
     eprintln!("C-2 cell 3: the publisher's own second device is refused as a rollback: {refused:?}");
@@ -442,7 +448,7 @@ fn which_device_is_refused_depends_only_on_the_order_they_were_read_in() {
     block_on(reverse.resolve(&Device::at(a.path()), KEY)).expect("A resolves first");
     let refused = block_on(reverse.resolve(&Device::at(b.path()), KEY));
     assert!(
-        matches!(&refused, Err(SignedFetchError::Verify(_))),
+        matches!(&refused, Err(SignedFetchError::Declined(_))),
         "the same pair of devices, read the other way round, is a refusal: {refused:?}"
     );
     eprintln!("C-2 cell 3b: B→A silently swaps trees; A→B is refused. Same two devices.");

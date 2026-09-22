@@ -758,6 +758,8 @@
   "doctor.check1.detail.unheard": "Non è giunto nulla dal dominio, quindi non è stato possibile confrontare nulla e nulla è noto — questo non è un certificato di buona salute. Tutto ciò che è già su questa macchina è intatto e ancora accurato. Riprovate quando sarete di nuovo in linea.",
   "doctor.check1.source.origin_error": "questo dominio ha risposto con un errore (HTTP {status})",
   "doctor.check1.detail.origin_error": "Il dominio è raggiungibile ma ha restituito un guasto anziché la sua configurazione, quindi non è stato possibile confrontare nulla. È un problema del dominio, non di questa macchina, e non dice nulla sul fatto che il vostro editore sia aggiornato.",
+  "doctor.check1.source.refused": "questo dominio non ha voluto fornire la sua configurazione (HTTP {status})",
+  "doctor.check1.detail.refused": "Il dominio è raggiungibile e ha rifiutato di consegnare la sua configurazione a questa app. È una regola di accesso del dominio, non un guasto né un problema di questa macchina. Non c'era nulla da confrontare, quindi non si sa se il tuo editore sia aggiornato.",
   "doctor.check1.source.unreadable": "non è stato possibile leggere la configurazione di questo dominio (HTTP {status})",
   "doctor.check1.detail.unreadable": "Il dominio ha risposto con qualcosa che questa applicazione non ha saputo interpretare — un file troncato o scritto a metà, o una pagina di errore servita come successo. Non è stato possibile confrontare nulla, e nulla di ciò è un'affermazione sulla vostra macchina.",
   "doctor.check1.source.no_document": "questo dominio non serve alcun documento di distribuzione",
@@ -803,6 +805,8 @@
   "feed.no_follows": "Non segui ancora nessuno.",
   "feed.nobody_selected": "Scegli un editore qui sopra per leggere il suo feed.",
   "feed.loading": "Lettura di questo feed…",
+  "feed.via.live": "Letto in diretta, direttamente da questo editore.",
+  "feed.via.published": "Letto dal sito pubblicato di questo editore.",
   "feed.no_posts": "Questo editore non ha pubblicato nulla.",
   "feed.failed": "Non è stato possibile leggere questo feed.",
   "feed.notice.followed": "Ora lo segui.",
@@ -816,5 +820,5 @@
   "feed.attr.wrong_target": "non firmato — la firma copre un altro post",
   "feed.attr.not_the_author": "non firmato — firmato da qualcuno diverso dall'autore",
   "feed.attr.bad_signature": "non firmato — la firma non è valida",
-  "feed.no_route": "Questa installazione non sa dove sia ospitato questo editore, quindi non c'è nessuno a cui chiedere."
+  "feed.no_route": "Non sei connesso a questo editore e questo deployment non sa dove sia ospitato, quindi non c'è nessuno a cui chiedere."
 }

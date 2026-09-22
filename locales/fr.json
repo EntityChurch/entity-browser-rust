@@ -758,6 +758,8 @@
   "doctor.check1.detail.unheard": "Rien n'a été entendu du domaine, rien n'a donc pu être comparé et rien n'est connu — ce n'est pas un certificat de bonne santé. Tout ce qui se trouve déjà sur cette machine est intact et toujours exact. Réessayez lorsque vous serez de nouveau en ligne.",
   "doctor.check1.source.origin_error": "ce domaine a répondu par une erreur (HTTP {status})",
   "doctor.check1.detail.origin_error": "Le domaine est joignable mais a renvoyé une erreur au lieu de sa configuration ; rien n'a donc pu être comparé. C'est un problème au niveau du domaine, pas sur cette machine, et cela ne dit rien sur l'actualité de votre éditeur.",
+  "doctor.check1.source.refused": "ce domaine n'a pas voulu livrer sa configuration (HTTP {status})",
+  "doctor.check1.detail.refused": "Le domaine est joignable et a refusé de livrer sa configuration à cette application. C'est une règle d'accès au niveau du domaine, pas une panne ni un problème sur cette machine. Rien n'a pu être comparé, on ne sait donc rien sur l'actualité de votre éditeur.",
   "doctor.check1.source.unreadable": "la configuration de ce domaine n'a pas pu être lue (HTTP {status})",
   "doctor.check1.detail.unreadable": "Le domaine a répondu par quelque chose que cette application n'a pas su analyser — un fichier tronqué ou écrit à moitié, ou une page d'erreur servie comme un succès. Rien n'a pu être comparé, et rien ici ne constitue une affirmation sur votre machine.",
   "doctor.check1.source.no_document": "ce domaine ne sert aucun document de déploiement",
@@ -803,6 +805,8 @@
   "feed.no_follows": "Vous ne suivez encore personne.",
   "feed.nobody_selected": "Choisissez un éditeur ci-dessus pour lire son flux.",
   "feed.loading": "Lecture de ce flux…",
+  "feed.via.live": "Lu en direct, depuis cet éditeur.",
+  "feed.via.published": "Lu depuis le site publié de cet éditeur.",
   "feed.no_posts": "Cet éditeur n'a rien publié.",
   "feed.failed": "Ce flux n'a pas pu être lu.",
   "feed.notice.followed": "Abonné.",
@@ -816,5 +820,5 @@
   "feed.attr.wrong_target": "non signé — la signature couvre une autre publication",
   "feed.attr.not_the_author": "non signé — signé par quelqu'un d'autre que l'auteur",
   "feed.attr.bad_signature": "non signé — la signature n'est pas valide",
-  "feed.no_route": "Ce déploiement ne sait pas où cet éditeur est hébergé, il n'y a donc personne à qui demander."
+  "feed.no_route": "Vous n'êtes pas connecté à cet éditeur, et ce déploiement ne sait pas où il est hébergé — il n'y a donc personne à qui demander."
 }

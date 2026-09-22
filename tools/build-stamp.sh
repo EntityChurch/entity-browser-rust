@@ -75,15 +75,42 @@ commit=${pair%% *}
 # defined one from anywhere else.
 core_ref=${pair##* }
 
-# THREE stamps, and no two of them answer the same question. (It was TWO until
-# 2026-09-05; re-state the count whenever one is added, because a heading that
-# undercounts is how the third one becomes invisible to the next reader.)
+# THE THIRD LEG. Our commit and the sibling's name the SOURCE; neither names the
+# TOOLCHAIN, and the same two commits built in two different images are two
+# different artifacts. The binaryen-108 regression is the proof that this leg is
+# load-bearing rather than tidy: a toolchain component moved, mis-optimized the
+# release bundle in exactly one WebView engine, and nothing in the emitted tree
+# could have said which wasm-opt produced those bytes.
+#
+# Passed in by the Makefile (`ENTITY_BUILD_ENV`) rather than discovered here,
+# because a container cannot reliably identify its own image from the inside —
+# the same reason `ENTITY_CORE_PIN` is threaded in rather than probed. This is
+# the value `build_env_digest` means in `PROPOSAL-EXTENSION-PACKAGE` §2.
+#
+# **A re-stamp with nothing passed in DOWNGRADES an existing value to 'unknown',
+# and that is deliberate rather than an oversight.** The tempting guard — keep
+# whatever is already in the file when we cannot tell — is wrong in the case
+# that matters: a `NATIVE=1` build writing into a dist a container built would
+# then claim an environment that did not produce those bytes. A stamp naming the
+# wrong environment is worse than one admitting ignorance, because nothing
+# downstream can tell them apart. And the hazard is narrow in practice: trunk
+# regenerates index.html on every build, so a re-stamp only reaches an
+# already-stamped file when nobody rebuilt — which is exactly when the old value
+# is stale anyway.
+build_env=${ENTITY_BUILD_ENV:-unknown}
+
+# FOUR stamps, and no two of them answer the same question. (TWO until
+# 2026-09-05, THREE until 2026-09-11; re-state the count whenever one is added,
+# because a heading that undercounts is how the next one becomes invisible to
+# the next reader.)
 #
 #   entity-build     the COMMIT. Provenance, for a human and a bug report.
 #   entity-core-ref  the SIBLING KERNEL commit this bundle was linked against.
 #                    Not decoration: with a path dependency and no lockfile,
 #                    (entity-build, entity-core-ref) is the smallest pair that
 #                    identifies a reproducible build. See the block above.
+#   entity-build-env the TOOLCHAIN IMAGE id. The third leg of the same triple:
+#                    source, source, and the environment that compiled them.
 #   entity-build-id  the BUNDLE HASH. The SLOT IDENTITY (C9/C10, design 3.1) --
 #                    what a rollback pin names and what /builds/<id>/ is keyed
 #                    on. Several commits can share one; two docs-only commits
@@ -106,10 +133,10 @@ core_ref=${pair##* }
 # Idempotent: trunk regenerates index.html on every build, but a re-stamp of an
 # already-stamped file (a hand-run, a reused shell) must replace rather than
 # accumulate.
-python3 - "$html" "$commit" "$core_ref" <<'PY'
+python3 - "$html" "$commit" "$core_ref" "$build_env" <<'PY'
 import re, sys
 
-path, commit, core_ref = sys.argv[1], sys.argv[2], sys.argv[3]
+path, commit, core_ref, build_env = sys.argv[1:5]
 with open(path, encoding='utf-8') as fh:
     html = fh.read()
 
@@ -128,6 +155,8 @@ if build_id:
 # 'unknown': "we could not tell" and "nobody recorded it" are different facts,
 # and only one of them is fixable by the next person to look.
 tags.append(('entity-core-ref', core_ref))
+# The toolchain image. Same rule, same reason: 'unknown' is a statement.
+tags.append(('entity-build-env', build_env))
 
 for name, value in tags:
     tag = f'<meta name="{name}" content="{value}">'
@@ -149,4 +178,6 @@ with open(path, 'w', encoding='utf-8') as fh:
 print(f'build-stamp: build id {build_id or "(none)"}')
 PY
 
-echo "build-stamp: $dist/index.html ← $commit (entity-core-rust $core_ref)"
+# The image id is 64 hex; abbreviate for the human line only. The full value is
+# in the meta tag, which is what anything comparing builds reads.
+echo "build-stamp: $dist/index.html ← $commit (entity-core-rust $core_ref, build-env ${build_env:0:12})"

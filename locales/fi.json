@@ -758,6 +758,8 @@
   "doctor.check1.detail.unheard": "Verkkotunnuksesta ei kuulunut mitään, joten mitään ei voitu verrata eikä mitään tiedetä — tämä ei ole puhdas terveystodistus. Kaikki, mikä on jo tällä koneella, on koskematonta ja edelleen paikkansapitävää. Yritä uudelleen, kun olet taas verkossa.",
   "doctor.check1.source.origin_error": "tämä verkkotunnus vastasi virheellä (HTTP {status})",
   "doctor.check1.detail.origin_error": "Verkkotunnus on tavoitettavissa, mutta se palautti vian asetustensa sijaan, joten mitään ei voitu verrata. Se on verkkotunnuksen ongelma, ei tämän koneen, eikä se kerro mitään siitä, onko julkaisijasi ajan tasalla.",
+  "doctor.check1.source.refused": "tämä verkkotunnus ei suostunut antamaan asetuksiaan (HTTP {status})",
+  "doctor.check1.detail.refused": "Verkkotunnus on tavoitettavissa ja kieltäytyi luovuttamasta asetuksiaan tälle sovellukselle. Kyse on verkkotunnuksen käyttöoikeussäännöstä, ei viasta eikä tämän koneen ongelmasta. Verrattavaa ei ollut, joten ei tiedetä, onko julkaisijasi ajan tasalla.",
   "doctor.check1.source.unreadable": "tämän verkkotunnuksen asetuksia ei voitu lukea (HTTP {status})",
   "doctor.check1.detail.unreadable": "Verkkotunnus vastasi jollakin, mitä tämä sovellus ei osannut jäsentää — katkaistulla tai puoliksi kirjoitetulla tiedostolla tai virhesivulla, joka tarjoiltiin onnistumisena. Mitään ei voitu verrata, eikä mikään tässä ole väite koneestasi.",
   "doctor.check1.source.no_document": "tämä verkkotunnus ei tarjoa käyttöönottoasiakirjaa",
@@ -803,6 +805,8 @@
   "feed.no_follows": "Et seuraa vielä ketään.",
   "feed.nobody_selected": "Valitse yllä julkaisija lukeaksesi hänen syötteensä.",
   "feed.loading": "Luetaan tätä syötettä…",
+  "feed.via.live": "Luettu suorana, suoraan tältä julkaisijalta.",
+  "feed.via.published": "Luettu tämän julkaisijan julkaistulta sivustolta.",
   "feed.no_posts": "Tämä julkaisija ei ole julkaissut mitään.",
   "feed.failed": "Tätä syötettä ei voitu lukea.",
   "feed.notice.followed": "Seurataan.",
@@ -816,5 +820,5 @@
   "feed.attr.wrong_target": "allekirjoittamaton — allekirjoitus koskee toista julkaisua",
   "feed.attr.not_the_author": "allekirjoittamaton — allekirjoittaja ei ole tekijä",
   "feed.attr.bad_signature": "allekirjoittamaton — allekirjoitus ei kelpaa",
-  "feed.no_route": "Tämä asennus ei tiedä, missä tätä julkaisijaa isännöidään, joten kysyttävää ei ole keneltäkään."
+  "feed.no_route": "Et ole yhteydessä tähän julkaisijaan, eikä tämä käyttöönotto tiedä, missä se on isännöity — joten ei ole mistä kysyä."
 }

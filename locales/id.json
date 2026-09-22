@@ -751,6 +751,8 @@
   "doctor.check1.detail.unheard": "Tidak ada yang terdengar dari domain, jadi tidak ada yang dapat dibandingkan dan tidak ada yang diketahui — ini bukan surat keterangan sehat yang bersih. Segala sesuatu yang sudah ada di mesin ini tidak terpengaruh dan masih akurat. Coba lagi ketika Anda kembali daring.",
   "doctor.check1.source.origin_error": "domain ini menjawab dengan galat (HTTP {status})",
   "doctor.check1.detail.origin_error": "Domain dapat dijangkau tetapi mengembalikan kegagalan alih-alih konfigurasinya, jadi tidak ada yang dapat dibandingkan. Itu adalah masalah di domain, bukan di mesin ini, dan tidak mengatakan apa pun tentang apakah penerbit Anda mutakhir.",
+  "doctor.check1.source.refused": "domain ini tidak mau menyerahkan konfigurasinya (HTTP {status})",
+  "doctor.check1.detail.refused": "Domain dapat dijangkau dan menolak menyerahkan konfigurasinya kepada aplikasi ini. Itu adalah aturan akses di domain, bukan kegagalan dan bukan masalah pada mesin ini. Tidak ada yang bisa dibandingkan, sehingga tidak diketahui apakah penerbit Anda mutakhir.",
   "doctor.check1.source.unreadable": "konfigurasi domain ini tidak dapat dibaca (HTTP {status})",
   "doctor.check1.detail.unreadable": "Domain menjawab dengan sesuatu yang tidak dapat diurai aplikasi ini — berkas yang terpotong atau setengah tertulis, atau halaman galat yang disajikan sebagai keberhasilan. Tidak ada yang dapat dibandingkan, dan tidak ada di sini yang merupakan pernyataan tentang mesin Anda.",
   "doctor.check1.source.no_document": "domain ini tidak menyajikan dokumen penggelaran",
@@ -796,6 +798,8 @@
   "feed.no_follows": "Anda belum mengikuti siapa pun.",
   "feed.nobody_selected": "Pilih penerbit di atas untuk membaca umpannya.",
   "feed.loading": "Membaca umpan ini…",
+  "feed.via.live": "Dibaca langsung, dari penerbit ini.",
+  "feed.via.published": "Dibaca dari situs terbitan penerbit ini.",
   "feed.no_posts": "Penerbit ini belum mengirim apa pun.",
   "feed.failed": "Umpan ini tidak dapat dibaca.",
   "feed.notice.followed": "Mengikuti.",
@@ -809,5 +813,5 @@
   "feed.attr.wrong_target": "tanpa tanda tangan — tanda tangan mencakup kiriman lain",
   "feed.attr.not_the_author": "tanpa tanda tangan — ditandatangani oleh orang selain penulis",
   "feed.attr.bad_signature": "tanpa tanda tangan — tanda tangan tidak sah",
-  "feed.no_route": "Penerapan ini tidak tahu di mana penerbit ini di-host, jadi tidak ada yang bisa ditanya."
+  "feed.no_route": "Anda tidak terhubung ke penerbit ini, dan penerapan ini tidak tahu di mana mereka dihosting — jadi tidak ada tempat untuk bertanya."
 }

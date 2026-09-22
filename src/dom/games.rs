@@ -2,7 +2,8 @@
 //! running a self-contained entity-app bundle, with the entity-apps postMessage
 //! protocol and save-state persisted to the tree.
 //!
-//! A third-party JS app bundle runs `sandbox="allow-scripts"` (and **not**
+//! A third-party JS app bundle runs `sandbox="allow-scripts allow-downloads"`
+//! (and **not**
 //! `allow-same-origin`): an opaque origin that can run JS but can't reach our DOM,
 //! storage, or origin — `postMessage` is the only channel. An **L5 app** (an
 //! `AppDelivery::Src` payload — our own trusted stripped browser-rust) additionally
@@ -470,20 +471,12 @@ fn sanitize_svg(root: &Element) {
     }
 }
 
-/// How the bundle reaches the sandboxed iframe. Most apps are self-contained HTML
-/// inlined as `srcdoc`; an L5 app (a WASM entity-peer payload) is a multi-MB wasm
-/// that can't practically be base64-inlined, so it is served from a URL via `src`
-/// (review G1). The variant also selects the sandbox trust tier in
-/// [`render_player`] — `Srcdoc` stays opaque `allow-scripts`; `Src` (our own
-/// trusted payload) adds `allow-same-origin` so it can load its wasm.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppDelivery {
-    /// Inline `bundle_html` as the iframe `srcdoc` (self-contained apps; default).
-    Srcdoc,
-    /// Load the bundle from `url` via the iframe `src`. Same-origin under `dist/`
-    /// in the deployed browser; the loader shell fetches its wasm from there.
-    Src(String),
-}
+// `AppDelivery` and the sandbox token sets live in `crate::app_sandbox`, which is
+// NATIVE. They were here, in a `cfg(target_arch = "wasm32")` module, and the only
+// thing that could see them was a Selenium run — which is how a token
+// `EMBEDDING.md` §5 documents as required stayed missing for two months with
+// every gate green. Re-exported so no call site changed.
+pub use crate::app_sandbox::AppDelivery;
 
 /// Fixed inputs the host loop needs for one loaded app.
 pub struct GamesHostConfig {
@@ -642,10 +635,44 @@ pub fn render_player(
     // moment of its own choosing, with our chrome gone — a spoofing surface
     // bought for nothing, since the affordance already exists on our side of
     // the wall. Adding the token is a trust-tier change, not plumbing.
-    let sandbox = match &cfg.delivery {
-        AppDelivery::Srcdoc => "allow-scripts",
-        AppDelivery::Src(_) => "allow-scripts allow-same-origin",
-    };
+    // `allow-downloads` — added 2026-09-11, and the reason it is not optional is
+    // that THE DOCUMENTED ALTERNATIVE IS NOT AVAILABLE TO US. `EMBEDDING.md` §5:
+    //
+    //   "Omitting it fails silently. The browser blocks the download with no
+    //    error and no exception — `Entity.Export` cannot detect it, and the app
+    //    cannot tell the user. So an export button will simply appear to do
+    //    nothing. … prefer hiding export in your host UI over shipping a dead
+    //    button."
+    //
+    // That advice assumes the HOST draws the export button. Ours does not — the
+    // button is inside the bundle, so we cannot hide it, and "ship a dead
+    // button" was therefore the only state we could be in. Five bundles call
+    // `Entity.Export` (`pixel`, `sketch`, `algo-art`, `nature-lab`, `tiling` —
+    // measured at entity-apps `ed9378b7`), i.e. every art app, i.e. exactly the
+    // set whose entire output is a file.
+    //
+    // It does NOT weaken origin isolation the way `allow-same-origin` would: it
+    // permits a download to be *initiated* and nothing else, so the worst it
+    // buys a hostile bundle is prompting the user with a file save. That is a
+    // real cost and a small one against a button that silently does nothing.
+    //
+    // ⚠ **This is a mitigation, not the answer.** It sends the bytes to the
+    // browser's Downloads folder — a destination the entity tree cannot read,
+    // the peer cannot serve and the run-environment cannot ingest, and on a
+    // phone barely a destination at all. The answer is a file verb that returns
+    // the bytes to the HOST, asked for in
+    // `ROUTING-2026-09-11-q-entity-apps-…`; when that lands, this token stays
+    // (it is the unhosted fallback path) and stops being the only route out.
+    //
+    // `Src` is deliberately unchanged: our own L5 payload has no download path
+    // (grep: no `download`/`createObjectURL` in `src/app_host/`), and adding a
+    // token to the tier that already holds `allow-same-origin` deserves its own
+    // measured reason rather than symmetry with this one.
+    //
+    // THE TOKENS THEMSELVES ARE IN `crate::app_sandbox`, gated by `make test`.
+    // They are not spelled here, because the reason this defect lasted two
+    // months is that they were only spelled somewhere no native test could read.
+    let sandbox = crate::app_sandbox::sandbox_tokens(&cfg.delivery);
     util::set_attr(&frame, "sandbox", sandbox);
     // Permissions Policy — a DIFFERENT mechanism from `sandbox`, and the one
     // thing an app cannot grant itself. `screen-wake-lock` is denied in a frame

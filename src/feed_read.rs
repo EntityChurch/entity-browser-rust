@@ -262,6 +262,59 @@ pub struct ReadEntry {
     pub hash: Hash,
     pub entry: FeedEntry,
     pub attribution: Attribution,
+    /// **What was obtained, byte-for-byte** — see [`Obtained`]. A reader that
+    /// only renders ignores it; a reader that republishes must carry exactly
+    /// this and nothing re-encoded from [`Self::entry`].
+    pub obtained: Obtained,
+}
+
+/// The bytes as they arrived, and the evidence that travels with them.
+///
+/// ## Why a decoded entry is not enough to republish
+///
+/// `APP-CONVENTION-FEED` §6.1 rule 1 and the replication proposal's byte-
+/// preservation `MUST` say the same thing from two tiers: **a republished entity
+/// is bound byte-identically to the form it was obtained in, and MUST NOT be
+/// re-encoded — including by decoding it through a type that does not fully
+/// declare it.** [`ReadEntry::entry`] is exactly such a type: `FeedEntry` knows
+/// §2.3's fields and V7 §2.6 obliges it to *ignore* the rest, so
+/// `FeedEntry::from_entity(…).to_entity()` silently drops whatever a publisher
+/// carried that we have not heard of.
+///
+/// ⛔ **And the loss is not a field, it is authorship.** A detached signature is
+/// bound at `/{author}/system/signature/{hex(entry_hash)}`; move the hash by one
+/// byte and the signature no longer names the entity, so `FEED-R4` obliges every
+/// entry to render **unattributed**. *A complete, verifiable, correctly-walked
+/// republication in which nobody wrote anything* — measured on another seat as
+/// **3 of 3 hashes moved, with no error anywhere**, which is why this is a type
+/// and not a convention.
+///
+/// The signature is carried for §6.1 rule 3's reason: *a mirror may carry an
+/// author's signature and may never supply one.* A republisher that fetched the
+/// entry and left the signature behind publishes bytes nobody can be named for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Obtained {
+    /// The entry entity exactly as the source served it.
+    pub entity: Entity,
+    /// The author's detached `system/signature`, if the source had one. `None`
+    /// is `FEED-R4`'s named case and **not** an error.
+    pub signature: Option<Entity>,
+}
+
+/// Recompute an entity's address from its own bytes.
+///
+/// **The one place byte fidelity is decided, and it is at the boundary bytes
+/// ARRIVE at** — a hash carried in an `Entity` struct is a *claim* about the
+/// bytes beside it, and on any source that is not root-anchored nothing has
+/// checked it. `SignedSession` verifies the published leg; a live peer's
+/// `system/tree:get` and another peer's republished walk do not, and those are
+/// exactly the two legs this convention adds.
+///
+/// Cheap on purpose: one re-encode of the body we already hold, compared once.
+pub(crate) fn recomputed_hash(entity: &Entity) -> Result<Hash, String> {
+    Entity::new(&entity.entity_type, entity.data.clone())
+        .map(|rebuilt| rebuilt.content_hash)
+        .map_err(|e| format!("{e:?}"))
 }
 
 /// Why a feed read stopped.
@@ -281,6 +334,18 @@ pub enum FeedReadError {
     /// pointed at a reader — an outage rendered as missing posts, which a person
     /// cannot tell from an author who deleted something.
     EntryUnreachable { entry: Hash, detail: String },
+    /// **The index named one entry and the source served different bytes.**
+    ///
+    /// Its own outcome and **fatal**, because §6.1 rule 2 draws exactly this
+    /// line: *a mirror can omit but never substitute.* An omission is an
+    /// ordinary short view ([`read_one`] returns `Ok(None)` for it); a
+    /// substitution is a source answering a pinned reference with something
+    /// else, and continuing would render bytes under an address that does not
+    /// name them — with the signature we fetched by that address attached.
+    ///
+    /// Unreachable on a root-anchored published leg, where `SignedSession`
+    /// refuses first. It is the live leg and the mirror leg that need it.
+    Substituted { named: Hash, served: Hash },
     /// A feed entity that does not decode.
     Malformed { key: String, source: FeedError },
 }
@@ -296,6 +361,13 @@ impl std::fmt::Display for FeedReadError {
                 f,
                 "the index names entry {} and it could not be fetched: {detail}",
                 entry.to_hex()
+            ),
+            FeedReadError::Substituted { named, served } => write!(
+                f,
+                "the index names entry {} and the bytes served hash to {} — \
+                 a source may omit an entry, never substitute one",
+                named.to_hex(),
+                served.to_hex()
             ),
             FeedReadError::Malformed { key, source } => write!(f, "{key}: {source}"),
         }
@@ -440,6 +512,18 @@ async fn read_one<S: FeedSource + ?Sized>(
     else {
         return Ok(None);
     };
+    // **The pin is checked against the BYTES, not against the struct's own
+    // claim.** `Entity.content_hash` is a field a source filled in; on the two
+    // legs this convention adds nothing has verified it, and every downstream
+    // act — which signature we fetch, which address we republish under — keys
+    // off this hash.
+    let served = recomputed_hash(&entity).map_err(|_| FeedReadError::Malformed {
+        key: key.clone(),
+        source: FeedError::Malformed("the served entity does not re-address"),
+    })?;
+    if served != *hash {
+        return Err(FeedReadError::Substituted { named: *hash, served });
+    }
     finish_entry(src, author, *hash, &key, entity).await.map(Some)
 }
 
@@ -451,7 +535,7 @@ async fn read_one<S: FeedSource + ?Sized>(
 /// from the bytes. A second copy of "decode, fetch the signature, attribute"
 /// is the drift C15 exists to refuse — and it would be the copy that quietly
 /// stopped attributing.
-async fn finish_entry<S: FeedSource + ?Sized>(
+pub(crate) async fn finish_entry<S: FeedSource + ?Sized>(
     src: &S,
     author: &str,
     hash: Hash,
@@ -467,7 +551,15 @@ async fn finish_entry<S: FeedSource + ?Sized>(
     // happen is either of them rendering as attributed.
     let sig = src.get(signature_key(author, &hash)).await.ok().flatten();
     let attribution = attribute(author, &hash, sig.as_ref());
-    Ok(ReadEntry { hash, entry, attribution })
+    Ok(ReadEntry {
+        hash,
+        entry,
+        attribution,
+        // Both halves kept **as served**. See [`Obtained`] — this is the only
+        // form a republisher may bind, and the signature is the half a tidy
+        // implementation drops because rendering never needs it.
+        obtained: Obtained { entity, signature: sig },
+    })
 }
 
 /// §4.3 rule 6 — *"a reader that cannot fetch \[the index] falls back to
@@ -530,11 +622,14 @@ async fn read_by_enumeration<S: FeedSource + ?Sized>(
         else {
             continue;
         };
-        // **The hash comes from the BYTES, never from the key name.** §2.2.1
-        // makes an entry's identity its own content hash, so taking it from the
-        // entity is what keeps a mis-bound key from sending us to look up
-        // somebody else's signature.
-        let hash = entity.content_hash;
+        // **The hash comes from the BYTES, never from the key name** — and
+        // since the review, never from `Entity.content_hash` either. §2.2.1
+        // makes an entry's identity its own content hash, so *computing* it is
+        // what keeps a mis-bound key, or a source that filled the field in by
+        // hand, from sending us to look up somebody else's signature. There is
+        // no pin to compare against on this arm, so the computed value simply
+        // *is* the address.
+        let Ok(hash) = recomputed_hash(&entity) else { continue };
         match finish_entry(src, author, hash, &key, entity).await {
             Ok(row) => rows.push(row),
             Err(FeedReadError::Malformed { .. }) => continue,
@@ -651,5 +746,101 @@ mod tests {
             block_on(read_feed(&nothing, "QmAuthor", 10)),
             Err(FeedReadError::NoIndex { .. })
         ));
+    }
+
+    // -- byte preservation, at the boundary bytes arrive at -----------------
+
+    /// ⭐ **What a reader obtains is kept as served, so that it can be
+    /// republished.**
+    ///
+    /// The whole of the closure precondition, checked where it is cheap: the
+    /// bytes on [`Obtained::entity`] are the publisher's, not a re-encode of
+    /// [`ReadEntry::entry`], and the author's signature came with them. A
+    /// gatherer built on a reader that dropped either one publishes a feed
+    /// nobody can be named for.
+    #[test]
+    fn what_a_reader_obtains_is_kept_as_served_and_its_signature_comes_with_it() {
+        let (tree, author, report) = crate::feed_publish::tests::published_tree(3);
+        let read = block_on(read_feed(&tree, &author, 10)).expect("the feed reads");
+        assert_eq!(read.len(), 3);
+
+        for row in &read {
+            let served = tree.0.get(&entry_key(&row.hash)).expect("the tree served it");
+            assert_eq!(
+                row.obtained.entity.data, served.data,
+                "the obtained bytes are not the served bytes"
+            );
+            assert_eq!(row.obtained.entity.content_hash, row.hash);
+            assert!(
+                row.obtained.signature.is_some(),
+                "FEED-R2's signature was fetched to attribute with and then dropped — \
+                 a republisher has nothing to carry"
+            );
+        }
+
+        // And the round trip a naive gatherer would perform instead — this is
+        // the control arm, asserted here so the defect has a name in our tree
+        // and not only in the other seat's measurement.
+        let re_encoded = read[0].entry.to_entity().unwrap();
+        assert_eq!(
+            re_encoded.content_hash, read[0].hash,
+            "for a body we fully declare the re-encode happens to agree — which is \
+             exactly why this is not a property to rely on"
+        );
+        assert!(report.entry_hashes.contains(&read[0].hash));
+    }
+
+    /// ⛔ **A source may omit an entry; it may never substitute one.**
+    ///
+    /// §6.1 rule 2 draws the line and the two legs this convention adds are
+    /// where it bites: the published leg is root-anchored and `SignedSession`
+    /// refuses first, but a live peer and a republishing peer each hand over an
+    /// entity with nothing above them checking that it is the one the pin
+    /// named. Rendering it would attach a signature fetched by the *named*
+    /// hash to bytes that are not it.
+    #[test]
+    fn a_source_answering_a_pin_with_other_bytes_is_refused_rather_than_rendered() {
+        let (mut tree, author, report) = crate::feed_publish::tests::published_tree(2);
+        let named = report.entry_hashes[0];
+        let other = tree
+            .0
+            .get(&entry_key(&report.entry_hashes[1]))
+            .expect("the second entry is published")
+            .clone();
+        // The substitution: the second entry's bytes, served at the first's key.
+        tree.0.insert(entry_key(&named), other);
+
+        match block_on(read_feed(&tree, &author, 10)) {
+            Err(FeedReadError::Substituted { named: n, served }) => {
+                assert_eq!(n, named);
+                assert_ne!(served, named);
+            }
+            other => panic!("a substituted entry was accepted: {other:?}"),
+        }
+    }
+
+    /// ⭐ **`Entity.content_hash` is a claim, not a check — the address is
+    /// computed.**
+    ///
+    /// The field is `pub`, and on every source that is not root-anchored it is
+    /// simply what the far end put there. A reader that trusted it would fetch
+    /// the signature at the *claimed* address, verify it against the *claimed*
+    /// address, and attribute bytes that are somebody else's entirely.
+    #[test]
+    fn a_hash_a_source_filled_in_by_hand_does_not_decide_the_address() {
+        let (mut tree, author, report) = crate::feed_publish::tests::published_tree(2);
+        let named = report.entry_hashes[0];
+        let mut forged = tree.0.get(&entry_key(&report.entry_hashes[1])).unwrap().clone();
+        // Bytes of entry 2, wearing entry 1's address.
+        forged.content_hash = named;
+        tree.0.insert(entry_key(&named), forged);
+
+        assert!(
+            matches!(
+                block_on(read_feed(&tree, &author, 10)),
+                Err(FeedReadError::Substituted { .. })
+            ),
+            "the struct's own claim about its address was taken as the address"
+        );
     }
 }

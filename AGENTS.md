@@ -500,6 +500,16 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   or index the lines and assert the line you are about to write starts with the row you mean.
   Same class as a neuter that passes and a gate satisfied by its fallback: *a tool reporting that
   it did something is not evidence that it did the thing you meant.*
+  ⭐ **THIRD INGREDIENT, 2026-09-11, and it defeats the assert this entry recommends: AN EARLIER EDIT
+  IN THE SAME RUN CAN MOVE A MATCHING ROW INTO YOUR NEXT ANCHOR'S RANGE.** Moving four ruled asks
+  Open → Closed, then inserting a new row "after the last `| **A-4` in Open", put it in **Closed** —
+  because `A-41` had *just* been moved there and now sorted last. **The assertion passed**, correctly:
+  the line really did start with `| **A-4`. **An assert that your anchor MATCHED is not an assert that
+  it matched the RIGHT one**, and no predicate over the row's own text can tell them apart. What
+  caught it was the script **printing the resolved target** (`INSERT after 259 -> | **A-41** …`) and
+  that line being read. ⇒ **anchor on a row id that is unique in the whole file, never on a prefix;
+  assert the target is in the SECTION you mean (`open_i < d < closed_i`); and print what you resolved
+  to, because in a multi-step edit the tree you are anchoring against is one you already changed.**
 - **A documented invocation is a coupling no compiler maintains — run it before you write it
   down (AP37).** Two gates' doc comments instructed `E2E_EXTRA='--ignored'`; the variable did
   not exist, make ignored it silently, and the command printed `0 passed; 2 ignored` — a
@@ -2312,14 +2322,73 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   read** and none about a file; `classify` also removed a four-arm match that `read_entity_at`
   and `list_keys_at` had duplicated. Not a standalone rename — the charter's rule, and EMBED's
   payload union is the precedent.
-  **What is NOT done:** the **window is unwired** (`FeedPoller::spawn_walk` still builds only an
-  `OriginFeedSource`) — which of live/published wins when both are available is a product
-  decision with a real trade (live is fresher; the origin works while they sleep) and is the
-  operator's. **No browser gate**: the live gates are native over the memory transport, so *"the
+  ⇒ **The window is WIRED as of 2026-09-11, and the framing was the thing that was wrong — see
+  `src/feed_route.rs`.** *Live or published* is not the question: a publisher may serve their feed
+  at only one of the two, so it is a **priority list**, and **an empty answer from one leg is not
+  evidence about the other**. A live peer with nothing in their tree beside a published tree full
+  of posts is what a publisher who cannot carry the load looks like from here — stopping at the
+  first leg that *answered* reports *"this author has posted nothing"* one hop from their archive
+  (AP54's family). **Serving stops the walk; answering does not**, and the gate asserts the second
+  leg was **never consulted**, because *"the answer came from the first"* passes with no
+  short-circuit at all. **A publisher cannot state a preference — measured**, and routed as
+  `A-43`: FEED's only use of *live* is §2.2's live-**reference** atom, a different axis.
+  **The default (live-first) is the weaker read today and the module doc says so**: the index is a
+  publish artifact, so the live leg falls through to the prefix fallback, which *reconstructs* the
+  order where the published leg *reads* it.
+  **No browser gate**: the live gates are native over the memory transport, so *"the
   transport does not matter"* rests on `DispatchHandle` having no branch below it — a structural
   argument, not a measurement. **Pointer bodies are not wired** (the blob walk is
   `file_offer::pull_offer`'s, one consumer over; `system/content:get` resolves **by hash, not by
   namespace** — the namespace is the capability scope).
+- **THE GATHERER IS BUILT — `src/feed_mirror.rs`, `APP-CONVENTION-FEED` §6 — AND ITS CLOSURE GATE
+  CANNOT SEE THE DEFECT IT LOOKS LIKE IT GUARDS (2026-09-11).** Arch ruled `D20` (closure's two
+  preconditions) and asked for this first. **The shape is forced, not chosen:** the gatherer signs
+  the **mirror record** and the carried entries are written at their **own author's** addresses and
+  are **not** in the gatherer's signed root — `RootProjector::record` skipping a foreign peer is the
+  tree tier saying a root commits only to keys under its own peer, and the entries stand on a pin
+  plus the author's detached signature instead. That is what *author-anchored evidence surviving
+  detachment* has to mean, and it is why `entry_key` being the entry's own hash matters: the
+  consumer's address is derivable, so `read_mirror` and `read_feed` share **one** `finish_entry`.
+  ⚠ **THE A→B→C GATE IS GREEN UNDER THE NAIVE-REPUBLISH NEUTER.** Every fixture in it came from our
+  own encoder, so decode-and-re-encode is lossless over them — `APP-CONVENTION-FEED` §6.1 names that
+  hazard by hand (*"a round trip through bytes your own encoder produced proves nothing"*) and our
+  first control arm walked into it and failed honestly. The arm that measures the `MUST` needs **a
+  field the reader does not declare** (V7 §2.6 obliges us to ignore exactly those), authored and
+  signed by the publisher: then the hash moves, **nothing errors anywhere**, and the signature stops
+  naming what was bound. ⇒ ***a gate whose fixtures your own encoder produced is testing your
+  encoder against itself*** — a fourth face of *ask what your gate's expected value depends on*, and
+  the gate's own doc comment says which of the two measures the property.
+  **`Entity.content_hash` is a CLAIM, not a check.** `SignedSession` verifies it on the published
+  leg; a live peer and a republishing peer do not, and both are legs this convention adds. So
+  `feed_read` **computes** the address and compares it to the pin (`FeedReadError::Substituted`,
+  fatal — §6.1 rule 2's *a source may omit, never substitute*), and `plan_mirror` re-checks rather
+  than inheriting, because it is the act whose correctness depends on it (AP44).
+  **Two findings routed, both from building rather than reading** (`A-57`/`A-59`): §2.2 makes
+  `reference` pinned-only, so §6's `subject` pins **one entity** — a thread — while the replication
+  proposal's closure trace republishes **timelines**, which are growing prefixes and cannot be
+  pinned, ⇒ **the third `SOURCE` leg that is the 250× has no type to ride on** and `feed_route::Leg`
+  stays at two variants. And a mirror is **not** consumed by the identical code path a feed is: at
+  the entry it literally is, at the set it is two walks, so the fixed point closes `mirror → mirror`.
+  **Stated bounds:** no verb publishes a mirror, nothing durable is held (D24 not engaged), and the
+  run is 4 entities.
+- **A READER-OWNED REFUSAL IS NOT A VERIFICATION FAILURE, AND OURS WAS BLAMING THE PUBLISHER FOR
+  OWNING TWO COMPUTERS (2026-09-11).** `SignedFetchError::Verify` carried the anti-rollback floor
+  and **enumerated the collapse in its own doc comment** — *"bad signature, wrong key, `seq`
+  rollback, or a body that does not hash to its address."* Three of those are the publisher failing
+  to prove themselves; the fourth is a root that **proved itself perfectly** and that our own
+  monotonicity policy then refused, necessarily *after* verification, because a rollback is a
+  correctly-signed root being replayed. So a reader saw *"verification failed: seq rollback"* — and
+  the field case that produces it is **the publisher's own second machine** (`multi_device_sequence`,
+  the `C-2` measurement). *Their laptop is not an attack and the report said it was.*
+  `SignedFetchError::Declined` is the split, through **one** `classify_root_error` because there
+  were two call sites with the identical collapse (C15) — and it is the only place the kernel's error
+  taxonomy is read for **attribution** rather than for control flow, so a new kernel variant lands
+  there and nowhere else. **Assert the discrimination, not the relabelling:** `SignatureInvalid`
+  still lands on `Verify`, so a split that made every terminal outcome the reader's own would red.
+  ⇒ **when a terminal outcome is a policy you chose, it is yours and not theirs** — AP40 where the
+  cost is not the merged value but the wrong destination. `AssetPayload::Unsupported { tag }` is the
+  same row with a different owner (capability rather than policy), and both are second-seat evidence
+  for the replication proposal's seventh outcome.
 - **THE THIRD PUBLISH AXIS SHIPPED, AND `src/publish_axes.rs` IS NOW *THE* LIST OF WHAT ENTERS A
   PROJECTION (2026-09-10).** `feed_tree::read_owned_feed` reads a peer's own feed off the tree,
   `feed_ingest::ingest_path` writes an authored `posts/` dir into it, `publish --ingest-feed=<dir>`

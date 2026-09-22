@@ -48,9 +48,19 @@ pub enum FeedPanel {
     NoRoute,
     /// A walk is in flight.
     Loading,
-    /// The walk finished and the publisher has published no entries.
+    /// Every leg of the route answered and the publisher has no entries.
+    ///
+    /// **Distinct from `NoRoute`**, which is the same blank panel for the
+    /// opposite reason: there we never asked.
     NoPosts,
-    Entries(Vec<EntryRow>),
+    /// Entries, and a catalog key naming **which leg served them** — a live
+    /// connection to the author or their published tree.
+    ///
+    /// `via` is shown rather than kept for the log because the two are not
+    /// interchangeable to a reader: a live read is as fresh as the author is,
+    /// and a published one is as fresh as their last publish. Somebody deciding
+    /// whether they are seeing the latest post needs to know which they got.
+    Entries { via: &'static str, rows: Vec<EntryRow> },
     /// The walk failed. Carries the reason verbatim — it is a diagnostic from
     /// the transport, not a sentence we authored, so it is shown beside a
     /// localized heading rather than in place of one.

@@ -758,6 +758,8 @@
   "doctor.check1.detail.unheard": "Nada foi ouvido do domínio, por isso nada pôde ser comparado e nada se sabe — este não é um atestado de boa saúde. Tudo o que já está nesta máquina permanece intacto e continua exato. Tente novamente quando estiver de novo em linha.",
   "doctor.check1.source.origin_error": "este domínio respondeu com um erro (HTTP {status})",
   "doctor.check1.detail.origin_error": "O domínio está acessível mas devolveu uma falha em vez da sua configuração, por isso nada pôde ser comparado. É um problema no domínio, não nesta máquina, e nada diz sobre se o seu editor está atual.",
+  "doctor.check1.source.refused": "este domínio não quis entregar a sua configuração (HTTP {status})",
+  "doctor.check1.detail.refused": "O domínio está acessível e recusou entregar a sua configuração a esta aplicação. Isso é uma regra de acesso no domínio, não uma falha nem um problema nesta máquina. Não houve nada a comparar, portanto não se sabe se o seu publicador está atualizado.",
   "doctor.check1.source.unreadable": "a configuração deste domínio não pôde ser lida (HTTP {status})",
   "doctor.check1.detail.unreadable": "O domínio respondeu com algo que esta aplicação não conseguiu analisar — um ficheiro truncado ou escrito pela metade, ou uma página de erro servida como sucesso. Nada pôde ser comparado, e nada disto é uma afirmação sobre a sua máquina.",
   "doctor.check1.source.no_document": "este domínio não serve qualquer documento de implantação",
@@ -803,6 +805,8 @@
   "feed.no_follows": "Ainda não segue ninguém.",
   "feed.nobody_selected": "Escolha um editor acima para ler o feed dele.",
   "feed.loading": "A ler este feed…",
+  "feed.via.live": "Lido ao vivo, diretamente deste editor.",
+  "feed.via.published": "Lido do site publicado deste editor.",
   "feed.no_posts": "Este editor não publicou nada.",
   "feed.failed": "Não foi possível ler este feed.",
   "feed.notice.followed": "A seguir.",
@@ -816,5 +820,5 @@
   "feed.attr.wrong_target": "sem assinatura — a assinatura cobre outra publicação",
   "feed.attr.not_the_author": "sem assinatura — assinado por alguém que não é o autor",
   "feed.attr.bad_signature": "sem assinatura — a assinatura não é válida",
-  "feed.no_route": "Esta implementação não sabe onde este editor está alojado, por isso não há a quem perguntar."
+  "feed.no_route": "Você não está conectado a este editor e esta implantação não sabe onde ele está hospedado — portanto não há a quem perguntar."
 }

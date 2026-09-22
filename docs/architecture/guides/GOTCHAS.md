@@ -3714,6 +3714,52 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Build, packaging & tree hygiene
 
+- **THE BUILD ENVIRONMENT IS AN ARTIFACT, IT IS NAMED BY A DIGEST OR NOT AT ALL, AND EVERY GUESS
+  ABOUT WHAT MAKES IT DRIFT WAS WRONG — `make image-verify`, 2026-09-11.** The toolchain image is
+  what `build_env_digest` means (`PROPOSAL-EXTENSION-PACKAGE` §8: *pin by digest, not a tag*), and
+  ours was `FROM rust:1.94.1-bookworm` — a moving tag with nothing to put in that field. It is
+  `@sha256` now, the binaryen and trunk tarballs are sha256-verified **before** they go on PATH
+  (the old binaryen form piped `curl` into `tar`, which cannot check anything — by the time a
+  mismatch could be noticed the bytes are installed), and `tauri-cli` is exact rather than `^2`.
+  **`entity-build-env` is stamped beside `entity-build` / `entity-core-ref` / `entity-build-id`** —
+  the first two name the SOURCE, and the same source built in two images is two artifacts. Threaded
+  in as an env var because a container cannot identify its own image from the inside; the Make
+  variable is **recursive, not `:=`**, or `make image wasm` in one invocation stamps the id of the
+  image that existed *before* the rebuild.
+  **The whole value is in `make image-verify` — two cold `--no-cache` builds, compare, print the
+  layer diff. A DIFFERENCE IS A RESULT, not a failure of the target**; it names what to pin next.
+  Three rounds, and **the method is the finding, because every prediction lost to the diff:**
+  **(1) The Dockerfile comment predicted Debian package drift and pointed at snapshot.debian.org.
+  Wrong** — `dpkg-query` over both arms is byte-identical, 788 packages, same versions. **(2) The
+  layer-size inference said "every `cargo install` drifts". Wrong** — only `trunk` did;
+  `cargo-tauri` and `cargo-xwin` were byte-identical. **(3) The first file-level diff named eight
+  files, and two of them were the PROBE** — `/etc/hostname` and `/etc/hosts` are injected by podman
+  at run time, so they differ between two runs of *one* image. **Running the same image twice is
+  the control, and without it two of eight findings are fiction.** Same discipline as putting a
+  must-be-present needle in a log-grep panel, pointed the other way: *a difference from an
+  unvalidated probe is not evidence either.*
+  **What actually drifted was bookkeeping, every time, and never a version:** a random
+  `/tmp/cargo-installXXXXXX` build dir baked into `trunk` (fixed with a fixed `--target-dir`),
+  timestamped `dpkg.log` / `apt/history.log` / **`alternatives.log` — a third log in a third place,
+  which is why the first pass missed it** — `/var/cache/fontconfig/*`, and a dbus-minted
+  `machine-id`. The normalisation runs **last and as its own layer**: every one of those is written
+  by a postinst somewhere above, so a cleanup placed mid-file is silently recreated by later
+  layers, and folding it into the last `apt` block would tie *normalise the image* to *install the
+  Windows toolchain*.
+  **The one rule with predictive power came out of the data, not from reasoning: DOWNLOADING a
+  prebuilt artifact is reproducible; COMPILING one is where it leaks.** The base layers, binaryen
+  and `rustup component add` were byte-identical from the very first run — all downloads. Every
+  layer that ever drifted compiles something. So when `trunk` *still* differed after the path fix —
+  same 31,954,896 bytes, no temp dir left, **4 MB of 32 different and spread through the file**,
+  i.e. non-determinism inside the compile that no pin can reach — the fix was not a third guess at
+  a codegen flag, it was to stop compiling it and fetch the published release binary with a
+  checksum. `cargo-tauri` and `cargo-xwin` keep compiling **because they measured reproducible**,
+  and replacing a measured-good step is churn.
+  **Bump a version and its digest in ONE commit** — a version moved without its sum fails the
+  build, which is the point. And **do not read a green `image-verify` as "Debian is pinned"**: the
+  package versions did not move between two builds minutes apart, which is not evidence about
+  weeks. snapshot.debian.org is still the route if a later run names them.
+
 - **A document that MENTIONS the string a parser greps it for will eventually be parsed as
   itself.** `build_id::parse_bundle_hash` took the **first** occurrence of `entity-browser-` in
   `index.html` and accepted whatever hex followed, extension or not. `assets/sw.js` derives the

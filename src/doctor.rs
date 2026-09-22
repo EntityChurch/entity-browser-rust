@@ -605,6 +605,18 @@ pub fn check_domain_identity(
             t("doctor.check1.source.origin_error", &[("status", &status.to_string())]),
             t("doctor.check1.detail.origin_error", &[]),
         ),
+        // **A 403 gets its own sentence, and reusing `origin_error`'s would be
+        // the collapse this whole function exists to refuse, one status over.**
+        // The verdict is the same — `Undetermined`, because nothing was compared
+        // — and the verdict is not what a person acts on. *"The domain is
+        // broken"* sends them to an origin that is working; *"the domain will
+        // not serve this to you"* sends them to its access rules. Adopted with
+        // `DocumentRead::Refused`; see that variant for why 401 is not here.
+        (_, DocumentRead::Refused { status }, _) => (
+            Verdict::Undetermined,
+            t("doctor.check1.source.refused", &[("status", &status.to_string())]),
+            t("doctor.check1.detail.refused", &[]),
+        ),
         (_, DocumentRead::Unreadable { status }, _) => (
             Verdict::Undetermined,
             t("doctor.check1.source.unreadable", &[("status", &status.to_string())]),
@@ -962,6 +974,7 @@ mod tests {
         for doc in [
             DocumentRead::Unheard,
             DocumentRead::OriginError { status: 502 },
+            DocumentRead::Refused { status: 403 },
             DocumentRead::Unreadable { status: 200 },
         ] {
             let f = check_domain_identity(Some("peerA"), SEEDED, &doc);
@@ -1005,6 +1018,27 @@ mod tests {
             !fault.detail.contains("legitimate choice"),
             "a server fault was described as the deployer's intent: {fault:?}"
         );
+    }
+
+    /// **A refusal is not a fault, and the verdict is not what makes them
+    /// different.** Both are `Undetermined` — correctly, since nothing was
+    /// compared either way — so the whole value of the split lives in the two
+    /// sentences, and a test asserting only the verdict would pass with them
+    /// merged. *"This domain is broken"* sends an operator to a healthy origin's
+    /// logs; *"this domain will not serve it to you"* sends them to its access
+    /// rules.
+    #[test]
+    fn a_domain_that_refuses_is_not_reported_as_a_domain_that_faulted() {
+        let refused = check_domain_identity(Some("peerA"), SEEDED, &DocumentRead::Refused { status: 403 });
+        let fault = check_domain_identity(Some("peerA"), SEEDED, &DocumentRead::OriginError { status: 502 });
+        assert_eq!(refused.verdict, fault.verdict, "the split is not about the verdict");
+        assert_ne!(
+            (refused.source.as_str(), refused.detail.as_str()),
+            (fault.source.as_str(), fault.detail.as_str()),
+            "a refusal and a fault render identically — then the split reached the enum \
+             and not the person"
+        );
+        assert!(refused.source.contains("403"), "{refused:?}");
     }
 
     #[test]

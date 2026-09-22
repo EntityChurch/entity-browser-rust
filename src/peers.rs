@@ -4015,8 +4015,20 @@ pub(crate) mod memory_transport_tests {
 
         // (2) The world changes while nobody is dispatching — the sleep. B's
         // listener goes, so it neither answers nor accepts new dials.
-        handle_b.abort();
+        //
+        // SAMPLE THE BASELINE BEFORE THE MUTATION. This read used to sit after
+        // `abort()`, which is a race: abort only requests cancellation, B's
+        // endpoint leaves the registry when the task actually unwinds, and if
+        // that lands before this line then `endpoints_before` is ALREADY the
+        // post-abort count — so `len() < endpoints_before` can never become
+        // true and the precondition times out at 2 s. Measured 1 red in 4 full
+        // suite runs (2026-09-11), only on the loaded cold-compile run; 5/5
+        // green filtered, which is the shared-state/timing signature rather
+        // than a product regression. It fails in the SAFE direction — loudly,
+        // and wearing the costume of the liveness bug this gate guards — but a
+        // precondition that can spuriously red costs a false regression report.
         let endpoints_before = registry.len();
+        handle_b.abort();
         assert!(
             eventually(Duration::from_secs(2), || registry.len() < endpoints_before).await,
             "B's endpoint must leave the registry — otherwise the outage is not \

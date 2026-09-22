@@ -863,8 +863,11 @@ fn render_content(
 ///
 /// The tiers we run, so the difference is visible in one place:
 /// - `"allow-same-origin"` — **here**. Passive document, no execution.
-/// - `"allow-scripts"` — `dom::games` app bundle. Opaque origin, JS runs,
-///   `postMessage` is the only channel.
+/// - `"allow-scripts allow-downloads"` — `dom::games` app bundle. Opaque origin,
+///   JS runs, `postMessage` is the only channel. The download token permits a
+///   download to be *initiated* and nothing else; it does not weaken origin
+///   isolation, and without it `Entity.Export` fails **silently** in every art
+///   app (2026-09-11).
 /// - `"allow-scripts allow-same-origin"` — an L5 app, *our own* payload.
 ///
 /// Note what that list makes obvious: **this tier and the app tier are now one

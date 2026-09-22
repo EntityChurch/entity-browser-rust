@@ -425,12 +425,33 @@ pub enum DocumentRead {
     /// family over. `PollError::NotFound` states the same rule for the content
     /// path and states it first; this is now consistent with it.
     NoDocument { status: u16 },
-    /// **The origin answered with a failure** — a 403, a 5xx, a proxy error. It
+    /// **The origin answered with a failure** — a 5xx, a proxy error. It
     /// answered, so this is not [`Unheard`](Self::Unheard); but a server fault
     /// says *nothing* about whether a document exists, so it is not
     /// [`NoDocument`](Self::NoDocument) either. Retryable, like every origin
     /// fault that is not a deliberate 404.
+    ///
+    /// **No longer carries 403** — see [`Refused`](Self::Refused).
     OriginError { status: u16 },
+    /// **The origin answered `403`: it will not serve this to us.**
+    ///
+    /// Split out of [`OriginError`](Self::OriginError) on 2026-09-11, adopting
+    /// the replication proposal's finer taxonomy after we told them our five
+    /// states were finer than their four — **they were finer than us here, and a
+    /// correction you offered is one you owe.**
+    ///
+    /// The distinction is *whose fact it is*, which is the same axis every other
+    /// arm of this enum is on: a 5xx is **the source's operation** and sends an
+    /// operator to the origin's logs; a 403 is **the asker's authority** and
+    /// sends them to the deployment's access rules. Two destinations, and an
+    /// operator handed the wrong one goes and reads a healthy server's logs.
+    ///
+    /// ⚠ **403 only, deliberately.** 401 stays an `OriginError`: *you have not
+    /// authenticated* is an invitation to try differently, and folding it in
+    /// would make this arm mean *"anything about credentials"* rather than the
+    /// one thing the taxonomy names. Widening is the direction that loses a
+    /// distinction, and a row nobody has met yet is a row to leave alone.
+    Refused { status: u16 },
     /// The origin answered with bytes we could not read. A fact about the
     /// **bytes** — a truncated or half-written file, a proxy error page served
     /// with a 200 — never a fact about whether a document exists.
@@ -468,6 +489,7 @@ impl DocumentRead {
             Self::Served(_) => "served",
             Self::NoDocument { .. } => "not-served",
             Self::OriginError { .. } => "origin-error",
+            Self::Refused { .. } => "refused",
             Self::Unreadable { .. } => "unreadable",
             Self::Unheard => "unheard",
         }
@@ -508,6 +530,10 @@ impl DocumentRead {
                 "the origin answered {status} for {DEPLOYMENT_CONFIG_PATH} — a server fault, \
                  which says NOTHING about whether this deployment has a document"
             ),
+            Self::Refused { status } => format!(
+                "the origin answered {status} for {DEPLOYMENT_CONFIG_PATH} — it has one and \
+                 will not serve it to us, which is an access rule and NOT a server fault"
+            ),
             Self::Unreadable { status } => format!(
                 "the origin answered {status} with a {DEPLOYMENT_CONFIG_PATH} we could not \
                  read — the file is malformed, not absent"
@@ -532,13 +558,18 @@ pub fn classify(resp: Option<crate::net::BoundedResponse>) -> DocumentRead {
     };
     if !resp.ok {
         // **Only 404/410 mean "there is none".** Everything else the origin can
-        // answer with — 403, 500, 502, a proxy page — is a fault that says
-        // nothing about whether a document exists, and calling it a deliberate
-        // absence turns a transient origin problem into a claim about the
-        // deployer's intent. Same rule, same reason, and the same wording as
-        // `PollError::NotFound` on the content path.
+        // answer with — a 403, a 500, a 502, a proxy page — says nothing about
+        // whether a document exists, and calling it a deliberate absence turns a
+        // transient origin problem into a claim about the deployer's intent.
+        // Same rule, same reason, and the same wording as `PollError::NotFound`
+        // on the content path.
         return match resp.status {
             404 | 410 => DocumentRead::NoDocument { status: resp.status },
+            // **403 is the asker's authority, not the source's operation.** See
+            // `DocumentRead::Refused` — adopted from the replication proposal's
+            // six-outcome taxonomy, which is finer than ours on exactly this
+            // status and nowhere else.
+            403 => DocumentRead::Refused { status: resp.status },
             status => DocumentRead::OriginError { status },
         };
     }
@@ -614,6 +645,15 @@ pub async fn read_document() -> DocumentRead {
             out.describe()
         ),
         DocumentRead::OriginError { .. } => tracing::warn!(
+            outcome = out.label(),
+            "deployment-config: {}",
+            out.describe()
+        ),
+        // WARN, like a fault, because the consequence is identical — this
+        // profile boots on build-time defaults — and the *destination* is what
+        // differs: an operator reading this goes to the deployment's access
+        // rules, not to the origin's error log.
+        DocumentRead::Refused { .. } => tracing::warn!(
             outcome = out.label(),
             "deployment-config: {}",
             out.describe()
@@ -1264,13 +1304,24 @@ mod tests {
         // deployer's intent, and the exact conflation this enum exists to
         // remove, one status family over. Found auditing this session's own
         // work; `PollError::NotFound` had already written the rule down.
-        for status in [403u16, 500, 502, 503] {
+        for status in [500u16, 502, 503] {
             assert_eq!(
                 classify(answered(status, "")),
                 DocumentRead::OriginError { status },
                 "a {status} says NOTHING about whether a document exists"
             );
         }
+        // ⭐ **And a 403 is not a fault either.** Split out on 2026-09-11,
+        // adopting the replication proposal's six-outcome taxonomy — which is
+        // finer than ours on exactly this status. The axis is the one every
+        // other arm here is on: *whose fact is it.* A 5xx is the source's
+        // operation; a 403 is the asker's authority, and an operator handed the
+        // first goes and reads a healthy server's logs.
+        assert_eq!(classify(answered(403, "")), DocumentRead::Refused { status: 403 });
+        // **401 deliberately stays a fault.** *You have not authenticated* is an
+        // invitation to try differently; widening this arm to mean "anything
+        // about credentials" would lose the one thing it names.
+        assert_eq!(classify(answered(401, "")), DocumentRead::OriginError { status: 401 });
 
         // A fact about the BYTES, never about whether a document exists. A
         // truncated or half-written file, or a proxy error page served 200.

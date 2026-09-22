@@ -14,6 +14,7 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod app_host;
 mod app_paths;
+mod app_sandbox;
 mod apps;
 mod boot;
 // Which build is this — read from the shell that loaded it (C5).
@@ -112,6 +113,12 @@ mod feed_follows;
 // really is identical, and the index is a publish artifact the live tree does
 // not have, which is why this module implements §4.3 rule 6's fallback.
 mod feed_peer;
+// Which ways to read one author's feed, and in what order. A PRIORITY LIST, not
+// a choice between two transports: a publisher may serve their feed at only one
+// of the two, so an empty answer from one leg is not evidence about the other.
+// The ordering input a publisher would use to state a preference does not exist
+// in the convention — measured, and routed as `A-43`.
+mod feed_route;
 mod percent;
 mod format;
 #[cfg(feature = "measurement")]

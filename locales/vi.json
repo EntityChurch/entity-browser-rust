@@ -751,6 +751,8 @@
   "doctor.check1.detail.unheard": "Không nghe được gì từ miền, nên không có gì để so sánh và không biết được điều gì — đây không phải là giấy chứng nhận sức khỏe sạch. Mọi thứ đã có trên máy này đều không bị ảnh hưởng và vẫn chính xác. Hãy thử lại khi bạn trực tuyến trở lại.",
   "doctor.check1.source.origin_error": "miền này trả lời bằng một lỗi (HTTP {status})",
   "doctor.check1.detail.origin_error": "Miền có thể tiếp cận được nhưng đã trả về một sự cố thay vì cấu hình của nó, nên không có gì để so sánh. Đó là vấn đề ở miền, không phải trên máy này, và nó không nói gì về việc nhà xuất bản của bạn có còn hiện hành hay không.",
+  "doctor.check1.source.refused": "miền này đã không chịu cung cấp cấu hình của nó (HTTP {status})",
+  "doctor.check1.detail.refused": "Miền có thể truy cập được và đã từ chối giao cấu hình của nó cho ứng dụng này. Đó là một quy tắc truy cập ở phía miền, không phải sự cố và không phải vấn đề trên máy này. Không có gì để so sánh, nên không biết nhà xuất bản của bạn có phải là bản mới nhất hay không.",
   "doctor.check1.source.unreadable": "không thể đọc cấu hình của miền này (HTTP {status})",
   "doctor.check1.detail.unreadable": "Miền đã trả lời bằng thứ mà ứng dụng này không phân tích được — một tệp bị cắt cụt hoặc viết dở, hoặc một trang lỗi được phục vụ như một thành công. Không có gì để so sánh, và không điều gì ở đây là một khẳng định về máy của bạn.",
   "doctor.check1.source.no_document": "miền này không phục vụ tài liệu triển khai nào",
@@ -796,6 +798,8 @@
   "feed.no_follows": "Bạn chưa theo dõi ai.",
   "feed.nobody_selected": "Chọn một nhà xuất bản ở trên để đọc nguồn cấp của họ.",
   "feed.loading": "Đang đọc nguồn cấp này…",
+  "feed.via.live": "Đọc trực tiếp, ngay từ nhà xuất bản này.",
+  "feed.via.published": "Đọc từ trang đã xuất bản của nhà xuất bản này.",
   "feed.no_posts": "Nhà xuất bản này chưa đăng gì.",
   "feed.failed": "Không đọc được nguồn cấp này.",
   "feed.notice.followed": "Đã theo dõi.",
@@ -809,5 +813,5 @@
   "feed.attr.wrong_target": "chưa ký — chữ ký thuộc về một bài đăng khác",
   "feed.attr.not_the_author": "chưa ký — được ký bởi người không phải tác giả",
   "feed.attr.bad_signature": "chưa ký — chữ ký không hợp lệ",
-  "feed.no_route": "Bản triển khai này không biết nhà xuất bản này được lưu trữ ở đâu, nên không có nơi nào để hỏi."
+  "feed.no_route": "Bạn chưa kết nối với nhà xuất bản này, và triển khai này cũng không biết họ được lưu trữ ở đâu — nên không có nơi nào để hỏi."
 }

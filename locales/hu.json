@@ -758,6 +758,8 @@
   "doctor.check1.detail.unheard": "A tartománytól semmi sem érkezett, így nem volt mit összehasonlítani, és semmit sem tudunk — ez nem tiszta egészségügyi bizonyítvány. Minden, ami már ezen a gépen van, érintetlen és továbbra is pontos. Próbálja újra, ha ismét online lesz.",
   "doctor.check1.source.origin_error": "ez a tartomány hibával válaszolt (HTTP {status})",
   "doctor.check1.detail.origin_error": "A tartomány elérhető, de a konfigurációja helyett hibát adott vissza, így nem volt mit összehasonlítani. Ez a tartomány oldalán jelentkező gond, nem ezen a gépen, és semmit sem mond arról, hogy a kiadója naprakész-e.",
+  "doctor.check1.source.refused": "ez a tartomány nem adta ki a beállításait (HTTP {status})",
+  "doctor.check1.detail.refused": "A tartomány elérhető, és megtagadta, hogy kiadja a beállításait ennek az alkalmazásnak. Ez a tartomány hozzáférési szabálya, nem hiba és nem ezen a gépen jelentkező probléma. Nem volt mit összehasonlítani, így nem tudható, hogy a közzétevője naprakész-e.",
   "doctor.check1.source.unreadable": "ennek a tartománynak a konfigurációja nem volt olvasható (HTTP {status})",
   "doctor.check1.detail.unreadable": "A tartomány olyasmivel válaszolt, amit ez az alkalmazás nem tudott értelmezni — csonka vagy félig megírt fájllal, vagy sikerként kiszolgált hibaoldallal. Nem volt mit összehasonlítani, és ebből semmi sem állítás az Ön gépéről.",
   "doctor.check1.source.no_document": "ez a tartomány nem szolgál ki telepítési dokumentumot",
@@ -803,6 +805,8 @@
   "feed.no_follows": "Még senkit sem követsz.",
   "feed.nobody_selected": "Válassz fent egy közzétevőt a hírfolyama elolvasásához.",
   "feed.loading": "Hírfolyam olvasása…",
+  "feed.via.live": "Élőben olvasva, közvetlenül ettől a közzétevőtől.",
+  "feed.via.published": "A közzétevő publikált webhelyéről olvasva.",
   "feed.no_posts": "Ez a közzétevő nem tett közzé semmit.",
   "feed.failed": "Ezt a hírfolyamot nem sikerült elolvasni.",
   "feed.notice.followed": "Követed.",
@@ -816,5 +820,5 @@
   "feed.attr.wrong_target": "aláíratlan — az aláírás egy másik bejegyzéshez tartozik",
   "feed.attr.not_the_author": "aláíratlan — nem a szerző írta alá",
   "feed.attr.bad_signature": "aláíratlan — az aláírás érvénytelen",
-  "feed.no_route": "Ez a telepítés nem tudja, hol van ez a közzétevő tárolva, így nincs kit megkérdezni."
+  "feed.no_route": "Nem csatlakozik ehhez a közzétevőhöz, és ez a telepítés nem tudja, hol van üzemeltetve — így nincs kitől kérdezni."
 }
