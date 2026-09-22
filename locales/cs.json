@@ -765,8 +765,6 @@
   "doctor.check1.detail.unheard": "Od domény se nic neozvalo, takže nebylo co porovnávat a nic není známo — toto není čisté potvrzení o dobrém stavu. Vše, co je již na tomto stroji, zůstává nedotčeno a stále platí. Zkuste to znovu, až budete zpět online.",
   "doctor.check1.source.origin_error": "tato doména odpověděla chybou (HTTP {status})",
   "doctor.check1.detail.origin_error": "Doména je dostupná, ale místo své konfigurace vrátila chybu, takže nebylo co porovnávat. To je problém na straně domény, nikoli tohoto stroje, a neříká to nic o tom, zda je váš vydavatel aktuální.",
-  "doctor.check1.source.refused": "tato doména odmítla vydat svou konfiguraci (HTTP {status})",
-  "doctor.check1.detail.refused": "Doména je dostupná a odmítla této aplikaci vydat svou konfiguraci. To je pravidlo přístupu na straně domény, nikoli chyba a nikoli problém tohoto počítače. Nebylo co porovnat, takže není známo, zda je váš vydavatel aktuální.",
   "doctor.check1.source.unreadable": "konfiguraci této domény nebylo možné přečíst (HTTP {status})",
   "doctor.check1.detail.unreadable": "Doména odpověděla něčím, co tato aplikace nedokázala zpracovat — zkráceným nebo napůl zapsaným souborem, nebo chybovou stránkou doručenou jako úspěch. Nebylo co porovnávat a nic z toho není tvrzení o vašem stroji.",
   "doctor.check1.source.no_document": "tato doména neposkytuje žádný dokument nasazení",
@@ -827,5 +825,10 @@
   "feed.attr.wrong_target": "nepodepsáno — podpis se týká jiného příspěvku",
   "feed.attr.not_the_author": "nepodepsáno — podepsal někdo jiný než autor",
   "feed.attr.bad_signature": "nepodepsáno — podpis neplatí",
-  "feed.no_route": "Nejste připojeni k tomuto vydavateli a toto nasazení neví, kde je hostován — není se tedy koho zeptat."
+  "feed.no_route": "Nejste připojeni k tomuto vydavateli a toto nasazení neví, kde je hostován — není se tedy koho zeptat.",
+  "apps.file.requested": "Tato aplikace žádá o soubor",
+  "apps.file.sent": "{name} odeslán do aplikace",
+  "apps.file.kept": "{name} uložen do vašich souborů",
+  "apps.file.refused": "{name} nebyl uložen: {why}",
+  "apps.file.not_sent": "Soubor nebyl odeslán: {why}"
 }

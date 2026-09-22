@@ -104,6 +104,36 @@ pub fn text_input(ctx: &util::DomCtx, field_id: &str, initial: &str, placeholder
     input
 }
 
+/// An unwired `<input type=file>`, **visually hidden rather than
+/// `display:none`**, tagged `data-field="{field}"`. Open it from a real
+/// button through [`util::show_file_picker`], which reports a refused chooser.
+///
+/// Why hidden this way: a `display:none` input is not rendered at all, and
+/// several mobile browsers are documented to decline a chooser for a control
+/// that is not rendered. Keeping it laid out at zero size costs nothing.
+///
+/// **It is NOT what makes Android work, and the record used to imply it was.**
+/// Measured 2026-08-24 on Firefox for Android with a nine-row matrix
+/// (`tools/picker-probe.html`): a clipped input, a laid-out `opacity:0` input
+/// and a plainly visible one tapped directly ALL have their chooser dismissed
+/// by the engine in ~200-250ms, while Chrome on the same phone opens it. So
+/// the hiding style is not the discriminator; this is cheap insurance for
+/// other engines, not a fix. Two consumers (File Transfer, the Apps player's
+/// file verbs), which is why it lives here and not twice.
+pub fn hidden_file_input(field: &str) -> Element {
+    let input = util::create_element("input");
+    input.set_attribute("type", "file").ok();
+    input
+        .set_attribute(
+            "style",
+            "position:absolute;width:1px;height:1px;padding:0;margin:-1px;\
+             overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0",
+        )
+        .ok();
+    input.set_attribute("data-field", field).ok();
+    input
+}
+
 /// An unwired native color swatch (`<input type=color>`, standard look) —
 /// for token-editor rows beside a text input. Wire behavior (sync-to-text,
 /// live preview) with `ctx.listen`; the value must be a 6-digit `#rrggbb`

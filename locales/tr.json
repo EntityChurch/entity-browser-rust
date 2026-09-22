@@ -758,8 +758,6 @@
   "doctor.check1.detail.unheard": "Alan adından hiçbir şey duyulmadı, dolayısıyla karşılaştırılacak bir şey olmadı ve hiçbir şey bilinmiyor — bu temiz bir sağlık raporu değildir. Bu makinede zaten bulunan her şey etkilenmemiştir ve hâlâ doğrudur. Yeniden çevrimiçi olduğunuzda tekrar deneyin.",
   "doctor.check1.source.origin_error": "bu alan adı bir hatayla yanıt verdi (HTTP {status})",
   "doctor.check1.detail.origin_error": "Alan adına erişilebiliyor ancak yapılandırması yerine bir arıza döndürdü, dolayısıyla karşılaştırılacak bir şey olmadı. Bu, alan adı tarafındaki bir sorundur, bu makinede değil, ve yayıncınızın güncel olup olmadığı hakkında hiçbir şey söylemez.",
-  "doctor.check1.source.refused": "bu alan adı yapılandırmasını vermek istemedi (HTTP {status})",
-  "doctor.check1.detail.refused": "Alan adına erişilebiliyor ve yapılandırmasını bu uygulamaya vermeyi reddetti. Bu, alan adı tarafındaki bir erişim kuralıdır; bir arıza değildir ve bu makinedeki bir sorun değildir. Karşılaştırılacak bir şey olmadığı için yayıncınızın güncel olup olmadığı bilinmiyor.",
   "doctor.check1.source.unreadable": "bu alan adının yapılandırması okunamadı (HTTP {status})",
   "doctor.check1.detail.unreadable": "Alan adı, bu uygulamanın çözümleyemediği bir şeyle yanıt verdi — kesilmiş ya da yarım yazılmış bir dosya veya başarı olarak sunulan bir hata sayfası. Karşılaştırılacak bir şey olmadı ve buradaki hiçbir şey makineniz hakkında bir ifade değildir.",
   "doctor.check1.source.no_document": "bu alan adı hiçbir dağıtım belgesi sunmuyor",
@@ -820,5 +818,10 @@
   "feed.attr.wrong_target": "imzasız — imza başka bir gönderiyi kapsıyor",
   "feed.attr.not_the_author": "imzasız — yazardan başka biri imzalamış",
   "feed.attr.bad_signature": "imzasız — imza geçerli değil",
-  "feed.no_route": "Bu yayıncıya bağlı değilsiniz ve bu dağıtım onun nerede barındırıldığını bilmiyor — bu yüzden soracak bir yer yok."
+  "feed.no_route": "Bu yayıncıya bağlı değilsiniz ve bu dağıtım onun nerede barındırıldığını bilmiyor — bu yüzden soracak bir yer yok.",
+  "apps.file.requested": "Bu uygulama bir dosya istiyor",
+  "apps.file.sent": "{name} uygulamaya gönderildi",
+  "apps.file.kept": "{name} dosyalarınıza kaydedildi",
+  "apps.file.refused": "{name} kaydedilmedi: {why}",
+  "apps.file.not_sent": "Dosya gönderilmedi: {why}"
 }

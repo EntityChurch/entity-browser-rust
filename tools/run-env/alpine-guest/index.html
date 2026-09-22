@@ -1,0 +1,657 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Alpine Environment</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  /* THE ONE PAGE. Everything before this was a throwaway rig -- see ARCHIVE.md.
+     Terminal IS the page: a thin status line, the terminal, the key bar. No
+     diagnostics panel; the numbers live in window.__m1 where a probe reads them
+     and a person does not have to. */
+
+  /* Flex column, NOT `height: calc(100% - 76px)` on the terminal. The status bar
+     wraps to two lines on a narrow screen and a hardcoded subtraction then pushes
+     the key bar off the bottom -- measured: the keys were sliced in half at 400px
+     wide, i.e. exactly where they are the only way to type. */
+  html,body { margin:0; height:100%; background:#1a1a1a; color:#ddd;
+              font:13px system-ui,sans-serif; overflow:hidden; }
+  body { display:flex; flex-direction:column; }
+  #bar, #keys { flex:0 0 auto; }
+  #term { flex:1 1 auto; min-height:0; }   /* min-height:0 or flex refuses to shrink */
+  #bar { padding:5px 9px; background:#252525; border-bottom:1px solid #333;
+         display:flex; gap:9px; align-items:center; font-size:12px;
+         white-space:nowrap; overflow:hidden; }
+  #bar b { font-weight:600; flex:0 0 auto; }
+  #status { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; }
+  .dim { color:#888; } .ok { color:#7ee787; } .bad { color:#ff7b72; }
+  /* The key bar exists because a phone has no Esc, Tab, Ctrl or arrows, and a
+     terminal without them is a read-only screen. trynix ships one for the reason. */
+  #keys { display:flex; gap:5px; padding:5px 6px; background:#202020;
+          border-top:1px solid #333; overflow-x:auto; }
+  #keys button { font:12px/1 monospace; padding:8px 9px; background:#333; color:#ddd;
+                 border:1px solid #444; border-radius:3px; min-width:34px;
+                 flex:0 0 auto; }
+  #keys button.on { background:#0a63c2; border-color:#0a63c2; }
+  #screen_container { display:none; }
+</style>
+<body>
+<div id="bar">
+  <b>Alpine</b>
+  <span id="status" class="dim">starting…</span>
+</div>
+<div id="term"></div>
+<div id="keys">
+  <button data-k="\x1b">esc</button>
+  <button data-k="\t">tab</button>
+  <button id="ctrl">ctrl</button>
+  <button data-k="\x1b[A">↑</button>
+  <button data-k="\x1b[B">↓</button>
+  <button data-k="\x1b[D">←</button>
+  <button data-k="\x1b[C">→</button>
+  <button data-k="|">|</button>
+  <button data-k="/">/</button>
+  <button data-k="-">-</button>
+  <button data-k="\x03">^C</button>
+  <button id="kbd">⌨ keyboard</button>
+</div>
+<div id="screen_container"><div></div><canvas></canvas></div>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="build/libv86.js"></script>
+<script>
+// ── The app side of entity-apps' contract, plus the file verbs it lacks ────────
+//   app → host : ready-for-init · state · ready · closed · error
+//   host → app : init {state} · viewport · request-state · destroy
+// ⚠ The `x-` file verbs are a PROTOTYPE, deliberately un-minted: entity-apps owns
+// EMBEDDING.md, and minting vocabulary a counterpart also implements is the
+// mistake G-PIN-4 and the SHARE divergence both paid for.
+const HOST = 'entity-host', APP = 'entity-app';
+const send = (t, x) => parent !== window &&
+  parent.postMessage(Object.assign({ source: APP, type: t }, x || {}), '*');
+const $ = id => document.getElementById(id);
+const t0 = performance.now();
+
+let emulator = null, booted = false, prompted = false, serial = '', pending = null;
+
+// Diagnostics live HERE, not on screen. A probe reads them; a person reads the
+// terminal. (The previous page put a JSON dump across 80% of the viewport --
+// that was a measurement rig mistaken for the product.)
+window.__m1 = { serial:'', booted:false, probeOk:false, bootMs:null, promptMs:null,
+                error:null, net:null,
+                env:{ crossOriginIsolated: (typeof crossOriginIsolated!=='undefined') ? crossOriginIsolated : 'undefined',
+                      SharedArrayBuffer_present: (typeof SharedArrayBuffer!=='undefined'),
+                      sandboxed: window.origin === 'null',
+                      ua: navigator.userAgent.slice(0,90) } };
+
+function netStats() {
+  const rs = performance.getEntriesByType('resource');
+  // transferred vs consumed are DIFFERENT FACTS: a cache hit reports
+  // transferSize 0, so `transferSize || encodedBodySize` bills every cache hit at
+  // full size and invents a 5x blow-up that is not happening.
+  const pick = p => { const m = rs.filter(p); return {
+      n:m.length, bytes:m.reduce((a,r)=>a+(r.transferSize||0),0),
+      consumed:m.reduce((a,r)=>a+(r.encodedBodySize||0),0) }; };
+  const names = rs.filter(r=>r.name.includes('/blobs/')).map(r=>r.name);
+  const blobs = pick(r=>r.name.includes('/blobs/'));
+  blobs.distinct = new Set(names).size;
+  blobs.repeats = names.length - blobs.distinct;
+  blobs.cacheHits = rs.filter(r=>r.name.includes('/blobs/') &&
+                      r.transferSize===0 && r.decodedBodySize>0).length;
+  return { blobs, kernel:pick(r=>/vmlinuz|initramfs/.test(r.name)),
+           engine:pick(r=>/v86\.wasm|libv86\.js/.test(r.name)),
+           index:pick(r=>/fs\.json/.test(r.name)), total_requests:rs.length };
+}
+const strip = s => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+const mib = n => (n/1048576).toFixed(1);
+
+const term = new Terminal({ convertEol:false, fontSize:13, scrollback:5000,
+                            theme:{ background:'#1a1a1a' } });
+term.open($('term'));
+
+// ── the fit trace ─────────────────────────────────────────────────────────────
+// "Did the terminal paint?" is a SAMPLING question, not a final-state one. At the
+// prompt the page calls fitAndTell() itself, so a frame that painted nothing for
+// eight seconds and one that painted throughout end up IDENTICAL at the end --
+// which is how an end-state assertion about the ResizeObserver passed with the
+// observer deleted. What separates them is the middle of the boot.
+window.__m1.fit = [];
+function sampleFit(why) {
+  const el = document.querySelector('.xterm-rows');
+  window.__m1.fit.push({ t: Math.round(performance.now() - t0), why,
+    rows: term.rows, cols: term.cols,
+    h: Math.round($('term').getBoundingClientRect().height),
+    painted: el ? el.children.length : 0,
+    chars: el ? el.innerText.replace(/\s+/g, '').length : 0 });
+}
+setInterval(() => sampleFit('tick'), 250);
+
+// ── Fit, and TELL THE GUEST ───────────────────────────────────────────────────
+// Without this xterm renders at its default 80x24 = 624px. Measured in a 464px
+// frame: the right third clipped, 21 unused rows as a black rectangle -- which on
+// a phone reads as "the app is broken", which is how it was reported.
+// Fitting is half of it. A serial console has NO window size: the kernel answers
+// TIOCGWINSZ 0x0 until something states it, so full-screen programs refuse to
+// start. Nothing carries a browser resize into a 16550, so we say it with `stty`.
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+let lastSize = '';
+function fitAndTell() {
+  try { fit.fit(); } catch (e) { return; }
+  const size = term.rows + 'x' + term.cols;
+  if (!prompted || size === lastSize) { lastSize = size; return; }
+  lastSize = size;
+  emulator && emulator.serial0_send(`stty rows ${term.rows} cols ${term.cols}\n`);
+}
+addEventListener('resize', () => setTimeout(fitAndTell, 150));
+// A phone rotating or opening its keyboard changes the visual viewport without
+// firing a useful `resize` on some browsers.
+if (window.visualViewport) visualViewport.addEventListener('resize', () => setTimeout(fitAndTell, 150));
+// ⚠ THE COMMENT THAT WAS HERE WAS WRONG, and the correction is worth more than
+// the observer. It claimed "neither `resize` nor `visualViewport` fires -- the
+// element changed, not the window". FALSE FOR AN IFRAME: resizing the frame
+// element IS resizing its inner window, so both fire inside it. Measured with the
+// frame grown from 0 after load, first fit in ms (`fit-trace.py`):
+//
+//     RO  resize  vVP   first fit
+//      Y     Y      Y        764    <- today
+//      N     Y      Y       1016
+//      N     N      Y       1014
+//      N     Y      N       1014
+//      N     N      N       8062    <- THE REPORTED SYMPTOM, exactly: one row and
+//                                      zero characters for the whole boot, then
+//                                      it snaps when the prompt fits itself
+//
+// So ANY ONE of the three recovers it, and the observer buys ~250ms by being the
+// only one with no 150ms debounce in front of it. ⚠ THIS RIG CANNOT SHOW THE CASE
+// THE OBSERVER IS ACTUALLY FOR -- an element resizing while the window does not (a
+// late flex/height resolution, a font load) -- because resizing a frame moves
+// both. Keep it for that case; do not claim this measured it. And the last row is
+// still reachable: if NOTHING ever changes size after term.open(), none of the
+// three fire and the terminal stays blank until the prompt.
+if (window.ResizeObserver) new ResizeObserver(() => fitAndTell()).observe($('term'));
+fit.fit();
+
+// ── The key bar, and the keyboard a phone will not open by itself ─────────────
+// Tapping a terminal does not summon a mobile keyboard: xterm's input target is a
+// hidden helper textarea and a touch on the canvas does not focus it.
+let ctrl = false;
+function focusKeyboard() {
+  const ta = document.querySelector('.xterm-helper-textarea');
+  if (ta) { ta.focus(); ta.click(); }
+  term.focus();
+}
+$('kbd').addEventListener('click', focusKeyboard);
+$('term').addEventListener('touchstart', focusKeyboard, { passive:true });
+$('ctrl').addEventListener('click', () => {
+  ctrl = !ctrl; $('ctrl').classList.toggle('on', ctrl);
+  focusKeyboard();
+});
+// A key-bar tap must NOT take focus from the terminal's input. On a phone the
+// soft keyboard belongs to whatever is focused, so tapping `ctrl` closed it --
+// and then there was no keyboard to type the letter Ctrl was meant to combine
+// with. preventDefault on pointerdown suppresses the focus change and leaves
+// the click intact. (Reported on Android Chrome: stuck in nano, no way to ^X.)
+for (const b of document.querySelectorAll('#keys button')) {
+  b.addEventListener('pointerdown', e => e.preventDefault());
+}
+// Ctrl + a key typed on the REAL keyboard. The armed flag was only ever read by
+// the key-bar handler below, and the key bar has no letters -- so Ctrl combined
+// with nothing a person could actually type. `^X` is caret notation: Ctrl+X is
+// byte 0x18, i.e. the letter's code minus 64, and the same rule covers @ [ \ ] ^ _.
+function applyCtrl(d) {
+  if (!ctrl || d.length !== 1) return d;
+  const c = d.toUpperCase().charCodeAt(0);
+  ctrl = false; $('ctrl').classList.remove('on');
+  if (c >= 64 && c <= 95) return String.fromCharCode(c - 64);
+  if (d === ' ') return '\x00';
+  if (d === '?') return '\x7f';
+  return d;                                   // no control form: send it plain
+}
+for (const b of document.querySelectorAll('#keys button[data-k]')) {
+  b.addEventListener('click', () => {
+    let k = b.dataset.k.replace(/\\x1b/g,'\x1b').replace(/\\t/g,'\t').replace(/\\x03/g,'\x03');
+    if (ctrl && k.length === 1 && /[a-z]/i.test(k)) {
+      k = String.fromCharCode(k.toUpperCase().charCodeAt(0) - 64);
+      ctrl = false; $('ctrl').classList.remove('on');
+    }
+    emulator && emulator.serial0_send(k);
+    focusKeyboard();
+  });
+}
+
+function status(text, cls) { $('status').textContent = text; $('status').className = cls || 'dim'; }
+
+// ── the download phase, which is the actual black box ─────────────────────────
+// The kernel log scrolling by is good feedback. The window BEFORE it is not:
+// 14.3 MiB of kernel + initramfs + engine has to arrive before the guest emits
+// its first byte, and until it does the page says "booting the kernel…" while it
+// is in fact still downloading one. On this desktop that is ~2s and forgivable;
+// on a phone on a bad link it is tens of seconds of a screen that looks broken,
+// and THAT is when someone hits back not knowing they were nearly there.
+// So: say which phase we are in, and put a number on the one that has no other
+// evidence it is progressing. Still ONE LINE -- the detail goes to __m1.
+const dl = { files: new Map(), done: false, firstMs: null, lastMs: null };
+window.__m1.phases = { boot_called: null, first_progress: null,
+                       download_done: null, first_serial: null, prompt: null };
+const since = () => Math.round(performance.now() - t0);
+
+function onProgress(e) {
+  // `total` can be absent on a chunked response, so a file we cannot size is
+  // counted in the "unknown" column rather than silently scored as 0 bytes --
+  // a progress bar that quietly under-reports its denominator runs backwards.
+  const prev = dl.files.get(e.file_name) || { loaded: 0, total: 0 };
+  dl.files.set(e.file_name, { loaded: e.loaded || 0,
+                              total: (e.total && e.total > 0) ? e.total : prev.total });
+  if (dl.firstMs === null) { dl.firstMs = since(); window.__m1.phases.first_progress = dl.firstMs; }
+  dl.lastMs = since();
+  if (dl.done) return;                       // the guest is talking; it owns the line now
+  let loaded = 0, total = 0, unsized = 0;
+  for (const f of dl.files.values()) { loaded += f.loaded; total += f.total; if (!f.total) unsized++; }
+  window.__m1.dl = { loaded, total, files: dl.files.size, unsized };
+  status(total
+    ? `fetching the environment… ${mib(loaded)} / ${mib(total)} MiB`
+    : `fetching the environment… ${mib(loaded)} MiB`);
+}
+
+// ── the userland phase, which is the REAL black box ───────────────────────────
+// Measured at 3000 kbps: the download phase is 39.6s and now reports a moving
+// number, then "root mounted — starting userland…" sits there for TWENTY-SEVEN
+// SECONDS with nothing on screen changing at all. That is the stretch that gets
+// the back button, and it was invisible over loopback where it is under 2s.
+// Nothing is wrong during it: Alpine's init is reading files, each read faults a
+// blob over HTTP, and userland is simply silent until the shell starts. So the
+// work is real and only the EVIDENCE of it is missing -- which is the cheap half.
+// The blobs do not come through `download-progress` (that covers the six startup
+// files only), so they are counted from the resource timeline, which is the same
+// instrument netStats() already reads.
+// ⚠ AND THE GAP THAT IS LEFT IS A PROPERTY OF THE INSTRUMENT, so it is reported
+// rather than papered over. A `resource` entry only exists once a request has
+// COMPLETED, so one large blob is invisible for its entire transfer -- measured,
+// an 8.8s freeze at 3000 kbps that is a single 3.2 MiB read. A spinner would
+// cover it with motion that means nothing. The elapsed time since the last
+// completed read means something exactly: it is how long the guest has been
+// blocked on one thing, so a big file and a wedge are told apart by whether the
+// number stops. (`handle9p` is where this stops being a limitation -- when WE
+// issue the fetch we can report its bytes. Third independent argument for it,
+// and the first that a person can see.)
+let ticker = null, lastReads = 0, lastReadAt = 0;
+function startUserlandTicker() {
+  if (ticker) return;
+  lastReadAt = since();
+  ticker = setInterval(() => {
+    if (prompted) { clearInterval(ticker); ticker = null; return; }
+    const rs = performance.getEntriesByType('resource').filter(r => r.name.includes('/blobs/'));
+    if (!rs.length) return;
+    const bytes = rs.reduce((a, r) => a + (r.transferSize || 0), 0);
+    if (rs.length !== lastReads) { lastReads = rs.length; lastReadAt = since(); }
+    const waited = Math.round((since() - lastReadAt) / 1000);
+    window.__m1.userland = { reads: rs.length, bytes, waited };
+    // "reads", not "files": v86 re-requests the same blob up to 44x, so a file
+    // count here would be a number that lies rather than a number that moves.
+    // If a read is outstanding we now know its SIZE, because the miss carried it.
+    // ⚠ SIZE AND ELAPSED ARE BOTH NEEDED, and trading one for the other REDS THE
+    // GATE -- which is what happened here: "reading 3.2 MiB" is more specific
+    // than "waiting 6s" and it is STATIC, so an 8.8s read froze the screen again
+    // with a better sentence on it. Specific says what it is stuck on; moving
+    // says it is still alive. A progress line owes both.
+    const r = window.__m1.retain;
+    const busy = r && r.installed && r.inflight.length && r.reading;
+    let tail = busy ? ` · reading ${mib(r.reading.size)} MiB` : '';
+    if (waited >= 2) tail += ` · ${waited}s`;
+    status(`starting userland… ${rs.length} reads · ${mib(bytes)} MiB${tail}`);
+  }, 400);
+}
+
+// ── the storage seam, which is NOT handle9p ───────────────────────────────────
+// `handle9p` is `fn(requestBytes, reply)` -- the RAW 9P2000.L WIRE PROTOCOL. Read
+// the engine: `a.handle9p ? new ld(a.handle9p, this)` and `ld` hands our function
+// the bytes off the virtqueue with the tag already parsed. Implementing it means
+// implementing Tversion/Tattach/Twalk/Tlopen/Tread/Treaddir/Tgetattr/Tclunk/…,
+// i.e. re-writing v86's own 9p server. That is NOT the half-day the last handoff
+// priced, and it is not what any of our three arguments actually needed.
+//
+// WHAT THEY NEEDED IS THIS, AND IT IS THREE METHODS:
+//     read(sha256, offset, count, size) -> Uint8Array | null
+//     cache(sha256, bytes)
+//     uncache(sha256)
+// at `emulator.fs9p.storage` (`function N(a,b){…this.storage=a…}`).
+//
+// ⚠ AND READING IT EXPLAINS THE 44x REFETCH, which was measured and never
+// diagnosed. `N.prototype.CloseInode` does `2 === b.status &&
+// this.storage.uncache(b.sha256sum)` -- v86 EVICTS A FILE FROM MEMORY WHEN THE
+// GUEST CLOSES IT. Every busybox applet invocation re-opens and re-fetches. It is
+// a deliberate memory bound in the engine, not a bug, and the browser's heuristic
+// HTTP cache is the only thing standing between it and the 2.6x that `…-l` A/B'd.
+// Suppressing the eviction removes the dependency on a cache nobody instructed.
+//
+// The whole userland is 7.1 MiB, so a budget is a guard rather than a policy --
+// but it is a REAL guard: a guest that reads a large file it then rewrites would
+// otherwise grow this map without limit.
+const RETAIN_BUDGET = 64 * 1024 * 1024;
+// ⚠ `emulator.fs9p` DOES NOT EXIST WHEN `new V86()` RETURNS. The engine awaits its
+// own wasm before building the filesystem, so a synchronous install reads
+// undefined and reports "not installed" -- which is what the first cut did, and
+// it reported it honestly rather than throwing, which is the only reason it took
+// one run to find. So: poll, and RECORD WHEN IT LANDED, because installing after
+// the guest's first read would retain nothing and still look installed.
+function installRetainingStorage(t_start) {
+  const fs = emulator.fs9p;
+  if (!fs || !fs.storage) {
+    if (since() > 20000) { window.__m1.retain = { installed: false, why: 'fs9p.storage never appeared' }; return; }
+    setTimeout(() => installRetainingStorage(t_start), 5);
+    return;
+  }
+  const inner = fs.storage;
+  const held = new Map(), inflight = new Map();
+  const st = window.__m1.retain = { installed: true, installed_at_ms: since(),
+                                    hits: 0, misses: 0, deduped: 0,
+                                    evictions_suppressed: 0, bytes_held: 0, inflight: [] };
+  fs.storage = {
+    async read(sha, off, cnt, size) {
+      const h = held.get(sha);
+      if (h) { st.hits++; return h.subarray(off, off + cnt); }
+      // Dedup CONCURRENT misses as well as sequential ones. Without this a guest
+      // reading one large file in N chunks before the first completes issues N
+      // requests -- a second refetch multiplier, independent of the eviction.
+      let p = inflight.get(sha);
+      if (p) st.deduped++;
+      else {
+        st.misses++;
+        // Delegate the FETCH to the engine: it owns the .zst path and the zstd
+        // decompressor. Owning it here to get byte-level progress is a further
+        // step and a bigger one -- this is the retention fix, not the progress
+        // fix, and conflating them would put a decompressor in the way of a
+        // measurement we can take today.
+        p = Promise.resolve(inner.read(sha, 0, size, size)).then(full => {
+          if (full && full.length) {
+            held.set(sha, full);
+            st.bytes_held += full.length;
+            while (st.bytes_held > RETAIN_BUDGET && held.size > 1) {
+              const k = held.keys().next().value;          // oldest first
+              st.bytes_held -= held.get(k).length; held.delete(k);
+            }
+          }
+          inflight.delete(sha);
+          st.inflight = [...inflight.keys()];
+          return full;
+        }, e => { inflight.delete(sha); st.inflight = [...inflight.keys()]; throw e; });
+        inflight.set(sha, p);
+        st.inflight = [...inflight.keys()];
+        // the size is known at the point of the miss, so the userland line can say
+        // how big the thing it is blocked on is -- which is the 8.8s gap
+        st.reading = { sha: sha.slice(0, 12), size };
+      }
+      const full = await p;
+      return full ? full.subarray(off, off + cnt) : null;
+    },
+    async cache(sha, bytes) { return inner.cache(sha, bytes); },
+    // THE WHOLE POINT. N.CloseInode evicts on close; we keep it.
+    uncache(sha) { st.evictions_suppressed++; },
+  };
+}
+
+function boot() {
+  window.__m1.phases.boot_called = since();
+  status('fetching the environment…');
+  try {
+    emulator = new V86({
+      wasm_path: "build/v86.wasm",
+      memory_size: 256 * 1024 * 1024,
+      vga_memory_size: 2 * 1024 * 1024,
+      screen_container: $("screen_container"),
+      bios: { url: "bios/seabios.bin" },
+      vga_bios: { url: "bios/vgabios.bin" },
+      bzimage: { url: "guest/vmlinuz" },
+      initrd: { url: "guest/initramfs" },
+      // root=host9p -- v86's 9p mount tag, read out of the engine's own
+      // configspace_tagname ([104,111,115,116,57,112]), never guessed.
+      cmdline: "rw root=host9p rootfstype=9p rootflags=trans=virtio,cache=loose " +
+               "console=ttyS0 console=tty0 init=/sbin/init",
+      filesystem: { basefs: { url: "guest/fs.json" }, baseurl: "guest/blobs/" },
+      autostart: true,
+      disable_speaker: true,
+    });
+  } catch (e) {
+    window.__m1.error = String(e);
+    status('failed: ' + e, 'bad');
+    send('error', { message: String(e).slice(0,300) });
+    return;
+  }
+  window.emulator = emulator;
+  installRetainingStorage();
+  emulator.add_listener("download-progress", onProgress);
+  // A failed fetch must not leave the line reading "fetching…" forever. It is the
+  // one state where the user can DO something (reload, check the network), and a
+  // spinner that never resolves is the worst possible rendering of it.
+  emulator.add_listener("download-error", e => {
+    window.__m1.error = 'download failed: ' + (e && e.file_name);
+    status('could not fetch ' + ((e && e.file_name) || 'the environment'), 'bad');
+    send('error', { message: window.__m1.error });
+  });
+
+  // EVERY BYTE GOES STRAIGHT TO THE SCREEN. Watching the boot is the feature: a
+  // black screen for 15s reads as broken and gets the back button, where a
+  // scrolling kernel log reads as working.
+  emulator.add_listener("serial0-output-byte", b => {
+    const ch = String.fromCharCode(b);
+    serial += ch; window.__m1.serial = serial;
+    term.write(ch);
+    feedRun(ch);
+    const plain = strip(serial);
+
+    // The first byte out of the guest is the hand-over: from here the kernel log
+    // IS the progress indicator and a byte count would be competing with it.
+    if (!dl.done) {
+      dl.done = true;
+      window.__m1.phases.download_done = window.__m1.phases.first_serial = since();
+      status('booting the kernel…');
+    }
+
+    if (!booted && /Mounting root: ok|Alpine Init/.test(plain)) {
+      booted = window.__m1.booted = true;
+      window.__m1.bootMs = Math.round(performance.now() - t0);
+      status('root mounted — starting userland…');
+      startUserlandTicker();
+    }
+    if (!prompted && /[$#] $/.test(plain.slice(-16))) {
+      prompted = true;
+      window.__m1.promptMs = window.__m1.phases.prompt = Math.round(performance.now() - t0);
+      const n = window.__m1.net = netStats();
+      status(`ready in ${(window.__m1.promptMs/1000).toFixed(1)}s · ` +
+             `${mib(n.blobs.bytes + n.kernel.bytes + n.engine.bytes + n.index.bytes)} MiB`, 'ok');
+      lastSize = ''; fitAndTell();     // the guest has a prompt to receive stty now
+      send('ready');
+    }
+    if (!window.__m1.probeOk && /PROBE-Linux i\d86-\d+-OK/.test(plain)) {
+      window.__m1.probeOk = true; window.__m1.net = netStats();
+    }
+  });
+  // xterm gives selection, scrollback and paste for free; the plain v86 screen
+  // container is a text grid the emulator owns, which cannot be copied out of.
+  term.onData(d => emulator.serial0_send(applyCtrl(d)));
+}
+
+// ── the guest's own file verbs: `send` and `receive` ──────────────────────────
+// A person inside the VM moves a file OUT with `send FILE` and asks for one IN
+// with `receive`. Both are tiny scripts in the guest (build-guest.sh 3c) that
+// print a PRIVATE OSC sequence -- ESC ] 5379 ; <verb> ; <arg> BEL -- which xterm
+// hands to the handler below instead of drawing it.
+//
+// Why an escape sequence and not the page typing commands at the shell: the
+// shell belongs to the person. `runInGuest` works for a probe, but a page that
+// injects `ls` while someone is inside nano corrupts their file. An OSC is
+// emitted BY the guest, only when the person asks, and it never touches stdin.
+// It also needs no engine internal -- the file is read with v86's public
+// `read_file`, since the guest root IS the 9p tree (`send` syncs first: the root
+// is cache=loose, so an unflushed write is otherwise not there yet).
+//
+// Outward, the file goes to the HOST as `x-file` (the entity-apps extension the
+// Apps player speaks: it keeps the file as an offer). Standalone -- no host --
+// it falls back to an ordinary browser download, which is the only sink there.
+const OSC_FILES = 5379;
+const baseName = p => (p.split('/').pop() || '').trim();
+function download(name, bytes) {
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+async function sendOut(path) {
+  const name = baseName(path);
+  window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
+  try {
+    const bytes = await emulator.read_file(path.replace(/^\/+/, ''));
+    // A fresh buffer holding exactly the file: a view into a larger buffer
+    // posts its neighbours too (the trailing-NUL bug on x-get-file, above).
+    const exact = bytes.slice();
+    window.__m1.files.sent.push({ name, length: exact.byteLength });
+    if (parent !== window) {
+      send('x-file', { name, media_type: 'application/octet-stream', data: exact });
+      status(`sent ${name} to the host…`);
+    } else {
+      download(name, exact);
+      status(`downloaded ${name} (no host to send it to)`);
+    }
+  } catch (err) {
+    status(`could not read ${path}: ${String(err).slice(0, 80)}`, 'bad');
+  }
+}
+term.parser.registerOscHandler(OSC_FILES, data => {
+  // Serial bytes reach xterm one Latin-1 char per byte, so a UTF-8 path arrives
+  // as mojibake. Put the bytes back together before reading anything out of it.
+  const text = new TextDecoder().decode(Uint8Array.from(data, c => c.charCodeAt(0) & 0xff));
+  const cut = text.indexOf(';');
+  const verb = cut < 0 ? text : text.slice(0, cut);
+  const arg = cut < 0 ? '' : text.slice(cut + 1);
+  if (verb === 'send' && arg && emulator) sendOut(arg);
+  else if (verb === 'receive') {
+    if (parent !== window) { send('x-request-file', {}); status('asked the host for a file — use its “Send a file” button'); }
+    else status('no host to receive a file from', 'bad');
+  }
+  return true;                      // handled: never draw the sequence
+});
+// Inward: a file the host sends lands in /mnt under its own base name.
+async function receiveIn(m) {
+  const name = baseName(String(m.name || ''));
+  if (!name || name === '.' || name === '..' || /[\x00-\x1f]/.test(name)) {
+    status('the host sent a file with an unusable name', 'bad'); return;
+  }
+  const bytes = new Uint8Array(m.data);
+  await emulator.create_file('mnt/' + name, bytes);
+  window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
+  window.__m1.files.received.push({ name, length: bytes.byteLength });
+  status(`received ${name} → /mnt/${name}`, 'ok');
+}
+
+// ── files, both directions ────────────────────────────────────────────────────
+// Extraction asks the GUEST for the listing rather than reading emulator.fs9p:
+// fs9p is an engine internal, so a listing built on it is a v86 driver wearing
+// the contract's name.
+async function putFiles(entries) {
+  const out = [];
+  for (const e of entries || []) {
+    const bytes = (e.bytes instanceof Uint8Array) ? e.bytes : new Uint8Array(e.bytes);
+    await emulator.create_file(e.name, bytes);
+    out.push({ name: e.name, bytes: bytes.length });
+  }
+  return out;
+}
+// ONE mechanism, not two: `x-list-files` is `runInGuest('ls -1 /mnt')`. The
+// listing verb was already "send a command, wait for a sentinel, scrape between"
+// -- naming that is what stops the second copy of it being written.
+// ⚠ `x-run` is THIS APP'S OWN BUSINESS and is deliberately NOT part of the verb
+// pair we are asking entity-apps for. A host wanting files out of an app is
+// general; a host running arbitrary commands inside one is a VM's affair, and
+// putting it in a shared contract would be minting the widest possible verb on
+// the strength of one consumer.
+let seq = 0;
+function runInGuest(cmd, ms) {
+  return new Promise(resolve => {
+    const tok = 'X' + (++seq) + 'Z';
+    pending = { buf:'', tok, resolve };
+    // The begin marker is only real when a NEWLINE follows it. The shell echoes
+    // the whole command line back down the serial link, and that echo contains
+    // both markers -- but there the begin marker is followed by `;`, so a match
+    // that requires \r?\n cannot latch onto the echo of its own command.
+    emulator.serial0_send(`echo __B__${tok}; ${cmd}; echo __E__${tok}\n`);
+    // A guest that never answers is "could not look", never "empty" -- different
+    // facts, and only one of them means the VM produced nothing.
+    setTimeout(() => {
+      if (pending && pending.tok === tok) { const p = pending; pending = null; p.resolve(null); }
+    }, ms || 4000);
+  });
+}
+function feedRun(ch) {
+  if (!pending) return;
+  pending.buf += ch;
+  const m = pending.buf.match(new RegExp('__B__' + pending.tok + '\\r?\\n([\\s\\S]*?)__E__' + pending.tok));
+  if (!m) return;
+  // busybox colourises `ls` even down a serial line; an unstripped name renders
+  // fine and then makes read_file ask for a file that does not exist.
+  const lines = m[1].split(/\r?\n/).map(s => strip(s).trim()).filter(s => s && !s.startsWith('__'));
+  const p = pending; pending = null; p.resolve(lines);
+}
+
+addEventListener('message', async e => {
+  const m = e.data;
+  if (!m || m.source !== HOST) return;
+  try {
+    switch (m.type) {
+      case 'init': boot(); break;
+      case 'request-state':
+        // Whole-object, latest-wins, host-blind -- the contract's own semantics.
+        // Deliberately NOT where file bytes go: debounced, retained N deep and
+        // keyed by one app id, so a rootfs through here is resent in full on
+        // every change and kept N times.
+        send('state', { state: { booted, engine:'v86', arch:'i686', distro:'alpine-3.21',
+          // the host cannot read into an opaque-origin document, so the only way
+          // it learns whether xterm actually painted is for the app to say so.
+          rows: term.rows, cols: term.cols,
+          termPainted: document.querySelectorAll('.xterm-rows > div').length,
+          promptMs: window.__m1.promptMs, fit: window.__m1.fit } });
+        break;
+      case 'x-put-files': send('x-files-put', { put: await putFiles(m.entries) }); break;
+      case 'x-file': if (emulator) await receiveIn(m); break;
+      case 'x-file-result':
+        window.__m1.files = window.__m1.files || { sent: [], received: [], results: [] };
+        window.__m1.files.results.push({ ok: !!m.ok, name: m.name, reason: m.reason || null });
+        status(m.ok ? `the host saved ${m.name}` : `the host did not save ${m.name}: ${m.reason}`,
+               m.ok ? 'ok' : 'bad');
+        break;
+      case 'x-list-files': {
+        const names = await runInGuest('ls -1 /mnt');
+        send('x-files-list', { names, couldNotLook: names === null }); break;
+      }
+      case 'x-run': {
+        const out = await runInGuest(m.cmd, m.timeoutMs || 30000);
+        send('x-run-done', { out, timedOut: out === null }); break;
+      }
+      case 'x-get-file': {
+        const bytes = await emulator.read_file(m.name);
+        // ⚠ NEVER transfer `bytes.buffer` directly: a Uint8Array can be a VIEW into
+        // a larger backing buffer, so the receiver gets the view PLUS whatever else
+        // is in there. Measured: a 33-byte file arrived as 49 bytes with 16 trailing
+        // NULs, while four controlled probes were byte-exact -- data-dependent,
+        // silent, and only on some files.
+        const exact = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength)
+          ? bytes : bytes.slice();
+        // SAME SHAPE as `send`'s x-file ({name, media_type, data}): one message
+        // name carrying two payload shapes is drift a host has to guess between.
+        parent.postMessage({ source:APP, type:'x-file', name:m.name, media_type:'application/octet-stream',
+                             length:exact.byteLength, data:exact.buffer }, '*', [exact.buffer]);
+        break;
+      }
+      case 'destroy':
+        try { emulator && emulator.destroy && emulator.destroy(); } catch (err) {}
+        send('closed'); break;
+    }
+  } catch (err) { send('error', { message:String(err).slice(0,300) }); }
+});
+
+send('ready-for-init');
+// The contract's 150ms fallback: a host that never answers still gets a working
+// app. Standalone (no parent) that is the only path, and it is the common one.
+setTimeout(() => { if (!emulator) boot(); }, 150);
+</script>
+</body>

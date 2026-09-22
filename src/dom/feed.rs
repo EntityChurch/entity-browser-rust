@@ -10,7 +10,7 @@ use crate::action::Action;
 use crate::dom::components;
 use crate::dom::theme;
 use crate::dom::util::{self, DomCtx};
-use crate::views::feed::output::{EntryRow, FeedOutput, FeedPanel};
+use crate::views::feed::output::{EntryRow, FeedOutput, FeedPanel, Via};
 
 use web_sys::Element;
 
@@ -19,6 +19,12 @@ use web_sys::Element;
 /// is a cosmetic annoyance rather than a correctness problem — the value is read
 /// only on the press, and the press carries it.
 const PEER_FIELD: &str = "feed_peer";
+
+/// The draft key for the gatherer box. **Its own field, not `PEER_FIELD`
+/// reused** — one box for two lists would let somebody type a peer id, press
+/// *Read through*, and have the Follow box they were looking at appear to
+/// change meaning under them.
+const GATHERER_FIELD: &str = "feed_gatherer";
 
 pub fn render(container: &Element, output: &FeedOutput, ctx: &DomCtx) {
     util::clear_children(container);
@@ -41,6 +47,7 @@ pub fn render(container: &Element, output: &FeedOutput, ctx: &DomCtx) {
         util::append(&wrapper, &components::notice(&crate::i18n::t(notice.0, &[])));
     }
     render_follow_list(&wrapper, output, ctx);
+    render_gatherers(&wrapper, output, ctx);
     render_panel(&wrapper, output, ctx);
 
     util::append(container, &wrapper);
@@ -127,6 +134,99 @@ fn render_follow_list(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
     util::append(parent, &list);
 }
 
+/// **Who this profile reads other authors through** — §6's third source leg.
+///
+/// A second list rather than a flag on the first, because it answers a different
+/// question: you *follow* Alice to read Alice, and you name Greg to be able to
+/// read **anybody** through Greg. The section says what it is for, because a
+/// list of peer ids with no explanation is a list nobody can use correctly.
+fn render_gatherers(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
+    util::append(parent, &components::subheading(&crate::i18n::t("feed.gatherers", &[])));
+
+    let hint = util::create_element("div");
+    hint.set_attribute("style", theme::HINT).ok();
+    util::set_text(&hint, &crate::i18n::t("feed.gatherers_hint", &[]));
+    util::append(parent, &hint);
+
+    let row = util::create_element("div");
+    row.set_attribute("style", theme::ROW_INLINE).ok();
+    let input = components::text_input(
+        ctx,
+        GATHERER_FIELD,
+        "",
+        &crate::i18n::t("feed.gatherer_placeholder", &[]),
+    );
+    let _ = input.set_attribute("data-field", "feed-gatherer-peer");
+    util::append(&row, &input);
+
+    let btn = components::button_el(
+        &crate::i18n::t("feed.add_gatherer", &[]),
+        components::ButtonKind::Secondary,
+    );
+    let _ = btn.set_attribute("data-field", "feed-add-gatherer");
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let drafts = ctx.drafts.clone();
+        let wid = output.window_id;
+        ctx.listen(&btn, "click", move |_| {
+            let typed = drafts.borrow().get(GATHERER_FIELD).cloned().unwrap_or_default();
+            // An empty press still dispatches — the refusal is a real sentence,
+            // and a button that does nothing is the dead-button disease.
+            actions.borrow_mut().push(Action::WindowEvent {
+                window_id: wid,
+                event: "feed_add_gatherer".to_string(),
+                value: typed,
+            });
+            rp();
+        });
+    }
+    util::append(&row, &btn);
+    util::append(parent, &row);
+
+    if output.gatherers.is_empty() {
+        util::append(parent, &components::empty(&crate::i18n::t("feed.no_gatherers", &[])));
+        return;
+    }
+
+    let list = util::create_element("div");
+    let _ = list.set_attribute("data-field", "feed-gatherers");
+    for g in &output.gatherers {
+        let line = util::create_element("div");
+        line.set_attribute("style", theme::ROW_INLINE).ok();
+
+        let label = util::create_element("span");
+        let _ = label.set_attribute("data-field", "feed-gatherer");
+        let _ = label.set_attribute("data-routed", if g.routed { "true" } else { "false" });
+        util::set_text(&label, &g.peer_id); // i18n-ignore — a peer id
+        util::append(&line, &label);
+
+        // **An unrouted gatherer says so rather than disappearing.** It
+        // contributes no leg (there is no URL to build, and inventing one
+        // relative to the page is `OriginFeedSource`'s empty-origin defect), and
+        // a row that silently did nothing would leave somebody wondering why
+        // adding it changed nothing.
+        if !g.routed {
+            let warn = util::create_element("span");
+            warn.set_attribute("style", theme::HINT).ok();
+            let _ = warn.set_attribute("data-field", "feed-gatherer-unrouted");
+            util::set_text(&warn, &crate::i18n::t("feed.gatherer_no_route", &[]));
+            util::append(&line, &warn);
+        }
+
+        let drop = components::button_el(
+            &crate::i18n::t("feed.remove_gatherer", &[]),
+            components::ButtonKind::Secondary,
+        );
+        let _ = drop.set_attribute("data-field", "feed-remove-gatherer");
+        ctx.on_window_event(&drop, "click", "feed_remove_gatherer", &g.peer_id);
+        util::append(&line, &drop);
+
+        util::append(&list, &line);
+    }
+    util::append(parent, &list);
+}
+
 fn render_panel(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
     let Some(selected) = &output.selected else {
         util::append(
@@ -180,16 +280,27 @@ fn render_panel(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
     }
 }
 
-fn render_entries(parent: &Element, via: &str, rows: &[EntryRow]) {
+fn render_entries(parent: &Element, via: &Via, rows: &[EntryRow]) {
     // **Which leg served this, on screen rather than only in the log.** A live
     // read is as fresh as the author is; a published one is as fresh as their
-    // last publish. Somebody asking *"am I seeing their latest?"* cannot answer
-    // it without knowing which they got.
+    // last publish; a mirror is somebody else's reading, which §6.1 rule 2
+    // allows to be short. Somebody asking *"am I seeing everything?"* cannot
+    // answer it without knowing which they got.
+    //
+    // ⛔ **This line is the ONE place a gatherer's peer id may appear** — §6.1
+    // rule 3 / `FEED-R13`: attribution follows each entry's own detached
+    // signature, and a surface naming the gatherer as the author is
+    // non-conformant. `EntryRow` carries no field it could travel in, so the
+    // rule is a property of the types rather than one this renderer remembers.
     let src = util::create_element("div");
     src.set_attribute("style", theme::HINT).ok();
     let _ = src.set_attribute("data-field", "feed-via");
-    let _ = src.set_attribute("data-via", via);
-    util::set_text(&src, &crate::i18n::t(via, &[]));
+    let _ = src.set_attribute("data-via", via.key());
+    let text = match via.source_peer() {
+        Some(gatherer) => crate::i18n::t(via.key(), &[("peer", gatherer)]),
+        None => crate::i18n::t(via.key(), &[]),
+    };
+    util::set_text(&src, &text);
     util::append(parent, &src);
 
     let list = util::create_element("div");

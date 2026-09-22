@@ -107,6 +107,10 @@ background:var(--surface, #15151a);}\
 background:var(--surface-hover, #22223a);color:var(--text, #e2e2ea);\
 border:1px solid var(--border, #2a2a3e);border-radius:6px;padding:5px 12px;\
 font-size:13px;font-family:inherit;white-space:nowrap;}\
+.gm-file-status{min-width:0;overflow:hidden;text-overflow:ellipsis;\
+white-space:nowrap;font-size:12px;color:var(--text-muted, #9a9ab0);}\
+.gm-file-btn.gm-file-requested{border-color:var(--accent, #6c8cff);\
+box-shadow:0 0 0 2px var(--accent, #6c8cff);}\
 .gm-stage-area.gm-expanded{padding:0;}\
 .gm-stage-area.gm-expanded>.gm-stage{max-width:none;max-height:none;\
 height:auto;align-self:stretch;border:0;border-radius:0;}\
@@ -505,6 +509,10 @@ pub struct GamesHostConfig {
     /// Content hash of the live save read at open, if any — seeds the
     /// retention ring so the first reclaim drops the prior session's blob.
     pub init_save_hash: Option<entity_hash::Hash>,
+    /// The app declared the file verbs (`x-files`, see [`crate::app_files`]).
+    /// `false` draws no file control and drops every `x-file` message, so an
+    /// app that did not opt in runs against exactly the host it always had.
+    pub files: bool,
 }
 
 /// The host loop's lifetime-bound state, kept alive by the window. Beyond the
@@ -601,6 +609,27 @@ pub fn render_player(
     if fullscreen_available {
         util::append(&actions, &full_btn);
     }
+
+    // File verbs — drawn ONLY for an app whose catalog entry opted in
+    // (`x-files`, `crate::app_files`). Wired below once the frame exists.
+    let file_ui = cfg.files.then(|| {
+        // Visually hidden, not `display:none` (see the component for why).
+        let input = crate::dom::components::hidden_file_input("app-file-input");
+        let btn = util::create_element_with_class("button", "gm-bar-btn gm-file-btn"); // i18n-ignore — CSS class names
+        util::set_attr(&btn, "type", "button");
+        util::set_attr(&btn, "data-field", "app-file-send");
+        util::set_text(&btn, &crate::i18n::t("filetransfer.send_file", &[]));
+        // The status line is the one place a file's fate is visible to a person.
+        // Written DIRECTLY, never through a dirty mark: a section rebuild re-runs
+        // this function, which replaces the iframe and restarts the app.
+        let status = util::create_element_with_class("span", "gm-file-status"); // i18n-ignore — CSS class names
+        util::set_attr(&status, "data-field", "app-file-status");
+        util::set_attr(&status, "role", "status");
+        util::append(&bar, &status);
+        util::append(&actions, &input);
+        util::append(&actions, &btn);
+        FileUi { input, btn, status }
+    });
 
     util::append(&bar, &actions);
     util::append(&wrapper, &bar);
@@ -812,6 +841,22 @@ pub fn render_player(
         Err(_) => return None,
     };
 
+    if let Some(ui) = &file_ui {
+        wire_file_picker(ctx, ui, &frame_iframe);
+    }
+    let files_declared = cfg.files;
+    // Taken once, here, for the same reason `AppWindow::send_save` does: the
+    // offer is a sequence of dispatched calls that must survive its first await.
+    // `Err` carries the reason there is no route, in `file_offer`'s own words,
+    // so the refusal a person reads is the same sentence File Transfer shows.
+    let file_dispatch = peers
+        .dispatch_handle(&cfg.peer_id)
+        .ok_or_else(|| crate::file_offer::not_routed_message(&cfg.peer_id));
+    let file_status = file_ui.as_ref().map(|u| u.status.clone());
+    let file_btn = file_ui.as_ref().map(|u| u.btn.clone());
+    let file_input = file_ui.as_ref().map(|u| u.input.clone());
+    let app_label = cfg.game_id.clone();
+
     let writer = peers.writer_handle_for(&cfg.peer_id);
     let peer_id = cfg.peer_id.clone();
     let set = cfg.set.clone();
@@ -1019,6 +1064,47 @@ pub fn render_player(
                     schedule();
                 }
             }
+            Some(crate::app_files::MSG_FILE) => {
+                receive_file(
+                    &data,
+                    files_declared,
+                    &app_label,
+                    &frame_iframe,
+                    file_dispatch.clone(),
+                    file_status.clone(),
+                );
+            }
+            Some(crate::app_files::MSG_REQUEST_FILE) => {
+                if !files_declared {
+                    tracing::warn!(
+                        app = %app_label,
+                        "app file: x-request-file from an app that does not declare x-files — ignored"
+                    );
+                    return;
+                }
+                // Raise the control; the person's tap is the gesture a chooser needs.
+                if let Some(btn) = &file_btn {
+                    let _ = btn.class_list().add_1("gm-file-requested"); // i18n-ignore — CSS class name
+                }
+                if let Some(input) = &file_input {
+                    // `accept` narrows the chooser. Only a short string: it is a
+                    // hint from a sandboxed page, and the attribute is ours.
+                    match js_sys::Reflect::get(&data, &JsValue::from_str("accept"))
+                        .ok()
+                        .and_then(|v| v.as_string())
+                        .filter(|a| a.len() <= 256)
+                    {
+                        Some(accept) => util::set_attr(input, "accept", &accept),
+                        None => {
+                            let _ = input.remove_attribute("accept");
+                        }
+                    }
+                }
+                if let Some(status) = &file_status {
+                    util::set_text(status, &crate::i18n::t("apps.file.requested", &[]));
+                }
+                let _ = frame_iframe.set_attribute("data-app-file-requested", "1");
+            }
             _ => {}
         }
     }) as Box<dyn FnMut(web_sys::Event)>);
@@ -1033,6 +1119,208 @@ pub fn render_player(
         _timer_cb: timer_cb,
         flush,
     })
+}
+
+/// The player's file controls, present only for an app that declared `x-files`.
+struct FileUi {
+    input: Element,
+    btn: Element,
+    status: Element,
+}
+
+/// Host → app: the "send a file" button opens a chooser and posts the chosen
+/// file into the frame as [`crate::app_files::MSG_FILE`].
+fn wire_file_picker(ctx: &DomCtx, ui: &FileUi, frame: &web_sys::HtmlIFrameElement) {
+    {
+        let input = ui.input.clone();
+        let status = ui.status.clone();
+        ctx.listen(&ui.btn, "click", move |_| {
+            let Ok(el) = input.clone().dyn_into::<web_sys::HtmlElement>() else { return };
+            // `show_file_picker` REPORTS a refused chooser — a bare `.click()`
+            // was a silent dead button on Android (see `file_transfer`).
+            if let Err(why) = util::show_file_picker(&el) {
+                util::set_text(&status, &crate::i18n::t("apps.file.not_sent", &[("why", &why)]));
+            }
+        });
+    }
+    let input = ui.input.clone();
+    let btn = ui.btn.clone();
+    let status = ui.status.clone();
+    let frame = frame.clone();
+    ctx.listen(&ui.input, "change", move |_| {
+        let Ok(inp) = input.clone().dyn_into::<web_sys::HtmlInputElement>() else { return };
+        let Some(file) = inp.files().and_then(|f| f.get(0)) else { return };
+        // Clear it, or choosing the same file twice fires no second `change`.
+        inp.set_value("");
+        let _ = btn.class_list().remove_1("gm-file-requested"); // i18n-ignore — CSS class name
+        let name = file.name();
+        let size = file.size() as u64;
+        // One limit in both directions: the app holds what it is sent in memory
+        // exactly as the host holds what it keeps.
+        if size > crate::file_offer::MAX_OFFER_BYTES {
+            let why = crate::file_offer::too_large_message(&name, size);
+            util::set_text(&status, &crate::i18n::t("apps.file.not_sent", &[("why", &why)]));
+            return;
+        }
+        let media_type = file.type_();
+        let status = status.clone();
+        let frame = frame.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let buf = match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                Ok(b) => b,
+                Err(e) => {
+                    let why = format!("{e:?}");
+                    util::set_text(&status, &crate::i18n::t("apps.file.not_sent", &[("why", &why)]));
+                    return;
+                }
+            };
+            let Some(cw) = frame.content_window() else { return };
+            let msg = host_message(crate::app_files::MSG_FILE);
+            let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("name"), &JsValue::from_str(&name));
+            let _ = js_sys::Reflect::set(
+                &msg,
+                &JsValue::from_str("media_type"),
+                &JsValue::from_str(&media_type),
+            );
+            let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("data"), &buf);
+            match cw.post_message(&msg, "*") {
+                Ok(()) => {
+                    util::set_text(&status, &crate::i18n::t("apps.file.sent", &[("name", &name)]));
+                    let seq = frame
+                        .get_attribute("data-app-file-sent-seq")
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(0)
+                        .wrapping_add(1);
+                    let _ = frame.set_attribute("data-app-file-sent-seq", &seq.to_string());
+                }
+                Err(e) => {
+                    let why = format!("{e:?}");
+                    util::set_text(&status, &crate::i18n::t("apps.file.not_sent", &[("why", &why)]));
+                }
+            }
+        });
+    });
+}
+
+/// `{source: 'entity-host', type}` — the envelope every host message carries.
+fn host_message(mtype: &str) -> js_sys::Object {
+    let out = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&out, &JsValue::from_str("source"), &JsValue::from_str("entity-host"));
+    let _ = js_sys::Reflect::set(&out, &JsValue::from_str("type"), &JsValue::from_str(mtype));
+    out
+}
+
+/// The bytes of an `ArrayBuffer` or any `ArrayBufferView`, as a `Uint8Array`
+/// over exactly those bytes. **Byte offset and length, never `.buffer`**: a
+/// view can be a window into a larger buffer, and reading the whole buffer is
+/// the trailing-garbage bug the run-environment measured on this same channel.
+fn file_bytes(v: &JsValue) -> Option<js_sys::Uint8Array> {
+    if v.is_instance_of::<js_sys::ArrayBuffer>() {
+        return Some(js_sys::Uint8Array::new(v));
+    }
+    if js_sys::ArrayBuffer::is_view(v) {
+        let num = |k: &str| js_sys::Reflect::get(v, &JsValue::from_str(k)).ok()?.as_f64();
+        let buffer = js_sys::Reflect::get(v, &JsValue::from_str("buffer")).ok()?;
+        let off = num("byteOffset")? as u32;
+        let len = num("byteLength")? as u32;
+        return Some(js_sys::Uint8Array::new_with_byte_offset_and_length(&buffer, off, len));
+    }
+    None
+}
+
+/// App → host: decide on an `x-file`, keep it as a `file_offer`, and ALWAYS
+/// answer a declared app with `x-file-result`. See [`crate::app_files`].
+fn receive_file(
+    data: &JsValue,
+    declared: bool,
+    app: &str,
+    frame: &web_sys::HtmlIFrameElement,
+    dispatch: Result<crate::dispatch_handle::DispatchHandle, String>,
+    status: Option<Element>,
+) {
+    let name = js_sys::Reflect::get(data, &JsValue::from_str("name")).ok().and_then(|v| v.as_string());
+    let bytes = js_sys::Reflect::get(data, &JsValue::from_str("data")).ok().and_then(|v| file_bytes(&v));
+    let size = bytes.as_ref().map(|b| b.length() as u64);
+
+    let kept_name = match crate::app_files::admit(declared, name.as_deref(), size) {
+        Ok(n) => n,
+        Err(crate::app_files::Refusal::NotDeclared) => {
+            // No reply: the app never asked to receive one (app_files module doc).
+            tracing::warn!(app = %app, "app file: x-file from an app that does not declare x-files — dropped");
+            return;
+        }
+        Err(refusal) => {
+            file_result(frame, status.as_ref(), app, name.as_deref().unwrap_or(""), Err(refusal));
+            return;
+        }
+    };
+    // Admitted, so `size` fit the limit: now, and only now, copy the bytes out.
+    let Some(bytes) = bytes else { return };
+    let raw = bytes.to_vec();
+    let dispatch = match dispatch {
+        Ok(d) => d,
+        Err(why) => {
+            file_result(frame, status.as_ref(), app, &kept_name, Err(crate::app_files::Refusal::StoreFailed(why)));
+            return;
+        }
+    };
+    let frame = frame.clone();
+    let app = app.to_string();
+    wasm_bindgen_futures::spawn_local(async move {
+        let outcome = crate::file_offer::offer_file(&dispatch, &kept_name, &raw)
+            .await
+            .map(|offer| offer.id())
+            .map_err(crate::app_files::Refusal::StoreFailed);
+        file_result(&frame, status.as_ref(), &app, &kept_name, outcome);
+    });
+}
+
+/// Report a file's fate in all three places it has to be visible: the app (the
+/// wire reply it branches on), the person (the status line), and a gate (the
+/// frame's `data-app-file-*` stamps plus one log line).
+fn file_result(
+    frame: &web_sys::HtmlIFrameElement,
+    status: Option<&Element>,
+    app: &str,
+    name: &str,
+    outcome: Result<String, crate::app_files::Refusal>,
+) {
+    let msg = host_message(crate::app_files::MSG_FILE_RESULT);
+    let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("name"), &JsValue::from_str(name));
+    let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("ok"), &JsValue::from_bool(outcome.is_ok()));
+    let code = match &outcome {
+        Ok(id) => {
+            let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_str(id));
+            tracing::info!(app = %app, name = %name, offer = %id, "app file: kept");
+            if let Some(s) = status {
+                util::set_text(s, &crate::i18n::t("apps.file.kept", &[("name", name)]));
+            }
+            "kept"
+        }
+        Err(refusal) => {
+            let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("reason"), &JsValue::from_str(refusal.code()));
+            tracing::warn!(app = %app, name = %name, reason = refusal.code(), detail = %refusal.describe(), "app file: refused");
+            if let Some(s) = status {
+                util::set_text(
+                    s,
+                    &crate::i18n::t("apps.file.refused", &[("name", name), ("why", &refusal.describe())]),
+                );
+            }
+            refusal.code()
+        }
+    };
+    let _ = frame.set_attribute("data-app-file-last", code);
+    if code == "kept" {
+        let seq = frame
+            .get_attribute("data-app-file-seq")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0)
+            .wrapping_add(1);
+        let _ = frame.set_attribute("data-app-file-seq", &seq.to_string());
+    }
+    if let Some(cw) = frame.content_window() {
+        let _ = cw.post_message(&msg, "*");
+    }
 }
 
 /// Remove a previously-installed host loop (called on window drop / before

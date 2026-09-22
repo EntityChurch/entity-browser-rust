@@ -1765,6 +1765,58 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   passed, and never shown that the tier's only divergent family had closed** — the single most
   important thing that run had to report, invisible to a number that moved in the right direction.
   *A ratchet that only counts cannot tell you what got better.*
+- **A JOINT FIXTURE'S COMPARAND IS CONVENTION-SPECIFIC, AND TWO OF OURS GIVE OPPOSITE ANSWERS ON THE
+  SAME AXIS — do not copy `gpin4-joint`'s README onto the next one (2026-09-12).** That file says, in
+  as many words, *"the peer id and the keypair do not matter"*, which is true of a site and **false of
+  a feed in both halves, silently**: `FEED-R1` makes an entry's `author` equal the namespace it is
+  read under and every index page is a list of `pin(author, hash)`, so **the peer id is in the bytes**.
+  `SHARE` is the mirror image — §4 makes the *namespace* the publisher, `decode_share` takes it as an
+  argument, and **no peer id appears in any share body at all**. ⇒ *ask which of the two you are in
+  before designing a fixture for either.*
+  **Pin a SEED, not a peer id, whenever the id is in the bytes.** A literal id makes the bodies
+  comparable and leaves the per-entry detached signature out of the comparison entirely — you cannot
+  sign as a peer whose key you do not hold. Ed25519 is deterministic, so a seed makes the id, the
+  identity entity **and every signature byte** reproducible, and `FEED-R2` becomes checkable rather
+  than aspirational (`tests/fixtures/feed-joint/`, `src/feed_joint_fixture.rs`, `J-4`).
+  **And only some keys are the convention's.** FEED §4.2 pins the index paths by hand; §2 says the
+  cross-impl contract is the **type tag, not the path**, so an entry's key is ours — hence **two
+  roots**, `index_root` (theirs to match) and `feed_root_ours` (our own drift detector). Same split as
+  the site fixture's two roots for a *different* reason: there the second waits on a **type** the
+  other seat has not built, here on a **path** the convention declines to pin. **Say *reproducible*
+  and *comparable* separately.**
+  Three smaller things that cost something: the signature goes through the production emitter
+  (`feed_publish::signature_entity`) rather than a second expression of *how this system signs one
+  entity* — **a fixture is the most tempting place to write one** (C15); §1.1's shorthand *"`signer =
+  author`"* assigns a field in the **kernel's** type whose own doc shouts *NOT the peer-id string*, so
+  **open the defining document when a convention assigns a field it did not define**; and the report
+  is **per-key before any root**, which is the one thing the other seat asked back for.
+  **The regenerate spelling is containerized** — `make test-one T=<name> EXTRA_RUN_ENV="-e
+  <X>_REGENERATE=1"`. `gpin4-joint`'s README documented a bare host `cargo test` that **dies in
+  `openssl-sys` on a podman-only box**; corrected the day the second fixture needed the same command
+  (AP37 — *run it before you write it down*).
+- **A JUSTIFICATION STATED OVER A WHOLE PREDICATE DOES NOT TRANSFER TO EACH CLAUSE OF IT — and the
+  cheap tell is to delete the clause in a test (2026-09-12, `A-24`/`B-10`).** We told arch in **three**
+  packets that refusing `REFERENCE` §3.2's `path` form at the asset position is *"a security property —
+  subgraph confinement"*. True of `asset_name_from_ref` **as a whole**; **false of the leading-slash
+  clause**, which is the one the ruling turns on. Measured: an asset ref has exactly **one** base and
+  it is the **site root** (`asset_path` = `/{peer}/sites/{site}/assets/{name}`; no page-relative
+  resolution in either of the two callers), so `/assets/x.png` and `assets/x.png` denote the same
+  bytes and the refusal is a **pure loss**. What confines the subgraph is the mandatory `assets/`
+  prefix plus `..`/`//`/`://`/`data:`.
+  **Nothing about the sentence was false; the inference was** — and it had been load-bearing in
+  somebody else's open ruling for three days. ⇒ **ask which clause would have to be removed for the
+  claimed harm to become reachable, and remove it in a test.** Four minutes.
+  `the_leading_slash_refusal_is_not_what_confines_the_subgraph` (`paths.rs`) is that test: it runs
+  every hostile input through a *hypothetical* single-slash strip and asserts each is still refused,
+  so the analysis is a measurement and a later session cannot re-derive it backwards.
+  ⭐ **`entity-workbench-go` found it, and the useful move was the third option: VERIFY THEIR CLAIM IN
+  YOUR OWN SOURCE** — not accept it, not dispute it. Their wording was better than ours
+  (`workbench/site_ref.go:299`) and checking it cost one function read.
+  ⛔ **Behaviour deliberately unchanged**, because site-root-relative vs peer-relative is *precisely*
+  what `A-24` leaves unruled: widening would make us a second seat asserting a reading of a clause we
+  had just found we mis-argued. **A ruling made on a premise you now know is partly wrong is worse
+  than a delayed one** — so the correction is what is owed, not the change. It also **fails safe** on
+  our side: a refused ref renders no figure, never somebody else's.
 - **WHEN A NORMATIVE FIELD'S TYPE HAS NO DEFINITION, GREP FOR THE PRODUCTION NAME — if it resolves
   nowhere, THAT is the finding (2026-09-11).** We asked arch what an `app/feed/entry`'s `body` should
   contain, reasoning that `body: embed-node` needed an `Embed` entity and **neither seat has one**. The
@@ -2263,6 +2315,111 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   attribution verdicts and a successful walk are still native-only, because the rig registers no
   origin and publishes no feed to one; and **the WINDOW cannot post** — `publish --ingest-feed`
   is a CLI path, so authoring still happens on disk and never in the app.
+- **A MIRROR IS REACHABLE BY A PERSON — the Feed window's *Read through* list, 2026-09-12. The
+  §6 arc's last gap on this seat, and the surface half is `src/feed_gatherers.rs` + the
+  `Leg::Mirror` wiring in `feed_fetch`.**
+  ⭐ **THE LIST IS TYPED BY A PERSON, AND THAT IS THE DESIGN RATHER THAN A SHORTFALL.**
+  `feed_route::plan` has taken a gatherer list since it shipped and been handed an **empty slice**
+  by the product the entire time, because §6 gives a reader **no way to learn a gatherer exists** —
+  no advertisement, no registry binding, no deployment field, and §6.0.1 is a *derivation* (where a
+  mirror would be **if** you knew whose) rather than a discovery. The alternative to a typed list is
+  the failure this file already names twice: *a viewer that cannot be told its source invents one,
+  and the invention is always "the first thing I already hold"* (`views/games::app_source`, AP54).
+  **A mirror makes that worse than usual** — the wrong guess is not a stale publisher, it is **a
+  stranger's reading of somebody else** in the place that person's own posts would be.
+  ⭐ **A LOSSY PROJECTION OF AN ADDRESS IS THE FIRST THING THAT BREAKS WHEN A THIRD KIND ARRIVES.**
+  `Resolution::Served` carried `via: &'static str` — a leg's *name*. The mirror leg has a fact the
+  name cannot hold (**whose** reading this is), and §6.1 rule 3 makes the *via* line the **one**
+  place a gatherer may be named, so *"mirrored"* without *"by whom"* leaves a reader unable to judge
+  a view they have just been told is partial. It carries the whole `Leg` now. The other half is
+  structural: **`EntryRow` has no field a gatherer's id could travel in**, so *never a byline* is a
+  property of the types rather than a rule a renderer remembers.
+  ⭐ **A ROUTE CHANGE INVALIDATES EVERY HELD WALK, NOT ONE AUTHOR'S.** The route is planned per
+  render from the live gatherer list, so adding one changes it for **every** author — and a held
+  `FeedState` is an answer to the old route that `poll` serves without re-walking. Somebody who adds
+  a gatherer *because* an author would not load would otherwise press the button, see the identical
+  panel, and conclude nothing happened. `FeedPoller::forget_all`, and its own gate.
+  **An unrouted gatherer contributes NO LEG and still SHOWS.** No origin means no URL, and
+  manufacturing one relative to the page is `OriginFeedSource`'s empty-origin defect, whose 404 read
+  as *"this publisher has no feed"* — *a dropped leg is honest; an invented one is a wrong answer.*
+  But dropping the **row** as well leaves somebody unable to tell whether adding it did anything, so
+  it stays and says so, and `routed` is recomputed per render rather than remembered (AP41).
+  **Two registries, two watches** — `feed-follows/` and `feed-gatherers/` are one path segment apart
+  and both keyed by a peer id. Forgetting the second `watch_prefix` is a dead button, and the browser
+  gate reads the two lists through **separate selectors** so *"the right list grew"* is falsifiable.
+  ⇒ **`make e2e-worker T=a_gathered_feed_reaches_a_browser` CLOSES THE DELIVERY HALF (2026-09-12) —
+  and the gate written to prove it works found that it did not.** `FeedWindow`'s factory built its
+  poller with an **empty `RepaintCell` that nothing ever filled**, so a landed walk told nobody:
+  every byte arrived, every signature verified, and the panel sat on *"Reading this feed…"* until
+  some unrelated write marked the window dirty. `render_dom` now composes `dirty.mark()` +
+  `repaint()` the way `content_site` does, and for its stated reason — a frame rebuilds only DIRTY
+  windows and a feed walk writes nothing to the tree, so a bare repaint is not enough either.
+  ⭐ **Two months green said nothing about it, because every earlier gate had a click of its own
+  coming**: the sibling browser gate's last step is a press and each native gate drives the poller
+  by hand. *A surface that only ever gets looked at right after you touched it never has to tell you
+  anything.* ⇒ when a surface completes work asynchronously, ask what LOOKS at it afterwards.
+  **The rig's shape is the transferable half.** The author is published to a throwaway directory and
+  **served nowhere** — the scenario and the anti-vacuity guard at once, since A has no `origins`
+  entry *and* A's carried bytes at B's origin are outside every signed root there by construction
+  (`RootProjector::record` skips a foreign peer). And **step 3 asserts the unreachable state BEFORE
+  any gatherer exists**: the claim is a *transition*, and a transition needs both of its states
+  measured, or a browser that found the posts by some other path passes every row with `Leg::Mirror`
+  never consulted. `data-via` / `data-attributed` are read as **attributes, never sentences** — the
+  no-route needle one gate over was a copy string and was red for a day.
+  Three neuters, each falsified: drop the mirror legs → the no-route screen; drop the repaint wiring
+  → the production symptom verbatim; publish A at the same origin under A's own signed root → **the
+  CONTROL reds**, reporting the published leg served it.
+  **Stated bounds:** nothing durable of a gatherer's is held (D24 not engaged), and no *window*
+  publishes a mirror — `--gather` is a CLI verb.
+- **AN ADDRESS IS A FIELD NOW — `src/open_target.rs` is the read side of `publish_axes`, and a
+  viewer is a row there plus a `WindowView::aim` override (built 2026-09-12).** `Action::SpawnWindow`
+  carried a window kind and a peer and **no address**, so a caller who knew exactly what a reader
+  wanted to look at had nowhere to put it, and the two callers that had one used a side channel: the
+  Registry Browser spawned a hard-coded `("Site Browser", peer)` and warmed manifests *as a side
+  effect*, and `BootSurface::Window` could boot the Feed window and not say *which* feed. **The
+  privileging was never in the UI; it was in one type.** The address is `APP-CONVENTION-REFERENCE`'s
+  atom, whose §3.2 string round trip is load-bearing rather than tidy — a deployment document and a
+  persisted config both need a string. Design + what building it corrected:
+  `docs/plans/DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION.md` §5.2.
+  **The SUBJECT and the BINDING are two fields because they are two facts** — a window's bound peer
+  is the store it READS, and binding a Site Browser to the publisher is the shipped bug
+  `views/registry_browser/output.rs:open_target` narrates (a real window, a plausible title, an
+  empty rail, because no local SDK hosts that id). One test asserts both peers at once so a later
+  tidy cannot collapse them back.
+  ⭐ **The aim runs AFTER `hydrate_durable`, and that ordering is the whole correctness argument —
+  with no new guard.** `durable_hydration_job` takes its witness **synchronously**, inside the
+  hydrate call, so an aim applied afterwards makes the in-flight read report `Superseded` and keep
+  what the caller asked for. *An explicit address is newer than a persisted one*, which is what
+  asking for it means. Applied **before**, the aim is inside the witness and the persisted location
+  lands on top of it. `spawn_offers_the_aim_to_the_window_it_created_and_does_it_after_hydrating`
+  records the order of the two calls, because the round-trip itself is `cfg(wasm32)` and no native
+  test can see it any other way.
+  **`Aim` is four outcomes and three are refusals** (AP40): *this window takes no target* / *took it*
+  / *not my convention* / *mine and names nothing I can open*. The last is the Registry Browser's
+  **live** case — a resolved name says *whose* sites and never *which* — and reporting it as a hit
+  is how a guess gets a feature's name. Count asserted.
+  **Still true and now enforceable rather than advisory:** do not add a hard-coded
+  `("Some Window", peer)` pair (there is a table; add a row), and **do not let a new viewer INFER its
+  source** the way `views/games::app_source` picks *the first foreign entry in the origins registry*
+  — *a viewer that cannot be aimed will invent an aim, and the invention is always "the first thing I
+  already hold"*, which is AP54. It can be aimed now; nothing hands it an address yet, so the guess
+  is still there.
+  ⚠ **DISCOVERY is untouched and is the whole of what is open.** *Which viewer handles this address*
+  is answerable from the address; *what does this peer publish* is not, and nothing here invents an
+  answer. The Registry Browser's `sites` guess survived — it is one visible line now instead of a
+  window name in a literal, and the day a binding can say *"I publish a feed"* that is the line that
+  changes.
+  **`window_target` is a declared deployment field** (`--window-target=<ref>`, refused at the CLI if
+  it is unreadable, unroutable, or names a viewer that is not the `--window-type` beside it). It is
+  **posture, not routing** on D25's census — a returning reader who has navigated elsewhere must not
+  be dragged back by a later publish — and it is deliberately **not** a build knob: an address names
+  a runtime peer id and a `const` default cannot bake one, which is `BootSurface::Window`'s own
+  existing rule about its peer argument.
+  ⭐ **Fourth instance of `spec vocab`'s path/tag confusion, and the first in PROSE: the doc comment
+  explaining that a bare `app/…` literal reads as a type tag was itself read as one.** The analyzer
+  scans raw lines, so prose about a tag and an emission of one are the same bytes to it. Segments are
+  spelled with a leading slash (`open_target::FEED_SEGMENT`) and **do not write a quoted `app/…` into
+  a comment in this repo.**
 - **A LIVE PEER READ IS THE SAME READ, AND THE TWO THINGS THAT ARE NOT THE TRANSPORT ARE THE
   ENTRY POINT AND THE PERMISSION — `src/feed_peer.rs` + `src/remote_read.rs`, 2026-09-11.**
   Asked whether a connected peer could do *"these same operations"*, since *"the difference
@@ -2371,6 +2528,42 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   the entry it literally is, at the set it is two walks, so the fixed point closes `mirror → mirror`.
   **Stated bounds:** no verb publishes a mirror, nothing durable is held (D24 not engaged), and the
   run is 4 entities.
+  ⇒ **BOTH ruled our way 2026-09-12 and the SECOND one made the `MUST` stricter — read
+  `feed::MirrorSubject` before touching a mirror key.** `subject` widens to `any-reference`
+  (`A-57`), and the layer measurement became `DX-R4`, a **`MUST NOT`**: never publish, under our own
+  namespace, an author's own set-layer object over content that author did not place there. We had
+  filed that one under *"we do not think this weakens the design"* — true, and the small half. **It
+  was building a forgery**, and every byte of it verifies. ⇒ ***a sentence true at the layer everyone
+  is thinking about and false at the layer nobody is reviews clean forever*** — three review rounds
+  and one build round agreed with it, and running a consumer against a gathered view broke it in an
+  afternoon. **When you measure that a normative sentence holds at only one layer, the finding is not
+  "it still works" — it is what a reader who believed it would build.** `DX-C6` gates it.
+  **`FEED-R26`/`R27` are enforced by ARGUMENT LISTS, not validators**, because nothing in a mirror's
+  bytes says whether its pinned subject moves: `MirrorSubject::timeline` takes **no hash**, so the
+  forbidden subject is not expressible, and `from_reference` names **every field of both atoms** with
+  the hints bound to `_` — so adding a field to the reference atom is `error[E0027]` at the one site
+  that decides what a coordinate is made of. *A `..` there is the version that silently starts
+  ignoring a field somebody later decided was identifying.*
+  ⚠ **§6.0.1's live key is ONE ARGUMENT SHORT and it is the comparand of its own vector** (`A-60`,
+  `A-61`): `content_hash` is V7 §1.4 over `{data, type}` and the clause supplies a path, which is not
+  an entity; and §6.0 never says *which* path *"an author's feed"* is. Two readings, different bytes,
+  and `FEED-12` compares exactly this — so no seat can pass it from the text. ⇒ **when a clause names
+  a function the corpus defines with more arguments than the clause supplies, the spelling is the
+  finding, not a detail to settle locally.** Ours is `sha256(utf8("/{peer}/app/feed/index"))`, pinned
+  to a literal computed with `hashlib` rather than with the function under test.
+  **`Leg::Mirror` exists and is NOT reachable from a browser, and the reason is the trust argument
+  rather than the wiring** — the carried bodies are deliberately outside every signed root at the
+  gatherer's origin, so an HTTP mirror source cannot be the `SignedSession` walk every other foreign
+  read here uses. **Our native double could not see that: a map keyed by `(peer, key)` verifies
+  nothing.** Same shape as `OriginFeedSource`'s empty origin — *a test double that supplies the thing
+  you forgot to ask for cannot notice that you forgot.* And **a mirror axis is not a row in
+  `publish_axes`** — `REFERENCE-PUBLISHING-PIPELINE` §0.2a is why, including that `--verify` sweeps
+  our own peer only and therefore cannot see a mirror's carried bodies at all.
+  **Rig lesson, paid for here: the R26 gate's first cut used 3 → 4 posts and failed its own
+  anti-vacuity assertion**, because `published_tree` publishes at a **fixed** clock — so the head's
+  `updated_at` cannot move and only a page boundary changes it. *A rig that holds a variable still
+  cannot measure a property that is about it*, and this is the cheap direction of that lesson: the
+  gate said so instead of going green.
 - **A READER-OWNED REFUSAL IS NOT A VERIFICATION FAILURE, AND OURS WAS BLAMING THE PUBLISHER FOR
   OWNING TWO COMPUTERS (2026-09-11).** `SignedFetchError::Verify` carried the anti-rollback floor
   and **enumerated the collapse in its own doc comment** — *"bad signature, wrong key, `seq`
@@ -2436,6 +2629,42 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   page); the feed-and-no-site branch in `run()`'s emptiness check is **unreachable from the CLI
   today** and is marked as such; and `run_plan`'s per-unit *naming* is still per-convention — every
   axis owes a *term*, only the wording is bespoke.
+- **THE FOURTH AXIS IS A MIRROR AND IT *IS* A ROW — `publish --gather=<peer>@<dir>`, 2026-09-12.
+  The publishing facts live in `REFERENCE-PUBLISHING-PIPELINE` §0.2a, which this replaces rather
+  than restates (AP56's corollary); read that before touching a gather, a mirror or the clean.**
+  It answers the three questions that section used to leave open, and **one of them the other way
+  from how it was posed** — it said `--verify` could not be fixed by an arm; it can, and the arm
+  found a real defect on its first run. Four things here that are *not* pipeline facts:
+  ⭐ **ENUMERATING TO DECIDE WHAT NOT TO REMOVE IS SAFE; ENUMERATING TO DECIDE WHAT TO REMOVE IS
+  NOT.** The content clean had to learn about foreign trees it cannot identify (a gathered author's
+  segment and a co-hosted publisher's are the same shape on disk). Asking *"is anybody else here"*
+  and only ever answering *"then leave it alone"* is sound — worst case, orphans — while the same
+  predicate authorizing a delete is AP52/AP53. **A predicate too weak to delete with can still be
+  strong enough to protect with**, and that asymmetry is worth reaching for whenever a guard is
+  blocked on *"we cannot tell these apart"*.
+  ⭐ **A NEW OBLIGATION ON A TRAIT GOES IN UNDEFAULTED.** `PublishAxis::carried_peers` is right for
+  all four rows today and three of them answer `Vec::new()` in one line; defaulting it would have
+  been correct for every axis that exists and silently wrong for the next one that is not (AP44).
+  `error[E0046]` is the enforcement point; a default is a rule with none.
+  ⭐ **THIRD INSTANCE OF *GREP YOUR TEST SCAFFOLDING FOR THE FIX*.** `feed_read::block_on` was
+  `#[cfg(test)]` with a doc comment saying *"native tests only"* — and a native CLI verb driving an
+  async source over synchronous file reads is exactly what it does. It is `cfg(not(wasm32))` now, so
+  **the cfg is the guarantee and the doc comment is only the reason**; the browser still cannot
+  reach it. Same session: `feed_publish::tests::Origin` was the **fourth** directory-backed
+  `BinSource` in this crate and is now the production one (`feed_gather::DirOrigin`), with the other
+  three named rather than folded — that consolidation belongs to whatever proves the boundary.
+  ⭐ **THE HANDOFF'S OWN WARNING, DISCHARGED: *a map keyed by `(peer, key)` verifies nothing*.**
+  `feed_fetch::OriginMirrorSource` is the production consumer, and it is **two-legged because the
+  two halves of a mirror stand on different evidence** — the §6 record through the gatherer's signed
+  root, every carried entry by two-hop address plus the record's pin plus the author's detached
+  signature. `RootProjector::record` skips a foreign peer, so the carried bodies are *by
+  construction* outside every signed root at that origin: a source resolving them through the
+  session gets `Absent` for all of them and reports a healthy mirror as empty. **A double that
+  answers both legs identically leaves the whole trust argument untouched by every assertion.**
+  **Stated bounds:** `--gather` reads a **directory, never an origin** (no native HTTP client in this
+  tree — `feed_gather`'s module doc leads with it); **timeline subjects only**, because a CLI flag
+  naming a peer cannot express a thread's entity hash; the browser cannot gather (no out-dir, `F3`);
+  and **no window shows a mirror yet**, which is still the largest gap on both seats.
 - **A TRAIT SHAPED BY ITS TEST DOUBLE RATHER THAN BY ITS PRODUCTION IMPLEMENTATION IS A SEAM THAT
   FITS NOTHING — `FeedSource`, found on the first day anything tried to use it (2026-09-10).**
   It was **synchronous**, and **every real source of a foreign entity in this repo is `async`** —

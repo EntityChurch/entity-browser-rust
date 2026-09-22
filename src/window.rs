@@ -94,6 +94,55 @@ impl Hydration {
     }
 }
 
+/// What a window did with the address it was opened at — **four facts, and three
+/// of them are refusals that must not merge.**
+///
+/// A spawn carries an optional [`crate::entity_ref::EntityRef`]
+/// ([`crate::open_target`]). Most of the 26 roster entries are not viewers of
+/// published content and ignore it; the ones that are decode their own payload
+/// out of it. The outcomes exist because *"this window does not take targets"*,
+/// *"that address is not mine"* and *"it is mine and I cannot act on it"* send a
+/// person — and a bug report — to three different places, and a `bool` would
+/// render all three as the same shrug (AP40).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aim {
+    /// This window type takes no target. The default, and the honest answer for
+    /// every window that is not a viewer of somebody else's published content.
+    NotAimable,
+    /// Took it — the window opened showing what the caller named.
+    Aimed,
+    /// This window is aimable and the address is not its convention's. Reachable
+    /// only through a caller that routed badly, since
+    /// [`crate::open_target::route`] picks the window type *from* the address —
+    /// which is exactly why it is worth a distinct word rather than a silent
+    /// no-op.
+    NotMine,
+    /// The address is this viewer's and it still cannot be opened at it — the
+    /// Registry Browser's *"this publisher's sites"* with no site named is the
+    /// live instance. **Not a failure**: the window opens as it otherwise would,
+    /// and this records that the aim added nothing.
+    Unusable(&'static str),
+}
+
+impl Aim {
+    /// Short label for the D13 line. Five words for four outcomes is a bug;
+    /// `every_aim_outcome_has_its_own_word` asserts the count.
+    pub fn label(self) -> &'static str {
+        match self {
+            Aim::NotAimable => "not-aimable",
+            Aim::Aimed => "aimed",
+            Aim::NotMine => "not-mine",
+            Aim::Unusable(_) => "unusable",
+        }
+    }
+
+    /// The one fact a caller may branch on: is the window showing what was asked
+    /// for?
+    pub fn hit(self) -> bool {
+        matches!(self, Aim::Aimed)
+    }
+}
+
 /// A window view that renders into web-sys DOM.
 #[allow(dead_code)]
 pub trait WindowView {
@@ -182,6 +231,42 @@ pub trait WindowView {
     /// deliberately not persisted, so assigning a decoded state over the live
     /// one would wipe what is on screen — AP41 pointed the other way.
     fn hydrate_durable(&self, _peers: &Peers) {}
+
+    /// Open this window **at an address** — the generic *"open this thing"* that
+    /// `Action::SpawnWindow` had no field for. Default: this window type takes no
+    /// target.
+    ///
+    /// # The subject is not the binding
+    ///
+    /// `target.peer()` is *whose content this is*; `peer_id()` is *whose store we
+    /// read*. They are usually different and conflating them is a shipped bug —
+    /// see `views/registry_browser/output.rs:open_target`, where binding a Site
+    /// Browser to the publisher produced a real window with an empty rail because
+    /// no local SDK hosts that id. An override decodes the subject out of the
+    /// target and leaves its own binding alone.
+    ///
+    /// # Why the call site is [`WindowManager::spawn`], AFTER `hydrate_durable`
+    ///
+    /// Same structural reason as [`hydrate_durable`](Self::hydrate_durable) — a
+    /// step every window is offered must not be something a factory author has to
+    /// remember (AP44). The **ordering** is load-bearing and is not a new guard:
+    /// `durable_hydration_job` takes its witness *synchronously*, inside the
+    /// `hydrate_durable` call, so an aim applied after it makes the in-flight read
+    /// land on [`Hydration::Superseded`] and keep the aim. An explicit address is
+    /// newer than a persisted one — that is what asking for it means — and the
+    /// existing witness already says so.
+    ///
+    /// # What an override owes
+    ///
+    /// Decode `open_target::payload(target, your_segment)` rather than re-parsing
+    /// the path: the outer address is `open_target`'s and the payload is yours.
+    /// Answer [`Aim::NotMine`] for an address outside your segment and
+    /// [`Aim::Unusable`] for one inside it that names nothing you can open —
+    /// never `Aimed` for a no-op, or the D13 line reports a window showing
+    /// something it is not.
+    fn aim(&mut self, _target: &crate::entity_ref::EntityRef, _peers: &Peers) -> Aim {
+        Aim::NotAimable
+    }
 
     /// Per-frame tick, called on every rAF frame (not gated by the dirty
     /// flag, unlike [`render_dom`](Self::render_dom)). Default: no-op. Windows
@@ -461,8 +546,28 @@ impl WindowManager {
         self.types.push(window_type);
     }
 
-    /// Spawn a new window instance of the given type bound to a peer. Returns its ID.
+    /// Spawn a new window instance of the given type bound to a peer, with no
+    /// address — the ordinary open. Returns its ID.
+    ///
+    /// Delegates to [`spawn_at`](Self::spawn_at) so there is exactly one place a
+    /// window is constructed and therefore exactly one place the hydrate and aim
+    /// steps are offered.
     pub fn spawn(&mut self, type_name: &str, peer_id: &str, peers: &Peers) -> Option<WindowId> {
+        self.spawn_at(type_name, peer_id, None, peers)
+    }
+
+    /// Spawn a window **at an address** ([`crate::open_target`]).
+    ///
+    /// `peer_id` is the store the window reads; `target` names whose content it
+    /// is looking at. Those are two facts and they are usually different — see
+    /// [`WindowView::aim`].
+    pub fn spawn_at(
+        &mut self,
+        type_name: &str,
+        peer_id: &str,
+        target: Option<&crate::entity_ref::EntityRef>,
+        peers: &Peers,
+    ) -> Option<WindowId> {
         // Resolve legacy keys (e.g. a boot-surface saved before a type rename).
         let type_name = canonical_window_type(type_name);
         let factory = self.types.iter().find(|t| t.name == type_name)?;
@@ -489,7 +594,7 @@ impl WindowManager {
                 fresh
             }
         };
-        let view = (factory.create)(id, peer_id, peers);
+        let mut view = (factory.create)(id, peer_id, peers);
         // Correct the factory's synchronous `initialize` read with an
         // authoritative one (AP41). Structural rather than per-factory on
         // purpose: this is the class's enforcement point, so a new window type
@@ -497,6 +602,31 @@ impl WindowManager {
         // instead of by remembering to add a call here. Default is a no-op, so
         // this costs nothing for the windows that persist nothing.
         view.hydrate_durable(peers);
+        // …and THEN the aim, in that order. `durable_hydration_job` takes its
+        // witness synchronously inside the call above, so a target applied here
+        // makes the in-flight read report `Superseded` and keep what the caller
+        // asked for. An explicit address is newer than a persisted one; the
+        // existing witness already expresses that and no second guard is owed.
+        if let Some(target) = target {
+            let outcome = view.aim(target, peers);
+            // Reported for every aimed spawn, including the refusals: a window
+            // opened at an address and a window that merely opened are the same
+            // pixels, and an aim that quietly did nothing is exactly the failure
+            // this whole seam exists to remove.
+            tracing::info!(
+                window_type = %type_name,
+                window_id = id,
+                bound_peer = %peer_id,
+                subject_peer = %target.peer(),
+                target = %crate::open_target::write(Some(target)),
+                outcome = outcome.label(),
+                detail = match outcome {
+                    Aim::Unusable(d) => d,
+                    _ => "",
+                },
+                "window opened at a target"
+            );
+        }
         self.windows.push(WindowInstance {
             id,
             open: true,
@@ -1008,6 +1138,110 @@ mod tests {
         mgr.spawn("Hydrating", peers.primary_peer_id(), &peers)
             .unwrap();
         assert_eq!(CALLS.load(Ordering::SeqCst), before + 2);
+    }
+
+    /// ⭐ **The aim is offered by `spawn`, and the ORDER is the property.**
+    ///
+    /// A no-op default means nothing else in the suite can see whether the hook
+    /// is wired, so the call site is gated here — the same reason
+    /// `spawn_offers_every_window_the_durable_hydration_step` exists. The second
+    /// half is the one that would be silently wrong: an aim applied *before*
+    /// `hydrate_durable` is inside the witness that guard reads, so a persisted
+    /// location would land after it and overwrite what the caller asked for.
+    /// Recording the order of the two calls is the only way a native test can
+    /// see it (the hydration round-trip itself is `cfg(wasm32)`).
+    #[test]
+    fn spawn_offers_the_aim_to_the_window_it_created_and_does_it_after_hydrating() {
+        use std::cell::RefCell;
+        thread_local! {
+            static ORDER: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        }
+
+        struct AimableView {
+            watch: crate::window_watch::WindowWatch,
+            seen: Option<String>,
+        }
+        impl WindowView for AimableView {
+            fn title(&self) -> String {
+                "Aimable".into()
+            }
+            fn type_name(&self) -> &'static str {
+                "Aimable"
+            }
+            fn watch(&self) -> &crate::window_watch::WindowWatch {
+                &self.watch
+            }
+            fn hydrate_durable(&self, _peers: &Peers) {
+                ORDER.with(|o| o.borrow_mut().push("hydrate"));
+            }
+            fn aim(&mut self, target: &crate::entity_ref::EntityRef, _peers: &Peers) -> Aim {
+                ORDER.with(|o| o.borrow_mut().push("aim"));
+                self.seen = Some(target.peer().to_string());
+                Aim::Aimed
+            }
+            fn handle_action(&mut self, _action: &Action, _peers: &Peers) {}
+            #[cfg(target_arch = "wasm32")]
+            fn render_dom(
+                &self,
+                _c: &web_sys::Element,
+                _s: &Peers,
+                _x: &crate::dom::util::DomCtx,
+            ) {
+            }
+        }
+
+        let peers = test_peers();
+        let mut mgr = WindowManager::new();
+        mgr.register_type(WindowType {
+            name: "Aimable",
+            description: "Test window that records being aimed",
+            scope: WindowScope::System,
+            create: |_id, _peer_id, _pm| {
+                Box::new(AimableView {
+                    watch: crate::window_watch::WindowWatch::new(),
+                    seen: None,
+                })
+            },
+        });
+
+        let target = crate::open_target::feed("PUBLISHER");
+        mgr.spawn_at("Aimable", peers.primary_peer_id(), Some(&target), &peers)
+            .unwrap();
+        ORDER.with(|o| {
+            assert_eq!(
+                o.borrow().as_slice(),
+                ["hydrate", "aim"],
+                "the aim must run AFTER hydrate_durable, or the persisted state \
+                 the in-flight read carries lands on top of the address the \
+                 caller asked for"
+            );
+            o.borrow_mut().clear();
+        });
+
+        // …and a spawn with no address does not aim at all. A window opened from
+        // the palette has no subject, and inventing one is exactly the guess
+        // (AP54) this seam exists to remove.
+        mgr.spawn("Aimable", peers.primary_peer_id(), &peers).unwrap();
+        ORDER.with(|o| assert_eq!(o.borrow().as_slice(), ["hydrate"]));
+    }
+
+    /// Four outcomes, four words, and the count asserted — so a fifth cannot
+    /// quietly reuse one. Same shape and same reason as
+    /// `every_hydration_outcome_has_its_own_word`.
+    #[test]
+    fn every_aim_outcome_has_its_own_word() {
+        let all = [
+            Aim::NotAimable,
+            Aim::Aimed,
+            Aim::NotMine,
+            Aim::Unusable("names no site"),
+        ];
+        let words: std::collections::BTreeSet<&str> = all.iter().map(|a| a.label()).collect();
+        assert_eq!(words.len(), all.len(), "two aim outcomes share a word: {words:?}");
+        assert_eq!(all.len(), 4, "an outcome was added or removed without a word");
+        // Only one of them is a hit, and it is the one that means the window is
+        // showing what was asked for.
+        assert_eq!(all.iter().filter(|a| a.hit()).count(), 1);
     }
 
     #[test]

@@ -200,6 +200,45 @@ impl WindowView for ContentSiteWindow {
         self.model.spawn_hydrate_durable(_peers);
     }
 
+    /// ⭐ **Open showing a named site — bound to MY store, aimed at THEIR
+    /// content.**
+    ///
+    /// The two peers in play are the whole history of this surface:
+    /// `open_target`'s doc records that binding this window to the publisher
+    /// produced a real window with an empty rail, because cached foreign content
+    /// lives at `/{foreign}/sites/…` in *my* store and no local SDK hosts a
+    /// publisher's id. So the target's peer goes into the **location** — which is
+    /// exactly where `Action::SiteOpen`'s `peer` already goes — and the binding is
+    /// untouched.
+    ///
+    /// The `Unusable` arm is the live one and is not an edge case: a name that
+    /// resolved to a publisher and an origin says *whose sites*, never *which*,
+    /// and this window opens as it otherwise would. Reporting that honestly is
+    /// what keeps the Registry Browser's remaining guess visible instead of
+    /// dressing it as a hit.
+    fn aim(&mut self, target: &crate::entity_ref::EntityRef, peers: &Peers) -> crate::window::Aim {
+        use crate::window::Aim;
+        let Some(payload) =
+            crate::open_target::payload(target, crate::open_target::SITES_SEGMENT)
+        else {
+            return Aim::NotMine;
+        };
+        match crate::content_site::location::Location::from_target_payload(target.peer(), payload) {
+            Some(loc) => {
+                self.model.open_page(
+                    loc.peer_id.as_deref().unwrap_or(""),
+                    &loc.site_id,
+                    &loc.page,
+                    peers,
+                );
+                self.watch.mark_dirty();
+                Aim::Aimed
+            }
+            // A D13 log field, not a label; see `Aim::Unusable`.
+            None => Aim::Unusable("names this publisher's sites but not which one"), // i18n-ignore
+        }
+    }
+
     fn handle_action(&mut self, action: &Action, peers: &Peers) {
         match action {
             Action::SiteNavigate { window_id, target } if *window_id == self.window_id => {
@@ -297,3 +336,81 @@ impl WindowView for ContentSiteWindow {
 /// content, authored by whoever published it, and the app does not
 /// translate the pages it renders. See that module's header.
 pub use demo_content::ensure_demo_site;
+
+#[cfg(test)]
+mod aim_tests {
+    use super::*;
+    use crate::window::Aim;
+
+    fn peer_id(seed: u8) -> String {
+        let kp = entity_crypto::Keypair::from_seed([seed; 32]);
+        entity_crypto::PeerId::from_public_key(&kp.public_key_bytes()).to_string()
+    }
+
+    fn window(peers: &Peers) -> ContentSiteWindow {
+        ContentSiteWindow::new(1, peers.primary_peer_id().to_string())
+    }
+
+    /// A site page address opens the window **at that page of that publisher's
+    /// site**, and the binding is untouched — the subject travels in the
+    /// location, exactly where `Action::SiteOpen`'s `peer` already travels.
+    #[test]
+    fn a_site_page_address_opens_that_page_and_leaves_the_binding_alone() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let publisher = peer_id(21);
+        let mut w = window(&peers);
+        let target = crate::open_target::site(&publisher, "demo", "about");
+        assert_eq!(w.aim(&target, &peers), Aim::Aimed);
+        let state = w.model.state_snapshot();
+        assert_eq!(state.peer.as_deref(), Some(publisher.as_str()));
+        assert_eq!(state.site_id, "demo");
+        assert_eq!(state.page, "about", "the page is the half a site-root open would drop");
+        assert_eq!(w.peer_id, me, "the store this window reads must not move");
+    }
+
+    /// ⭐ **The Registry Browser's live case: routable, not aimable.** A name that
+    /// resolved to a publisher says *whose* sites and never *which*, so the aim
+    /// reports `Unusable` and the window opens exactly as it otherwise would.
+    /// Asserting the state is **unchanged** is the half that matters — a version
+    /// that "helpfully" opened some site would be a guess (AP54) wearing a
+    /// feature's name.
+    #[test]
+    fn a_publishers_site_directory_is_unusable_and_moves_nothing() {
+        let peers = Peers::new_direct();
+        let mut w = window(&peers);
+        let before = w.model.state_snapshot();
+        let target = crate::open_target::site_directory(&peer_id(22));
+        assert!(matches!(w.aim(&target, &peers), Aim::Unusable(_)));
+        assert_eq!(w.model.state_snapshot(), before, "an unusable aim must move nothing");
+    }
+
+    /// Another convention's address is `NotMine` and moves nothing.
+    #[test]
+    fn a_feed_address_is_not_this_windows() {
+        let peers = Peers::new_direct();
+        let mut w = window(&peers);
+        let before = w.model.state_snapshot();
+        assert_eq!(w.aim(&crate::open_target::feed(&peer_id(23)), &peers), Aim::NotMine);
+        assert_eq!(w.model.state_snapshot(), before);
+    }
+
+    /// An address naming something real **inside** a site lands you in that site
+    /// rather than nowhere — `Location::from_target_payload`'s deliberate
+    /// charity. Refusing would report *"nothing to open"* about a site that is
+    /// sitting right there.
+    #[test]
+    fn an_address_deeper_than_a_page_still_lands_in_the_site() {
+        let peers = Peers::new_direct();
+        let publisher = peer_id(24);
+        let mut w = window(&peers);
+        let asset = crate::entity_ref::EntityRef::live(
+            &publisher,
+            "/sites/demo/assets/figure-1.png",
+        );
+        assert_eq!(w.aim(&asset, &peers), Aim::Aimed);
+        let state = w.model.state_snapshot();
+        assert_eq!(state.site_id, "demo");
+        assert_eq!(state.page, "", "an asset is not a page; the site root is the honest landing");
+    }
+}

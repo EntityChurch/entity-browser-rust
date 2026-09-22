@@ -91,7 +91,25 @@ pub enum BootSurface {
     /// (empty = system peer). The §4-B Surfaces seam — a window generalizes
     /// to a base surface (C1a). The `(peer, type)` is the durable identifier;
     /// the ephemeral window id is re-spawned at boot.
-    Window { peer_id: String, window_type: String },
+    ///
+    /// `target` is **what that window is aimed at** ([`crate::open_target`]) and
+    /// it closes the gap `DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION`
+    /// §2 names: a deployment could boot the Feed window and not say *whose
+    /// feed*, because this variant carried `(peer, type)` and no address. Note
+    /// the two peers again — `peer_id` is the local store the window reads,
+    /// `target.peer()` is the publisher it shows.
+    ///
+    /// ⚠ **Not a build-time knob, deliberately.** `ENTITY_STARTUP_WINDOW_TYPE`
+    /// bakes the *viewer*; an address names a runtime **peer id**, and this
+    /// variant's own rule — *"presets are `const` and can't bake a runtime
+    /// peer-id"*, the same reason an empty `peer_id` is a sentinel — applies to
+    /// it unchanged. So the build chooses which viewer opens and the deployment
+    /// document names what it is aimed at.
+    Window {
+        peer_id: String,
+        window_type: String,
+        target: Option<crate::entity_ref::EntityRef>,
+    },
 }
 
 impl BootSurface {
@@ -111,26 +129,42 @@ impl BootSurface {
         match self {
             BootSurface::Chrome => "chrome".to_string(),
             BootSurface::Site => "site".to_string(),
-            BootSurface::Window { peer_id, window_type } => {
+            BootSurface::Window { peer_id, window_type, target } => {
                 let p = if peer_id.is_empty() { "system" } else { peer_id.as_str() };
-                format!("window:{p}:{window_type}")
+                // The target is appended rather than folded in: *"booted the
+                // Feed window"* and *"booted the Feed window at this
+                // publisher"* are different boots, and a log line that cannot
+                // tell them apart cannot answer why a deployment came up empty.
+                match target.as_ref().and_then(|t| t.to_uri().ok()) {
+                    Some(uri) => format!("window:{p}:{window_type}@{uri}"),
+                    None => format!("window:{p}:{window_type}"),
+                }
             }
         }
     }
 }
 
-/// Build a [`BootSurface`] from the `(kind, peer_id, window_type)` strings —
-/// the shared **surface vocabulary** (`chrome` / `site` / `window`) spoken by
-/// the build-time default ([`boot_default`]), the per-domain deployment config
-/// ([`crate::deployment_config`]), and the settings surface. An empty
-/// `peer_id` on a `window` = "the system peer, resolved at boot". An unknown /
-/// absent kind falls back to `Chrome` (garbage-tolerant, like `from_entity`).
-pub fn boot_surface_from(kind: &str, peer_id: &str, window_type: &str) -> BootSurface {
+/// Build a [`BootSurface`] from the `(kind, peer_id, window_type, target)`
+/// strings — the shared **surface vocabulary** (`chrome` / `site` / `window`)
+/// spoken by the build-time default ([`boot_default`]), the per-domain
+/// deployment config ([`crate::deployment_config`]), and the settings surface. An
+/// empty `peer_id` on a `window` = "the system peer, resolved at boot". An
+/// unknown / absent kind falls back to `Chrome` (garbage-tolerant, like
+/// `from_entity`), and an unreadable `target` falls back to *no target* rather
+/// than to no surface — a deployment that mis-typed an address should still open
+/// the window it asked for, and `open_target::parse` logs what it dropped.
+pub fn boot_surface_from(
+    kind: &str,
+    peer_id: &str,
+    window_type: &str,
+    target: &str,
+) -> BootSurface {
     match kind {
         "site" => BootSurface::Site,
         "window" => BootSurface::Window {
             peer_id: peer_id.to_string(),
             window_type: window_type.to_string(),
+            target: crate::open_target::parse(target),
         },
         _ => BootSurface::Chrome,
     }
@@ -1094,6 +1128,7 @@ impl SessionConfig {
         let mut boot_kind: Option<String> = None;
         let mut boot_peer = String::new();
         let mut boot_window = String::new();
+        let mut boot_target = String::new();
         let mut pin_peer = String::new();
         let mut pin_origin = String::new();
         let mut cfg = Self::default();
@@ -1114,6 +1149,14 @@ impl SessionConfig {
                 Some("boot_surface_window") => {
                     if let Some(s) = v.as_text() {
                         boot_window = s.to_string();
+                    }
+                }
+                // The window's ADDRESS, §3.1's string form. Absent in every
+                // config written before it existed, which decodes as "no
+                // target" — the pre-change behaviour exactly, so no migration.
+                Some("boot_surface_target") => {
+                    if let Some(s) = v.as_text() {
+                        boot_target = s.to_string();
                     }
                 }
                 Some("home_site_peer") => {
@@ -1208,6 +1251,7 @@ impl SessionConfig {
             Some("window") => BootSurface::Window {
                 peer_id: boot_peer,
                 window_type: boot_window,
+                target: crate::open_target::parse(&boot_target),
             },
             _ => cfg.boot_surface,
         };
@@ -1215,18 +1259,23 @@ impl SessionConfig {
     }
 
     pub fn to_entity(&self) -> Entity {
-        // `boot_surface` → three structured fields; non-window surfaces store
-        // empty peer/window (round-trips back to the same enum).
+        // `boot_surface` → four structured fields; non-window surfaces store
+        // empty peer/window/target (round-trips back to the same enum).
         let (boot_peer, boot_window) = match &self.boot_surface {
-            BootSurface::Window { peer_id, window_type } => {
+            BootSurface::Window { peer_id, window_type, .. } => {
                 (peer_id.as_str(), window_type.as_str())
             }
             _ => ("", ""),
+        };
+        let boot_target = match &self.boot_surface {
+            BootSurface::Window { target, .. } => crate::open_target::write(target.as_ref()),
+            _ => String::new(),
         };
         let data = entity_ecf::to_ecf(&entity_ecf::cbor_map! {
             "boot_surface_kind" => entity_ecf::text(self.boot_surface.kind_str()),
             "boot_surface_peer" => entity_ecf::text(boot_peer),
             "boot_surface_window" => entity_ecf::text(boot_window),
+            "boot_surface_target" => entity_ecf::text(&boot_target),
             "home_site_peer" => entity_ecf::text(&self.home_site.peer_id),
             "home_site_id" => entity_ecf::text(&self.home_site.id),
             "home_site_loc" => entity_ecf::text(&self.home_site.loc),
@@ -1463,7 +1512,11 @@ pub fn boot_default() -> SessionConfig {
     let kind = option_env!("ENTITY_STARTUP_SURFACE").unwrap_or("chrome");
     let window_type = option_env!("ENTITY_STARTUP_WINDOW_TYPE").unwrap_or("");
     let mut cfg = SessionConfig {
-        boot_surface: boot_surface_from(kind, "", window_type),
+        // No build-time target, and that is a decision rather than an omission:
+        // an address names a runtime peer id and a `const` default cannot bake
+        // one — the same reason the peer argument here is `""`. The build picks
+        // the viewer; the deployment document names what it is aimed at.
+        boot_surface: boot_surface_from(kind, "", window_type, ""),
         ..SessionConfig::default()
     };
     // `active` is re-derived by boot_load, but keep the type honest here too.
@@ -1655,6 +1708,7 @@ mod tests {
             boot_surface: BootSurface::Window {
                 peer_id: "peer-ten".into(),
                 window_type: "Shell".into(),
+                target: Some(crate::open_target::feed("PUBLISHER")),
             },
             home_site: SiteRef {
                 peer_id: "labs-peer".into(),
@@ -1752,6 +1806,7 @@ mod tests {
             boot_surface: BootSurface::Window {
                 peer_id: String::new(),
                 window_type: "Settings".into(),
+                target: None,
             },
             ..SessionConfig::default()
         };
@@ -1760,19 +1815,57 @@ mod tests {
 
     #[test]
     fn boot_surface_from_builds_each_kind() {
-        assert_eq!(boot_surface_from("chrome", "", ""), BootSurface::Chrome);
-        assert_eq!(boot_surface_from("site", "", ""), BootSurface::Site);
+        assert_eq!(boot_surface_from("chrome", "", "", ""), BootSurface::Chrome);
+        assert_eq!(boot_surface_from("site", "", "", ""), BootSurface::Site);
         assert_eq!(
-            boot_surface_from("window", "peer-x", "Shell"),
-            BootSurface::Window { peer_id: "peer-x".into(), window_type: "Shell".into() }
+            boot_surface_from("window", "peer-x", "Shell", ""),
+            BootSurface::Window {
+                peer_id: "peer-x".into(),
+                window_type: "Shell".into(),
+                target: None,
+            }
         );
         // An empty peer on a window = "system, resolved at boot" (round-trips as empty).
         assert_eq!(
-            boot_surface_from("window", "", SITE_BROWSER_WINDOW),
-            BootSurface::Window { peer_id: String::new(), window_type: SITE_BROWSER_WINDOW.into() }
+            boot_surface_from("window", "", SITE_BROWSER_WINDOW, ""),
+            BootSurface::Window {
+                peer_id: String::new(),
+                window_type: SITE_BROWSER_WINDOW.into(),
+                target: None,
+            }
         );
         // Unknown / absent kind → Chrome (garbage-tolerant).
-        assert_eq!(boot_surface_from("nonsense", "", ""), BootSurface::Chrome);
+        assert_eq!(boot_surface_from("nonsense", "", "", ""), BootSurface::Chrome);
+    }
+
+    /// ⭐ **A window surface that cannot read its address still opens its
+    /// window.** The garbage-tolerance above is about the *kind*; this is about
+    /// the *target*, and the two fall back to different places on purpose — an
+    /// unknown kind has no surface to open, while a mis-typed address has a
+    /// perfectly good viewer sitting behind it. Dropping to chrome here would
+    /// punish a typo with a completely different application.
+    #[test]
+    fn an_unreadable_target_costs_the_address_and_not_the_window() {
+        assert_eq!(
+            boot_surface_from("window", "", "Feed", "not an address"),
+            BootSurface::Window {
+                peer_id: String::new(),
+                window_type: "Feed".into(),
+                target: None,
+            }
+        );
+        let aimed = boot_surface_from("window", "", "Feed", "entity+ref://PUB/app/feed/index");
+        assert_eq!(
+            aimed,
+            BootSurface::Window {
+                peer_id: String::new(),
+                window_type: "Feed".into(),
+                target: Some(crate::open_target::feed("PUB")),
+            }
+        );
+        // …and the two are distinguishable in the D13 line, which is the only
+        // place a deployer can see which of the two they got.
+        assert!(aimed.describe().contains("entity+ref://PUB/app/feed/index"), "{}", aimed.describe());
     }
 
     /// BUG-1 invariant: the chrome↔site toggle (status bar AND the overlay's
@@ -1818,7 +1911,7 @@ mod tests {
 
         // …a Window boot suppresses it regardless of the (mis-emitted) posture.
         let window = SessionConfig {
-            boot_surface: BootSurface::Window { peer_id: String::new(), window_type: SITE_BROWSER_WINDOW.into() },
+            boot_surface: BootSurface::Window { peer_id: String::new(), window_type: SITE_BROWSER_WINDOW.into(), target: None },
             site_mode: exposing,
             ..SessionConfig::default()
         };
@@ -1852,7 +1945,7 @@ mod tests {
         assert!(!cfg.active_from_boot_surface());
         cfg.boot_surface = BootSurface::Site;
         assert!(cfg.active_from_boot_surface());
-        cfg.boot_surface = BootSurface::Window { peer_id: "p".into(), window_type: "Shell".into() };
+        cfg.boot_surface = BootSurface::Window { peer_id: "p".into(), window_type: "Shell".into(), target: None };
         assert!(!cfg.active_from_boot_surface(), "Window is a non-overlay surface");
     }
 
@@ -1861,7 +1954,7 @@ mod tests {
         for surface in [
             BootSurface::Chrome,
             BootSurface::Site,
-            BootSurface::Window { peer_id: "p10".into(), window_type: "Shell".into() },
+            BootSurface::Window { peer_id: "p10".into(), window_type: "Shell".into(), target: None },
         ] {
             let cfg = SessionConfig { boot_surface: surface.clone(), ..SessionConfig::default() };
             assert_eq!(SessionConfig::from_entity(&cfg.to_entity()).boot_surface, surface);
@@ -2167,7 +2260,7 @@ mod tests {
         let peers = Peers::new_direct();
         let pid = peers.primary_peer_id().to_string();
         assert_eq!(read(&peers, &pid).boot_surface, BootSurface::Chrome);
-        let surface = BootSurface::Window { peer_id: "peer-10".into(), window_type: "Shell".into() };
+        let surface = BootSurface::Window { peer_id: "peer-10".into(), window_type: "Shell".into(), target: None };
         set_boot_surface(&peers, &pid, surface.clone());
         assert_eq!(read(&peers, &pid).boot_surface, surface);
         // ...and it preserves the rest (profile/home_site untouched).
@@ -2182,6 +2275,7 @@ mod tests {
         set_boot_surface(&peers, &sys, BootSurface::Window {
             peer_id: "gone".into(),
             window_type: "Shell".into(),
+            target: None,
         });
         set_home_site(&peers, &sys, "gone", "labs");
         assert!(repair_for_deleted_peer(&peers, &sys, "gone"), "should report a change");
@@ -2203,7 +2297,7 @@ mod tests {
         // wiring in both directions). Guards against the fallback drifting.
         let kind = option_env!("ENTITY_STARTUP_SURFACE").unwrap_or("chrome");
         let window_type = option_env!("ENTITY_STARTUP_WINDOW_TYPE").unwrap_or("");
-        assert_eq!(boot_default().boot_surface, boot_surface_from(kind, "", window_type));
+        assert_eq!(boot_default().boot_surface, boot_surface_from(kind, "", window_type, ""));
     }
 
     #[test]

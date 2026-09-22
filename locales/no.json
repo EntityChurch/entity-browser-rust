@@ -758,8 +758,6 @@
   "doctor.check1.detail.unheard": "Ingenting ble hørt fra domenet, så ingenting kunne sammenlignes og ingenting er kjent — dette er ikke en ren helseattest. Alt som allerede finnes på denne maskinen er upåvirket og fortsatt riktig. Prøv igjen når du er tilkoblet på nytt.",
   "doctor.check1.source.origin_error": "dette domenet svarte med en feil (HTTP {status})",
   "doctor.check1.detail.origin_error": "Domenet er tilgjengelig, men returnerte en feil i stedet for konfigurasjonen sin, så ingenting kunne sammenlignes. Det er et problem hos domenet, ikke på denne maskinen, og det sier ingenting om hvorvidt utgiveren din er aktuell.",
-  "doctor.check1.source.refused": "dette domenet ville ikke utlevere konfigurasjonen sin (HTTP {status})",
-  "doctor.check1.detail.refused": "Domenet er tilgjengelig og nektet å utlevere konfigurasjonen sin til denne appen. Det er en tilgangsregel hos domenet, ikke en feil og ikke et problem på denne maskinen. Det var ingenting å sammenligne, så det er ikke kjent om utgiveren din er oppdatert.",
   "doctor.check1.source.unreadable": "konfigurasjonen til dette domenet kunne ikke leses (HTTP {status})",
   "doctor.check1.detail.unreadable": "Domenet svarte med noe denne appen ikke kunne tolke — en avkortet eller halvskrevet fil, eller en feilside levert som et vellykket svar. Ingenting kunne sammenlignes, og ingenting av dette er en påstand om maskinen din.",
   "doctor.check1.source.no_document": "dette domenet leverer ingen utrullingsdokument",
@@ -820,5 +818,10 @@
   "feed.attr.wrong_target": "usignert — signaturen dekker et annet innlegg",
   "feed.attr.not_the_author": "usignert — signert av en annen enn forfatteren",
   "feed.attr.bad_signature": "usignert — signaturen er ikke gyldig",
-  "feed.no_route": "Du er ikke koblet til denne utgiveren, og denne utrullingen vet ikke hvor de er vert — så det er ingen å spørre."
+  "feed.no_route": "Du er ikke koblet til denne utgiveren, og denne utrullingen vet ikke hvor de er vert — så det er ingen å spørre.",
+  "apps.file.requested": "Denne appen ber om en fil",
+  "apps.file.sent": "Sendte {name} til appen",
+  "apps.file.kept": "Lagret {name} i filene dine",
+  "apps.file.refused": "Lagret ikke {name}: {why}",
+  "apps.file.not_sent": "Sendte ingen fil: {why}"
 }

@@ -409,29 +409,15 @@ pub(crate) mod tests {
 
     /// A published directory, served the way an origin serves one.
     ///
+    /// **The production type**, not a copy of it: this was a `BinSource` spelled
+    /// out here until [`crate::feed_gather`] needed the same thing for a real
+    /// verb. A second spelling beside it would be C15's defect on a path this
+    /// module's own gates depend on.
+    ///
     /// `pub(crate)` so [`crate::feed_fetch`]'s gates can point the real
     /// `OriginFeedSource` at a real published tree — the only place in this
     /// crate that a projector exists to make one.
-    pub(crate) struct Origin(pub std::path::PathBuf);
-
-    impl crate::content_site::http_poll::BinSource for Origin {
-        fn get(
-            &self,
-            url: String,
-            _freshness: crate::content_site::http_poll::Freshness,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                    Output = Result<Vec<u8>, crate::content_site::http_poll::PollError>,
-                >,
-            >,
-        > {
-            let rel = url.trim_start_matches('/').to_string();
-            let r = std::fs::read(self.0.join(&rel))
-                .map_err(|e| crate::content_site::http_poll::poll_error_for_io(&rel, &e));
-            Box::pin(std::future::ready(r))
-        }
-    }
+    pub(crate) use crate::feed_gather::DirOrigin as Origin;
 
     /// **A feed read through the REAL consumer** — the signed-root client, the
     /// manifest, the trie walk, the two-hop pointer/blob fetch and the signature
@@ -572,6 +558,30 @@ pub(crate) mod tests {
         let author = author_id();
         let (tree, report, author) = publish(&entries(&author, n), 10);
         (tree, author, report)
+    }
+
+    /// A published feed **left on disk**, for a consumer that needs a directory
+    /// rather than a harvested map.
+    ///
+    /// `published_tree` harvests into a `Tree` and drops the temp dir, which is
+    /// right for every decision gate here and useless to [`crate::feed_gather`],
+    /// whose whole subject is reading a real projection. The `TempDir` is
+    /// returned rather than leaked so the caller's scope owns the lifetime.
+    pub(crate) fn published_dir(n: usize) -> (tempfile::TempDir, String) {
+        let author = author_id();
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = RootProjector::new(identity()).unwrap();
+        publish_feed(dir.path(), &mut root, &entries(&author, n), &[], 10, NOW)
+            .expect("the fixture publishes");
+        root.finish(dir.path()).expect("the root signs over the whole feed");
+        (dir, author)
+    }
+
+    /// The newest `created_at` [`published_dir`] would carry at `n` posts — so a
+    /// gate about the stamp can name the value without recomputing the fixture's
+    /// arithmetic beside it.
+    pub(crate) fn newest_created_at(n: usize) -> u64 {
+        entries(&author_id(), n).iter().map(|e| e.created_at).max().unwrap_or(0)
     }
 
     fn entries(author: &str, n: usize) -> Vec<FeedEntry> {

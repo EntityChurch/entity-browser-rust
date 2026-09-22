@@ -113,17 +113,66 @@ pub struct ResolvedName {
 /// The publisher is still reached — by the origin registration and the
 /// `warm_peer_sites` enumeration that run on the same click — and it appears in
 /// the rail as a *cached* entry, which is what it is.
-pub fn open_target(
-    resolved: &Phase<ResolvedName>,
-    local_peer: &str,
-) -> Option<(&'static str, String)> {
+/// # ⭐ The window type is no longer a literal here — 2026-09-12
+///
+/// It used to be `Some(("Site Browser", local_peer))`, and
+/// `DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION` §1 row 1 names
+/// that literal as one of the three places the site convention is privileged.
+/// What this builds now is an **address** — *this publisher's sites* — and
+/// [`crate::open_target::route`] decides which viewer shows it. The answer is
+/// still the Site Browser, and that is the point: the table gives the same
+/// answer and a second convention can register beside it without editing this
+/// function.
+///
+/// ⚠ **The remaining guess is `sites`, and it is deliberately visible.** A name
+/// binding carries a peer and an origin and says **nothing** about what that peer
+/// publishes, so *which convention* is not derivable here — it is the discovery
+/// half §4 separates out and refuses to smuggle in with the open. Before, that
+/// guess was a window name in a literal; now it is one address on one line, and
+/// the day a binding can say *"I publish a feed"* this is the line that changes.
+pub fn open_target(resolved: &Phase<ResolvedName>, local_peer: &str) -> Option<Open> {
     let Phase::Done(target) = resolved else { return None };
     // No origin means we resolved WHO but not WHERE. A Site Browser opened for
     // a peer with no registered origin can only fail to fetch, and it would
     // fail as "that site is not there" — a wrong sentence about a registry that
     // answered correctly.
     target.origin.as_ref()?;
-    Some(("Site Browser", local_peer.to_string())) // i18n-ignore — identity key
+    let address = crate::open_target::site_directory(&target.peer_id);
+    match crate::open_target::route(&address) {
+        crate::open_target::Routing::Viewer(window_type) => Some(Open {
+            window_type,
+            bind_peer: local_peer.to_string(),
+            target: address,
+        }),
+        // Unreachable while `sites` has a row, and not asserted away: a table
+        // with no viewer for this address is a real state, and opening *some*
+        // window because one was expected is how a routing hole becomes an empty
+        // rail somebody has to debug.
+        other => {
+            tracing::warn!(
+                resolved_peer = %target.peer_id,
+                routing = ?other,
+                "a resolved name has no viewer to open it in"
+            );
+            None
+        }
+    }
+}
+
+/// What an *Open* click must do: **which window, whose store it reads, and what
+/// it is looking at.**
+///
+/// The second and third fields are different peers and that is the whole
+/// history of this surface — see this module's [`open_target`] doc for the
+/// window that shipped bound to the publisher and rendered an empty rail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Open {
+    /// Identity key from `window_registry`, chosen by [`crate::open_target`].
+    pub window_type: &'static str,
+    /// The peer whose **store** the window reads — mine.
+    pub bind_peer: String,
+    /// The **subject**: what the window is opened at.
+    pub target: crate::entity_ref::EntityRef,
 }
 
 /// One in-flight or finished operation, so the surface can distinguish "nothing
@@ -198,13 +247,33 @@ mod open_target_tests {
     #[test]
     fn a_resolved_name_opens_a_site_browser_bound_to_my_own_store() {
         let r = resolved(Some("https://billslab.com"));
-        let got = open_target(&Phase::Done(r.clone()), "2KMYLOCALPEER");
-        assert_eq!(got, Some(("Site Browser", "2KMYLOCALPEER".to_string())), "{got:?}");
+        let got = open_target(&Phase::Done(r.clone()), "2KMYLOCALPEER").expect("an open");
+        assert_eq!(got.window_type, "Site Browser");
+        assert_eq!(got.bind_peer, "2KMYLOCALPEER");
         assert_ne!(
-            got.map(|(_, p)| p),
-            Some(r.peer_id.clone()),
+            got.bind_peer, r.peer_id,
             "binding the window to the publisher is the bug: no local SDK hosts \
              that id, so every read in the window is empty"
+        );
+    }
+
+    /// ⭐ **…and the SUBJECT is the publisher, which is the same fact from the
+    /// other side.** The pair that shipped carried only the binding, so *whose
+    /// content this is* travelled as a side effect (the origin registration and
+    /// the manifest warm on the same click). Asserting both peers in one test is
+    /// what stops a later simplification from collapsing them back — and it is
+    /// the one assertion that would fail if somebody "fixed" the binding to point
+    /// at the publisher.
+    #[test]
+    fn the_subject_is_the_publisher_and_the_binding_is_mine() {
+        let r = resolved(Some("https://billslab.com"));
+        let got = open_target(&Phase::Done(r.clone()), "2KMYLOCALPEER").expect("an open");
+        assert_eq!(got.target.peer(), r.peer_id, "the target names the publisher");
+        assert_ne!(got.target.peer(), got.bind_peer, "subject and binding are two facts");
+        assert_eq!(
+            crate::open_target::route(&got.target),
+            crate::open_target::Routing::Viewer("Site Browser"),
+            "the window type must come from the table, not from a literal here"
         );
     }
 

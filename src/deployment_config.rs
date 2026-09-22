@@ -70,6 +70,19 @@ pub struct DeploymentConfig {
     /// The window type to boot maximized when `surface == "window"` (e.g.
     /// `"Site Browser"`). Ignored for other surfaces.
     pub window_type: Option<String>,
+    /// **What that window is aimed at** — an `APP-CONVENTION-REFERENCE` §3.1
+    /// address string (`entity+ref://{peer}/{path}`). Ignored for other surfaces.
+    ///
+    /// This is the one-field gap
+    /// `DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION` §2 measured:
+    /// before it, a deployment could boot the Feed window and had **no way to say
+    /// whose feed**, because the surface carried a window kind and a peer and no
+    /// address. Zero parsed keys here named a convention, and that is still true
+    /// — this one names an *address*, which is the generic form.
+    ///
+    /// Unparseable → dropped with a log line, and the window still opens. A
+    /// deployer who mis-typed an address should get their viewer, not chrome.
+    pub window_target: Option<String>,
     /// The startup site — where a `Site` boot lands / the home toggle opens.
     pub home_site: Option<SiteRef>,
     /// `target-peer-id → HTTP origin` — where each hosting peer's published
@@ -161,6 +174,15 @@ impl DeploymentConfig {
             let w = w.trim();
             if !w.is_empty() {
                 cfg.window_type = Some(w.to_string());
+            }
+        }
+        // Kept as a STRING here and parsed at apply time, like `surface` and
+        // `window_type` beside it: this struct is what the document said, and
+        // deciding whether it is readable belongs with the other validation.
+        if let Some(t) = obj.get("window_target").and_then(|v| v.as_str()) {
+            let t = t.trim();
+            if !t.is_empty() {
+                cfg.window_target = Some(t.to_string());
             }
         }
 
@@ -283,7 +305,8 @@ impl DeploymentConfig {
         // — a per-domain config can't bake a runtime peer-id.
         if let Some(kind) = &self.surface {
             let wt = self.window_type.clone().unwrap_or_default();
-            cfg.boot_surface = boot_surface_from(kind, "", &wt);
+            let target = self.window_target.clone().unwrap_or_default();
+            cfg.boot_surface = boot_surface_from(kind, "", &wt, &target);
         }
         if let Some(home) = &self.home_site {
             cfg.home_site = home.clone();
@@ -349,7 +372,7 @@ pub fn resolve_home_origin(deployment: Option<&DeploymentConfig>, peer_id: &str)
 /// per-domain config says `surface: "site"`, without a rebuild.
 pub fn resolve_boots_into_site(deployment: Option<&DeploymentConfig>) -> bool {
     match deployment.and_then(|d| d.surface.as_deref()) {
-        Some(kind) => boot_surface_from(kind, "", "") == BootSurface::Site,
+        Some(kind) => boot_surface_from(kind, "", "", "") == BootSurface::Site,
         None => boot_default().active_from_boot_surface(),
     }
 }
@@ -764,6 +787,7 @@ mod tests {
         let DeploymentConfig {
             surface,
             window_type,
+            window_target,
             home_site,
             origins,
             site_mode,
@@ -778,6 +802,7 @@ mod tests {
         let declared: Vec<&str> = vec![
             field_of("surface", &surface),
             field_of("window_type", &window_type),
+            field_of("window_target", &window_target),
             field_of("home_site", &home_site),
             field_of("origins", &origins),
             field_of("site_mode", &site_mode),
@@ -804,6 +829,20 @@ mod tests {
                 "window_type",
                 Owned::AdoptedOnlyOnFirstContact("with `surface`"),
                 Refreshed::FirstContactOnly("with `surface`"),
+            ),
+            (
+                "window_target",
+                Owned::AdoptedOnlyOnFirstContact("with `surface` — it is read by the same \
+                     `apply_to` branch and has no separate adoption path"),
+                Refreshed::FirstContactOnly(
+                    "posture, not routing. It reads like routing and it is not: the address \
+                     names WHICH publisher a returning reader's startup window opens at, and \
+                     a reader who has since navigated elsewhere in that window must not be \
+                     dragged back by a later publish — the same argument `surface` makes \
+                     about how the app opens. AP50's routing column is for facts a deployer \
+                     must be able to CORRECT (an origin moved, a peer was superseded); a \
+                     changed startup address is a deployer changing their mind",
+                ),
             ),
             (
                 "home_site",
@@ -1173,7 +1212,7 @@ mod tests {
         let out = cfg.apply_to(SessionConfig::default());
         assert_eq!(
             out.boot_surface,
-            BootSurface::Window { peer_id: String::new(), window_type: "Site Browser".into() }
+            BootSurface::Window { peer_id: String::new(), window_type: "Site Browser".into(), target: None }
         );
     }
 

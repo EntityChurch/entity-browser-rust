@@ -50,6 +50,11 @@ pub struct AppEntry {
     /// the delivery mode per app (an L5 WASM-peer payload loads via `src`, not
     /// `srcdoc`). `None` on older catalogs that predate the field.
     pub app_type: Option<String>,
+    /// The app opted in to the host's file verbs (catalog key
+    /// [`crate::app_files::MANIFEST_KEY`], `x-files`). A **local extension**
+    /// until entity-apps rules on the contract — see `app_files`. `false` for
+    /// every catalog that does not carry the key, which is every catalog today.
+    pub files: bool,
 }
 
 /// The app catalog — the list rendered as the launcher grid.
@@ -133,6 +138,16 @@ fn encode_entry(e: &AppEntry) -> entity_ecf::Value {
     if let Some(t) = &e.app_type {
         fields.push((entity_ecf::Value::Text("type".into()), entity_ecf::text(t)));
     }
+    // Only when TRUE, and after `type`, for the same reason as `type`: a catalog
+    // whose apps never opted in encodes byte-identically to one written before
+    // the key existed. An explicit `false` is the same fact as an absent key and
+    // gets the same bytes.
+    if e.files {
+        fields.push((
+            entity_ecf::Value::Text(crate::app_files::MANIFEST_KEY.into()),
+            entity_ecf::Value::Bool(true),
+        ));
+    }
     entity_ecf::Value::Map(fields)
 }
 
@@ -150,6 +165,7 @@ fn decode_entry(item: &ciborium::Value) -> AppEntry {
                 Some("icon") => e.icon = v.as_text().map(str::to_string),
                 Some("size") => e.size = decode_size(v),
                 Some("type") => e.app_type = v.as_text().map(str::to_string),
+                Some(crate::app_files::MANIFEST_KEY) => e.files = v.as_bool().unwrap_or(false),
                 _ => {}
             }
         }
@@ -289,6 +305,7 @@ mod tests {
                     icon: Some("<path d='M6 4v16'/>".into()),
                     size: Some(AppSize { width: Some(460), height: Some(600) }),
                     app_type: Some("tool".into()),
+                    files: true,
                 },
                 // width-only cap (height fills), and no hints at all.
                 AppEntry {
@@ -336,6 +353,27 @@ mod tests {
             ])]),
         )]));
         assert_eq!(bare.to_entity().data, legacy);
+
+        // And an app that did not opt in to files is the same bytes: `files:
+        // false` must not add a key, or every catalog re-addresses on upgrade.
+        let explicit_false = AppCatalog {
+            entries: vec![AppEntry { files: false, ..bare.entries[0].clone() }],
+        };
+        assert_eq!(explicit_false.to_entity().data, legacy);
+    }
+
+    #[test]
+    fn a_files_opt_in_is_encoded_under_the_extension_key_and_only_when_set() {
+        let opted = AppCatalog {
+            entries: vec![AppEntry { id: "vm".into(), files: true, ..Default::default() }],
+        };
+        let data = opted.to_entity().data;
+        let v: ciborium::Value = ciborium::from_reader(data.as_slice()).unwrap();
+        let entry = &v.as_map().unwrap()[0].1.as_array().unwrap()[0];
+        let keys: Vec<&str> = entry.as_map().unwrap().iter().filter_map(|(k, _)| k.as_text()).collect();
+        // By literal: the wire key, not the constant, so a rename is caught.
+        assert!(keys.contains(&"x-files"), "opt-in not encoded under x-files: {keys:?}");
+        assert_eq!(AppCatalog::from_entity(&opted.to_entity()), opted);
     }
 
     #[test]

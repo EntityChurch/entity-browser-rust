@@ -1,0 +1,87 @@
+{
+  "_comment": "AUTHORED INPUT for APP-CONVENTION-FEED's joint fixture (J-4). Hand-edited; EXPECTED.json is computed FROM this and is not. Read README.md before changing anything here — the other seat compares their publisher against the bytes this produces, so an edit here is a wire event. Every hash in this file is either a 66-char wire-hex literal (an opaque pin to something outside the fixture) or the object {\"entry\": \"<name>\"}, which resolves to the content hash of an EARLIER entry in `entries`. Forward references are refused.",
+
+  "convention": "APP-CONVENTION-FEED §2.3 (app/feed/entry), §4.2 (app/feed/index, app/feed/index/{page}), §1.1 (FEED-R2 detached signature)",
+
+  "peers": {
+    "_comment": "Ed25519 seeds, NOT identities. RFC 8032 signing is deterministic, so a pinned seed makes the peer id, the identity entity, and every detached signature byte-reproducible on any implementation. These are test vectors and nothing is ever published under them.",
+    "author": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "forum": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+  },
+
+  "page_size": 2,
+
+  "entries": [
+    {
+      "name": "plain",
+      "_why": "THE FLOOR — author, created_at, body and nothing else. Every optional key (reply, context, prev, attachments) must be ABSENT, not empty. An empty map and an absent key are different bytes and only one of them is representable.",
+      "created_at": 1757462400000,
+      "body": {
+        "media_type": "text/plain",
+        "fallback": "Hello from the joint fixture.",
+        "payload": { "tag": "inline", "utf8": "Hello from the joint fixture." }
+      }
+    },
+    {
+      "name": "params",
+      "_why": "TWO params keys, so canonical map ordering inside a nested map is exercised — ECF orders by length then lexically and the encoder gets no say, which is not a BTreeMap's natural order. One value is text and one is an unsigned integer, so an implementation that stringifies numbers into the open bag is caught.",
+      "created_at": 1757466000000,
+      "body": {
+        "media_type": "text/markdown",
+        "fallback": "Notes: two params, so map order is exercised.",
+        "payload": { "tag": "inline", "utf8": "# Notes\n\nTwo params, so map order is exercised.\n" },
+        "params": { "lang": "en", "words": 8 }
+      }
+    },
+    {
+      "name": "reply",
+      "_why": "§2.3's reply, with root and parent DISTINCT — an implementation that collapses them, or emits one of them twice, produces a plausible entry with different bytes. Both terms are pinned (FEED-R6); a live atom here must be refused.",
+      "created_at": 1757469600000,
+      "body": {
+        "media_type": "text/plain",
+        "fallback": "Agreed, and the second point is the one that matters.",
+        "payload": { "tag": "inline", "utf8": "Agreed, and the second point is the one that matters." }
+      },
+      "reply": {
+        "root": { "tag": "pin", "peer": "author", "hash": { "entry": "plain" } },
+        "parent": { "tag": "pin", "peer": "author", "hash": { "entry": "params" } }
+      }
+    },
+    {
+      "name": "linked",
+      "_why": "A LIVE reference carrying `seen`, an `at` anchor and a `via` hint, plus an attachments list holding a PIN to a peer that is not the author. Four things at once because each is separately droppable: `seen` is an expectation not an identity (§2.2.2), `via` is advisory and MUST round-trip even when unknown (REF-R7/R8), an anchor names a field path, and a reference to another peer is what makes `peer` load-bearing rather than decoration.",
+      "created_at": 1757473200000,
+      "body": {
+        "media_type": "text/plain",
+        "fallback": "Filed under the announcements thread.",
+        "payload": { "tag": "inline", "utf8": "Filed under the announcements thread." }
+      },
+      "context": {
+        "tag": "live",
+        "peer": "forum",
+        "path": "/app/feed/index",
+        "seen": "005ee4000000000000000000000000000000000000000000000000000000000001",
+        "at": { "field": ["entries", "0"] },
+        "via": [
+          { "tag": "origin", "value": "https://forum.example/" },
+          { "tag": "unknown-kind", "value": "carried, never acted on" }
+        ]
+      },
+      "attachments": [
+        { "tag": "pin", "peer": "forum", "hash": "00facade0000000000000000000000000000000000000000000000000000000001" },
+        { "tag": "pin", "peer": "author", "hash": { "entry": "plain" } }
+      ]
+    },
+    {
+      "name": "chained",
+      "_why": "§2.3.1's opt-in `prev` chain, and EMBED §3's POINTER payload arm. The pointer arm is the only conformant way to carry a body over the 16 KiB inline ceiling, and a fixture that is all-inline cannot see an implementation that never built it. `prev` is a bare hash, not a reference atom — a seat that wraps it in one produces different bytes.",
+      "created_at": 1757476800000,
+      "body": {
+        "media_type": "image/png",
+        "fallback": "A chart of weekly posts, rising.",
+        "payload": { "tag": "pointer", "hash": "00b10b000000000000000000000000000000000000000000000000000000000001" }
+      },
+      "prev": { "entry": "linked" }
+    }
+  ]
+}

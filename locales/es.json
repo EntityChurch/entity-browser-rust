@@ -758,8 +758,6 @@
   "doctor.check1.detail.unheard": "No se recibió nada del dominio, así que no se pudo comparar nada y nada se sabe — esto no es un certificado de buena salud. Todo lo que ya está en esta máquina no se ve afectado y sigue siendo exacto. Inténtelo de nuevo cuando vuelva a estar en línea.",
   "doctor.check1.source.origin_error": "este dominio respondió con un error (HTTP {status})",
   "doctor.check1.detail.origin_error": "El dominio es accesible pero devolvió un fallo en lugar de su configuración, así que no se pudo comparar nada. Es un problema del dominio, no de esta máquina, y no dice nada sobre si su editor está al día.",
-  "doctor.check1.source.refused": "este dominio no quiso entregar su configuración (HTTP {status})",
-  "doctor.check1.detail.refused": "El dominio es accesible y se negó a entregar su configuración a esta aplicación. Eso es una regla de acceso del dominio, no un fallo ni un problema de esta máquina. No hubo nada que comparar, así que no se sabe si tu editor está al día.",
   "doctor.check1.source.unreadable": "la configuración de este dominio no se pudo leer (HTTP {status})",
   "doctor.check1.detail.unreadable": "El dominio respondió con algo que esta aplicación no pudo analizar — un archivo truncado o escrito a medias, o una página de error servida como éxito. No se pudo comparar nada, y nada de esto es una afirmación sobre su máquina.",
   "doctor.check1.source.no_document": "este dominio no sirve ningún documento de despliegue",
@@ -820,5 +818,10 @@
   "feed.attr.wrong_target": "sin firmar: la firma cubre otra publicación",
   "feed.attr.not_the_author": "sin firmar: firmado por alguien que no es el autor",
   "feed.attr.bad_signature": "sin firmar: la firma no es válida",
-  "feed.no_route": "No estás conectado a este editor y este despliegue no sabe dónde está alojado, así que no hay dónde preguntar."
+  "feed.no_route": "No estás conectado a este editor y este despliegue no sabe dónde está alojado, así que no hay dónde preguntar.",
+  "apps.file.requested": "Esta aplicación pide un archivo",
+  "apps.file.sent": "{name} enviado a la aplicación",
+  "apps.file.kept": "{name} guardado en tus archivos",
+  "apps.file.refused": "No se guardó {name}: {why}",
+  "apps.file.not_sent": "No se envió ningún archivo: {why}"
 }

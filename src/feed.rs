@@ -684,63 +684,238 @@ impl IndexPage {
 // app/feed/mirror
 // ---------------------------------------------------------------------------
 
-/// The tree prefix a mirror is bound under. ⚠ **OURS, not the convention's.**
+/// The tree prefix a mirror is bound under — **§6.0.1, and it is the
+/// convention's now rather than ours.**
 ///
-/// §6 pins **no path at all** — unlike §4.2, which names the index head and its
-/// pages by hand precisely because *"an index nobody can find is not an entry
-/// point"*. A mirror has the identical problem and no answer: §2's cross-impl
-/// contract is the type tag, so finding one is a type-filtered query, which a
-/// static origin cannot serve (`A-38`). Routed; this is a local binding choice
-/// and a cross-impl consumer must not depend on it.
+/// It was ours when this module shipped, for the reason the old note gave: §6
+/// pinned no path, §2's cross-impl contract is the type tag, and finding a mirror
+/// was therefore a type-filtered query a static origin cannot serve (`A-38`).
+/// **Arch ruled the prefix and adopted this spelling unchanged**, on the argument
+/// one step further along than we took it: the thing a reader needs is to
+/// *enumerate what a peer has gathered, from that peer's signed root, without
+/// asking them*, which a type query cannot do — so *"a gathered view nobody can
+/// find is not a source leg"*, the same sentence §4.2 is written from.
 const MIRROR_PREFIX_REL: &str = "/app/feed/mirrors/";
 
-/// The tree prefix a mirror is bound under. Ours; see [`MIRROR_PREFIX_REL`].
+/// The tree prefix a mirror is bound under (§6.0.1). See [`MIRROR_PREFIX_REL`].
 pub fn mirror_prefix() -> &'static str {
     MIRROR_PREFIX_REL.trim_start_matches('/')
 }
 
-/// Where a gatherer binds its mirror of `subject` — **keyed by the subject's own
-/// hash, so the address is DERIVABLE.**
+/// **What a mirror is OF** — §6.0's two kinds, as a type rather than as a raw
+/// reference.
 ///
-/// That is the whole reason for the choice. §6 gives a reader no way to discover
-/// that a gatherer holds a mirror, and enumeration is unavailable over a static
-/// origin — but a reader who already holds the subject can compute
-/// `{gatherer}/app/feed/mirrors/{hex(subject)}` and simply ask. *A derivable
-/// address is an entry point that needs no index.*
+/// §6's `subject` is an `any-reference` and the two atoms mean two different
+/// things, so *which kind it is* decides what the mirror means and how short
+/// reads:
 ///
-/// It is also **mutable at a stable key**, which is the shape it has to be: a
-/// gatherer republishes as it reads more, and §1.3 makes that monotone — the
-/// view lengthens and never contradicts itself.
-pub fn mirror_key(subject: &Hash) -> String {
-    format!("{}{}", mirror_prefix(), subject.to_hex())
+/// | kind | names | writers | *short* means |
+/// |---|---|---|---|
+/// | [`Thread`](Self::Thread) | one entity many parties contribute to | many | a contributor you did not reach |
+/// | [`Timeline`](Self::Timeline) | a prefix one peer owns | exactly one | a gap in the prefix |
+///
+/// ## ⭐ Why this is a type and not just an `EntityRef`
+///
+/// **`FEED-R26`: a `subject` MUST NOT be a pin to a value that moves when the
+/// subject changes** — and the value that violates it is the one a developer
+/// reaches for first, an author's **index head**. Its hash changes every time
+/// they post (so it is a *witness*, not an identity) and a reader must already
+/// have reached the author to know it (so the address is underivable, which is
+/// the hop a mirror exists to save).
+///
+/// A raw `EntityRef` parameter makes that mistake the path of least resistance:
+/// the gatherer is holding the head when it decides. [`Self::timeline`] **takes
+/// no hash and no path**, so the violating value is not expressible through the
+/// constructor a timeline gather uses. *The guard is the argument list.*
+///
+/// ## The address survives the author posting, which is the measurable form
+///
+/// `FEED-R26`'s consequence is a property a test can hold: derive the key, let
+/// the author post again, derive it once more — **same key.** A head-pinned
+/// subject moves. That is what the rule is protecting and it is why the
+/// enforcement here is a constructor rather than a validator: nothing in the
+/// bytes of a mirror record says whether its pinned subject moves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirrorSubject {
+    /// §6.0's **pinned** kind — a thread root. Many writers, no single
+    /// authority.
+    Thread {
+        /// Who published the root. Carried for routing; **not in the key** —
+        /// §6.0.1 derives a pinned key from the hash alone, and a content
+        /// address needs no peer to be unique.
+        peer: String,
+        root: Hash,
+    },
+    /// §6.0's **live** kind — an author's own feed, the prefix they alone own.
+    Timeline {
+        peer: String,
+        /// Peer-relative with a leading `/`, as [`EntityRef::live`] normalizes.
+        path: String,
+    },
 }
+
+impl MirrorSubject {
+    /// A thread mirror of the entity at `root`, published by `peer`.
+    pub fn thread(peer: impl Into<String>, root: Hash) -> Self {
+        Self::Thread { peer: peer.into(), root }
+    }
+
+    /// A timeline mirror of `author`'s own feed.
+    ///
+    /// ⚠ **Takes no path, and that is a derivation rather than a convenience.**
+    /// §6.0 calls the live subject *"a prefix one peer owns"* and names none, so
+    /// a caller-supplied path would put a **local** choice inside a key two
+    /// implementations have to agree on. Our own entry prefix is explicitly ours
+    /// and not the convention's (`A-38`, [`entry_prefix`]) — a key derived from
+    /// it could never be computed by another seat.
+    ///
+    /// So the address is [`index_head_path`]: the **only** feed path §4.2 pins by
+    /// hand, named there for the reason §6.0.1 cites for pinning this prefix.
+    /// Note this is the repair §6.0's own warning implies rather than a
+    /// contradiction of it — that note forbids pinning the head's **hash**, and a
+    /// live reference to the head's **path** has neither defect it lists: the
+    /// path does not move when the author posts, and a reader needs no prior hop
+    /// to write it down.
+    ///
+    /// ⚠ **Routed, not settled** — §6.0 does not say which path this is, and
+    /// `FEED-12` compares keys across two seats. See [`path_coordinate`].
+    pub fn timeline(author: impl Into<String>) -> Self {
+        let peer = author.into();
+        let path = index_head_path(&peer);
+        // `index_head_path` is absolute; a subject's own `path` is peer-relative.
+        let relative = path.strip_prefix(&format!("/{peer}")).unwrap_or(INDEX_HEAD_REL).to_string();
+        Self::Timeline { peer, path: relative }
+    }
+
+    /// Read a subject off a decoded mirror record.
+    ///
+    /// ⭐ **Every field of both atoms is named, with the hints bound to `_`** —
+    /// `FEED-R27` forbids an optional hint entering the derivation, and the way
+    /// to enforce that is to make *adding a field to the atom* a compile error
+    /// (`error[E0027]`) at the one site that decides what a coordinate is made
+    /// of. A `..` here is the version that silently starts ignoring a field
+    /// somebody later decided was identifying.
+    pub fn from_reference(r: &EntityRef) -> Self {
+        match r {
+            EntityRef::Pinned { peer, hash, at: _, via: _ } => {
+                Self::Thread { peer: peer.clone(), root: *hash }
+            }
+            EntityRef::Live { peer, path, seen: _, at: _, via: _ } => {
+                Self::Timeline { peer: peer.clone(), path: path.clone() }
+            }
+        }
+    }
+
+    /// The reference a mirror record carries.
+    pub fn reference(&self) -> EntityRef {
+        match self {
+            Self::Thread { peer, root } => EntityRef::pin(peer.clone(), *root),
+            Self::Timeline { peer, path } => EntityRef::live(peer.clone(), path.clone()),
+        }
+    }
+
+    /// Who to ask about the subject itself. Not part of a thread's key.
+    pub fn peer(&self) -> &str {
+        match self {
+            Self::Thread { peer, .. } | Self::Timeline { peer, .. } => peer,
+        }
+    }
+
+    /// §6.0.1's coordinate — **the value the key is the hex of.**
+    pub fn coordinate(&self) -> Hash {
+        match self {
+            Self::Thread { root, .. } => *root,
+            Self::Timeline { peer, path } => path_coordinate(peer, path),
+        }
+    }
+
+    /// Where a gatherer binds its mirror of this subject (`FEED-R25`).
+    pub fn key(&self) -> String {
+        format!("{}{}", mirror_prefix(), self.coordinate().to_hex())
+    }
+}
+
+/// §6.0.1's live coordinate — `content_hash` of the **absolute** path,
+/// `/{peer}/{path}`, canonical UTF-8.
+///
+/// ## ⚠ This is the one invention in the ruling, and the clause is one argument
+/// short
+///
+/// §6.0.1 says `hex(content_hash(absolute-path))`. **`content_hash` in this
+/// corpus is a function of TWO arguments** — V7 §1.4's hash over the ECF
+/// encoding of `{data, type}`, which is what [`Hash::compute`] takes — and a
+/// path is not an entity, so there is no type to supply. Two readings survive,
+/// they produce different bytes, and **the key is precisely the thing `FEED-12`
+/// compares**, so a seat cannot pass that vector by reading the text.
+///
+/// | reading | input | what it invents |
+/// |---|---|---|
+/// | **ours** — the digest of the path | `sha256(utf8(absolute))` | that `content_hash` here means a bare digest |
+/// | ECF-framed | `Hash::compute(T, utf8(absolute))` | a value for `T`, which the clause does not name |
+///
+/// **We take the first because its input is fully determined by the clause's own
+/// words.** The second needs a type tag that would itself have to be transmitted
+/// and agreed — and anything tag-shaped invented here is also a vocabulary
+/// finding (`spec vocab` classifies source literals by shape). The output is
+/// wrapped in the corpus's SHA-256 hash format so that **both kinds of key are
+/// the same shape**, 66 hex characters `00`-prefixed, which is what makes
+/// [`MirrorSubject::key`] one expression instead of two.
+///
+/// **Routed as an ask, and one function to change if arch rules the other way.**
+/// `the_live_coordinate_is_pinned_to_a_literal` holds the bytes so a silent
+/// drift on either side is visible.
+pub fn path_coordinate(peer: &str, relative_path: &str) -> Hash {
+    let absolute = if relative_path.starts_with('/') {
+        format!("/{peer}{relative_path}")
+    } else {
+        format!("/{peer}/{relative_path}")
+    };
+    let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(absolute.as_bytes()).into();
+    Hash::new(entity_hash::HASH_ALGORITHM_SHA256, digest)
+}
+
+// There is deliberately no `mirror_key(&Hash)` shorthand beside
+// `MirrorSubject::key`. It existed while a subject could only be a pin, and once
+// the subject widened it became a second expression of §6.0.1's derivation with
+// **no caller** — C15's drift shape, and the dangerous half of it: the one
+// nobody reads is the one that stops agreeing.
 
 /// §6's `app/feed/mirror` — one reader's gathered view of one subject.
 ///
-/// ## What `subject` may be, and the gap underneath the question
+/// ## What `subject` may be — **widened, and the argument for widening is
+/// closure's**
 ///
-/// §2.2 defines `reference` as **`pinned-ref`** — the live shape is spelled
-/// `live-reference` and a site has to say it takes one. §6's CDDL says
-/// `subject: reference`, so **the subject is a pin to one entity**, and its
-/// comment agrees: *"the root entry this view is of."* That is a **thread**
-/// mirror, and §6.2's rationale is written about exactly that — *"a conversation
-/// spans publishers, and no single publisher holds all of it."*
+/// v0.1's `subject: reference` was pinned-only, so a subject could name one
+/// entity and nothing else. We measured that the case the closure trace turns on
+/// had no type: a gatherer following three *authors* republishes their
+/// **timelines**, and a timeline is a growing prefix, not an entity. **Ruled
+/// (`A-57`): §6.0's `subject` is an `any-reference`**, and [`MirrorSubject`]
+/// carries the distinction.
 ///
-/// ⚠ **Which leaves the case the replication proposal's own closure trace turns
-/// on with no type.** There, a gatherer follows three authors and publishes
-/// *their timelines*; a timeline is a **growing prefix**, not an entity, so it
-/// cannot be pinned and cannot be a `subject`. Pinning the author's *index-head
-/// entity* encodes, and it makes the address underivable (you need the head hash
-/// before you can ask, which means reaching the author first — the hop the
-/// mirror exists to save). **Implemented as the convention specifies and routed
-/// rather than stretched**, because whichever shape publishes first is the
-/// baseline.
+/// ⭐ **Widened rather than given a second type, and that is not a size
+/// judgement.** The record carries no field that differs between the two kinds
+/// and a reader does the same thing with both, so a second type would **double
+/// the consuming code path at exactly the seam `DX-R2` requires to be single** —
+/// i.e. it would have been the first thing the new closure `MUST` forbids,
+/// proposed in the same week that `MUST` landed.
+///
+/// What the two kinds buy is an **authority** distinction rather than a
+/// presentation one: a timeline has exactly one writer and a thread has many, so
+/// *short* means different things and the rollback floor applies to one and not
+/// the other.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeedMirror {
-    /// §6 — the subject this view is of. A pin (§2.2).
+    /// §6.0 — the subject this view is of. **Either atom**; see
+    /// [`MirrorSubject`] for what each kind means and for `FEED-R26`.
     pub subject: EntityRef,
     /// Pinned references to what this mirror holds, **republished unmodified**.
     /// Order is the gatherer's; nothing in §6 makes it authoritative.
+    ///
+    /// ⭐ **Always pinned, even though `subject` is not — `FEED-R28`.** §6.0 says
+    /// why in one line: a mirror carries exact bytes (§6.1 rule 1), so an entry
+    /// named by a live reference would be a mirror of *whatever is there now*,
+    /// which is not a mirror. The two fields taking different atoms is the shape
+    /// of the type, not an inconsistency in it.
     pub entries: Vec<EntityRef>,
     pub gathered_at: u64,
     /// The key that assembled it. **Never an authorship claim** — §6.1 rule 3:
@@ -792,7 +967,11 @@ impl FeedMirror {
         let map = body_map(entity, FEED_MIRROR_TYPE)?;
         let subject = match field(&map, "subject") {
             None => return Err(FeedError::Malformed("subject")),
-            Some(v) => reference(v, "subject", true)?,
+            // **`any-reference` since v0.2** — a live subject is a timeline
+            // mirror, which is the kind that makes a mirror usable as a source
+            // leg. `entries` two lines down stays pinned and that asymmetry is
+            // the design, not an oversight.
+            Some(v) => reference(v, "subject", false)?,
         };
         let entries = match field(&map, "entries") {
             None => return Err(FeedError::Malformed("entries")),
@@ -1274,5 +1453,142 @@ mod tests {
         let f = Follow::new(THEM, 1);
         assert_eq!(f.to_entity().unwrap().entity_type, "app/feed/follow");
         assert_ne!(f.to_entity().unwrap().entity_type, "app/share/follow");
+    }
+
+    // -----------------------------------------------------------------------
+    // §6.0 / §6.0.1 — the subject, and the key derived from it
+    // -----------------------------------------------------------------------
+
+    /// ⛔ **`FEED-R27`, and it is the one this whole derivation exists for.**
+    ///
+    /// `at` and `via` are optional **hints** and `seen` is an expectation, so two
+    /// gatherers naming one subject will not carry the same ones. If any of them
+    /// entered the key, each would publish a correct, verifiable view at an
+    /// address the other does not compute — **and nothing would error**, at
+    /// either end, ever. *A derivation that includes an optional field is not a
+    /// derivation.*
+    ///
+    /// This is the assertion `FEED-12` makes across two implementations; here it
+    /// is made across two atoms.
+    #[test]
+    fn a_mirrors_key_ignores_every_optional_hint() {
+        let root = Hash::compute("app/feed/entry", b"a thread root");
+        let other = Hash::compute("app/feed/entry", b"something else");
+        let hints = vec![crate::entity_ref::Hint::new(
+            crate::entity_ref::HintTag::Origin,
+            "https://mirror.example",
+        )];
+        let anchor = crate::entity_ref::Anchor { field: vec!["body".into()] };
+
+        let bare = MirrorSubject::thread(ME, root);
+        let hinted = MirrorSubject::from_reference(
+            &EntityRef::pin(ME, root).with_via(hints.clone()).with_at(anchor.clone()),
+        );
+        assert_eq!(bare.key(), hinted.key(), "a hint entered a pinned key");
+
+        let live_bare = MirrorSubject::timeline(ME);
+        let live_hinted = MirrorSubject::from_reference(
+            &live_bare
+                .reference()
+                .with_via(hints)
+                .with_at(anchor)
+                // `seen` is the sharpest of the three: it is the most tempting to
+                // treat as identifying and §2.2 calls it an expectation.
+                .with_seen(other),
+        );
+        assert_eq!(live_bare.key(), live_hinted.key(), "a hint entered a live key");
+
+        // And the two kinds do not collide: a thread and a timeline of one peer
+        // are different views and must not share a slot.
+        assert_ne!(bare.key(), live_bare.key());
+    }
+
+    /// The live coordinate, **pinned to a literal computed outside this code.**
+    ///
+    /// §6.0.1 names `content_hash` with one argument where the corpus defines it
+    /// with two (see [`path_coordinate`]), so our reading is a choice — and the
+    /// key is exactly what `FEED-12` compares across seats. A test spelled in
+    /// terms of `path_coordinate` would follow the choice silently; this one
+    /// carries the bytes, so a drift on either side is visible as a diff.
+    ///
+    /// The expected value is `"00" || sha256(utf8("/{peer}/app/feed/index"))`,
+    /// computed with `hashlib`, not with the function under test.
+    #[test]
+    fn the_live_coordinate_is_pinned_to_a_literal() {
+        const ALICE: &str = "2AliceExamplePeerIdForKeyVectors";
+        let subject = MirrorSubject::timeline(ALICE);
+        assert_eq!(
+            subject.coordinate().to_hex(),
+            "00c11cf34c7c0dcf8c67494648b34e6690173fd07fb229b2f6d9b5ce2e23bbef4f",
+            "the live-key derivation moved — this is a WIRE event, not a test fix"
+        );
+        assert_eq!(
+            subject.key(),
+            format!(
+                "app/feed/mirrors/{}",
+                "00c11cf34c7c0dcf8c67494648b34e6690173fd07fb229b2f6d9b5ce2e23bbef4f"
+            ),
+            "and the prefix is §6.0.1's"
+        );
+    }
+
+    /// **`FEED-R26`'s codec half: a timeline subject is a LIVE reference, so
+    /// `MirrorSubject::timeline` cannot express the shape the rule forbids.**
+    ///
+    /// ⚠ **Stated plainly, because a green test here is worth less than it
+    /// looks:** the enforcement is the constructor's *argument list* — it takes no
+    /// hash — so the violation is a compile error rather than a test failure, and
+    /// this asserts only that the atom that comes out is the live one.
+    /// **The consequence is measured where it bites**, over a real mirror read
+    /// across two of the author's publishes:
+    /// `feed_mirror::tests::a_timeline_mirror_is_still_found_after_the_author_posts_again`.
+    #[test]
+    fn a_timeline_subject_is_a_live_reference_and_not_a_pin() {
+        let subject = MirrorSubject::timeline(ME);
+        assert!(!subject.reference().is_pinned(), "a timeline subject is a live reference");
+        // The address is a function of the peer id **alone** — which is what makes
+        // it derivable by a reader who has never fetched anything from this
+        // author, the hop §6.0 says a mirror exists to save.
+        assert_eq!(subject.key(), MirrorSubject::timeline(ME).key());
+        assert_ne!(subject.key(), MirrorSubject::timeline(THEM).key());
+    }
+
+    /// §6.0 since v0.2: the **subject** takes either atom and **`entries`**
+    /// takes only a pin (`FEED-R28`).
+    ///
+    /// The asymmetry is the design. A mirror carries exact bytes, so an entry
+    /// named live would be a mirror of whatever is there now — which is not a
+    /// mirror — while a subject named live is the only way to say *this view is
+    /// of that author's feed*.
+    #[test]
+    fn a_mirror_subject_takes_either_atom_and_its_entries_take_only_a_pin() {
+        let entry = Hash::compute("app/feed/entry", b"one post");
+        let timeline = MirrorSubject::timeline(ME);
+
+        let record =
+            FeedMirror::new(timeline.reference(), vec![EntityRef::pin(ME, entry)], 7, THEM);
+        let entity = record.to_entity().unwrap();
+        let back = FeedMirror::from_entity(&entity, THEM).expect("a live subject decodes");
+        assert_eq!(back, record, "the timeline mirror did not round-trip");
+        assert_eq!(
+            MirrorSubject::from_reference(&back.subject),
+            timeline,
+            "the subject came back as a different subject"
+        );
+
+        // …and the entries do not widen with it.
+        let live_entry = FeedMirror::new(
+            timeline.reference(),
+            vec![EntityRef::live(ME, "/app/feed/entries/whatever-is-there-now")],
+            7,
+            THEM,
+        );
+        assert!(
+            matches!(
+                FeedMirror::from_entity(&live_entry.to_entity().unwrap(), THEM),
+                Err(FeedError::LiveReferenceWherePinRequired { field: "entries" })
+            ),
+            "a live entry reference was accepted into a mirror"
+        );
     }
 }

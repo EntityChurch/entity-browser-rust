@@ -1,0 +1,277 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>run-env — the VM as an entity-app</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  /* Flex column, NOT `height: calc(100% - 76px)` on the terminal. The status bar
+     wraps to two lines on a narrow screen, and a hardcoded subtraction then pushes
+     the key bar off the bottom -- measured: the keys were sliced in half at 400px
+     wide, i.e. exactly where they are the only way to type. */
+  html,body { margin:0; height:100%; background:#1a1a1a; color:#ddd;
+              font:13px system-ui,sans-serif; }
+  body { display:flex; flex-direction:column; }
+  #bar, #keys { flex:0 0 auto; }
+  #term { flex:1 1 auto; min-height:0; }   /* min-height:0 or flex refuses to shrink */
+  #bar { padding:5px 9px; background:#252525; border-bottom:1px solid #333;
+         display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; }
+  #bar b { font-weight:600; } .dim { color:#888; }
+  /* The key bar exists because a phone has no Esc, Tab, Ctrl or arrows, and a
+     terminal without them is a read-only screen. trynix ships one for the same
+     reason. */
+  #keys { display:flex; gap:5px; padding:5px 6px; background:#202020;
+          border-top:1px solid #333; overflow-x:auto; }
+  #keys button { font:12px/1 monospace; padding:7px 9px; background:#333; color:#ddd;
+                 border:1px solid #444; border-radius:3px; min-width:34px; }
+  #keys button.on { background:#0a63c2; border-color:#0a63c2; }
+</style>
+<body>
+<div id="bar">
+  <b>run-env</b>
+  <span id="status" class="dim">booting…</span>
+  <span id="origin" class="dim"></span>
+  <span class="dim" style="margin-left:auto">select to copy · shift+insert to paste</span>
+</div>
+<div id="term"></div>
+<div id="keys">
+  <button data-k="\x1b">esc</button>
+  <button data-k="\t">tab</button>
+  <button id="ctrl">ctrl</button>
+  <button data-k="\x1b[A">↑</button>
+  <button data-k="\x1b[B">↓</button>
+  <button data-k="\x1b[D">←</button>
+  <button data-k="\x1b[C">→</button>
+  <button data-k="|">|</button>
+  <button data-k="/">/</button>
+  <button data-k="-">-</button>
+  <button data-k="\x03">^C</button>
+  <button id="kbd">⌨ keyboard</button>
+</div>
+<div id="screen_container" style="display:none"><div></div><canvas></canvas></div>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="build/libv86.js"></script>
+<script>
+// ── The app side of entity-apps' ③α contract, plus the file verbs it lacks ──────
+//
+// Contract read from entity-apps/docs/EMBEDDING.md, not from memory:
+//   app → host : ready-for-init · state · ready · closed · error
+//   host → app : init {state} · viewport · request-state · destroy
+//
+// Two things that survey settled, and they shape everything below:
+//
+//  1. `request-state` means the contract ALREADY has a host→app request with an
+//     app→host reply. File verbs mirror that shape rather than inventing one.
+//  2. The contract's existing file story is `Entity.Export` + `allow-downloads`,
+//     which initiates a BROWSER DOWNLOAD. It lands in the user's Downloads folder
+//     — it does not reach the host, so it cannot reach the entity tree. That is
+//     the actual gap, and it is narrower than "files in and out".
+//
+// ⚠ The file verbs below are a PROTOTYPE, deliberately un-minted. entity-apps owns
+// EMBEDDING.md; minting `request-files` here would make us the baseline for a
+// vocabulary a counterpart also implements — the mistake G-PIN-4 and the SHARE
+// divergence both paid for. They are prefixed `x-` so nothing mistakes them for
+// ratified vocabulary.
+const HOST = 'entity-host', APP = 'entity-app';
+const send = (type, extra) => parent.postMessage(
+  Object.assign({ source: APP, type }, extra || {}), '*');
+
+const $ = id => document.getElementById(id);
+// ⚠ `window.origin`, NOT `location.origin`. Measured inside a real
+// sandbox="allow-scripts" frame: location.origin reports the URL's origin
+// (http://127.0.0.1:8147) while the effective origin is opaque — parent.document,
+// localStorage and document.cookie all throw SecurityError and window.origin is
+// "null". The wrong expression reports "not sandboxed" about a frame that is.
+$('origin').textContent = 'origin=' + (window.origin === 'null' ? 'opaque (sandboxed) ✓' : window.origin);
+
+const term = new Terminal({ convertEol: false, fontSize: 13, scrollback: 5000,
+                            theme: { background: '#1a1a1a' } });
+term.open($('term'));
+
+// ── Fit, and TELL THE GUEST ───────────────────────────────────────────────────
+// Without this xterm renders at its default 80x24 = 624px wide. Measured in a
+// 464px frame: the right third is clipped and the 21 unused rows are a large
+// black rectangle -- which on a phone reads as "the app is broken", which is
+// exactly how it was reported.
+//
+// Fitting the terminal is only half. A serial console has NO window size: the
+// kernel answers TIOCGWINSZ with 0x0 until something sets it, so a full-screen
+// program refuses to start and line editing wraps wrongly. Nothing carries a
+// browser resize into a 16550 -- so we state the size at the guest's prompt with
+// `stty`, which is the same answer trynix reached (its page writes winsize.N into
+// the share for a loop in the guest to apply; over a plain serial line the direct
+// `stty` is the version available to us).
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+let lastSize = '';
+function fitAndTell() {
+  try { fit.fit(); } catch (e) { return; }
+  const size = term.rows + 'x' + term.cols;
+  if (!booted || size === lastSize) { lastSize = size; return; }
+  lastSize = size;
+  emulator.serial0_send(`stty rows ${term.rows} cols ${term.cols}\n`);
+}
+addEventListener('resize', () => setTimeout(fitAndTell, 150));
+// A phone rotating or opening its keyboard changes the visual viewport without
+// firing a useful `resize` on some browsers.
+if (window.visualViewport) visualViewport.addEventListener('resize', () => setTimeout(fitAndTell, 150));
+fit.fit();
+
+// ── The key bar, and the keyboard a phone will not open by itself ─────────────
+// Tapping a terminal does not summon a mobile keyboard: xterm's input target is a
+// hidden helper textarea and a touch on the canvas does not focus it. The explicit
+// button is what makes the terminal usable on a phone at all -- without it you can
+// read the VM and never type at it, which is what happened.
+let ctrl = false;
+function focusKeyboard() {
+  const ta = document.querySelector('.xterm-helper-textarea');
+  if (ta) { ta.focus(); ta.click(); }
+  term.focus();
+}
+$('kbd').addEventListener('click', focusKeyboard);
+$('term').addEventListener('touchstart', focusKeyboard, { passive: true });
+$('ctrl').addEventListener('click', () => {
+  ctrl = !ctrl; $('ctrl').classList.toggle('on', ctrl);
+});
+for (const b of document.querySelectorAll('#keys button[data-k]')) {
+  b.addEventListener('click', () => {
+    let k = b.dataset.k.replace(/\\x1b/g, '\x1b').replace(/\\t/g, '\t').replace(/\\x03/g, '\x03');
+    if (ctrl && k.length === 1 && /[a-z]/i.test(k)) {
+      k = String.fromCharCode(k.toUpperCase().charCodeAt(0) - 64);
+      ctrl = false; $('ctrl').classList.remove('on');
+    }
+    if (emulator) emulator.serial0_send(k);
+    focusKeyboard();
+  });
+}
+
+let emulator = null, booted = false, serial = '', pendingLs = null;
+const t0 = performance.now();
+
+function boot() {
+  emulator = new V86({
+    wasm_path: "build/v86.wasm",
+    memory_size: 64 * 1024 * 1024,
+    vga_memory_size: 2 * 1024 * 1024,
+    screen_container: $("screen_container"),
+    bios: { url: "bios/seabios.bin" },
+    vga_bios: { url: "bios/vgabios.bin" },
+    cdrom: { url: "images/linux4.iso" },
+    filesystem: {},
+    autostart: true,
+  });
+  window.emulator = emulator;
+
+  emulator.add_listener("serial0-output-byte", b => {
+    const ch = String.fromCharCode(b);
+    serial += ch;
+    term.write(ch);
+    feedLs(ch);
+    if (!booted && /~%/.test(serial)) {
+      booted = true;
+      const ms = Math.round(performance.now() - t0);
+      $('status').textContent = 'booted in ' + ms + 'ms';
+      // The guest only has a prompt to receive `stty` at once it is booted, so the
+      // first size is stated here rather than at fit() time.
+      lastSize = '';
+      fitAndTell();
+      send('ready');
+    }
+  });
+  // xterm gives selection, scrollback and paste for free -- the plain v86 screen
+  // container is a text grid the emulator owns, which is why the console could not
+  // be copied out of. Everything typed goes down the same serial line.
+  term.onData(d => emulator.serial0_send(d));
+}
+
+// ── files, both directions ────────────────────────────────────────────────────
+// Injection is a page-side call into v86's own JS 9p server. Extraction asks the
+// GUEST for the listing (`ls` between markers) rather than reading emulator.fs9p:
+// fs9p is an engine internal, so a listing built on it is a v86 driver wearing the
+// contract's name.
+async function putFiles(entries) {
+  const out = [];
+  for (const e of entries || []) {
+    const bytes = (e.bytes instanceof Uint8Array) ? e.bytes : new Uint8Array(e.bytes);
+    await emulator.create_file(e.name, bytes);
+    out.push({ name: e.name, bytes: bytes.length });
+  }
+  return out;
+}
+
+function listGuest() {
+  return new Promise(resolve => {
+    pendingLs = { buf: '', resolve };
+    emulator.serial0_send("echo __LS__; ls -1 /mnt; echo __ENDLS__\n");
+    // A guest that never answers is "could not look", never "empty" -- those are
+    // different facts and only one of them means the VM produced nothing.
+    setTimeout(() => { if (pendingLs) { const p = pendingLs; pendingLs = null; p.resolve(null); } }, 4000);
+  });
+}
+function feedLs(ch) {
+  if (!pendingLs) return;
+  pendingLs.buf += ch;
+  const m = pendingLs.buf.match(/__LS__\r?\n([\s\S]*?)__ENDLS__/);
+  if (!m) return;
+  // busybox colourises `ls` even down a serial line; an unstripped name renders
+  // fine and then makes read_file ask for a file that does not exist.
+  const strip = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const names = m[1].split(/\r?\n/).map(s => strip(s).trim())
+    .filter(s => s && !s.startsWith('__') && !s.includes('ls -1'));
+  const p = pendingLs; pendingLs = null; p.resolve(names);
+}
+
+addEventListener('message', async e => {
+  const m = e.data;
+  if (!m || m.source !== HOST) return;
+  try {
+    switch (m.type) {
+      case 'init':
+        boot();
+        break;
+      case 'request-state':
+        // Whole-object, latest-wins, host-blind -- the contract's own semantics.
+        // Deliberately NOT where file bytes go: it is debounced, retained N deep
+        // and keyed by one app id, so a rootfs through here is resent in full on
+        // every change and kept N times.
+        send('state', { state: { booted, bootedAt: t0, engine: 'v86', arch: 'i686' } });
+        break;
+      case 'x-put-files':
+        send('x-files-put', { put: await putFiles(m.entries) });
+        break;
+      case 'x-list-files': {
+        const names = await listGuest();
+        send('x-files-list', { names, couldNotLook: names === null });
+        break;
+      }
+      case 'x-get-file': {
+        const bytes = await emulator.read_file(m.name);
+        // ⚠ NEVER transfer `bytes.buffer` directly. A Uint8Array can be a VIEW into
+        // a larger backing buffer, and `.buffer` is the whole backing store — so the
+        // receiver's `new Uint8Array(m.bytes)` gets the view PLUS whatever else is in
+        // there. Measured: a 33-byte file arrived as 49 bytes with 16 trailing NULs,
+        // while four controlled probes were byte-exact. That is the worst shape a
+        // corruption can have -- data-dependent, silent, and only on some files.
+        const exact = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength)
+          ? bytes : bytes.slice();   // slice() copies into a tight buffer
+        parent.postMessage({ source: APP, type: 'x-file', name: m.name,
+                             length: exact.byteLength,   // so the host can CHECK
+                             bytes: exact.buffer }, '*', [exact.buffer]);
+        break;
+      }
+      case 'destroy':
+        try { emulator && emulator.destroy && emulator.destroy(); } catch (err) {}
+        send('closed');
+        break;
+    }
+  } catch (err) {
+    send('error', { message: String(err).slice(0, 300) });
+  }
+});
+
+send('ready-for-init');
+// The contract's 150ms fallback: a host that never answers still gets a working
+// app. Ours boots itself rather than sitting blank.
+setTimeout(() => { if (!emulator) { $('status').textContent = 'no host init — booting standalone'; boot(); } }, 150);
+</script>
+</body>

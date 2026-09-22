@@ -758,8 +758,6 @@
   "doctor.check1.detail.unheard": "Er is niets van het domein vernomen, dus er kon niets worden vergeleken en er is niets bekend — dit is geen schone gezondheidsverklaring. Alles wat al op deze machine staat is onaangetast en nog steeds juist. Probeer het opnieuw wanneer u weer online bent.",
   "doctor.check1.source.origin_error": "dit domein antwoordde met een fout (HTTP {status})",
   "doctor.check1.detail.origin_error": "Het domein is bereikbaar maar gaf een storing terug in plaats van zijn configuratie, dus er kon niets worden vergeleken. Dat is een probleem bij het domein, niet op deze machine, en het zegt niets over de vraag of uw uitgever actueel is.",
-  "doctor.check1.source.refused": "dit domein wilde zijn configuratie niet afgeven (HTTP {status})",
-  "doctor.check1.detail.refused": "Het domein is bereikbaar en weigerde zijn configuratie aan deze app af te geven. Dat is een toegangsregel bij het domein, geen storing en geen probleem op dit apparaat. Er viel niets te vergelijken, dus is niet bekend of uw uitgever actueel is.",
   "doctor.check1.source.unreadable": "de configuratie van dit domein kon niet worden gelezen (HTTP {status})",
   "doctor.check1.detail.unreadable": "Het domein antwoordde met iets dat deze app niet kon verwerken — een afgekapt of half geschreven bestand, of een foutpagina die als succes werd aangeboden. Er kon niets worden vergeleken, en niets hiervan is een uitspraak over uw machine.",
   "doctor.check1.source.no_document": "dit domein biedt geen implementatiedocument aan",
@@ -820,5 +818,10 @@
   "feed.attr.wrong_target": "niet ondertekend — de handtekening hoort bij een andere post",
   "feed.attr.not_the_author": "niet ondertekend — ondertekend door iemand anders dan de auteur",
   "feed.attr.bad_signature": "niet ondertekend — de handtekening klopt niet",
-  "feed.no_route": "Je bent niet verbonden met deze uitgever, en deze implementatie weet niet waar die gehost wordt — er is dus niemand om het aan te vragen."
+  "feed.no_route": "Je bent niet verbonden met deze uitgever, en deze implementatie weet niet waar die gehost wordt — er is dus niemand om het aan te vragen.",
+  "apps.file.requested": "Deze app vraagt om een bestand",
+  "apps.file.sent": "{name} naar de app gestuurd",
+  "apps.file.kept": "{name} opgeslagen in je bestanden",
+  "apps.file.refused": "{name} niet opgeslagen: {why}",
+  "apps.file.not_sent": "Geen bestand verzonden: {why}"
 }

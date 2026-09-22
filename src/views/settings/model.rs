@@ -310,7 +310,10 @@ impl SettingsModel {
                 session_config::set_boot_surface(
                     peers,
                     &self.peer_id,
-                    BootSurface::Window { peer_id: peer, window_type },
+                    // Choosing the `window` KIND names no address; this surface
+                    // has no control for one, and a deployment document is where
+                    // a target comes from (`deployment_config::window_target`).
+                    BootSurface::Window { peer_id: peer, window_type, target: None },
                 );
             }
             _ => {}
@@ -326,7 +329,7 @@ impl SettingsModel {
         }
         let cfg = session_config::read(peers, &self.peer_id);
         match &cfg.boot_surface {
-            BootSurface::Window { window_type, .. } => {
+            BootSurface::Window { window_type, target, .. } => {
                 // Resolve a legacy key first so a boot choice saved before a type
                 // rename validates against its current key (not dropped to fallback).
                 let window_type = crate::window::canonical_window_type(window_type);
@@ -339,7 +342,14 @@ impl SettingsModel {
                 session_config::set_boot_surface(
                     peers,
                     &self.peer_id,
-                    BootSurface::Window { peer_id: value.to_string(), window_type },
+                    // The target is PRESERVED across a peer change: `peer_id` is
+                    // the local store the window reads and the address names a
+                    // publisher, so moving one says nothing about the other.
+                    BootSurface::Window {
+                        peer_id: value.to_string(),
+                        window_type,
+                        target: target.clone(),
+                    },
                 );
             }
             BootSurface::Site => {
@@ -357,9 +367,15 @@ impl SettingsModel {
                 session_config::set_boot_surface(
                     peers,
                     &self.peer_id,
+                    // …and DROPPED when the window type changes, because an
+                    // address belongs to a convention: handing the Feed window a
+                    // `/sites/…` target would carry a setting forward into a
+                    // viewer that can only answer `NotMine`. Losing it is the
+                    // honest outcome of choosing a different viewer.
                     BootSurface::Window {
                         peer_id: peer_id.clone(),
                         window_type: value.to_string(),
+                        target: None,
                     },
                 );
             }
@@ -787,7 +803,7 @@ mod tests {
         let cfg = crate::session_config::read(&pm, &pid);
         assert_eq!(
             cfg.boot_surface,
-            BootSurface::Window { peer_id: pid.clone(), window_type: "Shell".into() }
+            BootSurface::Window { peer_id: pid.clone(), window_type: "Shell".into(), target: None }
         );
     }
 

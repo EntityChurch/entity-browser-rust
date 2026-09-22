@@ -1306,6 +1306,13 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Connect to a peer first."),
     ),
     ("saves.err_offer", Message::Simple("Could not offer it: {why}")),
+    // The Apps player's file verbs (`x-files`, crate::app_files). The button
+    // reuses `filetransfer.send_file`: one English string, one key.
+    ("apps.file.requested", Message::Simple("This app is asking for a file")),
+    ("apps.file.sent", Message::Simple("Sent {name} to the app")),
+    ("apps.file.kept", Message::Simple("Saved {name} to your files")),
+    ("apps.file.refused", Message::Simple("Did not save {name}: {why}")),
+    ("apps.file.not_sent", Message::Simple("Did not send a file: {why}")),
     (
         "saves.err_scan",
         Message::Simple("Could not ask that peer: {why}"),
@@ -2547,18 +2554,6 @@ pub const EN: &[(&str, Message)] = &[
         "doctor.check1.detail.origin_error",
         Message::Simple(
             "The domain is reachable but returned a fault instead of its configuration, so nothing could be compared. That is a problem at the domain, not on this machine, and it says nothing about whether your publisher is current.",
-        ),
-    ),
-    (
-        "doctor.check1.source.refused",
-        Message::Simple(
-            "this domain would not serve its configuration (HTTP {status})",
-        ),
-    ),
-    (
-        "doctor.check1.detail.refused",
-        Message::Simple(
-            "The domain is reachable and refused to hand its configuration to this app. That is an access rule at the domain, not a fault and not a problem on this machine. Nothing could be compared, so nothing is known about whether your publisher is current.",
         ),
     ),
     (

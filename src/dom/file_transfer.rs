@@ -196,7 +196,7 @@ fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
             ctx,
             &crate::i18n::t("filetransfer.authorize_device", &[]),
             components::ButtonKind::Primary,
-            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None }, // i18n-ignore — identity key; registry lookup
+            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None, target: None }, // i18n-ignore — identity key; registry lookup
         );
         util::append(parent, &btn);
     }

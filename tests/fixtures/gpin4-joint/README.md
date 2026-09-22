@@ -186,8 +186,19 @@ fixture without it goes green while the divergence is live:
 
 ## Changing anything here
 
-`EXPECTED.json` is regenerated with `GPIN4_REGENERATE=1 cargo test --bin entity-browser gpin4_joint`,
+`EXPECTED.json` is regenerated **in this repo's container** — the host needs only `make` + `podman`:
+
+```
+make test-one T=gpin4_joint EXTRA_RUN_ENV="-e GPIN4_REGENERATE=1"
+```
+
 and that is the only way it should ever change.
+
+> This line used to read `GPIN4_REGENERATE=1 cargo test --bin entity-browser gpin4_joint`, which is
+> a **host** invocation and fails on a podman-only box — `openssl-sys` cannot find `openssl.pc`, and
+> the build dies before any test runs. Corrected 2026-09-12, when the FEED joint fixture needed the
+> same command and it did not work. *A documented invocation is a coupling no compiler maintains;
+> run it before you write it down.*
 
 **A regeneration that was not accompanied by a deliberate `site.json` edit is a wire event, not a
 test fix.** The other seat compares against these bytes; if they moved on their own, our encoder

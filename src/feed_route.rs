@@ -7,9 +7,9 @@
 //!
 //! ## Why this is a ladder and not a choice
 //!
-//! The two arms are not two implementations of one capability — they are two
-//! *deployments*, and a publisher picks between them for reasons a reader cannot
-//! see. The operator's framing, which is the design:
+//! The author's two arms are not two implementations of one capability — they are
+//! two *deployments*, and a publisher picks between them for reasons a reader
+//! cannot see. The operator's framing, which is the design:
 //!
 //! > *You may always only publish one or the other if you know you're providing
 //! > data or a service that either requires live, or that would crash you if you
@@ -18,6 +18,24 @@
 //!
 //! So the reader's job is not to pick the "right" transport, it is to **try what
 //! is there** and to say which one answered.
+//!
+//! ## The third leg is a different KIND of leg — [`Leg::Mirror`]
+//!
+//! A gatherer's republication (`APP-CONVENTION-FEED` §6) is not a third way to
+//! reach the author; it is **somebody else's reading of them**, and §6.2 places it
+//! as *"one leg of an ordered source set… not a replacement for the author."* Two
+//! consequences worth having in one place:
+//!
+//! - **It goes last** and the reason is authority, not latency. A mirror can only
+//!   ever be *short* — §6.1 rule 2 gives it no way to claim otherwise — so
+//!   preferring it over a reachable author trades a complete answer for a partial
+//!   one. The cost argument that makes mirrors worth having (one root check
+//!   instead of 500) is about a **batch no-op check across many authors**, a
+//!   different operation from reading one author's feed.
+//! - **What it carries is not who wrote it.** `DX-R13` / §6.1 rule 3: attribution
+//!   follows each entry's own detached signature, always, and a surface naming the
+//!   gatherer as the author is non-conformant. The leg name reaches the log and
+//!   the *"via"* line; it never reaches a byline.
 //!
 //! ## ⚠ A publisher cannot state a preference today, and that is measured
 //!
@@ -60,17 +78,42 @@ pub enum Leg {
     Live,
     /// Over their published tree, served at this origin.
     Published(String),
+    /// Over a **gatherer's** mirror of this author — `APP-CONVENTION-FEED` §6.
+    ///
+    /// ⭐ **The third leg is not a third transport.** Live and published are two
+    /// deployments of *the author*; this is somebody else's republication of what
+    /// they gathered, and §6.2 is explicit that it is *"one leg of an ordered
+    /// source set, alongside the author's live peer and the author's own published
+    /// origin"* — **not a replacement for the author**, which is why it is last in
+    /// [`plan`]'s default order.
+    ///
+    /// What it buys is cost. A reader following 500 authors directly pays a signed
+    /// root check per author; one following a peer who mirrors them pays **one**,
+    /// because the witness is that gatherer's root and one root covers every
+    /// mirror under it. That is the 250× argument, and it is arithmetic over a
+    /// measured no-op rather than a measurement — nobody has built a 500-follow
+    /// reader on either seat.
+    Mirror {
+        /// Whose republication this is. **Never rendered as the author of
+        /// anything** (§6.1 rule 3 / `DX-R13`) — it names who to ask, and
+        /// attribution comes off each entry's own signature.
+        gatherer: String,
+        /// Where the gatherer's tree is served.
+        origin: String,
+    },
 }
 
 impl Leg {
     /// The stable word for this leg — a log field and an i18n key suffix.
     ///
     /// **Not `Display`**, which would have to render the origin: a name that
-    /// varies by deployment cannot key a translated string.
+    /// varies by deployment cannot key a translated string. The same argument
+    /// applies to the gatherer's peer id.
     pub fn name(&self) -> &'static str {
         match self {
             Leg::Live => "live",
             Leg::Published(_) => "published",
+            Leg::Mirror { .. } => "mirror",
         }
     }
 }
@@ -80,6 +123,9 @@ impl fmt::Display for Leg {
         match self {
             Leg::Live => write!(f, "live"),
             Leg::Published(origin) => write!(f, "published at {origin}"),
+            Leg::Mirror { gatherer, origin } => {
+                write!(f, "mirrored by {gatherer} at {origin}")
+            }
         }
     }
 }
@@ -115,6 +161,20 @@ impl Route {
     }
 }
 
+/// A peer who republishes this author, and where their tree is served.
+///
+/// ⚠ **Where this list comes from is an open question, and the honest answer
+/// today is nowhere.** §6 gives a reader no way to learn that a gatherer exists:
+/// §6.0.1 makes a mirror's address *derivable* once you know **whose** mirror you
+/// want, and nothing names the gatherers. So the product passes an empty slice —
+/// the mechanism is built and gated, and the discovery half is routed rather than
+/// invented here, because whichever shape publishes first becomes the baseline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gatherer {
+    pub peer_id: String,
+    pub origin: String,
+}
+
 /// Build the reading order for one author.
 ///
 /// `connected` comes from the kernel read-model
@@ -123,8 +183,14 @@ impl Route {
 /// the fifth. `origin` comes from
 /// [`origins::get_origin`](crate::content_site::origins::get_origin), the
 /// accessor that resolves supersession, so a retired publisher's origin cannot
-/// enter a route (AP54).
-pub fn plan(connected: bool, origin: Option<&str>, pref: Preference) -> Route {
+/// enter a route (AP54). `mirrors` is [`Gatherer`] — read its note before
+/// wondering why every caller in the product passes `&[]`.
+pub fn plan(
+    connected: bool,
+    origin: Option<&str>,
+    mirrors: &[Gatherer],
+    pref: Preference,
+) -> Route {
     let mut legs = Vec::new();
     match pref {
         Preference::Unstated => {
@@ -133,6 +199,21 @@ pub fn plan(connected: bool, origin: Option<&str>, pref: Preference) -> Route {
             }
             if let Some(o) = origin {
                 legs.push(Leg::Published(o.to_string()));
+            }
+            // ⭐ **Mirrors go LAST, and the reason is authority rather than
+            // cost.** §6.2: a mirror *"is not a replacement for the author"* — it
+            // can only ever be short, and a gatherer's view of what somebody
+            // posted is evidence about the gatherer's reading, not about the
+            // author's writing. The cost argument (one root check instead of 500)
+            // is real and is about a **batch no-op check across many authors**,
+            // which is a different operation from reading one author's feed; it
+            // does not license preferring a stranger's copy over the author when
+            // the author is right there.
+            for g in mirrors {
+                legs.push(Leg::Mirror {
+                    gatherer: g.peer_id.clone(),
+                    origin: g.origin.clone(),
+                });
             }
         }
     }
@@ -169,8 +250,17 @@ pub struct Attempt {
 /// a report about ours.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Resolution<T> {
-    /// Posts, and the leg that supplied them.
-    Served { via: &'static str, entries: Vec<T> },
+    /// Posts, and **the leg that supplied them, whole**.
+    ///
+    /// ⭐ **It carries the `Leg` rather than its `name()` because a mirror leg
+    /// has a fact the name cannot hold: WHOSE reading this is.** §6.1 rule 3
+    /// makes the gatherer's peer id something a surface must never put in a
+    /// byline — and the *via* line is the one place it may legitimately appear,
+    /// so a resolution that could say *"mirrored"* and not *"by whom"* would
+    /// leave a reader unable to judge a view they have been told is partial by
+    /// construction. `name()` is still the i18n key suffix; this is the value it
+    /// projects from.
+    Served { leg: Leg, entries: Vec<T> },
     /// At least one leg answered, and no leg had anything. The attempts are
     /// carried because *"we asked both and they have nothing"* and *"we asked
     /// one, they have nothing, and the other we could not check"* are different
@@ -208,7 +298,7 @@ pub fn reduce<T>(results: Vec<(Leg, Result<Vec<T>, String>)>) -> Resolution<T> {
         return Resolution::Unreachable;
     }
     let mut attempts = Vec::with_capacity(results.len());
-    let mut served: Option<(&'static str, Vec<T>)> = None;
+    let mut served: Option<(Leg, Vec<T>)> = None;
     let mut any_answered = false;
 
     for (leg, result) in results {
@@ -222,7 +312,7 @@ pub fn reduce<T>(results: Vec<(Leg, Result<Vec<T>, String>)>) -> Resolution<T> {
                 any_answered = true;
                 attempts.push(Attempt { leg: name, outcome: AttemptOutcome::Entries(entries.len()) });
                 if served.is_none() {
-                    served = Some((name, entries));
+                    served = Some((leg, entries));
                 }
             }
             Err(detail) => {
@@ -232,7 +322,7 @@ pub fn reduce<T>(results: Vec<(Leg, Result<Vec<T>, String>)>) -> Resolution<T> {
     }
 
     match served {
-        Some((via, entries)) => Resolution::Served { via, entries },
+        Some((leg, entries)) => Resolution::Served { leg, entries },
         None if any_answered => Resolution::NoPosts { attempts },
         None => Resolution::Failed { attempts },
     }
@@ -246,8 +336,10 @@ pub fn reduce<T>(results: Vec<(Leg, Result<Vec<T>, String>)>) -> Resolution<T> {
 /// path was silent and a window said how it resolved only when it adopted.
 pub fn describe<T>(author: &str, resolution: &Resolution<T>) -> String {
     match resolution {
-        Resolution::Served { via, entries } => {
-            format!("feed-route: {author} served {} entries via {via}", entries.len())
+        Resolution::Served { leg, entries } => {
+            // `Leg`'s `Display`, not `name()` — the log is where *"mirrored by
+            // G at O"* belongs, and it was previously the bare word "mirror".
+            format!("feed-route: {author} served {} entries via {leg}", entries.len())
         }
         Resolution::NoPosts { attempts } => {
             format!("feed-route: {author} has no posts — {}", render_attempts(attempts))
@@ -281,13 +373,13 @@ mod tests {
 
     #[test]
     fn a_connected_author_with_no_origin_is_read_live() {
-        assert_eq!(plan(true, None, Preference::Unstated).legs, vec![Leg::Live]);
+        assert_eq!(plan(true, None, &[], Preference::Unstated).legs, vec![Leg::Live]);
     }
 
     #[test]
     fn an_author_we_are_not_connected_to_is_read_from_their_origin() {
         assert_eq!(
-            plan(false, Some("https://e.example"), Preference::Unstated).legs,
+            plan(false, Some("https://e.example"), &[], Preference::Unstated).legs,
             vec![Leg::Published("https://e.example".into())]
         );
     }
@@ -296,18 +388,61 @@ mod tests {
     #[test]
     fn with_both_available_live_is_tried_first_and_published_is_the_fallback() {
         assert_eq!(
-            plan(true, Some("https://e.example"), Preference::Unstated).legs,
+            plan(true, Some("https://e.example"), &[], Preference::Unstated).legs,
             vec![Leg::Live, Leg::Published("https://e.example".into())]
         );
+    }
+
+    /// ⭐ **Every one of the author's own legs outranks every mirror** (§6.2 —
+    /// *"not a replacement for the author"*).
+    ///
+    /// The tempting order is the other one: a mirror is the **cheap** leg, and a
+    /// reader following 500 people would rather pay one root check than 500. That
+    /// argument is about a batch no-op check across many authors; applied to
+    /// reading *one* author it trades a complete answer for one that can only ever
+    /// be short, from a peer with no authority over the subject.
+    ///
+    /// Asserted as an **order over the whole list**, not as *"mirror is not
+    /// first"* — with three legs the weaker assertion passes an implementation
+    /// that puts a mirror between the two author legs.
+    #[test]
+    fn a_gatherers_mirror_is_tried_after_every_one_of_the_authors_own_legs() {
+        let mirrors = vec![
+            Gatherer { peer_id: "2FirstGatherer".into(), origin: "https://g1.example".into() },
+            Gatherer { peer_id: "2SecondGatherer".into(), origin: "https://g2.example".into() },
+        ];
+        let legs = plan(true, Some("https://e.example"), &mirrors, Preference::Unstated).legs;
+        assert_eq!(
+            legs,
+            vec![
+                Leg::Live,
+                Leg::Published("https://e.example".into()),
+                Leg::Mirror {
+                    gatherer: "2FirstGatherer".into(),
+                    origin: "https://g1.example".into()
+                },
+                Leg::Mirror {
+                    gatherer: "2SecondGatherer".into(),
+                    origin: "https://g2.example".into()
+                },
+            ],
+            "a mirror was tried before one of the author's own legs"
+        );
+        // And a mirror alone is a route: an author we cannot reach at all is still
+        // readable through somebody who gathered them, which is most of why §6
+        // exists.
+        let only = plan(false, None, &mirrors[..1], Preference::Unstated);
+        assert!(!only.is_unreachable(), "a gathered author was reported unreachable");
+        assert_eq!(only.legs.len(), 1);
     }
 
     /// **Not `legs.is_empty()` at the call site** — the surface that renders
     /// this says something no other outcome says.
     #[test]
     fn no_connection_and_no_origin_is_unreachable_rather_than_an_empty_feed() {
-        let route = plan(false, None, Preference::Unstated);
+        let route = plan(false, None, &[], Preference::Unstated);
         assert!(route.is_unreachable());
-        assert!(!plan(true, None, Preference::Unstated).is_unreachable());
+        assert!(!plan(true, None, &[], Preference::Unstated).is_unreachable());
     }
 
     // -- reduce -----------------------------------------------------------
@@ -323,8 +458,8 @@ mod tests {
     fn the_first_leg_that_carries_posts_serves_them_and_names_itself() {
         let r = reduce(vec![(Leg::Live, ok(3)), (Leg::Published("o".into()), ok(9))]);
         match r {
-            Resolution::Served { via, entries } => {
-                assert_eq!(via, "live");
+            Resolution::Served { leg, entries } => {
+                assert_eq!(leg.name(), "live");
                 assert_eq!(entries.len(), 3, "the second leg must not overwrite the first");
             }
             other => panic!("{other:?}"),
@@ -339,8 +474,8 @@ mod tests {
     fn an_empty_answer_does_not_stop_the_ladder() {
         let r = reduce(vec![(Leg::Live, ok(0)), (Leg::Published("o".into()), ok(4))]);
         match r {
-            Resolution::Served { via, entries } => {
-                assert_eq!(via, "published");
+            Resolution::Served { leg, entries } => {
+                assert_eq!(leg.name(), "published");
                 assert_eq!(entries.len(), 4);
             }
             other => panic!("an empty first leg swallowed the feed: {other:?}"),
@@ -350,7 +485,7 @@ mod tests {
     #[test]
     fn a_failed_leg_falls_through_to_the_next_one() {
         let r = reduce(vec![(Leg::Live, err("no route to peer")), (Leg::Published("o".into()), ok(2))]);
-        assert!(matches!(r, Resolution::Served { via: "published", .. }));
+        assert!(matches!(r, Resolution::Served { leg: Leg::Published(_), .. }));
     }
 
     /// *"We asked and they have nothing"* is a claim about the author.
@@ -410,7 +545,7 @@ mod tests {
     #[test]
     fn all_four_resolutions_report_and_no_two_say_the_same_thing() {
         let lines = vec![
-            describe("A", &Resolution::Served { via: "live", entries: vec![1u8] }),
+            describe("A", &Resolution::Served { leg: Leg::Live, entries: vec![1u8] }),
             describe(
                 "A",
                 &Resolution::<u8>::NoPosts {

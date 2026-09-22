@@ -41,6 +41,33 @@ impl Location {
     pub fn site_root(site_id: impl Into<String>) -> Self {
         Self { peer_id: None, site_id: site_id.into(), page: String::new() }
     }
+
+    /// Decode an [`crate::open_target`] payload — the part of an address beneath
+    /// the `sites` segment — into a location on `peer`.
+    ///
+    /// `{site}` → the site root · `{site}/pages/{slug}` → that page. **`None` for
+    /// an empty payload**, which is the Registry Browser's *"this publisher's
+    /// sites"*: routable (there is a viewer for it) and not aimable (it names no
+    /// site). Those are different claims and the caller reports them as such.
+    ///
+    /// A payload that is neither shape — `{site}/manifest`, `{site}/assets/x` —
+    /// yields the **site root** rather than nothing. A target naming a real thing
+    /// inside a real site should land you in that site; refusing would report
+    /// *"nothing to open"* about a site sitting right there, which is AP54's
+    /// wrong sentence one layer down.
+    pub fn from_target_payload(peer: &str, payload: &str) -> Option<Self> {
+        let payload = payload.trim_matches('/');
+        if payload.is_empty() {
+            return None;
+        }
+        let (site_id, rest) = split_first_segment(payload);
+        let page = rest.strip_prefix("pages/").unwrap_or("").to_string();
+        Some(Self {
+            peer_id: Some(peer.to_string()).filter(|p| !p.is_empty()),
+            site_id,
+            page,
+        })
+    }
 }
 
 /// The classified meaning of a link string.

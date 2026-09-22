@@ -765,8 +765,6 @@
   "doctor.check1.detail.unheard": "Z domeny nic nie dotarło, więc nie było czego porównywać i nic nie wiadomo — nie jest to czyste zaświadczenie o dobrym stanie. Wszystko, co już znajduje się na tej maszynie, pozostaje nienaruszone i nadal aktualne. Spróbuj ponownie, gdy wrócisz do sieci.",
   "doctor.check1.source.origin_error": "ta domena odpowiedziała błędem (HTTP {status})",
   "doctor.check1.detail.origin_error": "Domena jest osiągalna, ale zamiast swojej konfiguracji zwróciła błąd, więc nie było czego porównywać. To problem po stronie domeny, a nie tej maszyny, i nie mówi nic o tym, czy twój wydawca jest aktualny.",
-  "doctor.check1.source.refused": "ta domena nie chciała udostępnić swojej konfiguracji (HTTP {status})",
-  "doctor.check1.detail.refused": "Domena jest osiągalna i odmówiła przekazania swojej konfiguracji tej aplikacji. To reguła dostępu po stronie domeny, a nie awaria ani problem na tym komputerze. Nie było czego porównać, więc nie wiadomo, czy Twój wydawca jest aktualny.",
   "doctor.check1.source.unreadable": "nie udało się odczytać konfiguracji tej domeny (HTTP {status})",
   "doctor.check1.detail.unreadable": "Domena odpowiedziała czymś, czego ta aplikacja nie potrafiła przetworzyć — obciętym lub w połowie zapisanym plikiem albo stroną błędu podaną jako powodzenie. Nie było czego porównywać i nic z tego nie jest stwierdzeniem o twojej maszynie.",
   "doctor.check1.source.no_document": "ta domena nie udostępnia żadnego dokumentu wdrożenia",
@@ -827,5 +825,10 @@
   "feed.attr.wrong_target": "niepodpisany — podpis dotyczy innego wpisu",
   "feed.attr.not_the_author": "niepodpisany — podpisany przez kogoś innego niż autor",
   "feed.attr.bad_signature": "niepodpisany — podpis jest nieprawidłowy",
-  "feed.no_route": "Nie masz połączenia z tym wydawcą, a to wdrożenie nie wie, gdzie jest hostowany — nie ma więc kogo zapytać."
+  "feed.no_route": "Nie masz połączenia z tym wydawcą, a to wdrożenie nie wie, gdzie jest hostowany — nie ma więc kogo zapytać.",
+  "apps.file.requested": "Ta aplikacja prosi o plik",
+  "apps.file.sent": "Wysłano {name} do aplikacji",
+  "apps.file.kept": "Zapisano {name} w Twoich plikach",
+  "apps.file.refused": "Nie zapisano {name}: {why}",
+  "apps.file.not_sent": "Nie wysłano pliku: {why}"
 }

@@ -1,0 +1,51 @@
+{
+  "_comment": "COMPUTED by entity-browser-rust from feed.json. Not hand-editable — see the module doc on src/feed_joint_fixture.rs. `index_root` is the EXTENSION-TREE v4.0.2 trie root over `index_bindings` and is THE comparand. `feed_root_ours` additionally covers keys whose prefix APP-CONVENTION-FEED leaves to the publisher, so it is our own drift detector and NOT a cross-impl expectation. Neither is a published-root head: that entity carries a wall clock and is not comparable.",
+  "author_peer_id": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis",
+  "convention": "APP-CONVENTION-FEED — §2.3 entries, §4.2 index, §1.1 (FEED-R2) signatures",
+  "entries": [
+    {
+      "entry": "006b623eb38ba9f4432e7c31ede368259761fbe0e2bd2a700124525f70209ba0e6",
+      "name": "plain",
+      "signature": "004b096a87561024f287e8a8f50ca0ca86629cf1d845186218d22a2d751c8a16b7",
+      "signature_key": "system/signature/006b623eb38ba9f4432e7c31ede368259761fbe0e2bd2a700124525f70209ba0e6"
+    },
+    {
+      "entry": "00553209772f2b417799541e71afcda03b316e97c92f1ff50e754a51503b05fc2d",
+      "name": "params",
+      "signature": "00c691b7bc122cb07678439752131b3e79ffc34473c21aef59fdf34bcdfa19ec67",
+      "signature_key": "system/signature/00553209772f2b417799541e71afcda03b316e97c92f1ff50e754a51503b05fc2d"
+    },
+    {
+      "entry": "00160d5027a95f69a84d74e307959a665e0cfbaaedc88822730549643bbf2c69a5",
+      "name": "reply",
+      "signature": "007e107d905781e724382234221f32a924f79bd4ef3632cbc0582413e3c2caba69",
+      "signature_key": "system/signature/00160d5027a95f69a84d74e307959a665e0cfbaaedc88822730549643bbf2c69a5"
+    },
+    {
+      "entry": "00f20477ac81899bba8a5ec7992b44fdb32cdab5e2c019280dd2ae0eef0ae04030",
+      "name": "linked",
+      "signature": "00a9d1c52150a187b8af3c9e2ad4d0492e5365b8c3931a5a8edb0ada24ede93996",
+      "signature_key": "system/signature/00f20477ac81899bba8a5ec7992b44fdb32cdab5e2c019280dd2ae0eef0ae04030"
+    },
+    {
+      "entry": "00b0b7e704586806e7a32001dcaaeb6dc907b7fba87b68b28f68b408b1115c12b0",
+      "name": "chained",
+      "signature": "007c96365933c52ca900a065d15e3ebd9a24512c6186ba591e8a846cc73398bff0",
+      "signature_key": "system/signature/00b0b7e704586806e7a32001dcaaeb6dc907b7fba87b68b28f68b408b1115c12b0"
+    }
+  ],
+  "entry_keys_are_ours": {
+    "prefix": "app/feed/entries/",
+    "why": "APP-CONVENTION-FEED §2 makes the cross-impl contract the TYPE TAG, not the path, so where an entry lives is a local choice and a second seat is not expected to match this. Compare `entries[].entry` by hash, in order. The signature key is a different case: V7 §3.5's invariant pointer pins it, so `signature_key` IS an expectation."
+  },
+  "feed_root_ours": "00c752020984810532fef66b77b5b88bbbd9cc04f94e4c1af26f1908aa4fc036f0",
+  "index_bindings": {
+    "app/feed/index": "000f5d07bd318ad9ca242ae2d7037af02cad01d3d518842f37cd5c84b57cffc038",
+    "app/feed/index/0": "00625ea655f0f7d6bc5595cc99018841370365103276da329b5533dd3ec4a964f3",
+    "app/feed/index/1": "00635ae56af548874784bf3d26b805a4ea0d4905091bc6bcac50996b30a819a5fd",
+    "app/feed/index/2": "0002fb5cd31466ff777cf8c2bfe7521931ce41806ae3be7f6b68c1edd05b00d78e"
+  },
+  "index_root": "001064708fe2ad99d0184af7a61519a1c9867e77e0a7e89e46890e218538947488",
+  "page_count": 3,
+  "page_size": 2
+}

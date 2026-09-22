@@ -758,8 +758,6 @@
   "doctor.check1.detail.unheard": "Von der Domain war nichts zu hören, es konnte also nichts verglichen werden und nichts ist bekannt — dies ist kein Unbedenklichkeitsnachweis. Alles, was bereits auf diesem Gerät liegt, ist unberührt und weiterhin zutreffend. Versuchen Sie es erneut, wenn Sie wieder online sind.",
   "doctor.check1.source.origin_error": "diese Domain hat mit einem Fehler geantwortet (HTTP {status})",
   "doctor.check1.detail.origin_error": "Die Domain ist erreichbar, hat aber statt ihrer Konfiguration einen Fehler zurückgegeben, es konnte also nichts verglichen werden. Das ist ein Problem bei der Domain, nicht auf diesem Gerät, und es sagt nichts darüber aus, ob Ihr Herausgeber aktuell ist.",
-  "doctor.check1.source.refused": "diese Domain wollte ihre Konfiguration nicht herausgeben (HTTP {status})",
-  "doctor.check1.detail.refused": "Die Domain ist erreichbar und hat es abgelehnt, ihre Konfiguration an diese App herauszugeben. Das ist eine Zugriffsregel der Domain, kein Fehler und kein Problem auf diesem Gerät. Es gab nichts zu vergleichen, daher ist nicht bekannt, ob Ihr Herausgeber aktuell ist.",
   "doctor.check1.source.unreadable": "die Konfiguration dieser Domain konnte nicht gelesen werden (HTTP {status})",
   "doctor.check1.detail.unreadable": "Die Domain hat mit etwas geantwortet, das diese App nicht auswerten konnte — eine abgeschnittene oder halb geschriebene Datei oder eine als Erfolg ausgelieferte Fehlerseite. Es konnte nichts verglichen werden, und nichts hiervon ist eine Aussage über Ihr Gerät.",
   "doctor.check1.source.no_document": "diese Domain stellt kein Bereitstellungsdokument bereit",
@@ -820,5 +818,10 @@
   "feed.attr.wrong_target": "unsigniert – die Signatur deckt einen anderen Beitrag ab",
   "feed.attr.not_the_author": "unsigniert – von jemand anderem als dem Autor signiert",
   "feed.attr.bad_signature": "unsigniert – die Signatur ist ungültig",
-  "feed.no_route": "Sie sind nicht mit diesem Herausgeber verbunden, und diese Bereitstellung weiß nicht, wo er gehostet wird — es gibt also niemanden zu fragen."
+  "feed.no_route": "Sie sind nicht mit diesem Herausgeber verbunden, und diese Bereitstellung weiß nicht, wo er gehostet wird — es gibt also niemanden zu fragen.",
+  "apps.file.requested": "Diese App fragt nach einer Datei",
+  "apps.file.sent": "{name} an die App gesendet",
+  "apps.file.kept": "{name} in deinen Dateien gespeichert",
+  "apps.file.refused": "{name} nicht gespeichert: {why}",
+  "apps.file.not_sent": "Keine Datei gesendet: {why}"
 }

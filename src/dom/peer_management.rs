@@ -332,7 +332,7 @@ fn render_row(tbody: &Element, row: &PeerRow, ctx: &DomCtx) {
             &crate::i18n::t("peers.open_tree", &[]),
             components::ButtonKind::Primary,
             // "Entity Tree" is the window-type identity key, not UI text.
-            Action::SpawnWindow { type_name: "Entity Tree", peer_id: Some(row.peer_id.clone()) }, // i18n-ignore
+            Action::SpawnWindow { type_name: "Entity Tree", peer_id: Some(row.peer_id.clone()), target: None }, // i18n-ignore
         );
         util::append(&td_actions, &open_btn);
     }

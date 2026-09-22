@@ -465,6 +465,83 @@ mod tests {
         assert_eq!(asset_name_from_ref(""), None);
     }
 
+    /// **⚠ WHICH CLAUSE IS THE SECURITY PROPERTY — and it is not the one `F-1`
+    /// is about (`B-10` / `A-24`, measured 2026-09-12).**
+    ///
+    /// We have told arch, in three packets, that refusing
+    /// `APP-CONVENTION-REFERENCE` §3.2's **`path` form** (a leading `/`) at the
+    /// asset position is *"a security property — subgraph confinement"*. That
+    /// sentence is true of [`asset_name_from_ref`] **as a whole** and **false of
+    /// the leading-slash clause specifically**, which is the clause the ruling
+    /// turns on. `entity-workbench-go` made the argument first
+    /// (`workbench/site_ref.go:299`, *"the base of an asset ref is the site root
+    /// either way … which is what makes the old refusal a pure loss"*) and it
+    /// was verified here rather than taken on report:
+    ///
+    /// **An asset ref has exactly one base and it is the SITE ROOT.**
+    /// [`asset_path`] is `/{peer}/sites/{site}/assets/{name}` and `name` is
+    /// everything after the mandatory `assets/` prefix — there is no
+    /// page-relative resolution anywhere on the path. So `/assets/figures/x.png`
+    /// and `assets/figures/x.png` denote **the same bytes**, and refusing the
+    /// first buys nothing the second does not already give up.
+    ///
+    /// What actually confines the subgraph is the **`assets/` prefix** (the name
+    /// can only ever be appended under this site's own assets dir) plus the
+    /// `..` / `//` / `://` / `data:` guards. This test runs every hostile input
+    /// through a *hypothetical* single-leading-slash strip and asserts each one
+    /// is **still** refused — so the claim above is a measurement rather than an
+    /// argument, and a future session cannot re-derive it the wrong way round.
+    ///
+    /// ⛔ **BEHAVIOUR IS DELIBERATELY UNCHANGED.** `A-24` is open at arch and
+    /// the live question is what §3.2's `path` form *means* at this position —
+    /// site-root-relative (their reading) or peer-relative `/{peer}/sites/…`
+    /// (which would make accepting it our own invented third reading). Widening
+    /// while a ruling is pending would make us a second seat asserting a reading
+    /// of a clause we just found we had mis-argued. **The correction is what is
+    /// owed, not the change** — a ruling made on a premise we now know is partly
+    /// wrong is worse than a delayed one.
+    ///
+    /// Stated so nobody reads the divergence as dangerous: it fails **safe** on
+    /// our side. A refused ref renders no figure; it never renders somebody
+    /// else's.
+    #[test]
+    fn the_leading_slash_refusal_is_not_what_confines_the_subgraph() {
+        // The `path` form of the ref we DO accept. Refused today…
+        assert_eq!(asset_name_from_ref("/assets/figures/x.png"), None);
+        // …and it names the same bytes as the form we accept, because the base
+        // is the site root and nothing else.
+        assert_eq!(
+            asset_path("PEER1", "church", &asset_name_from_ref("assets/figures/x.png").unwrap()),
+            "/PEER1/sites/church/assets/figures/x.png"
+        );
+
+        // Every hostile input, with ONE leading slash removed — i.e. what the
+        // function would see if the leading-slash clause were dropped. All still
+        // refused, by the clauses that are doing the real work.
+        let hostile_after_a_slash_strip = [
+            "etc/passwd",                     // ← "/etc/passwd"
+            "/evil.test/x.png",               // ← "//evil.test/x.png"
+            "https://evil.test/x.png",
+            "data:image/png;base64,AAAA",
+            "assets/../../secret",
+            "../../../etc/shadow",
+            "figures/x.png",                  // not under assets/
+            "",
+        ];
+        for input in hostile_after_a_slash_strip {
+            assert_eq!(
+                asset_name_from_ref(input),
+                None,
+                "{input:?} resolved — the leading-slash clause was load-bearing after all, and \
+                 the correction routed as B-10/A-24 is wrong"
+            );
+        }
+
+        // Anti-vacuity: the list above is only meaningful if the accepting arm
+        // still accepts something.
+        assert!(asset_name_from_ref("assets/demo.svg").is_some());
+    }
+
     #[test]
     fn page_from_path_round_trips() {
         let full = page_path("PEER1", "church", "docs/intro");

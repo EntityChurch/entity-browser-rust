@@ -166,6 +166,8 @@ struct Token {
     /// marks an L5 app the host delivers via `src` (`?app-host={id}`); its `html`
     /// is an unused placeholder (the payload is browser-rust in stripped mode).
     app_type: &'static str,
+    /// Declares the host's file verbs (`x-files`, [`crate::app_files`]).
+    files: bool,
 }
 
 /// The minimal baked token(s) for a set (e2e-only; see [`Token`]). One small
@@ -182,6 +184,7 @@ fn demo_tokens(set: &str) -> &'static [Token] {
             glyph: "🃏",
             html: include_str!("fixtures/war.html"),
             app_type: "",
+            files: false,
         }],
         paths::APPS_SET => &[
             Token {
@@ -193,6 +196,7 @@ fn demo_tokens(set: &str) -> &'static [Token] {
                 glyph: "🧮",
                 html: include_str!("fixtures/calculator.html"),
                 app_type: "",
+                files: false,
             },
             // L5 delivery smoke: browser-rust booted in stripped `?app-host=ping`
             // mode inside the sandboxed iframe, proving a WASM-peer payload can
@@ -207,6 +211,20 @@ fn demo_tokens(set: &str) -> &'static [Token] {
                 glyph: "🛰",
                 html: "<!doctype html><title>l5-placeholder</title>",
                 app_type: paths::APP_TYPE_L5,
+                files: false,
+            },
+            // The app side of the host's `x-file` verbs — the ONE fixture that
+            // declares `x-files`, so the others double as the not-declared case.
+            Token {
+                id: "file-probe",
+                name: "File Probe", // i18n-ignore — e2e-only demo fixture, not in production builds
+                description: "Sends a file to the host and shows the files the host sends back.", // i18n-ignore — e2e-only demo fixture
+                saves: false,
+                category: "", // folds into `other`
+                glyph: "📎",
+                html: include_str!("fixtures/file_probe.html"),
+                app_type: "",
+                files: true,
             },
             // NOTE: the built-in COMPUTE programs (Life / Snake / Asteroids) are
             // NOT baked here anymore. They are the production `EMBEDDED_PROGRAMS`
@@ -242,6 +260,7 @@ pub fn ensure_demo_set(peers: &Peers, peer_id: &str, set: &str) {
                 category: (!t.category.is_empty()).then(|| t.category.to_string()),
                 glyph: (!t.glyph.is_empty()).then(|| t.glyph.to_string()),
                 app_type: (!t.app_type.is_empty()).then(|| t.app_type.to_string()),
+                files: t.files,
                 ..Default::default()
             })
             .collect(),
@@ -1593,6 +1612,7 @@ impl WindowView for AppWindow {
             delivery,
             init_state,
             init_save_hash,
+            files: entry.files,
         };
         let listener = crate::dom::games::render_player(container, peers, ctx, &cfg);
         *self.listener.borrow_mut() = listener;

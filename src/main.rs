@@ -14,7 +14,6 @@ mod app;
 #[cfg(target_arch = "wasm32")]
 mod app_host;
 mod app_paths;
-mod app_sandbox;
 mod apps;
 mod boot;
 // Which build is this — read from the shell that loaded it (C5).
@@ -92,6 +91,10 @@ mod feed_ingest;
 // row plus an `impl`, and the compiler enforces the obligations.
 #[cfg_attr(target_arch = "wasm32", allow(unused))]
 mod publish_axes;
+// …and the same list read backwards: given an address, which viewer shows it.
+// `Action::SpawnWindow` carried a window kind and a peer and no address, so the
+// two callers that knew what a reader wanted to look at used a side channel.
+mod open_target;
 // The consumer half — an author's index walked, their entries fetched, and
 // FEED-R4's attribution attached to each one separately. **Not** native-only:
 // it split out of `feed_publish` precisely because that gate was hiding a
@@ -106,6 +109,12 @@ mod feed_fetch;
 // App-scoped and not window-scoped on purpose: two Feed windows must agree, and
 // closing one must not unfollow anybody.
 mod feed_follows;
+// …and who you read them THROUGH. `feed_route::plan` has taken a gatherer list
+// since it shipped and been passed an empty slice, because §6 gives a reader no
+// way to LEARN that a gatherer exists. This is the list somebody types — the
+// alternative is a viewer that invents its source, which is AP54 with a
+// stranger's reading of a third party in the place of their own posts.
+mod feed_gatherers;
 // The live-transport twin of `feed_fetch`'s origin source: the same `read_feed`
 // walk against the peer whose feed it is, over whatever connection reaches them.
 // Its module doc carries the measurement that says what "it is just the
@@ -119,6 +128,26 @@ mod feed_peer;
 // The ordering input a publisher would use to state a preference does not exist
 // in the convention — measured, and routed as `A-43`.
 mod feed_route;
+// §6's gatherer — consume from N sources and PUBLISH the result, which is the
+// one act that makes aggregation aggregatable. Carries `D20`'s two closure
+// preconditions (byte preservation; author-anchored evidence surviving
+// detachment from the author's root) and the two findings building it produced.
+mod feed_mirror;
+// The SOURCE `feed_mirror` never had: somebody else's published tree, read
+// through the real signed consumer, so a gather can be a verb rather than a
+// decision. Native-only, and it reads a DIRECTORY — this tree has no native
+// HTTP client, which its module doc states first because it bounds the verb.
+mod feed_gather;
+// `J-4` — the FEED joint fixture's authored input, our computed half, and the
+// gates that keep them pinned. Ours to build per `AT-30`; `entity-workbench-go`
+// produces against it. Test-only and native-only: it exists to hold our
+// `app/feed/*` encoding still for a second implementation, not to ship.
+mod feed_joint_fixture;
+// `B-7` — `app/share/*` bodies from OUR encoder, for entity-workbench-go to
+// vendor. The mirror image of `tests/fixtures/crossimpl-go-site/`: every
+// fixture in `share.rs`'s 32 gates is authored by the encoder under test, and
+// the only cure for that is bytes crossing the boundary.
+mod share_crossimpl_fixture;
 mod percent;
 mod format;
 #[cfg(feature = "measurement")]

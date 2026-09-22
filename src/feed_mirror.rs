@@ -41,16 +41,19 @@
 //! is why `RootProjector::record` skips a foreign peer rather than being taught
 //! to include one.
 //!
-//! ## ⚠ Two findings from building it, stated here and routed
+//! ## Two findings from building it — both ruled, and both changed the spec
 //!
-//! **1. §6's mirror is a THREAD mirror, and the closure trace is a TIMELINE.**
-//! §2.2 defines `reference` as pinned-only, so `subject: reference` pins one
-//! entity — *"the root entry this view is of"*, which §6.2's rationale is written
-//! about. The replication proposal's own §15.1 trace is a gatherer following
-//! three *authors* and republishing their timelines, and a timeline is a growing
-//! prefix that cannot be pinned. Both readings are built here (a subject is just
-//! a reference) and only the thread one has a derivable address; see
-//! [`crate::feed::FeedMirror`].
+//! **1. §6's mirror was a THREAD mirror and the closure trace is a TIMELINE.**
+//! v0.1 defined `reference` as pinned-only, so `subject: reference` pinned one
+//! entity, while the trace the whole design is argued from is a gatherer
+//! following three *authors* and republishing their timelines — a growing prefix
+//! that cannot be pinned. **Ruled `A-57`: the subject widens to
+//! `any-reference`**, and [`MirrorSubject`] is the two kinds. The one thing to
+//! read before touching the key is `FEED-R27`: the derivation is over
+//! *identifying fields only*, because `at` and `via` are optional hints and a
+//! derivation that includes an optional field is not a derivation — two
+//! gatherers of one author would publish correct, verifiable views at two
+//! addresses, each unable to compute the other's, with no error anywhere.
 //!
 //! **2. A mirror is NOT consumed by the identical code path a feed is**, which is
 //! weaker than the closure sentence reads. At the **entry** it is identical —
@@ -62,6 +65,17 @@
 //! — a gatherer can gather a mirror, since [`plan_mirror`] takes the same
 //! [`ReadEntry`] rows either reader produces — it closes `mirror → mirror` rather
 //! than `feed → feed`.
+//!
+//! ⛔ **That measurement made the `MUST` stricter, and the new clause binds this
+//! module: `DX-R4` forbids publishing, under our own namespace, an author's own
+//! set-layer object over content that author did not place there.** A reader
+//! taking the flat sentence literally goes looking for an `app/feed/index` under
+//! the *gatherer* — which is the gatherer asserting a claim only the author can
+//! make, unauthenticated besides, since the authorship instrument signs entries
+//! and not sets. `a_gatherer_publishes_no_set_layer_object_of_the_authors` is
+//! `DX-C6` and it inspects what a plan binds.
+//! *A sentence true at the layer everyone is thinking about and false at the
+//! layer nobody is reviews clean forever.*
 
 #![allow(dead_code)] // no verb publishes a mirror yet; the gates are native
 
@@ -72,7 +86,7 @@ use entity_entity::Entity;
 use entity_hash::Hash;
 
 use crate::entity_ref::EntityRef;
-use crate::feed::{entry_key, mirror_key, FeedError, FeedMirror};
+use crate::feed::{entry_key, FeedError, FeedMirror, MirrorSubject};
 use crate::feed_read::{finish_entry, recomputed_hash, FeedSource, ReadEntry};
 
 // ---------------------------------------------------------------------------
@@ -93,18 +107,49 @@ pub struct Carried {
     pub entity: Entity,
 }
 
-/// Everything one mirror publish emits: the gatherer's signed record, and the
-/// foreign bytes it carries.
+/// Everything one mirror publish emits: the gatherer's signed record, the
+/// foreign bytes it carries, and the hash-addressed closure beneath them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirrorPlan {
     pub record: FeedMirror,
     pub carried: Vec<Carried>,
+    /// **The `system/content` closure behind every pointer body**, hash-
+    /// addressed and therefore bound at no tree key at all.
+    ///
+    /// ⛔ **This field exists because the first cut did not have it and
+    /// published a dangling reference** — the identical defect `publish_feed`
+    /// shipped with one convention over, and for the identical reason: a body
+    /// over EMBED §3's 16 KiB ceiling is *refused inline*, so the pointer arm is
+    /// the only conformant way to carry one, which makes the closure a
+    /// requirement of that arm rather than a nicety.
+    ///
+    /// It was invisible to every gate in `feed_mirror` and every gate in
+    /// `feed_fetch`, because they all run against a map-backed double that
+    /// serves whatever it was handed. **What found it was `--verify`'s new
+    /// mirror arm, on its first run against a fixture carrying one long post**
+    /// — *"the post appears in the index and its body is empty"* — which is the
+    /// case for `AUDIT F8`'s rule made as plainly as it can be made: every
+    /// declaring type owes an arm, in the commit that introduces it, and the
+    /// arm finds things the type's own round-trip cannot.
+    pub content: Vec<Entity>,
 }
 
 impl MirrorPlan {
     /// How many entries this mirror holds.
     pub fn entry_count(&self) -> usize {
         self.record.entries.len()
+    }
+
+    /// The peers whose namespaces this plan writes into — **never the
+    /// gatherer's**, which is the whole of why a mirror needs `PublishAxis::
+    /// carried_peers`. Sorted and deduped, because a caller uses it to decide
+    /// what a clean may touch and a list with an order nobody chose is one
+    /// somebody eventually depends on.
+    pub fn carried_peers(&self) -> Vec<String> {
+        let mut peers: Vec<String> = self.carried.iter().map(|c| c.peer.clone()).collect();
+        peers.sort();
+        peers.dedup();
+        peers
     }
 
     /// How many of them travel with an author's signature.
@@ -128,6 +173,22 @@ pub enum GatherError {
     RowDoesNotAddress { claimed: Hash, actual: Hash },
     /// A row we could not re-address at all.
     RowUnencodable { claimed: Hash },
+    /// ⛔ **An entry declares a body blob this gather does not hold.**
+    ///
+    /// Refused rather than carried, because the alternative is a mirror that
+    /// *names a post and serves an empty one* — the post appears, the body is
+    /// blank, and nothing anywhere says why. A short mirror is legal (§1.3) and
+    /// a hollow entry is not: omission is a view somebody can reason about,
+    /// and an entry whose declared closure is absent is a claim that does not
+    /// resolve.
+    ///
+    /// **The refusal is on `plan_mirror` rather than on its callers on
+    /// purpose** (AP44): a `content` argument a caller could pass empty is a
+    /// step the next caller forgets, and the consequence is not an error but a
+    /// silently broken publication.
+    BodyClosureMissing { entry: Hash, blob: Hash },
+    /// A carried blob's bytes do not hash to the address the entry named.
+    ClosureDoesNotAddress { claimed: Hash, actual: Hash },
 }
 
 impl std::fmt::Display for GatherError {
@@ -142,6 +203,20 @@ impl std::fmt::Display for GatherError {
             GatherError::RowUnencodable { claimed } => {
                 write!(f, "a gathered row claiming {} does not re-address", claimed.to_hex())
             }
+            GatherError::BodyClosureMissing { entry, blob } => write!(
+                f,
+                "entry {} declares body blob {} and this gather does not hold it — \
+                 publishing it would name a post and serve an empty one",
+                entry.to_hex(),
+                blob.to_hex()
+            ),
+            GatherError::ClosureDoesNotAddress { claimed, actual } => write!(
+                f,
+                "a gathered body blob claims {} and its bytes hash to {} — refusing to \
+                 republish it",
+                claimed.to_hex(),
+                actual.to_hex()
+            ),
         }
     }
 }
@@ -173,18 +248,56 @@ impl std::fmt::Display for GatherError {
 /// every one from the bytes; §6.1 rule 3 already says what it must then present.
 pub fn plan_mirror(
     gathered_by: &str,
-    subject: EntityRef,
+    subject: &MirrorSubject,
     rows: &[ReadEntry],
+    closure: &[Entity],
     gathered_at: u64,
 ) -> Result<MirrorPlan, GatherError> {
     let mut entries = Vec::with_capacity(rows.len());
     let mut carried = Vec::with_capacity(rows.len() * 2);
+    // Indexed by the address each blob claims, so the lookup below is by the
+    // same name the entry declares — never by position, which would let a
+    // caller hand over the right number of wrong bytes.
+    let mut held: std::collections::BTreeMap<String, &Entity> = Default::default();
+    for blob in closure {
+        let actual = recomputed_hash(blob)
+            .map_err(|_| GatherError::RowUnencodable { claimed: blob.content_hash })?;
+        if actual != blob.content_hash {
+            return Err(GatherError::ClosureDoesNotAddress {
+                claimed: blob.content_hash,
+                actual,
+            });
+        }
+        held.insert(actual.to_hex(), blob);
+    }
+    let mut needed: Vec<Hash> = Vec::new();
 
     for row in rows {
         let actual = recomputed_hash(&row.obtained.entity)
             .map_err(|_| GatherError::RowUnencodable { claimed: row.hash })?;
         if actual != row.hash {
             return Err(GatherError::RowDoesNotAddress { claimed: row.hash, actual });
+        }
+
+        // **The declared closure, walked transitively.** A pointer body names a
+        // `system/content/blob`, and *that* declares its chunks — same two
+        // levels `--verify` and `publish_feed` both walk, and stopping at the
+        // first would carry a blob whose reassembly ends nowhere.
+        let mut queue = crate::feed_tree::body_blob_hashes(&row.entry.body);
+        let mut seen: std::collections::BTreeSet<String> = Default::default();
+        while let Some(h) = queue.pop() {
+            if !seen.insert(h.to_hex()) {
+                continue;
+            }
+            let Some(blob) = held.get(&h.to_hex()) else {
+                return Err(GatherError::BodyClosureMissing { entry: row.hash, blob: h });
+            };
+            needed.push(h);
+            if blob.entity_type == entity_types::TYPE_CONTENT_BLOB {
+                if let Ok(chunks) = crate::content_site::asset_store::chunk_hashes_of(blob) {
+                    queue.extend(chunks);
+                }
+            }
         }
 
         let author = row.entry.author.clone();
@@ -204,9 +317,21 @@ pub fn plan_mirror(
         }
     }
 
+    // Only what the entries actually declare — a caller handing over a wider
+    // closure publishes bytes nothing in this mirror names, which is the orphan
+    // shape `--verify` reports and the next publisher's clean cannot remove.
+    let mut carried_content: Vec<Entity> = Vec::new();
+    let mut emitted: std::collections::BTreeSet<String> = Default::default();
+    for h in needed {
+        if emitted.insert(h.to_hex()) {
+            carried_content.push((*held.get(&h.to_hex()).expect("checked above")).clone());
+        }
+    }
+
     Ok(MirrorPlan {
-        record: FeedMirror::new(subject, entries, gathered_at, gathered_by),
+        record: FeedMirror::new(subject.reference(), entries, gathered_at, gathered_by),
         carried,
+        content: carried_content,
     })
 }
 
@@ -242,20 +367,23 @@ pub fn publish_mirror(
     for item in &plan.carried {
         write(dir, &item.peer, &item.key, &item.entity, root)?;
     }
+    // **Hash-addressed, so `put_only` and not `write`.** A pointer body names
+    // its blob by hash; binding it under a tree key as well would publish the
+    // same bytes twice and make the root commit to something the consumer
+    // already reaches. Same door and same reason as `publish_feed`'s closure
+    // loop and an oversized site figure's blob.
+    for blob in &plan.content {
+        root.put_only(blob);
+    }
 
-    let subject_hash = match &plan.record.subject {
-        EntityRef::Pinned { hash, .. } => *hash,
-        // Unreachable through `FeedMirror::from_entity`, which refuses a live
-        // subject — but `plan_mirror` takes a reference by argument, and a key
-        // we cannot derive is a mirror nobody can find.
-        EntityRef::Live { .. } => {
-            return Err("a mirror subject must be a pin — §2.2's `reference` is pinned-only, \
-                        and the key is derived from the subject's hash"
-                .to_string())
-        }
-    };
+    // §6.0.1 — the key is derived from the subject, for **both** kinds. This used
+    // to refuse a live subject, because v0.1's `subject` was pinned-only and a
+    // key we cannot derive is a mirror nobody can find; `A-57` widened the field
+    // and gave the live kind its own derivation, so the refusal is gone rather
+    // than relaxed.
+    let key = MirrorSubject::from_reference(&plan.record.subject).key();
     let entity = plan.record.to_entity()?;
-    write(dir, &gatherer, &mirror_key(&subject_hash), &entity, root)
+    write(dir, &gatherer, &key, &entity, root)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -362,10 +490,13 @@ impl std::fmt::Display for MirrorReadError {
 pub async fn read_mirror<M: MirrorSource + ?Sized>(
     src: &M,
     gatherer: &str,
-    subject: &Hash,
+    subject: &MirrorSubject,
     limit: usize,
 ) -> Result<Vec<ReadEntry>, MirrorReadError> {
-    let key = mirror_key(subject);
+    // **The reader COMPUTES the address; it never discovers it** (§6.0.1). That
+    // is the whole of what makes a mirror usable as a source: a reader holding
+    // the subject needs no index, no query and no prior hop to know where to ask.
+    let key = subject.key();
     let entity = match src.get(gatherer.to_string(), key.clone()).await {
         Err(detail) => return Err(MirrorReadError::Unreachable { key, detail }),
         Ok(None) => return Err(MirrorReadError::NoMirror { key }),
@@ -437,15 +568,17 @@ mod tests {
             for c in &plan.carried {
                 self.0.insert((c.peer.clone(), c.key.clone()), c.entity.clone());
             }
-            let subject = match &plan.record.subject {
-                EntityRef::Pinned { hash, .. } => *hash,
-                _ => panic!("a pinned subject"),
-            };
-            self.0.insert(
-                (gatherer.to_string(), mirror_key(&subject)),
-                plan.record.to_entity().unwrap(),
-            );
+            // The same derivation the publisher uses (§6.0.1) — **never a key
+            // spelled here**, or the gates would agree with each other about an
+            // address production disagrees with.
+            let key = MirrorSubject::from_reference(&plan.record.subject).key();
+            self.0.insert((gatherer.to_string(), key), plan.record.to_entity().unwrap());
         }
+    }
+
+    /// The thread subject these gates use: A's entry, published by A.
+    fn thread(author: &str, root: Hash) -> MirrorSubject {
+        MirrorSubject::thread(author, root)
     }
 
     fn gathered_rows(n: usize) -> (Vec<ReadEntry>, String, Tree) {
@@ -476,13 +609,13 @@ mod tests {
         assert!(rows.iter().all(|r| r.attribution == Attribution::Signed));
 
         let gatherer = "2GathererPeerIdForTheseGates";
-        let subject = EntityRef::pin(author.clone(), rows[0].hash);
-        let plan = plan_mirror(gatherer, subject, &rows, 1_757_000_999).expect("the gather plans");
+        let subject = thread(&author, rows[0].hash);
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 1_757_000_999).expect("the gather plans");
 
         let mut origin = Origin::default();
         origin.take(&plan, gatherer);
 
-        let read = block_on(read_mirror(&origin, gatherer, &rows[0].hash, 100))
+        let read = block_on(read_mirror(&origin, gatherer, &subject, 100))
             .expect("the mirror reads");
 
         assert_eq!(read.len(), 4, "every carried entry came back");
@@ -578,7 +711,7 @@ mod tests {
         };
         let gatherer = "2GathererPeerIdForTheseGates";
         let plan =
-            plan_mirror(gatherer, EntityRef::pin(author.clone(), published_hash), &[row], 9)
+            plan_mirror(gatherer, &thread(&author, published_hash), &[row], &[], 9)
                 .expect("the gather plans");
         let carried = &plan.carried[0].entity;
         assert_eq!(
@@ -589,12 +722,98 @@ mod tests {
 
         let mut origin = Origin::default();
         origin.take(&plan, gatherer);
-        let read = block_on(read_mirror(&origin, gatherer, &published_hash, 10)).unwrap();
+        let read = block_on(read_mirror(&origin, gatherer, &thread(&author, published_hash), 10)).unwrap();
         assert_eq!(read.len(), 1);
         assert_eq!(
             read[0].attribution,
             Attribution::Signed,
             "an entry carrying a field we do not understand lost its author"
+        );
+    }
+
+    /// ⛔⭐ **A POST WHOSE BODY IS A POINTER CANNOT BE MIRRORED WITHOUT ITS
+    /// BYTES — and the refusal is on the plan, not on its callers.**
+    ///
+    /// Found by `--verify`'s mirror arm on its first run, not by reasoning:
+    /// every fixture in this module is all-inline, so nothing here could
+    /// exhibit it, and the end-to-end publish reported *"the post appears in
+    /// the index and its body is empty"* about a gather that had just
+    /// succeeded. The identical defect `publish_feed` shipped with, one
+    /// convention over — *a test population you generated cannot contain the
+    /// shape you are missing.*
+    ///
+    /// Refused rather than carried, because a short mirror is legal (§1.3) and
+    /// a **hollow** entry is not: omission is a view somebody can reason about,
+    /// and a post that renders blank with nothing saying why is not.
+    ///
+    /// Both directions, because either one alone is satisfied by an
+    /// implementation that always refuses or always accepts.
+    #[test]
+    fn an_entry_whose_body_is_a_pointer_is_refused_without_the_bytes_it_names() {
+        use crate::embed::{EmbedData, EmbedNode, EmbedPayload};
+
+        let (rows, author, _) = gathered_rows(1);
+        let blob = Entity::new("system/content", entity_ecf::to_ecf(&entity_ecf::text("x")))
+            .unwrap();
+        let blob_hash = blob.content_hash;
+
+        // An entry whose body names those bytes rather than carrying them.
+        let entry = crate::feed::FeedEntry::new(
+            &author,
+            1_000,
+            EmbedNode::new(
+                "text/plain",
+                EmbedData::new(EmbedPayload::Pointer(blob_hash), "a long post"),
+            ),
+        );
+        let entity = entry.to_entity().unwrap();
+        let row = ReadEntry {
+            hash: entity.content_hash,
+            entry,
+            attribution: crate::feed_read::Attribution::Signed,
+            obtained: crate::feed_read::Obtained { entity, signature: None },
+        };
+        let subject = thread(&author, rows[0].hash);
+
+        match plan_mirror("2Gatherer", &subject, &[row.clone()], &[], 9) {
+            Err(GatherError::BodyClosureMissing { entry, blob }) => {
+                assert_eq!(entry, row.hash);
+                assert_eq!(blob, blob_hash);
+            }
+            other => panic!("a hollow post was planned for republication: {other:?}"),
+        }
+
+        // …and with the bytes it is carried, hash-addressed and bound at no
+        // tree key — which is what makes the refusal above about the closure
+        // rather than about pointer bodies.
+        let plan = plan_mirror("2Gatherer", &subject, &[row], std::slice::from_ref(&blob), 9)
+            .expect("a pointer body with its bytes plans");
+        assert_eq!(plan.content, vec![blob]);
+        assert!(
+            plan.carried.iter().all(|c| c.key.starts_with(crate::feed::entry_prefix())),
+            "a content blob was bound at a tree key — it is reached by hash"
+        );
+    }
+
+    /// A caller handing over more than the entries declare publishes bytes
+    /// nothing names. The plan carries the **declared** closure, not the offer.
+    #[test]
+    fn a_closure_wider_than_what_the_entries_declare_is_not_carried() {
+        let (rows, author, _) = gathered_rows(1);
+        let stranger =
+            Entity::new("system/content", entity_ecf::to_ecf(&entity_ecf::text("unnamed")))
+                .unwrap();
+        let plan = plan_mirror(
+            "2Gatherer",
+            &thread(&author, rows[0].hash),
+            &rows,
+            std::slice::from_ref(&stranger),
+            9,
+        )
+        .expect("an all-inline gather plans");
+        assert!(
+            plan.content.is_empty(),
+            "a blob no entry declares was published as part of this mirror"
         );
     }
 
@@ -606,7 +825,7 @@ mod tests {
         let real = rows[0].hash;
         rows[0].obtained.entity = rows[1].obtained.entity.clone();
 
-        match plan_mirror("2Gatherer", EntityRef::pin(author, real), &rows, 1) {
+        match plan_mirror("2Gatherer", &thread(&author, real), &rows, &[], 1) {
             Err(GatherError::RowDoesNotAddress { claimed, actual }) => {
                 assert_eq!(claimed, real);
                 assert_ne!(actual, real);
@@ -624,15 +843,15 @@ mod tests {
         let (mut rows, author, _) = gathered_rows(2);
         rows[0].obtained.signature = None;
 
-        let subject = EntityRef::pin(author.clone(), rows[0].hash);
+        let subject = thread(&author, rows[0].hash);
         let gatherer = "2GathererPeerIdForTheseGates";
-        let plan = plan_mirror(gatherer, subject, &rows, 9).expect("the gather plans");
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9).expect("the gather plans");
         assert_eq!(plan.entry_count(), 2, "the unsigned entry was dropped");
         assert_eq!(plan.attributable(), 1);
 
         let mut origin = Origin::default();
         origin.take(&plan, gatherer);
-        let read = block_on(read_mirror(&origin, gatherer, &rows[0].hash, 100)).unwrap();
+        let read = block_on(read_mirror(&origin, gatherer, &subject, 100)).unwrap();
 
         assert_eq!(read.len(), 2);
         assert_eq!(
@@ -648,14 +867,14 @@ mod tests {
     fn a_mirror_that_substitutes_a_body_is_refused_and_one_that_omits_is_short() {
         let (rows, author, _) = gathered_rows(3);
         let gatherer = "2GathererPeerIdForTheseGates";
-        let subject = EntityRef::pin(author, rows[0].hash);
-        let plan = plan_mirror(gatherer, subject, &rows, 9).unwrap();
+        let subject = thread(&author, rows[0].hash);
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9).unwrap();
 
         // Omission: the record still names three, the origin serves two.
         let mut short = Origin::default();
         short.take(&plan, gatherer);
         short.0.remove(&(rows[1].entry.author.clone(), entry_key(&rows[1].hash)));
-        let read = block_on(read_mirror(&short, gatherer, &rows[0].hash, 100))
+        let read = block_on(read_mirror(&short, gatherer, &subject, 100))
             .expect("a short mirror is readable");
         assert_eq!(read.len(), 2, "an omitted entry made the whole mirror unreadable");
 
@@ -670,7 +889,7 @@ mod tests {
         swapped.0.insert((rows[0].entry.author.clone(), entry_key(&rows[0].hash)), other);
         assert!(
             matches!(
-                block_on(read_mirror(&swapped, gatherer, &rows[0].hash, 100)),
+                block_on(read_mirror(&swapped, gatherer, &subject, 100)),
                 Err(MirrorReadError::Substituted { .. })
             ),
             "a substituted body was accepted"
@@ -683,13 +902,13 @@ mod tests {
     #[test]
     fn a_mirror_record_cannot_name_a_different_gatherer() {
         let (rows, author, _) = gathered_rows(1);
-        let plan = plan_mirror("2SomeoneElse", EntityRef::pin(author, rows[0].hash), &rows, 9)
+        let plan = plan_mirror("2SomeoneElse", &thread(&author, rows[0].hash), &rows, &[], 9)
             .unwrap();
         let mut origin = Origin::default();
         origin.take(&plan, "2TheActualGatherer");
 
         assert!(matches!(
-            block_on(read_mirror(&origin, "2TheActualGatherer", &rows[0].hash, 100)),
+            block_on(read_mirror(&origin, "2TheActualGatherer", &thread(&author, rows[0].hash), 100)),
             Err(MirrorReadError::Malformed {
                 source: FeedError::AuthorIsNotTheNamespace { .. },
                 ..
@@ -704,7 +923,7 @@ mod tests {
         let (rows, author, _) = gathered_rows(1);
         let empty = Origin::default();
         assert!(matches!(
-            block_on(read_mirror(&empty, "2Gatherer", &rows[0].hash, 10)),
+            block_on(read_mirror(&empty, "2Gatherer", &thread(&author, rows[0].hash), 10)),
             Err(MirrorReadError::NoMirror { .. })
         ));
 
@@ -719,7 +938,7 @@ mod tests {
             }
         }
         assert!(matches!(
-            block_on(read_mirror(&Dead, "2Gatherer", &rows[0].hash, 10)),
+            block_on(read_mirror(&Dead, "2Gatherer", &thread(&author, rows[0].hash), 10)),
             Err(MirrorReadError::Unreachable { .. })
         ));
         let _ = author;
@@ -738,21 +957,157 @@ mod tests {
         let c = "2TheSecondGatherer";
 
         let plan_b =
-            plan_mirror(b, EntityRef::pin(author.clone(), rows[0].hash), &rows, 1).unwrap();
+            plan_mirror(b, &thread(&author, rows[0].hash), &rows, &[], 1).unwrap();
         let mut origin = Origin::default();
         origin.take(&plan_b, b);
 
-        let via_b = block_on(read_mirror(&origin, b, &rows[0].hash, 100)).unwrap();
+        let via_b = block_on(read_mirror(&origin, b, &thread(&author, rows[0].hash), 100)).unwrap();
         let plan_c =
-            plan_mirror(c, EntityRef::pin(author.clone(), rows[0].hash), &via_b, 2).unwrap();
+            plan_mirror(c, &thread(&author, rows[0].hash), &via_b, &[], 2).unwrap();
         origin.take(&plan_c, c);
 
-        let via_c = block_on(read_mirror(&origin, c, &rows[0].hash, 100)).unwrap();
+        let via_c = block_on(read_mirror(&origin, c, &thread(&author, rows[0].hash), 100)).unwrap();
         assert_eq!(via_c.len(), 3);
         for (first, third) in rows.iter().zip(via_c.iter()) {
             assert_eq!(third.hash, first.hash, "a hash moved on the second hop");
             assert_eq!(third.attribution, Attribution::Signed);
             assert_eq!(third.entry.author, author);
         }
+    }
+
+    /// ⛔⭐ **`FEED-R26` where it bites: a timeline mirror is still FOUND after
+    /// the author posts again.**
+    ///
+    /// The tempting subject for a timeline is the author's index head, and §6.0
+    /// spends a paragraph forbidding it. This is the reason, run rather than
+    /// argued: the head's hash changes on every publish, so a head-pinned mirror
+    /// moves to a new address each time the author writes — the reader who
+    /// computed the address before the post finds **nothing**, and the gatherer
+    /// republishing gets a second slot instead of updating its own. *A witness
+    /// masquerading as an identity.*
+    ///
+    /// Both halves are here on purpose. The positive says the live-subject address
+    /// survives; the counter-example performs the forbidden derivation over the
+    /// **same two real heads** and shows the read failing. Without the second
+    /// half the first is satisfied by any address that does not depend on the
+    /// author's state at all, including a constant.
+    #[test]
+    fn a_timeline_mirror_is_still_found_after_the_author_posts_again() {
+        let (rows, author, _) = gathered_rows(3);
+        // ⚠ **3 → 15, and the jump is the fixture's constraint rather than a
+        // taste.** `published_tree` publishes at a FIXED clock, so the head's
+        // `updated_at` does not move and `current` is the only field left that
+        // can — which needs a page boundary crossed (page size 10). Written with
+        // 3 → 4 first, and it failed on its own anti-vacuity assertion: the two
+        // heads were byte-identical. *A rig that holds a variable still cannot
+        // measure a property that is about it.*
+        let head_before = published_head(3);
+        let gatherer = "2GathererPeerIdForTheseGates";
+
+        let subject = MirrorSubject::timeline(&author);
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 1).expect("the gather plans");
+        let mut origin = Origin::default();
+        origin.take(&plan, gatherer);
+
+        // The author posts. Their head is a different entity now.
+        let head_after = published_head(15);
+        assert_ne!(
+            head_before, head_after,
+            "the fixture's head did not move, so this gate measures nothing"
+        );
+
+        // A reader deriving the address from the author's FEED still finds it —
+        // and note it is recomputed from scratch, not the value from before.
+        let recomputed = MirrorSubject::timeline(&author);
+        let read = block_on(read_mirror(&origin, gatherer, &recomputed, 100))
+            .expect("the mirror moved when the author posted");
+        assert_eq!(read.len(), 3);
+
+        // …and the derivation §6.0 forbids, over those same two heads.
+        let pinned_before = MirrorSubject::thread(&author, head_before);
+        let pinned_after = MirrorSubject::thread(&author, head_after);
+        assert_ne!(pinned_before.key(), pinned_after.key());
+        let mut head_pinned = Origin::default();
+        let head_plan = plan_mirror(gatherer, &pinned_before, &rows, &[], 1).unwrap();
+        head_pinned.take(&head_plan, gatherer);
+        assert!(
+            matches!(
+                block_on(read_mirror(&head_pinned, gatherer, &pinned_after, 100)),
+                Err(MirrorReadError::NoMirror { .. })
+            ),
+            "pinning the head gave a stable address, which would make R26 about nothing"
+        );
+    }
+
+    /// The author's own index head, at a given number of posts — the value §6.0
+    /// forbids as a subject, which the gate above needs two of.
+    fn published_head(posts: usize) -> Hash {
+        let (tree, _, _) = crate::feed_publish::tests::published_tree(posts);
+        tree.0
+            .get(crate::feed::index_head_key())
+            .expect("a published feed has a head")
+            .content_hash
+    }
+
+    /// ⛔ **`DX-C6` — the gatherer publishes no SET-LAYER object of the
+    /// author's.**
+    ///
+    /// This exists because the closure `MUST` used to be one flat sentence —
+    /// *republished entries are consumable by the identical code path* — which is
+    /// true at the entry layer and **false at the set layer**, and a reader taking
+    /// it literally publishes an `app/feed/index` under the **gatherer's** name
+    /// over entries the author never put there. That is a claim only the author
+    /// can make, and it is unauthenticated besides: the authorship instrument
+    /// signs entries, not sets. *Every byte of the forgery verifies.*
+    ///
+    /// So the check is over **what a plan binds**, not over what it renders.
+    /// Three properties, and the third is the one a tidy implementation loses:
+    ///
+    /// 1. under a **foreign** peer, only content-addressed entries and their
+    ///    signatures — nothing whose key is an author's own index;
+    /// 2. under the **gatherer**, exactly one binding, the mirror record;
+    /// 3. that record is at §6.0.1's derived key, so it presents as *a mirror*
+    ///    and cannot be mistaken for the author's own entry point.
+    #[test]
+    fn a_gatherer_publishes_no_set_layer_object_of_the_authors() {
+        let (rows, author, _) = gathered_rows(3);
+        let gatherer = "2GathererPeerIdForTheseGates";
+        let subject = thread(&author, rows[0].hash);
+        let plan = plan_mirror(gatherer, &subject, &rows, &[], 9).unwrap();
+
+        // 1 — the foreign half.
+        assert!(!plan.carried.is_empty(), "a plan carrying nothing proves nothing here");
+        for item in &plan.carried {
+            assert_eq!(item.peer, author, "a carried body left the author's namespace");
+            let is_entry = item.key.starts_with(crate::feed::entry_prefix());
+            let is_signature = item.key.starts_with("system/signature/");
+            assert!(
+                is_entry || is_signature,
+                "a mirror bound {} under {author} — DX-R4 admits entries and their \
+                 signatures and nothing else",
+                item.key
+            );
+            // Named explicitly, because these are the two the flat sentence
+            // invites and neither is caught by the shape test above.
+            assert_ne!(item.key, crate::feed::index_head_key(), "the author's index head, forged");
+            assert!(
+                !item.key.starts_with(&format!("{}/", crate::feed::index_head_key())),
+                "an index PAGE of the author's, forged: {}",
+                item.key
+            );
+        }
+
+        // 2 and 3 — the gatherer's own half is one record, and it is a mirror.
+        let mut origin = Origin::default();
+        origin.take(&plan, gatherer);
+        let ours: Vec<&String> =
+            origin.0.keys().filter(|(p, _)| p == gatherer).map(|(_, k)| k).collect();
+        assert_eq!(
+            ours.len(),
+            1,
+            "the gatherer bound more than its own record under its own name: {ours:?}"
+        );
+        assert_eq!(ours[0], &subject.key());
+        assert!(ours[0].starts_with(crate::feed::mirror_prefix()));
     }
 }

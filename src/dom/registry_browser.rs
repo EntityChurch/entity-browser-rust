@@ -367,7 +367,7 @@ fn render_evidence(
     // buried in a doc comment. The origin came from a registry-SIGNED binding
     // (better than the deployment list); the pages it then fetches are still
     // origin-trusted, and the Site Browser labels them "not verified".
-    if let Some((window_type, peer_id)) =
+    if let Some(to_open) =
         crate::views::registry_browser::output::open_target(&Phase::Done(target.clone()), local_peer)
     {
         // **TWO listeners on one click, and the order is load-bearing.** The
@@ -399,7 +399,11 @@ fn render_evidence(
         ctx.on_action(
             &open,
             "click",
-            crate::action::Action::SpawnWindow { type_name: window_type, peer_id: Some(peer_id) },
+            crate::action::Action::SpawnWindow {
+                type_name: to_open.window_type,
+                peer_id: Some(to_open.bind_peer),
+                target: Some(to_open.target),
+            },
         );
         util::append(card, &open);
         util::append(

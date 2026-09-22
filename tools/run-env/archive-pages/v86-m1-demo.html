@@ -1,0 +1,174 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Linux in a tab — with files going in and out</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; max-width: 1100px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #666; margin-bottom: 14px; }
+  #screen_container { background: #000; padding: 6px; border-radius: 4px; }
+  #screen_container div { white-space: pre; font: 14px/1.05 monospace; color: #ccc; }
+  .row { display: flex; gap: 20px; align-items: flex-start; margin-top: 14px; }
+  .panel { border: 1px solid #ddd; border-radius: 4px; padding: 10px 12px; min-width: 320px; }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; color: #555; }
+  button { font: inherit; padding: 4px 10px; }
+  table { border-collapse: collapse; width: 100%; font: 12px monospace; }
+  td { padding: 2px 6px; border-bottom: 1px solid #eee; }
+  .badge { display:inline-block; padding:1px 6px; border-radius:3px; font:12px monospace; }
+  .ok { background:#e6f4ea; color:#137333; } .no { background:#fce8e6; color:#c5221f; }
+  #log { font: 12px monospace; color: #444; white-space: pre-wrap; max-height: 120px; overflow: auto; }
+</style>
+<body>
+<h1>Linux in a browser tab — and your files going in and out of it</h1>
+<div class="sub">
+  The VM is <b>v86</b>, 32-bit, running entirely in this tab. Nothing runs on a server.
+  <span id="iso" class="badge"></span>
+  <span id="boot" class="badge"></span>
+</div>
+
+<div id="screen_container"><div></div><canvas style="display:none"></canvas></div>
+
+<div class="row">
+  <div class="panel">
+    <h3>Put a file in</h3>
+    <p style="margin:4px 0 8px;color:#666">Lands in <code>/mnt</code> inside the VM.</p>
+    <input type="file" id="infile" multiple>
+    <p style="margin:8px 0 0">
+      <button id="mkdemo">…or inject a demo file</button>
+    </p>
+  </div>
+  <div class="panel" style="flex:1">
+    <h3>Take a file out</h3>
+    <p style="margin:4px 0 8px;color:#666">
+      Anything the VM writes into <code>/mnt</code>. Try:
+      <code>echo hi &gt; /mnt/note.txt</code>
+    </p>
+    <button id="refresh">Refresh /mnt</button>
+    <table id="files"></table>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:14px">
+  <h3>Log</h3><div id="log"></div>
+</div>
+
+<script src="build/libv86.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const log = m => { $('log').textContent += m + '\n'; $('log').scrollTop = 1e9; };
+
+// Reported, not assumed: this page is served with no COOP/COEP, and the whole point
+// of the small engine is that it does not need them.
+$('iso').textContent = 'crossOriginIsolated=' + crossOriginIsolated;
+$('iso').className = 'badge ' + (crossOriginIsolated ? 'no' : 'ok');
+$('boot').textContent = 'booting…';
+$('boot').className = 'badge';
+
+const t0 = performance.now();
+const emulator = new V86({
+  wasm_path: "build/v86.wasm",
+  memory_size: 64 * 1024 * 1024,
+  vga_memory_size: 2 * 1024 * 1024,
+  screen_container: $("screen_container"),
+  bios: { url: "bios/seabios.bin" },
+  vga_bios: { url: "bios/vgabios.bin" },
+  cdrom: { url: "images/linux4.iso" },
+  filesystem: {},        // v86's 9p server lives in this page — that is why both
+                         // directions work here and do not on qemu-wasm's local backend.
+  autostart: true,
+});
+window.emulator = emulator;
+
+let booted = false, serial = '';
+emulator.add_listener("serial0-output-byte", b => {
+  const ch = String.fromCharCode(b);
+  serial += ch;
+  feedList(ch);
+  if (!booted && /~%/.test(serial)) {
+    booted = true;
+    const ms = Math.round(performance.now() - t0);
+    $('boot').textContent = 'booted in ' + ms + 'ms';
+    $('boot').className = 'badge ok';
+    log('guest at prompt after ' + ms + 'ms — click the screen and type');
+    refresh();
+  }
+});
+
+$('infile').addEventListener('change', async e => {
+  for (const f of e.target.files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    await emulator.create_file(f.name, bytes);
+    log(`in  → /mnt/${f.name}  (${bytes.length} bytes)`);
+  }
+  refresh();
+});
+
+$('mkdemo').addEventListener('click', async () => {
+  const body = new TextEncoder().encode(
+    'hello from the page, ' + new Date().toISOString() + '\n');
+  await emulator.create_file('from-the-page.txt', body);
+  log('in  → /mnt/from-the-page.txt (' + body.length + ' bytes)');
+  refresh();
+});
+
+// ⚠ ASK THE GUEST, do not read the engine's internals.
+//
+// The obvious implementation is emulator.fs9p.GetChildren(...) -- v86's own 9p server
+// is right there. It was tried first and threw ("can't access property 'status'"),
+// and that is the better outcome: fs9p is an engine internal, so a listing built on it
+// is a v86 driver wearing the contract's name. `ls` in the guest is the same answer
+// from the only authority that is portable across engines.
+let pendingList = null;
+function listing() {
+  return new Promise(resolve => {
+    pendingList = { buf: '', resolve };
+    emulator.serial0_send("echo __LS__; ls -1 /mnt; echo __ENDLS__\n");
+    setTimeout(() => {
+      if (pendingList) { const p = pendingList; pendingList = null; p.resolve(null); }
+    }, 4000);   // a guest that never answers is "could not look", never "empty"
+  });
+}
+
+function feedList(chunk) {
+  if (!pendingList) return;
+  pendingList.buf += chunk;
+  const m = pendingList.buf.match(/__LS__\r?\n([\s\S]*?)__ENDLS__/);
+  if (!m) return;
+  // busybox `ls` colourises even down a serial line, so a name arrives wrapped in
+  // escape sequences. Left in, the row renders fine and the save button then asks
+  // read_file for a filename that does not exist -- a listing that looks right and
+  // an extraction that silently misses.
+  const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const names = m[1].split(/\r?\n/).map(s => stripAnsi(s).trim())
+    .filter(s => s && !s.startsWith('__') && !s.includes('ls -1'));
+  const p = pendingList; pendingList = null;
+  p.resolve(names.map(n => ({ name: n })));
+}
+
+async function refresh() {
+  const t = $('files');
+  t.innerHTML = '<tr><td style="color:#888">asking the guest…</td></tr>';
+  const rows = await listing();
+  // Three outcomes, kept apart: could not look / nothing there / here they are.
+  if (rows === null) { t.innerHTML = '<tr><td>could not read /mnt (the guest did not answer)</td></tr>'; return; }
+  if (!rows.length) { t.innerHTML = '<tr><td style="color:#888">nothing in /mnt yet</td></tr>'; return; }
+  t.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.name}</td>`;
+    const td = document.createElement('td');
+    const b = document.createElement('button');
+    b.textContent = 'save';
+    b.onclick = async () => {
+      const bytes = await emulator.read_file(r.name);
+      log(`out ← /mnt/${r.name}  (${bytes.length} bytes)`);
+      const url = URL.createObjectURL(new Blob([bytes]));
+      const a = document.createElement('a');
+      a.href = url; a.download = r.name; a.click();
+      URL.revokeObjectURL(url);
+    };
+    td.appendChild(b); tr.appendChild(td); t.appendChild(tr);
+  }
+}
+$('refresh').addEventListener('click', refresh);
+</script>
+</body>

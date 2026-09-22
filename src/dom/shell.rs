@@ -185,6 +185,13 @@ fn render_prompt(parent: &Element, output: &ShellOutput, ctx: &DomCtx) {
     input.set_attribute("value", &output.draft).ok();
     input.set_attribute("autocomplete", "off").ok();
     input.set_attribute("spellcheck", "false").ok();
+    // A phone keyboard capitalizes the first letter of a text field and
+    // "corrects" words by default, so `ls` arrived as `Ls` and a path as a
+    // dictionary word. `spellcheck` alone only hides the squiggle. These are the
+    // two attributes xterm sets on its own input for the same reason — found by
+    // the run-env terminal, which types cleanly on Android where this did not.
+    input.set_attribute("autocapitalize", "off").ok();
+    input.set_attribute("autocorrect", "off").ok();
     input.set_attribute("autofocus", "").ok();
     input
         .set_attribute(

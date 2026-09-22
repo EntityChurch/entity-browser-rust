@@ -1,0 +1,126 @@
+{
+  "_comment": "COMPUTED by entity-browser-rust. Not hand-editable — see the module doc on src/share_crossimpl_fixture.rs. Each row's `body_file` holds the CANONICAL HASHABLE BODY, byte-for-byte what a publisher writes to content/{aa}/{bb}/{hex}. No peer id appears in any of these bytes: APP-CONVENTION-SHARE §4 makes the NAMESPACE the publisher, so a reader is handed it rather than reading a `from` field.",
+  "convention": "APP-CONVENTION-SHARE §2.2 (record), §2.3 (audience-entry), §2.5 (publication)",
+  "entities": [
+    {
+      "body_file": "bodies/0063cb54ccaf520130b8fa12b5aaab489166ac9b948efb195ef34dbe2d3daa4359",
+      "content_hash": "0063cb54ccaf520130b8fa12b5aaab489166ac9b948efb195ef34dbe2d3daa4359",
+      "decodes_to": {
+        "audience": [
+          {
+            "added_at": 1757462400000,
+            "grantee": "2KLv2nhwtPrLFd4BZFQuNK1ujtE74q8cVg7y8cYdcZZ5BL",
+            "via": "direct"
+          }
+        ],
+        "audience_is_self_only": false,
+        "created_at": 1757462400000,
+        "from": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis",
+        "note": "The numbers behind Tuesday's deck.",
+        "target": {
+          "hash": "00d0c51e1700000000000000000000000000000000000000000000000000000001",
+          "tag": "blob"
+        },
+        "title": "quarterly-figures.pdf"
+      },
+      "name": "record-one-member",
+      "type": "app/share/record",
+      "why": "THE FLOOR for `app/share/record`: one audience entry, a note, a blob target. `audience` is an ARRAY OF ENTITIES (`{type, data}`), not a list of peer-id strings — a seat that flattens it to strings produces a plausible record with different bytes and a reader that cannot tell `via` from absent."
+    },
+    {
+      "body_file": "bodies/00238eb9a20760805706cab91c44736e1e49fecbe7ca2a7c5308805586bc00c278",
+      "content_hash": "00238eb9a20760805706cab91c44736e1e49fecbe7ca2a7c5308805586bc00c278",
+      "decodes_to": {
+        "audience": [],
+        "audience_is_self_only": true,
+        "created_at": 1757466000000,
+        "from": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis",
+        "note": null,
+        "target": {
+          "path": "/2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis/local/files/drafts/",
+          "tag": "prefix"
+        },
+        "title": "draft-notes"
+      },
+      "name": "record-self-only",
+      "type": "app/share/record",
+      "why": "SHARE-7's vector, and the most valuable row here: an EMPTY audience is SELF-ONLY, never public. The `audience` key is PRESENT and empty. A seat that reads it as public, or that omits the key when the array is empty, is wrong in the direction that discloses — and both mistakes are invisible in a round trip against yourself."
+    },
+    {
+      "body_file": "bodies/00c6ed9124d411eefc4fbb15723eded552186656f66b7daca8956ab8b2caa8326d",
+      "content_hash": "00c6ed9124d411eefc4fbb15723eded552186656f66b7daca8956ab8b2caa8326d",
+      "decodes_to": {
+        "audience": [
+          {
+            "added_at": 1757469600000,
+            "grantee": "2KLv2nhwtPrLFd4BZFQuNK1ujtE74q8cVg7y8cYdcZZ5BL",
+            "via": "direct"
+          },
+          {
+            "added_at": 1757469601000,
+            "grantee": "2KHPSRBHu13dCYEo4AQW8rqZ1yLVE2Hmu3faXJUy3zcs8L",
+            "via": "group"
+          }
+        ],
+        "audience_is_self_only": false,
+        "created_at": 1757469600000,
+        "from": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis",
+        "note": null,
+        "target": {
+          "path": "/2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis/local/files/retro/",
+          "tag": "prefix"
+        },
+        "title": "retro-2026-09"
+      },
+      "name": "record-two-members-group-origin",
+      "type": "app/share/record",
+      "why": "TWO entries, so authored order is exercised, and the second carries `via: group` — §2.3's other origin token, which records that a group membership produced the entry AT AUTHORING TIME and is explicitly not resolved at check time. Also NO `note`, so the optional key must be ABSENT rather than an empty string."
+    },
+    {
+      "body_file": "bodies/00e9e00106af0b2c9f4ee4a9a309c34989b5a055e5a9e997094c4b71e5c148df78",
+      "content_hash": "00e9e00106af0b2c9f4ee4a9a309c34989b5a055e5a9e997094c4b71e5c148df78",
+      "decodes_to": {
+        "audience": [
+          {
+            "added_at": 1757473200000,
+            "grantee": "2KHPSRBHu13dCYEo4AQW8rqZ1yLVE2Hmu3faXJUy3zcs8L",
+            "via": null
+          }
+        ],
+        "audience_is_self_only": false,
+        "created_at": 1757473200000,
+        "from": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis",
+        "note": null,
+        "target": {
+          "hash": "00d0c51e1700000000000000000000000000000000000000000000000000000001",
+          "tag": "blob"
+        },
+        "title": "one-off.txt"
+      },
+      "name": "record-member-without-via",
+      "type": "app/share/record",
+      "why": "`via` is OPTIONAL (§2.3) and this entry has none, so the key must be ABSENT inside the entry's `data` — not `\"direct\"` defaulted in on the way out. A seat that defaults it is emitting a claim about how the member got there."
+    },
+    {
+      "body_file": "bodies/00afacc231f9eb53606c16463bc57ada8304465487f51127f7c79f44eb14ccf1f8",
+      "content_hash": "00afacc231f9eb53606c16463bc57ada8304465487f51127f7c79f44eb14ccf1f8",
+      "decodes_to": {
+        "audience": null,
+        "audience_is_self_only": false,
+        "created_at": 1757476800000,
+        "from": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis",
+        "note": "Public — pull-only, no grant, and we cannot know who fetched it.",
+        "target": {
+          "hash": "00d0c51e1700000000000000000000000000000000000000000000000000000001",
+          "tag": "blob"
+        },
+        "title": "entity-core-overview.pdf"
+      },
+      "name": "publication",
+      "type": "app/share/publication",
+      "why": "`app/share/publication` — §2.5's public, pull-only half, and it carries NO `audience` key at all. SHARE-8 makes a publication carrying one INVALID rather than something to skip silently: §2.6's must-ignore would otherwise launder the one shape this type exists to exclude into an ordinary-looking row."
+    }
+  ],
+  "for": "entity-workbench-go, ask B-7",
+  "publisher": "2K42FX8pASWDrXaAVsGXMNJbAkCVBuVwXf4RuwFNnmyYis"
+}

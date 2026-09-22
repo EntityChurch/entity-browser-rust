@@ -649,12 +649,22 @@ async fn read_by_enumeration<S: FeedSource + ?Sized>(
     Ok(rows)
 }
 
-/// A minimal executor for the native gates.
+/// A minimal executor for the native side.
 ///
 /// These futures are `!Send` by design (a wasm `JsFuture` is), so no runtime is
-/// involved. **Native tests only** — see the module doc for why spinning on a
-/// real `JsFuture` would hang the browser rather than resolve.
-#[cfg(test)]
+/// involved.
+///
+/// ⚠ **Native only, and the cfg is the guarantee rather than the doc comment.**
+/// Spinning on a real `JsFuture` does not resolve it — it blocks the very event
+/// loop that would — so this must never be reachable from a browser build, which
+/// `not(target_arch = "wasm32")` makes structurally true instead of a rule
+/// somebody has to remember.
+///
+/// It said `#[cfg(test)]` until `publish --gather` needed it: a CLI verb driving
+/// an async `FeedSource` over synchronous file reads is exactly what this does,
+/// and writing a second spinner beside it would be C15 on a loop that is
+/// load-bearing for the gates as well.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
     fn raw() -> RawWaker {

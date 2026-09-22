@@ -171,6 +171,13 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 ciborium = "0.2"
 serde_json = "1"
 
+# One digest, for one derivation: `APP-CONVENTION-FEED` §6.0.1's live mirror
+# coordinate is `content_hash` of a **path**, and every corpus primitive for that
+# (`Hash::compute`) takes a type argument the clause does not supply. See
+# `feed::path_coordinate` for the reading we take and what is routed about it.
+# Already in the graph — `entity-hash` depends on it — so this edge only names it.
+sha2 = "0.10"
+
 # Error handling
 thiserror = "2"
 

@@ -758,8 +758,6 @@
   "doctor.check1.detail.unheard": "Ingenting hördes från domänen, så ingenting kunde jämföras och ingenting är känt — detta är inget rent friskhetsintyg. Allt som redan finns på den här maskinen är opåverkat och fortfarande korrekt. Försök igen när du är uppkopplad på nytt.",
   "doctor.check1.source.origin_error": "den här domänen svarade med ett fel (HTTP {status})",
   "doctor.check1.detail.origin_error": "Domänen går att nå men returnerade ett fel i stället för sin konfiguration, så ingenting kunde jämföras. Det är ett problem hos domänen, inte på den här maskinen, och det säger ingenting om huruvida din utgivare är aktuell.",
-  "doctor.check1.source.refused": "den här domänen ville inte lämna ut sin konfiguration (HTTP {status})",
-  "doctor.check1.detail.refused": "Domänen går att nå och vägrade lämna ut sin konfiguration till den här appen. Det är en åtkomstregel hos domänen, inte ett fel och inte ett problem på den här maskinen. Det fanns inget att jämföra, så det är inte känt om din utgivare är aktuell.",
   "doctor.check1.source.unreadable": "den här domänens konfiguration kunde inte läsas (HTTP {status})",
   "doctor.check1.detail.unreadable": "Domänen svarade med något som den här appen inte kunde tolka — en avhuggen eller halvskriven fil, eller en felsida levererad som ett lyckat svar. Ingenting kunde jämföras, och ingenting av detta är ett påstående om din maskin.",
   "doctor.check1.source.no_document": "den här domänen levererar inget distributionsdokument",
@@ -820,5 +818,10 @@
   "feed.attr.wrong_target": "osignerad — signaturen gäller ett annat inlägg",
   "feed.attr.not_the_author": "osignerad — signerad av någon annan än författaren",
   "feed.attr.bad_signature": "osignerad — signaturen är ogiltig",
-  "feed.no_route": "Du är inte ansluten till denna utgivare, och den här distributionen vet inte var den är värd — så det finns ingen att fråga."
+  "feed.no_route": "Du är inte ansluten till denna utgivare, och den här distributionen vet inte var den är värd — så det finns ingen att fråga.",
+  "apps.file.requested": "Den här appen ber om en fil",
+  "apps.file.sent": "Skickade {name} till appen",
+  "apps.file.kept": "Sparade {name} i dina filer",
+  "apps.file.refused": "Sparade inte {name}: {why}",
+  "apps.file.not_sent": "Ingen fil skickades: {why}"
 }

@@ -585,6 +585,10 @@ impl<'a> AppActionSink for ShellActionSink<'a> {
                 crate::action::Action::SpawnWindow {
                     type_name: resolved,
                     peer_id,
+                    // `window open <type>` names a window, never a subject —
+                    // the shell's aimed verb is `name open`, which routes
+                    // through `open_target` and does not come through here.
+                    target: None,
                 }
             }
             ShellRequest::CreatePeer { mode, label } => {

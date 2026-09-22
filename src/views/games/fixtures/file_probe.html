@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>File Probe</title>
+<!--
+  E2E-ONLY FIXTURE (demo-apps). The app side of the host's `x-file` verbs
+  (crate::app_files), declared with `x-files: true` in its catalog token.
+
+  On init it does three things and records every answer in window.__probe,
+  which the gate reads by entering this frame:
+
+    1. x-request-file {accept}      -> the host raises its "send a file" control
+    2. x-file name "../"            -> must come back ok:false reason:"bad-name"
+    3. x-file "out/probe-out.txt"   -> must come back ok:true with an offer id
+
+  (3) is sent as a Uint8Array VIEW into a larger buffer on purpose: a host that
+  reads `.buffer` instead of the view's own bytes stores 64 bytes of padding
+  around 33 bytes of text, and the File Transfer row then says 64 B, not 33 B.
+
+  Anything the HOST sends back as x-file is shown, byte-counted, in #received.
+-->
+<style>body{font:13px monospace;background:#111;color:#ddd;margin:8px}</style>
+<div id="results">waiting for the host…</div>
+<pre id="received"></pre>
+<script>
+const APP = 'entity-app', HOST = 'entity-host';
+const P = window.__probe = { results: [], received: [], init: false };
+const send = (type, extra) => parent.postMessage(Object.assign({ source: APP, type }, extra || {}), '*');
+const show = () => {
+  document.getElementById('results').textContent = JSON.stringify(P.results);
+  document.getElementById('received').textContent = P.received
+    .map(r => r.name + ' ' + r.length + 'B ' + JSON.stringify(r.text)).join('\n');
+};
+
+addEventListener('message', e => {
+  const m = e.data;
+  if (!m || m.source !== HOST) return;
+  if (m.type === 'init' && !P.init) {
+    P.init = true;
+    send('x-request-file', { accept: 'text/plain' });
+    send('x-file', { name: '../', data: new Uint8Array([1, 2, 3]) });
+    const text = new TextEncoder().encode('file probe: made inside the app\n'); // 32 bytes
+    const big = new Uint8Array(64);
+    big.set(text, 8);
+    big[40] = 33; // a 33rd byte, '!', still inside the view
+    const view = big.subarray(8, 41);                                            // 33 bytes
+    send('x-file', { name: 'out/probe-out.txt', media_type: 'text/plain', data: view });
+  } else if (m.type === 'x-file-result') {
+    P.results.push({ ok: m.ok, name: m.name, reason: m.reason || null, id: m.id || null });
+  } else if (m.type === 'x-file') {
+    const bytes = new Uint8Array(m.data);
+    P.received.push({ name: m.name, media_type: m.media_type, length: bytes.length,
+                      text: new TextDecoder().decode(bytes) });
+  }
+  show();
+});
+
+send('ready-for-init');
+</script>

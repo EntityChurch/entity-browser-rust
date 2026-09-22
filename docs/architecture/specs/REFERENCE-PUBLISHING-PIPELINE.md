@@ -67,12 +67,13 @@ to write it down somewhere else, link here instead. It is one function:
    ⇒ **anything that wants to be in the signed root has to be in the tree
    `publish` projects.** A separate verb writing into the same out-dir is the
    mistake.
-4. **What enters the projection is `src/publish_axes.rs` — one list, three rows.**
+4. **What enters the projection is `src/publish_axes.rs` — one list, four rows.**
    It was a hardcoded enumeration of two L5 conventions (`emit_owned_sites` +
    `for set in app_sets`) until 2026-09-10, when the feed axis landed and paid
-   for the table. **A fourth convention is a row plus an `impl PublishAxis`**,
-   and the compiler will not let it skip an obligation: name, tree prefix,
-   `incoming()`, `project()`.
+   for the table, and the §6 mirror made it four on 2026-09-12. **A fifth
+   convention is a row plus an `impl PublishAxis`**, and the compiler will not
+   let it skip an obligation: name, tree prefix, `incoming()`, `carried_peers()`,
+   `project()`.
    - The prefix matters because **the clean is wholesale** — `{base}/{peer}/` goes
      in one `remove_dir_all`, so an axis nobody listed is not left alone, it is
      deleted. Every axis therefore also owes a term in `run_plan`.
@@ -80,13 +81,17 @@ to write it down somewhere else, link here instead. It is one function:
      (the legacy-web `.html` export, `--bare-root`, the plan's per-unit naming,
      the `http_poll` URL builders) rather than left to be rediscovered.
 
-### 0.2 The three axes
+### 0.2 The four axes
 
 | axis | tree prefix | reader | ingest flag |
 |---|---|---|---|
 | sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` |
 | apps | `apps/` | `apps::read::read_all_app_sets` | `--ingest-apps=<dir>` |
 | feed (`APP-CONVENTION-FEED`) | `app/feed/` | `feed_tree::read_owned_feed` | `--ingest-feed=<dir>` |
+| mirrors (`APP-CONVENTION-FEED` §6) | `app/feed/mirrors/` **+ each carried author's segment** | `feed_gather::gather_timeline` — somebody ELSE's tree, not ours | `--gather=<peer_id>@<dir>` |
+
+The fourth row is the only one whose reader points outside this peer and the
+only one with a non-empty `carried_peers`; §0.2a is what that costs.
 
 Three things about the feed axis that are decisions, not details:
 
@@ -110,6 +115,101 @@ in-memory** peer each run — the *keypair* is durable, the *content* is assembl
 at publish time. **There is no verb that reads a long-lived native store**, which
 is what *"publish cannot publish a peer's tree"* means. It applies to sites
 identically and is what blocks *"the desktop app posts"*.
+
+### 0.2a ⭐ The fourth axis is a MIRROR, and it IS a row — what it cost to make it one
+
+`APP-CONVENTION-FEED` §6's gatherer is `src/feed_mirror.rs`, the verb is
+`publish --gather=<peer_id>@<dir>`, and the row is
+`publish_axes::MirrorAxis`. **This section used to say a mirror is NOT a
+row**, and listed three questions to answer first. All three are answered
+below; **one of them was answered the other way from how it was posed**, and
+that correction is the part worth reading.
+
+**1. A fourth axis, not a second subgraph of the feed axis.** The deciding
+argument is the *plan's* per-unit term, not tidiness: `run_plan` exists to name
+**which** thing a republish would delete, and folded into the feed's term a
+publisher carrying posts without re-gathering would be told *"0 post(s)
+REMOVED"* on the run that deletes every gathered view they hold. A post and a
+gathered view are different units.
+
+The prefix overlap is real and is now **asserted rather than implied** —
+`app/feed/mirrors/` nests inside `app/feed/` because §6 puts it there, and
+`the_only_nesting_between_two_axes_is_the_one_feed_6_puts_there` pins exactly
+which pair overlaps, so a fifth convention colliding with an existing prefix by
+accident fails instead of quietly sharing another axis's accounting. Both
+statements are true at once because the clean is wholesale over
+`{base}/{peer}/`: every prefix in the table is nested inside *that*.
+
+**2. `tree_prefix` does not have to lie — a row states its foreign half.**
+`PublishAxis::carried_peers` is the fifth obligation, **undefaulted** so a fifth
+convention gets `error[E0046]` rather than an empty list it never chose. Three
+rows answer it in one line; the mirror is the only non-empty answer in the
+table, because a carried entry is bound at its own **author's** address, which
+is what lets a consumer reach it with the reader it already has.
+
+⛔ **And the consequence that a "carried bodies just survive" reading misses:
+the POINTERS survive the clean and their BLOBS do not.** `write_entity` puts
+every body into the **shared** `content/{aa}/{bb}/{hex}` store whoever it
+belongs to; only the `.bin` pointer is peer-scoped. `projected_peer_ids` reads
+`{base}/sites/`, and a carried author has no site projection now or ever — so
+left to that check alone, the next publish deletes the blobs and leaves the
+pointers naming them. **Remove-then-un-name: this repo's own rule run
+backwards**, and a tree that no longer resolves what it still names.
+
+The content clean therefore asks a broader question — `foreign_trees`, *is
+anybody else's tree here at all* — and it asks it **only in the direction that
+is safe to be wrong in**. ⭐ ***Enumerating to decide what NOT to remove is
+safe; enumerating to decide what to remove is how a publish destroys a co-hosted
+publisher's tree (AP52/AP53).*** The predicate cannot tell a gathered author's
+segment from a sibling publisher's, which is exactly why it is only ever allowed
+to say *"leave it alone"*. Cost, stated: orphan blobs accumulate, which
+`--verify` already lists and §7's origin-wide keep-set is the real answer to.
+Gate: `a_republish_that_does_not_re_gather_leaves_no_dangling_pointer`.
+
+**3. ⛔ `--verify` IS fixed by an arm — and the version of this section that
+said otherwise was wrong.** It reasoned: the sweep is rooted at
+`{base}/{peer_id}/`, a mirror's carried bodies are bound under each author's
+segment, so *"this one is the wrong root and no extra arm fixes it"*. Two facts,
+both measured rather than reasoned, make it an arm after all:
+
+- **The blobs are not foreign at all** — see above; the shared content store
+  already holds them and the closure fetcher already reaches them by hash.
+- **A mirror record DECLARES what it carries.** `entries` is `FEED-R28`-pinned,
+  so each row is a `(peer, hash)` coordinate — the same structural handle a trie
+  node's children and a site asset's blob give.
+
+⇒ **the general rule holds with no exception: every declaring type owes an arm
+in `run_verify`, in the commit that introduces it.** What differs here is only
+that the declaration names a *pair*, so the arm checks two legs — the bytes, and
+the foreign key a consumer resolves them by. Either alone passes a tree that
+does not serve. Gate:
+`verify_follows_a_mirror_and_fails_on_either_half_of_what_it_declares`, with
+both legs falsified separately.
+
+⭐⭐ **AND THE ARM EARNED ITS KEEP ON ITS FIRST RUN, WHICH IS THE WHOLE
+ARGUMENT FOR THE RULE.** Against a fixture carrying one post over EMBED §3's
+16 KiB inline ceiling it reported *"the post appears in the index and its body
+is empty"* — because `plan_mirror` carried the entry and its signature and
+**not the blob its pointer body names**. The identical dangling-reference defect
+`publish_feed` shipped with, one convention over, invisible to every gate in
+`feed_mirror` and `feed_fetch` because all of them run against map-backed
+doubles that serve whatever they were handed. *A test population you generated
+cannot contain the shape you are missing.* `MirrorPlan::content` is the fix and
+`GatherError::BodyClosureMissing` is the refusal — **on the plan, not on its
+callers** (AP44), because a `content` argument a caller may pass empty is a step
+the next caller forgets and whose consequence is not an error but a silently
+hollow publication.
+
+⚠ **A hypothesis about this that measured WRONG, in the alarming direction.** We
+expected a mirror publish to make every carried author look like a **sibling
+publisher**, permanently disabling the shared `content/` clean and printing *"N
+other publisher(s) already at this origin"* about peers who never published
+there. **It does not:** `projected_peer_ids` reads `{base}/sites/`, and a carried
+author has no site projection. *One function, four minutes — and reasoning about
+it would have produced a design decision answering a problem that does not
+exist.* (What it *did* leave open is the pointer/blob asymmetry in point 2,
+which is a different and real one.)
+
 
 ## 1. End-to-end flow
 
@@ -177,6 +277,7 @@ python3 -m http.server 8081 --directory dist
 | `--config-site=<id>` | the SPA's **home site** (what it boots into) |
 | `--surface=<chrome\|site\|window>` | cold-boot **surface** baked into the deployment config (default `window`) |
 | `--window-type=<name>` | for `--surface=window`, the maximized window type (default `Site Browser`) |
+| `--window-target=<ref>` | for `--surface=window`, **what that window opens at** — an `APP-CONVENTION-REFERENCE` §3.1 address (`entity+ref://{peer}/{path}`). Refused at the CLI if it is unreadable, if no viewer handles it, or if its viewer is not the `--window-type` beside it. Absent = today's behaviour: the window opens showing nothing in particular |
 | `--locked` | for `--surface=site`, emit the kiosk lock (no toggle, no peer creation) |
 | `--live=<origin>` | the HTTP origin the SPA fetches content from. **Empty ⇒ same-origin** (portable; see §5/§7) |
 | `--prefix=<p>` | host many isolated peers under one domain at `/{prefix}` (multi-tenant; empty ⇒ root) |
@@ -185,6 +286,7 @@ python3 -m http.server 8081 --directory dist
 | `--site=<id>` | publish only this site out of the set |
 | `--ingest-apps=<dir>` | ingest an app set (entity-apps `dist/`) alongside the sites. `--ingest-games=<dir>` is an accepted alias |
 | `--ingest-feed=<dir>` | ingest a directory of authored posts (`*.md` with a `+++` TOML block carrying **`created_at`**) as the peer's `APP-CONVENTION-FEED` archive — the **third publish axis**. The date is required and never taken from the file's mtime, which `git clone` rewrites; see `src/feed_ingest.rs` |
+| `--gather=<peer_id>@<dir>` | *(repeatable)* read that author's feed out of the tree they published at `<dir>` and carry it into this publish as an `APP-CONVENTION-FEED` §6 **mirror** — the **fourth publish axis**. ⚠ **A DIRECTORY, not an origin**: this tree has no native HTTP client, so the topology it serves is publishers sharing one hosting scope (`src/feed_gather.rs` leads with the bound). One author per flag, because §6.0.1 derives one address per subject and two gathers of one author would write both at one key |
 | **`--plan`** | resolve the source and report **what would change, writing nothing**. Has its own exit-code contract (`run_plan`) |
 | **`--verify`** | prove an **already-published** tree resolves — every pointer, every body hashing to its address, the whole closure walkable (`run_verify`). **For a registry use `registry --verify`, not this** — different durable identity |
 | `--allow-out-of-set-links` | downgrade an out-of-set `site:`/`entity://` target from a build **failure** to a warning. `--strict-links` is **accepted and ignored** — it asks for today's default, and other repos' pipelines still pass it |

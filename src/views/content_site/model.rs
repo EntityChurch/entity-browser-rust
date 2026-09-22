@@ -706,6 +706,17 @@ impl ContentSiteModel {
     /// signal the directory surfaces) — the one place we count a visit, so it
     /// counts explicit opens, not per-frame renders.
     pub fn open_site(&self, peer: &str, site: &str, peers: &Peers) {
+        self.open_page(peer, site, "", peers)
+    }
+
+    /// [`open_site`](Self::open_site) at a named page rather than the site root —
+    /// the entry point a [`crate::window::WindowView::aim`] uses, since an
+    /// `open_target` address may name `{site}/pages/{page}` and arriving at the
+    /// root would silently drop the half the caller cared about.
+    ///
+    /// `page` empty = the site's root page, which is what makes `open_site` one
+    /// line rather than a second expression of the same act.
+    pub fn open_page(&self, peer: &str, site: &str, page: &str, peers: &Peers) {
         let peer_id = Some(peer.to_string()).filter(|p| !p.is_empty());
         // The provenance/prefs ledger keys by the concrete owning peer; an
         // owned site keys by my own id (`peer` empty → my bound peer).
@@ -718,7 +729,7 @@ impl ContentSiteModel {
             |p| p.visit_count = p.visit_count.saturating_add(1),
         );
         self.go_to(
-            Location { peer_id, site_id: site.to_string(), page: String::new() },
+            Location { peer_id, site_id: site.to_string(), page: page.to_string() },
             peers,
         );
     }

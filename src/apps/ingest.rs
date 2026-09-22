@@ -106,6 +106,12 @@ pub fn read_dist(dir: &Path) -> Result<IngestedSets, String> {
             // Retain the `type` so the host can pick a delivery mode per app
             // (L5 payloads load via `src`); empty `type` → `None`.
             app_type: (!app_type.is_empty()).then(|| app_type.to_string()),
+            // The file-verb opt-in. Only a JSON `true` opts in: a string "true",
+            // a 1, or an absent key all leave the app on the unchanged host.
+            files: item
+                .get(crate::app_files::MANIFEST_KEY)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         };
 
         let html_path = dir.join(format!("{id}.html"));
@@ -263,6 +269,31 @@ mod tests {
         let games = sets.get(paths::GAMES_SET).expect("games set present");
         let war = &games.catalog.entries[0];
         assert!(war.category.is_none() && war.glyph.is_none() && war.icon.is_none() && war.size.is_none());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn only_a_json_true_opts_an_app_in_to_files() {
+        let tmp = std::env::temp_dir().join(format!("apps-ingest-files-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        write(
+            &tmp,
+            "index.json",
+            r#"[{"id":"yes","name":"Y","type":"tool","x-files":true},
+                {"id":"str","name":"S","type":"tool","x-files":"true"},
+                {"id":"one","name":"O","type":"tool","x-files":1},
+                {"id":"off","name":"F","type":"tool","x-files":false},
+                {"id":"none","name":"N","type":"tool"}]"#,
+        );
+        for id in ["yes", "str", "one", "off", "none"] {
+            write(&tmp, &format!("{id}.html"), "<html></html>");
+        }
+        let sets = read_dist(&tmp).unwrap();
+        let apps = sets.get(paths::APPS_SET).expect("apps set present");
+        let opted: Vec<&str> =
+            apps.catalog.entries.iter().filter(|e| e.files).map(|e| e.id.as_str()).collect();
+        // A near-miss spelling must not grant a sandboxed app a new channel.
+        assert_eq!(opted, vec!["yes"]);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
