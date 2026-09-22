@@ -311,6 +311,14 @@ pub const EN: &[(&str, Message)] = &[
     ("btn.trace", Message::Simple("Trace")),
     ("btn.dismiss", Message::Simple("Dismiss")),
     ("btn.reload", Message::Simple("Reload")),
+    // The C7 update prompt. Says a new version is *available*, never that
+    // anything is wrong — reloading is the user's call and at their
+    // convenience, and the surrounding buttons (`btn.reload` / `btn.dismiss`)
+    // are the existing shared ones.
+    (
+        "update.available",
+        Message::Simple("A new version of Entity Browser is available."),
+    ),
     ("btn.clear", Message::Simple("Clear")),
     ("btn.expand", Message::Simple("Expand")),
     ("btn.collapse", Message::Simple("Collapse")),
@@ -2275,6 +2283,12 @@ pub const EN: &[(&str, Message)] = &[
         "doctor.recheck",
         Message::Simple(
             "Check again",
+        ),
+    ),
+    (
+        "doctor.what_was_checked",
+        Message::Simple(
+            "What was checked",
         ),
     ),
     (

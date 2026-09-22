@@ -193,9 +193,9 @@ impl Conversation {
                 ciborium::Value::Text(title.clone()),
             ));
         }
-        let mut buf = Vec::new();
-        ciborium::into_writer(&ciborium::Value::Map(map), &mut buf)
-            .expect("CBOR encode of Conversation");
+        // `to_ecf`, NOT `ciborium::into_writer` — entity data must be
+        // CANONICAL ECF. See `entity_canonical_encoding` in `make lint`.
+        let buf = entity_ecf::to_ecf(&ciborium::Value::Map(map));
         Entity::new(CONVERSATION_TYPE, buf).expect("Conversation entity well-formed")
     }
 
@@ -403,9 +403,9 @@ impl MembershipOp {
                 ciborium::Value::Text(prev.clone()),
             ));
         }
-        let mut buf = Vec::new();
-        ciborium::into_writer(&ciborium::Value::Map(map), &mut buf)
-            .expect("CBOR encode of MembershipOp");
+        // `to_ecf`, NOT `ciborium::into_writer` — entity data must be
+        // CANONICAL ECF. See `entity_canonical_encoding` in `make lint`.
+        let buf = entity_ecf::to_ecf(&ciborium::Value::Map(map));
         Entity::new(MEMBERSHIP_OP_TYPE, buf).expect("MembershipOp entity well-formed")
     }
 
@@ -572,9 +572,9 @@ impl ChatMessage {
                 ciborium::Value::Integer(self.sent_at.into()),
             ),
         ];
-        let mut buf = Vec::new();
-        ciborium::into_writer(&ciborium::Value::Map(map), &mut buf)
-            .expect("CBOR encode of ChatMessage");
+        // `to_ecf`, NOT `ciborium::into_writer` — entity data must be
+        // CANONICAL ECF. See `entity_canonical_encoding` in `make lint`.
+        let buf = entity_ecf::to_ecf(&ciborium::Value::Map(map));
         Entity::new(MESSAGE_TYPE, buf).expect("ChatMessage entity well-formed")
     }
 

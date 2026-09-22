@@ -2662,6 +2662,38 @@ impl EntityApp {
                      left untouched (absence of evidence is not evidence)"
                 );
             }
+            // **Report the heal, once (D13).** `list_origins` resolves retired
+            // publishers on every read and is otherwise completely silent — which
+            // is exactly how the 2026-09-05 Apps incident would recur unnoticed:
+            // the fault heals, nobody can tell it ever existed, and the next
+            // surface that forgets to consume the fact looks identical to one
+            // that consumed it. Taken here rather than in `list_origins` because
+            // that runs every frame; taken AFTER `revalidate` so it reports the
+            // records this boot actually settled on. A boot where nothing moved
+            // logs nothing (AP54).
+            {
+                let (before, after, resolved) = crate::content_site::origins::supersession_effect(
+                    &self.peer_manager,
+                    &system_pid,
+                );
+                if !resolved.is_empty() {
+                    for (retired, live) in &resolved {
+                        tracing::info!(
+                            retired = %retired,
+                            live = %live,
+                            "site-origins: a registered publisher is RETIRED — reads resolve \
+                             forward to its successor (the registry row is left in place; the \
+                             resolve is read-time, so a corrected document can still drop it)"
+                        );
+                    }
+                    tracing::info!(
+                        rows_before = before,
+                        rows_after = after,
+                        resolved = resolved.len(),
+                        "site-origins: supersession applied to the origin registry"
+                    );
+                }
+            }
             // DERIVE the runtime surface from the durable `boot_surface` — boot
             // lands where config says, not wherever a previous session's toggle
             // last left it. Everything else on the entity (boot_surface,

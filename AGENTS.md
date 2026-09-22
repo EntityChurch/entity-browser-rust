@@ -715,6 +715,65 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   TTL shares the block and the function but has no surface that displays it, so its wiring rides
   the pin's falsification of that block rather than an assertion of its own.
   Design: `DESIGN-RESILIENCE-RECONCILIATION-AND-ENTITY-DOCTOR.md` §1.1e.
+- **THE PRODUCT DIAGNOSED IT CORRECTLY AND TOLD A STATUS CARD INSTEAD OF THE RESOLVER — AP54,
+  found in PRODUCTION on 2026-09-05, by devops, on the first real re-keyed deployment.** The heal
+  path shipped, was audited, and was signed off. It healed the home and the content-site surface.
+  **The Apps surface never healed at all**, and on the same boot, in the same session, Entity
+  Doctor's check 2 was reporting `fetch-failure-by-peer: diverges` and **naming the dead peer** —
+  the exact fact `app_source` needed, already loaded in memory in phase 1, before the Apps window
+  spawned. It was not a race. *Diagnosis reaching a card is not repair.* **When a check can name a
+  fault, ask which code path would have to consume that same fact to FIX it, and whether anything
+  does.** A health surface that is right while the resolver is wrong is a signal you have built the
+  knowledge and not wired it.
+  **Three defects, one root, and all three verified in source before being believed:**
+  **(1)** `peer_supersession::resolve` had exactly **two** call sites, both in
+  `views/content_site/model.rs`. **(2)** `app_source` preferred the origin *"whose catalog we
+  already hold — a stable choice across frames"*; on a re-keyed profile the peer you hold a catalog
+  for is the **retired** one, and it is **self-reinforcing**: the live peer can only earn a catalog
+  by being fetched, and the fetch is what the preference refuses to make. **A preference for state
+  we already hold is a preference for STALE**, and after an identity change it never recovers on
+  its own. **(3)** `list_origins` did no supersession filtering, so the dead registration survived
+  every boot — the adoption path only ever *adds*.
+  **The commit that introduced it said the right thing and did not do it, which is worse than
+  silence.** `ac515ff`'s message reads *"a replaced publisher is ONE fact about a peer, not N facts
+  about surfaces."* Its code is a fact about one surface — the one the author had open. **A commit
+  message stating the general principle is not the principle being implemented**, and it makes the
+  scope look considered to every later reader, including the audit that signed this off. Grep the
+  call sites; do not grade the rationale.
+  **Enforcement, structural rather than conventional:** the resolve moved into
+  `origins::list_origins`, which **all seven** call sites already use, and
+  `list_origins_raw` is **private** — there is no way to obtain an unresolved listing from outside
+  that module, so a surface added tomorrow inherits it without knowing it exists. The decision is
+  `apply_supersession`, **pure** and taking the resolver as an argument (same reason `resolve_in`
+  was split from `resolve`), so every combination is gated by `make test` on both arms.
+  **Read-time resolve, never a stored sweep** — writing the resolution down would be a durable
+  record of a fact the live document owns (AP30), and revalidation exists to drop a record the
+  domain contradicts.
+  **The middle case is the one a tidy fix gets wrong:** superseded **and the successor is not
+  separately registered** → **carry the origin forward**, do not drop. A re-key is normally the
+  same publisher at the same origin, so dropping the only row naming it turns a recoverable re-key
+  into an unreachable publisher — availability lost to hygiene. Drop only when the successor has
+  its own registration, which `adopt_deployment_origin` wrote from the live document and which
+  therefore outranks anything we inferred.
+  **The gate's PRECONDITION is the gate** (devops asked for exactly this, and they were right):
+  `a_rekeyed_domain_stops_serving_apps_from_the_retired_publisher` **warms the retired peer's
+  catalog first**. Without that, `app_source`'s first loop finds nothing, falls through to *"the
+  first foreign origin"*, and the answer depends on which peer id sorts first — **an unwarmed
+  fixture passes with the defect fully present.** The retired peer is also chosen to sort *first*,
+  so sort order cannot supply an accidental pass. Two traps building it: `catalog_path` is
+  peer-qualified, so a **placeholder peer-id string makes the warming `put` a silent no-op** and
+  the precondition unreachable — use real generated ids; and warm through the `WriterHandle`, which
+  is the path `foreign_cache::ensure_current` actually uses. Falsified: neuter `list_origins` back
+  to raw and both gates red with the production symptom.
+  **The wrong sentence, fixed and bounded:** the surface said *"the publisher withheld it"* about a
+  publisher that was **retired**, whose replacement was serving those catalogs at 200. *"This
+  publisher does not carry it"* is a claim about a live publisher's choice; asking a dead one is
+  our mistake, not their decision (AP40). That arm now checks `is_retired` — belt-and-braces, since
+  the chokepoint stops us asking at all, but still reachable when phase 1's supersession read fails
+  and leaves the dead row *unresolvable* rather than merely unresolved.
+  **Stated and deliberate: the retired peer's cached catalogs are NOT swept.** They stop being
+  consulted and are inert. Deleting them is the destructive direction with no export path, and D24
+  is explicit that a cache which drops what it cannot re-verify turns an outage into a missing app.
 - **Re-key recovery is SINGLE-PUBLISHER, and `stale_against` will delete a correct multi-peer
   record — do not widen the writer alone.** A deployment may declare several peers (`origins` is a
   map; `boot_phase2` logs `hosted_peer_origins` and calls `>1` a multi-tenant umbrella). The
@@ -1277,6 +1336,99 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   it"* are different facts (AP40). **`fleet-probe` does not report it yet**; that is the obvious
   follow-on and is the field most likely to differ between two domains reporting the same commit.
   **Quote build ids as `(our commit, entity-core-rust commit)` in anything a deployer reads.**
+  **AN UNEXPLAINED RED IN A SUBSYSTEM YOU DID NOT TOUCH IS A `git -C ../entity-core-rust log`
+  BEFORE IT IS A BISECT — 2026-09-06, and the entry above did not prevent it.** That entry is
+  written about a moving **build id**; this arrived as **18 failing tests**, which reads as your
+  own regression, so the first instinct was to bisect a change that was nowhere near them. The
+  tell is the *shape*: `make test` red at **1377/18** with every failure in one subsystem
+  (tree writes — shell persistence, chat round-trip, memory-transport delivery) and all of it far
+  from the diff. Cost: `dev` + kernel `e17d711` fails `make test` **and** four e2e gates
+  (`a_shell_window_returns_to_its_working_directory_*`, `each_window_returns_to_its_own_slot_*`
+  — **both arms of both**, which is itself the signal that the fault is *below* the arm split
+  rather than in it). Confirm in two commands: stash and re-run (identical 18 ⇒ not yours), then
+  the intersection check — non-empty here (`bindings/sdk`, `core/peer`, `core/tree`). Cause:
+  0.8.2.11's **`put` admission ladder** — a peer now validates the carried `content_hash` and
+  MUST NOT author one, and nothing lands through the app-tier writer (measured: `get -> None`,
+  `0 entries` under `app/`).
+  **AND THEN THE SECOND HALF, WHICH INVERTS THE FIRST: the defect was OURS** (the canonical-ECF
+  entry above), fixed at `950054b`, `1517 / 0 / 19` and `67 / 0`. The routing doc is **withdrawn
+  in place** with the retraction at the top rather than deleted, because the misdiagnosis is the
+  lesson. **`git log` on the sibling tells you what CHANGED, never who is WRONG** — the
+  intersection check did its job and then the write-up slid from *"the sibling moved"* to *"the
+  sibling is at fault"* on no evidence from our own code, which is the 09-04 review's §7 exactly:
+  *choosing the symbol after the claim produces a review that looks checked and is not.* **A
+  correct instrument pointing at a real change is the most persuasive way to be wrong.** Use it
+  to bound the search, then go and read your own code before you write the word "routed".
+  **And the release is not implicated** — a deploy builds a pinned pair, so a sibling that moved
+  after the cut cannot reach it; say so explicitly, because a red `make test` on `dev` reads as
+  *the release is broken* to everyone who did not run the check.
+- **ENTITY `data` IS CANONICAL ECF — `entity_ecf::to_ecf`, NEVER `ciborium::into_writer`.
+  `tools/ecf-lint.sh` (in `make lint`, baseline-ratcheted) is the enforcement point.**
+  `ciborium` faithfully preserves **your** map key order; `to_ecf` canonicalizes (**length, then
+  lexical**) *"and the encoder gets no say"*. So an entity built with `into_writer` carries a
+  `content_hash` over bytes the peer will never reproduce, and the moment it crosses L1 the put
+  answers **`400 hash_mismatch`** — **silently, because `dispatch_write` is fire-and-forget.**
+  Measured on `ShellState`: we wrote `wd, history, draft`; canonical is `wd, draft, history`.
+  **The rule existed at ONE call site for a month and generalised nowhere — AP44, and this is its
+  most expensive instance.** `registry_publish.rs`'s `http_poll_profile_entity` already said
+  *"`to_ecf`, NOT `ciborium::into_writer` — and this is now load-bearing"*, written about that
+  site's circumstance (a profile fetched by hash, where `verify_and_decode` re-encodes before
+  hashing). Five other encoders never got it. When the kernel landed 0.8.2.11's §6.3 **`put`
+  admission ladder** on 2026-09-06 — a peer now *validates* the carried hash and MUST NOT author
+  one — the latent defect became fatal on **every L1 write**: `make test` 1377/18, four e2e gates
+  red **on both arms**, every failure a tree-write path. Fixed at all five (chat ×3, shell ×2);
+  green at **1517 / 0 / 19 across 19 binaries**.
+  **How it was found is the transferable half, and the first two theories were both wrong.** The
+  intersection check said `bindings/sdk` + `core/peer` + `core/tree` had moved, so it read as
+  *their* regression and was routed as one. It is ours. **Trace, do not theorise (A1):** an L0
+  `tree.put` of the real payload **succeeded**, and so did an L1 `dispatch_write` of a *synthetic*
+  one (`a0`, an empty map — canonical by construction, which is exactly why it passed and why a
+  simpler probe would have cleared the code). Only the real `ShellState` failed, and only through
+  L1. `put_and_wait` — the awaiting twin of the fire-and-forget writer — is what printed the
+  status. **When a write "does not land", get the Result: `dispatch_write` swallows it into a
+  `tracing::warn!` that no native test has a subscriber for.**
+  **The baseline carries a COUNT, not names** — a swap passes, same stated limit as `net-lint`.
+  The 3 legitimate uses are not entity data (a fixture building a deliberately hostile body, a
+  test helper feeding a decoder). **And note what this does NOT fix:** the L1 put wire sends `data`
+  as a decoded `Value` for the peer to re-encode, so **any** non-canonical entity is lossy across
+  it — which bears directly on `mirror_byte_fidelity`'s republication property, since a foreign
+  entity we mirror is exactly the case where the bytes are not ours to canonicalize. Republishing
+  through L0 preserves them; through L1 it does not. Routed, not solved here.
+- **THE UPDATE PROMPT FOLLOWS THE BUNDLE, NOT `sw.js` — C7, shipped 2026-09-06
+  (`src/build_update.rs`).** The old banner fired from the service worker registration's
+  `updatefound` chain, i.e. **when `/sw.js`'s bytes change** — a `copy-file` asset touched three
+  times all year against 72 `src/` commits. Measured on two consecutive production deploys of one
+  domain: the deploy carrying the entire re-key fix left `sw.js` byte-identical and **notified
+  nobody**, and an `sw.js`-only change would notify **everybody** about an application that did not
+  move. The operator called the prompt unpredictable for weeks; it was deterministic and keyed to
+  the wrong artifact.
+  **The framing is the design, and it is not the obvious one.** The question is **not** *"what does
+  the origin serve"* — it is *"would reloading this page get you different application code"*,
+  because Reload is the only thing the button does. So the comparison is against **the freshest
+  shell this browser can obtain**, and the check goes **through** `sw.js` rather than fighting it:
+  online, `networkFirst` fetches `/` with `cache: 'reload'`; offline it serves the cached `/`,
+  which is exactly what a reload would deliver — so a match is *correctly* quiet and a newer cached
+  shell *correctly* prompts. Both arms right, no special-casing.
+  **Identity is the bundle hash (§3.1), never the commit** — two docs-only commits would prompt for
+  a no-op, which is the defect `fleet-probe` shipped. **It adds no fourth expression of "read a
+  build id out of a shell"** (`build_id.rs`, `sw.js`'s regex, `build-stamp.sh` are the three): it
+  calls the existing pure `parse_bundle_hash`. C15's rule, applied on the way in.
+  **`PinnedDeliberately` is the arm a tidy version gets wrong** — a retained shell must not be
+  nagged to leave the build it was rolled back to, or the banner argues with C10's pin. Detected by
+  `is_canonical_shell(pathname)`, the same predicate `sw.js` uses, **not** by enumerating the
+  boot-slot script's nine `action` strings, which would be a contract between two files with no
+  compiler in between (the `boot_diagnostics.rs` shape one row over).
+  **All five outcomes log, including `Current`** — a check whose only evidence of having run is a
+  banner that did not appear cannot be told from one that never ran. That is also why the gate's
+  **first** assertion is the anti-vacuity one: *"no banner"* is what an unarmed feature produces
+  too. `showUpdateBanner` is **deleted** from `index.html` (it keeps a `console.info` for a worker
+  update — real, and not actionable) and the prompt is translated in all 30 locales, which leaving
+  it in the shell made impossible. `AUTO_RELOAD_ON_UPDATE` stays `false` (S-5).
+  Gate: `make e2e-worker T=a_new_bundle_prompts`, falsified both ways. **And its own first run red
+  for a defect in the gate** — the matcher was spelled `outcome="current"` while `tracing_wasm`
+  renders `outcome = "current"`, so it would have blamed the feature. *A log assertion is a
+  coupling to a formatter; normalise before matching, and dump the log tail on failure or the two
+  candidate causes are indistinguishable.*
 - **The live fleet is CORRECTABLE, measured 2026-09-02 (first real `fleet-probe` run, exit 0).**
   Both domains serve every mutable URL (`/`, `/index.html`, `/sw.js`, `/entity-deployment.json`) at
   `max-age=1, must-revalidate`, and both bundles `immutable`. So brick-matrix **#7/#8/#9 are not

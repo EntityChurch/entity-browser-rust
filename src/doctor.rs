@@ -127,6 +127,25 @@ pub enum Check {
 }
 
 impl Check {
+    /// **The roster — the one list of what this surface checks.**
+    ///
+    /// It exists because the census that was supposed to catch a new check
+    /// could not: `every_check_has_its_own_key_and_title` and
+    /// `the_runner_reports_every_check_exactly_once` both hand-listed the three
+    /// variants, so adding a fourth left them enumerating three and passing.
+    /// `all.len() == 3` cannot fail when `all` is written out by hand — the
+    /// count asserted something about the literal above it, not about `Check`.
+    ///
+    /// A `const` array does not force an update on its own either. What forces
+    /// it is [`run_checks`], which iterates this list and dispatches through an
+    /// **exhaustive match** — so a new variant cannot compile without being
+    /// given a builder, and the author is standing in this file when it
+    /// happens. Same rule as everywhere else here: if it needs the word
+    /// *every*, the structure has to enforce it (AP44), and a census you have
+    /// not falsified reports what you hoped.
+    pub const ALL: [Check; 3] =
+        [Check::DomainIdentity, Check::FetchFailureByPeer, Check::CatalogCompleteness];
+
     /// The heading a person reads. Not the enum name, and not [`key`](Self::key)
     /// — this one is translated, that one must stay a stable token.
     pub fn title(&self) -> String {
@@ -326,6 +345,29 @@ pub mod copy {
     }
     pub fn recheck() -> String {
         t("doctor.recheck", &[])
+    }
+    /// The disclosure that opens the full roster — every check that ran and what
+    /// each concluded, including the ones that concluded nothing.
+    ///
+    /// **Why a count was not enough.** The quiet line already says *"{n} checks
+    /// ran just now; {q} had nothing to compare against yet"*, which is what
+    /// separates a clean report from a surface that never ran. What a count
+    /// cannot say is *the check that would have caught your problem is one of
+    /// the two that had nothing to compare against* — and that is the sentence
+    /// the operator was reaching for when he asked to see which checks ran.
+    ///
+    /// **It is a disclosure and not a list, and that is the whole of the
+    /// design.** Rendering the roster unconditionally is the mistake this
+    /// surface already made once: it put three non-problems under a heading
+    /// that says *Problems* on a perfectly healthy profile (AP48), which is how
+    /// a screen becomes one people learn to close. Closed by default costs
+    /// nothing and answers the question for whoever asks it.
+    ///
+    /// Phrased as *what was checked* — past tense, about the run that
+    /// happened — rather than *"details"* or *"advanced"*, which say nothing
+    /// about what is behind them.
+    pub fn what_was_checked() -> String {
+        t("doctor.what_was_checked", &[])
     }
     /// Labels for the two halves of every finding — the design's *belief ·
     /// source* pair, which is what makes a finding auditable instead of an
@@ -830,11 +872,18 @@ pub fn run_checks(
     doc: &DocumentRead,
     ledger: &Snapshot,
 ) -> Vec<Finding> {
-    let findings = vec![
-        check_domain_identity(believed_home_peer, home, doc),
-        check_fetch_failure_by_peer(ledger),
-        check_catalog_completeness(ledger),
-    ];
+    // Driven off `Check::ALL` with an exhaustive match, not a hand-written
+    // `vec![]`. The list and the runner were two places to remember, and the
+    // census over them enumerated by hand and so could not see an omission;
+    // now a new variant fails to compile here until it is given a builder.
+    let findings: Vec<Finding> = Check::ALL
+        .iter()
+        .map(|check| match check {
+            Check::DomainIdentity => check_domain_identity(believed_home_peer, home, doc),
+            Check::FetchFailureByPeer => check_fetch_failure_by_peer(ledger),
+            Check::CatalogCompleteness => check_catalog_completeness(ledger),
+        })
+        .collect();
     for f in &findings {
         tracing::info!(
             check = f.check.key(),
@@ -1482,9 +1531,56 @@ mod tests {
             findings.len(),
             "the runner reported the same check twice"
         );
-        for c in [Check::DomainIdentity, Check::FetchFailureByPeer, Check::CatalogCompleteness] {
+        // Off `Check::ALL`, never a hand-written list — that is the whole
+        // difference between this census and the one it replaced.
+        for c in Check::ALL {
             assert!(seen.contains(c.key()), "{} is defined but never run", c.key());
         }
+        assert_eq!(
+            findings.len(),
+            Check::ALL.len(),
+            "the runner and the roster disagree about how many checks exist"
+        );
+    }
+
+    /// **The roster is what the *what was checked* disclosure promises to be
+    /// complete against, so it gets its own falsifier.**
+    ///
+    /// The two censuses that were supposed to catch a new check could not:
+    /// both wrote out `[DomainIdentity, FetchFailureByPeer,
+    /// CatalogCompleteness]` by hand, so `all.len() == 3` was asserting
+    /// something about the literal on the line above it. Add a fourth variant
+    /// and they enumerate three, pass, and the new check runs nowhere and
+    /// appears nowhere — while the disclosure still says *what was checked*.
+    ///
+    /// What actually holds the line is [`run_checks`]'s exhaustive match over
+    /// `Check::ALL`: a new variant cannot compile without a builder. Falsified
+    /// 2026-09-06 by adding a fourth variant — **three** `E0004`s
+    /// (`title`, `key`, and the runner's dispatch); before the roster landed it
+    /// was two, and the runner's hand-written `vec![]` compiled untouched.
+    ///
+    /// **The residual hole, stated rather than claimed away:** a variant that
+    /// is given a match arm but never added to `ALL` still never runs, and
+    /// nothing here can see it — the runner would yield three findings against
+    /// a three-entry roster and agree with itself. It is narrow (the match
+    /// whose arm you must add is *inside the loop over `ALL`*, four lines
+    /// away) and it is not zero. Anyone widening this: the enumeration would
+    /// have to come from the type, which needs a derive we do not carry.
+    #[test]
+    fn the_roster_is_the_only_list_and_it_is_the_size_it_says() {
+        use std::collections::BTreeSet;
+        let keys: BTreeSet<&str> = Check::ALL.iter().map(|c| c.key()).collect();
+        let titles: BTreeSet<String> = Check::ALL.iter().map(|c| c.title()).collect();
+        assert_eq!(keys.len(), Check::ALL.len(), "two checks share a log key");
+        assert_eq!(titles.len(), Check::ALL.len(), "two checks share a heading");
+        assert_eq!(
+            Check::ALL.len(),
+            3,
+            "checks 4-8 of DESIGN-RESILIENCE §7.2 are not built. If you just added one: \
+             `run_checks` already refused to compile without a builder, so the runner is \
+             covered — update this count, and confirm the new check appears in the \
+             *what was checked* disclosure (§7.3a), which claims to be complete."
+        );
     }
 
     /// End to end on the incident-B shape: the finding appears, it carries the
@@ -1530,15 +1626,11 @@ mod tests {
         assert!(after.remedy.is_none(), "a cleared finding must not still offer a repair");
     }
 
-    /// Every check must have its own stable key and its own heading — a gate
-    /// against two checks colliding in a log line or a chip.
-    #[test]
-    fn every_check_has_its_own_key_and_title() {
-        let all = [Check::DomainIdentity, Check::FetchFailureByPeer, Check::CatalogCompleteness];
-        let keys: std::collections::BTreeSet<&str> = all.iter().map(|c| c.key()).collect();
-        let titles: std::collections::BTreeSet<String> = all.iter().map(|c| c.title()).collect();
-        assert_eq!(keys.len(), all.len());
-        assert_eq!(titles.len(), all.len());
-        assert_eq!(all.len(), 3, "checks 4-8 of design §7.2 are not built; update this count");
-    }
+    // `every_check_has_its_own_key_and_title` lived here and is deleted, not
+    // moved: `the_roster_is_the_only_list_and_it_is_the_size_it_says` asserts
+    // the same two properties off `Check::ALL` instead of off a hand-written
+    // literal, which is the difference between a census and a restatement.
+    // Leaving both would have kept the weaker one as the thing a reader finds
+    // first (AP17 — an authoritative source that leaves its mirror standing has
+    // increased duplication).
 }

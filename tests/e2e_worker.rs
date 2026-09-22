@@ -15130,6 +15130,155 @@ async fn poll_rendered(
 /// depends on which surface the domain happens to ship is not a repair, it just
 /// moves which door the bug is reachable through. Both callers below run the
 /// identical scenario; only the fixture's surface and the DOM read differ.
+/// **AP54's browser half — the journey, not the decision.**
+///
+/// The 2026-09-05 production incident: a domain re-keys, the home and
+/// content-site surfaces heal, and the **Apps** surface keeps sourcing from the
+/// retired publisher forever. Four native gates now pin the decision
+/// (`app_source`, `list_origins`, `get_origin`). This one pins what a person
+/// sees, which is the layer that actually failed and the layer no gate covered
+/// — the existing re-key gates publish SITES, so none of them could ever have
+/// exhibited it.
+///
+/// **Why it discriminates, and this is the part to keep if it is ever
+/// rewritten:** a publish cleans only its OWN peer's roots, so peer A's app
+/// tree SURVIVES the re-key publish and still answers **200**. Under the defect
+/// the profile therefore renders A's app quite happily — no error, no 404, no
+/// empty state. A gate asserting "the Apps window is not broken" passes with the
+/// bug fully present. So each identity publishes a **differently named app** and
+/// the assertion is *which publisher are we sourcing from*.
+///
+/// The first boot's assertion is also the **precondition**: reading `AlphaFromA`
+/// off the screen is what warms A's catalog into the profile, which is what
+/// makes A the "stable" choice the retired-peer preference then locks onto.
+/// Without it the second boot proves nothing.
+#[tokio::test(flavor = "current_thread")]
+#[cfg_attr(not(feature = "e2e"), ignore)]
+async fn a_rekeyed_domain_serves_apps_from_the_new_publisher(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-rekey-apps".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    // Read the Apps launcher grid and report WHICH app is listed. Named buttons,
+    // not a count: the whole question is whose catalog we rendered.
+    let read_apps = r#"
+        const layer = document.getElementById('dom-layer');
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const btns = Array.from(sec.querySelectorAll('button'))
+                .filter(b => !b.hasAttribute('data-chip'))
+                .map(b => b.textContent.trim());
+            return {
+                open: true,
+                alpha: btns.some(t => t.includes('AlphaFromA')),
+                beta: btns.some(t => t.includes('BetaFromB')),
+                btns: btns,
+            };
+        }
+        return { open: false, alpha: false, beta: false, btns: [] };
+    "#;
+
+    let r = async {
+        // ── 1. First contact with the domain as publisher A ──────────────────
+        run_rekey_fixture("emit_rekey_apps_before", &root);
+        let peer_a = deployment_home_peer(&root);
+        println!("  [apps-rekey] published as A = {peer_a}");
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        wait_for_phase2(&client, 30_000).await?;
+
+        assert_eq!(
+            click_spawn_btn(&client, "+ Apps").await?,
+            "clicked",
+            "could not open the Apps window on first contact"
+        );
+        let first = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+            v.get("alpha").and_then(|b| b.as_bool()).unwrap_or(false)
+        })
+        .await?;
+        // Assert on the VALUE — `poll_json` returns Ok(last_value) on timeout,
+        // so a `?` here would not be a check (AP47).
+        assert!(
+            first.get("alpha").and_then(|b| b.as_bool()).unwrap_or(false),
+            "PRECONDITION FAILED — publisher A's app never rendered on first \
+             contact, so A's catalog was never warmed into this profile and the \
+             re-key assertion below would prove nothing. Got: {first:?}"
+        );
+        println!("  [apps-rekey] first contact rendered A's app — catalog warmed");
+
+        // ── 2. The domain re-keys: same domain, new publisher identity ───────
+        run_rekey_fixture("emit_rekey_apps_after", &root);
+        let peer_b = deployment_home_peer(&root);
+        println!("  [apps-rekey] re-published as B = {peer_b}");
+        assert_ne!(peer_a, peer_b, "the fixture did not actually re-key");
+        // A's tree is deliberately still served — see the doc comment.
+        assert!(
+            std::path::Path::new(&format!("{root}/{peer_a}/apps/apps/catalog.bin")).exists(),
+            "A's app catalog was removed by the re-key publish, which would make \
+             this gate pass for the wrong reason (a 404 rather than a resolve)"
+        );
+
+        // ── 3. The returning profile ────────────────────────────────────────
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        wait_for_phase2(&client, 30_000).await?;
+
+        assert_eq!(
+            click_spawn_btn(&client, "+ Apps").await?,
+            "clicked",
+            "could not open the Apps window after the re-key"
+        );
+        let after = poll_json(&client, read_apps, ASYNC_ROUND_TRIP_BUDGET, |v| {
+            v.get("beta").and_then(|b| b.as_bool()).unwrap_or(false)
+        })
+        .await?;
+
+        assert!(
+            after.get("beta").and_then(|b| b.as_bool()).unwrap_or(false),
+            "THE APPS SURFACE DID NOT HEAL. After the re-key it is still sourcing \
+             from the RETIRED publisher {peer_a} instead of {peer_b}. This is the \
+             2026-09-05 production incident: the profile holds the dead peer's \
+             catalog, which makes it look like the stable choice, and the live \
+             peer can never earn one because the fetch that would give it a \
+             catalog is the one the preference refuses to make. Got: {after:?}"
+        );
+        assert!(
+            !after.get("alpha").and_then(|b| b.as_bool()).unwrap_or(true),
+            "the retired publisher's app is STILL listed beside the new one — the \
+             resolve dropped nothing. Got: {after:?}"
+        );
+        println!("  [apps-rekey] healed: rendering B's app, A's is gone");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    client.close().await.ok();
+    r
+}
+
 async fn rekey_scenario(
     before_fixture: &str,
     after_fixture: &str,
@@ -23013,6 +23162,137 @@ async fn the_problems_card_is_in_the_browser_and_quiet_until_something_is_actual
         );
         println!("  problems: present in a browser and quiet on a healthy profile ✓");
 
+        // ── 1b. The roster: a clean verdict can say WHICH checks ran ────────
+        //
+        // The operator's ask after the 2026-09-06 re-key deploy (§7.3a): *three
+        // checks ran, no problems found* — and no way to see which three. The
+        // count above separates "clean" from "never ran"; it cannot say that
+        // the check which would have caught your problem is one of the ones
+        // that had nothing to compare against.
+        //
+        // Two claims, and the second is the one worth gating: the trigger is
+        // CLOSED by default (rendering the roster unconditionally is AP48
+        // rebuilt — three non-problems under a heading that says *Problems*),
+        // and when opened it is COMPLETE, not a filtered view of whatever the
+        // branch above happened to render.
+        assert!(
+            text.contains("What was checked"),
+            "RED — a healthy profile's card offers no way to see which checks ran, so a \
+             clean report is still indistinguishable from a surface whose inputs nobody \
+             can name (§7.3a). Card text: {text:?}"
+        );
+        const CHECK_TITLES: [&str; 3] = [
+            "Who publishes this site",
+            "Whether a publisher is still answering",
+            "Whether everything finished loading",
+        ];
+        for t in CHECK_TITLES {
+            assert!(
+                !text.contains(t),
+                "RED — the roster is rendering EXPANDED on a healthy profile. That is AP48 \
+                 rebuilt: three non-problems under a heading that says 'Problems' is the \
+                 screen people learn to close. It must be a disclosure, closed by default. \
+                 Found {t:?} in: {text:?}"
+            );
+        }
+
+        let opened = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const h of root.querySelectorAll('h3')) {
+                    if (h.textContent.trim() !== 'Problems') continue;
+                    for (const b of h.parentElement.querySelectorAll('button')) {
+                        if (b.textContent.includes('What was checked')) { b.click(); return 'clicked'; }
+                    }
+                    return 'no-roster-trigger';
+                }
+                return 'no-problems-card';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            opened.as_str(),
+            Some("clicked"),
+            "problems: the roster trigger is not a control the reader can press"
+        );
+
+        // Poll: the toggle marks the window dirty and the rebuild lands on the
+        // next frame, so a single read here races the rAF loop and would red
+        // naming the feature instead of the wait (it did, first run).
+        let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        let mut open_card = problems_card(&client).await?;
+        while Instant::now() < deadline {
+            if open_card
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains(CHECK_TITLES[0])
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+            open_card = problems_card(&client).await?;
+        }
+        let open_text = open_card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        for t in CHECK_TITLES {
+            assert!(
+                open_text.contains(t),
+                "RED — the opened roster does not name {t:?}. It promises to be the COMPLETE \
+                 set of checks that ran, including the ones that established nothing — a \
+                 roster filtered to `warrants_attention` is empty on exactly the healthy \
+                 profile this exists to answer for. Card text: {open_text:?}"
+            );
+        }
+        println!("  problems: the roster is closed by default and complete when opened ✓");
+
+        // **Close it again before step 2, and this is not tidiness.** The roster
+        // rows carry verdict chips of their own, and step 2(e) asserts a chip
+        // reading "could not check" — which an open roster would supply from a
+        // different element than the one under test. A gate satisfied by the
+        // wrong element is AP31 wearing this feature's costume.
+        let closed = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const h of root.querySelectorAll('h3')) {
+                    if (h.textContent.trim() !== 'Problems') continue;
+                    for (const b of h.parentElement.querySelectorAll('button')) {
+                        if (b.textContent.includes('What was checked')) { b.click(); return 'clicked'; }
+                    }
+                }
+                return 'not-found';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(closed.as_str(), Some("clicked"), "problems: the roster would not close");
+        let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        let mut reclosed = problems_card(&client).await?;
+        while Instant::now() < deadline {
+            if !reclosed
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains(CHECK_TITLES[0])
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+            reclosed = problems_card(&client).await?;
+        }
+        let reclosed_text =
+            reclosed.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        assert!(
+            !reclosed_text.contains(CHECK_TITLES[0]),
+            "RED — the roster does not close, so it is a list wearing a disclosure's \
+             affordance and every assertion below is measuring an open card. Text: \
+             {reclosed_text:?}"
+        );
+
         // ── 2. Now make a check genuinely impossible to run ─────────────────
         // Not "wrong" — *unknowable*. The domain accepts the request for its
         // deployment document and never answers, so `read_document` expires at
@@ -23839,4 +24119,218 @@ async fn a_pinned_build_is_honoured_and_every_way_out_of_the_pin_works(
          recovery-immunity and origin-moved-on all clear it."
     );
     Ok(())
+}
+
+/// Stage an isolated SPA copy whose served shell can be rewritten mid-test.
+///
+/// Returns the server, the bundle hash the staged shell names, and the root, so
+/// a caller can move what `/` serves **without touching `dist/`** — the shared
+/// build every other scenario links from.
+fn stage_update_check_spa(
+    port: u16,
+) -> Result<(FederationServer, String, std::path::PathBuf), Box<dyn std::error::Error>> {
+    let root = std::path::PathBuf::from("target/e2e-update-check");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    fn link_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if e.file_type()?.is_dir() {
+                link_tree(&src, &dst)?;
+            } else if std::fs::hard_link(&src, &dst).is_err() {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+        Ok(())
+    }
+    link_tree(std::path::Path::new("dist"), &root)?;
+
+    // **Break the hard links for the one file we rewrite.** `link_tree` hard-links,
+    // so writing through this path would edit `dist/index.html` itself and every
+    // later scenario in an unfiltered run would boot a shell naming a bundle that
+    // does not exist. Copy-then-replace gives this scenario its own inode.
+    let shell_path = root.join("index.html");
+    let shell = std::fs::read_to_string(&shell_path)?;
+    std::fs::remove_file(&shell_path)?;
+    std::fs::write(&shell_path, &shell)?;
+
+    // The hash the shell NAMES — parsed the same way the app does (the bundle
+    // filename), not from the `entity-build-id` meta. The meta is a convenience
+    // for the pre-WASM tier and is explicitly not a second source of truth, so a
+    // gate that keyed on it would not be measuring what `build_update` compares.
+    let live = shell
+        .split("entity-browser-")
+        .nth(1)
+        .and_then(|rest| {
+            let hex: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            (hex.len() >= 8).then_some(hex)
+        })
+        .ok_or(
+            "the staged shell names no /entity-browser-<hash> bundle — there is nothing for \
+             the update check to compare against and every assertion below is vacuous",
+        )?;
+
+    let child = Command::new("python3")
+        .args(["tools/cors-serve.py", root.to_str().unwrap(), &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    Ok((FederationServer(child), live, root))
+}
+
+/// **C7 — the "a new version is available" prompt is keyed to the BUNDLE, and an
+/// `sw.js`-only deploy must not raise it.**
+///
+/// The banner used to be raised from the service worker registration's
+/// `updatefound` chain, which fires when the browser finds `/sw.js`
+/// byte-different. Measured by meta DevOps across two consecutive production
+/// deploys of one domain on 2026-09-06: the deploy carrying an entire re-key fix
+/// left `sw.js` byte-identical and **notified nobody**, while an `sw.js`-only
+/// change would notify **everybody** about an application that did not move.
+///
+/// **Three claims, and the first is what stops this being theatre.** A banner
+/// that never fires and a banner that always fires both look calm from outside,
+/// so the negative case is asserted *against evidence that a check actually
+/// ran* — otherwise "no banner" passes on a feature that was never armed.
+///
+/// 1. Checks run, and an unchanged bundle concludes `current` and says nothing.
+/// 2. Moving the bundle the origin names raises the prompt, with a Reload.
+/// 3. The prompt is the app's, not `index.html`'s — `showUpdateBanner` is gone
+///    from the shell, so a banner appearing here can only be the new path.
+#[tokio::test]
+async fn a_new_bundle_prompts_and_an_unchanged_one_stays_quiet(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let port = pick_free_port()?;
+    let (_server, live, root) = stage_update_check_spa(port)?;
+    // Fast enough that the gate does not wait out the shipped five minutes,
+    // slow enough that several checks land inside the budget below.
+    let base = format!("http://localhost:{port}/?log=trace&updatecheck=400");
+    let client = connect_browser().await?;
+
+    let r = async {
+        client.goto(&base).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ── 1. Checks run, and an unchanged origin says nothing ─────────────
+        //
+        // **The anti-vacuity half.** Without the log assertion, "no banner" is
+        // also what a feature that never armed produces, and this gate would
+        // certify the silence it exists to explain.
+        let mut ran = false;
+        let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        while Instant::now() < deadline {
+            let log = capture_log(&client).await?;
+            // Whitespace-normalised before matching. `tracing_wasm` renders a
+            // field as `outcome = "current"`, with spaces and quotes, and a
+            // matcher spelled `outcome="current"` silently never fires — the
+            // gate then reds naming the FEATURE for a defect in its own
+            // assertion, which is what happened on the first run here.
+            if log.iter().any(|l| {
+                let flat: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+                flat.contains("outcome=\"current\"") || flat.contains("outcome=current")
+            }) {
+                ran = true;
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        if !ran {
+            // Never discard the output that identifies the cause — the two
+            // candidates here (never armed / armed but silent) have different
+            // signatures in this log and the assertion alone cannot tell them
+            // apart.
+            let log = capture_log(&client).await?;
+            let tail: Vec<String> =
+                log.iter().rev().take(40).cloned().collect::<Vec<_>>().into_iter().rev().collect();
+            panic!(
+                "RED — no update check ever reported `current` against an unchanged origin. \
+                 Either the check is not armed (in which case the 'no banner' assertion \
+                 below measures nothing at all) or it is not reporting, which is the same \
+                 silence this feature exists to replace.\n  last 40 log lines:\n    {}",
+                tail.join("\n    ")
+            );
+        }
+        assert!(
+            update_banner_text(&client).await?.is_none(),
+            "RED — the prompt appeared while the origin serves the SAME bundle this page is \
+             running. That is the `sw.js` defect rebuilt on a different artifact: a prompt \
+             whose Reload button would deliver the identical application."
+        );
+        println!("  update: checks run, and an unchanged bundle stays quiet ✓");
+
+        // ── 2. Move the bundle the origin names ─────────────────────────────
+        //
+        // Rewriting only the bundle REFERENCE, not the file: the check fetches
+        // `/` and parses it, and never loads what it names. This is a deploy as
+        // this page can observe one.
+        let shell = std::fs::read_to_string(root.join("index.html"))?;
+        let moved = shell.replace(&format!("entity-browser-{live}"), "entity-browser-0123456789abcdef");
+        assert_ne!(shell, moved, "rewriting the staged shell's bundle reference did not take");
+        std::fs::write(root.join("index.html"), &moved)?;
+
+        let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        let mut banner = None;
+        while Instant::now() < deadline {
+            banner = update_banner_text(&client).await?;
+            if banner.is_some() {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        let banner = banner.ok_or(
+            "RED — the origin now serves a DIFFERENT bundle and this page was never told. \
+             That is the production case: a deploy that replaces the client while `sw.js` \
+             stays byte-identical, which raised no prompt at all under the old trigger.",
+        )?;
+        assert!(
+            banner.contains("new version"),
+            "the prompt is up but does not say a new version is available: {banner:?}"
+        );
+        assert!(
+            banner.contains("Reload"),
+            "RED — the prompt offers no way to take the update. Its whole purpose is the \
+             reload; a notice with no action is a nag. Banner: {banner:?}"
+        );
+        println!("  update: a moved bundle raises the prompt, with a Reload ✓");
+
+        // ── 3. It is the app's banner, not the shell's ──────────────────────
+        let stale = client
+            .execute(
+                "return typeof showUpdateBanner === 'undefined' ? 'gone' : 'still-there';",
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            stale.as_str(),
+            Some("gone"),
+            "RED — `showUpdateBanner` is still defined in index.html, so the sw.js-keyed \
+             prompt can still fire beside the bundle-keyed one and a user gets both."
+        );
+        println!("  update: the sw.js-keyed banner is gone from the shell ✓");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = client.close().await;
+    r?;
+    println!("C7 OK — the prompt follows the bundle, not sw.js.");
+    Ok(())
+}
+
+/// The C7 banner's text, or `None` when it is not up. Read by **id**, which is
+/// the one stable handle: its copy is translated and asserting on English words
+/// alone would make this gate a locale test.
+async fn update_banner_text(
+    client: &Client,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let v = client
+        .execute(
+            "const b = document.getElementById('update-banner'); \
+             return b ? b.textContent : null;",
+            vec![],
+        )
+        .await?;
+    Ok(v.as_str().map(|s| s.to_string()))
 }

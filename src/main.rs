@@ -19,6 +19,10 @@ mod boot;
 // Which build is this — read from the shell that loaded it (C5).
 mod boot_diagnostics;
 mod build_id;
+// Is a newer build available to this page (C7)? Keyed to the bundle id, never
+// to `sw.js` bytes — see the module doc for the two production deploys that
+// measured why.
+mod build_update;
 mod chain_trace_cache;
 mod deployment_config;
 #[cfg(target_arch = "wasm32")]
@@ -845,6 +849,15 @@ pub async fn start() -> Result<(), JsValue> {
         // existed. Nothing is pending, so hand the page over now.
         boot_progress::surface_down("phase 2 inline");
     }
+
+    // C7 — watch for a newer build. **One call site, outside the boot-order
+    // branch above**, because nothing here depends on phase 2's result: it
+    // compares this page's bundle id against the shell a reload would deliver,
+    // and both are available the moment the document is. Arming it inside each
+    // arm would be two places to remember, which is AP44 for the sake of
+    // symmetry it does not need. The first check is one interval away, so it
+    // never competes with phase 2's own bounded read on a slow origin.
+    build_update::arm();
     Ok(())
 }
 

@@ -29,6 +29,9 @@ pub const HEALTH_RECHECK_EVENT: &str = "health_recheck";
 /// ([`crate::doctor::Remedy::key`]) — resolved through `Remedy::from_key`,
 /// which returns `None` for anything unrecognised rather than guessing.
 pub const HEALTH_REMEDY_EVENT: &str = "health_remedy";
+/// Open or close the *what was checked* roster. Display state only — it runs
+/// nothing and reads nothing, which is why it does not set `needs_health`.
+pub const HEALTH_TOGGLE_CHECKS_EVENT: &str = "health_toggle_checks";
 
 /// The *Problems* section's state, held by the window because it is a
 /// point-in-time answer rather than a projection of the tree.
@@ -53,6 +56,20 @@ struct HealthState {
     checking: bool,
     findings: Vec<crate::doctor::Finding>,
     remedy_message: Option<String>,
+    /// **Is the *what was checked* roster open?** Session-only display state,
+    /// and it lives in the model rather than in a native `<details>` on
+    /// purpose: `components::disclosure` re-renders closed on every repaint,
+    /// which is right for a section that costs something to open and wrong for
+    /// one somebody is reading — and this card repaints on every backend poll
+    /// tick under Tauri (`REFRESH_MS_ACTIVE`/`_IDLE`), which would snap it shut
+    /// under them. `collapsible_header` holds `open` here instead, so a
+    /// subscription or a poll firing mid-read cannot collapse it.
+    ///
+    /// Not persisted, for the same reason as everything else in this struct.
+    /// Closed on open: the card's job is to be quiet when there is nothing
+    /// wrong, and the roster is the answer to a question, not part of the
+    /// report (§7.3a).
+    checks_open: bool,
 }
 
 pub struct SystemOverviewWindow {
@@ -256,6 +273,18 @@ impl WindowView for SystemOverviewWindow {
                     self.watch.mark_dirty();
                 }
             }
+            HEALTH_TOGGLE_CHECKS_EVENT => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // Display state, so it marks the window dirty itself and
+                    // re-runs nothing. AP43's rule the other way round: the
+                    // card must not wait on a store event it never causes.
+                    let mut h = self.health.borrow_mut();
+                    h.checks_open = !h.checks_open;
+                    drop(h);
+                    self.watch.mark_dirty();
+                }
+            }
             HEALTH_REMEDY_EVENT => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -416,6 +445,7 @@ impl WindowView for SystemOverviewWindow {
                 checking: h.checking,
                 findings: h.findings.clone(),
                 remedy_message: h.remedy_message.clone(),
+                checks_open: h.checks_open,
             }
         };
 

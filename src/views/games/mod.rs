@@ -293,6 +293,27 @@ pub fn ensure_demo_apps(peers: &Peers, peer_id: &str) {
 ///
 /// Returns `(apps_peer, Some(origin))` when fetching is possible, or
 /// `(me, None)` for the local baked set.
+///
+/// ⚠ **"whose catalog we already hold" is a preference for STALE STATE, and it
+/// is only safe because [`list_origins`](crate::content_site::origins::list_origins)
+/// resolves superseded publishers out of the list first.** Read that before
+/// touching either.
+///
+/// It shipped without that resolve and the result was measured in production on
+/// 2026-09-05: after a domain re-keyed, the peer whose catalog a returning
+/// profile held was the **retired** one, so this function returned the dead peer
+/// on every frame, forever. **Self-reinforcing** — the new publisher could only
+/// earn a catalog by being fetched, and the fetch was the thing this heuristic
+/// refused to make. The stale copy is precisely what made the dead peer look
+/// like the "stable" choice. The surface then reported *the publisher withheld
+/// it* about a publisher that was retired and whose replacement was serving
+/// those catalogs at 200.
+///
+/// Note what the preference does **not** buy, so nobody restores it in a worse
+/// form: `list_origins` returns a peer-id-sorted list, so "the first foreign
+/// origin" is *already* stable across frames. What this adds is only that a
+/// newly-registered origin sorting earlier will not yank a working set out from
+/// under a session — a narrow win that must never outrank liveness.
 pub fn app_source(peers: &Peers, me: &str, set: &str) -> (String, Option<String>) {
     let origins = crate::content_site::origins::list_origins(peers, me);
     // A foreign origin whose catalog we already hold → stable across frames.
@@ -1099,12 +1120,38 @@ impl AppWindow {
                         // the advice the exhausted arm gives — *reopen the
                         // window* — would be wrong here: reopening asks the same
                         // question and gets the same answer.
+                        // **Two different facts, and saying the first one about
+                        // the second is what shipped in the 2026-09-05
+                        // incident** — the surface reported *the publisher
+                        // withheld it* about a publisher that had been RETIRED,
+                        // whose replacement was serving those catalogs at 200.
+                        // "The publisher does not carry this" is a statement
+                        // about a live publisher's choice; asking a dead one is
+                        // our mistake, not their decision (AP40).
+                        //
+                        // `list_origins` resolving supersession is what stops us
+                        // asking a retired peer at all, so this arm is the
+                        // belt-and-braces half: it is still reachable when the
+                        // supersession records could not be loaded this boot
+                        // (phase 1 read failed), which leaves the registry's
+                        // dead row unresolvable rather than merely unresolved.
                         LadderStep::Withheld => {
-                            tracing::warn!(
-                                peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
-                                "apps: the origin answered and does not carry this — not retried; \
-                                 the publisher withheld it (recorded for Entity Doctor)"
-                            );
+                            if crate::peer_supersession::is_retired(&apps_peer) {
+                                tracing::warn!(
+                                    peer = %apps_peer,
+                                    successor = %crate::peer_supersession::resolve(&apps_peer),
+                                    key = %key, attempts = attempt, error = ?e,
+                                    "apps: asked a RETIRED publisher — this is not a withholding, \
+                                     it is us holding a stale source. The successor should be \
+                                     serving this (recorded for Entity Doctor)"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
+                                    "apps: the origin answered and does not carry this — not \
+                                     retried; the publisher withheld it (recorded for Entity Doctor)"
+                                );
+                            }
                             break;
                         }
                         // **Incident B's exact line.** Give up loudly (D13)
@@ -1945,6 +1992,87 @@ mod tests {
             app_source(&peers, &me, paths::APPS_SET),
             ("PUBPEER".to_string(), Some("http://pub.example".to_string()))
         );
+    }
+
+    /// **The re-key gate for the Apps surface. Its PRECONDITION is the test.**
+    ///
+    /// Incident, 2026-09-05, found on a real deployment after a domain re-keyed:
+    /// the home and content-site surfaces healed and Apps never did, because
+    /// `peer_supersession::resolve` had two call sites and both were in
+    /// `views/content_site/model.rs`.
+    ///
+    /// **Warming the retired peer's catalog first is what makes this a gate
+    /// rather than theatre**, and it is why the obvious version of this test is
+    /// worthless: with no catalog held for either peer, `app_source`'s first
+    /// loop finds nothing, falls through to "the first foreign origin", and the
+    /// answer depends on which peer id happens to sort first — so an unwarmed
+    /// fixture can pass with the defect fully present. The production profile
+    /// held the OLD peer's catalog, which is exactly what made the dead peer win
+    /// and kept it winning: the new publisher could only earn a catalog by being
+    /// fetched, and the fetch was what the heuristic refused to make.
+    ///
+    /// Falsified: revert `list_origins` to return `list_origins_raw` and this
+    /// reds with `apps_peer == RETIRED`.
+    #[test]
+    fn a_rekeyed_domain_stops_serving_apps_from_the_retired_publisher() {
+        use crate::content_site::origins;
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+
+        // REAL peer ids, because `catalog_path` is peer-qualified
+        // (`/{peer}/apps/{set}/catalog`) and the store rejects a path whose peer
+        // segment is not one — a placeholder string makes the warming `put` a
+        // silent no-op and the precondition unreachable.
+        //
+        // The RETIRED one is chosen to sort FIRST, so that even the fallback
+        // arm ("the first foreign origin") would hand back the dead peer. That
+        // removes sort order as an accidental source of a pass.
+        let a = Peers::new_direct().primary_peer_id().to_string();
+        let b = Peers::new_direct().primary_peer_id().to_string();
+        let (retired, live) = if a < b { (a, b) } else { (b, a) };
+        let (retired, live) = (retired.as_str(), live.as_str());
+
+        // Both are registered: the adoption path only ever ADDS, so a re-key
+        // leaves the retired row in place beside the new one.
+        origins::set_origin(&peers, &me, retired, "http://old.example");
+        origins::set_origin(&peers, &me, live, "http://new.example");
+
+        // THE PRECONDITION. A returning profile holds the retired publisher's
+        // catalog and nothing else — the stale copy the heuristic reads as
+        // "stable". Written through the `WriterHandle`, which is the same path
+        // `foreign_cache::ensure_current` uses to land a fetched catalog, so the
+        // fixture reproduces the profile rather than approximating it.
+        peers
+            .writer_handle_for(&me)
+            .expect("direct arm always has a writer")
+            .put(
+                paths::catalog_path(retired, paths::APPS_SET),
+                AppCatalog::default().to_entity(),
+            );
+        assert!(
+            peers
+                .get_entity(&me, &paths::catalog_path(retired, paths::APPS_SET))
+                .is_some(),
+            "precondition not established — without the warmed stale catalog this \
+             test cannot distinguish the fix from the defect"
+        );
+
+        crate::peer_supersession::set_all(
+            [(retired.to_string(), live.to_string())].into_iter().collect(),
+        );
+
+        let (apps_peer, origin) = app_source(&peers, &me, paths::APPS_SET);
+        crate::peer_supersession::set_all(Default::default());
+
+        assert_eq!(
+            apps_peer, live,
+            "the Apps surface is still sourcing from the RETIRED publisher after a \
+             re-key. This is the production incident: the profile holds the dead \
+             peer's catalog, so it looks like the stable choice, and the live peer \
+             can never earn one because the fetch that would give it a catalog is \
+             the one this refuses to make."
+        );
+        assert_eq!(origin.as_deref(), Some("http://new.example"));
     }
 
     #[cfg(feature = "demo-apps")]

@@ -72,16 +72,31 @@ fn cached_page(body: &str) -> Entity {
 /// `system/tree:put` params — `{entity: {type, data}}`, the shape
 /// `entity_sdk`'s `build_put_params` sends (§3.2 path-as-resource, so the
 /// mirror path travels in the resource target, not the params).
+/// The `put-request` wire shape — **all three keys**.
+///
+/// It carried only `{type, data}` until 2026-09-06, which stopped being legal
+/// when `ENTITY-CORE-PROTOCOL` 0.8.2.11 landed the §6.3 admission ladder:
+/// `put-request.entity` is typed `core/entity`, whose three fields are all
+/// required, so **`put` is a receipt path** — the peer validates the carried
+/// hash and MUST NOT author one. The old two-key form was accepted only because
+/// the handler's absent-arm called `Entity::new`, i.e. authored an address the
+/// submitter never chose.
+///
+/// Mirrors `entity_sdk`'s own `build_put_params` deliberately, rather than
+/// being a second expression of the wire shape: these tests exist to check
+/// **authorization** of a foreign-namespace write, and a hand-rolled envelope
+/// that drifts from the SDK's turns them into a test of the envelope instead.
 fn put_params(entity: &Entity) -> Entity {
     let data_value: Value = ciborium::from_reader(entity.data.as_slice()).unwrap();
     let params = Value::Map(vec![(
         text("entity"),
         Value::Map(vec![
-            (text("type"), text(&entity.entity_type)),
+            (text("content_hash"), Value::Bytes(entity.content_hash.to_bytes())),
             (text("data"), data_value),
+            (text("type"), text(&entity.entity_type)),
         ]),
     )]);
-    Entity::new("system/tree/put/params", to_ecf(&params)).unwrap()
+    Entity::new("system/tree/put-request", to_ecf(&params)).unwrap()
 }
 
 fn resource_opts(path: &str) -> ExecuteOptions {

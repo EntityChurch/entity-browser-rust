@@ -54,6 +54,10 @@ pub struct HealthView {
     pub findings: Vec<crate::doctor::Finding>,
     /// What the last applied remedy reported, if one was applied this session.
     pub remedy_message: Option<String>,
+    /// Whether the *what was checked* roster is expanded. Held in the model
+    /// rather than by a native `<details>` so a repaint cannot collapse it
+    /// under a reader — see the field's note on `HealthState`.
+    pub checks_open: bool,
 }
 
 /// Everything the System Backend window renders.

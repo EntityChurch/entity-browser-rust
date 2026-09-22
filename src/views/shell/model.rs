@@ -142,9 +142,9 @@ impl ShellState {
             ));
         }
 
-        let mut buf = Vec::new();
-        ciborium::into_writer(&ciborium::Value::Map(map), &mut buf)
-            .expect("CBOR encode of ShellState");
+        // `to_ecf`, NOT `ciborium::into_writer` — entity data must be
+        // CANONICAL ECF. See `entity_canonical_encoding` in `make lint`.
+        let buf = entity_ecf::to_ecf(&ciborium::Value::Map(map));
         Entity::new(STATE_TYPE, buf).expect("ShellState entity well-formed")
     }
 
@@ -444,9 +444,10 @@ pub(super) fn parse_json_to_ecf(text: &str) -> Result<Vec<u8>, String> {
     let json: serde_json::Value =
         serde_json::from_str(text).map_err(|e| e.to_string())?;
     let cbor = json_to_cbor(&json);
-    let mut buf = Vec::new();
-    ciborium::into_writer(&cbor, &mut buf).map_err(|e| e.to_string())?;
-    Ok(buf)
+    // `to_ecf`, NOT `ciborium::into_writer` — these bytes become an entity's
+    // `data` (`system/params`), and entity data must be CANONICAL ECF. See
+    // `entity_canonical_encoding` in `make lint`.
+    Ok(entity_ecf::to_ecf(&cbor))
 }
 
 fn json_to_cbor(v: &serde_json::Value) -> ciborium::Value {

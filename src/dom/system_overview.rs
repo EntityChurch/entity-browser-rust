@@ -261,6 +261,36 @@ fn render_health(
         }
     }
 
+    // **The roster — every check that ran and what each concluded, including
+    // the ones that concluded nothing.** Closed by default.
+    //
+    // It is deliberately the COMPLETE set, not "the ones not shown above": the
+    // thing it promises is completeness, and a roster that silently omitted
+    // whatever the branch above happened to render would be the same defect
+    // one layer in. A finding appearing twice on a healthy-plus-one-problem
+    // card is the cost, and it is the right way round — the problem stays
+    // highlighted, and the roster puts it in context.
+    //
+    // `collapsible_header`, not `components::disclosure`: a `<details>`
+    // re-renders closed on every repaint, and this card repaints on the
+    // backend poll under Tauri. See `HealthState::checks_open`.
+    if health.ran {
+        util::append(
+            &card,
+            &components::collapsible_header(
+                ctx,
+                &copy::what_was_checked(),
+                health.checks_open,
+                crate::views::system_overview::HEALTH_TOGGLE_CHECKS_EVENT,
+            ),
+        );
+        if health.checks_open {
+            for f in &health.findings {
+                util::append(&card, &health_roster_row(f));
+            }
+        }
+    }
+
     if let Some(msg) = &health.remedy_message {
         util::append(&card, &components::success(msg));
     }
@@ -288,6 +318,40 @@ fn render_health(
     util::append(&card, &row);
 
     util::append(parent, &card);
+}
+
+/// One row of the *what was checked* roster: the check's name, the word for
+/// what it concluded, and the one line saying what that means.
+///
+/// **Lighter than [`health_finding`] on purpose.** The audit pair
+/// (belief / source) and the remedy button belong to a finding that is being
+/// put in front of someone because it needs acting on. Repeating them here
+/// would make the roster a second copy of the Problems list rather than the
+/// answer to *which checks ran*, and would put a repair button under a
+/// disclosure — where a person who came looking for reassurance would find it.
+///
+/// The chip carries its own tone, so a check that established nothing reads as
+/// unknown rather than as a tick: three of the six verdicts land on
+/// `HealthTone::Unknown`, and that mapping is the reason a roster is safe to
+/// show at all.
+fn health_roster_row(f: &crate::doctor::Finding) -> Element {
+    let block = util::create_element("div");
+    block.set_attribute("style", theme::SECTION_GROUP).ok();
+
+    let head = util::create_element("div");
+    head.set_attribute("style", theme::ROW_INLINE).ok();
+    let name = util::create_element("strong");
+    util::set_text(&name, &f.check.title());
+    util::append(&head, &name);
+    util::append(&head, &components::health_chip(&f.verdict.chip(), f.verdict.tone()));
+    util::append(&block, &head);
+
+    let detail = util::create_element("p");
+    detail.set_attribute("style", theme::NOTE).ok();
+    util::set_text(&detail, &f.detail);
+    util::append(&block, &detail);
+
+    block
 }
 
 /// One finding: what this machine believes, what it was checked against, what

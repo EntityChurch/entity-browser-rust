@@ -3481,6 +3481,64 @@ mod tests {
         emit_rekey_fixture(REKEY_SEED_AFTER, REKEY_SURFACE_WINDOW);
     }
 
+    /// The **Apps-surface** re-key pair — AP54's browser half.
+    ///
+    /// The site re-key fixtures above could never have caught the 2026-09-05
+    /// incident: they publish sites, and the surface that failed to heal was
+    /// Apps. This pair publishes a **different app under each identity**, so the
+    /// assertion downstream is *which publisher are we sourcing from* rather
+    /// than *did anything error* — which matters because the `_before` peer's
+    /// tree SURVIVES the second publish (a publish cleans only its own peer's
+    /// roots), so under the defect the old catalog still answers 200 and a
+    /// gate asserting "no error" would pass with the bug fully present.
+    ///
+    /// `--surface=chrome` so the launcher's `+ Apps` button exists to click.
+    fn emit_rekey_apps_fixture(seed: [u8; 32], app_id: &str, app_name: &str) {
+        let out = std::env::var("ENTITY_REKEY_OUT").unwrap_or_else(|_| "dist".to_string());
+        let hex = crate::vault_codec::seed_to_hex(&seed);
+        let apps_dist = std::env::temp_dir().join(format!("entity-rekey-apps-{app_id}"));
+        let _ = std::fs::remove_dir_all(&apps_dist);
+        std::fs::create_dir_all(&apps_dist).unwrap();
+        std::fs::write(
+            apps_dist.join("index.json"),
+            format!(
+                r#"[{{"id":"{app_id}","name":"{app_name}","description":"rekey fixture","saves":false,"type":"tool"}}]"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            apps_dist.join(format!("{app_id}.html")),
+            format!("<html><body><h1>{app_name}</h1></body></html>"),
+        )
+        .unwrap();
+        let args = vec![
+            "publish".to_string(),
+            out.clone(),
+            "--deployment-config".to_string(),
+            "--set-home".to_string(),
+            "--surface=chrome".to_string(),
+            format!("--identity-seed={hex}"),
+            format!("--ingest-apps={}", apps_dist.display()),
+        ];
+        let _ = run(&args);
+        assert!(
+            std::path::Path::new(&out).join("entity-deployment.json").exists(),
+            "re-key apps fixture: deployment config not emitted into {out}/"
+        );
+    }
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_rekey_apps_before() {
+        emit_rekey_apps_fixture(REKEY_SEED_BEFORE, "alphatool", "AlphaFromA");
+    }
+
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_rekey_apps_after() {
+        emit_rekey_apps_fixture(REKEY_SEED_AFTER, "betatool", "BetaFromB");
+    }
+
     // ── The demo-site PULL fixture (B-7) ──────────────────────────────────
     //
     // **Not a re-key, and the difference is the finding.** The publisher

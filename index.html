@@ -1336,48 +1336,26 @@
         // silently refuse SW registration over plain http unless on
         // `localhost` / `127.0.0.1`.
         //
-        // Update handling: when a new deploy lands, the browser installs a
-        // new SW version in the background. We surface it. DEFAULT is a
-        // manual "Reload" banner so we never interrupt a working session
-        // (auto-reloading mid-edit is the footgun). Flip AUTO_RELOAD_ON_UPDATE
-        // to true to reload automatically as soon as the new version is ready.
-        // (Network-first index.html already serves the new app code on the
-        // first reload regardless — this is about prompting the reload, not
-        // delivering the bytes.) See the SW-cache-and-durability review.
+        // Update handling. **Two different things, and conflating them is what
+        // C7 fixed** — the flag below is about a new SERVICE WORKER taking
+        // control; the user-facing "a new version is available" prompt is about
+        // a new BUNDLE and now lives in `src/build_update.rs`.
+        //
+        // This flag stays `false` (S-5, and it is sequencing rather than
+        // taste): faster adoption of a broken build is not an improvement while
+        // there is nowhere to fall back to, i.e. until C11's crash-loop counter
+        // exists. Network-first `index.html` already serves the new app code on
+        // the first reload regardless — none of this is about delivering the
+        // bytes, only about when the page is replaced under someone.
         var AUTO_RELOAD_ON_UPDATE = false;
 
-        function showUpdateBanner() {
-            if (document.getElementById('update-banner')) return; // idempotent
-            var banner = document.createElement('div');
-            banner.id = 'update-banner';
-            banner.setAttribute('style',
-                'display:flex;align-items:center;gap:12px;padding:8px 14px;background:#13283a;' +
-                'color:#eee;border-bottom:1px solid #2f6ea3;' +
-                'font:13px/1.4 system-ui,-apple-system,sans-serif;');
-            var text = document.createElement('span');
-            text.textContent = 'A new version of Entity Browser is available.';
-            text.setAttribute('style', 'flex:1;');
-            banner.appendChild(text);
-            var reload = document.createElement('button');
-            reload.textContent = 'Reload';
-            reload.setAttribute('style',
-                'padding:3px 12px;cursor:pointer;background:#2f6ea3;color:#fff;' +
-                'border:1px solid #4a90c2;border-radius:4px;font-size:12px;');
-            reload.addEventListener('click', function() { location.reload(); });
-            banner.appendChild(reload);
-            var later = document.createElement('button');
-            later.textContent = 'Later';
-            later.setAttribute('style',
-                'padding:3px 10px;cursor:pointer;background:transparent;color:#eee;' +
-                'border:1px solid currentColor;border-radius:4px;font-size:12px;');
-            later.addEventListener('click', function() { banner.remove(); });
-            banner.appendChild(later);
-            // Top of the layout, above the status bar (fall back to <body>) —
-            // same placement as the storage banner (storage_durability.rs).
-            var layout = document.getElementById('app-layout');
-            if (layout) { layout.insertBefore(banner, layout.firstChild); }
-            else if (document.body) { document.body.insertBefore(banner, document.body.firstChild); }
-        }
+        // `showUpdateBanner` lived here and is GONE (C7). The prompt moved to
+        // the app tier (`src/build_update.rs`) for two reasons: it was keyed to
+        // `sw.js` bytes, which is a different artifact on a different lifecycle
+        // than "is there new application code"; and this file carries no i18n
+        // by decision, so its copy could never be translated. This file's tier
+        // is what still helps when the WASM is the broken thing — a prompt
+        // shown to someone in a working session is not that.
 
         // NOT on the recovery console. That page exists to inspect and, since
         // 2026-09-01, to REMOVE the service worker; registering one on the way
@@ -1414,15 +1392,33 @@
                         // deploy visible on this load rather than the next.
                         reg.update().catch(function() {});
                         // A newly-installed worker while one already controls
-                        // the page = an update became available.
+                        // the page. **This is NOT "a new version of the app is
+                        // available" and no longer raises a banner (C7).**
+                        //
+                        // `updatefound` fires when the browser finds `/sw.js`
+                        // byte-different from the installed copy, and `sw.js` is
+                        // a `copy-file` asset that changes only when we edit
+                        // that one file. Measured on two consecutive production
+                        // deploys of one domain: the deploy that shipped an
+                        // entire re-key fix left `sw.js` byte-identical and
+                        // notified NOBODY, while an `sw.js`-only change would
+                        // notify EVERYBODY about an application that did not
+                        // move. The signal is real; it is about a different
+                        // artifact on a different lifecycle than the question
+                        // a user is being asked.
+                        //
+                        // The prompt now lives in `src/build_update.rs` and
+                        // compares this page's BUNDLE ID against the shell a
+                        // reload would deliver. Logged here, because a worker
+                        // update is still worth seeing in a bug report.
                         reg.addEventListener('updatefound', function() {
                             var sw = reg.installing;
                             if (!sw) return;
                             sw.addEventListener('statechange', function() {
                                 if (sw.state === 'installed' &&
-                                    navigator.serviceWorker.controller &&
-                                    !AUTO_RELOAD_ON_UPDATE) {
-                                    showUpdateBanner();
+                                    navigator.serviceWorker.controller) {
+                                    console.info('[Entity Browser] a new service worker installed'
+                                        + ' (sw.js changed — NOT necessarily new app code)');
                                 }
                             });
                         });

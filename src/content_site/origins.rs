@@ -480,10 +480,74 @@ pub async fn list_origins_async(
 /// registry, or `None` if unregistered (→ the resolver falls back to a
 /// local read). Reads L1 via the router so it works on both arms (subject
 /// to the Worker-arm subscription note above).
-pub fn get_origin(peers: &Peers, our_peer_id: &str, target_peer_id: &str) -> Option<String> {
+/// The keyed registry read, **unresolved** — the primitive both layers sit on.
+///
+/// Private and it must stay that way: this is the operation the 2026-09-05
+/// incident consisted of. It also exists to break a cycle that a first cut of
+/// the fix walked straight into — [`get_origin`] routes through
+/// [`list_origins`], and [`list_origins_raw`] used to build its rows by calling
+/// `get_origin`, so defining one in terms of the other recursed until the stack
+/// died. Caught on the first run of `get_origin_and_list_origins_agree_after_a_rekey`,
+/// which is the entire argument for writing the agreement test rather than
+/// reasoning that two functions "obviously" agree.
+fn raw_origin(peers: &Peers, our_peer_id: &str, target_peer_id: &str) -> Option<String> {
     let path = app_paths::site_origin_path(APP_ID, our_peer_id, target_peer_id);
     let entity = peers.get_entity(our_peer_id, &path)?;
     decode_origin(&entity)
+}
+
+/// How many registry rows the supersession resolve **changed**, and to whom —
+/// a boot-time D13 report, not a per-frame one.
+///
+/// The 2026-09-05 incident healed silently once fixed, and a silent heal is how
+/// the next one gets missed: nothing anywhere said that a stored registration
+/// named a publisher that no longer exists. [`list_origins`] runs every frame
+/// and must stay quiet, so the report is taken **once**, by boot, through this.
+///
+/// Returns `(rows_before, rows_after, resolved_pairs)`. `resolved_pairs` is
+/// empty on every boot but the one after a re-key, which is the point: a boot
+/// that reports nothing is a boot where nothing moved.
+pub fn supersession_effect(
+    peers: &Peers,
+    our_peer_id: &str,
+) -> (usize, usize, Vec<(String, String)>) {
+    let raw = list_origins_raw(peers, our_peer_id);
+    let resolved: Vec<(String, String)> = raw
+        .iter()
+        .filter_map(|(peer, _)| {
+            let live = crate::peer_supersession::resolve(peer);
+            (live != *peer).then(|| (peer.clone(), live))
+        })
+        .collect();
+    let after = apply_supersession(raw.clone(), crate::peer_supersession::resolve).len();
+    (raw.len(), after, resolved)
+}
+
+/// **Defined in terms of [`list_origins`], deliberately — ONE expression of
+/// "which publisher is live", not two that can drift (C15).**
+///
+/// The 2026-09-05 incident was a registry read that had not been resolved
+/// against supersession. Fixing only `list_origins` would have left this
+/// function as a second reader of the same registry answering a different
+/// question, and the two disagree in *both* directions after a re-key: this one
+/// would hand back the retired publisher's origin, and — the case a
+/// resolve-then-lookup version still gets wrong — it would answer `None` for a
+/// live successor whose origin is only reachable via the retired row that
+/// carries it. Routing through the listing makes the three arms of
+/// [`apply_supersession`] the single place that decision is made.
+///
+/// **Cost, stated:** a full listing per call rather than one keyed read. The
+/// registry holds one row per publisher a deployment declares (one or two in
+/// practice, `dist-federation`'s widest case is a handful) and every read is
+/// in-memory on both arms, so this is a few map lookups. If that ever stops
+/// being true, cache the listing per frame — do **not** reintroduce a second
+/// path to the answer.
+pub fn get_origin(peers: &Peers, our_peer_id: &str, target_peer_id: &str) -> Option<String> {
+    let live = crate::peer_supersession::resolve(target_peer_id);
+    list_origins(peers, our_peer_id)
+        .into_iter()
+        .find(|(peer, _)| *peer == live)
+        .map(|(_, origin)| origin)
 }
 
 /// List **every** registered `(target_peer_id, origin)` under `our_peer_id`'s
@@ -494,7 +558,42 @@ pub fn get_origin(peers: &Peers, our_peer_id: &str, target_peer_id: &str) -> Opt
 /// and any returning-user override. One level (the immediate `{target}` keys),
 /// sorted by peer-id, deduped. Arm-aware via [`Peers::tree_listing`] (Worker
 /// arm: the reader must watch [`app_paths::site_origins_prefix`]).
+/// **Superseded registrations are resolved here, and this is the chokepoint on
+/// purpose (AP44).** A re-key leaves the retired publisher's registration in the
+/// registry — nothing sweeps it, because the adoption path only ever *adds* —
+/// so every caller of this function would otherwise have to remember to ask
+/// `peer_supersession` itself. Seven do today and none did: the resolve had
+/// exactly **two** call sites, both in `views/content_site/model.rs`, so the
+/// content-site surface healed after a re-key and the Apps surface never did.
+/// Found in production on 2026-09-05 by devops, on a real re-keyed deployment,
+/// against a build whose own health checks were diagnosing the fault correctly
+/// on the same boot (`fetch-failure-by-peer: diverges`, naming the dead peer)
+/// while the resolver forty lines earlier could not see it.
+///
+/// **Read-time resolve, never a stored sweep** — the same stance
+/// `peer_supersession` documents for the content-site call sites. The registry
+/// keeps what it was told; what we *act on* is derived per read. Writing the
+/// resolution down would be a durable record of a fact the live document owns
+/// (AP30), and revalidation already exists to drop a record the domain
+/// contradicts.
 pub fn list_origins(peers: &Peers, our_peer_id: &str) -> Vec<(String, String)> {
+    apply_supersession(
+        list_origins_raw(peers, our_peer_id),
+        crate::peer_supersession::resolve,
+    )
+}
+
+/// [`list_origins`] **without** the supersession resolve — what is literally in
+/// the registry.
+///
+/// **PRIVATE, and that is the enforcement point (AP44).** The incident this
+/// module was changed for is a surface reading rows nobody had resolved, so the
+/// fix must not be a convention that the next surface has to know about. There
+/// is no way to obtain an unresolved listing from outside this module; if you
+/// find yourself wanting one, you want [`list_origins`] and a reason written
+/// down. Keeping [`apply_supersession`] pure is what makes the decision
+/// testable without this function being reachable.
+fn list_origins_raw(peers: &Peers, our_peer_id: &str) -> Vec<(String, String)> {
     let prefix = app_paths::site_origins_prefix(APP_ID, our_peer_id);
     let mut out: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for entry in peers.tree_listing(our_peer_id, &prefix) {
@@ -507,9 +606,56 @@ pub fn list_origins(peers: &Peers, our_peer_id: &str) -> Vec<(String, String)> {
         if target.is_empty() || target.contains('/') {
             continue;
         }
-        if let Some(origin) = get_origin(peers, our_peer_id, target) {
+        if let Some(origin) = raw_origin(peers, our_peer_id, target) {
             out.insert(target.to_string(), origin);
         }
+    }
+    out.into_iter().collect()
+}
+
+/// Rewrite a raw registry listing so it names **live** publishers.
+///
+/// Pure, and takes the resolver as an argument rather than reaching for the
+/// thread-local, so the whole decision is gated by `make test` on both arms —
+/// `peer_supersession`'s own map is a thread-local and the cases that matter
+/// here are *hypothetical* maps, which is the same reason `resolve_in` was split
+/// out from `resolve`.
+///
+/// Three cases, and the middle one is the one a naive version gets wrong:
+///
+/// - **Not superseded** → kept verbatim. A peer nothing replaced resolves to
+///   itself, so this is every row on every boot but the one after a re-key.
+/// - **Superseded, successor is separately registered** → the retired row is
+///   **dropped**. The successor's own registration was written by
+///   `adopt_deployment_origin` from the live deployment document, which is
+///   authoritative over anything we inferred; carrying the old origin forward
+///   could only overwrite a better answer with a worse one.
+/// - **Superseded, successor NOT registered** → the origin is **carried
+///   forward** under the successor's id. Dropping here would be the tempting,
+///   tidy choice and it is wrong: a re-key is normally the same publisher at the
+///   same origin, so dropping the only row that names that origin turns a
+///   recoverable re-key into an unreachable publisher — availability lost to
+///   hygiene.
+///
+/// Two retired peers collapsing onto one unregistered successor is resolved by
+/// first-wins over the sorted raw list. Deterministic, and it cannot arise from
+/// the single-publisher recovery this mechanism supports (see `AGENTS.md` on why
+/// re-key recovery is single-publisher).
+fn apply_supersession(
+    raw: Vec<(String, String)>,
+    resolve: impl Fn(&str) -> String,
+) -> Vec<(String, String)> {
+    let registered: std::collections::BTreeSet<&str> =
+        raw.iter().map(|(p, _)| p.as_str()).collect();
+    let mut out: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (peer, origin) in &raw {
+        let live = resolve(peer);
+        if live == *peer {
+            out.insert(peer.clone(), origin.clone());
+        } else if !registered.contains(live.as_str()) {
+            out.entry(live).or_insert_with(|| origin.clone());
+        }
+        // else: superseded AND the successor speaks for itself — drop.
     }
     out.into_iter().collect()
 }
@@ -530,6 +676,158 @@ fn decode_origin(entity: &Entity) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `apply_supersession`'s three cases, as a pure function so every
+    /// combination is gated by `make test` rather than only through a browser.
+    /// The map is passed in, which is the same reason `resolve_in` exists.
+    #[test]
+    fn a_superseded_registration_resolves_to_the_live_publisher() {
+        let map: std::collections::BTreeMap<&str, &str> = [("old", "new")].into_iter().collect();
+        let resolve = |p: &str| map.get(p).map(|s| s.to_string()).unwrap_or_else(|| p.to_string());
+
+        // 1. Successor separately registered → the retired row is DROPPED and
+        //    the successor's own origin (from the live document) survives.
+        assert_eq!(
+            apply_supersession(
+                vec![
+                    ("old".into(), "http://old.example".into()),
+                    ("new".into(), "http://new.example".into()),
+                ],
+                &resolve
+            ),
+            vec![("new".to_string(), "http://new.example".to_string())],
+        );
+
+        // 2. Successor NOT registered → the origin is CARRIED FORWARD. Dropping
+        //    here is the tidy-looking answer and it loses the only row naming
+        //    the origin the new publisher is actually served from.
+        assert_eq!(
+            apply_supersession(vec![("old".into(), "http://shared.example".into())], &resolve),
+            vec![("new".to_string(), "http://shared.example".to_string())],
+            "a re-key at the same origin must stay reachable, not be tidied away"
+        );
+
+        // 3. Nothing superseded → verbatim, which is every boot but one.
+        assert_eq!(
+            apply_supersession(vec![("other".into(), "http://other.example".into())], &resolve),
+            vec![("other".to_string(), "http://other.example".to_string())],
+        );
+    }
+
+    /// A carried-forward row must never overwrite a real registration, whichever
+    /// order the raw list arrives in — the successor's own row was written from
+    /// the live deployment document and outranks anything we inferred.
+    #[test]
+    fn a_carried_forward_origin_never_outranks_the_successors_own() {
+        let map: std::collections::BTreeMap<&str, &str> = [("zzz", "aaa")].into_iter().collect();
+        let resolve = |p: &str| map.get(p).map(|s| s.to_string()).unwrap_or_else(|| p.to_string());
+        // `zzz` (retired) sorts AFTER `aaa` (its successor), so the successor is
+        // inserted first and the retired row is reached second.
+        assert_eq!(
+            apply_supersession(
+                vec![
+                    ("aaa".into(), "http://authoritative.example".into()),
+                    ("zzz".into(), "http://stale.example".into()),
+                ],
+                &resolve
+            ),
+            vec![("aaa".to_string(), "http://authoritative.example".to_string())],
+        );
+    }
+
+    /// The other half of the 2026-09-05 fault: nothing swept the retired
+    /// registration, so it survived every boot. Asserts the resolve happens at
+    /// the chokepoint — a surface added tomorrow inherits it without knowing.
+    #[test]
+    fn a_retired_publishers_registration_does_not_survive_the_listing() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        set_origin(&peers, &me, "AAAold", "http://old.example");
+        set_origin(&peers, &me, "ZZZnew", "http://new.example");
+
+        assert_eq!(
+            list_origins_raw(&peers, &me).len(),
+            2,
+            "the registry itself still holds both rows — the resolve is read-time, \
+             not a stored sweep, so revalidation can still drop a false record"
+        );
+
+        crate::peer_supersession::set_all(
+            [("AAAold".to_string(), "ZZZnew".to_string())].into_iter().collect(),
+        );
+        let live = list_origins(&peers, &me);
+        crate::peer_supersession::set_all(Default::default());
+
+        assert_eq!(
+            live,
+            vec![("ZZZnew".to_string(), "http://new.example".to_string())],
+            "a retired publisher is still listed as reachable"
+        );
+    }
+
+    /// `get_origin` and `list_origins` must never disagree about who is live —
+    /// they are one expression now (C15), and this pins it in **both**
+    /// directions, because a resolve-then-keyed-read version passes the first
+    /// and fails the second.
+    #[test]
+    fn get_origin_and_list_origins_agree_after_a_rekey() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+
+        // Only the RETIRED peer is registered — the successor has no row of its
+        // own, so its origin is reachable only via the carried-forward one.
+        set_origin(&peers, &me, "OLD", "http://shared.example");
+        crate::peer_supersession::set_all(
+            [("OLD".to_string(), "NEW".to_string())].into_iter().collect(),
+        );
+
+        let listed = list_origins(&peers, &me);
+        let asked_new = get_origin(&peers, &me, "NEW");
+        let asked_old = get_origin(&peers, &me, "OLD");
+        crate::peer_supersession::set_all(Default::default());
+
+        assert_eq!(listed, vec![("NEW".to_string(), "http://shared.example".to_string())]);
+        assert_eq!(
+            asked_new.as_deref(),
+            Some("http://shared.example"),
+            "the listing says NEW is reachable at this origin; asking about NEW directly \
+             must not answer 'nowhere'"
+        );
+        assert_eq!(
+            asked_old.as_deref(),
+            Some("http://shared.example"),
+            "a caller still holding the retired id is resolved forward, not refused"
+        );
+    }
+
+    /// The boot report must be SILENT on an ordinary boot and specific on the
+    /// one that matters — a report that fires every time is one nobody reads.
+    #[test]
+    fn the_supersession_report_is_silent_until_something_moves() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        set_origin(&peers, &me, "OLD", "http://old.example");
+        set_origin(&peers, &me, "LIVE", "http://live.example");
+
+        let (before, after, resolved) = supersession_effect(&peers, &me);
+        assert_eq!((before, after), (2, 2));
+        assert!(resolved.is_empty(), "nothing is superseded — this boot must log nothing");
+
+        crate::peer_supersession::set_all(
+            [("OLD".to_string(), "LIVE".to_string())].into_iter().collect(),
+        );
+        let (before, after, resolved) = supersession_effect(&peers, &me);
+        crate::peer_supersession::set_all(Default::default());
+
+        assert_eq!(before, 2, "the registry itself is untouched — read-time resolve");
+        assert_eq!(after, 1, "the retired row collapses onto its successor");
+        assert_eq!(
+            resolved,
+            vec![("OLD".to_string(), "LIVE".to_string())],
+            "the report must name WHICH publisher was retired and WHO replaced it — \
+             a count alone cannot be acted on"
+        );
+    }
 
     #[test]
     fn round_trips_an_origin_through_the_tree() {
