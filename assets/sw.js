@@ -148,13 +148,51 @@ self.addEventListener('fetch', (event) => {
     }
 });
 
-// This build's id, or null when it cannot be established.
+// The build id **that `/` serves** — NOT necessarily the build the calling page
+// is running. Read the next paragraph before relying on this.
 //
 // Read from the cached shell first: `networkFirst` awaits its `cache.put` for
 // navigations precisely so that by the time a page can spawn a worker, the
-// shell in cache is the one that page is running. Falling back to a fetch
-// covers the first-ever visit, where the navigation happened before this SW
-// took control and nothing was cached.
+// shell in cache is the one `/` last served. Falling back to a fetch covers the
+// first-ever visit, where the navigation happened before this SW took control
+// and nothing was cached.
+//
+// ⚠ **KNOWN GAP — C9/C10 split this and only the WRITE side was fixed.**
+// Until C9 there was one navigable document, so *"the build `/` serves"* and
+// *"the build this page runs"* were the same sentence and this function
+// answered both. C9 retains shells at `/builds/<id>/index.html` and C10
+// navigates to one to honour a pin. `isCanonicalShell` correctly stops a
+// retained shell from being written to the `/` key — but **both reads here
+// still resolve to the canonical shell**: `cache.match('/')` is the live build
+// by construction, and the `/index.html` fallback fetches the live build from
+// the origin. Neither can ever return the retained build's id.
+//
+// So a page running retained shell **A** resolves to **B** and
+// `buildScopedAsset` hands it **B's worker**. Its main bundle is still A's —
+// that URL is content-hashed and goes through `cacheFirst` — so the pairing is
+// *A's shell + A's bundle + B's worker*.
+//
+// What bounds it, measured rather than assumed:
+//   - The cache is NOT corrupted. B's worker is stored under B, which is where
+//     it belongs, so nothing lingers once the pin clears. `dropSupersededBuilds`
+//     is not implicated.
+//   - `WorkerProxy::new` verifies `protocol_version` against the main bundle's
+//     compiled-in `PROTOCOL_VERSION` and returns `VersionMismatch`, and
+//     `main.rs` falls back to Direct/IDB. So a WIRE-incompatible skew fails
+//     closed and the app still boots. A skew between two builds that share a
+//     `PROTOCOL_VERSION` — the common case, it only moves on a wire change —
+//     is NOT detected and simply runs.
+//   - Reachable only where a worker is actually spawned: `?worker=1`, or a
+//     profile holding a persisted `Backend*` peer (`respawn_persisted_backend_peer_into`),
+//     which spawns one on BOTH arms. A default fresh profile spawns none.
+//
+// The structural fix is to make the requesting client name its own build rather
+// than inferring it from `/`: the main thread knows its id (the
+// `entity-build-id` meta) and already builds the loader URL in
+// `app.rs::worker_loader_url`, so passing it there and reading it back off
+// `clients.get(event.clientId).url` closes it without a per-build worker copy.
+// Do NOT "fix" this by keying on the worker's own bytes — that reintroduces the
+// disagreement this scheme exists to prevent.
 async function currentBuildId(cache) {
     // EXACT match on the canonical key — deliberately not `ignoreSearch`, which
     // resolves in insertion order and would happily hand back a shell from a
@@ -183,11 +221,21 @@ function buildScopedKey(rawUrl, build) {
 
 // Cache-first, keyed on (url, build id).
 //
-// A build id we do not recognise is a cache MISS, never a stale hit, so the
-// dangerous direction — serving a worker from a different build than the main
-// bundle — is unreachable by construction rather than by discipline. Entries
-// for superseded builds are swept opportunistically; they are wrong to serve,
-// not wrong to hold, so the sweep never has to win a race.
+// A build id we do not recognise is a cache MISS, never a stale hit, so this
+// function never serves a worker from a build other than the one
+// `currentBuildId` returned. Entries for superseded builds are swept
+// opportunistically; they are wrong to serve, not wrong to hold, so the sweep
+// never has to win a race.
+//
+// ⚠ **That is a weaker guarantee than it reads as, and the difference matters.**
+// This comment used to say the dangerous direction was "unreachable by
+// construction". It is unreachable *relative to `currentBuildId`* — and since
+// C9, `currentBuildId` answers "which build does `/` serve", not "which build is
+// the calling page running". A page on a retained shell therefore gets the
+// CURRENT build's worker, correctly keyed, from a function behaving exactly as
+// written. **The invariant is "the worker matches `/`", never "the worker
+// matches the running shell".** Full analysis and the bounds on it are in
+// `currentBuildId` above; do not re-derive it from this function.
 //
 // When the build id cannot be established at all we fall back to the previous
 // behaviour exactly (network-first). That is the fail-safe direction: it costs

@@ -1,7 +1,10 @@
 # entity-browser-rust — status
 
-_Updated: 2026-09-03 · version **0.9.0** in the manifests; the next tag's number is not yet
-decided — see `docs/status/CHECKPOINT-2026-09-03-release-closeout.md`_
+_Updated: 2026-09-05 · version **0.9.0** in the manifests. **A site hotfix is being published
+from `dev` — build `ddd508b281925031` at `62c6d62`.** The build, the file set, the upload
+ordering and the live-fleet measurements are in
+`docs/status/RELEASE-2026-09-05-THE-SITE-HOTFIX-BUILD-AND-WHAT-DEVOPS-NEEDS.md`, which
+supersedes the 2026-09-03 closeout's gate table._
 
 Where the product is, what is proven and on what, and what is open. It cites files, symbols and
 measurements rather than commit SHAs, which do not resolve for a reader outside this tree (see
@@ -25,15 +28,17 @@ and `make native` prints a deprecation redirect.
 
 ## Gate state
 
-Re-measured **2026-09-03 (release closeout)** rather than quoted — `test`, `test-tauri` and `lint`
-all re-run from a clean tree at `dev` HEAD in the same pass:
+Re-measured **2026-09-04/05 (the site hotfix cut)** rather than quoted — **all five rows re-run
+at `62c6d62` from a clean tree in one pass**, including the e2e, which the 2026-09-03 table
+deliberately did not re-run:
 
 | Gate | Result |
 |---|---|
-| `make test` | **1484 / 0 / 17-ignored** across **17** test binaries — re-measured 2026-09-03 at this tip. It has moved 1300 → 1484 over ten days. Re-run it; do not quote this line |
-| `make test-tauri` | **56 / 0** across 4 binaries — **re-measured 2026-09-03**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) |
-| `make lint` | **exit 0, re-measured 2026-09-03 — eleven checks**, not the seven this row carried through 0.9.0. The two added since: `cargo clippy --features e2e --tests`, which is the only thing in the tree that compiles `tests/e2e_worker.rs` at all, plus the cache-policy pair. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `net-lint` matches baseline · `foreign-cache-lint` matches baseline · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable) · `cache-policy-doc-check` ok · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **769** keys · `i18n-callsite-check` **699** call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
-| `make e2e-worker` | **64 passed / 0 failed, 674.73 s** — unfiltered, run **2026-09-03 at `3b96b47`**, the `sw.js` rollback fix, *with* that change in. **Not re-run at this tip, and that is deliberate rather than an omission:** every commit since is documentation, so no input to the suite has moved. Said explicitly so three fresh numbers above do not imply a fresh fourth |
+| `make test` | **1501 / 0 / 17-ignored** across **19** test binaries — re-measured 2026-09-04 at this tip. It has moved 1300 → 1484 → 1501; the two binaries added since 09-03 are the mirror byte-fidelity gate and the phase-2 barrier census. Re-run it; do not quote this line |
+| `make test-tauri` | **56 / 0** across 4 binaries — **re-measured 2026-09-04**, not quoted forward. (`src-tauri` is workspace-excluded, so it is not in the number above.) |
+| `make lint` | **exit 0, re-measured 2026-09-04 — eleven checks**, not the seven this row carried through 0.9.0. The two added since: `cargo clippy --features e2e --tests`, which is the only thing in the tree that compiles `tests/e2e_worker.rs` at all, plus the cache-policy pair. `ui-lint` atoms=7 styles=135 hex=4 across 23 files · `net-lint` matches baseline · `foreign-cache-lint` matches baseline · `cache-policy-lint` 36 shared vectors (9 immutable / 27 mutable) · `cache-policy-doc-check` ok · `i18n-lint` **raw=0** phys=0 · `i18n-locale-check` 30 locales × **769** keys · `i18n-callsite-check` **699** call sites · `i18n-untranslated` 6 allowlisted · `tree-hygiene` no tracked path is gitignored |
+| `make e2e-worker` | **65 passed / 0 failed, 694.84 s** — unfiltered, **re-run 2026-09-04 at this tip** on a fresh `make e2e-grid`. **The invocation is part of the number:** `env -u WAYLAND_DISPLAY -u DISPLAY make e2e-worker`. With a display on this host the Tauri WebView phase is a standing red (bisected 2026-09-03) and the same tree returns 65/1, so a bare "65/0" is not reproducible |
+| `make site-dist` | green — release build id **`ddd508b281925031`**, `check-dist` consistent, and `publish --verify` on the emitted tree reports **17 pointers / 17 verified / 0 broken; 19 blobs / 0 orphaned** |
 
 **`i18n-lint raw=0` — the baseline file is empty, which is the floor.** It read `raw=90` earlier on
 2026-09-03 (`doctor.rs` 66 + `content_site/mod.rs` 24) and both halves are closed, differently and

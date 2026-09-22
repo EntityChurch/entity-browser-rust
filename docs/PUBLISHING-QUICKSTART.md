@@ -480,7 +480,31 @@ hash and already retained.
 **Both are MUTABLE** — `no-store`, per §6.1. `builds.json` changes every release,
 and a retained shell is overwritten whenever the same build id is republished.
 
-**Upload order matters, and it is the same rule as §6.2(5)'s cutover:**
+> #### The invariant — this is a property of the artifact, not a step in one recipe
+>
+> **`builds.json` must never name a shell that is not yet at the origin.**
+>
+> That is the whole requirement. It holds for every uploader, in every order, and
+> it is the same rule as prune's *un-name before you remove*, run forwards: **a
+> shell nothing names is merely unreachable; a name with no shell is the
+> failure** — it 404s at the one moment someone is falling back, where none of
+> our code runs to heal it.
+>
+> "Upload `builds.json` last" is one procedure that satisfies it, and it is the
+> easiest one. It is **not** the requirement. An uploader that cannot express a
+> total order satisfies the invariant just as well by uploading `builds.json` in
+> a second pass after everything else has landed. If your uploader sorts by
+> basename, note that `builds.json` sorts *ahead* of `builds/<id>/index.html`,
+> so the default is the inverted, unsafe order.
+>
+> **Today the window is unobservable and that is not a reason to ignore it.**
+> Nothing in the client reads `builds.json` at runtime yet — the C10 tier in
+> `index.html` honours a pin from `localStorage` / `?build=` and never fetches
+> the manifest. The reader is C14's slot list, which is not built. So a violation
+> is latent now and becomes live the day that surface ships, by which time the
+> uploaders are written.
+
+**The ordering that satisfies it, and it is the same rule as §6.2(5)'s cutover:**
 
 ```
 1. assets  (hashed, immutable — safe in any order, nothing points at them yet)

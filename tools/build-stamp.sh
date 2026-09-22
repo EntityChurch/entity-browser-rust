@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# build-stamp — record WHICH COMMIT BUILT THIS SHELL, in the shell itself.
+# build-stamp — record WHAT BUILT THIS SHELL, in the shell itself: our commit,
+#                the sibling kernel commit, and the bundle hash.
 #
 # An emitted tree carried nothing that named the commit its wasm came from, so
 # reconstructing a cut's provenance meant diffing file mtimes against `git log`.
@@ -46,9 +47,43 @@ if [ "$commit" != "unknown" ] && ! git diff --quiet HEAD 2>/dev/null; then
     commit="$commit-dirty"
 fi
 
-# TWO stamps, and the second one is not a duplicate of the first.
+# THE SECOND HALF OF THE PROVENANCE, and without it the first half is not an
+# identifier — added 2026-09-05 after it cost a release hand-over.
+#
+# This crate links `entity-core-rust` by PATH DEPENDENCY (twenty paths under
+# `bindings/`, `core/`, `extensions/`) and there is NO cross-repo lockfile. So
+# the bundle hash is a function of OUR commit *and* that sibling checkout's
+# state, and a local build takes whatever happens to be on disk. Only CI pins
+# the other half (`CORE_RUST_REF` in release.yml); the site publish is built
+# locally, where nothing pinned it and — until this stamp — nothing recorded it.
+#
+# Measured, which is why this exists: a COMMENT-ONLY edit to `assets/sw.js`
+# moved the build id from `ddd508b281925031` to `70e3e3d69e547fb4`, apparently
+# violating our own rule that a change confined to unhashed assets cannot move
+# it. Two rebuilds at a fixed commit returned the same new id, so the build is
+# reproducible and the variable was the sibling: another seat had landed two
+# commits, one of them kernel code (`core/tree`, `extensions/content`) that we
+# link. A build id handed to a deployer without this second half names a
+# bundle nobody can reproduce.
+#
+# Same failure-is-not-a-build-failure rule as the commit above: `unknown` when
+# the sibling is absent, not a checkout, or unreadable. The path is relative to
+# THIS repo's root, which is where the script runs from (and the sibling is
+# bind-mounted beside us in the build image).
+core_ref=$(git -C ../entity-core-rust rev-parse --short HEAD 2>/dev/null || echo unknown)
+if [ "$core_ref" != "unknown" ] && ! git -C ../entity-core-rust diff --quiet HEAD 2>/dev/null; then
+    core_ref="$core_ref-dirty"
+fi
+
+# THREE stamps, and no two of them answer the same question. (It was TWO until
+# 2026-09-05; re-state the count whenever one is added, because a heading that
+# undercounts is how the third one becomes invisible to the next reader.)
 #
 #   entity-build     the COMMIT. Provenance, for a human and a bug report.
+#   entity-core-ref  the SIBLING KERNEL commit this bundle was linked against.
+#                    Not decoration: with a path dependency and no lockfile,
+#                    (entity-build, entity-core-ref) is the smallest pair that
+#                    identifies a reproducible build. See the block above.
 #   entity-build-id  the BUNDLE HASH. The SLOT IDENTITY (C9/C10, design 3.1) --
 #                    what a rollback pin names and what /builds/<id>/ is keyed
 #                    on. Several commits can share one; two docs-only commits
@@ -71,10 +106,10 @@ fi
 # Idempotent: trunk regenerates index.html on every build, but a re-stamp of an
 # already-stamped file (a hand-run, a reused shell) must replace rather than
 # accumulate.
-python3 - "$html" "$commit" <<'PY'
+python3 - "$html" "$commit" "$core_ref" <<'PY'
 import re, sys
 
-path, commit = sys.argv[1], sys.argv[2]
+path, commit, core_ref = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, encoding='utf-8') as fh:
     html = fh.read()
 
@@ -89,6 +124,10 @@ if not build_id:
 tags = [('entity-build', commit)]
 if build_id:
     tags.append(('entity-build-id', build_id))
+# The sibling kernel this bundle was linked against. Stamped even when
+# 'unknown': "we could not tell" and "nobody recorded it" are different facts,
+# and only one of them is fixable by the next person to look.
+tags.append(('entity-core-ref', core_ref))
 
 for name, value in tags:
     tag = f'<meta name="{name}" content="{value}">'
@@ -110,4 +149,4 @@ with open(path, 'w', encoding='utf-8') as fh:
 print(f'build-stamp: build id {build_id or "(none)"}')
 PY
 
-echo "build-stamp: $dist/index.html ← $commit"
+echo "build-stamp: $dist/index.html ← $commit (entity-core-rust $core_ref)"

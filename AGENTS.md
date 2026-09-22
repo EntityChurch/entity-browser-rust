@@ -1095,6 +1095,18 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   and §3.5's recovery Boot section. Today the mechanism is reachable by a hand-typed
   `?build=<id>` — real for an operator or support, inert for everyone else. **Do not describe row
   10 as closed.**
+  **Second stated bound, measured 2026-09-04 and a different claim from the first: the FLEET has no
+  slots, because a mechanism that shipped is not a mechanism a deployment HAS.** `/builds.json` and
+  `/builds/<live-build-id>/index.html` both 404 on all **six** live domains — the retained-build
+  machinery landed 2026-09-02, after the last deploy, so no publish has ever written one. The
+  consequence is the one that matters on a cutover day: **the FIRST publish to use it still has
+  nothing to roll back to**, and cannot retroactively retain the shell it is replacing (that shell
+  was built from another branch and is not in hand). It creates the first slot, which pays off from
+  the *next* publish onward. What covers the gap in the meantime is the correctable-header property
+  — `fleet-probe` exit 0 — so *republish* is the recovery, and that is measured rather than assumed.
+  **The general shape: a capability present in the build reads as a capability the deployment has.**
+  Same family as a gate satisfied by its fallback and as *recording a gap is what makes it look
+  handled* — ask what the ORIGIN serves, not what the artifact contains. One `curl` per domain.
   **A default that is also a MEANINGFUL value collapses *absent* into *unreadable* — and pick the
   arm by which mistake you can afford (AP40, applied to a parse).** `BuildsManifest::from_json`
   hard-stopped on a malformed `builds`/`index` and then read the anti-rollback floor with
@@ -1125,11 +1137,42 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   is **the converse — a build id that moves does not carry the unhashed assets with it**. So
   **if the bug you are rolling back from is in the worker or in `sw.js`, rolling back the shell
   does not escape it.** Do not describe row 10 as "a bad build has somewhere to fall back to"
-  without this qualifier. Note also why `dropSupersededBuilds` makes the old shape strictly worse
-  rather than accidentally right: it sweeps the previous build's worker entry when the new one
-  lands, so a rolled-back shell never finds its own worker cached — it fetches the current one and,
-  under the old code, stored those bytes **under the rolled-back id**, defeating the very invariant
-  `buildScopedAsset` exists to hold.
+  without this qualifier.
+  **CORRECTED 2026-09-05, and the correction is the interesting half — it UNDERSTATED the defect
+  and misnamed the mechanism.** This entry used to close by blaming `dropSupersededBuilds` for
+  storing the current worker "under the rolled-back id". Traced through the code (meta DevOps
+  raised it; their mechanism was wrong too, in the same direction): **`dropSupersededBuilds` is
+  not implicated, no eviction is needed, and no fetch is needed.** `currentBuildId` reads
+  `cache.match('/')` — and `isCanonicalShell` guarantees a retained shell is *never* written to
+  the `/` key, while the `/index.html` fallback fetches the live build from the origin. **So both
+  reads resolve to the CURRENT build, always.** A page on retained shell A resolves to B and is
+  handed B's worker **on a cache hit**, correctly keyed under B. The cache stays coherent; the
+  *page* does not. Net pairing: **A's shell + A's main bundle** (content-hashed, so `cacheFirst`
+  gets it right) **+ B's worker**.
+  **So `sw.js`'s "unreachable by construction" was true of the mechanism it described and false as
+  the guarantee readers drew from it.** The invariant `buildScopedAsset` holds is *"the worker
+  matches `/`"*, never *"the worker matches the running shell"* — one sentence before C9, two
+  after. C9 split the collapsed value and **only the write side was fixed** (`isCanonicalShell`);
+  the read side was left inferring the running page from `/`. Same family as AP40, and the same
+  bug the `isCanonicalShell` comment itself narrates, one layer over.
+  **What bounds it, measured:** `WorkerProxy::new` checks `protocol_version` against the main
+  bundle's compiled-in `PROTOCOL_VERSION` and returns `VersionMismatch`, and `main.rs` falls back
+  to Direct/IDB — so a **wire-incompatible** skew fails closed and the app still boots. Two builds
+  sharing a `PROTOCOL_VERSION` (the common case; it moves only on a wire change) are **not**
+  detected and simply run. Reachable only where a worker is spawned: `?worker=1`, or a profile
+  holding a persisted `Backend*` peer (`respawn_persisted_backend_peer_into`, which spawns one on
+  **both** arms) — a default fresh profile spawns none.
+  **Why no gate saw it:** `a_pinned_build_is_honoured_and_every_way_out_of_the_pin_works` mentions
+  the worker **zero times**, and it *cannot* exhibit this — `stage_two_build_spa` synthesises the
+  retained shell by rewriting only the `entity-build-id` meta, so the retained shell still names
+  the **live** bundle and `BUNDLE_HASH` reads the same id from both. The rig makes shell and worker
+  agree by construction. **A two-build rig that shares one bundle is not two builds** — any gate for
+  this needs a genuinely distinct second bundle.
+  **The fix is to make the requester name its own build**, not to retain a worker per build:
+  `app.rs::worker_loader_url` already composes the loader URL and the main thread knows its id
+  (the `entity-build-id` meta), so passing it there and reading it off
+  `clients.get(event.clientId).url` closes it. Do **not** key on the worker's own bytes — that
+  reintroduces the disagreement the scheme exists to prevent.
 - **TORI IS NOT A SMALLER BROWSER — audit it against its OWN substrate, 2026-09-02.** The heal-path
   arc is browser-shaped and most of it genuinely does not apply: `frontendDist` is embedded in the
   executable, so the WebView has no service worker cache of a remote origin, no CDN, and no build
@@ -1205,6 +1248,35 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   `HASHED_REF` already matched, **not** by a second scan of the document — the required extension is
   what keeps a prose mention from being parsed as the build, which is the trap `parse_bundle_hash`
   hit on 2026-09-02.
+- **A BUILD ID DOES NOT IDENTIFY A BUILD OF THIS REPO — the PAIR does, and the missing half is
+  the one that moves (2026-09-05).** We link `entity-core-rust` by **path dependency** across
+  twenty paths under `bindings/`, `core/` and `extensions/`, and there is **no cross-repo
+  lockfile**. So the bundle hash is a function of *our commit* **and** *whatever is checked out in
+  the sibling*. CI pins the second half (`CORE_RUST_REF`); **a local build pins nothing** — and
+  the site publish is built locally, which makes this worse in exactly the place it matters most.
+  `RELEASE-READINESS.md` §2 step 4 already warns that an unpinned ref lets "the same tag build
+  twice into two different binaries"; that paragraph is written about CI and the local case had no
+  entry anywhere.
+  **Measured, and the way it surfaced is the transferable half.** A build id was handed to DevOps;
+  a later **comment-only** edit to `assets/sw.js` moved it — which our own C9 rule says is
+  impossible, since a change confined to unhashed assets cannot move the bundle hash. **Rebuilding
+  twice at a fixed commit returned the same new id**, which is what separated *"the build is
+  non-deterministic"* from *"an input you were not tracking changed"*: the build is reproducible
+  against a fixed pair. Diffing the two bundles' **string tables** named the culprit in one step —
+  an error token from `core/peer`, i.e. not our tree — and `git -C ../entity-core-rust reflog`
+  showed two commits from another seat 20 minutes earlier. **When a hash moves and your diff cannot
+  explain it, diff the ARTIFACTS, not the source.**
+  **The intersection check is the one to run and it already existed:**
+  `git -C ../entity-core-rust diff --name-only $OLD..$NEW` against the `path =` entries in
+  `Cargo.toml`. Non-empty here (`core/tree/src/lib.rs`, `extensions/content/src/handler.rs`), so it
+  was a real change in the shipped bundle, not an inert one.
+  **Enforcement point: `tools/build-stamp.sh` stamps `entity-core-ref`** beside `entity-build` and
+  `entity-build-id`, so a deployed shell states which kernel it was linked against and the question
+  is answerable **from the artifact** rather than from someone's memory of what was on disk. Stamped
+  as `unknown` when it cannot be read, deliberately — *"we could not tell"* and *"nobody recorded
+  it"* are different facts (AP40). **`fleet-probe` does not report it yet**; that is the obvious
+  follow-on and is the field most likely to differ between two domains reporting the same commit.
+  **Quote build ids as `(our commit, entity-core-rust commit)` in anything a deployer reads.**
 - **The live fleet is CORRECTABLE, measured 2026-09-02 (first real `fleet-probe` run, exit 0).**
   Both domains serve every mutable URL (`/`, `/index.html`, `/sw.js`, `/entity-deployment.json`) at
   `max-age=1, must-revalidate`, and both bundles `immutable`. So brick-matrix **#7/#8/#9 are not
