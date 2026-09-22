@@ -36,6 +36,13 @@ addEventListener('message', e => {
   if (!m || m.source !== HOST) return;
   if (m.type === 'init' && !P.init) {
     P.init = true;
+    // What the HOST offered for the file family. Recorded with the same `=== true`
+    // test entity-apps' own SDK applies (`ext.files.available()`), so this probe
+    // answers the question their host contract actually asks rather than "was the
+    // key present". A host that implements the verbs and offers nothing is
+    // indistinguishable from one that never will — which was true of us until
+    // 2026-09-16, with every other assertion in this gate passing.
+    P.filesOffered = (m['x-files'] === true);
     send('x-request-file', { accept: 'text/plain' });
     send('x-file', { name: '../', data: new Uint8Array([1, 2, 3]) });
     const text = new TextEncoder().encode('file probe: made inside the app\n'); // 32 bytes

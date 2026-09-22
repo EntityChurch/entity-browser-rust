@@ -104,6 +104,30 @@
 #   mirror is phase 4 and needs the byte-fidelity republication path rather than
 #   a codec, and the collection has no consumer yet.
 #
+# app/feed/mirror + app/feed/mirror-page — ✅ CLEARED 2026-09-16, BY THE OTHER
+#   SEAT, EXACTLY AS BOTH ROWS PREDICTED. `entity-workbench-go` @ `89fe6fa`
+#   ("the mirror vocabulary, and its coordinate agrees with the other seat byte
+#   for byte") models both types, so the family is two-seat and the rows are
+#   gone from the report — which means they come out of here, because the gate
+#   fails BOTH ways.
+#
+#   ⚠ It was RED FOR A DAY FIRST, on the same two rows, for a different reason,
+#   and the difference is the thing to carry. On 2026-09-16 (session -f) the
+#   file was UNTRACKED in their working tree: the family read two-seat on this
+#   box and single-seat at every commit in either repo. The rows were removed,
+#   the gate went green, and they were PUT BACK — retiring them then would have
+#   recorded a state reproducible from no commit anywhere. One day later the
+#   identical report is a landing. ⇒ **`vocab-lint` resolves sibling seats by
+#   DIRECTORY and reads their working copy, so "the sibling moved" and "the
+#   sibling is mid-edit" produce the same red** — the `Cargo.lock`-from-a-path-
+#   dep hazard, one tool over. `git -C <sibling> status --short` is the whole
+#   check, and it is the first thing to run when this gate names a family you
+#   did not touch. `CORE_RUST_REF` solves exactly this for the kernel by
+#   building from a `git archive`; there is no equivalent here, and that half is
+#   routed.
+#
+# --- the two rows' original notes, kept because what they predicted came true -
+#
 # app/feed/mirror — FIFTH ROW, 2026-09-11, and it is the one the prior paragraph
 #   said was waiting on the byte-fidelity republication path. That path is built
 #   (`src/feed_mirror.rs`), so the type is: the family now reads 6 declared /
@@ -162,6 +186,52 @@
 #   the honest summary is "we became conformant and the tier's implementation
 #   gap widened by one." Both halves are true and only the names show it.
 #
+# app/user — ✅ REMOVED 2026-09-16, AND THE CAUSE WAS NOT WHAT EITHER EARLIER
+#   NOTE REASONED IT OUT TO BE. It was never about a doc example or a sample
+#   string. **It was a stale build directory inside the other worktree**, and it
+#   took instrumenting the analyzer's own scan to say so — the two prior
+#   explanations below were derived by reading, agreed with themselves, and were
+#   both wrong.
+#
+#   Measured: the ONLY file contributing `app/user` as *product* code was
+#   `.core-pin/<kernel-sha>/extensions/compute/src/eval/tests.rs` — **the
+#   kernel's own test file** — present in FIVE stale pin directories under
+#   `entity-browser-rust/`, and attributed to our commit. Our own occurrences
+#   (`views/query_console/{mod,model}.rs`) are classed test-only and name us
+#   nowhere, in either worktree. Two independent misses compose into it: the
+#   analyzer's skip patterns are anchored `/target/` and are tested against a
+#   path RELATIVE to the seat root, so a top-level `target/` never matches
+#   (0 files skipped here, **1962 build-output files scanned as ours** in the
+#   main worktree); and its test-file regex matches a `tests/` DIRECTORY or a
+#   `_test.rs` SUFFIX, so a file literally named `tests.rs` reads as product.
+#
+#   `.core-pin/` is itself residue: `tools/core-pin.sh` has written to
+#   `~/.cache/entity-browser-core-pin/` since 2026-09-15, precisely because the
+#   analyzer was reading the kernel's sources as ours. **The writer moved and the
+#   64 MB of already-written pins did not**, so the defect the move was made to
+#   fix went on being live in the one tree where this gate could run.
+#
+#   The row comes out because the finding is gone under a scan of what git
+#   considers part of this repo — verified from BOTH worktrees (336 and 335
+#   files, `app/user` product in neither), so this is one answer everywhere and
+#   not a worktree artifact pointed the other way. `tools/vocab-lint.sh` now
+#   materializes the seat rather than letting the analyzer read a directory by
+#   name; its header carries the reasoning.
+#
+#   ⭐ THE TRANSFERABLE HALF: **a gate that resolves a tree by NAME reads
+#   whatever is on disk under that name, including artifacts of a tool that has
+#   since moved.** This repo already records that shape for `Cargo.lock` and for
+#   `CORE_RUST_REF`; what is new is that the residue outlived its writer, so
+#   every instinct that says "we fixed that" was true of the code and false of
+#   the disk. Ask what the previous version of a tool LEFT BEHIND, not only where
+#   the current one writes.
+#
+#   The two superseded explanations are kept below, unedited, because the way
+#   they were reached is the lesson — both were reasoned from source and from the
+#   corpus, neither was measured, and each produced a confident account of a
+#   false positive whose real cause was in neither place.
+#
+# --- SUPERSEDED, kept for the reasoning ---
 # app/user — RETIRED 2026-09-12, BACK 2026-09-15, AND IT IS A FALSE POSITIVE ON
 #   BOTH SIDES OF THE ANALYZER. The 09-12 note below stands and is the reason
 #   this row is a RECORD OF WHAT THE GATE REPORTS, never a claim we endorse:
@@ -221,9 +291,36 @@
 #   outside `members` is ACCEPTED, pinned by a test named for the fact that
 #   nothing forbids it. Refusing would be this repo inventing a MUST on somebody
 #   else's convention, which is what `A-24` cost a correction for.
+#
+# app/feed/{mirror,mirror-page} — ✅ CLEARED 2026-09-16, BY THE OTHER SEAT,
+#   EXACTLY AS BOTH ROWS PREDICTED. They read "it clears as workbench-go models
+#   it; there is nothing for us to fix" — and they did:
+#   `entitysdk/feed_mirror.go:68-69` at `89fe6fa` declares `TypeFeedMirror` and
+#   `TypeFeedMirrorPage`, with `FeedMirrorPrefix` for §6's page addressing.
+#   Verified in their tree before the rows were removed, per the standing rule —
+#   a row is removed on evidence, never because the analyzer stopped saying it.
+#
+#   ⭐ FIFTH INSTANCE OF THE NAMES-NOT-COUNTS PAYOFF AND THE THIRD WHERE THE
+#   COUNTERPART DID THE WORK. Two rows left and none arrived, so the gate went
+#   RED on a 5 -> 3 movement — progress, which a count-based ratchet passes
+#   silently while never showing that the tier's gatherer vocabulary had gone
+#   two-seat. `A ratchet that only counts cannot tell you what got better.`
+#
+#   ⭐⭐ AND IT CARRIES EVIDENCE FOR AN OPEN ASK, WHICH IS THE PART TO CARRY.
+#   Their commit subject is *"the mirror vocabulary, and its coordinate agrees
+#   with the other seat byte for byte"*, and `feed_mirror_test.go:63` pins their
+#   key against a constant named for ours. That is `A-60`/`A-61` — FEED §6.0.1's
+#   live coordinate reads `hex(content_hash(absolute-path))`, a ONE-argument
+#   spelling of a function the corpus defines with two, and we derived it as
+#   `EXTENSION-REVISION` §3.1's `prefix_hash` over `system/tree/path` rather than
+#   inventing one. Two independent seats landing on the same byte is the
+#   strongest evidence available that the derivation is the intended reading,
+#   and it arrived through a LINT GATE rather than through the channel. Take it
+#   to the tracker before the ask is answered on weaker grounds.
+#
+#   ⛔ The family now reads 7 declared / 7 implemented here, 6 of them two-seat.
+#   `app/feed/collection` is the only single-seat row left in it, and it stays
+#   honest: we built it last week because the composer's verbs needed it.
 
 single-seat	app/feed/collection
-single-seat	app/feed/mirror
-single-seat	app/feed/mirror-page
 single-seat	app/site-asset
-single-seat	app/user

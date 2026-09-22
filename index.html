@@ -1778,10 +1778,75 @@
             gap: 16px;
         }
 
-        #status-bar .mode-label {
+        /* The product name. It carries the accent that `.mode-label` used to,
+           back when the label was one word: the name is the fixed thing on this
+           bar and the segments beside it are the readings. */
+        #status-bar .product-name {
             color: var(--accent, #90d0ff);
             font-weight: bold;
+            flex-shrink: 0;
         }
+
+        /* The segment host. `flex: 1; min-width: 0` is LOAD-BEARING, not
+           cosmetic: `util::status_bar_cells()` measures this element to decide
+           how many segments fit, so it has to be the leftover space itself.
+           `overflow: hidden` makes a mis-estimated tier clip instead of pushing
+           the site toggle off the bar. (DESIGN-2026-09-16) */
+        #status-bar .mode-label {
+            color: var(--text-dim, #888);
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        /* One segment: a sparkline or a glyph, with its caption beside it.
+           `flex-shrink: 0` is deliberate — a segment the MODEL decided fits
+           must not be squeezed into an unreadable one by flexbox; a
+           mis-estimated tier clips at the host's `overflow: hidden` instead,
+           which is the failure the cell arithmetic is chosen to have. */
+        #status-bar .status-seg {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            font-weight: normal;
+            color: var(--text-dim, #888);
+        }
+        #status-bar .status-seg-label { white-space: nowrap; }
+        #status-bar .status-glyph {
+            color: var(--accent-2, #c0c0e0);
+            font-size: 13px;
+        }
+        /* The boundary between the fixed facts and the live gauges. Drawn as a
+           border rather than a character so it costs no cells — `layout` has
+           already committed to a tier by the time this is painted. */
+        #status-bar .status-div {
+            align-self: stretch;
+            width: 0;
+            border-left: 1px solid var(--border, #333);
+            margin: 6px 0;
+            flex-shrink: 0;
+        }
+        /* The braille graph. A monospace cell keeps the sparkline the width the
+           model measured it as; `line-height: 1` keeps one row inside 28px. */
+        #status-bar .status-spark {
+            font-family: ui-monospace, Menlo, Consolas, monospace;
+            line-height: 1;
+            letter-spacing: 0;
+        }
+        /* The bands. Colour is EMPHASIS — the reading is the bar height, which
+           is why these are safe for a red-green colourblind reader (and why the
+           held-time scale is the Warn/Bad boundary, so the height carries the
+           band at all). `seg-neutral` is an app's own gauge: busy is not bad,
+           and green would be as much a verdict as red. */
+        #status-bar .seg-neutral { color: var(--text-dim, #888); }
+        #status-bar .seg-good { color: var(--ok, #6ec87a); }
+        #status-bar .seg-warn { color: var(--warn, #d8b24a); }
+        #status-bar .seg-bad  { color: var(--error, #d96a6a); }
 
         /* Site Mode overlay toggle — pushed to the right edge of the bar. */
         #site-toggle {
@@ -1925,7 +1990,7 @@
     </div>
     <div id="app-layout">
         <div id="status-bar">
-            <span>Entity Browser</span>
+            <span class="product-name">Entity Browser</span>
             <span class="mode-label" id="mode-display">DOM</span>
             <button id="site-toggle" type="button" title="View site">⛶</button>
         </div>

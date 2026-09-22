@@ -241,32 +241,62 @@ pub fn classify(obs: &Observation) -> Reachability {
         Outcome::NotAttempted | Outcome::InFlight => Reachability::Unknown,
         Outcome::Connected => Reachability::Connected,
         Outcome::Failed => {
-            if obs.gathered.is_empty() {
-                // Not even a host candidate. That is not a topology fact about
-                // the network between two peers — it is an agent that never
-                // gathered — so we have nothing honest to say about the far
-                // side. **This arm has to come first**: it was written below
-                // the `reflectors_configured` check at first, which classified
-                // a never-started agent as `ReflectorUnreachable` and would
-                // have sent the user to fix a reflector that was never asked.
-                // `gathering_nothing_at_all_is_not_a_topology_claim` caught it.
-                Reachability::Unknown
-            } else if obs.sdp_exchange_complete == Some(false) {
+            if obs.sdp_exchange_complete == Some(false) {
                 // **Nobody answered, so there is no network fact here to
-                // report.** Every arm below reasons about the path *between two
-                // peers*; that path is only exercised once both are talking, and
-                // an exchange that never completed did not exercise it. Placed
-                // above them for the same reason the empty-gather arm is placed
-                // above `reflectors_configured`: the cheaper, truer claim has to
-                // win, or a richer-sounding one is made about a network nothing
-                // touched. This is the arm the operator's report earned —
-                // "no reflector is set up" said about a peer on the same
-                // machine that was not running.
+                // report.** Every network arm below reasons about the path
+                // *between two peers*; that path is only exercised once both are
+                // talking, and an exchange that never completed did not exercise
+                // it. The cheaper, truer claim has to win, or a richer-sounding
+                // one is made about a network nothing touched. This is the arm
+                // the operator's report earned — "no reflector is set up" said
+                // about a peer on the same machine that was not running.
                 //
                 // `== Some(false)`, deliberately, so `None` (not measurable)
                 // falls through to exactly today's behaviour rather than
                 // becoming a silent accusation.
+                //
+                // ⭐ **It sits above the empty-gather arm as of 2026-09-16, and
+                // that is a REVERSAL of an ordering this module used to assert
+                // on purpose** ("an agent that gathered nothing is about US, so
+                // it outranks a statement about them"). The reversal is not a
+                // change of principle — it is that the earlier case analysis was
+                // missing the case that produces almost all of these.
+                //
+                // `AUDIT-2026-09-15-a`: ~100 consecutive negotiations, every one
+                // `role=answerer, sdp_exchange=INCOMPLETE, bucket=0 msg(s),
+                // candidates posted=0/fed=0`. An **answerer with no offer to
+                // answer never calls `create_answer`, so gathering never
+                // starts** — the empty gather is a *consequence* of the
+                // counterpart's absence, not an independent fault of ours, and
+                // classifying it as *"we cannot say"* withheld the one true,
+                // actionable sentence for the whole life of that session. The
+                // audit recorded the storm as "never reaching an honest terminal
+                // *I cannot reach them*"; this arm is that terminal.
+                //
+                // **What makes the reversal safe is that `Some(false)` already
+                // excludes the paths where our own machinery broke.** Only
+                // `WebRtcError::Timeout` carries `answered`, and `Timeout` means
+                // the negotiation loop ran to its deadline — a `create_offer` /
+                // `create_answer` that threw is a substrate error, reported as
+                // `None`. So `Some(false)` is a fact about the *pair* reaching a
+                // deadline with neither side closing the exchange, which an
+                // empty local gather cannot contradict.
+                //
+                // The empty-gather arm keeps its precedence over every arm that
+                // makes a claim about the **network**, which is what it was
+                // earned against — see below.
                 Reachability::NoCounterpart
+            } else if obs.gathered.is_empty() {
+                // Not even a host candidate, and the exchange did not tell us
+                // nobody was there. That is not a topology fact about the
+                // network between two peers — it is an agent that never
+                // gathered — so we have nothing honest to say. **This arm has to
+                // come above every network arm below it**: it was written under
+                // the `reflectors_configured` check at first, which classified a
+                // never-started agent as `ReflectorUnreachable` and would have
+                // sent the user to fix a reflector that was never asked.
+                // `gathering_nothing_at_all_is_not_a_topology_claim` caught it.
+                Reachability::Unknown
             } else if obs.gathered.contains(CandidateKind::Relay) {
                 // A relay gathered and it still failed. Do NOT say "this network
                 // needs a relay" — they have one. The likeliest remaining cause
@@ -826,9 +856,14 @@ mod tests {
             }
         }
 
-        // An agent that gathered NOTHING still classifies `Unknown`: it is not a
-        // topology claim either, and it is about **us**, so it outranks a
-        // statement about them. Ordering, asserted rather than commented.
+        // ⭐ **REVERSED 2026-09-16, and the reversal is the subject of
+        // `an_answerer_with_nothing_to_answer_is_told_nobody_was_there`.** This
+        // assertion used to demand `Unknown` here, on the reasoning that "an
+        // agent that gathered nothing is about US, so it outranks a statement
+        // about them". `AUDIT-2026-09-15-a` is the case that analysis was
+        // missing: an answerer with no offer to answer never gathers at all, so
+        // the empty gather IS the statement about them. Ordering, asserted
+        // rather than commented — in the other direction now.
         assert_eq!(
             classify(&Observation {
                 gathered: GatheredTypes::default(),
@@ -836,7 +871,7 @@ mod tests {
                 outcome: Outcome::Failed,
                 sdp_exchange_complete: Some(false),
             }),
-            Reachability::Unknown
+            Reachability::NoCounterpart
         );
 
         // **`None` is not `false`.** A carrier error or a policy refusal cannot
@@ -1077,22 +1112,98 @@ mod tests {
         );
     }
 
-    /// An agent that gathered **nothing** failed for a reason that is not about
-    /// the network between two peers, so we have nothing honest to say. Notably
+    /// An agent that gathered **nothing**, in a negotiation that cannot say
+    /// whether the far side was there, failed for a reason that is not about the
+    /// network between two peers — so we have nothing honest to say. Notably
     /// this is NOT `NoReflector`: recommending a reflector to someone whose ICE
     /// agent never started would send them to fix the wrong thing.
+    ///
+    /// `Some(true)` and `None` are both here **because they are the two inputs
+    /// this arm still owns** after `NoCounterpart` was lifted above it
+    /// (2026-09-16). Running only the `Some(true)` row would leave the arm's
+    /// precedence over `reflectors_configured` — the thing it was earned for —
+    /// resting on one input.
     #[test]
     fn gathering_nothing_at_all_is_not_a_topology_claim() {
         for reflectors_configured in [false, true] {
-            assert_eq!(
-                classify(&Observation {
-                    gathered: GatheredTypes::default(),
-                    reflectors_configured,
-                    outcome: Outcome::Failed,
-                    sdp_exchange_complete: Some(true),
-                }),
-                Reachability::Unknown
-            );
+            for sdp_exchange_complete in [Some(true), None] {
+                assert_eq!(
+                    classify(&Observation {
+                        gathered: GatheredTypes::default(),
+                        reflectors_configured,
+                        outcome: Outcome::Failed,
+                        sdp_exchange_complete,
+                    }),
+                    Reachability::Unknown,
+                    "reflectors={reflectors_configured} exchange={sdp_exchange_complete:?}"
+                );
+            }
         }
+    }
+
+    /// **THE STORM'S MISSING TERMINAL — `AUDIT-2026-09-15-a`, closed 2026-09-16.**
+    ///
+    /// A real session ran ~100 consecutive negotiations, every one
+    /// `role=answerer, sdp_exchange=INCOMPLETE, bucket=0 msg(s), candidates
+    /// posted=0/fed=0`, and the app said **nothing at all** — for the whole life
+    /// of the session. Not a wrong sentence: no sentence. The audit recorded it
+    /// as *"never reaching an honest terminal `I cannot reach them`"*.
+    ///
+    /// The cause was an ordering, and the ordering was decided by a case
+    /// analysis missing its own main case. `classify` asked *"did our agent
+    /// gather anything?"* first and answered `Unknown` when it had not, on the
+    /// reasoning that an agent which never gathered is a fault of **ours** and
+    /// must not be reported as a fault of theirs. True — and **an answerer with
+    /// no offer to answer never calls `create_answer`, so gathering never
+    /// starts**. In that shape the empty gather is the *consequence* of the
+    /// counterpart's absence, and treating it as an independent fault about us
+    /// swallowed the one claim that was both true and actionable.
+    ///
+    /// What makes the reordering safe rather than a coin flip is that
+    /// `Some(false)` cannot be produced by our own machinery failing: only
+    /// `WebRtcError::Timeout` carries `answered`, and a `Timeout` means the
+    /// negotiation loop ran to its deadline. A `create_offer`/`create_answer`
+    /// that threw reports `None`, which still falls through to `Unknown`.
+    #[test]
+    fn an_answerer_with_nothing_to_answer_is_told_nobody_was_there() {
+        // The capture's exact shape: nothing gathered, nobody answered.
+        let storm = Observation {
+            gathered: GatheredTypes::default(),
+            reflectors_configured: false,
+            outcome: Outcome::Failed,
+            sdp_exchange_complete: Some(false),
+        };
+        assert_eq!(
+            classify(&storm),
+            Reachability::NoCounterpart,
+            "the ~100-negotiation storm must reach a terminal, not silence"
+        );
+        assert!(
+            classify(&storm).is_advisory(),
+            "a terminal that renders nothing is the silence this test exists to end"
+        );
+        // And it must not have become a claim about the network on the way —
+        // the empty-gather arm's own reason for existing.
+        for reflectors_configured in [false, true] {
+            let v = classify(&Observation { reflectors_configured, ..storm.clone() });
+            assert_ne!(v, Reachability::NoReflector, "reflectors={reflectors_configured}");
+            assert_ne!(v, Reachability::ReflectorUnreachable, "reflectors={reflectors_configured}");
+            assert_ne!(v, Reachability::NoDirectPath, "reflectors={reflectors_configured}");
+        }
+    }
+
+    /// The suppression still holds over the new ordering: a peer we have
+    /// **heard from** must not be told *"that device didn't answer"* just
+    /// because one later negotiation timed out with nothing gathered. That is
+    /// `record_for`'s `Keep`, and lifting `NoCounterpart` above the empty-gather
+    /// arm makes strictly more observations reach it — so the guard now carries
+    /// strictly more weight than it did when it was written.
+    #[test]
+    fn a_peer_we_have_heard_from_is_still_not_called_absent_by_an_empty_negotiation() {
+        assert_eq!(record_for(Reachability::NoCounterpart, true), Record::Keep);
+        assert_eq!(
+            record_for(Reachability::NoCounterpart, false),
+            Record::Replace(Reachability::NoCounterpart)
+        );
     }
 }

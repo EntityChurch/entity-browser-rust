@@ -57,6 +57,7 @@ use entity_hash::Hash;
 use super::format::{SiteManifest, SitePage};
 use super::location::Location;
 use super::resolver::{ResolveError, ResolvedPage};
+use crate::obtained::Obtained;
 
 /// Entity type of an Amendment-6 tree-leaf pointer.
 const HASH_POINTER_TYPE: &str = "system/hash";
@@ -175,20 +176,33 @@ pub fn content_url(origin: &str, h: &Hash) -> String {
 /// `paths`) because it carries an http origin and appends the `.bin` poll
 /// suffix.
 pub fn manifest_bin_url(origin: &str, peer_id: &str, site_id: &str) -> String {
-    format!("{}/{}/sites/{}/manifest.bin", origin.trim_end_matches('/'), peer_id, site_id)
+    tree_bin_url(origin, peer_id, &format!("sites/{site_id}/manifest"))
+}
+
+/// HTTP URL of **any** peer-relative tree key's `.bin` leaf under a published
+/// origin — `{origin}/{peer_id}/{key}.bin`.
+///
+/// The three site builders around it are this with a key spelled out, and they
+/// are written that way rather than repeating the join: the peer-first layout
+/// and the `.bin` suffix are one convention, and three copies of it is the shape
+/// that drifts (C15).
+///
+/// It is public because `APP-CONVENTION-FEED` §6 needs a key that belongs to no
+/// vocabulary this module knows: a mirror's carried entries are bound under
+/// **their own author** at `app/feed/entries/{hex}`, and a consumer reaching
+/// them has a `(peer, key)` pair and nothing else. Adding a
+/// `mirror_entry_bin_url` beside the site three would have been the vocabulary
+/// coupling `REVIEW-2026-09-10` measured this file as already holding too much
+/// of.
+pub fn tree_bin_url(origin: &str, peer_id: &str, key: &str) -> String {
+    format!("{}/{}/{}.bin", origin.trim_end_matches('/'), peer_id, key)
 }
 
 /// HTTP URL of a site page's `.bin` leaf under a published origin —
 /// `{origin}/{peer_id}/sites/{site_id}/pages/{slug}.bin` (tree-path mirror,
 /// peer-first; see [`manifest_bin_url`]).
 pub fn page_bin_url(origin: &str, peer_id: &str, site_id: &str, slug: &str) -> String {
-    format!(
-        "{}/{}/sites/{}/pages/{}.bin",
-        origin.trim_end_matches('/'),
-        peer_id,
-        site_id,
-        slug
-    )
+    tree_bin_url(origin, peer_id, &format!("sites/{site_id}/pages/{slug}"))
 }
 
 /// HTTP URL of a site asset's `.bin` leaf under a published origin —
@@ -196,13 +210,7 @@ pub fn page_bin_url(origin: &str, peer_id: &str, site_id: &str, slug: &str) -> S
 /// peer-first; see [`manifest_bin_url`]). `name` is the asset's path under
 /// `assets/` (`figures/x.png`), so the leaf is `assets/figures/x.png.bin`.
 pub fn asset_bin_url(origin: &str, peer_id: &str, site_id: &str, name: &str) -> String {
-    format!(
-        "{}/{}/sites/{}/assets/{}.bin",
-        origin.trim_end_matches('/'),
-        peer_id,
-        site_id,
-        name
-    )
+    tree_bin_url(origin, peer_id, &format!("sites/{site_id}/assets/{name}"))
 }
 
 /// Fetch + decode a site asset entity over `src` (the asset two-hop). Returns
@@ -459,12 +467,16 @@ pub async fn resolve_closure_via(
             // we do not know what the publisher carries, and must not say we do.
             _ => ResolveError::OriginUnreachable,
         })?;
-    let manifest = SiteManifest::from_entity(&manifest_ent);
+    // ⭐ **The publisher's entity travels with the decoded view.** This is the
+    // one arm that holds somebody else's bytes, and until 2026-09-16 it decoded
+    // them and dropped them three stack frames before the cache write-through
+    // re-encoded from the struct. See [`crate::obtained`] for the measurement.
+    let manifest = Obtained::decoded_from(manifest_ent, SiteManifest::from_entity);
 
     let page_slug = if loc.page.is_empty() { manifest.root().to_string() } else { loc.page.clone() };
 
     let page = match fetch_entity_two_hop(src, origin, &page_bin_url(origin, &pid, &loc.site_id, &page_slug)).await {
-        Ok(page_ent) => SitePage::from_entity(&page_ent),
+        Ok(page_ent) => Obtained::decoded_from(page_ent, SitePage::from_entity),
         Err(_) => {
             // No page entity here. If the static `pages.list` shows this slug
             // is a SECTION (has descendant pages), render a generated
@@ -477,7 +489,8 @@ pub async fn resolve_closure_via(
             if children.is_empty() {
                 return Err(ResolveError::PageMissing);
             }
-            super::resolver::section_index_page(&page_slug, &children)
+            // Ours — synthesized from the slug listing, not served by anyone.
+            Obtained::authored(super::resolver::section_index_page(&page_slug, &children))
         }
     };
 
@@ -493,7 +506,7 @@ pub async fn resolve_closure_via(
             continue;
         };
         if let Ok(ent) = fetch_asset(src, origin, &pid, &loc.site_id, &name).await {
-            let asset = super::format::SiteAsset::from_entity(&ent);
+            let asset = Obtained::decoded_from(ent, super::format::SiteAsset::from_entity);
             if asset.from_legacy_encoding {
                 // Reported at the FETCH, once per asset, never in the render
                 // loop — a papers page has twenty figures and would emit
@@ -556,7 +569,7 @@ pub async fn resolve_closure_via(
 /// Every hop is `Freshness::Immutable`: each URL is its own content address,
 /// so a cached copy is correct by construction and a changed blob is a
 /// different URL.
-async fn fetch_blob_closure(
+pub async fn fetch_blob_closure(
     src: &dyn BinSource,
     origin: &str,
     blob: &Hash,
@@ -727,6 +740,38 @@ pub(crate) mod fixture {
             self.put(url, pointer);
         }
     }
+
+    /// A [`BinSource`] backed by a [`PublishedFixture`] — each URL's bytes as
+    /// an immediately-ready future.
+    ///
+    /// **Lives here, beside the fixture, for the reason the module doc above
+    /// gives: one publisher fixture, not one per module.** It was private to
+    /// this file's own `tests` until `resolver`'s currency gate needed the same
+    /// origin, and a second copy would be a second definition of what a
+    /// published origin answers — which is the drift that makes two suites
+    /// agree with each other while both drift from the producer.
+    pub(crate) struct FixtureBinSource(pub(crate) PublishedFixture);
+
+    impl super::BinSource for FixtureBinSource {
+        fn get(
+            &self,
+            url: String,
+            _freshness: super::Freshness,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, super::PollError>>>>
+        {
+            // **`NotFound`, not `Decode`.** A path a static origin does not
+            // carry is a 404 — the one failure an origin *chooses* — and this
+            // double used to report it as `Decode(format!("404 {url}"))`: a
+            // string that says 404 while the variant says "the bytes were
+            // unreadable". Harmless while everything downstream collapsed both
+            // into `ManifestMissing`; the moment the decode point started
+            // preserving the distinction (map-C2), a test double that lies
+            // about which outcome it is producing makes the new behaviour
+            // untestable — or, worse, quietly proves the opposite.
+            let r = self.0.get(&url).map(<[u8]>::to_vec).ok_or(super::PollError::NotFound(404));
+            Box::pin(std::future::ready(r))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -883,29 +928,7 @@ mod tests {
     // truly pends).
     // ===================================================================
 
-    /// A [`BinSource`] backed by a [`PublishedFixture`] — returns each
-    /// URL's bytes as an immediately-ready future (404 → `Decode`).
-    struct FixtureBinSource(PublishedFixture);
-
-    impl BinSource for FixtureBinSource {
-        fn get(
-            &self,
-            url: String,
-            _freshness: Freshness,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PollError>>>> {
-            // **`NotFound`, not `Decode`.** A path a static origin does not
-            // carry is a 404 — the one failure an origin *chooses* — and this
-            // double used to report it as `Decode(format!("404 {url}"))`: a
-            // string that says 404 while the variant says "the bytes were
-            // unreadable". Harmless while everything downstream collapsed both
-            // into `ManifestMissing`; the moment the decode point started
-            // preserving the distinction (map-C2), a test double that lies
-            // about which outcome it is producing makes the new behaviour
-            // untestable — or, worse, quietly proves the opposite.
-            let r = self.0.get(&url).map(<[u8]>::to_vec).ok_or(PollError::NotFound(404));
-            Box::pin(std::future::ready(r))
-        }
-    }
+    use super::fixture::FixtureBinSource;
 
     /// Poll a future to completion on the current thread with a no-op
     /// waker. Sufficient because every fixture await is already Ready.

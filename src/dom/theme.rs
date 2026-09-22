@@ -68,6 +68,31 @@ pub const TEXTAREA: &str = "display:block;width:100%;min-height:300px;\
     font-family:var(--font-mono,monospace);line-height:1.5;border-radius:3px;\
     box-sizing:border-box;margin:2px 0 0 0;resize:vertical";
 
+/// ⭐ **A short multi-line composer** — a post box, not a document editor.
+///
+/// [`TEXTAREA`] is `min-height:300px` because its callers are editors (the
+/// Knowledge Base body, the site editor). A feed post was a **single-line
+/// `INPUT`** stretched across the whole window, which is wrong twice: the body
+/// is markdown, so it has line breaks, and a 1400-pixel-wide one-line box is
+/// the widest possible way to show the least possible text.
+///
+/// `max-width` is [`READING_COLUMN`]'s number for the same reason — what you
+/// type and what other people then read are the same measure.
+pub const COMPOSE_BOX: &str = "display:block;width:100%;max-width:720px;min-height:78px;\
+    background:var(--input-bg,#0e0e1e);color:var(--text,#e0e0e0);\
+    border:1px solid var(--border-strong,#444);padding:8px;font-size:13px;\
+    line-height:1.5;border-radius:3px;box-sizing:border-box;margin:2px 0 6px 0;\
+    resize:vertical";
+
+/// ⭐ **A reading column.** Prose at the full width of a maximized window is
+/// unreadable — the eye loses the line on the way back. 720px is not a new
+/// number: it is what the Site Browser's own document column already uses
+/// (`dom::content_site`), so a post and a page measure the same.
+///
+/// Applied to the parts a person *reads*, never to the tables — a browse row
+/// has columns and wants the width it is given.
+pub const READING_COLUMN: &str = "max-width:720px";
+
 /// Select dropdown.
 pub const SELECT: &str = "display:block;width:100%;background:var(--input-bg,#0e0e1e);\
     color:var(--text,#e0e0e0);border:1px solid var(--border-strong,#444);padding:4px 8px;\

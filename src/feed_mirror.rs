@@ -878,6 +878,7 @@ mod tests {
                 entity: published.clone(),
                 signature: Some(sig.clone()),
             },
+            body_blob: crate::feed_body::BodyBlob::Inline,
         };
         let gatherer = "2GathererPeerIdForTheseGates";
         let plan =
@@ -942,6 +943,11 @@ mod tests {
             entry,
             attribution: crate::feed_read::Attribution::Signed,
             obtained: crate::feed_read::Obtained { entity, signature: None },
+            // Nobody resolved it: this row exists to prove `plan_mirror` refuses
+            // to gather an entry whose blob closure it does not hold.
+            body_blob: crate::feed_body::BodyBlob::Unresolved(
+                crate::feed_body::BlobMiss::SourceCannot,
+            ),
         };
         let subject = thread(&author, rows[0].hash);
 

@@ -541,6 +541,23 @@ pub fn set_status_text(text: &str) {
     }
 }
 
+/// How many character cells the status bar's segment area has room for.
+///
+/// **The one place the bar is measured**, and it measures the segment host
+/// rather than the bar, because `#mode-display` is `flex: 1; min-width: 0` and
+/// therefore already *is* the space left over after the product name and the
+/// site toggle. Subtracting "furniture" from the bar's width instead would be a
+/// feedback loop: an empty host measures narrow, so fewer segments render, so
+/// it stays narrow.
+///
+/// A bar that has not laid out yet reports 0, which renders no segments for one
+/// frame and corrects on the next — preferable to guessing a width and painting
+/// a tier the bar cannot hold.
+pub fn status_bar_cells() -> usize {
+    let Some(host) = get_element_by_id("mode-display") else { return 0 };
+    crate::status_bar::cells_available(host.client_width() as f64)
+}
+
 /// Set only the `#app-container` mode class (`mode-dom` chrome /
 /// `mode-site` overlay) without touching the mode-display label. The
 /// Site Mode toggle calls this when the active surface changes.

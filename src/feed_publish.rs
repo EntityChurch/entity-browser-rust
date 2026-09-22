@@ -473,6 +473,34 @@ pub(crate) mod tests {
                 }
             })
         }
+
+        /// The same walk [`crate::feed_fetch::OriginFeedSource`] makes, over a
+        /// directory instead of `fetch`.
+        ///
+        /// ⭐ **A test source that cannot do what the production source does
+        /// makes the gate above it meaningless.** Before this existed, every
+        /// `FeedSource` in this crate answered the defaulted *cannot resolve
+        /// blobs* — so a gate could publish an oversized post, verify its blob
+        /// was served, and still never once read one back through a reader.
+        /// That is exactly how the defect shipped: *a test double that supplies
+        /// the thing you forgot to ask for cannot notice that you forgot*, in
+        /// the direction where the double supplies **nothing** and the
+        /// production gap is invisible.
+        fn blob(
+            &self,
+            blob: entity_hash::Hash,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<Vec<u8>>, crate::feed_body::BlobMiss>>>,
+        > {
+            let path = self.path.clone();
+            // **The production classifier, called — not a second copy of it.**
+            // See `feed_fetch::resolve_blob_over`: a gate that measured its own
+            // re-implementation of *which failure is whose* would go green while
+            // the shipped one drifted.
+            Box::pin(async move {
+                crate::feed_fetch::resolve_blob_over(&Origin(path), "", blob).await
+            })
+        }
     }
 
     /// Publish into a temp dir with a real projector and sign the root.
@@ -1276,6 +1304,224 @@ pub(crate) mod tests {
             entity_content::reassemble(&held, &pointer).expect("the closure reassembles"),
             long_post,
             "the post's own bytes came back out of the published origin"
+        );
+    }
+
+    /// ⭐⭐ **A long post REACHES A READER — the half the gate above could not
+    /// see, and the one a real corpus broke on.**
+    ///
+    /// The test above proves the publisher's side: the blob and its chunks are
+    /// in the projection and reassemble. It then hand-assembles them, with a
+    /// `MemoryContentStore` and three kernel calls — which is precisely what a
+    /// reader was *not* doing. `read_feed` returned the entry, `feed_body`
+    /// found a `Pointer`, and the ladder bottomed out on the authored fallback:
+    /// **an 18 KB post arrived on screen as its title**, bytes published,
+    /// verified, and never fetched.
+    ///
+    /// ⇒ **The population argument, one turn further than usual.** Every feed
+    /// fixture on either seat was a short post, so the pointer arm was reachable
+    /// only by a test that constructed it deliberately — and the one that did
+    /// asserted the *publisher's* obligation. Pointed at `entity-core-papers`'
+    /// real corpus the defect is immediate: **2 of 58 posts** are over EMBED
+    /// §3's 16 KiB ceiling (18,219 B and 17,109 B), and they are the two
+    /// longest. *A bound stated honestly is not a bound measured; what makes it
+    /// real is the traffic in the governed case.*
+    ///
+    /// Asserted as **markup on screen**, not as `Resolved`: the subject is what
+    /// a person reads, and a `BodyBlob` that resolved into a renderer nobody
+    /// called would pass a structural assertion and fail the claim.
+    #[test]
+    fn a_post_too_long_to_inline_is_read_back_as_markup_and_not_as_its_title() {
+        use crate::feed_body::{decide_with, BodyRender};
+        use entity_store::{ContentStore, MemoryContentStore};
+        use std::sync::Arc;
+
+        let author = author_id();
+        // Markdown, over the ceiling, with a heading — so the assertion can tell
+        // "the renderer ran" from "some text arrived".
+        let mut long_md = String::from("# The long one\n\nBody **emphasis** here.\n\n");
+        long_md.push_str(&"filler filler filler\n".repeat(1200));
+        assert!(
+            long_md.len() > crate::embed::INLINE_PAYLOAD_MAX,
+            "the control: this post must be over the inline ceiling, else the \
+             pointer arm is never taken and this gate measures nothing"
+        );
+
+        let scratch: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+        let staged = crate::content_site::asset_store::stage(
+            crate::feed_body::MARKDOWN_MEDIA_TYPE,
+            long_md.clone().into_bytes(),
+            &scratch,
+        )
+        .unwrap();
+        let pointer = staged.asset.pointer().expect("oversized bytes take the pointer arm");
+
+        let node = EmbedNode::new(
+            crate::feed_body::MARKDOWN_MEDIA_TYPE,
+            // ⚠ **The fallback must share NO text with the body.** The first
+            // cut used the body's own `# The long one` heading here and then
+            // asserted the rendered HTML did not contain it — which the
+            // heading satisfies, so the check could not tell "we drew the
+            // fallback" from "we drew the body". A gate whose two outcomes
+            // produce the same string is not a gate. It failed honestly.
+            EmbedData::new(EmbedPayload::Pointer(pointer), "FALLBACK-ONLY-SENTINEL"),
+        );
+        let (origin, _) = publish_signed_with_content(
+            &[FeedEntry::new(&author, NOW, node)],
+            &staged.content,
+            4,
+            NOW,
+        );
+
+        let read = block_on(read_feed(&origin, &author, 10)).expect("the feed reads");
+        assert_eq!(read.len(), 1);
+
+        // The reader resolved it, through the source, during the walk.
+        assert!(
+            matches!(read[0].body_blob, crate::feed_body::BodyBlob::Resolved(_)),
+            "the pointer body was not resolved by the read: {:?}",
+            read[0].body_blob
+        );
+
+        // …and that is what a person gets.
+        let out = decide_with(&read[0].entry.body, &read[0].body_blob);
+        let BodyRender::Markup(html) = &out else {
+            panic!(
+                "an 18 KB markdown post must reach a person as markup, not as its \
+                 fallback — got {out:?}"
+            );
+        };
+        assert!(html.contains("<h1"), "the heading survived: {}", &html[..200.min(html.len())]);
+        assert!(html.contains("<strong>"), "the emphasis survived");
+        assert!(
+            !html.contains("FALLBACK-ONLY-SENTINEL"),
+            "the authored fallback reached the screen instead of the body — the defect"
+        );
+        assert!(
+            html.contains("filler filler filler"),
+            "the body's own bulk is what a person reads, not a one-line degradation"
+        );
+    }
+
+    /// The same post, read by a source that does not resolve blobs at all —
+    /// which is every `FeedSource` that has not overridden the default.
+    ///
+    /// **The distinction is load-bearing and is the reason `BlobMiss` exists.**
+    /// *Nobody looked* is ours to fix; a publisher whose signed closure names a
+    /// blob the origin will not serve is theirs; and a reader that renders both
+    /// as *"could not show this"* sends the wrong person to look.
+    #[test]
+    fn a_source_that_cannot_resolve_blobs_says_so_rather_than_blaming_the_publisher() {
+        use crate::feed_body::{BlobMiss, BodyBlob, FallbackReason};
+
+        // The defaulted arm, reached through the trait rather than constructed.
+        struct NoBlobs(std::path::PathBuf, std::rc::Rc<crate::content_site::signed_fetch::SignedSession>);
+        impl FeedSource for NoBlobs {
+            fn get(
+                &self,
+                relative_key: String,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<Entity>, String>>>>
+            {
+                use crate::content_site::signed_fetch::SignedFetchError;
+                let (path, session) = (self.0.clone(), std::rc::Rc::clone(&self.1));
+                Box::pin(async move {
+                    match session.resolve(&Origin(path), &relative_key).await {
+                        Ok(e) => Ok(Some(e)),
+                        Err(SignedFetchError::Absent) => Ok(None),
+                        Err(e) => Err(format!("{e:?}")),
+                    }
+                })
+            }
+            // `blob` deliberately NOT overridden.
+        }
+
+        use entity_store::{ContentStore, MemoryContentStore};
+        use std::sync::Arc;
+        let author = author_id();
+        let long = vec![b'z'; crate::embed::INLINE_PAYLOAD_MAX + 64];
+        let scratch: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+        let staged =
+            crate::content_site::asset_store::stage("text/plain", long, &scratch).unwrap();
+        let pointer = staged.asset.pointer().unwrap();
+        let node = EmbedNode::new(
+            "text/plain",
+            EmbedData::new(EmbedPayload::Pointer(pointer), "a long post"),
+        );
+        let (origin, _) = publish_signed_with_content(
+            &[FeedEntry::new(&author, NOW, node)],
+            &staged.content,
+            4,
+            NOW,
+        );
+
+        let plain = NoBlobs(origin.path.clone(), std::rc::Rc::clone(&origin.session));
+        let read = block_on(read_feed(&plain, &author, 10)).expect("the feed reads");
+        assert_eq!(
+            read[0].body_blob,
+            BodyBlob::Unresolved(BlobMiss::SourceCannot),
+            "a source that does not resolve blobs must say NOBODY LOOKED, never \
+             that the origin has none"
+        );
+
+        let out = crate::feed_body::decide_with(&read[0].entry.body, &read[0].body_blob);
+        let crate::feed_body::BodyRender::Fallback { reason, .. } = out else {
+            panic!("with no bytes in hand the ladder must bottom out");
+        };
+        assert_eq!(
+            reason,
+            FallbackReason::PayloadNotInHand { miss: BlobMiss::SourceCannot },
+            "the miss travels to the renderer, so the surface can say whose it is"
+        );
+    }
+
+    /// The **theirs** arm: a publisher whose signed closure names a blob the
+    /// origin does not serve.
+    ///
+    /// ⭐ **This is the arm a tidy implementation loses**, and losing it is worse
+    /// than the defect it replaces. `Ok(None)` is *"this source cannot resolve
+    /// blobs"* — ours — and folding a 404 into it would report a broken publish
+    /// as a missing capability of ours, so nobody would ever go and look at the
+    /// origin. `--verify` catches this before a publish leaves the building; a
+    /// reader that meets it anyway should say whose it is.
+    ///
+    /// Built by publishing the entry and **withholding the content** — the same
+    /// shape `plan_mirror`'s closure check uses, one layer out.
+    #[test]
+    fn a_blob_the_origin_will_not_serve_is_reported_as_theirs_not_as_our_missing_resolver() {
+        use crate::feed_body::{BlobMiss, BodyBlob};
+        use entity_store::{ContentStore, MemoryContentStore};
+        use std::sync::Arc;
+
+        let author = author_id();
+        let long = vec![b'q'; crate::embed::INLINE_PAYLOAD_MAX + 128];
+        let scratch: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
+        let staged =
+            crate::content_site::asset_store::stage("text/plain", long, &scratch).unwrap();
+        let pointer = staged.asset.pointer().unwrap();
+        let node = EmbedNode::new(
+            "text/plain",
+            EmbedData::new(EmbedPayload::Pointer(pointer), "a long post"),
+        );
+
+        // **The entry is published; its closure is NOT.** `&[]` rather than
+        // `&staged.content` is the whole fixture.
+        let (origin, _) =
+            publish_signed_with_content(&[FeedEntry::new(&author, NOW, node)], &[], 4, NOW);
+
+        let read = block_on(read_feed(&origin, &author, 10)).expect("the feed still reads");
+        assert_eq!(
+            read.len(),
+            1,
+            "an unresolvable body must not shorten the feed — the post is there,              §4.3's walk is unaffected, and only the body is missing"
+        );
+        assert!(
+            read[0].attribution.may_name_the_author(),
+            "the entry still verifies: a body we cannot fetch says nothing about              whether the author signed it"
+        );
+        assert_eq!(
+            read[0].body_blob,
+            BodyBlob::Unresolved(BlobMiss::Absent),
+            "the origin answered and has no such blob — theirs, and it must not              read as our source being unable to resolve blobs at all"
         );
     }
 

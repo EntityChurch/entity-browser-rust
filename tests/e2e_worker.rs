@@ -531,6 +531,131 @@ impl Drop for DistServer {
 /// 15-minute test is its own bug.
 const DIST_LOG_CAP: usize = 20_000;
 
+/// Refuse to start a server on a port **somebody else is already serving**.
+///
+/// `await_server_ready` asks "did our child exit?" before "is something
+/// listening?", and that order is load-bearing — for a child that has *already*
+/// died. **It cannot help on the first pass.** A freshly spawned python has not
+/// yet had time to fail its bind, so `try_wait()` answers `None`, the HTTP probe
+/// takes its 200 from the **foreign** server, and the helper returns `Ok` over a
+/// child that is about to exit. The suite then runs to completion against
+/// somebody else's `dist/`.
+///
+/// **Measured 2026-09-16, and it cost a session.** A second seat's suite held
+/// :8092 — `make e2e-worker` serves over `--network host`, so there is no
+/// namespace between two checkouts on one box and whichever binds first owns the
+/// port. A full unfiltered run read their tree: every navigation served their
+/// bytes, the failure set moved run to run with whatever their worktree held,
+/// and the run that should have been a baseline came back *worse* than the
+/// branch under test. One gate named the cause in its own output — *"running
+/// 63f958bc"*, a commit in no checkout of mine — and it was read as a cascade
+/// from an earlier failure.
+///
+/// So the question is not *is something serving* but **is it ours**, and the
+/// cheapest time to ask is before we bind. Nothing legitimate holds these ports:
+/// the suite is `--test-threads=1` and `DistServer::drop` does `kill()` then
+/// `wait()`, so our own previous server is reaped before the next one starts.
+///
+/// **It REFUSES**, which is deliberately the opposite of the Selenium preflight
+/// one file over. That one reports and proceeds because a leaked session is
+/// exactly what `reap_stale_sessions` exists to rescue; here there is no reaper
+/// and no case to rescue — a foreign server makes every assertion in the run a
+/// statement about a build nobody chose.
+///
+/// The refusal **names the build it found**, because *whose bytes are these* is
+/// the one fact that turns four hours of bisecting into one line. `curl -s <url>
+/// | grep entity-build` is the manual form this repo already recommends for
+/// :8081; this is it, wired to the place that would otherwise lie.
+///
+/// Scope, stated: this guards the two **fixed, well-known** ports every seat on
+/// a box shares (`E2E_HTTP_PORT`/8092, `E2E_BLACKHOLE_PORT`/8093). The staging
+/// servers take `pick_free_port()`, where the OS picks and a cross-seat
+/// collision needs an unlucky ephemeral reuse rather than a shared default.
+fn refuse_if_port_is_already_served(port: u16, what: &str) -> Result<(), std::io::Error> {
+    let Some(body) = foreign_index_html(port) else {
+        return Ok(());
+    };
+    let whose = meta_stamp(&body, "entity-build")
+        .map(|b| format!("build {b}"))
+        .unwrap_or_else(|| "no entity-build stamp — not one of our shells".to_string());
+
+    // PRINTED, not only returned. A test harness renders a returned error with
+    // `{:?}`, which turns every newline into a literal `\n` and lays the whole
+    // block out as one unreadable line — at exactly the moment somebody has to
+    // read it. Falsified and seen: the first cut of this was legible in the
+    // source and a wall of escapes on the screen.
+    eprintln!(
+        "\n\
+         ┌─ REFUSING to start {what} ─────────────────────────────────────\n\
+         │ Something is ALREADY serving :{port}, and it is not us.\n\
+         │\n\
+         │   what is answering there:  {whose}\n\
+         │   who holds the port:       ss -ltnp | grep {port}\n\
+         │\n\
+         │ Every navigation in this run would have gone to that server's\n\
+         │ dist/, and every assertion would have been about ITS build. That\n\
+         │ is not a failure you can read off the results: the failure set\n\
+         │ moves with the other tree, and a clean run and a contaminated one\n\
+         │ look the same.\n\
+         │\n\
+         │ Usually another seat's suite on the same box — e2e-worker serves\n\
+         │ over --network host, so two checkouts share one port space.\n\
+         │ Give this run its own ports (do NOT kill their server):\n\
+         │\n\
+         │   make e2e-grid GRID_PORT=4455\n\
+         │   make e2e-worker WEBDRIVER=http://localhost:4455 \\\n\
+         │        E2E_HTTP_PORT=8492 E2E_BLACKHOLE_PORT=8493\n\
+         └────────────────────────────────────────────────────────────────\n"
+    );
+    Err(std::io::Error::other(format!(
+        ":{port} is already served by {whose} — refused (see the block above)"
+    )))
+}
+
+/// `GET /index.html` from `port`, returning the body only if a live server
+/// answers 200. `None` covers every other outcome — nothing listening, a socket
+/// that accepts and never answers, a non-200 — because the only thing this is
+/// allowed to conclude is *a server is serving here right now*.
+///
+/// A bare TCP connect would not do: it cannot tell a server from the black-hole
+/// rig's accept-and-never-answer socket, which is the distinction
+/// `await_server_ready` already had to learn.
+fn foreign_index_html(port: u16) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut sock = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(300),
+    )
+    .ok()?;
+    sock.set_read_timeout(Some(Duration::from_millis(700))).ok()?;
+    let req = format!(
+        "GET /index.html HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
+    );
+    sock.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    // Bounded: a shell is ~100 KB and we only need the <head>. An unbounded read
+    // here would hand a hostile or merely enormous origin control of this probe.
+    let _ = sock.take(64 * 1024).read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let (head, _) = text.split_once("\r\n\r\n")?;
+    head.lines().next()?.contains(" 200 ").then_some(text)
+}
+
+/// Pull `<meta name="NAME" content="…">` out of a served shell.
+///
+/// Deliberately tolerant of attribute order and quoting: this reads a *foreign*
+/// document whose emitter we do not control, and the cost of missing the stamp
+/// is only a vaguer refusal message, never a wrong verdict — the refusal itself
+/// is decided by the 200, not by this.
+fn meta_stamp(html: &str, name: &str) -> Option<String> {
+    let needle = format!("name=\"{name}\"");
+    let at = html.find(&needle)?;
+    let rest = &html[at..];
+    let c = rest.find("content=\"")? + "content=\"".len();
+    let end = rest[c..].find('"')?;
+    Some(rest[c..c + end].to_string())
+}
+
 /// Start the dist server and **prove it is accepting connections** before
 /// returning.
 ///
@@ -558,6 +683,9 @@ fn start_dist_server() -> Result<DistServer, std::io::Error> {
     // app would run opaque-origin and then need a CORS-adding server; that arrives
     // with the sub-peer capability model — D21.)
     let port = http_server_port();
+    // Before we bind, not after: a bind failure is racy to observe and a foreign
+    // server answering our probe is not.
+    refuse_if_port_is_already_served(port, "the dist server")?;
     let child = Command::new("python3")
         .args(["-m", "http.server", &port.to_string(), "--directory", "dist"])
         .stdout(Stdio::null())
@@ -589,6 +717,7 @@ fn blackhole_server_port() -> u16 {
 #[allow(dead_code)]
 fn start_blackhole_server(stall: &[&str]) -> Result<DistServer, std::io::Error> {
     let port = blackhole_server_port();
+    refuse_if_port_is_already_served(port, "the black-hole server")?;
     let mut args: Vec<String> = vec![
         "tools/e2e/blackhole-serve.py".to_string(),
         port.to_string(),
@@ -1209,6 +1338,71 @@ fn last_shell_output<'a>(scrollback: &'a str, cmd: &str) -> &'a str {
     }
 }
 
+/// `last_shell_output`, but *absent* and *empty* stay apart.
+///
+/// The lenient version falls back to the WHOLE scrollback when the command
+/// never echoed, and that fallback can satisfy the assertion it was scoped to
+/// prevent: `ls app/e2e_deltest` is checked for the word `marker`, and the
+/// `put app/e2e_deltest/marker marker …` echo three lines up contains it. So a
+/// shell that never ran the `ls` at all returns a haystack in which the needle
+/// is guaranteed — a pass that means the opposite of what it reads as.
+///
+/// Use this wherever the *presence* of a token is the assertion. The lenient
+/// one is still right where absence is (there the fallback fails safe).
+fn last_shell_output_strict<'a>(scrollback: &'a str, cmd: &str) -> Option<&'a str> {
+    let marker = format!("> {cmd}");
+    scrollback
+        .rfind(&marker)
+        .map(|i| &scrollback[i + marker.len()..])
+}
+
+/// Re-issue `line` until `ready` holds on **that submission's own output**, or
+/// the deadline passes. Returns the final scrollback and the attempt count.
+///
+/// WHY THIS EXISTS: `shell_submit` dispatches Enter and then sleeps a FIXED
+/// `settle_ms`. That is a threshold nobody earned, and it is measured to be the
+/// wrong shape rather than merely the wrong number — on 2026-09-16 the
+/// delete-reflect phase failed an unfiltered run with its `put` scrollback still
+/// showing the output of `help`, i.e. after 800 ms the shell had not echoed the
+/// command, let alone run it. The same test passes filtered, which is this
+/// repo's own signature for *the rig is timing-sensitive*, not *the product
+/// regressed*.
+///
+/// Raising the sleep would buy a quieter box and lose the next one. Polling is
+/// the shape the charter already requires (`poll_json`, never a fixed sleep) and
+/// it is strictly stronger: a mirror that never fills still reds at the
+/// deadline, so nothing the original assertion could catch is given up.
+///
+/// It RE-SUBMITS rather than re-reading, deliberately: an `ls` renders its
+/// answer once, so re-reading the scrollback of a listing taken while the mirror
+/// was still empty polls a photograph. The question is asked again.
+async fn shell_poll<F>(
+    client: &Client,
+    line: &str,
+    deadline_ms: u64,
+    ready: F,
+) -> Result<(String, u32), Box<dyn std::error::Error>>
+where
+    F: Fn(&str) -> bool,
+{
+    let started = std::time::Instant::now();
+    let mut attempts = 0_u32;
+    let mut last = String::new();
+    loop {
+        attempts += 1;
+        last = shell_submit(client, line, 250).await.unwrap_or(last);
+        if let Some(out) = last_shell_output_strict(&last, line) {
+            if ready(out) {
+                return Ok((last, attempts));
+            }
+        }
+        if started.elapsed() >= Duration::from_millis(deadline_ms) {
+            return Ok((last, attempts));
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
 /// Type `line` into the first Shell window's input and submit it via
 /// keydown Enter. Sleeps `settle_ms` (typical 200–500ms for sync verbs,
 /// 800–1500ms for async verbs like `exec` / `count` / `connect`) and
@@ -1745,12 +1939,13 @@ async fn setup(
         .into());
     }
 
-    let server = start_dist_server().map_err(|e| {
-        format!(
-            "failed to start python3 -m http.server: {e}. \
-             Is dist/ built? Run `make wasm` first (or `make e2e-worker`)."
-        )
-    })?;
+    // No advice added here, deliberately. This used to append "Is dist/ built?
+    // Run `make wasm` first", which is one cause among several and was simply
+    // WRONG for the other two: a port held by another seat, and a server that
+    // never served a 200. Both inner errors already name their own remedy, and a
+    // wrapper that guesses outranks them on the screen — the reader acts on the
+    // last sentence. AP40's cost is the wrong sentence, not the merged value.
+    let server = start_dist_server().map_err(|e| format!("could not start the dist server: {e}"))?;
 
     let mut caps = serde_json::Map::new();
     caps.insert(
@@ -2605,17 +2800,36 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
     )
     .await?;
     println!("  delete-reflect put: {del_put:?}");
-    let del_ls_present = shell_submit(&client, "ls app/e2e_deltest", 600).await?;
-    let present_out = last_shell_output(&del_ls_present, "ls app/e2e_deltest");
+    // Poll, do not sleep. The subject is *does the mirror ever reflect this*,
+    // and a fixed settle answers *had it reflected by 600 ms on this box*.
+    let (del_ls_present, present_tries) =
+        shell_poll(&client, "ls app/e2e_deltest", 8_000, |out| {
+            out.contains("marker")
+        })
+        .await?;
+    let present_out = last_shell_output_strict(&del_ls_present, "ls app/e2e_deltest").expect(
+        "the `ls` never echoed into the scrollback, so there is no output to judge — \
+         the shell is not processing submissions, which is a different fault from \
+         the mirror not reflecting",
+    );
     assert!(
         present_out.contains("marker"),
         "after put, the Worker-arm mirror must show the new entity \
-         (creates reflect). last `ls app/e2e_deltest` output: {present_out:?}"
+         (creates reflect). Gave it 8s across {present_tries} listing(s). \
+         last `ls app/e2e_deltest` output: {present_out:?}"
     );
+    println!("  delete-reflect present after {present_tries} listing(s)");
 
     let del_rm = shell_submit(&client, "rm app/e2e_deltest/marker", 800).await?;
     println!("  delete-reflect rm: {del_rm:?}");
-    let del_ls_gone = shell_submit(&client, "ls app/e2e_deltest", 600).await?;
+    // The delete half polls the other way — and the original defect it gates
+    // ("creates reflect, deletes don't") still reds, because a ghost that is
+    // never removed is still there at the deadline.
+    let (del_ls_gone, gone_tries) = shell_poll(&client, "ls app/e2e_deltest", 8_000, |out| {
+        !out.contains("marker")
+    })
+    .await?;
+    println!("  delete-reflect gone-check after {gone_tries} listing(s)");
     // Scope to the LAST `ls` output — scrollback is cumulative, so the
     // earlier present-listing + the `put`/`rm` command echoes still mention
     // the path and would false-match a whole-history `contains`.
@@ -8096,7 +8310,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 addr.value = 'ws://127.0.0.1:65535';
                 addr.dispatchEvent(new Event('input', { bubbles: true }));
                 for (const b of sec.querySelectorAll('button')) {
-                    if (b.textContent.trim() === 'Add connector') { b.click(); return { ok: true }; }
+                    if (b.getAttribute('data-field') === 'connector-add') { b.click(); return { ok: true }; }
                 }
                 return { ok: false, reason: 'no-add-button' };
             }
@@ -8262,7 +8476,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 }
                 return {
                     card: text.includes('Meet at a name'),
-                    needs_connector: text.includes('Select a connector first'),
+                    needs_connector: text.includes('Choose a rendezvous node first'),
                     meet_btn,
                 };
             }
@@ -8314,7 +8528,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 addr.value = 'ws://127.0.0.1:65534';
                 addr.dispatchEvent(new Event('input', { bubbles: true }));
                 for (const b of sec.querySelectorAll('button')) {
-                    if (b.textContent.trim() === 'Add connector') { b.click(); return { ok: true }; }
+                    if (b.getAttribute('data-field') === 'connector-add') { b.click(); return { ok: true }; }
                 }
                 return { ok: false, reason: 'no-add-button' };
             }
@@ -8506,6 +8720,7 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
         for (const sec of root.querySelectorAll('section.window')) {
             if (!sec.querySelector('.peer-connections')) continue;
             const text = sec.textContent;
+            const line = (text.match(/Searching at[^\n]*/) || [''])[0];
             return {
                 searching: text.includes('Searching at'),
                 // The reach_node failure text specifically — NOT the address,
@@ -8514,6 +8729,11 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
                 failed: text.includes('connector: dialing'),
                 stop_btn: Array.from(sec.querySelectorAll('button'))
                     .some(b => b.textContent.trim() === 'Stop'),
+                // What the line SAYS, so the shape of it is assertable: a
+                // duration a person can price, and never a bare N/M counter.
+                line,
+                says_how_long: /min left|under a minute/.test(line),
+                counter: /\d+\s*\/\s*\d+/.test(line),
             };
         }
         return { searching: false, reason: 'no-section' };
@@ -8539,9 +8759,32 @@ async fn worker_boots_and_opens_all_windows() -> Result<(), Box<dyn std::error::
             "A running meet offers no way to stop it — it would poll for its whole \
              window with no way out. Detail: {running}"
         );
-        println!("  meet observed in progress, with a way to stop it: {running}");
+        // **The wait has to be priceable.** What this replaced was the raw poll
+        // counter climbing toward its bound, which says nothing a person can act
+        // on — reported, in those words, as stressful to watch. The phrase is
+        // renderable from the first frame precisely because `remaining_ms` is
+        // the whole window until listening begins: a slow dial must not look
+        // like a short search.
+        assert_eq!(
+            running.get("says_how_long").and_then(|v| v.as_bool()),
+            Some(true),
+            "A running meet does not say how long it runs for. Detail: {running}"
+        );
+        assert_eq!(
+            running.get("counter").and_then(|v| v.as_bool()),
+            Some(false),
+            "The meet line is back to a bare N/M counter. Detail: {running}"
+        );
+        println!("  meet observed in progress, priced and stoppable: {running}");
     } else {
-        println!("  meet failed before the first look — that is a report too: {running}");
+        // Say which arm ran. The node here is unreachable by construction, so
+        // catching the search mid-flight is a race — and an assertion that may
+        // not have executed must not be read as coverage. When this line prints,
+        // the two checks above did NOT run.
+        println!(
+            "  meet failed before the first look — that is a report too, and the \
+             mid-search line went UNMEASURED this run: {running}"
+        );
     }
 
     // It ENDS, and says why. The node is unreachable by construction, so a
@@ -14196,7 +14439,7 @@ async fn selecting_a_connector_says_it_needs_a_reload(
             if (!set('connector_addr', 'ws://127.0.0.1:65535')) return 'no-addr-field';
             if (!set('connector_expect', {pid:?})) return 'no-expect-field';
             for (const b of card.querySelectorAll('button')) {{
-                if (b.textContent.trim() === 'Add connector') {{ b.click(); return 'added'; }}
+                if (b.getAttribute('data-field') === 'connector-add') {{ b.click(); return 'added'; }}
             }}
             return 'no-add-button';
             "#,
@@ -19831,6 +20074,22 @@ async fn an_app_that_declares_files_can_send_one_to_the_host_and_receive_one_bac
     }).await?;
     client.enter_parent_frame().await?;
     println!("  app side: {inside}");
+    // ── 0, asserted FIRST because it is the one an app decides on before it asks
+    // anything: did the host OFFER the family in `init`?
+    //
+    // entity-apps' SDK gates `ext.files.available()` on exactly this, `=== true`,
+    // so a host that implements every verb and offers nothing is indistinguishable
+    // from one that will never answer — and that was us from 2026-09-14 to 09-16,
+    // with every other assertion in this gate passing the whole time. This fixture
+    // asks the host directly and so could not see it; the app's own view is the
+    // only place the omission is visible.
+    assert_eq!(
+        inside.get("filesOffered").and_then(|b| b.as_bool()),
+        Some(true),
+        "the host never offered `x-files` in init, so an app following the contract \
+         cannot tell this host from one that will never answer (entity-apps \
+         EMBEDDING §8). The verbs working is not the same as the offer being made: {inside}"
+    );
     let results = inside.get("results").and_then(|r| r.as_array()).cloned().unwrap_or_default();
     let refused = results.iter().find(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(false));
     let kept = results.iter().find(|r| r.get("ok").and_then(|b| b.as_bool()) == Some(true));
@@ -20566,7 +20825,7 @@ async fn on_a_phone_a_windows_content_stays_inside_it() -> Result<(), Box<dyn st
             addr.value = '{long_addr}';
             addr.dispatchEvent(new Event('input', {{ bubbles: true }}));
             for (const b of sec.querySelectorAll('button'))
-                if (b.textContent.trim() === 'Add connector') {{ b.click(); return {{ ok: true }}; }}
+                if (b.getAttribute('data-field') === 'connector-add') {{ b.click(); return {{ ok: true }}; }}
             return {{ ok: false, reason: 'no-add-button' }};
         }}
         return {{ ok: false, reason: 'no-section' }};
@@ -27647,6 +27906,636 @@ async fn a_dead_wasm_instance_is_reported_from_outside_the_wasm(
     println!(
         "DEAD-INSTANCE DETECTOR OK — a stopped program is detected, reported and \
          escapable from OUTSIDE the wasm, which is the only place that can."
+    );
+    Ok(())
+}
+
+/// **A HIGH REBUILD RATE NAMES A WINDOW.**
+///
+/// Earned 2026-09-15 on the crash capture (`AUDIT-2026-09-15-a`), which carries
+/// **32** occurrences of `DOM: HIGH REBUILD RATE rebuilds_per_sec=13 total=4438`
+/// and not one of them names a window. Four lines below it in the same function,
+/// `DOM: SLOW REBUILD` prints a full per-section breakdown out of
+/// `section_timings` — which `render()` populates every frame regardless and
+/// which the rate warning simply did not read. So a sustained 11–14/sec ran for
+/// the life of that session and stayed unattributable, and the audit had to
+/// record it as *"its own defect, and a plausible amplifier for anything
+/// closure-lifetime shaped"* with no way to say whose.
+///
+/// **Why a browser gate for a log line.** The decision — who is named, how a
+/// forced sweep is kept apart from a per-window churn, what an empty interval
+/// says — is pure and gated by `make test` (`src/rebuild_attribution.rs`, seven
+/// tests). What no native test can see is the **wiring**: that the real
+/// `section_timings` reach the tally and that the real threshold reads it. That
+/// half is the half that decides whether the *next* capture is evidence or
+/// another number, and we get one shot at the next capture.
+///
+/// `?rebuildrate=0` lowers the threshold so any rebuild in a completed interval
+/// trips the warning — the same affordance shape, and the same reason, as
+/// `?bootstall=` and `?deadinstance=`; nothing in the product sets it, and it
+/// can only ever make the warning more talkative.
+///
+/// Two rows:
+///   1. anti-vacuity — the warning fires at all under the lowered threshold;
+///   2. the subject — at least one of those lines attributes the rebuilds to a
+///      named window section, rather than printing a rate and nothing else.
+///
+/// **Stated bound:** the `forced=` arm (a moving locale / reachability
+/// generation rebuilding every open window, which must not read as an
+/// eleven-window churn storm) is gated natively, not here — reaching it from a
+/// browser needs a locale switch mid-session, which is a different rig.
+#[tokio::test]
+async fn a_high_rebuild_rate_names_a_window() -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+    let url = format!("http://localhost:{}/?log=trace&rebuildrate=0", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ⚠ **Drive rebuilds until the warning flushes, rather than assuming a
+        // spawn count lands across an interval boundary.** The line is emitted
+        // on the first rebuild frame AFTER a second has elapsed, so a burst that
+        // fits inside one interval is never flushed at all — and a fixed
+        // three-spawn sequence is a guess about how long a spawn takes on a
+        // loaded box. It passed standalone and produced ZERO lines inside the
+        // unfiltered run, which is the same fixed-sleep mistake `poll_json`
+        // exists to refuse, wearing a spawn's clothes.
+        //
+        // Each pass spawns a window (a guaranteed rebuild) and then waits past
+        // the 1s interval, so every pass closes an interval that contains one.
+        let mut log: Vec<String> = Vec::new();
+        let mut rate_lines: Vec<String> = Vec::new();
+        for (i, label) in
+            ["+ Shell", "+ Event Log", "+ Entity Tree", "+ Key Manager", "+ Storage"]
+                .iter()
+                .enumerate()
+        {
+            spawn_window_labeled(&client, label).await?;
+            sleep(Duration::from_millis(1200)).await;
+            log = capture_log(&client).await?;
+            rate_lines =
+                log.iter().filter(|l| l.contains("HIGH REBUILD RATE")).cloned().collect();
+            // Two lines, so the second is a flush of an interval this loop drove
+            // rather than the boot burst that precedes any of it.
+            if rate_lines.len() >= 2 {
+                println!("  drove {} rate line(s) in {} pass(es)", rate_lines.len(), i + 1);
+                break;
+            }
+        }
+        let rate_lines: Vec<&String> = rate_lines.iter().collect();
+        for l in &rate_lines {
+            println!("    rate line: {}", attributed_value(l).unwrap_or("(no attributed_to field)"));
+        }
+
+        // ── ROW 1 — anti-vacuity ────────────────────────────────────────────
+        assert!(
+            !rate_lines.is_empty(),
+            "VACUOUS: no `DOM: HIGH REBUILD RATE` line was emitted at all under \
+             `?rebuildrate=0`, so row 2 is about nothing. Either the threshold \
+             override is not read, or five window spawns produced no rebuild frame \
+             across a completed interval.\n{} lines captured; last 15:\n  {}",
+            log.len(),
+            log.iter()
+                .rev()
+                .take(15)
+                .rev()
+                .map(|l| l.chars().take(180).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+        println!("  row 1: the rate warning fires ({} lines) ✓", rate_lines.len());
+
+        // ── ROW 2 — it names a culprit ──────────────────────────────────────
+        // Asserted on the SECTION key spelling (`type#id`), not on any one
+        // window's name: which window happens to be churning is the product's
+        // business, and pinning a name would make this gate fail the day the
+        // spawn order changes. What must hold is that SOMETHING is named.
+        let attributed: Vec<&&String> = rate_lines
+            .iter()
+            .filter(|l| attributed_value(l).is_some_and(|v| v.contains('#')))
+            .collect();
+        assert!(
+            !attributed.is_empty(),
+            "RED — every `HIGH REBUILD RATE` line reports a rate and no window, \
+             which is exactly the state the 2026-09-15 capture was left in: 32 \
+             warnings, 4438 rebuilds, nobody named. The lines were:\n  {}",
+            rate_lines
+                .iter()
+                .take(8)
+                .map(|l| l.chars().take(240).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+        println!(
+            "  row 2: attributed — {} ✓",
+            attributed_value(attributed[0]).unwrap_or("")
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "REBUILD ATTRIBUTION OK — a rate warning names the window, so the next \
+         capture is evidence rather than a number."
+    );
+    Ok(())
+}
+
+/// Pull the `attributed_to` field's value out of one captured console line.
+///
+/// **Not a convenience.** `tracing-wasm` renders a log line with its own CSS
+/// colour directives appended — `color: orange; background: #444 …` — so a naive
+/// `line.contains('#')` looking for a `type#id` section key matches the CSS and
+/// passes on a line that attributed nothing. Measured: the first cut of
+/// [`a_high_rebuild_rate_names_a_window`] went green against
+/// `attributed_to = palette=1`. *A log assertion is a coupling to a formatter;
+/// isolate the field before you match on it.*
+fn attributed_value(line: &str) -> Option<&str> {
+    let rest = line.split("attributed_to = ").nth(1)?;
+    Some(rest.split(';').next().unwrap_or(rest).trim())
+}
+
+/// **The gauge switch turns them OFF and BACK ON** — the settings toggle,
+/// end to end, through the real checkbox.
+///
+/// ⭐ **The second half is the gate.** Off is easy and was never at risk; ON is
+/// where this class fails, and it failed here for real during the session that
+/// built it. The first cut re-read the preference only when
+/// `sampler::roll` reported the second had turned — which looked like the one
+/// cheap signal already on the frame path, and is not: `with_active` returns
+/// early when nothing holds the sampler, so `roll` answers `false` forever once
+/// the gauges are off. **The switch was one-way.** AP36 in its smallest form —
+/// the guard went on the ACQUISITION (is the sampler running) when the question
+/// is a DECISION (does the user still want it running), and the acquisition is
+/// precisely what the decision switches off.
+///
+/// It was found by reading `with_active` while falsifying an unrelated neuter,
+/// which is the reason this gate exists rather than a note: nothing native can
+/// see it (`mod dom` and the frame path are `cfg(wasm32)`) and a gate that only
+/// asserted *off* would have shipped it green.
+///
+/// **Off is a real off, and the gate says so by what it asserts:** the sparks
+/// go to zero because the sampler goes dormant and `segments` omits every gauge
+/// — the same route a profile takes when nobody has ever opened the System
+/// Monitor. The counts stay, at every step, or the switch has taken more than
+/// it was pointed at.
+#[tokio::test]
+async fn the_gauge_switch_turns_them_off_and_back_on(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const SPARKS: &str = r#"
+        var host = document.getElementById('mode-display');
+        if (!host) return { present: false };
+        return {
+            present: true,
+            sparks: host.querySelectorAll('.status-spark').length,
+            counts: host.querySelectorAll('[data-seg="windows"],[data-seg="peers"],\
+[data-seg="durability"]').length
+        };
+    "#;
+    // Set the checkbox to `want` and fire the change the model listens for.
+    const SET: &str = r#"
+        var [want] = arguments;
+        var layer = document.getElementById('dom-layer');
+        if (!layer) return 'no-dom-layer';
+        var root = layer.shadowRoot || layer;
+        var cb = root.querySelector('input[data-field="status_gauges"]');
+        if (!cb) return 'no-checkbox';
+        if (cb.checked === want) return 'already';
+        cb.checked = want;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        return 'set';
+    "#;
+
+    // Poll for a spark count rather than sleeping a fixed budget: the setting
+    // is re-read once a second and the sampler rolls once a second, so the
+    // round trip is ~2s and a fixed settle is a threshold nobody earned.
+    async fn wait_sparks(
+        client: &Client,
+        probe: &str,
+        want_any: bool,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let mut last = serde_json::Value::Null;
+        for _ in 0..40 {
+            last = client.execute(probe, vec![]).await?;
+            let n = last["sparks"].as_u64().unwrap_or(0);
+            if (n > 0) == want_any {
+                return Ok(last);
+            }
+            sleep(Duration::from_millis(250)).await;
+        }
+        Ok(last)
+    }
+
+    let (client, _server) = setup().await?;
+    client.set_window_size(1400, 900).await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ── ROW 1 — on by default, and really gauging ───────────────────────
+        let on = wait_sparks(&client, SPARKS, true).await?;
+        assert!(
+            on["sparks"].as_u64().unwrap_or(0) > 0,
+            "VACUOUS: no gauge ever appeared, so there is nothing for a switch \
+             to turn off and every row below measures nothing. Probe: {on}"
+        );
+        let counts = on["counts"].as_u64().unwrap_or(0);
+        assert_eq!(counts, 3, "the three counts must be there to start: {on}");
+
+        // ── ROW 2 — the checkbox exists and turns them off ──────────────────
+        spawn_window_labeled(&client, "+ Settings").await?;
+        let set = client.execute(SET, vec![false.into()]).await?;
+        assert_eq!(
+            set.as_str().unwrap_or(""),
+            "set",
+            "could not uncheck the gauge setting — the Settings window has no \
+             `input[data-field=status_gauges]`, so the switch this gate is about \
+             is not reachable by a person."
+        );
+        let off = wait_sparks(&client, SPARKS, false).await?;
+        assert_eq!(
+            off["sparks"].as_u64().unwrap_or(0),
+            0,
+            "the gauges are still drawn after switching them off. Probe: {off}"
+        );
+        assert_eq!(
+            off["counts"].as_u64().unwrap_or(0),
+            3,
+            "switching the gauges off took the window/peer/durability counts \
+             with it — the switch is pointed at the gauges, and the bar without \
+             them is exactly what it was before the feature. Probe: {off}"
+        );
+
+        // ── ROW 3 — AND BACK ON. This is the row the one-way bug reds. ──────
+        let set = client.execute(SET, vec![true.into()]).await?;
+        assert_eq!(
+            set.as_str().unwrap_or(""),
+            "set",
+            "could not re-check the gauge setting: {set:?}"
+        );
+        let back = wait_sparks(&client, SPARKS, true).await?;
+        assert!(
+            back["sparks"].as_u64().unwrap_or(0) > 0,
+            "THE SWITCH IS ONE-WAY: the gauges went off and never came back. \
+             The preference re-read is gated on something the preference itself \
+             switches off — check what signal drives `sync_status_gauge_hold` \
+             and whether that signal survives the sampler going dormant. \
+             Probe: {back}"
+        );
+        println!(
+            "  on {} sparks -> off {} -> back on {}, counts steady at 3",
+            on["sparks"], off["sparks"], back["sparks"]
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "GAUGE SWITCH OK — off stops the sampling, on starts it again, and the \
+         counts never move."
+    );
+    Ok(())
+}
+
+/// **The status bar is a row of segments, and the gauges are live** —
+/// `DESIGN-2026-09-16` §9 step 5.
+///
+/// Five rows, each separately falsifiable. Everything below row 2 is
+/// unreachable from `make test`: `mod dom` is `cfg(wasm32)`, the sampling hold
+/// only does anything against a real rAF loop, and the width tiers depend on
+/// real font metrics — `APPROX_CHAR_PX` is an estimate and this is the only
+/// place it meets a browser.
+///
+///   1. anti-vacuity — the bar renders SEGMENTS, not one formatted string;
+///   2. the three counts are there, each with its own `data-seg` and its words;
+///  2b. the three counts sit LEFT of every gauge, with a divider between the
+///      groups — the operator's arrangement, asserted on DOM order because that
+///      is what a person sees (`layout` not reordering is the model half);
+///   3. a gauge appears once sampling has a second of history, which is the
+///      always-on hold working (with no hold the history is empty and
+///      `segments` omits every gauge — the off-switch, and the failure mode);
+///  3b. **a gauge paints no number**, and still says the number in its
+///      accessible label — both halves, or a change that merely deleted the
+///      reading passes the easy one;
+///   4. accessibility — the braille is `aria-hidden`, every segment carries an
+///      `aria-label`, and the BAR carries the summary sentence, so a screen
+///      reader gets one phrase rather than a row of marks to reassemble;
+///   5. **a LADDER of widths**: the row never grows as it narrows, never
+///      overflows at any rung, keeps the storage mark at every rung, and is
+///      strictly shorter at the narrowest than at the widest. It was a single
+///      1400 → 520 step until the bar got more compact and landed exactly on
+///      that boundary — *a fixed width is a threshold nobody earned*.
+///
+/// **Scope, stated so the name is not read wider than the measurement:** it
+/// gates the BAR, not the sampler's accuracy. Whether `frozen` is the right
+/// number is `monitor::sampler`'s question; this asserts that whatever it says
+/// reaches the screen, is readable, and fits.
+#[tokio::test]
+async fn the_status_bar_shows_segments_and_stays_readable_as_it_narrows(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Read the bar as STRUCTURE, never as a sentence: `data-seg` keys come from
+    // `Segment::selector_key`, which `make test` pins as distinct. Matching on
+    // copy would make this gate red on a wording change and green on a broken
+    // layout — exactly backwards.
+    const PROBE: &str = r#"
+        var host = document.getElementById('mode-display');
+        var bar  = document.getElementById('status-bar');
+        if (!host || !bar) return { present: false };
+        var segs = Array.prototype.slice.call(host.querySelectorAll('[data-seg]'));
+        return {
+            present: true,
+            count: segs.length,
+            keys: segs.map(function (s) { return s.getAttribute('data-seg'); }),
+            labelled: segs.filter(function (s) {
+                var l = s.getAttribute('aria-label');
+                return l && l.trim().length > 0;
+            }).length,
+            // A sparkline a screen reader would read as braille cells.
+            sparks: host.querySelectorAll('.status-spark').length,
+            sparks_hidden: host.querySelectorAll('.status-spark[aria-hidden="true"]').length,
+            // What each segment PAINTS, in DOM order, keyed by segment. Read as
+            // a map so a row can ask about one segment without depending on
+            // where in the row it landed.
+            painted: segs.reduce(function (m, s) {
+                m[s.getAttribute('data-seg')] = s.textContent || '';
+                return m;
+            }, {}),
+            dividers: host.querySelectorAll('.status-div').length,
+            bar_label: host.getAttribute('aria-label') || '',
+            // Does the row fit? scrollWidth > clientWidth means it is clipped.
+            host_client: host.clientWidth,
+            host_scroll: host.scrollWidth,
+            text: host.textContent
+        };
+    "#;
+
+    let (client, _server) = setup().await?;
+    client.set_window_size(1400, 900).await?;
+    let url = format!("http://localhost:{}/?log=trace", http_server_port());
+
+    let r = async {
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // ── ROW 1 — it is a list of segments, not a string ──────────────────
+        let wide: serde_json::Value = client.execute(PROBE, vec![]).await?;
+        assert!(
+            wide["present"].as_bool().unwrap_or(false),
+            "VACUOUS: #status-bar / #mode-display is missing, so every assertion \
+             below is about nothing. Probe: {wide}"
+        );
+        let count = wide["count"].as_u64().unwrap_or(0);
+        assert!(
+            count >= 3,
+            "VACUOUS: the bar rendered {count} `[data-seg]` element(s). Before this \
+             feature it was one formatted string and this gate must red on a \
+             revert to it. Text was {:?}",
+            wide["text"].as_str().unwrap_or("")
+        );
+
+        // ── ROW 2 — the three counts, by key ────────────────────────────────
+        let keys: Vec<&str> = wide["keys"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_str()).collect()
+        }).unwrap_or_default();
+        for want in ["windows", "peers", "durability"] {
+            assert!(
+                keys.contains(&want),
+                "the bar does not carry the `{want}` segment — keys were {keys:?}. \
+                 These are the facts the bar has always shown and no width tier \
+                 may drop them while a gauge survives."
+            );
+        }
+
+        // ── ROW 2b — the fixed facts sit LEFT of every gauge ────────────────
+        // The operator's arrangement (2026-09-16): windows · peers · durability
+        // do not move second to second, so they belong beside the product name
+        // and the gauges fill what is left. Asserted on DOM ORDER, which is the
+        // thing a person sees — `layout` promising not to reorder is the model
+        // half and is gated natively.
+        let order_of = |keys: &[&str], k: &str| keys.iter().position(|x| *x == k);
+        // (checked again after the gauges arrive, below — at this point the
+        // live group may legitimately be empty)
+
+        // ── ROW 3 — a gauge, once a second of sampling exists ───────────────
+        // The sampler rolls once a second, so the first second of a boot has no
+        // history and NO gauge is the correct render. Poll rather than sleep a
+        // fixed budget: a fixed settle is a threshold nobody earned.
+        let mut gauged = wide.clone();
+        for _ in 0..40 {
+            if gauged["sparks"].as_u64().unwrap_or(0) > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            gauged = client.execute(PROBE, vec![]).await?;
+        }
+        let sparks = gauged["sparks"].as_u64().unwrap_or(0);
+        assert!(
+            sparks > 0,
+            "no gauge ever appeared. The status bar holds a `MonitorHold` for the \
+             life of the tab, so the sampler should be filling; with no hold the \
+             history stays empty, `segments` omits every gauge and the bar \
+             degrades to the counts. That is the off-switch — and here it is the \
+             defect. Probe: {gauged}"
+        );
+        let gkeys: Vec<&str> = gauged["keys"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_str()).collect()
+        }).unwrap_or_default();
+        assert!(
+            gkeys.contains(&"smoothness"),
+            "a sparkline rendered but not the smoothness one — that is the gauge \
+             the whole feature exists for. Keys: {gkeys:?}"
+        );
+
+        let fixed_last = ["windows", "peers", "durability"]
+            .iter()
+            .filter_map(|k| order_of(&gkeys, k))
+            .max();
+        let live_first = ["smoothness", "drawing", "app-1", "app-2", "app-3"]
+            .iter()
+            .filter_map(|k| order_of(&gkeys, k))
+            .min();
+        if let (Some(f), Some(l)) = (fixed_last, live_first) {
+            assert!(
+                f < l,
+                "a gauge is painted to the LEFT of a fixed fact: {gkeys:?}. The \
+                 three counts belong beside the product name — they are the \
+                 facts that do not move, and a row that interleaves them with \
+                 sparklines is the arrangement this replaced."
+            );
+        } else {
+            panic!("VACUOUS: the row has no fixed segment or no gauge, so the \
+                    ordering claim is about nothing. Keys: {gkeys:?}");
+        }
+        assert!(
+            gauged["dividers"].as_u64().unwrap_or(0) >= 1,
+            "no divider between the fixed group and the gauges — the boundary is \
+             a model fact (`Segment::group`) and the renderer draws it. Probe: {gauged}"
+        );
+
+        // ── ROW 3b — a gauge paints NO number ───────────────────────────────
+        // The braille IS the reading; a `0 ms` beside it is the widest part of
+        // an idle segment (operator, 2026-09-16). The figure moved to the
+        // accessible label, so this asserts BOTH halves — a change that simply
+        // deleted the reading would pass the easy one.
+        let painted = &gauged["painted"];
+        for key in ["smoothness", "drawing", "app-1", "app-2", "app-3"] {
+            let Some(text) = painted.get(key).and_then(|v| v.as_str()) else { continue };
+            assert!(
+                !text.chars().any(|c| c.is_ascii_digit()),
+                "the `{key}` gauge paints a number: {text:?}. The sparkline is the \
+                 reading — the figure belongs in the label, not on a 28px bar."
+            );
+        }
+        for key in ["smoothness", "drawing"] {
+            if order_of(&gkeys, key).is_none() {
+                continue;
+            }
+            let got = client
+                .execute(
+                    &format!(
+                        "var e = document.querySelector('[data-seg=\"{key}\"]'); \
+                         return e ? (e.getAttribute('aria-label') || '') : '';"
+                    ),
+                    vec![],
+                )
+                .await?;
+            let label = got.as_str().unwrap_or("");
+            assert!(
+                label.chars().any(|c| c.is_ascii_digit()),
+                "the `{key}` gauge dropped its reading instead of moving it — its \
+                 aria-label is {label:?}, so a screen reader and a hover now get \
+                 no figure at all."
+            );
+        }
+
+        // ── ROW 4 — accessibility ───────────────────────────────────────────
+        let hidden = gauged["sparks_hidden"].as_u64().unwrap_or(0);
+        assert_eq!(
+            hidden, sparks,
+            "{} of {sparks} sparkline(s) are not aria-hidden. A screen reader \
+             reads U+2800–U+28FF as BRAILLE CELLS, so an exposed graph is read \
+             aloud as nonsense. Dropping the attribute does not change the \
+             display, which is exactly why it needs a gate.",
+            sparks - hidden
+        );
+        let (segs, labelled) = (
+            gauged["count"].as_u64().unwrap_or(0),
+            gauged["labelled"].as_u64().unwrap_or(0),
+        );
+        assert_eq!(
+            labelled, segs,
+            "{} of {segs} segment(s) carry no aria-label. With the braille hidden, \
+             the label is the ONLY thing a screen reader gets from that segment.",
+            segs - labelled
+        );
+        let bar_label = gauged["bar_label"].as_str().unwrap_or("");
+        assert!(
+            bar_label.contains('·') && bar_label.len() > 5,
+            "the bar carries no summary sentence as its accessible name (got \
+             {bar_label:?}). The phrase is wider than the icons, so it can never \
+             be a visible tier — being the bar's aria-label is the job it kept, \
+             and it is how a screen reader gets one sentence instead of three \
+             isolated marks."
+        );
+
+        // ── ROW 5 — the LADDER: it narrows monotonically and never overflows ─
+        // The one place APPROX_CHAR_PX meets real font metrics.
+        //
+        // ⚠ **This was a single 1400 → 520 step and a magic number, and the
+        // change that made the bar more compact invalidated it** — dropping the
+        // `0 ms` readings and the redundant "Saved" word took the full row from
+        // ~60 cells to ~46, which is almost exactly what 520px affords, so the
+        // gate sat ON the boundary: green filtered, red unfiltered, for no
+        // reason a reader of either result could see.
+        //
+        // ⇒ ***a fixed width is a threshold nobody earned, exactly like a fixed
+        // settle*** — and the tell is that the number encoded an assumption
+        // about segment widths that the feature is free to change. The claim was
+        // never "520 drops something"; it is **monotonicity plus no overflow**,
+        // so that is what is asserted, across a ladder. Narrowing can now make
+        // the bar more compact without anybody having to re-tune a constant in
+        // a test.
+        let wide_keys = gkeys.len();
+        let mut ladder: Vec<(u32, Vec<String>)> = vec![(1400, gkeys.iter().map(|s| s.to_string()).collect())];
+        for width in [1000u32, 760, 560, 380] {
+            client.set_window_size(width, 900).await?;
+            // Poll rather than sleep: the row re-measures on the frame loop, and
+            // a fixed settle here would be the same defect one layer down.
+            let prev = ladder.last().map(|(_, k)| k.len()).unwrap_or(0);
+            let mut step = client.execute(PROBE, vec![]).await?;
+            for _ in 0..15 {
+                if step["count"].as_u64().unwrap_or(0) < prev as u64 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                step = client.execute(PROBE, vec![]).await?;
+            }
+            let keys: Vec<String> = step["keys"].as_array().map(|a| {
+                a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect()
+            }).unwrap_or_default();
+            // Every rung, not just the last: no overflow, and the storage mark
+            // is priority 0 and must be the last one standing.
+            let (c, sc) = (
+                step["host_client"].as_i64().unwrap_or(0),
+                step["host_scroll"].as_i64().unwrap_or(0),
+            );
+            assert!(
+                sc <= c + 2, // 2px of rounding slack; the host is overflow:hidden
+                "the segment row overflows its host at {width}px ({sc}px of content \
+                 in a {c}px box), so a reading is clipped and a clipped reading is \
+                 a wrong reading. APPROX_CHAR_PX is under-estimating. Keys: {keys:?}"
+            );
+            assert!(
+                keys.contains(&"durability".to_string()),
+                "narrowing to {width}px dropped the durability segment while others \
+                 survived — it is priority 0 and must be the last one standing. \
+                 Keys: {keys:?}"
+            );
+            ladder.push((width, keys));
+        }
+        // Monotone: a narrower bar never shows MORE. A single-width check cannot
+        // see a priority that stopped being monotone in the middle of the range.
+        for pair in ladder.windows(2) {
+            let ((w0, k0), (w1, k1)) = (&pair[0], &pair[1]);
+            assert!(
+                k1.len() <= k0.len(),
+                "the bar grew as it narrowed: {}px showed {} segment(s) {k0:?} and \
+                 {}px showed {} {k1:?}. `layout` only ever drops, so this is a \
+                 priority that is not monotone or a row that did not re-measure.",
+                w0, k0.len(), w1, k1.len()
+            );
+        }
+        let (narrow_w, narrow_keys) = ladder.last().cloned().unwrap_or((0, vec![]));
+        assert!(
+            narrow_keys.len() < wide_keys,
+            "the whole ladder 1400px → {narrow_w}px dropped nothing: {wide_keys} \
+             segment(s) wide, {} at the narrowest ({narrow_keys:?}). Either the bar \
+             is not re-measuring at all, or APPROX_CHAR_PX is so generous that \
+             every tier fits at every width.",
+            narrow_keys.len()
+        );
+
+        println!(
+            "  ladder: {}\n  sparks {sparks}, all aria-hidden; bar label {bar_label:?}",
+            ladder
+                .iter()
+                .map(|(w, k)| format!("{w}px:{}", k.len()))
+                .collect::<Vec<_>>()
+                .join(" → ")
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+    let _ = client.close().await;
+    r?;
+    println!(
+        "STATUS BAR OK — segments render, the gauge is live, the braille is hidden \
+         from a screen reader and the row narrows without clipping."
     );
     Ok(())
 }

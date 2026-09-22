@@ -49,7 +49,7 @@
 //!
 //! ## Why the session is frame-pumped rather than an async loop
 //!
-//! A meet is several round trips over ~30 seconds, and every one of them needs
+//! A meet is several round trips over minutes, and every one of them needs
 //! `&Peers` to build — which a spawned task cannot hold across an `.await`
 //! (`WriterHandle`'s module doc is the same problem for writes). So
 //! [`MeetSession`] is a state machine pumped from the frame loop, exactly like
@@ -65,11 +65,50 @@
 //!
 //! - **Do not stop at the first answer.** A bucket is a *set with history*, not
 //!   a queue: `tag` and `lobby` keys are stable by construction, so a bucket
-//!   still holds earlier exchanges until the 60 s TTL. A session that returned
-//!   at its first hit would report a stale peer and abandon the one actually
-//!   waiting. We keep listening for the whole window and report everyone.
+//!   still holds earlier exchanges until the node's TTL reaps them. A session
+//!   that returned at its first hit would report a stale peer and abandon the
+//!   one actually waiting. We keep listening for the whole window and report
+//!   everyone.
 //! - **Skip nonces already answered**, or every poll re-answers the same request
-//!   and fills the bucket against its 32-message bound.
+//!   and fills the bucket against its `max_bucket_blobs` bound.
+//!
+//! ## Pacing: two people press a button at roughly the same time
+//!
+//! A meet is a **human-time** activity, and the shape of the wait is the whole
+//! design. Two people who agreed on a name out of band press *Meet* seconds
+//! apart, or one presses and then walks to the other machine — so the useful
+//! window is minutes and the useful *cadence* is fast at the start and slow
+//! afterwards. [`poll_interval_ms`] is that schedule; [`SEARCH_WINDOW`] is the
+//! window.
+//!
+//! Three things it is worth knowing before changing either:
+//!
+//! - **Pacing out costs nothing in the common case and everything in the tail.**
+//!   Whoever presses second finds the first one on their *first* poll, because
+//!   the first one's `connect-request` is already sitting in the bucket. What
+//!   the interval bounds is the *other* direction — how long the person who
+//!   pressed first waits to notice — so the ceiling is a bound on the worst
+//!   case for the person who is already waiting, which is why it stays in
+//!   single-digit seconds rather than going to the TTL.
+//! - **The interval may never approach the node's TTL.** A bucket entry expires;
+//!   an interval longer than the TTL can straddle a deposit-and-expiry and miss
+//!   a peer *with nothing erroring anywhere* — the same silent never-meet the
+//!   lobby constant produces one section up. The TTL is **advertised**
+//!   (`Limits::ttl_seconds`, §4.5), so [`poll_interval_ms`] takes it rather than
+//!   assuming the 60 s default, and [`resolve_key`] hands back what the node
+//!   said whenever it had to ask (lobby mode). For `tag`/`secret` we do not
+//!   make the extra round trip and the protocol default stands in — stated
+//!   rather than hidden, and narrowing-only: a node advertising a *longer* TTL
+//!   never widens our interval, because the human's wait bounds it too.
+//! - **The window is wall clock, not a poll count.** A frame-counted window
+//!   means something different on a 60 fps tab, a backgrounded one (where rAF
+//!   stops entirely) and a native test loop, and what this bound is about is
+//!   *seconds a person waits*. Same argument as [`SETUP_BUDGET`], which was
+//!   wall clock first.
+//!
+//! Answering is deliberately **not** paced: a queued answer is a peer already
+//! waiting on us, so [`MeetSession::pump`] sends it on the next frame whatever
+//! the poll schedule says.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -204,31 +243,38 @@ pub struct Discovered {
 // Key derivation
 // ---------------------------------------------------------------------------
 
-/// Resolve the rendezvous key for `mode` at `node_peer_id`.
+/// Resolve the rendezvous key for `mode` at `node_peer_id`, plus the node's own
+/// published TTL **when resolving had to ask it**.
 ///
 /// `tag` and `secret` derive locally. **`lobby` asks the node** — see the module
 /// doc; deriving it from `LOBBY_DEFAULT` at a node that overrode the constant is
 /// the silent never-meet, so the round trip is not optional here.
+///
+/// The TTL rides along rather than being fetched separately: the advertisement
+/// is already in hand on the one path that fetches it, and throwing it away
+/// would leave [`poll_interval_ms`] pacing against a default we could have
+/// replaced with a fact. `None` is *"we did not ask"*, never *"the node has no
+/// TTL"* — the two would decide the same thing today and are different claims.
 pub fn resolve_key(
     peers: &Peers,
     local_peer_id: &str,
     node_peer_id: &str,
     mode: &Mode,
-) -> NodeFuture<RendezvousKey> {
+) -> NodeFuture<(RendezvousKey, Option<u64>)> {
     match mode {
         Mode::Tag(label) => {
             let k = key::tag_key(label);
-            Box::pin(async move { Ok(k) })
+            Box::pin(async move { Ok((k, None)) })
         }
         Mode::Secret(secret) => {
             let k = key::secret_key(secret);
-            Box::pin(async move { Ok(k) })
+            Box::pin(async move { Ok((k, None)) })
         }
         Mode::Lobby => {
             let fut = connectors::advertise(peers, local_peer_id, node_peer_id);
             Box::pin(async move {
                 let ad = fut.await?;
-                Ok(key::lobby_key(connectors::lobby_constant_for(&ad)))
+                Ok((key::lobby_key(connectors::lobby_constant_for(&ad)), Some(ad.limits.ttl_seconds)))
             })
         }
     }
@@ -453,15 +499,59 @@ pub fn requests_to_answer(messages: &[CollectedCoordination], my_peer_id: &str) 
 // The session
 // ---------------------------------------------------------------------------
 
-/// Frames between polls of the bucket (~0.5 s at 60 fps). A meet is a human-time
-/// activity; polling per frame would spend the node's rate budget to shave
-/// milliseconds off a wait measured in seconds.
-const POLL_EVERY_FRAMES: u32 = 30;
+/// How long a session keeps listening. Bounded on purpose: an unbounded meet is
+/// a background job nobody asked for, holding a bucket entry alive forever.
+/// Restarting is one press.
+///
+/// **Two minutes, because the number people have to hit is each other, not a
+/// deadline.** The previous window was ~30 s, which is shorter than "let me go
+/// and tell them to press it too" — and it was *rendered as a counter climbing
+/// to 60*, so the surface asked the user to watch a number race toward an
+/// outcome they had no way to price. Four times the window at **half** the
+/// requests is the trade [`poll_interval_ms`] buys.
+pub const SEARCH_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Polls before a session settles — ~30 s of searching. Bounded on purpose: an
-/// unbounded meet is a background job nobody asked for, holding a bucket entry
-/// alive forever. Restarting is one press.
-const MAX_POLLS: u32 = 60;
+/// The backoff schedule as `(listening for at least N ms, wait this long)`,
+/// consulted by [`poll_interval_ms`]. Ascending by the first element; the last
+/// entry that fits wins.
+///
+/// The first tier is what makes "we both pressed it just now" feel immediate;
+/// the last is the steady state for someone who pressed and walked away.
+const BACKOFF_MS: [(u64, u64); 3] = [(0, 1_000), (10_000, 3_000), (30_000, 8_000)];
+
+/// The floor under the TTL-derived ceiling. A node advertising a nonsensically
+/// short TTL must not turn the loop into a spin.
+const MIN_INTERVAL_MS: u64 = 500;
+
+/// How long to wait before the next `collect`, given how long this session has
+/// been listening and the TTL the node published.
+///
+/// Pure, and native — the cadence is the part of a meet most likely to be
+/// re-tuned by someone who cannot run a browser, and a schedule that can only be
+/// observed through Selenium is one nobody checks.
+///
+/// The TTL **narrows and never widens**: a generous node does not license us to
+/// leave a waiting person staring at nothing for a quarter of a minute.
+pub fn poll_interval_ms(listening_ms: u64, ttl_seconds: u64) -> u64 {
+    // A quarter of the TTL: an interval that straddles a deposit and its expiry
+    // loses a peer silently, and a quarter leaves room for the answer exchange
+    // inside one lifetime rather than merely clearing the edge.
+    let ceiling = (ttl_seconds.saturating_mul(1000) / 4).max(MIN_INTERVAL_MS);
+    let step = BACKOFF_MS
+        .iter()
+        .rev()
+        .find(|(after, _)| listening_ms >= *after)
+        .map(|(_, every)| *every)
+        .unwrap_or(MIN_INTERVAL_MS);
+    step.min(ceiling)
+}
+
+/// The TTL to pace against when the node never told us — the protocol's own
+/// published default, read from the extension rather than typed in here, so a
+/// §4.5 retune moves both together.
+fn default_ttl_seconds() -> u64 {
+    entity_signaling::Limits::default().ttl_seconds
+}
 
 /// Wall-clock budget for **getting to the bucket** — the dial, the key, the
 /// announce. Not the search itself, which [`MAX_POLLS`] bounds.
@@ -520,14 +610,23 @@ pub struct MeetStatus {
     pub mode_input: String,
     pub node_peer_id: String,
     pub found: Vec<Discovered>,
+    /// Round trips spent reading the bucket. A diagnostic, **not** a progress
+    /// bar: the window is wall clock, so this number does not divide into
+    /// anything and a surface that renders it as `polls/max` is telling the user
+    /// to watch a counter climb. Use [`remaining_ms`](Self::remaining_ms).
     pub polls: u32,
-    pub max_polls: u32,
+    /// Milliseconds left in the search window; `0` once settled.
+    pub remaining_ms: u64,
 }
 
 #[derive(Debug)]
 struct Inner {
     phase: MeetPhase,
     rendezvous_key: Option<RendezvousKey>,
+    /// What the node published as its bucket TTL, when resolving the key had to
+    /// ask (see [`resolve_key`]). Lands from a spawned round trip, which is why
+    /// it lives here rather than on the session.
+    ttl_seconds: Option<u64>,
     /// peer-id → was it ever seen verified.
     found: BTreeMap<String, bool>,
     answered: HashSet<Vec<u8>>,
@@ -561,9 +660,22 @@ pub struct MeetSession {
     mode: Mode,
     nonce: Nonce,
     inner: Arc<Mutex<Inner>>,
-    frame: u32,
-    poll_every: u32,
-    max_polls: u32,
+    /// How long this session listens once it is in the bucket.
+    window: std::time::Duration,
+    /// When listening began. Taken on the first `Listening` pump rather than in
+    /// the transition, because the transition lands in a spawned task and the
+    /// clock that matters is the one the user is watching.
+    listening_since: Option<web_time::Instant>,
+    /// When the next `collect` is due. `None` until the first Listening pump,
+    /// which polls immediately.
+    next_poll_at: Option<web_time::Instant>,
+    /// A fixed interval instead of [`poll_interval_ms`]'s schedule. **Tests
+    /// only** — and the field itself is `cfg(test)`, so production has no slot
+    /// for anyone to fill. An integration test that ran the real schedule would
+    /// spend real seconds proving something [`poll_interval_ms`]'s own tests
+    /// prove for free.
+    #[cfg(test)]
+    interval_override: Option<std::time::Duration>,
     /// When "getting to the bucket" stops being worth waiting for. `web_time`
     /// so the same code measures real seconds in the browser and on native.
     setup_deadline: web_time::Instant,
@@ -580,6 +692,7 @@ impl MeetSession {
             inner: Arc::new(Mutex::new(Inner {
                 phase: MeetPhase::Reaching,
                 rendezvous_key: None,
+                ttl_seconds: None,
                 found: BTreeMap::new(),
                 answered: HashSet::new(),
                 to_answer: VecDeque::new(),
@@ -587,20 +700,44 @@ impl MeetSession {
                 busy: false,
                 changed: false,
             })),
-            frame: 0,
-            poll_every: POLL_EVERY_FRAMES,
-            max_polls: MAX_POLLS,
+            window: SEARCH_WINDOW,
+            listening_since: None,
+            next_poll_at: None,
+            #[cfg(test)]
+            interval_override: None,
             setup_deadline: web_time::Instant::now() + SETUP_BUDGET,
         }
     }
 
-    /// Tighten the cadence — for tests, which pump in a tight loop rather than
-    /// at 60 fps and would otherwise spend real seconds counting frames.
+    /// Shorten the search window and fix the interval — for tests, which pump in
+    /// a tight loop and would otherwise spend the real two minutes.
     #[cfg(test)]
-    fn with_cadence(mut self, poll_every: u32, max_polls: u32) -> Self {
-        self.poll_every = poll_every;
-        self.max_polls = max_polls;
+    fn with_cadence(mut self, interval: std::time::Duration, window: std::time::Duration) -> Self {
+        self.interval_override = Some(interval);
+        self.window = window;
         self
+    }
+
+    /// The wait before the next `collect`.
+    fn next_interval_ms(&self, listening_ms: u64, ttl_seconds: u64) -> u64 {
+        #[cfg(test)]
+        if let Some(fixed) = self.interval_override {
+            return fixed.as_millis() as u64;
+        }
+        poll_interval_ms(listening_ms, ttl_seconds)
+    }
+
+    /// Milliseconds left in the search window. The full window until listening
+    /// begins — the setup steps are not part of the time the user was promised,
+    /// and counting them down would make a slow dial look like a short search.
+    fn remaining_ms(&self) -> u64 {
+        match self.listening_since {
+            None => self.window.as_millis() as u64,
+            Some(since) => self
+                .window
+                .saturating_sub(since.elapsed())
+                .as_millis() as u64,
+        }
     }
 
     /// Shorten the setup budget — for the test that proves a round trip which
@@ -623,7 +760,7 @@ impl MeetSession {
                     node_peer_id: self.node.node_peer_id.clone(),
                     found: Vec::new(),
                     polls: 0,
-                    max_polls: self.max_polls,
+                    remaining_ms: 0,
                 }
             }
         };
@@ -642,7 +779,10 @@ impl MeetSession {
                 })
                 .collect(),
             polls: inner.polls,
-            max_polls: self.max_polls,
+            // A settled session has no time left, whatever the clock says — the
+            // window is the reason to keep waiting, and reporting one over a
+            // search that already stopped is a countdown to nothing.
+            remaining_ms: if inner.phase.is_settled() { 0 } else { self.remaining_ms() },
         }
     }
 
@@ -671,7 +811,6 @@ impl MeetSession {
     /// One frame of progress. Cheap when settled, when a round trip is in
     /// flight, or between polls.
     pub fn pump(&mut self, peers: &Peers) {
-        self.frame = self.frame.wrapping_add(1);
         let phase = {
             let Ok(mut inner) = self.inner.lock() else { return };
             if inner.phase.is_settled() {
@@ -707,8 +846,9 @@ impl MeetSession {
             MeetPhase::Deriving => {
                 let fut =
                     resolve_key(peers, &self.local_peer_id, &self.node.node_peer_id, &self.mode);
-                self.run(fut, |inner, k| {
+                self.run(fut, |inner, (k, ttl)| {
                     inner.rendezvous_key = Some(k);
+                    inner.ttl_seconds = ttl;
                     inner.phase = MeetPhase::Announcing;
                 });
             }
@@ -740,17 +880,39 @@ impl MeetSession {
                     self.run(fut, |_, _| {});
                     return;
                 }
-                if !self.frame.is_multiple_of(self.poll_every) {
+                // The window starts when we are actually in the bucket, and the
+                // first poll is due immediately: whoever pressed second finds
+                // the first one right here, on this poll, with no wait at all.
+                let now = web_time::Instant::now();
+                let since = *self.listening_since.get_or_insert(now);
+                if now.duration_since(since) >= self.window {
+                    let Ok(mut inner) = self.inner.lock() else { return };
+                    inner.phase = MeetPhase::Done;
+                    inner.changed = true;
                     return;
                 }
+                if now < *self.next_poll_at.get_or_insert(now) {
+                    return;
+                }
+                let ttl = self
+                    .inner
+                    .lock()
+                    .ok()
+                    .and_then(|i| i.ttl_seconds)
+                    .unwrap_or_else(default_ttl_seconds);
+                let wait =
+                    self.next_interval_ms(now.duration_since(since).as_millis() as u64, ttl);
+                self.next_poll_at = Some(now + std::time::Duration::from_millis(wait));
                 {
                     let Ok(mut inner) = self.inner.lock() else { return };
-                    if inner.polls >= self.max_polls {
-                        inner.phase = MeetPhase::Done;
-                        inner.changed = true;
-                        return;
-                    }
                     inner.polls += 1;
+                    // **This is also what keeps the countdown honest.** A window
+                    // repaints only when told, and nothing else ticks — so the
+                    // displayed time-left is only ever as fresh as the last
+                    // poll. That is sound because the poll interval is capped in
+                    // single-digit seconds while the display is coarse to the
+                    // minute: the phrase cannot be stale by enough to be wrong.
+                    // A finer display would need its own reason to repaint.
                     inner.changed = true;
                 }
                 let fut = collect(peers, &self.local_peer_id, &self.node.node_peer_id, key);
@@ -882,6 +1044,70 @@ mod tests {
         assert!(!s.contains("correct-horse"), "got {s:?}");
     }
 
+    /// The cadence starts fast and settles, and **every step stays under the
+    /// node's TTL** — an interval that can straddle a deposit and its expiry
+    /// loses a peer with nothing erroring anywhere, which is the same silent
+    /// never-meet the lobby constant produces.
+    #[test]
+    fn the_poll_cadence_backs_off_and_never_outruns_the_bucket() {
+        let ttl = default_ttl_seconds();
+        let first = poll_interval_ms(0, ttl);
+        let middle = poll_interval_ms(15_000, ttl);
+        let late = poll_interval_ms(90_000, ttl);
+
+        assert!(first < middle && middle < late, "{first} {middle} {late}");
+        assert!(
+            first <= 1_000,
+            "the first tier is what makes 'we both just pressed it' feel immediate; got {first}"
+        );
+
+        // Sampled across the whole window, at the *published* TTL and at a
+        // node that publishes a much shorter one.
+        for ttl_seconds in [ttl, 8, 4, 1] {
+            let ttl_ms = ttl_seconds * 1000;
+            let mut at = 0;
+            while at <= SEARCH_WINDOW.as_millis() as u64 {
+                let wait = poll_interval_ms(at, ttl_seconds);
+                assert!(
+                    wait < ttl_ms || wait == MIN_INTERVAL_MS,
+                    "an interval of {wait}ms at ttl {ttl_seconds}s can outlive a bucket entry"
+                );
+                assert!(wait >= MIN_INTERVAL_MS, "a {wait}ms interval is a spin");
+                at += wait;
+            }
+        }
+    }
+
+    /// A generous node does not license a slow surface. The TTL **narrows**:
+    /// what bounds the interval at the top is the person waiting, not the bucket.
+    #[test]
+    fn a_longer_advertised_ttl_never_widens_the_interval() {
+        let generous = poll_interval_ms(90_000, 3_600);
+        let default = poll_interval_ms(90_000, default_ttl_seconds());
+        assert_eq!(generous, default, "a one-hour TTL must not slow the surface down");
+        assert!(generous <= 8_000, "the tail interval is the wait a person already sat through");
+    }
+
+    /// The pacing has to be **cheaper** than what it replaced, not just longer:
+    /// the previous loop spent 60 round trips in 30 s, and the complaint it
+    /// answers was about the wait, not about throughput.
+    #[test]
+    fn the_longer_window_costs_fewer_round_trips_than_the_old_one() {
+        let ttl = default_ttl_seconds();
+        let mut at = 0u64;
+        let mut polls = 0u32;
+        while at < SEARCH_WINDOW.as_millis() as u64 {
+            at += poll_interval_ms(at, ttl);
+            polls += 1;
+        }
+        assert!(
+            polls < 60,
+            "120 s of searching must cost fewer than the 60 polls the old 30 s window spent; \
+             got {polls}"
+        );
+        assert!(polls > 10, "and it must still actually look; got {polls}");
+    }
+
     /// The same input under two modes is two different buckets — domain
     /// separation is upstream's, but *passing the right mode* is ours, and a
     /// mix-up here is a silent never-meet with no error anywhere.
@@ -947,9 +1173,9 @@ mod tests {
         tokio::task::yield_now().await;
 
         let mut a = MeetSession::start(&pid_a, conn_a, Mode::Tag("chess".into()))
-            .with_cadence(1, 200);
+            .with_cadence(std::time::Duration::ZERO, std::time::Duration::from_secs(5));
         let mut b = MeetSession::start(&pid_b, conn_b, Mode::Tag("chess".into()))
-            .with_cadence(1, 200);
+            .with_cadence(std::time::Duration::ZERO, std::time::Duration::from_secs(5));
 
         let (want_a, want_b) = (pid_b.clone(), pid_a.clone());
         pump_until(
@@ -997,9 +1223,9 @@ mod tests {
         tokio::task::yield_now().await;
 
         let mut a =
-            MeetSession::start(&pid_a, conn_a, Mode::Tag("chess".into())).with_cadence(1, 40);
+            MeetSession::start(&pid_a, conn_a, Mode::Tag("chess".into())).with_cadence(std::time::Duration::ZERO, std::time::Duration::from_millis(400));
         let mut b =
-            MeetSession::start(&pid_b, conn_b, Mode::Tag("checkers".into())).with_cadence(1, 40);
+            MeetSession::start(&pid_b, conn_b, Mode::Tag("checkers".into())).with_cadence(std::time::Duration::ZERO, std::time::Duration::from_millis(400));
 
         // Run both to the end of their (short) windows rather than to a hit.
         pump_until((&mut a, &peers_a), (&mut b, &peers_b), |a, b| {
@@ -1027,11 +1253,19 @@ mod tests {
         tokio::task::yield_now().await;
 
         connectors::reach_node(&peers, &me, &connector).await.expect("dial the node");
-        let k = resolve_key(&peers, &me, &node_pid, &Mode::Lobby)
+        let (k, ttl) = resolve_key(&peers, &me, &node_pid, &Mode::Lobby)
             .await
             .expect("the node advertises its lobby constant");
 
         assert_eq!(k, key::lobby_key("pool-seven"));
+        // The advertisement was already in hand; dropping the TTL would leave
+        // the poll cadence pacing against a default we could have replaced with
+        // a fact about this node.
+        assert_eq!(
+            ttl,
+            Some(default_ttl_seconds()),
+            "a lobby resolve must carry back the TTL the node published"
+        );
         assert_ne!(
             k,
             key::lobby_key(entity_signaling::LOBBY_DEFAULT),
@@ -1058,7 +1292,7 @@ mod tests {
         let registry = MemoryTransportRegistry::new();
         let (peers, me, connector) = app_peer(registry, "2KNobodyHome");
         let mut s = MeetSession::start(&me, connector, Mode::Tag("chess".into()))
-            .with_cadence(1, 200)
+            .with_cadence(std::time::Duration::ZERO, std::time::Duration::from_secs(5))
             .with_setup_budget(std::time::Duration::ZERO);
 
         s.pump(&peers);
@@ -1088,7 +1322,7 @@ mod tests {
             relay_username: String::new(),
             relay_credential: String::new(),
         };
-        let mut s = MeetSession::start(&me, ghost, Mode::Tag("chess".into())).with_cadence(1, 10);
+        let mut s = MeetSession::start(&me, ghost, Mode::Tag("chess".into())).with_cadence(std::time::Duration::ZERO, std::time::Duration::from_millis(400));
 
         for _ in 0..200 {
             s.pump(&peers);

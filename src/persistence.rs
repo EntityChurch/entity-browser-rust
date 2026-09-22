@@ -330,6 +330,22 @@ mod native {
             .collect()
     }
 
+    /// Every identity this profile holds the authoring key for — the native
+    /// half of [`super::wasm::held_keypairs`], and see that one for why the
+    /// question has its own function.
+    ///
+    /// On this arm there is one drawer: `{data_root}/peers/`. The `publish/`
+    /// and `registry/` keypairs beside it are deliberately **not** here — they
+    /// are publishing identities the CLI signs with, not peers this app runs,
+    /// and folding them in would offer to author into a namespace no window is
+    /// bound to.
+    pub fn held_keypairs() -> Vec<Keypair> {
+        load_all_peer_entries()
+            .into_iter()
+            .map(|e| e.persisted.keypair)
+            .collect()
+    }
+
     pub fn load_all_peer_entries() -> Vec<PersistedPeerEntry> {
         // One-shot migration: copy any `keys/{peer_id}.pem` files into
         // the new spec layout before reading.
@@ -497,7 +513,7 @@ mod wasm {
         if let Some(storage) = storage.as_ref() {
             if let Ok(Some(hex)) = storage.get_item(SYSTEM_SEED_KEY) {
                 if let Some(seed) = vault_codec::hex_to_seed(&hex) {
-                    return (seed, true);
+                    return (remember_system_seed(seed), true);
                 }
             }
         }
@@ -509,7 +525,85 @@ mod wasm {
                 tracing::warn!(?e, "failed to persist system seed; primary identity will be ephemeral this session");
             }
         }
-        (seed, false)
+        (remember_system_seed(seed), false)
+    }
+
+    thread_local! {
+        /// The system seed **this session is actually running on**, recorded by
+        /// [`system_seed`] on every return path.
+        ///
+        /// ⭐ **A WITNESS, NOT A NOTIFICATION (AP44).** The alternative was a
+        /// `remember_system_seed(seed)` call added to `new_wasm` beside the
+        /// existing `system_seed()` — a second call site that the next author
+        /// who constructs a primary has to know about. Recording inside the
+        /// function that *mints* the seed means there is nothing to remember and
+        /// no path that can produce a running identity we then fail to recognise.
+        ///
+        /// It exists because a read-only re-read is **not** an equivalent
+        /// answer: when localStorage is unavailable `system_seed` returns a
+        /// fresh per-session seed that is never persisted, so re-reading would
+        /// report that we do not hold the key for the peer we are at that moment
+        /// running as. That is the same reasoning `EntityApp::webrtc_seed`
+        /// already carries for the carrier identity, one consumer over.
+        static SESSION_SYSTEM_SEED: std::cell::Cell<Option<[u8; 32]>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    fn remember_system_seed(seed: [u8; 32]) -> [u8; 32] {
+        SESSION_SYSTEM_SEED.with(|c| c.set(Some(seed)));
+        seed
+    }
+
+    /// Every identity this profile holds the **authoring key** for.
+    ///
+    /// ⭐⭐ **THERE ARE TWO DRAWERS AND THE PROFILE'S OWN PEER IS IN THE SECOND
+    /// ONE.** `entity_peers` (the vault) is the *spawn list* — the peers a
+    /// person explicitly created — and [`SYSTEM_SEED_KEY`]'s own doc comment
+    /// says it is *"distinct from the `entity_peers` spawn-list"*. The
+    /// always-present main-thread system peer, which is the peer every window is
+    /// bound to on a default profile, lives **only** in the second. So a
+    /// key-holding question answered by reading the vault alone returns `None`
+    /// for the one identity the app is definitionally running as, and the
+    /// surface that asked reports *"this profile does not hold its key"* about a
+    /// key that is in localStorage and in memory and signing right now.
+    ///
+    /// This is the single answer to *"may I author as this peer"*. Ask it here
+    /// rather than enumerating a drawer at a call site: a third durable identity
+    /// added tomorrow is one row in this function, not a sweep of every surface
+    /// that authors.
+    ///
+    /// Deduplicated by derived peer-id, and the id is **derived from the key**
+    /// rather than read from the stored field — `roster::spawn_list_derived`'s
+    /// rule, because the two can drift.
+    pub fn held_keypairs() -> Vec<Keypair> {
+        let mut out: Vec<Keypair> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut push = |kp: Keypair| {
+            if seen.insert(kp.peer_id().to_string()) {
+                out.push(kp);
+            }
+        };
+
+        // Drawer 2 first: the system peer is the one a window is bound to by
+        // default, so the common answer is the first comparison rather than the
+        // last.
+        if let Some(seed) = SESSION_SYSTEM_SEED.with(|c| c.get()) {
+            push(Keypair::from_seed(seed));
+        } else if let Some(hex) = get_storage().and_then(|s| s.get_item(SYSTEM_SEED_KEY).ok().flatten())
+        {
+            // Nothing has minted a seed in this session yet (a caller running
+            // before boot's construction). A persisted seed is still an identity
+            // we hold; an absent one is NOT generated here, because minting an
+            // identity is boot's act and a predicate must not have that effect.
+            if let Some(seed) = vault_codec::hex_to_seed(&hex) {
+                push(Keypair::from_seed(seed));
+            }
+        }
+
+        for entry in load_all_peer_entries() {
+            push(entry.persisted.keypair);
+        }
+        out
     }
 
     /// The IDB-durable system peer's id, for the Direct/IDB multi-tab
@@ -814,11 +908,11 @@ mod wasm {
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_entries, delete_peer, publisher_keypair, registry_keypair};
+pub use native::{save_peer, save_peer_with_mode, load_all_peers, load_all_peer_entries, delete_peer, publisher_keypair, registry_keypair, held_keypairs};
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{
-    save_peer, save_peer_with_mode, load_all_peer_entries, delete_peer,
+    save_peer, save_peer_with_mode, load_all_peer_entries, delete_peer, held_keypairs,
     mark_opfs_for_cleanup, load_opfs_tombstones, set_opfs_tombstones,
     mark_idb_for_cleanup, load_idb_tombstones, set_idb_tombstones,
     system_seed, system_seed_id,

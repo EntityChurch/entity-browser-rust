@@ -77,8 +77,10 @@ use std::pin::Pin;
 use entity_entity::Entity;
 use entity_hash::Hash;
 
+use crate::embed::EmbedPayload;
 use crate::entity_ref::EntityRef;
 use crate::feed::{entry_key, entry_prefix, index_head_key, index_page_key, signature_key, FeedEntry, FeedError, IndexHead, IndexPage};
+use crate::feed_body::{BlobMiss, BodyBlob};
 
 // ---------------------------------------------------------------------------
 // FEED-R4 — attribution
@@ -378,6 +380,14 @@ pub struct ReadEntry {
     /// only renders ignores it; a reader that republishes must carry exactly
     /// this and nothing re-encoded from [`Self::entry`].
     pub obtained: Obtained,
+    /// The body's `system/content` blob when [`Self::entry`]'s payload took
+    /// EMBED §3's **pointer** arm — resolved here, on the async side, because
+    /// the render pass that needs it is synchronous.
+    ///
+    /// [`BodyBlob::Inline`] is the ordinary case and means nothing was owed.
+    /// The [`Unresolved`](BodyBlob::Unresolved) arm names *whose* situation it
+    /// is rather than collapsing to a missing body, for AP40's reason.
+    pub body_blob: BodyBlob,
 }
 
 /// The bytes as they arrived, and the evidence that travels with them.
@@ -522,6 +532,34 @@ pub trait FeedSource {
         relative_prefix: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<String>>, String>>>> {
         let _ = relative_prefix;
+        Box::pin(std::future::ready(Ok(None)))
+    }
+
+    /// Reassemble the `system/content` blob a **pointer body** names.
+    ///
+    /// **`Ok(None)` means this source cannot resolve blobs at all** — *nobody
+    /// looked* — which is a different fact from `Err(BlobMiss::Absent)` (*the
+    /// origin looked and has none*) and from `Err(BlobMiss::Failed)` (*we tried
+    /// and could not*). The same three-state discipline [`Self::list`] carries
+    /// one method up, and for the same reason: a reader that cannot tell our
+    /// missing capability from the publisher's broken closure files their defect
+    /// under ours, or ours under theirs.
+    ///
+    /// The error type is [`BlobMiss`] rather than `String` precisely so that
+    /// distinction survives the call. A `String` would force the caller to sniff
+    /// a message for it.
+    ///
+    /// **Defaulted, so no existing source changed.** It is not decoration: EMBED
+    /// §3 caps an inline payload at 16 KiB, so **every post above that is
+    /// required to take the pointer arm**, and until this method existed the
+    /// reader drew such a post as its authored fallback — its title — while the
+    /// bytes sat published and verified at the origin. See
+    /// [`BodyBlob`](crate::feed_body::BodyBlob) for the corpus measurement.
+    fn blob(
+        &self,
+        blob: Hash,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, BlobMiss>>>> {
+        let _ = blob;
         Box::pin(std::future::ready(Ok(None)))
     }
 }
@@ -776,6 +814,24 @@ pub(crate) async fn finish_entry<S: FeedSource + ?Sized>(
     // happen is either of them rendering as attributed.
     let sig = src.get(signature_key(author, &hash)).await.ok().flatten();
     let attribution = attribute(author, &hash, sig.as_ref());
+
+    // A pointer body's bytes are a second walk — the blob, then every chunk it
+    // names — and this is the only place in the read with both the source and
+    // the decoded entry in hand.
+    //
+    // **Best-effort, exactly like the signature above.** A body we could not
+    // reassemble must not fail the read: the entry is still there, still
+    // attributable, and still has an authored fallback to draw. What must not
+    // happen is the three situations rendering as one (AP40).
+    let body_blob = match &entry.body.data.payload {
+        EmbedPayload::Pointer(h) => match src.blob(*h).await {
+            Ok(Some(bytes)) => BodyBlob::Resolved(bytes),
+            Ok(None) => BodyBlob::Unresolved(BlobMiss::SourceCannot),
+            Err(miss) => BodyBlob::Unresolved(miss),
+        },
+        _ => BodyBlob::Inline,
+    };
+
     Ok(ReadEntry {
         hash,
         entry,
@@ -784,6 +840,7 @@ pub(crate) async fn finish_entry<S: FeedSource + ?Sized>(
         // form a republisher may bind, and the signature is the half a tidy
         // implementation drops because rendering never needs it.
         obtained: Obtained { entity, signature: sig },
+        body_blob,
     })
 }
 

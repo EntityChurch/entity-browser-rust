@@ -287,6 +287,19 @@ pub fn export_site_set(
         // static surface's answer to multi-site discovery.
         write_peer_index(out_dir, site.peer_id, sites, prefix)?;
     }
+    // **A publish carrying no sites emits no site chrome.** Both writes below
+    // are entirely about sites: one lists them, the other sends `/` to that
+    // list. On a feed-only or apps-only domain (`publish --no-sites`) they would
+    // serve an index page whose content is *"this publisher's sites:"* followed
+    // by nothing, and point the domain root at it — a claim about a publisher,
+    // invented by the publisher's tooling, which is the shape `SiteSource` was
+    // introduced to stop one layer up.
+    //
+    // Not an `if sites.is_empty()` around each: an early return is what makes
+    // *"no sites ⇒ no site chrome"* one decision rather than two that can drift.
+    if sites.is_empty() {
+        return Ok(ExportReport { pages: written, dangling: audit.into_dangling() });
+    }
     // A landing index at `{out}/sites/index.html` listing every exported site —
     // so the static tree is reachable WITHOUT knowing the (ephemeral) publish
     // peer-id. It lives UNDER the `sites/` projection namespace (not `{out}/`)

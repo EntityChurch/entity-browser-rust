@@ -1273,6 +1273,27 @@ def main():
                             print(f"  the node served BOTH browsers again at t={i+1}s "
                                   f"(A={saw_a} B={saw_b} lines)"); break
                     print(f"  node lines after the mark: A={saw_a} B={saw_b}")
+                    # ⚠ A ZERO ABOVE IS ONLY EVIDENCE BESIDE A CONTROL. The app
+                    # emits `connector: reaching the rendezvous node` on EVERY
+                    # `reach_node` call whatever it decides next, so these counts
+                    # separate "the meet never asked the carrier for anything"
+                    # from "it asked and the carrier could not deliver" — the
+                    # distinction the first cut of this investigation could not
+                    # make, and the reason it could not attribute the failure.
+                    for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+                        lines = log_lines(base, sid)
+                        reach = sum(1 for l in lines
+                                    if "reaching the rendezvous node" in l)
+                        probed = sum(1 for l in lines
+                                     if "probed a carrier we believed was live" in l)
+                        believed = sum(1 for l in lines
+                                       if "reaching the rendezvous node" in l
+                                       and "believed_connected = true" in l)
+                        ok = sum(1 for l in lines if "the dial resolved OK" in l)
+                        bad = sum(1 for l in lines if "connector: the dial failed" in l)
+                        print(f"  {lbl} carrier: reach_node calls={reach} "
+                              f"(believed-connected={believed}, probed={probed}, "
+                              f"dial ok={ok}, dial failed={bad})")
                     checks["the carrier reaches the node again after it restarts"] = (
                         saw_a > 0 and saw_b > 0)
                     # And the link they already had is untouched by any of it —

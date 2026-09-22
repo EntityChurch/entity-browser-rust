@@ -6,8 +6,8 @@
 //! [`Peers::new_direct_idb_with_establish`](crate::peers::Peers::new_direct_idb_with_establish)
 //! takes it because it must be captured before the peer's `PeerShared` clones,
 //! and there is no `&mut Peer` on this arm. So the establisher was decided
-//! entirely at boot, from `resolve_provisioning`: `?webrtc_node=` in the URL,
-//! then the localStorage selection mirror, then the build knob.
+//! entirely at boot, from `resolve_provisioning`: the localStorage selection
+//! mirror, then `?webrtc_node=` in the URL, then the build knob.
 //!
 //! **A fresh profile has none of the three.** A private window, a first visit, a
 //! newly launched desktop app — nothing is configured yet, so no seam was

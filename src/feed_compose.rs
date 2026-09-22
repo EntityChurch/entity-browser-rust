@@ -510,10 +510,21 @@ pub fn own_posts(peers: &crate::peers::Peers, peer: &str) -> Vec<OwnPost> {
 /// Derives the id from the key rather than trusting the stored `peer_id` field,
 /// which is `roster::spawn_list_derived`'s rule and exists because the two can
 /// drift.
+///
+/// ⭐⭐ **THIS READ THE SPAWN-LIST VAULT ALONE UNTIL 2026-09-16, SO IT ANSWERED
+/// `None` FOR THE PROFILE'S OWN PEER AND THE COMPOSER WAS UNREACHABLE FOR
+/// EVERYBODY.** A default profile's windows are bound to the **system peer**,
+/// whose seed lives under `entity_system_seed` — a drawer whose own constant is
+/// documented as *"distinct from the `entity_peers` spawn-list"* — so the one
+/// identity we are definitionally running as was the one identity this lookup
+/// could not see. The surface then said *"this profile does not hold its key"*
+/// about a key that was in localStorage, in memory, and signing that session's
+/// traffic. Enumerate through [`crate::persistence::held_keypairs`], which is
+/// the single answer to the question and knows about both drawers.
 pub fn authoring_keypair(peer: &str) -> Option<entity_crypto::IdentityKeypair> {
-    crate::persistence::load_all_peer_entries()
+    crate::persistence::held_keypairs()
         .into_iter()
-        .map(|e| entity_crypto::IdentityKeypair::Ed25519(e.persisted.keypair))
+        .map(entity_crypto::IdentityKeypair::Ed25519)
         .find(|kp| kp.peer_id().to_string() == peer)
 }
 

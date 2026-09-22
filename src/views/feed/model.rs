@@ -46,6 +46,16 @@ pub struct FeedModel {
     /// What the last compose act was. **Session-only** — see
     /// [`super::output::FeedOutput::compose_notice`].
     compose_notice: Option<ComposeNotice>,
+    /// Whether the *Manage* section is open. **Session-only, and deliberately
+    /// not persisted**: which sections a person has expanded is a view state,
+    /// not a fact about the profile, and writing it down would put a UI
+    /// preference in the durable tree for `D25` to then have to answer
+    /// ownership questions about. Same reasoning as the panel selection.
+    ///
+    /// Held in the MODEL rather than a `<details>` — `components::disclosure`
+    /// re-renders closed on every repaint, and this section contains two text
+    /// inputs somebody is typing into.
+    manage_open: bool,
 }
 
 impl FeedModel {
@@ -56,6 +66,7 @@ impl FeedModel {
             selected: None,
             notice: None,
             compose_notice: None,
+            manage_open: false,
         }
     }
 
@@ -64,6 +75,12 @@ impl FeedModel {
     /// is a feed that loads forever.
     pub fn set_repaint(&self, repaint: crate::window::RepaintFn) {
         self.poller.set_repaint(repaint);
+    }
+
+    /// Expand or collapse *Manage* — the follow-by-id box, the follow list and
+    /// the gatherers. Session-only; see the field.
+    pub fn toggle_manage(&mut self) {
+        self.manage_open = !self.manage_open;
     }
 
     /// Show this peer's feed. Selecting somebody **clears the notice** — it was
@@ -182,8 +199,16 @@ impl FeedModel {
         let entry = crate::feed::FeedEntry::new(
             our_peer_id,
             now,
+            // ⭐ **Markdown, which is what makes a feed entry and a site page
+            // the same thing to an author.** SITE §3.1 gives a page
+            // `format: "markdown"`; EMBED is the vocabulary FEED §2.3 imports
+            // for `body`; so the two conventions already agree and this is the
+            // line that honours it. The `fallback` is the raw source, which is
+            // the right degradation: unrendered markdown is still readable
+            // prose, which is EMBED §8's anti-graveyard rule getting the easy
+            // case for free.
             crate::embed::EmbedNode::new(
-                "text/plain",
+                crate::feed_body::MARKDOWN_MEDIA_TYPE,
                 crate::embed::EmbedData::new(
                     crate::embed::EmbedPayload::Inline(text.as_bytes().to_vec()),
                     text,
@@ -243,16 +268,90 @@ impl FeedModel {
     /// **The clock is an argument, not a read.** `now_ms()` lives in `dom`,
     /// which is `cfg(wasm32)` — a model that reached for it would be a model no
     /// native test could call.
+    /// ⭐ **This deployment's own publisher, if this profile has one.**
+    ///
+    /// Read per render and never retained (AP41): a warm boot settles the
+    /// session config in phase 2, so a window opened during phase 1 that
+    /// captured this would hold *"no home"* for the rest of the session. `None`
+    /// is an honest answer here — no deployment, or a config prefix this arm has
+    /// not mirrored yet — and it costs the fallback, never a wrong row.
+    fn home_publisher(peers: &Peers, our_peer_id: &str) -> Option<String> {
+        let cfg = crate::session_config::read_opt(peers, our_peer_id)?;
+        let peer = cfg.home_site.peer_id;
+        // The documented sentinel for *this profile's own peer*. It names a real
+        // peer only by resolution, and marking a blank as home would put a row
+        // with no peer id at the top of the browse list.
+        (!peer.is_empty()).then_some(peer)
+    }
+
+    /// ⭐ **Whose feed the panel shows — DERIVED, not stored.**
+    ///
+    /// An explicit selection wins; with none, the deployment's own publisher
+    /// does. *Arriving at a domain and opening this window should show you that
+    /// domain's posts*, which is the whole difference between a reader and a
+    /// text box — and deriving it rather than writing it into `self.selected` at
+    /// open is what keeps it from fighting the person: unfollowing whoever was
+    /// on screen clears the selection and falls back here, and a later boot with
+    /// a different home follows the deployment instead of a captured answer.
+    ///
+    /// It is **session-only and not durable**, so this is a default view and not
+    /// a deployment deciding something on a visitor's behalf — D25 does not
+    /// engage. And it can land on a publisher with no feed, which renders
+    /// `NoPosts`: an honest empty state is not the invented answer AP54 is about.
+    fn effective_selection(&self, home: Option<&str>) -> Option<String> {
+        self.selected.clone().or_else(|| home.map(str::to_string))
+    }
+
     pub fn render_output(&self, peers: &Peers, our_peer_id: &str, now: f64) -> FeedOutput {
+        let home = Self::home_publisher(peers, our_peer_id);
+        let selected = self.effective_selection(home.as_deref());
+
         let follows: Vec<FollowRow> = feed_follows::list(peers, our_peer_id)
             .into_iter()
             .map(|f| FollowRow {
-                selected: self.selected.as_deref() == Some(f.subject.as_str()),
+                selected: selected.as_deref() == Some(f.subject.as_str()),
                 peer_id: f.subject,
             })
             .collect();
 
-        let panel = match &self.selected {
+        // **The browse list.** Read per render from the same accessor the panel
+        // routes through, so a row can never name a peer the panel would then
+        // report as unreachable — and `list_origins` is the AP54 chokepoint, so
+        // a retired publisher is resolved rather than offered.
+        let followed: std::collections::BTreeSet<&str> =
+            follows.iter().map(|f| f.peer_id.as_str()).collect();
+        let mut known: Vec<crate::views::feed::output::KnownRow> =
+            crate::content_site::origins::list_origins(peers, our_peer_id)
+                .into_iter()
+                .map(|(peer_id, _origin)| crate::views::feed::output::KnownRow {
+                    followed: followed.contains(peer_id.as_str()),
+                    selected: selected.as_deref() == Some(peer_id.as_str()),
+                    home: home.as_deref() == Some(peer_id.as_str()),
+                    own: peer_id == our_peer_id,
+                    peer_id,
+                })
+                .collect();
+        // **The home publisher first, then peer id.** A stable total order, so
+        // the list does not reshuffle between frames — `own_posts`' rule below,
+        // and here the first row is also the one a visitor arrived for.
+        known.sort_by(|a, b| b.home.cmp(&a.home).then_with(|| a.peer_id.cmp(&b.peer_id)));
+
+        // **The panel's subject, carrying what they are to this profile** — the
+        // head offers a follow control and cannot decide which one without it.
+        //
+        // Built here rather than in the struct literal at the bottom for a
+        // borrow reason worth stating: `followed` borrows `follows`, and that
+        // literal moves `follows` before it reaches this field. The two facts
+        // come from the same sources the browse rows above read, so a row and
+        // the head can never disagree about the same peer.
+        let selection = selected.as_ref().map(|peer_id| crate::views::feed::output::Selection {
+            followed: followed.contains(peer_id.as_str()),
+            own: peer_id == our_peer_id,
+            home: home.as_deref() == Some(peer_id.as_str()),
+            peer_id: peer_id.clone(),
+        });
+
+        let panel = match &selected {
             None => FeedPanel::NobodySelected,
             Some(author) => {
                 // **Both inputs are read fresh every render, and neither is
@@ -328,6 +427,14 @@ impl FeedModel {
                     id_short: hex.chars().take(12).collect(),
                     hash_hex: hex,
                     text: post.entry.body.data.fallback.clone(),
+                    // ⚠ **`decide`, not `decide_with`, and that is a stated
+                    // bound rather than an oversight.** `feed_compose::own_posts`
+                    // reads the local tree and resolves no blob closure, so a
+                    // pointer body of ours would render as its fallback — which
+                    // `BlobMiss::SourceCannot` says exactly. It is unreachable
+                    // today because the composer mints inline only; the day it
+                    // chunks, this line is the one that has to grow a resolver.
+                    body: crate::feed_body::decide(&post.entry.body),
                     created_at: post.entry.created_at,
                 }
             })
@@ -345,12 +452,17 @@ impl FeedModel {
         FeedOutput {
             window_id: self.window_id,
             follows,
+            known,
             gatherers,
-            selected: self.selected.clone(),
+            // The EFFECTIVE selection, not what somebody clicked — a renderer
+            // that highlighted `self.selected` would leave the home fallback
+            // showing a feed with no row marked as its source.
+            selected: selection,
             panel,
             notice: self.notice,
             own_posts,
             compose_notice: self.compose_notice,
+            manage_open: self.manage_open,
             // Read per render, not captured: a profile can gain the key for a
             // peer between frames, and a composer that decided once would stay
             // switched off for the session.
@@ -412,6 +524,10 @@ fn entry_row(read: &crate::feed_read::ReadEntry) -> EntryRow {
     EntryRow {
         id_short: hex.chars().take(12).collect(),
         text: read.entry.body.data.fallback.clone(),
+        // The blob the async read resolved, not a second lookup: a pointer body
+        // is the only path to a post over EMBED §3's 16 KiB inline ceiling, and
+        // the render pass this feeds is synchronous.
+        body: crate::feed_body::decide_with(&read.entry.body, &read.body_blob),
         created_at: read.entry.created_at,
         attributed: read.attribution.may_name_the_author(),
         attribution_key: attribution_key(&read.attribution),
@@ -794,7 +910,7 @@ mod tests {
 
         m.follow(&peers, &me, &them, NOW_MS);
         let out = m.render_output(&peers, &me, CLOCK);
-        assert_eq!(out.selected.as_deref(), Some(them.as_str()));
+        assert_eq!(out.selected_peer(), Some(them.as_str()));
         assert_eq!(out.notice, Some(Notice("feed.notice.followed")));
         assert_eq!(out.follows.len(), 1);
         assert!(out.follows[0].selected, "the row is marked as the one on screen");
@@ -802,7 +918,64 @@ mod tests {
         m.follow(&peers, &me, &them, NOW_MS + 1);
         let out = m.render_output(&peers, &me, CLOCK);
         assert_eq!(out.notice, Some(Notice("feed.notice.already")));
-        assert_eq!(out.selected.as_deref(), Some(them.as_str()), "still showing them");
+        assert_eq!(out.selected_peer(), Some(them.as_str()), "still showing them");
+    }
+
+    /// ⭐⭐ **The publisher you are reading carries what they are to you, so the
+    /// panel can offer the control — and it FLIPS.**
+    ///
+    /// This is the gate for the journey ending one click short. Arriving here
+    /// from the Registry Browser (`publication_probe` said they publish a feed →
+    /// *Open in Feed* → `FeedWindow::aim`) **selects without following**, which
+    /// is correct: reading somebody is not subscribing to them. What was missing
+    /// is the second act being available where the first one landed, and a
+    /// renderer cannot draw it from a bare `Option<String>`.
+    ///
+    /// Asserts the transition rather than an end state: a selection that
+    /// reported `followed: true` unconditionally would pass any single-state
+    /// check, and `Stranger → Followed → Stranger` is what a person does.
+    #[test]
+    fn the_publisher_on_screen_carries_whether_you_follow_them_and_it_flips() {
+        use crate::views::feed::output::{relation, Relation};
+        let (mut m, peers, me) = model();
+        let them = peer_id(71);
+        route(&peers, &me, &them);
+
+        // Selected without following — the state `aim` leaves behind.
+        m.select(&them);
+        let sel = m.render_output(&peers, &me, CLOCK).selected.expect("on screen");
+        assert_eq!(sel.peer_id, them);
+        assert!(!sel.followed, "reading somebody is not following them");
+        assert!(!sel.own);
+        assert_eq!(relation(sel.own, sel.followed), Relation::Stranger, "offer Follow");
+
+        m.follow(&peers, &me, &them, NOW_MS);
+        let sel = m.render_output(&peers, &me, CLOCK).selected.expect("still on screen");
+        assert!(sel.followed, "the head must now offer Unfollow, not Follow");
+        assert_eq!(relation(sel.own, sel.followed), Relation::Followed);
+
+        // And back. Unfollow clears the selection entirely (its own gate above),
+        // so re-select to read the relation rather than asserting on `None`.
+        m.unfollow(&peers, &me, &them);
+        m.select(&them);
+        let sel = m.render_output(&peers, &me, CLOCK).selected.expect("re-selected");
+        assert!(!sel.followed, "unfollowing puts the control back to Follow");
+    }
+
+    /// **Your own peer gets no follow control**, on the panel head and in the
+    /// browse row alike — `feed_follows::follow` refuses it
+    /// (`a_refused_follow_selects_nobody_and_names_its_own_refusal` pins the
+    /// refusal itself), so a button there could only ever produce a notice.
+    #[test]
+    fn reading_your_own_feed_offers_no_follow_control() {
+        use crate::views::feed::output::{relation, Relation};
+        let (mut m, peers, me) = model();
+
+        m.select(&me);
+        let sel = m.render_output(&peers, &me, CLOCK).selected.expect("on screen");
+        assert!(sel.own);
+        assert!(!sel.followed);
+        assert_eq!(relation(sel.own, sel.followed), Relation::Own, "offer nothing");
     }
 
     /// A refused follow says which refusal it was and **selects nobody** — the
@@ -814,7 +987,7 @@ mod tests {
         m.follow(&peers, &me, "not-a-peer-id", NOW_MS);
         let out = m.render_output(&peers, &me, CLOCK);
         assert_eq!(out.notice, Some(Notice("feed.notice.not_a_peer_id")));
-        assert_eq!(out.selected, None);
+        assert_eq!(out.selected_peer(), None);
         assert_eq!(out.panel, FeedPanel::NobodySelected);
 
         m.follow(&peers, &me, &me, NOW_MS);
@@ -842,7 +1015,7 @@ mod tests {
         m.unfollow(&peers, &me, &them);
         let out = m.render_output(&peers, &me, CLOCK);
         assert_eq!(out.follows.len(), 0, "off the list");
-        assert_eq!(out.selected, None, "off the screen");
+        assert_eq!(out.selected_peer(), None, "off the screen");
         assert_eq!(out.panel, FeedPanel::NobodySelected);
 
         // Re-follow: the panel must go back to Loading, not straight to the
@@ -945,6 +1118,7 @@ mod tests {
                         entry,
                         attribution: Attribution::Signed,
                         obtained: Obtained { entity, signature: None },
+                        body_blob: crate::feed_body::BodyBlob::Inline,
                     }],
                 },
                 retry_at_ms: None,
@@ -1109,6 +1283,7 @@ mod tests {
             entry,
             attribution: Attribution::Unattributed(Unattributed::NoSignature),
             obtained: Obtained { entity, signature: None },
+            body_blob: crate::feed_body::BodyBlob::Inline,
         });
 
         assert_eq!(row.text, "hello");
@@ -1117,5 +1292,133 @@ mod tests {
         assert!(hash.to_hex().starts_with(&row.id_short));
         assert!(!row.attributed, "FEED-R4: no signature means nobody is named");
         assert_eq!(row.attribution_key, "feed.attr.no_signature");
+    }
+
+    // -- the browse list --------------------------------------------------
+
+    /// Declare `them` as this deployment's home publisher.
+    fn home(peers: &Peers, me: &str, them: &str) {
+        crate::session_config::set_home_site(peers, me, them, "demo");
+    }
+
+    /// **Every publisher this profile can reach is offered, and each row says
+    /// what that peer is to this profile.**
+    ///
+    /// The set is the *routed* set on purpose — a row with no origin can only
+    /// produce `NoRoute`, so offering it would be AP54's shape pointed forward.
+    #[test]
+    fn the_browse_list_is_every_publisher_this_profile_can_reach() {
+        let (model, peers, me) = model();
+        let (alice, bob) = (peer_id(11), peer_id(12));
+        route(&peers, &me, &alice);
+        route(&peers, &me, &bob);
+        feed_follows::follow(&peers, &me, &bob, NOW_MS);
+
+        let out = model.render_output(&peers, &me, CLOCK);
+        let ids: Vec<&str> = out.known.iter().map(|r| r.peer_id.as_str()).collect();
+        assert!(ids.contains(&alice.as_str()) && ids.contains(&bob.as_str()), "{ids:?}");
+
+        let row = |p: &str| out.known.iter().find(|r| r.peer_id == p).unwrap().clone();
+        assert!(row(&bob).followed, "bob is in the follow registry");
+        assert!(!row(&alice).followed, "alice is reachable and not followed");
+        assert!(!row(&alice).own && !row(&alice).home);
+    }
+
+    /// ⛔ **A publisher we have no route to is NOT in the browse list**, even
+    /// when we follow them — the list is what can be opened. They keep their
+    /// row under *Following*, so nothing is lost, and the panel still tells them
+    /// `NoRoute` if they pick it.
+    #[test]
+    fn a_publisher_with_no_route_is_followed_but_not_offered_to_browse() {
+        let (model, peers, me) = model();
+        let stranger = peer_id(13);
+        feed_follows::follow(&peers, &me, &stranger, NOW_MS);
+
+        let out = model.render_output(&peers, &me, CLOCK);
+        assert!(out.known.is_empty(), "no origin, nothing to open: {:?}", out.known);
+        assert_eq!(out.follows.len(), 1, "and the follow is not lost");
+    }
+
+    /// ⭐⭐ **THE HEADLINE: arriving at a deployment and opening this window
+    /// shows that deployment's posts, with nobody choosing anything.**
+    ///
+    /// This is the whole difference between a reader and a text box. It is
+    /// derived per render rather than written into `self.selected` at open —
+    /// see [`FeedModel::effective_selection`] — so it cannot fight a person who
+    /// then picks somebody else, and a later boot under a different home
+    /// follows the deployment rather than a captured answer.
+    #[test]
+    fn arriving_at_a_deployment_reads_its_own_publisher_without_anybody_choosing() {
+        let (model, peers, me) = model();
+        let publisher = peer_id(21);
+        route(&peers, &me, &publisher);
+        home(&peers, &me, &publisher);
+
+        let out = model.render_output(&peers, &me, CLOCK);
+        assert_eq!(out.selected_peer(), Some(publisher.as_str()));
+        assert!(
+            !matches!(out.panel, FeedPanel::NobodySelected),
+            "a visitor who chose nothing is reading, not looking at an empty pane"
+        );
+        let row = out.known.iter().find(|r| r.peer_id == publisher).unwrap();
+        assert!(row.home, "and the row says why it is the one on screen");
+        assert!(row.selected, "the highlight follows the EFFECTIVE selection");
+        assert!(!row.followed, "⛔ reading is not following — nothing durable was written");
+        assert!(out.follows.is_empty(), "the registry is untouched");
+    }
+
+    /// **An explicit choice outranks the fallback**, and the home row stops
+    /// being highlighted — otherwise two rows would claim to be what is on
+    /// screen.
+    #[test]
+    fn an_explicit_choice_outranks_the_home_fallback() {
+        let (mut model, peers, me) = model();
+        let (publisher, other) = (peer_id(21), peer_id(22));
+        route(&peers, &me, &publisher);
+        route(&peers, &me, &other);
+        home(&peers, &me, &publisher);
+
+        model.select(&other);
+        let out = model.render_output(&peers, &me, CLOCK);
+        assert_eq!(out.selected_peer(), Some(other.as_str()));
+        let row = |p: &str| out.known.iter().find(|r| r.peer_id == p).unwrap().clone();
+        assert!(row(&other).selected);
+        assert!(!row(&publisher).selected, "the home row is no longer the one being read");
+        assert!(row(&publisher).home, "but it is still the home publisher");
+    }
+
+    /// **The home publisher sorts first**, because it is the row a visitor
+    /// arrived for — and the rest by peer id, so the list cannot reshuffle
+    /// between frames on nothing.
+    #[test]
+    fn the_home_publisher_sorts_first_and_the_rest_are_a_total_order() {
+        let (model, peers, me) = model();
+        let mut others: Vec<String> = (30u8..33).map(peer_id).collect();
+        let publisher = peer_id(40);
+        for p in others.iter().chain(std::iter::once(&publisher)) {
+            route(&peers, &me, p);
+        }
+        home(&peers, &me, &publisher);
+        others.sort();
+
+        let out = model.render_output(&peers, &me, CLOCK);
+        let ids: Vec<String> = out.known.iter().map(|r| r.peer_id.clone()).collect();
+        assert_eq!(ids[0], publisher, "the home publisher leads: {ids:?}");
+        assert_eq!(&ids[1..], &others[..], "and the rest are sorted: {ids:?}");
+    }
+
+    /// **With no deployment there is no fallback, and that is an honest
+    /// `NobodySelected`** rather than a guess at which of several publishers
+    /// somebody meant — AP54's invention, which this surface must not make.
+    #[test]
+    fn with_no_home_declared_nothing_is_selected_on_this_profiles_behalf() {
+        let (model, peers, me) = model();
+        route(&peers, &me, &peer_id(51));
+        route(&peers, &me, &peer_id(52));
+
+        let out = model.render_output(&peers, &me, CLOCK);
+        assert_eq!(out.known.len(), 2, "both are offered");
+        assert!(out.selected_peer().is_none(), "and neither is chosen for them");
+        assert!(matches!(out.panel, FeedPanel::NobodySelected));
     }
 }

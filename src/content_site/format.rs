@@ -721,6 +721,33 @@ fn decode_string_map(v: &ciborium::Value) -> BTreeMap<String, String> {
     out
 }
 
+// -- Byte fidelity: these three are the types we both DECODE and AUTHOR --------
+//
+// Every `from_entity` above closes on `_ => {}`, which is V7 §2.6's MUST-ignore
+// and is correct for *reading*. It is also lossy, so the value that comes back
+// out of `to_entity` is **our** entity, not the publisher's. Implementing
+// [`Encodes`](crate::obtained::Encodes) is what lets a write path hold an
+// [`Obtained<T>`](crate::obtained::Obtained) and store the author's own bytes
+// instead — see that module for what the loss was measured to cost.
+
+impl crate::obtained::Encodes for SiteManifest {
+    fn to_entity(&self) -> Entity {
+        SiteManifest::to_entity(self)
+    }
+}
+
+impl crate::obtained::Encodes for SitePage {
+    fn to_entity(&self) -> Entity {
+        SitePage::to_entity(self)
+    }
+}
+
+impl crate::obtained::Encodes for SiteAsset {
+    fn to_entity(&self) -> Entity {
+        SiteAsset::to_entity(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

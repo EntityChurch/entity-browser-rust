@@ -28,17 +28,27 @@ use super::discovery::ChildEntry;
 use super::format::{SiteManifest, SitePage};
 use super::location::Location;
 use super::paths;
+use crate::obtained::Obtained;
 use crate::peers::Peers;
 use crate::window::RepaintFn;
 
 /// A fully-resolved page ready to render: the page itself plus the
 /// site manifest (for nav/chrome) and the concrete location reached.
+///
+/// ⭐ **The three decoded values are [`Obtained`], not bare structs, and that is
+/// load-bearing for the cache write-through.** Each derefs to the value a
+/// renderer wants and additionally carries the publisher's own entity when the
+/// value came over the wire, so [`MultiResolver::persist_to_cache`] can store
+/// *their* bytes rather than our re-encoding of the fields we happen to model.
+/// See [`crate::obtained`] for what the re-encode was measured to cost — the
+/// short version is that it moves the entity's address, and the address is what
+/// D24's currency check compares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPage {
     /// The concrete location reached (root resolved to a page slug).
     pub location: Location,
-    pub manifest: SiteManifest,
-    pub page: SitePage,
+    pub manifest: Obtained<SiteManifest>,
+    pub page: Obtained<SitePage>,
     /// The page's embed assets `(name, asset)` — the closure the HTTP arm
     /// fetched alongside the page so they can be written through to MY store
     /// (where [`crate::dom::content_site::make_asset_resolver`] finds them).
@@ -47,7 +57,7 @@ pub struct ResolvedPage {
     /// directly — only the remote HTTP arm carries bytes here. Excluded from
     /// nothing (it's part of `Eq`), but it's transient: written through once
     /// then the durable store is the source of truth.
-    pub assets: Vec<(String, super::format::SiteAsset)>,
+    pub assets: Vec<(String, Obtained<super::format::SiteAsset>)>,
     /// The `system/content` blob + chunk entities behind any **pointer**
     /// asset in [`Self::assets`], fetched over the same origin.
     ///
@@ -144,7 +154,7 @@ pub trait ContentResolver {
     /// page — for the O3 manifest-pinned shell (render the chrome when a
     /// page is ephemeral + offline). Default `None` (no shell); the
     /// [`MultiResolver`] overrides it to read from the durable cache.
-    fn manifest_only(&self, _peers: &Peers, _loc: &Location) -> Option<SiteManifest> {
+    fn manifest_only(&self, _peers: &Peers, _loc: &Location) -> Option<Obtained<SiteManifest>> {
         None
     }
 }
@@ -166,9 +176,14 @@ impl ContentResolver for LocalTreeResolver {
 fn resolve_local(peers: &Peers, loc: &Location) -> Result<ResolvedPage, ResolveError> {
     let pid: &str = loc.peer_id.as_deref().unwrap_or_else(|| peers.primary_peer_id());
 
+    // `decoded_from`, not `authored`: these entities came out of a store, and a
+    // store holds foreign trees as well as ours (the write-through lands a
+    // publisher's site at their own path). Keeping the bytes costs a clone and
+    // means a value read here can be written back anywhere without becoming our
+    // re-encoding of it.
     let manifest = peers
         .get_entity(pid, &paths::manifest_path(pid, &loc.site_id))
-        .map(|e| SiteManifest::from_entity(&e))
+        .map(|e| Obtained::decoded_from(e, SiteManifest::from_entity))
         .ok_or(ResolveError::ManifestMissing)?;
 
     // Empty page → the manifest's declared root page (params.root).
@@ -179,7 +194,7 @@ fn resolve_local(peers: &Peers, loc: &Location) -> Result<ResolvedPage, ResolveE
     };
 
     let page = match peers.get_entity(pid, &paths::page_path(pid, &loc.site_id, &page_slug)) {
-        Some(e) => SitePage::from_entity(&e),
+        Some(e) => Obtained::decoded_from(e, SitePage::from_entity),
         None => {
             // No page entity here. If the path is a *section* (has child
             // pages), render a generated section-index listing them instead
@@ -193,7 +208,11 @@ fn resolve_local(peers: &Peers, loc: &Location) -> Result<ResolvedPage, ResolveE
             if children.is_empty() {
                 return Err(ResolveError::PageMissing);
             }
-            section_index_page(&page_slug, &children)
+            // **Ours.** No publisher wrote this page — we synthesize it from the
+            // child listing — so there are no author bytes to preserve and our
+            // encoding is the canonical one for it. `authored` says that; it is
+            // not a fallback for bytes we lost.
+            Obtained::authored(section_index_page(&page_slug, &children))
         }
     };
 
@@ -329,7 +348,10 @@ impl MultiResolver {
     /// Write a freshly-fetched remote page through to MY durable store — the
     /// **manifest-pinned** caching browse (§3 + O3, §5). Foreign authored
     /// content (Category A) lands at its natural universal path
-    /// `/{foreign}/sites/{S}/...` in my store (§2, byte-faithful), with the
+    /// `/{foreign}/sites/{S}/...` in my store (§2, byte-faithful — **which it
+    /// genuinely is as of 2026-09-16 and was not before**: this comment said so
+    /// while the three writes below re-encoded from the decoded struct. See
+    /// [`crate::obtained`]), with the
     /// **manifest** always persisted (the mutable ref + the enumerable anchor —
     /// it keeps a visited site in `list_all_sites` + navigable across reloads)
     /// and the **page body persisted only when the site is "kept offline"**
@@ -372,7 +394,13 @@ impl MultiResolver {
         }
 
         // Manifest + provenance: ALWAYS (manifest-pinned), once per site.
-        let manifest_entity = rp.manifest.to_entity();
+        // `Obtained::entity` — the PUBLISHER's bytes, not our re-encoding of the
+        // fields we model. This path and `foreign_cache::ensure_current` write
+        // the SAME key (`ForeignArtifact::Manifest::store_path`), and that one
+        // compares the stored `content_hash` against the origin's hop-1 pointer
+        // to decide whether anything changed — so a rewritten copy here makes
+        // every currency check downstream answer `Fetched` forever.
+        let manifest_entity = rp.manifest.entity();
         let site_key = (foreign.to_string(), site.clone());
         if self.manifest_persisted.borrow_mut().insert(site_key) {
             peers.seed_write(me, paths::manifest_path(foreign, site), manifest_entity.clone());
@@ -410,27 +438,35 @@ impl MultiResolver {
             peers.seed_content(me, entity.clone());
         }
         for (name, asset) in &rp.assets {
-            // **Do not write through a payload we could not use.** The cache
-            // stores `asset.to_entity()` — a RE-ENCODE from the decoded
-            // struct, not the origin's bytes — so an arm we did not
-            // understand would be dropped on the way in and the cached copy
-            // would claim to be a complete asset carrying nothing. For a
-            // legacy asset that re-encode is the repair (it lands in the
-            // declared shape); for an unreadable or unimplemented one it is
-            // data loss wearing a cache's clothes.
+            // **Do not write through a payload we could not use.**
             //
-            // Skipping leaves the tree with no entry at that path, so the
-            // next visit re-fetches instead of resolving a lie from cache.
+            // ⚠ This guard used to exist because the cache stored
+            // `asset.to_entity()` — a re-encode from the decoded struct — so an
+            // arm we did not understand was dropped on the way in and the
+            // cached copy claimed to be a complete asset carrying nothing. The
+            // write is [`Obtained::entity`] now, i.e. the publisher's own bytes,
+            // so that specific loss is gone and an unreadable arm would be
+            // stored faithfully rather than hollowed out.
+            //
+            // **The guard stays anyway, and the reason changed.** The renderer
+            // resolves `<img>` from the durable store synchronously; an asset we
+            // cannot resolve renders nothing whether its bytes are faithful or
+            // not. Writing it would put a row at that path which
+            // `resolve_from_my_store` then answers from — a cache hit that can
+            // never produce a figure, with no network arm behind it. Skipping
+            // leaves no entry, so the next visit re-fetches and a build that
+            // *does* understand the arm can use it. Fidelity fixed the
+            // correctness half; availability is why the skip survives.
             if asset.inline_bytes().is_none() && asset.pointer().is_none() {
                 tracing::warn!(
                     site = %site,
                     asset = %name,
                     "asset payload not usable by this build — not cached, so the next visit \
-                     re-fetches rather than resolving a rewritten copy"
+                     re-fetches rather than resolving an asset we cannot render"
                 );
                 continue;
             }
-            peers.seed_write(me, paths::asset_path(foreign, site, name), asset.to_entity());
+            peers.seed_write(me, paths::asset_path(foreign, site, name), asset.entity());
         }
 
         // Page body: only when this site is "kept offline" (full caching, O3).
@@ -440,7 +476,7 @@ impl MultiResolver {
             peers.seed_write(
                 me,
                 paths::page_path(foreign, site, &rp.location.page),
-                rp.page.to_entity(),
+                rp.page.entity(),
             );
         }
 
@@ -467,9 +503,14 @@ fn resolve_from_my_store(
         // cache read — let the normal local arm handle it.
         return Err(ResolveError::ManifestMissing);
     };
+    // The cached copy IS the publisher's entity (that is what the write-through
+    // stores now), so carry it forward rather than decoding into a struct whose
+    // re-encoding would differ. This arm feeds `persist_to_cache`'s `persisted`
+    // guard and the renderer; both are read-only, but a value that loses its
+    // bytes here would lose them for anything downstream that ever writes.
     let manifest = peers
         .get_entity(my_peer_id, &paths::manifest_path(foreign, &loc.site_id))
-        .map(|e| SiteManifest::from_entity(&e))
+        .map(|e| Obtained::decoded_from(e, SiteManifest::from_entity))
         .ok_or(ResolveError::ManifestMissing)?;
     let page_slug = if loc.page.is_empty() {
         manifest.root().to_string()
@@ -478,7 +519,7 @@ fn resolve_from_my_store(
     };
     let page = peers
         .get_entity(my_peer_id, &paths::page_path(foreign, &loc.site_id, &page_slug))
-        .map(|e| SitePage::from_entity(&e))
+        .map(|e| Obtained::decoded_from(e, SitePage::from_entity))
         .ok_or(ResolveError::PageMissing)?;
     Ok(ResolvedPage {
         location: Location {
@@ -605,14 +646,14 @@ impl ContentResolver for MultiResolver {
     /// when a manifest-pinned site's page is ephemeral + the origin is
     /// unreachable, the surface still renders the chrome (title + nav) instead
     /// of a bare error — a visited site never strands you on its shell.
-    fn manifest_only(&self, peers: &Peers, loc: &Location) -> Option<SiteManifest> {
+    fn manifest_only(&self, peers: &Peers, loc: &Location) -> Option<Obtained<SiteManifest>> {
         let (selector, site_peer) = match loc.peer_id.as_deref() {
             Some(foreign) if foreign != self.our_peer_id => (self.our_peer_id.as_str(), foreign),
             _ => (self.our_peer_id.as_str(), self.our_peer_id.as_str()),
         };
         peers
             .get_entity(selector, &paths::manifest_path(site_peer, &loc.site_id))
-            .map(|e| SiteManifest::from_entity(&e))
+            .map(|e| Obtained::decoded_from(e, SiteManifest::from_entity))
     }
 }
 
@@ -964,8 +1005,8 @@ mod tests {
         // re-read path.
         let resolved = ResolvedPage {
             location: loc.clone(),
-            manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
-            page: SitePage::markdown("Home", "# hi"),
+            manifest: Obtained::authored(SiteManifest::new("labs", "Labs", "index", vec![])),
+            page: Obtained::authored(SitePage::markdown("Home", "# hi")),
             assets: Vec::new(),
             content: Vec::new(),
         };
@@ -1043,8 +1084,8 @@ mod tests {
             loc.clone(),
             Ok(ResolvedPage {
                 location: Location { peer_id: Some(foreign.to_string()), site_id: "labs".into(), page: "index".into() },
-                manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
-                page: SitePage::markdown("Home", "# hi from labs"),
+                manifest: Obtained::authored(SiteManifest::new("labs", "Labs", "index", vec![])),
+                page: Obtained::authored(SitePage::markdown("Home", "# hi from labs")),
                 assets: Vec::new(),
                 content: Vec::new(),
             }),
@@ -1088,6 +1129,254 @@ mod tests {
         assert!(
             matches!(mr2.resolve_page(&peers, &loc), ResolveOutcome::Pending),
             "ephemeral page re-fetches on a cold resolver (manifest-pinned)"
+        );
+    }
+
+    // -- Byte fidelity of the write-through (see `crate::obtained`) -----------
+
+    /// Build a site manifest entity **by hand**, the way a conformant publisher
+    /// that is not us would emit it.
+    ///
+    /// ⭐ **Not `SiteManifest::new(..).to_entity()`, and that is the whole
+    /// difference between these gates and a green no-op.** A fixture our own
+    /// encoder produced round-trips losslessly by construction, so every
+    /// assertion below would pass with the defect fully present — the
+    /// `feed_mirror` control-arm lesson (*a gate whose fixtures your own encoder
+    /// produced is testing your encoder against itself*), arriving in the
+    /// subsystem where the loss was live.
+    ///
+    /// ECF canonicalizes map keys by (length, then lexical) and the encoder gets
+    /// no say, so `pairs` is given in that order rather than relying on the
+    /// order they are written.
+    fn foreign_manifest_entity(pairs: Vec<(&str, &str)>) -> entity_entity::Entity {
+        let mut kv: Vec<(entity_ecf::Value, entity_ecf::Value)> = pairs
+            .into_iter()
+            .map(|(k, v)| (entity_ecf::Value::Text(k.into()), entity_ecf::text(v)))
+            .collect();
+        kv.sort_by(|a, b| {
+            let (x, y) = (a.0.as_text().unwrap_or(""), b.0.as_text().unwrap_or(""));
+            x.len().cmp(&y.len()).then(x.cmp(y))
+        });
+        entity_entity::Entity::new(
+            "app/site-manifest",
+            entity_ecf::to_ecf(&entity_ecf::Value::Map(kv)),
+        )
+        .expect("canonical ECF")
+    }
+
+    /// Drive the write-through with a manifest we did **not** author, and read
+    /// back what landed in the store.
+    fn cache_roundtrip(origin_entity: entity_entity::Entity) -> (entity_entity::Entity, entity_entity::Entity) {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let foreign = Peers::new_direct().primary_peer_id().to_string();
+        crate::content_site::origins::set_origin(&peers, &me, &foreign, "http://labs.example");
+        let mr = MultiResolver::new(me.clone(), repaint_cell());
+
+        let loc =
+            Location { peer_id: Some(foreign.clone()), site_id: "labs".into(), page: String::new() };
+        assert!(matches!(mr.resolve_page(&peers, &loc), ResolveOutcome::Pending));
+        mr.http.seed(
+            loc.clone(),
+            Ok(ResolvedPage {
+                location: Location {
+                    peer_id: Some(foreign.clone()),
+                    site_id: "labs".into(),
+                    page: "index".into(),
+                },
+                // The arm under test: the publisher's entity, decoded for
+                // rendering and carried for storage.
+                manifest: Obtained::decoded_from(origin_entity.clone(), SiteManifest::from_entity),
+                page: Obtained::authored(SitePage::markdown("Home", "# hi")),
+                assets: Vec::new(),
+                content: Vec::new(),
+            }),
+        );
+        assert!(matches!(mr.resolve_page(&peers, &loc), ResolveOutcome::Ready(Ok(_))));
+
+        let stored = peers
+            .get_entity(&me, &paths::manifest_path(&foreign, "labs"))
+            .expect("the manifest always writes through (manifest-pinned)");
+        (origin_entity, stored)
+    }
+
+    /// **A publisher's entity is stored as the publisher emitted it**, including
+    /// the parts this build does not model.
+    ///
+    /// V7 §2.6 makes an unknown field MUST-ignore on *read*, which
+    /// `SiteManifest::from_entity`'s `_ => {}` correctly does. It does not
+    /// license re-emitting the value without it and calling that the
+    /// publisher's site.
+    #[test]
+    fn a_publishers_manifest_is_cached_with_the_fields_we_do_not_model() {
+        let (origin, stored) = cache_roundtrip(foreign_manifest_entity(vec![
+            ("site_id", "labs"),
+            ("title", "Labs"),
+            ("root", "index"),
+            // A field no version of this build has ever modelled.
+            ("theme_hint", "dark"),
+        ]));
+
+        assert_eq!(stored.data, origin.data, "the cached bytes ARE the publisher's bytes");
+        assert!(
+            String::from_utf8_lossy(&stored.data).contains("theme_hint"),
+            "a field we cannot read survives being cached — measured before the \
+             fix as 52 bytes in, 30 bytes out, with `theme_hint` gone"
+        );
+    }
+
+    /// ⭐ **The arm that makes this a defect rather than a forward-compatibility
+    /// nicety: it contains no unknown field at all.**
+    ///
+    /// A one-page site emits no `nav` — `APP-CONVENTION-SEMANTIC-CONTENT-SITE`
+    /// §4 makes it optional and the convention says title-only is conformant —
+    /// and our encoder emits `nav: []` unconditionally. So an ordinary,
+    /// fully-understood, entirely conformant publisher was having their manifest
+    /// rewritten (measured: 25 bytes in, 30 out) with nothing exotic anywhere in
+    /// the picture. Same shape as the `gpin4-joint` finding (*same absence, two
+    /// encodings*), where it cost a fixture note; here it cost the address.
+    #[test]
+    fn a_conformant_publisher_who_emits_no_nav_is_not_rewritten() {
+        let (origin, stored) =
+            cache_roundtrip(foreign_manifest_entity(vec![("site_id", "labs"), ("title", "Labs")]));
+
+        assert_eq!(
+            stored.data, origin.data,
+            "no unknown field is involved — we simply must not ADD a key the \
+             publisher omitted"
+        );
+        assert!(
+            !String::from_utf8_lossy(&stored.data).contains("nav"),
+            "and `nav: []` is the key we were adding"
+        );
+    }
+
+    /// ⭐⭐ **The consequence, and it is not the fidelity.**
+    ///
+    /// This write and [`foreign_cache::ensure_current`] land at the SAME tree key
+    /// (`ForeignArtifact::Manifest::store_path` is `paths::manifest_path`), and
+    /// D24's currency check decides *did anything change* by comparing the
+    /// stored entity's `content_hash` against the origin's 58-byte hop-1
+    /// pointer. A rewritten copy's hash can never equal the pointer it came
+    /// from, so before this fix `ensure_current` answered `Fetched` on every
+    /// sweep, forever, for any publisher whose encoding differed from ours by
+    /// one optional key — the pointer mechanism defeated not by a missing
+    /// trigger (the failure D24 was written about) but by **a sibling writer at
+    /// the same path putting bytes the trigger cannot recognise**.
+    ///
+    /// ⇒ *When two code paths write the same tree key, they owe the same bytes.*
+    #[test]
+    fn the_cached_manifests_address_is_the_one_a_currency_check_compares() {
+        let (origin, stored) = cache_roundtrip(foreign_manifest_entity(vec![
+            ("site_id", "labs"),
+            ("title", "Labs"),
+            ("theme_hint", "dark"),
+        ]));
+
+        assert_eq!(
+            stored.content_hash, origin.content_hash,
+            "the held hash equals the publisher's — so hop 1 can answer \
+             `Unchanged` and hop 2 never runs"
+        );
+        // And the falsifier for the three gates above, spelled out so none of
+        // them can go vacuous behind a codec that happened to be lossless: the
+        // re-encode really does move the address.
+        let rewritten = SiteManifest::from_entity(&origin).to_entity();
+        assert_ne!(
+            rewritten.content_hash, origin.content_hash,
+            "re-encoding from the decoded view — what this path used to store — \
+             produces a DIFFERENT address, which is what made every currency \
+             check miss"
+        );
+    }
+
+    /// ⭐⭐ **THE CONSEQUENCE, not the mechanism: after browsing a foreign site,
+    /// D24's currency check answers `Unchanged`.**
+    ///
+    /// The three gates above assert the cached *address* is the publisher's,
+    /// which is the arithmetic. This one runs the actual interaction the defect
+    /// broke — browse a site over the HTTP arm, then ask
+    /// [`foreign_cache::ensure_current`] whether it is current, against the same
+    /// origin, with no republish in between. Before the fix it answered
+    /// `Fetched` here and would have gone on answering `Fetched` forever,
+    /// because the bytes in the store were ours and the pointer was theirs.
+    ///
+    /// **Two writers, one key.** `persist_to_cache` writes
+    /// `paths::manifest_path`; `ForeignArtifact::Manifest::store_path` **is**
+    /// `paths::manifest_path`. Nothing connects them but the path, which is why
+    /// neither module's own tests could see the disagreement.
+    #[test]
+    fn a_browsed_site_is_current_when_the_sweep_asks_about_it() {
+        use crate::content_site::foreign_cache::{ensure_current, held_hash, Currency, ForeignArtifact};
+        use crate::content_site::http_poll::fixture::{FixtureBinSource, PublishedFixture};
+
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        let foreign = Peers::new_direct().primary_peer_id().to_string();
+        let origin = "http://labs.example";
+        crate::content_site::origins::set_origin(&peers, &me, &foreign, origin);
+
+        // The publisher's manifest — built by hand, carrying a field we do not
+        // model, so our encoder cannot reproduce it. A fixture from
+        // `SiteManifest::new(..)` would make this gate pass with the defect
+        // fully present.
+        let published = foreign_manifest_entity(vec![
+            ("site_id", "labs"),
+            ("title", "Labs"),
+            ("theme_hint", "dark"),
+        ]);
+        let mut fx = PublishedFixture::new(origin);
+        // `.bin` — the tree-leaf pointer suffix `tree_bin_url` builds. Without
+        // it the sweep asks for a URL the fixture does not carry and the gate
+        // reds on `Unavailable(NotFound(404))`, which looks like the subject and
+        // is a rig fault.
+        fx.publish(&format!("{foreign}/sites/labs/manifest.bin"), &published);
+        let src = FixtureBinSource(fx);
+
+        // 1. Browse it. The HTTP arm decodes for rendering and the write-through
+        //    lands a copy at the publisher's path in our tree.
+        let mr = MultiResolver::new(me.clone(), repaint_cell());
+        let loc =
+            Location { peer_id: Some(foreign.clone()), site_id: "labs".into(), page: String::new() };
+        assert!(matches!(mr.resolve_page(&peers, &loc), ResolveOutcome::Pending));
+        mr.http.seed(
+            loc.clone(),
+            Ok(ResolvedPage {
+                location: Location {
+                    peer_id: Some(foreign.clone()),
+                    site_id: "labs".into(),
+                    page: "index".into(),
+                },
+                manifest: Obtained::decoded_from(published.clone(), SiteManifest::from_entity),
+                page: Obtained::authored(SitePage::markdown("Home", "# hi")),
+                assets: Vec::new(),
+                content: Vec::new(),
+            }),
+        );
+        assert!(matches!(mr.resolve_page(&peers, &loc), ResolveOutcome::Ready(Ok(_))));
+
+        // 2. The sweep asks the origin whether anything moved. Nothing has.
+        let what = ForeignArtifact::Manifest { peer: foreign.clone(), site: "labs".into() };
+        assert!(
+            peers.get_entity(&me, &paths::manifest_path(&foreign, "labs")).is_some(),
+            "anti-vacuity: the browse must have left a copy at the key the sweep \
+             reads, or `ensure_current` is answering about an empty store and \
+             `Fetched` would be the correct answer to a different question"
+        );
+        let held = held_hash(&peers, &me, &what);
+
+        let verdict = crate::feed_read::block_on(ensure_current(
+            &src,
+            &peers.writer_handle_for(&me).expect("writer"),
+            held,
+            origin,
+            &what,
+        ));
+        assert!(
+            matches!(verdict, Currency::Unchanged),
+            "browsing a site then sweeping it must cost ONE 58-byte pointer, not \
+             a full re-fetch — got {verdict:?}. A `Fetched` here is D24's \
+             mechanism defeated by a sibling writer at the same key."
         );
     }
 
@@ -1137,11 +1426,11 @@ mod tests {
             loc.clone(),
             Ok(ResolvedPage {
                 location: Location { peer_id: Some(foreign.clone()), site_id: "labs".into(), page: "index".into() },
-                manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
-                page: SitePage::markdown("Home", "# hi\n\n::embed[Fig]{ref=assets/figures/x.svg}"),
+                manifest: Obtained::authored(SiteManifest::new("labs", "Labs", "index", vec![])),
+                page: Obtained::authored(SitePage::markdown("Home", "# hi\n\n::embed[Fig]{ref=assets/figures/x.svg}")),
                 assets: vec![(
                     "figures/x.svg".into(),
-                    SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec()),
+                    Obtained::authored(SiteAsset::inline("image/svg+xml", b"<svg/>".to_vec())),
                 )],
                 content: Vec::new(), // inline asset — no blob closure to carry
             }),
@@ -1180,8 +1469,8 @@ mod tests {
             loc.clone(),
             Ok(ResolvedPage {
                 location: Location { peer_id: Some(foreign.clone()), site_id: "labs".into(), page: "index".into() },
-                manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
-                page: SitePage::markdown("Home", "# hi"),
+                manifest: Obtained::authored(SiteManifest::new("labs", "Labs", "index", vec![])),
+                page: Obtained::authored(SitePage::markdown("Home", "# hi")),
                 assets: Vec::new(),
                 content: Vec::new(),
             }),
@@ -1212,8 +1501,8 @@ mod tests {
             loc.clone(),
             Ok(ResolvedPage {
                 location: Location { peer_id: Some(foreign.clone()), site_id: "labs".into(), page: "index".into() },
-                manifest: SiteManifest::new("labs", "Labs", "index", vec![]),
-                page: SitePage::markdown("Home", "# hi"),
+                manifest: Obtained::authored(SiteManifest::new("labs", "Labs", "index", vec![])),
+                page: Obtained::authored(SitePage::markdown("Home", "# hi")),
                 assets: Vec::new(),
                 content: Vec::new(),
             }),

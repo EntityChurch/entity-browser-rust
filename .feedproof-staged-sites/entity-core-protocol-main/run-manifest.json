@@ -1,0 +1,79 @@
+{
+  "_comment": "Reproducibility proof for one render/ build. Re-run with same pinned inputs -> same tree_hash. First-pass run: CGID is corpus-incorrect (no whole-corpus prescan), flow-correct only.",
+  "site_id": "entity-core-protocol-main",
+  "tool": "render/ (content pipeline, Go; invokes release-builder for Stage 0)",
+  "cgid": "TBD-at-publish (via release-builder date-genid + whole-corpus prescan)",
+  "tree_hash": "6340cb227babfaab91ad92544905a76af9f0881b1f9962e13e9c025868b5de45",
+  "stages": [
+    "stage0: release-builder — scrubbed intake of content/lab/ (read-only, no push)",
+    "stage1+2: transform/produce + overlay-merge (per-page, deterministic)",
+    "stage3: emit tree + site.manifest.json + run-manifest.json + TreeHash"
+  ],
+  "warnings": [
+    "6 dead link(s) in pulled prose degraded to plain text — upstream links outside its own declared doc set; see run-manifest.json"
+  ],
+  "flags": [
+    {
+      "kind": "pulled-unscrubbed-by-design",
+      "detail": "pulled content is rendered from repo source and is NOT Stage-0 scrubbed (Stage 0 covers content/lab/ only; this path reads repo source directly). Dates, CGID stamps and coordination headers ARE removed at emit by scrubPublishTokens. Internal references are not redacted. The control for this class is the PAGE PLAN — publish only sources meant to be public; a scrub cannot make an internal document publishable"
+    },
+    {
+      "kind": "model-backlinks",
+      "detail": "699 source_documents refs inverted over 365 distinct notes → per-note \"Referenced by the model\" sections (the reverse web; empty in cuts that don't pull the model census)"
+    },
+    {
+      "kind": "pulled-unscrubbed-by-design",
+      "detail": "pulled content is rendered from repo source and is NOT Stage-0 scrubbed (Stage 0 covers content/lab/ only; this path reads repo source directly). Dates, CGID stamps and coordination headers ARE removed at emit by scrubPublishTokens. Internal references are not redacted. The control for this class is the PAGE PLAN — publish only sources meant to be public; a scrub cannot make an internal document publishable"
+    },
+    {
+      "kind": "pulled-unscrubbed-by-design",
+      "detail": "pulled content is rendered from repo source and is NOT Stage-0 scrubbed (Stage 0 covers content/lab/ only; this path reads repo source directly). Dates, CGID stamps and coordination headers ARE removed at emit by scrubPublishTokens. Internal references are not redacted. The control for this class is the PAGE PLAN — publish only sources meant to be public; a scrub cannot make an internal document publishable"
+    },
+    {
+      "kind": "pulled-unscrubbed-by-design",
+      "detail": "pulled content is rendered from repo source and is NOT Stage-0 scrubbed (Stage 0 covers content/lab/ only; this path reads repo source directly). Dates, CGID stamps and coordination headers ARE removed at emit by scrubPublishTokens. Internal references are not redacted. The control for this class is the PAGE PLAN — publish only sources meant to be public; a scrub cannot make an internal document publishable"
+    },
+    {
+      "kind": "pulled-unscrubbed-by-design",
+      "detail": "pulled content is rendered from repo source and is NOT Stage-0 scrubbed (Stage 0 covers content/lab/ only; this path reads repo source directly). Dates, CGID stamps and coordination headers ARE removed at emit by scrubPublishTokens. Internal references are not redacted. The control for this class is the PAGE PLAN — publish only sources meant to be public; a scrub cannot make an internal document publishable"
+    },
+    {
+      "kind": "pulled-unscrubbed-by-design",
+      "detail": "pulled content is rendered from repo source and is NOT Stage-0 scrubbed (Stage 0 covers content/lab/ only; this path reads repo source directly). Dates, CGID stamps and coordination headers ARE removed at emit by scrubPublishTokens. Internal references are not redacted. The control for this class is the PAGE PLAN — publish only sources meant to be public; a scrub cannot make an internal document publishable"
+    },
+    {
+      "kind": "glossary",
+      "detail": "spec/glossary/index.md: 24/25 authored terms present in ../../<shared-parent>/entity-core-protocol/specs (3 files); 0 boilerplate occurrence(s) suppressed (context line repeated across ≥3 files); occurrences reported per document, listing capped at 12 docs/term"
+    },
+    {
+      "kind": "reachable",
+      "detail": "all 11 emitted page(s) reachable from the landing page + the 3-entry nav cover"
+    },
+    {
+      "kind": "pulled-link-outside-surface",
+      "detail": "6 link(s) across 1 pulled page(s) point outside this site's publish surface and were degraded to plain text (the prose is kept; the link is not emitted). We publish these documents verbatim and do not author them, and the target is a file the declaring repo has not declared — emitting a page for it would publish something nobody approved. Upstream's to declare or de-link; this does NOT hide it: keystone/conformance-matrix.md → protocol-generator/shared/findings/handler-resolution-index-equivalence.md, protocol-generator/shared/findings/peers-dimension-reachability.md, protocol-generator/shared/findings/prehello-authenticate-wire-census.md, protocol-generator/shared/syntheses/synthesis-reconciliation.md"
+    },
+    {
+      "kind": "body-links",
+      "detail": "80 relative link(s) across 11 emitted pages — all resolve to an emitted page or staged asset (0 cross-site `site:` ref(s) checked separately)"
+    }
+  ],
+  "links": {
+    "relative": 61,
+    "cross_site": 0
+  },
+  "leak_audit": "stage0 release-builder redact net (observe-only this pass); fail-closed before real publish",
+  "pages": {
+    "pages/formalization.md": "490192178b04f8c43e5755eb193c804af03bfd10b53fa63da3753612e0de763e",
+    "pages/index.md": "d4e7c97a6203001bcd14c19e5fee32848641dfcb3bd59e3385b5edade23b0879",
+    "pages/keystone/conformance-invariants.md": "02e6be03e78c26794c5ced38b4f96283ac4616689572e2078e19eba0f65505fd",
+    "pages/keystone/conformance-matrix.md": "a009e03835c3cf89c2a65f65261addb889ab82c9363805a8b9cfa0557fa2e61e",
+    "pages/keystone/index.md": "30025b682bbdc745dea926c9f713b0808de1f71f13f2232cf5cdf13ccb77e5ec",
+    "pages/keystone/validate-peer.md": "eec3ddb357130766b61c0a89f352bcdc95ece91c8a4468a3bba500a58934951d",
+    "pages/spec/cbor-encoding/index.md": "1e7a2a5777c111a387bc697603e922086dd0a9b8e308b346182b503b1cc01dc5",
+    "pages/spec/entity-core-protocol/index.md": "d6524641cbc360c23116c5ad9ce103295973a4232b516ae98bd9cc977982ebd4",
+    "pages/spec/glossary/index.md": "0a2a64cebf627a8b4f6440f4d8c4cfe15db674d17aaf441298e5350d3f47228d",
+    "pages/spec/index.md": "f11046366d66ea1fbe903a980859d5ae79032a69bc94ff86ccca1832465ff87f",
+    "pages/spec/native-type-system/index.md": "b3ce073deb63e3c513c1bd57b7f34df351897621629454a4fe7f7c33284a1f87"
+  }
+}

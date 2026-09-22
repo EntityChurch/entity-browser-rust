@@ -98,9 +98,12 @@ use std::rc::Rc;
 
 use entity_entity::Entity;
 
-use crate::content_site::http_poll::BinSource;
+use entity_hash::Hash;
+
+use crate::content_site::http_poll::{BinSource, PollError};
 use crate::content_site::signed_fetch::{PinnedPublisher, SignedFetchError, SignedSession};
 use crate::dispatch_handle::DispatchHandle;
+use crate::feed_body::BlobMiss;
 use crate::feed_read::{read_feed, FeedSource, ReadEntry};
 use crate::feed_route::{reduce, Leg, Resolution, Route};
 
@@ -221,6 +224,11 @@ pub fn feed_step(state: Option<&FeedState>, now: f64) -> FeedStep {
 pub struct OriginFeedSource<B: BinSource + 'static> {
     session: Rc<SignedSession>,
     bin: Rc<B>,
+    /// Held because [`FeedSource::blob`] addresses the content store directly —
+    /// `{origin}/content/{aa}/{bb}/{hex}` — rather than through the trie. A blob
+    /// is hash-addressed and verified against its own address, so it needs the
+    /// origin and nothing else the session knows.
+    origin: String,
 }
 
 impl<B: BinSource + 'static> OriginFeedSource<B> {
@@ -251,7 +259,11 @@ impl<B: BinSource + 'static> OriginFeedSource<B> {
         let pin = PinnedPublisher::from_peer_id(origin, author).ok_or_else(|| {
             format!("{author} does not carry its own key, so its tree cannot be verified")
         })?;
-        Ok(Self { session: Rc::new(SignedSession::new(pin)), bin })
+        Ok(Self {
+            session: Rc::new(SignedSession::new(pin)),
+            bin,
+            origin: origin.to_string(),
+        })
     }
 }
 
@@ -277,6 +289,69 @@ impl<B: BinSource + 'static> FeedSource for OriginFeedSource<B> {
             }
         })
     }
+
+    /// Walk the blob and its chunks over the hash-addressed content route, then
+    /// reassemble.
+    ///
+    /// ## Two functions reused rather than a third walk of the blob wire shape
+    ///
+    /// [`fetch_blob_closure`] is the same fetch the site's asset path makes, and
+    /// [`reassemble_blob`](crate::content_site::asset_store::reassemble_blob)
+    /// is the same reassembly — whose own doc already says *"a site asset is not
+    /// the only thing that points at a blob"* and anticipates a third caller.
+    /// This is it. A second expression of either would be C15's drift, with the
+    /// silent half being a reader that reassembles chunks in a subtly different
+    /// order from the publisher that wrote them.
+    ///
+    /// **Nothing here is trusted from the origin.** Each hop is verified against
+    /// its own content address by `fetch_content`, so a substituted blob is
+    /// rejected the same way a substituted entity is — which is why this can
+    /// address the content store directly instead of going through the trie.
+    fn blob(
+        &self,
+        blob: Hash,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, BlobMiss>>>> {
+        let bin = Rc::clone(&self.bin);
+        let origin = self.origin.clone();
+        Box::pin(async move { resolve_blob_over(bin.as_ref(), &origin, blob).await })
+    }
+}
+
+/// Fetch a pointer body's blob closure and reassemble it — **the one expression
+/// of that walk and of how its failures are attributed.**
+///
+/// Free-standing rather than inlined into
+/// [`OriginFeedSource::blob`](FeedSource::blob) because the gate that measures
+/// the attribution runs against a **directory-backed** source, and a classifier
+/// written twice is a classifier where the tested copy and the shipped copy can
+/// disagree — C15, in the place it is least visible, since both would pass their
+/// own tests. Two call sites, one rule.
+///
+/// ⭐ **`NotFound` is NOT `Ok(None)`, and the asymmetry with
+/// [`FeedSource::get`] is deliberate.** An absent *entry* is an ordinary fact
+/// that §4.3 rule 6 and `FEED-R4` both build on. A blob the publisher's own
+/// signed closure NAMES and the origin will not serve is a **broken publish** —
+/// theirs, and `publish --verify` would have caught it. Folding it into *"this
+/// source cannot resolve blobs"* would file their defect under our capability,
+/// and nobody would go and look at the origin.
+pub(crate) async fn resolve_blob_over(
+    bin: &dyn BinSource,
+    origin: &str,
+    blob: Hash,
+) -> Result<Option<Vec<u8>>, BlobMiss> {
+    let entities =
+        match crate::content_site::http_poll::fetch_blob_closure(bin, origin, &blob).await {
+            Ok(e) => e,
+            Err(PollError::NotFound(_)) => return Err(BlobMiss::Absent),
+            Err(e) => return Err(BlobMiss::Failed(format!("{e:?}"))),
+        };
+    crate::content_site::asset_store::reassemble_blob(blob, |h| {
+        entities.iter().find(|e| &e.content_hash == h).cloned()
+    })
+    .map(Some)
+    // A closure that fetched and would not reassemble is also theirs, but it is
+    // a *different* theirs from a 404 and says so.
+    .map_err(|e| BlobMiss::Failed(format!("{e:?}")))
 }
 
 /// A [`MirrorSource`](crate::feed_mirror::MirrorSource) over a **gatherer's

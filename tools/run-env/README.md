@@ -1,4 +1,41 @@
-# `tools/run-env` — the run-environment rig
+# `tools/run-env` — the run-environment rig · ⛔ SUPERSEDED 2026-09-15
+
+**The machines live in `entity-apps` now, and this directory is not where they are built.**
+`AP-6` was answered **yes**: Alpine and KolibriOS moved to `entity-apps` as
+`apps/alpine/` + `apps/kolibri/` with the shared library at `sdk/vm/`, the build
+tooling at `tools/vm/`, and **a third machine we never had — Tiny Core Linux** —
+added there on top. Their `./run.sh vmbuild` builds any of them from scratch.
+Reconciled at their `f6bae9f1`.
+
+So everything below describes a rig that has moved. **Do not build here, do not
+add a machine here, and do not read the table as current — it says "two today"
+and there are three, in another repo.** What this repo keeps is the *host* half:
+the iframe player, the sandbox tiers, and the `x-assets` / `x-files` /
+`x-workspace` / `x-stats` / `x-view` consumers.
+
+## Why it is still here rather than deleted
+
+**One thing in it has not moved: `licence/survey-2026-09-14/`** — the licence and
+source-provenance survey for the v86 engine and the guest package sets. The
+machines moved and the obligation moved with them; the record did not, and
+`entity-apps` carries no equivalent (measured 2026-09-16: their only licence file
+is a vendored `fasm/license.txt` inside a build directory). Deleting this before
+they have it would drop a compliance record on the floor, so it is routed as
+`AP-7` and this directory survives until that lands.
+
+The other 63 files are kept only because deleting half a directory is how you get
+a directory nobody can reason about. `package-app.sh` in particular is **obsolete
+by construction** — it was the `--onto` interim that merged a VM onto their built
+`dist/` while `--ingest-apps` took the whole app set, and with the machines in
+their tree their `dist/` already contains them.
+
+The ~41 MB of built output that used to sit here (`alpine-guest/{bios,build,guest,
+vendor}`, `v86-m1/`) was gitignored and is **removed** — 42 MB → 784 KB. It rebuilds
+in their repo, which is the only place a rebuild is now correct.
+
+---
+
+_Historical from here down._
 
 Small machines in a browser tab, under v86. **Two today**, sharing one library:
 

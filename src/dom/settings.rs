@@ -273,6 +273,23 @@ fn render_rendering(parent: &Element, output: &SettingsOutput, ctx: &DomCtx) {
             &format!(" {}", crate::i18n::t("settings.show_inspector", &[])),
         ),
     );
+    // The status bar's gauges. In "Rendering" rather than "Appearance" because
+    // off is not a cosmetic choice: it stops the sampling, which is the whole
+    // reason this switch is honest (`SettingsState::status_gauges`).
+    util::append(
+        &card,
+        &components::checkbox(
+            ctx,
+            "status_gauges",
+            output.status_gauges,
+            "toggle_status_gauges",
+            &format!(" {}", crate::i18n::t("settings.status_gauges", &[])),
+        ),
+    );
+    let hint = util::create_element("p");
+    hint.set_attribute("style", theme::HINT).ok();
+    util::set_text(&hint, &crate::i18n::t("settings.status_gauges.hint", &[]));
+    util::append(&card, &hint);
     util::append(parent, &card);
 }
 

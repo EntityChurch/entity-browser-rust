@@ -98,6 +98,32 @@ impl FeedWindow {
                 // EMPTY and the surface would say you have posted nothing.
                 let entries = format!("/{peer_id}/{}", crate::feed::entry_prefix());
                 pm.watch_prefix(&mut window.watch, peer_id, entries);
+                // ⭐ **The FOURTH watch — the browse list's.** `known` is built
+                // per render from `origins::list_origins`, and the origin
+                // registry is filled by `boot_phase2`'s adoption, which lands
+                // *after* a startup window has already been spawned. Without
+                // this the list renders empty on the boot that matters and never
+                // re-renders — the dead-button defect two registries over, in
+                // the one place it would look like *"this deployment knows
+                // nobody"*. On the Worker arm it is doing more again: an
+                // unsubscribed prefix lists EMPTY from the mirror.
+                let origins = crate::app_paths::site_origins_prefix(
+                    crate::app_paths::APP_ID,
+                    peer_id,
+                );
+                pm.watch_prefix(&mut window.watch, peer_id, origins);
+                // ⭐ **The FIFTH — the session config**, which is where the home
+                // publisher lives (`FeedModel::home_publisher`). Same two
+                // reasons: the config is settled in phase 2, and on the Worker
+                // arm a sync `get_entity` on an unsubscribed prefix answers
+                // `None`, which would make the fallback selection unreachable on
+                // the arm that has it hardest.
+                let settings = crate::app_paths::settings_path(
+                    crate::app_paths::APP_ID,
+                    peer_id,
+                    "", // the whole settings prefix — the config is one key under it
+                );
+                pm.watch_prefix(&mut window.watch, peer_id, settings);
                 Box::new(window)
             },
         }
@@ -171,6 +197,7 @@ impl WindowView for FeedWindow {
             // shortened form is for a person to read and names no binding.
             "feed_post" => self.model.post(peers, &me, value, now_ms_u64()),
             "feed_remove_post" => self.model.remove_post(peers, &me, value),
+            "feed_toggle_manage" => self.model.toggle_manage(),
             _ => return,
         }
         self.watch.mark_dirty();
@@ -248,7 +275,7 @@ mod aim_tests {
         let mut w = window(&peers);
         assert_eq!(w.aim(&crate::open_target::feed(&author), &peers), Aim::Aimed);
         let out = w.model.render_output(&peers, &me, 0.0);
-        assert_eq!(out.selected.as_deref(), Some(author.as_str()));
+        assert_eq!(out.selected_peer(), Some(author.as_str()));
         assert_eq!(w.peer_id, me, "the store this window reads must not move");
     }
 
@@ -269,7 +296,7 @@ mod aim_tests {
             "an aim must not write a follow record"
         );
         assert_eq!(
-            w.model.render_output(&peers, &me, 0.0).selected.as_deref(),
+            w.model.render_output(&peers, &me, 0.0).selected_peer(),
             Some(author.as_str()),
             "…and it must still be what the window is showing"
         );
@@ -286,7 +313,7 @@ mod aim_tests {
         let mut w = window(&peers);
         let site = crate::open_target::site(&peer_id(12), "demo", "about");
         assert_eq!(w.aim(&site, &peers), Aim::NotMine);
-        assert_eq!(w.model.render_output(&peers, &me, 0.0).selected, None);
+        assert_eq!(w.model.render_output(&peers, &me, 0.0).selected_peer(), None);
     }
 
     /// A feed address naming no publisher is **`Unusable`** — the window opens

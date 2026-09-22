@@ -181,9 +181,51 @@ pub struct MeetStatusRow {
     pub searching: bool,
     /// Set when the meet stopped early, with the reason.
     pub error: Option<String>,
-    pub polls: u32,
-    pub max_polls: u32,
+    /// How much longer the search will run, already reduced to the coarse shape
+    /// a person is shown. Coarse on purpose — see [`TimeLeft`].
+    pub time_left: TimeLeft,
     pub found: Vec<MeetFoundRow>,
+}
+
+/// How long a running search has left, at the granularity it is **spoken** in.
+///
+/// Coarse, and that is the feature. The surface this replaced rendered the raw
+/// poll counter — a number climbing toward 60 with no stated meaning — and it
+/// was reported, in those words, as stressful to watch. A person waiting for a
+/// friend to press a button needs to know *roughly how long this goes on for*,
+/// which is a sentence, not a gauge.
+///
+/// Two consequences of being coarse, both deliberate: the phrase changes at most
+/// once a minute, so it does not flicker and it does not need its own repaint
+/// (`MeetSession::pump` marks the window on every poll, which is far finer); and
+/// a renderer cannot accidentally reintroduce a live-ticking number, because the
+/// seconds never reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeLeft {
+    /// Roughly this many minutes — never `0`, which is [`Self::UnderAMinute`].
+    Minutes(u64),
+    /// Under a minute. Said as a phrase rather than a number: a countdown from
+    /// 59 is the shape being removed.
+    UnderAMinute,
+    /// Not searching. Distinct from "no time left" — a settled meet has an
+    /// outcome to report and no clock to show at all.
+    NotSearching,
+}
+
+impl TimeLeft {
+    /// Round to the nearest minute, with anything under a minute said in words.
+    ///
+    /// Nearest rather than ceiling: at 90 s "about 2 min" is the honest word and
+    /// ceiling would say it at 61 s too.
+    pub fn from_remaining_ms(remaining_ms: u64, searching: bool) -> Self {
+        if !searching {
+            return Self::NotSearching;
+        }
+        if remaining_ms < 60_000 {
+            return Self::UnderAMinute;
+        }
+        Self::Minutes((remaining_ms + 30_000) / 60_000)
+    }
 }
 
 /// One peer a meet turned up.
@@ -205,4 +247,62 @@ pub struct MeetFoundRow {
 pub struct ConnectorNotice {
     pub text: String,
     pub is_error: bool,
+}
+
+#[cfg(test)]
+mod time_left_tests {
+    use super::TimeLeft;
+
+    /// The three outcomes stay apart, and **`NotSearching` is not a zero**: a
+    /// settled meet has a result to report and no clock at all, which is a
+    /// different sentence from "it is nearly over".
+    #[test]
+    fn a_settled_meet_has_no_clock_rather_than_a_clock_at_zero() {
+        assert_eq!(TimeLeft::from_remaining_ms(0, false), TimeLeft::NotSearching);
+        assert_eq!(
+            TimeLeft::from_remaining_ms(90_000, false),
+            TimeLeft::NotSearching,
+            "a stopped search does not resume being a countdown because the clock says so"
+        );
+        assert_eq!(TimeLeft::from_remaining_ms(0, true), TimeLeft::UnderAMinute);
+    }
+
+    /// Rounding is to the **nearest** minute, and nothing under a minute is ever
+    /// said as a number — a countdown through 59, 58, 57 is the exact shape this
+    /// type exists to remove.
+    #[test]
+    fn the_phrase_is_coarse_and_never_counts_seconds() {
+        assert_eq!(TimeLeft::from_remaining_ms(120_000, true), TimeLeft::Minutes(2));
+        assert_eq!(TimeLeft::from_remaining_ms(119_000, true), TimeLeft::Minutes(2));
+        assert_eq!(TimeLeft::from_remaining_ms(90_000, true), TimeLeft::Minutes(2));
+        assert_eq!(
+            TimeLeft::from_remaining_ms(61_000, true),
+            TimeLeft::Minutes(1),
+            "ceiling would say 'about 2 min' with 61 seconds to go"
+        );
+        assert_eq!(TimeLeft::from_remaining_ms(60_000, true), TimeLeft::Minutes(1));
+        for ms in [59_999u64, 30_000, 1_000, 1] {
+            assert_eq!(
+                TimeLeft::from_remaining_ms(ms, true),
+                TimeLeft::UnderAMinute,
+                "{ms}ms must be a phrase, not a number"
+            );
+        }
+    }
+
+    /// A whole window, sampled: the phrase only ever moves **downward**, so the
+    /// line can never read as time being added back.
+    #[test]
+    fn the_phrase_never_goes_back_up() {
+        let mut last = u64::MAX;
+        let mut ms = crate::rendezvous::SEARCH_WINDOW.as_millis() as u64;
+        while ms > 0 {
+            if let TimeLeft::Minutes(n) = TimeLeft::from_remaining_ms(ms, true) {
+                assert!(n <= last, "{n} min at {ms}ms follows {last} min");
+                assert!(n > 0, "a zero-minute reading must be the under-a-minute phrase");
+                last = n;
+            }
+            ms = ms.saturating_sub(937); // a prime-ish step, so no boundary is skipped by luck
+        }
+    }
 }

@@ -104,6 +104,7 @@ mod publish_axes;
 // …and the same list read backwards: given an address, which viewer shows it.
 // `Action::SpawnWindow` carried a window kind and a peer and no address, so the
 // two callers that knew what a reader wanted to look at used a side channel.
+mod obtained;
 mod open_target;
 // …and the question NEITHER of those two answers: given a publisher, what do
 // they publish? A registry binding says who and where and nothing about what,
@@ -126,6 +127,7 @@ mod feed_fetch;
 // publishing, and the static emit is a separate, operational act. Pure planners
 // so `make test` gates the decisions on both arms, and so a caller can ask what
 // a removal would unbind — which is what `FEED-R21`'s UI obligation needs.
+mod feed_body;
 mod feed_compose;
 // Who this profile follows — `app/feed/follow` in a flat, APP-scoped registry.
 // App-scoped and not window-scoped on purpose: two Feed windows must agree, and
@@ -212,6 +214,10 @@ mod wake_probe;
 // types. `dial_markers`' shape (local, in-flight, in-memory) — NOT a fourth
 // liveness store; the kernel owns connection state and this only advises.
 mod reachability;
+// Which window a `DOM: HIGH REBUILD RATE` warning is about. Native, because
+// `src/dom/` is wasm-only and a decision reachable solely through Selenium is
+// one `make test` cannot gate.
+mod rebuild_attribution;
 // Preflight: can this machine reach another machine's peer, and if not which
 // half is missing. The pure model + its remedies are native-tested; the
 // collector is wasm-only. Read by the Shell's `net` verb.
@@ -234,6 +240,7 @@ mod user_themes;
 mod opfs_cleanup;
 #[cfg(target_arch = "wasm32")]
 mod idb_cleanup;
+mod status_bar;
 #[cfg(target_arch = "wasm32")]
 mod storage_durability;
 #[cfg(target_arch = "wasm32")]

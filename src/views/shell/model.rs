@@ -1700,12 +1700,18 @@ impl ShellModel {
             match self.meet.lock().ok().and_then(|m| m.as_ref().map(|r| r.session.status())) {
                 Some(st) => {
                     push(ScrollbackEntry::Info(format!(
-                        "meeting at {} via {} — {:?}, poll {}/{}, {} found", // i18n-ignore — dev-facing CLI
+                        // Seconds, not the window's coarse minutes: this line is
+                        // for whoever is debugging the cadence, and the pretty
+                        // version is the window's job.
+                        "meeting at {} via {} — {:?}, {} polls, {}s left, {} found", // i18n-ignore — dev-facing CLI
                         st.mode,
-                        crate::views::short_pid(&st.node_peer_id),
+                        // A running meet knows only the node's id, so this is the
+                        // id-only spelling of the same name — still the address
+                        // and the label when the registry has them.
+                        describe_node_id(peers, &st.node_peer_id),
                         st.phase,
                         st.polls,
-                        st.max_polls,
+                        st.remaining_ms / 1000,
                         st.found.len()
                     )));
                 }
@@ -1760,7 +1766,14 @@ impl ShellModel {
         };
 
         let describe = mode.describe();
-        let short = crate::views::short_pid(&node.node_peer_id);
+        // **Name the node the way the person knows it.** This printed
+        // `short_pid` alone until 2026-09-16, which is an opaque Base58 fragment
+        // nobody typed and nobody can match against anything on their screen —
+        // reported, in those words, as *"the meet doesn't say meet at this
+        // particular signaling node; is it just pulling the last one I connected
+        // to?"* The address is what was typed, the label is what it was called,
+        // and the source answers the question the peer-id could not.
+        let short = describe_node(&node);
         if let Ok(mut slot) = self.meet.lock() {
             *slot = Some(MeetRun {
                 session: MeetSession::start(&self.peer_id, node, mode),
@@ -4243,9 +4256,11 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut met = false;
         while std::time::Instant::now() < deadline && !met {
-            // A frame's worth of pumps on both sides; the session polls the
-            // bucket every N frames, so pumping in bursts keeps the test fast
-            // without changing the production cadence.
+            // A frame's worth of pumps on both sides. The cadence is wall clock
+            // (`rendezvous::poll_interval_ms`), so a burst of pumps does NOT
+            // buy extra polls — what advances it is the sleep below. The burst
+            // is what keeps a *landed* round trip from waiting a whole tick to
+            // be picked up; the real seconds come from the loop.
             for _ in 0..40 {
                 model.pump_meet(&peers, &dirty);
                 other_session.pump(&other);
@@ -4500,3 +4515,64 @@ mod tests {
         );
     }
 }
+
+/// How a rendezvous node is named to a person: the address they typed, the label
+/// they gave it, and — when we can say — why this one is in force.
+///
+/// ⭐ **`short_pid` alone was the whole of it until 2026-09-16**, and it is
+/// unmatchable against anything the user has on screen: they added a node by
+/// *address*, and `meet` answered with a Base58 fragment. The report, verbatim:
+/// *"the meet doesn't say meet at this particular signaling node — is it just
+/// pulling the last one I connected to?"* The peer-id stays, in brackets,
+/// because it is what correlates a line here with the node's own log.
+///
+/// The source is the half that answers the actual question. It comes from
+/// `connectors::applied_source`, i.e. from the arm — so it describes the node
+/// that makes us reachable, not a second resolve that could name a different
+/// one.
+fn describe_node(node: &crate::connectors::Connector) -> String {
+    let short = crate::views::short_pid(&node.node_peer_id);
+    let named = if node.label.trim().is_empty() {
+        format!("{} [{}]", node.node_addr, short)
+    } else {
+        format!("{} — {} [{}]", node.label.trim(), node.node_addr, short)
+    };
+    match source_note() {
+        Some(src) => format!("{named} ({src})"),
+        None => named,
+    }
+}
+
+/// The same name for a node we hold only an id for (a meet already running
+/// reports its node by id). Falls back to the id when the registry has no row,
+/// rather than inventing an address.
+fn describe_node_id(peers: &Peers, node_peer_id: &str) -> String {
+    let sys = peers.system_peer_id().to_string();
+    match crate::connectors::read_connectors(peers, &sys)
+        .into_iter()
+        .find(|c| c.node_peer_id == node_peer_id)
+    {
+        Some(row) => describe_node(&row),
+        None => crate::views::short_pid(node_peer_id),
+    }
+}
+
+/// Why this node is the one in force, in the fewest words that answer it.
+///
+/// Native returns `None`: there is no URL and no localStorage mirror off-wasm,
+/// so the registry is the only source and *"from the connector you selected"*
+/// would be saying the only thing that could be true.
+#[cfg(target_arch = "wasm32")]
+fn source_note() -> Option<&'static str> {
+    Some(match crate::connectors::applied_source()? {
+        s if s.contains("selected") => "the connector you selected", // i18n-ignore — dev-facing CLI
+        "URL query" => "from the page you opened", // i18n-ignore — dev-facing CLI
+        _ => "this build's default", // i18n-ignore — dev-facing CLI
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn source_note() -> Option<&'static str> {
+    None
+}
+

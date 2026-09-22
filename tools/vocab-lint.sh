@@ -48,8 +48,8 @@
 # went unchecked. `spec vocab` itself keeps the distinction (exit 2 =
 # could-not-look) and so does this.
 #
-# ⛔ AND IT RESOLVES OUR SEAT BY DIRECTORY NAME, WHICH IS NOT THIS CHECKOUT WHEN
-# YOU ARE IN A WORKTREE.
+# ⛔ IT RESOLVES OUR SEAT BY DIRECTORY NAME, WHICH IS NOT THIS CHECKOUT WHEN YOU
+# ARE IN A WORKTREE — SO WE CONSTRUCT THE PARENT RATHER THAN SKIPPING.
 #
 # `spec vocab` finds the seat at `<corpus parent>/entity-browser-rust` and reads
 # whatever is on disk there. Run this from a worktree — `entity-browser-rust-vm`,
@@ -61,11 +61,45 @@
 # session's changes, which is the tell — *if the symptom survives your change
 # being gone, the symptom is not yours.*
 #
-# Same class as the `Cargo.lock` hazard this repo already records: a tool that
-# resolves a sibling BY NAME resolves it against whatever is on disk. The
-# analyzer's own JSON carries `head` and `dirty` per seat and this wrapper used
-# to throw both away, so nothing anywhere said which tree had been read. It now
-# prints them on every run and refuses to speak for a tree that is not this one.
+# That was answered with a loud SKIP until 2026-09-16, and a loud skip is still a
+# class going unchecked: every branch in this repo is developed in a worktree, so
+# the one gate no test here can stand in for ran on **no** branch work, ever.
+#
+# It is CONSTRUCTED now, which is `CORE_RUST_REF`'s move one tool over — build the
+# world in which the name resolves to the tree you mean, rather than verifying
+# that it happens to. A scratch parent holds a corpus of symlinks (so
+# `corpus.parent` is ours to choose), the sibling seats symlinked through, and
+# `entity-browser-rust` materialized from THIS checkout.
+#
+# ⛔ AND THE SEAT IS MATERIALIZED, NOT SYMLINKED, BECAUSE THE ANALYZER'S BUILD-
+# OUTPUT SKIP NEVER FIRES ON A TOP-LEVEL `target/`.
+#
+# Its skip patterns are anchored with slashes on both sides (`/target/`, `/.git/`)
+# and are tested with `in` against a path that is RELATIVE to the seat root — so
+# `target/debug/…` has no leading slash and never matches. Measured 2026-09-16
+# across both worktrees: **0 files skipped here, and 1962 build-output files
+# scanned as our source in the main worktree** (stale `.core-pin/` kernel exports
+# plus `target-pin-*`).
+#
+# That is not abstract. `single-seat app/user` sat in our baseline for days, and
+# the file that produced it is
+# `.core-pin/<kernel-sha>/extensions/compute/src/eval/tests.rs` — **the kernel's
+# own test file**, in five stale pin directories, attributed to our commit. Our
+# real occurrences (`views/query_console/`) are correctly classed test-only and
+# name us nowhere. The baseline's own note had reasoned it out as a doc-example
+# false positive; the cause was residue on disk, and only instrumenting the scan
+# said so.
+#
+# So the seat we hand the analyzer is **what git considers part of this repo** —
+# tracked plus untracked-not-ignored. Residue is ignored by definition, so this
+# needs no list of directories to exclude and cannot rot as new build dirs appear
+# (`target-pin-*` did not exist when `/target/` was written). A file you have
+# created and not yet added is still yours and is still read.
+#
+# The analyzer's own JSON carries `head`/`dirty` per seat; the materialized tree
+# has no `.git`, so those are read here, from the real checkout, and printed on
+# every run — a report that cannot say which tree it is about is the defect this
+# whole block exists to answer.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -88,27 +122,52 @@ command -v python3 >/dev/null 2>&1 || skip "no python3"
 [ -d "$ARCH/specs/applications" ] || skip "no $ARCH — the corpus that declares the tags"
 [ -f "$TOOLS/spec-tool/cli.py" ] || skip "no $TOOLS — the analyzer"
 
-# WHOSE TREE IS THE ANALYZER ABOUT TO READ? Checked BEFORE running it, because a
-# report about another checkout is not a weaker answer, it is an answer to a
-# different question — and one that names us in its findings.
-SEAT_DIR="$PARENT/$SEAT"
-seat_real="$(cd "$SEAT_DIR" 2>/dev/null && pwd -P)"
 here_real="$(cd "$HERE" && pwd -P)"
-if [ "$seat_real" != "$here_real" ]; then
-	echo "vocab-lint: SKIPPED — the analyzer reads the seat at a fixed path and that is not this checkout."
-	echo "            it would read: ${seat_real:-$SEAT_DIR}"
-	if [ -n "$seat_real" ]; then
-		echo "                        ($(git -C "$seat_real" log --oneline -1 2>/dev/null || echo 'not a checkout')$(
-			[ -n "$(git -C "$seat_real" status --short 2>/dev/null)" ] && echo ', DIRTY')"
-		echo "                         — another seat's work, attributed to your commit)"
-	fi
-	echo "            you are in:  $here_real"
-	echo "            Run 'make lint' from $SEAT_DIR to exercise this gate. Rows found"
-	echo "            there are that tree's to answer for, not this one's."
-	skip "our seat resolves to a different tree"
+command -v git >/dev/null 2>&1 || skip "no git — the seat is built from what git considers part of this repo"
+
+# THE SCRATCH PARENT. `corpus.parent` is where the analyzer looks for seats, so
+# owning the parent is what lets us say which tree `entity-browser-rust` means.
+SHADOW="$(mktemp -d "${TMPDIR:-/tmp}/vocab-lint.XXXXXX")" || skip "could not create a scratch parent"
+trap 'rm -rf "$SHADOW"' EXIT
+SHADOW_CORPUS="$SHADOW/$(basename "$ARCH")"
+
+# The corpus is a real directory of symlinks: `--root` is `.resolve()`d, so a
+# symlinked corpus would resolve straight back to the real parent and undo the
+# whole construction. One level down (`corpus/specs`) is a symlink, and an rglob
+# rooted AT a symlink does descend — which is why this works where a symlinked
+# seat would not. `declared_total` is asserted below so that if the analyzer ever
+# walks the corpus differently, this fails loudly instead of reporting a tier in
+# which nothing is declared and everything we emit looks invented.
+mkdir -p "$SHADOW_CORPUS" || skip "could not build the scratch corpus"
+for e in "$ARCH"/* "$ARCH"/.[!.]*; do
+	[ -e "$e" ] || continue
+	ln -s "$e" "$SHADOW_CORPUS/$(basename "$e")" 2>/dev/null
+done
+# Every sibling of ours, symlinked: the analyzer resolves a seat before scanning
+# it, so the other seats are read exactly as they are on disk. Only OUR seat is
+# replaced, and only because the residue problem above is ours to answer for.
+for e in "$PARENT"/*; do
+	[ -d "$e" ] || continue
+	[ "$(basename "$e")" = "$SEAT" ] && continue
+	[ "$(basename "$e")" = "$(basename "$ARCH")" ] && continue
+	ln -s "$e" "$SHADOW/$(basename "$e")" 2>/dev/null
+done
+
+# OUR SEAT: what git considers part of this repo, materialized. See the header —
+# the analyzer's `/target/` skip does not fire on a top-level `target/`, and a
+# symlinked seat is `.resolve()`d back to the real directory, residue and all.
+mkdir -p "$SHADOW/$SEAT" || skip "could not build the scratch seat"
+if ! git -C "$HERE" ls-files --cached --others --exclude-standard -z \
+	| tar -C "$HERE" --null -T - -cf - 2>/dev/null \
+	| tar -C "$SHADOW/$SEAT" -xf - 2>/dev/null; then
+	skip "could not materialize this checkout as the seat"
 fi
 
-VOCAB_RAW="$(cd "$ARCH" && python3 "$TOOLS/spec-tool/cli.py" vocab --json 2>/dev/null)"
+SEAT_HEAD="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo '?')"
+[ -n "$(git -C "$HERE" status --short 2>/dev/null)" ] \
+	&& SEAT_HEAD="$SEAT_HEAD, DIRTY — this run is not reproducible"
+
+VOCAB_RAW="$(cd "$SHADOW_CORPUS" && python3 "$TOOLS/spec-tool/cli.py" vocab --root "$SHADOW_CORPUS" --json 2>/dev/null)"
 rc=$?
 export VOCAB_RAW SEAT
 
@@ -132,6 +191,17 @@ n_seats = len(seats) if isinstance(seats, list) else int(seats or 0)
 if n_seats < 2:
     print("ERR\tfewer-than-two-seats"); sys.exit(0)
 
+# ANTI-VACUITY ON THE RIG, NOT ON THE SUBJECT. We hand the analyzer a corpus of
+# symlinks, which works because an rglob rooted at a symlink descends. If that
+# ever stops holding, the corpus reads as empty — and an empty corpus does not go
+# quiet, it declares nothing, which makes EVERY tag we emit `implemented-
+# undeclared` and floods the gate with rows that are an artifact of the rig.
+# The floor is 1: did the corpus load at all. It must not be set anywhere near
+# the real count, or it starts adjudicating the finding instead of guarding the
+# instrument.
+if not (d.get("declared_total") or 0):
+    print("ERR\tcorpus-read-nothing"); sys.exit(0)
+
 f = d.get("findings", {})
 rows = set()
 for it in f.get("implemented-undeclared", []):
@@ -146,14 +216,16 @@ for it in f.get("divergent-family", []):
 
 missing = d.get("missing_seats") or []
 n_missing = len(missing) if isinstance(missing, list) else int(missing or 0)
-# WHICH TREE, AT WHICH HEAD. The analyzer reports this per seat and the wrapper
-# used to discard it, so a run could not be reproduced and a report about
-# somebody else's checkout was indistinguishable from one about ours.
+# WHICH TREE, AT WHICH HEAD, AND HOW MUCH OF IT WAS READ. The head comes from
+# the real checkout (the materialized seat has no `.git`), and the file count is
+# printed because it is the one number that would have exposed the residue
+# defect on sight: 409 files here against 2298 in a sibling worktree of the same
+# repo is not a difference between branches, it is a scan reading somebody
+# else's tree.
 mine = next((s for s in seats if s.get("name") == seat), {})
-print("SEAT\t%s%s" % (
-    mine.get("head", "?"), ", DIRTY — this run is not reproducible" if mine.get("dirty") else ""))
-print("CTX\t%d seat(s), %d missing, %s declared / %s emitted" % (
-    n_seats, n_missing, d.get("declared_total"), d.get("implemented_total")))
+print("CTX\t%d seat(s), %d missing, %s declared / %s emitted, %s file(s) read" % (
+    n_seats, n_missing, d.get("declared_total"), d.get("implemented_total"),
+    mine.get("files", "?")))
 for c, t in sorted(rows):
     print("ROW\t%s\t%s" % (c, t))
 PY
@@ -163,15 +235,17 @@ case "$REDUCED" in
 	*"ERR"$'\t'"not-json"*) skip "spec vocab did not return JSON (exit $rc)" ;;
 	*"ERR"$'\t'"fewer-than-two-seats"*)
 		skip "spec vocab found fewer than 2 application seats — is $PARENT/entity-workbench-go present?" ;;
+	*"ERR"$'\t'"corpus-read-nothing"*)
+		skip "the corpus read through the scratch parent declared NOTHING — the construction in this script is broken, not the tier" ;;
 esac
 
 CONTEXT="$(printf '%s\n' "$REDUCED" | sed -n 's/^CTX\t//p')"
-SEAT_AT="$(printf '%s\n' "$REDUCED" | sed -n 's/^SEAT\t//p')"
 OURS="$(printf '%s\n' "$REDUCED" | sed -n 's/^ROW\t//p')"
-# `$here_real` is honest ONLY because the guard above proved the analyzer's seat
-# path resolves to this checkout. Relax that guard and this line starts naming a
-# directory the report is not about — which is the defect it was added for.
-echo "vocab-lint: read $SEAT at $here_real ($SEAT_AT)"
+# `$here_real` is honest because the seat handed to the analyzer was BUILT from
+# this checkout — not because a path happened to line up. That is the difference
+# between construction and verification, and it is why this line can name a
+# worktree at all.
+echo "vocab-lint: read $SEAT at $here_real ($SEAT_HEAD)"
 
 [ -f "$BASELINE" ] || { echo "vocab-lint: FAIL — no baseline at $BASELINE"; exit 1; }
 BASE="$(grep -vE '^\s*(#|$)' "$BASELINE" | sort)"

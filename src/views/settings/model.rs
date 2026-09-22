@@ -52,6 +52,16 @@ pub struct SettingsState {
     /// instead of spawning a duplicate. Off by default (preserves the
     /// historical multi-instance behavior).
     pub singleton_windows: bool,
+    /// The status bar's live performance gauges (`DESIGN-2026-09-16`).
+    ///
+    /// **On by default, and off is a real off:** this does not hide a gauge
+    /// that is still being computed — it drops the frame path's `MonitorHold`
+    /// (`EntityApp::status_gauge_hold`), so the sampler goes dormant and the
+    /// bar degrades to the three counts by the same route it takes when nobody
+    /// has ever opened the System Monitor. A moving bar is not to everyone's
+    /// taste and this is the escape hatch; a switch that still charged you for
+    /// the sampling would be the wrong one.
+    pub status_gauges: bool,
 }
 
 impl Default for SettingsState {
@@ -63,6 +73,7 @@ impl Default for SettingsState {
             auto_connect: false,
             show_inspector: true,
             singleton_windows: false,
+            status_gauges: true,
         }
     }
 }
@@ -111,6 +122,11 @@ impl SettingsState {
                         state.singleton_windows = b;
                     }
                 }
+                Some("status_gauges") => {
+                    if let Some(b) = v.as_bool() {
+                        state.status_gauges = b;
+                    }
+                }
                 _ => {}
             }
         }
@@ -124,7 +140,8 @@ impl SettingsState {
             "site_appearance" => entity_ecf::text(&self.site_appearance),
             "auto_connect" => entity_ecf::bool_val(self.auto_connect),
             "show_inspector" => entity_ecf::bool_val(self.show_inspector),
-            "singleton_windows" => entity_ecf::bool_val(self.singleton_windows)
+            "singleton_windows" => entity_ecf::bool_val(self.singleton_windows),
+            "status_gauges" => entity_ecf::bool_val(self.status_gauges)
         });
         Entity::new("app/state/setting", data).unwrap()
     }
@@ -224,6 +241,14 @@ impl SettingsModel {
     pub fn toggle_autoconnect(&self, peers: &Peers) {
         let mut state = self.read_state(peers);
         state.auto_connect = !state.auto_connect;
+        self.write_state(peers, &state);
+    }
+
+    /// Flip the status bar's live gauges. See [`SettingsState::status_gauges`]:
+    /// off drops the sampler hold, it does not merely hide a drawing.
+    pub fn toggle_status_gauges(&self, peers: &Peers) {
+        let mut state = self.read_state(peers);
+        state.status_gauges = !state.status_gauges;
         self.write_state(peers, &state);
     }
 
@@ -546,6 +571,7 @@ impl SettingsModel {
             show_inspector: state.show_inspector,
             auto_connect: state.auto_connect,
             singleton_windows: state.singleton_windows,
+            status_gauges: state.status_gauges,
             session,
         }
     }
@@ -596,6 +622,9 @@ mod tests {
             auto_connect: true,
             show_inspector: false,
             singleton_windows: true,
+            // Non-default on purpose: a round trip through the default value
+            // proves nothing about the field being carried.
+            status_gauges: false,
         };
         let e = s.to_entity();
         let s2 = SettingsState::from_entity(&e);
@@ -629,6 +658,9 @@ mod tests {
             auto_connect: true,
             show_inspector: false,
             singleton_windows: true,
+            // Non-default on purpose: a round trip through the default value
+            // proves nothing about the field being carried.
+            status_gauges: false,
         };
         let path = crate::app_paths::settings_path(crate::app_paths::APP_ID, &pid, SETTINGS_PATH);
         let ctx = pm.test_seed_ctx(&pid);

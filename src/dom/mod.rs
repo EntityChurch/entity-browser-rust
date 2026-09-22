@@ -34,6 +34,7 @@ pub mod site_directory;
 pub mod site_editor;
 pub mod site_overlay;
 pub mod shell;
+pub mod status_bar;
 pub mod storage;
 pub mod system_monitor;
 pub mod style;
@@ -156,6 +157,14 @@ pub struct DomRenderer {
     rebuild_count: u64,
     last_rebuild_log: f64,
     rebuilds_since_log: u64,
+    /// Who rebuilt, over the current log interval. The rate alone is a number;
+    /// this is what makes it evidence (`crate::rebuild_attribution`).
+    rebuild_tally: crate::rebuild_attribution::RebuildTally,
+    /// Rebuilds-per-second above which the rate warning fires. `?rebuildrate=<n>`
+    /// lowers it so a gate can reach the branch inside a scenario the harness can
+    /// build — the same affordance shape, and the same reason, as `?bootstall=`
+    /// and `?deadinstance=`. Nothing in the product sets it.
+    rebuild_rate_threshold: u64,
     /// Last locale generation this renderer acted on. When
     /// `i18n::locale_generation()` advances (a language switch), every open
     /// window is force-rebuilt for one frame so `t()` strings re-resolve — the
@@ -253,6 +262,8 @@ impl DomRenderer {
             rebuild_count: 0,
             last_rebuild_log: 0.0,
             rebuilds_since_log: 0,
+            rebuild_tally: Default::default(),
+            rebuild_rate_threshold: rebuild_rate_threshold(),
             // Seed from the current generation (boot already applied a locale),
             // so the first frame doesn't spuriously force-rebuild everything.
             last_locale_generation: crate::i18n::locale_generation(),
@@ -333,8 +344,9 @@ impl DomRenderer {
         // the DOM ops themselves — and the breakdown is only emitted
         // when the slow-rebuild warning fires.
         let mut section_timings: Vec<(String, WindowId, f64)> = Vec::new();
-        let any_section_changed =
+        let pass =
             self.update_window_sections(peers, window_manager, &mut section_timings, maximized, dial_markers, connect_attempt, offer_attempt, pull_attempt, provisioning_drifted);
+        let any_section_changed = pass.any_changed;
         // The System Monitor's hooks — no-ops unless a monitor is open. The
         // timings were always measured; this is where they stop being thrown away.
         crate::monitor::sampler::note_sections(&section_timings);
@@ -452,11 +464,30 @@ impl DomRenderer {
         self.rebuild_count += 1;
         self.rebuilds_since_log += 1;
 
+        // Accumulate the culprit tally for this frame. `section_timings` holds
+        // exactly the sections that rebuilt; the frame-level facts come from the
+        // pass, because a forced sweep EXPLAINS a per-window tally rather than
+        // adding to it. Both are recorded on every counted rebuild frame, not
+        // only once the warning threshold is crossed — the interval that trips
+        // the threshold is over by the time the threshold is read.
+        self.rebuild_tally.note_frame(pass.forced, palette_changed, pass.closed);
+        for (name, id, _) in &section_timings {
+            self.rebuild_tally.note_section(name, *id as u64);
+        }
+
         if frame_start - self.last_rebuild_log > 1000.0 {
-            if self.rebuilds_since_log > 10 {
+            // Taken unconditionally: the tally is per-interval, and one that
+            // survived a quiet second would keep naming a window that has gone
+            // quiet — and would grow without bound.
+            let attribution = self.rebuild_tally.take();
+            if self.rebuilds_since_log > self.rebuild_rate_threshold {
                 tracing::warn!(
                     rebuilds_per_sec = self.rebuilds_since_log,
                     total = self.rebuild_count,
+                    // The half this warning shipped without: 32 of these lines
+                    // in the 2026-09-15 crash capture named a rate and no
+                    // window. `src/rebuild_attribution.rs` has the reasoning.
+                    attributed_to = %attribution.summary(),
                     "DOM: HIGH REBUILD RATE"
                 );
             }
@@ -910,10 +941,11 @@ impl DomRenderer {
         offer_attempt: &crate::offer_attempt::OfferAttempt,
         pull_attempt: &crate::pull_attempt::PullAttempt,
         provisioning_drifted: bool,
-    ) -> bool {
+    ) -> SectionPass {
         use std::collections::HashSet;
 
         let mut any_changed = false;
+        let mut closed = 0u64;
 
         // Locale switch: when the global generation advances, force EVERY open
         // window to rebuild this frame so its `t()` strings re-resolve — the
@@ -955,6 +987,10 @@ impl DomRenderer {
             if let Some(state) = self.window_sections.remove(&id) {
                 state.section_el.remove();
                 any_changed = true;
+                // Counted, because this is the one producer of a rebuild that
+                // leaves NO timing entry — an attribution that could not name it
+                // would print an empty culprit list for a real frame.
+                closed += 1;
             }
         }
 
@@ -1213,8 +1249,40 @@ impl DomRenderer {
             ));
         }
 
-        any_changed
+        SectionPass { any_changed, forced: force_all, closed }
     }
+}
+
+/// Rebuilds per second above which `DOM: HIGH REBUILD RATE` fires.
+///
+/// 10 in the product. `?rebuildrate=<n>` lowers it, so the branch — and with it
+/// the attribution line — is reachable from a scenario a test harness can
+/// actually build; churning eleven rebuilds a second on purpose is not. A test
+/// affordance, never set by anything shipped, and it can only ever make the
+/// warning *more* talkative.
+fn rebuild_rate_threshold() -> u64 {
+    const DEFAULT: u64 = 10;
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|s| {
+            s.trim_start_matches('?')
+                .split('&')
+                .find_map(|part| part.strip_prefix("rebuildrate=")?.parse::<u64>().ok())
+        })
+        .unwrap_or(DEFAULT)
+}
+
+/// What one pass over the window sections did — the facts
+/// [`crate::rebuild_attribution`] needs to name a culprit.
+///
+/// `forced` is carried out rather than inferred at the call site because it is
+/// the difference between *one window rebuilding eleven times* and *eleven
+/// windows rebuilt once by a moving generation counter*, which produce an
+/// identical per-window tally and implicate opposite things.
+struct SectionPass {
+    any_changed: bool,
+    forced: bool,
+    closed: u64,
 }
 
 /// The grip along a window's bottom edge: drag to set the window's height,

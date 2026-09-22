@@ -31,6 +31,8 @@ pub struct SettingsOutput {
     pub auto_connect: bool,
     /// Whether single-instance ("immutable") windows are enabled.
     pub singleton_windows: bool,
+    /// Whether the status bar's live performance gauges are on.
+    pub status_gauges: bool,
     /// Site & Surface settings, read from the session config entity.
     pub session: SessionSettings,
 }

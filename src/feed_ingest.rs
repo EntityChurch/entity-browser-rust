@@ -92,7 +92,16 @@ use crate::peers::Peers;
 const POST_EXT: &str = "md";
 
 /// The body media type every post here becomes.
-const POST_MEDIA_TYPE: &str = "text/markdown";
+///
+/// ⭐ **Shared with the reader, not restated.** This module has minted
+/// `text/markdown` since it shipped — every post in `entity-core-papers`' corpus
+/// carries it — while the Feed window rendered every body's `fallback` and never
+/// looked at the media type at all. So the *producer* was right for weeks and the
+/// spelling was already on the wire; what was missing was a reader. Two `const`s
+/// that must agree, in a producer and a consumer of the same bytes, is C15 with a
+/// silent failure on the end of it (SHARE §2: a type-filtered query on the wrong
+/// tag returns a correct, complete, EMPTY answer).
+const POST_MEDIA_TYPE: &str = crate::feed_body::MARKDOWN_MEDIA_TYPE;
 
 /// Ingest every post under `dir` into `peer_id`'s tree. Returns how many
 /// entries were written.
@@ -103,8 +112,8 @@ const POST_MEDIA_TYPE: &str = "text/markdown";
 /// `--ingest-feed` meant to publish posts, and a publish that quietly carried
 /// none is the *"nothing would be removed"* report that deleted every app
 /// bundle.
-pub fn ingest_path(peers: &Peers, peer_id: &str, dir: &Path) -> Result<usize, String> {
-    let posts = read_post_dir(dir, peer_id)?;
+pub fn ingest_path(peers: &Peers, peer_id: &str, dir: &Path) -> Result<Ingested, String> {
+    let (posts, notes) = read_post_dir(dir, peer_id)?;
 
     // Chunk into a scratch store and hand the produced entities to the peer —
     // the site ingest's shape and its reason: `stage` returns the closure by
@@ -119,7 +128,22 @@ pub fn ingest_path(peers: &Peers, peer_id: &str, dir: &Path) -> Result<usize, St
         let key = entry_key(&entity.content_hash);
         peers.seed_write(peer_id, format!("/{peer_id}/{key}"), entity);
     }
-    Ok(posts.len())
+    Ok(Ingested { posts: posts.len(), notes })
+}
+
+/// What an ingest carried, and what it could not.
+///
+/// A count alone lets a caller report a clean `ingested N post(s)` over a set
+/// that quietly lost an authored attribute — the same shape as `--plan`'s
+/// reassuring zero (meta `B-5`), one verb over. The caller gets both or
+/// neither.
+#[derive(Debug)]
+pub struct Ingested {
+    /// Entries written into the tree.
+    pub posts: usize,
+    /// One line per authored key the entry could not carry, each naming the
+    /// file. Empty is the ordinary case and prints nothing.
+    pub notes: Vec<String>,
 }
 
 /// The disk→entity half, with no `Peers` in sight.
@@ -128,10 +152,12 @@ pub fn ingest_path(peers: &Peers, peer_id: &str, dir: &Path) -> Result<usize, St
 /// was earned rather than assumed: *a link you cannot evaluate without standing
 /// up a peer is a link nobody evaluates.* Every refusal below is reachable from
 /// a test that touches no tree.
+///
+/// Returns the posts **and** the per-file notes, for [`Ingested`]'s reason.
 pub(crate) fn read_post_dir(
     dir: &Path,
     author: &str,
-) -> Result<Vec<(FeedEntry, Vec<Entity>)>, String> {
+) -> Result<(Vec<(FeedEntry, Vec<Entity>)>, Vec<String>), String> {
     let mut files = Vec::new();
     collect_posts(dir, &mut files)?;
     files.sort();
@@ -141,20 +167,28 @@ pub(crate) fn read_post_dir(
 
     let scratch: Arc<dyn ContentStore> = Arc::new(MemoryContentStore::new());
     let mut out = Vec::with_capacity(files.len());
+    let mut notes = Vec::new();
     for path in &files {
         let raw = std::fs::read_to_string(path)
             .map_err(|e| format!("read {}: {e}", path.display()))?;
-        out.push(read_post(&raw, author, &scratch).map_err(|e| format!("{}: {e}", path.display()))?);
+        let (entry, content, dropped) =
+            read_post(&raw, author, &scratch).map_err(|e| format!("{}: {e}", path.display()))?;
+        // The file name is the actionable half — a note naming a key and not a
+        // post sends the author looking through the whole directory.
+        notes.extend(dropped.into_iter().map(|d| format!("{}: {d}", path.display())));
+        out.push((entry, content));
     }
-    Ok(out)
+    Ok((out, notes))
 }
 
-/// One post's text → an entry and the content closure its body needs.
+/// One post's text → an entry, the content closure its body needs, and **what
+/// the entry could not carry** (see the `params` loop below — a caller cannot
+/// take the entry without being handed the loss).
 pub(crate) fn read_post(
     raw: &str,
     author: &str,
     store: &Arc<dyn ContentStore>,
-) -> Result<(FeedEntry, Vec<Entity>), String> {
+) -> Result<(FeedEntry, Vec<Entity>, Vec<String>), String> {
     let (front, body) = split_frontmatter(raw)?;
     let created_at = created_at_ms(&front)?;
 
@@ -206,18 +240,39 @@ pub(crate) fn read_post(
     // answer different questions — a renderer wanting a headline wants
     // `params.title`, while `fallback` is EMBED §6's degradation text, which for
     // an untitled post is the first line instead.
+    //
+    // ⭐ **A key the bag cannot hold is REPORTED, not silently dropped.**
+    // `tags = ["a", "b"]` is the shape an author reaches for and the bag is
+    // strings only, so the array goes nowhere — and until 2026-09-16 it went
+    // nowhere *quietly*, at the one boundary where the person who can fix it is
+    // standing. Found by comparing this module against
+    // `entity-core-papers`' `tools/feed/emit.py`, which restates these refusals
+    // at the authoring seat and **already warned about this loss while we said
+    // nothing**: a counterpart's gate being louder than the authority it
+    // restates is a defect in the authority.
+    //
+    // Reported rather than refused, deliberately. `created_at` has no correct
+    // answer without the author, which is why that one is fatal; an attribute
+    // the bag cannot carry has an obvious one — the post publishes, minus a key
+    // nothing was going to read — and refusing would make a conformant post
+    // unpublishable over an attribute that is not part of its meaning.
+    let mut dropped = Vec::new();
     for (k, v) in front.iter() {
         if k == "created_at" {
             continue; // it is a field on the entry, not an attribute of the body
         }
-        if let Some(s) = v.as_str() {
-            data.params.insert(k.clone(), entity_ecf::text(s));
+        match v.as_str() {
+            Some(s) => {
+                data.params.insert(k.clone(), entity_ecf::text(s));
+            }
+            None => dropped.push(format!("`{k}` is {} and `params` carries strings only", v.type_str())),
         }
     }
 
     Ok((
         FeedEntry::new(author, created_at, EmbedNode::new(POST_MEDIA_TYPE, data)),
         staged.content,
+        dropped,
     ))
 }
 
@@ -459,7 +514,7 @@ mod tests {
     #[test]
     fn a_body_over_the_inline_ceiling_becomes_a_pointer_and_brings_its_bytes() {
         let long = "x".repeat(crate::embed::INLINE_PAYLOAD_MAX + 1);
-        let (entry, content) =
+        let (entry, content, _) =
             read_post(&post("created_at = 2026-09-10", &long), "QmA", &scratch()).unwrap();
         let hash = match entry.body.data.payload {
             EmbedPayload::Pointer(h) => h,
@@ -470,7 +525,7 @@ mod tests {
         // …and the last conformant inline size still inlines, so this is a
         // boundary and not a policy of always chunking.
         let at_ceiling = "x".repeat(crate::embed::INLINE_PAYLOAD_MAX);
-        let (entry, content) =
+        let (entry, content, _) =
             read_post(&post("created_at = 2026-09-10", &at_ceiling), "QmA", &scratch()).unwrap();
         assert!(matches!(entry.body.data.payload, EmbedPayload::Inline(_)));
         assert!(content.is_empty());
@@ -481,7 +536,7 @@ mod tests {
     /// second copy is a second source of truth.
     #[test]
     fn authored_attributes_are_carried_and_the_date_is_not_duplicated_into_the_body() {
-        let (entry, _) = read_post(
+        let (entry, _, dropped) = read_post(
             &post("created_at = 2026-09-10\ntitle = \"A post\"\ntags = \"rust,feeds\"", "body"),
             "QmA",
             &scratch(),
@@ -493,13 +548,47 @@ mod tests {
             !entry.body.data.params.contains_key("created_at"),
             "the clock is a field on the entry, not an attribute of its body"
         );
+        assert!(dropped.is_empty(), "nothing was lost, so there is nothing to report: {dropped:?}");
+    }
+
+    /// **A key `params` cannot hold is REPORTED, and the post still
+    /// publishes.** `tags = ["a", "b"]` is the shape an author reaches for and
+    /// the bag is strings only (EMBED §3), so the array goes nowhere — and
+    /// until 2026-09-16 it went nowhere silently, at the authoring boundary,
+    /// while `entity-core-papers`' own gate warned about the same loss. *A
+    /// counterpart's restatement being louder than the authority it restates is
+    /// a defect in the authority.*
+    ///
+    /// Both halves are asserted, because each has a different wrong
+    /// implementation: report and refuse (a conformant post made unpublishable
+    /// over an attribute that is not part of its meaning), or carry and say
+    /// nothing (today's defect).
+    #[test]
+    fn an_attribute_the_bag_cannot_hold_is_reported_and_the_post_still_publishes() {
+        let (entry, _, dropped) = read_post(
+            &post("created_at = 2026-09-10\ntags = [\"a\", \"b\"]\ndraft = false", "body"),
+            "QmA",
+            &scratch(),
+        )
+        .unwrap();
+        assert_eq!(entry.body.data.fallback, "body", "the post is still an entry");
+        assert!(!entry.body.data.params.contains_key("tags"));
+
+        // Named, and named individually — a count would tell an author that
+        // something was lost without telling them what.
+        assert_eq!(dropped.len(), 2, "one line per key, not one per post: {dropped:?}");
+        assert!(dropped.iter().any(|d| d.contains("`tags`") && d.contains("array")), "{dropped:?}");
+        assert!(
+            dropped.iter().any(|d| d.contains("`draft`") && d.contains("boolean")),
+            "{dropped:?}"
+        );
     }
 
     /// With no title the fallback is the post's first line — a real sentence,
     /// which is what §6's degradation ladder is for.
     #[test]
     fn a_post_with_no_title_falls_back_to_its_first_line() {
-        let (entry, _) = read_post(
+        let (entry, _, _) = read_post(
             &post("created_at = 2026-09-10", "\n\n# A heading\n\nand then a paragraph."),
             "QmA",
             &scratch(),
@@ -535,7 +624,7 @@ mod tests {
 
         let peers = Peers::new_direct();
         let pid = peers.primary_peer_id().to_string();
-        assert_eq!(ingest_path(&peers, &pid, dir.path()).unwrap(), 3);
+        assert_eq!(ingest_path(&peers, &pid, dir.path()).unwrap().posts, 3);
 
         let feed = crate::feed_tree::read_owned_feed(&peers, &pid).expect("the posts are a feed");
         let titles: Vec<&str> =

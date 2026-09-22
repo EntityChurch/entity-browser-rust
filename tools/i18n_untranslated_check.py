@@ -76,6 +76,11 @@ ALLOWLIST: dict[str, str] = {
     "siteeditor.markdown_label": "file-format proper noun plus a slot",
     # "{window} · {app}": two slots and a separator. Nothing in it is a word.
     "palette.running_title": "two slots and a separator — no text to translate",
+    # "{ms} ms": a slot plus the SI symbol for millisecond, which is written
+    # `ms` in Greek too. The locales that DO carry a native form (мс, ミリ秒,
+    # 毫秒, مللي ثانية …) use it because that is their convention, not because
+    # this string has prose in it. Same call `file_offer::human_bytes` already
+    # makes for B/KB/MB: a unit symbol is language-neutral.
 }
 
 # Codepoint ranges that count as "this locale's own script". A locale absent

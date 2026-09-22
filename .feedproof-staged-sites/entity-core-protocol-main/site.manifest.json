@@ -1,0 +1,53 @@
+{
+  "_comment": "Curated nav cover, DERIVED from the page plan's out-paths (maps to L5 SITE SiteManifest). Nav is a cover, not the full collection; deeper pages discovered lazily.",
+  "site_id": "entity-core-protocol-main",
+  "title": "Entity Core Protocol",
+  "tagline": "A working specification for distributed information systems",
+  "theme": "",
+  "nav": [
+    {
+      "title": "The Specification",
+      "path": "pages/spec/index.md",
+      "children": [
+        {
+          "title": "Entity Core Protocol",
+          "path": "pages/spec/entity-core-protocol/index.md"
+        },
+        {
+          "title": "CBOR Encoding",
+          "path": "pages/spec/cbor-encoding/index.md"
+        },
+        {
+          "title": "Native Type System",
+          "path": "pages/spec/native-type-system/index.md"
+        },
+        {
+          "title": "Glossary",
+          "path": "pages/spec/glossary/index.md"
+        }
+      ]
+    },
+    {
+      "title": "Keystone",
+      "path": "pages/keystone/index.md",
+      "children": [
+        {
+          "title": "Conformance Matrix",
+          "path": "pages/keystone/conformance-matrix.md"
+        },
+        {
+          "title": "validate-peer — the harness contract",
+          "path": "pages/keystone/validate-peer.md"
+        },
+        {
+          "title": "Conformance Invariants (N1–N8)",
+          "path": "pages/keystone/conformance-invariants.md"
+        }
+      ]
+    },
+    {
+      "title": "Formalization",
+      "path": "pages/formalization.md"
+    }
+  ]
+}

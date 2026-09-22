@@ -16,12 +16,20 @@ pub struct FeedOutput {
     pub window_id: WindowId,
     /// Who this profile follows, sorted and stable.
     pub follows: Vec<FollowRow>,
+    /// ⭐ **Every publisher this profile can reach** — the browse list, so that
+    /// arriving at a deployment and opening this window does not require
+    /// pasting a 45-character peer id. See [`KnownRow`].
+    pub known: Vec<KnownRow>,
     /// Who this profile reads other authors **through** — `APP-CONVENTION-FEED`
     /// §6's gatherers. A separate list from [`Self::follows`] because it is a
     /// different relationship, not a flag on the same one.
     pub gatherers: Vec<GathererRow>,
-    /// Whose feed the panel is showing, if any.
-    pub selected: Option<String>,
+    /// Whose feed the panel is showing, if any — **and what they are to this
+    /// profile**, because the panel offers a control that depends on it.
+    ///
+    /// See [`Selection`]. Read the peer id through [`FeedOutput::selected_peer`]
+    /// where the relation is not wanted.
+    pub selected: Option<Selection>,
     pub panel: FeedPanel,
     /// The result of the last Follow press, if there was one this session.
     pub notice: Option<Notice>,
@@ -38,6 +46,8 @@ pub struct FeedOutput {
     /// about the profile, and a removal's sentence surviving a reload would be
     /// an answer to a question nobody asked twice.
     pub compose_notice: Option<ComposeNotice>,
+    /// Whether the *Manage* section is expanded. Session-only; see the model.
+    pub manage_open: bool,
     /// Whether this profile holds the authoring key for the bound peer.
     ///
     /// Drives whether the composer is offered at all. **Spelled positively** so
@@ -46,10 +56,148 @@ pub struct FeedOutput {
     pub can_author: bool,
 }
 
+impl FeedOutput {
+    /// Whose feed is on screen, without the relation.
+    ///
+    /// Exists because most callers — and every gate written before the panel
+    /// had a control — want only the peer id, and `selected.as_ref().map(…)` at
+    /// each of them would read as if the relation were incidental. It is not:
+    /// it decides which button the panel draws.
+    pub fn selected_peer(&self) -> Option<&str> {
+        self.selected.as_ref().map(|s| s.peer_id.as_str())
+    }
+}
+
+/// Whose feed the panel is showing, and what they are to this profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    pub peer_id: String,
+    /// Already in the durable follow registry.
+    pub followed: bool,
+    /// This profile's own peer.
+    pub own: bool,
+    /// This deployment's own publisher — the row a visitor arrived for, and the
+    /// panel's fallback when nobody has chosen.
+    pub home: bool,
+}
+
+impl Selection {
+    /// ⭐ **What to call this publisher, given that we have no name for them.**
+    ///
+    /// ⛔ **There is no display name in this system and we may not invent one.**
+    /// `peers::peer_metadata` resolves through `sdk_for`, so it answers only for
+    /// peers that live in this process — a foreign publisher has no label
+    /// anywhere. The registry's by-name index is enumerable but yields *names*,
+    /// and reversing it to `peer → name` costs one resolve per name, which is
+    /// the same O(list) round trip `KnownRow` refuses for probing. And the real
+    /// answer — a profile — is `APP-CONVENTION-FEED` §12's `F-6`, whose **shape
+    /// is ruled and whose path arch is deliberately holding**, so minting one
+    /// here would make us the baseline for a decision that is not ours.
+    ///
+    /// So the heading says the one true thing we do know, and the id is
+    /// rendered in full beside it rather than shortened. **Never truncated:**
+    /// half a peer id cannot be copied and still cannot be read, which is
+    /// strictly worse than the whole one.
+    ///
+    /// Three outcomes; `own` outranks `home` because a deployment publishing
+    /// under this profile's own peer is both, and *this is you* is the more
+    /// specific statement.
+    /// ⛔ **The generic arm reuses the browse table's column key rather than
+    /// minting a `feed.panel.publisher`.** "Publisher" already has a key, and
+    /// one English word gets one key — `i18n-locale-check` reds on a second
+    /// (Hungarian rendered the pair `Kiadó` / `Közzétevő`), which is C15 inside
+    /// the catalog with a translator on the far end. The key's name says `col`
+    /// because the column asked for the word first; it is one noun either way.
+    pub fn heading_key(&self) -> &'static str {
+        if self.own {
+            "feed.panel.you"
+        } else if self.home {
+            "feed.panel.home"
+        } else {
+            "feed.known.col.publisher"
+        }
+    }
+}
+
+/// ⭐ **Which follow control a surface may offer for one publisher — three
+/// outcomes, not a `bool`.**
+///
+/// *Follow them* and *stop following them* are the two a `bool` can express.
+/// The third is the one that matters: **your own peer has no control at all**,
+/// because `feed_follows::follow` refuses it with its own word
+/// (`FollowOutcome::ThatIsYou`) — so a Follow button on your own row is a
+/// control whose only possible outcome is a refusal. The browse list offered
+/// exactly that until this decision existed, which is what a two-state answer
+/// to a three-state question costs.
+///
+/// One expression, two call sites (the panel head and the browse row), so the
+/// two cannot disagree about the same peer — which they could while the
+/// renderer decided it inline in each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relation {
+    /// Not followed, and not us — offer **Follow**.
+    Stranger,
+    /// In the follow registry — offer **Unfollow**.
+    Followed,
+    /// Us. Offer nothing.
+    Own,
+}
+
+/// [`Relation`] from the two facts a row already carries.
+///
+/// `own` outranks `followed` deliberately: the registry verb refuses to file
+/// your own peer, so the pair cannot both be true through any supported path —
+/// and if one ever arrives (a hand-written entity, an older build), the arm
+/// that offers no control is the safe one.
+pub fn relation(own: bool, followed: bool) -> Relation {
+    if own {
+        Relation::Own
+    } else if followed {
+        Relation::Followed
+    } else {
+        Relation::Stranger
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FollowRow {
     pub peer_id: String,
     pub selected: bool,
+}
+
+/// One publisher **this profile already knows how to reach** — the browse list.
+///
+/// ⭐ **The set is the ROUTED set, not everything we have ever heard of**, and
+/// that is the design rather than a shortcut. A row with no origin can only
+/// produce `FeedPanel::NoRoute`, so offering it is AP54's shape pointed
+/// forward: *a viewer must not offer what it cannot open.* What populates it
+/// costs nothing new — `origins::list_origins` is the same supersession-resolving
+/// accessor the panel already reads, and a deployment's own publisher is in it
+/// because `adopt_deployment_origin` put it there at boot.
+///
+/// **Rows are not probed.** `publication_probe` could pre-annotate each with
+/// *does this peer publish a feed*, and it would cost one signed-root walk per
+/// row — O(list) round trips to decorate a list. Selecting a row reads it, and
+/// [`FeedPanel`]'s four states already answer the same question honestly at the
+/// moment somebody asks it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownRow {
+    pub peer_id: String,
+    /// Already in the durable follow registry.
+    pub followed: bool,
+    /// The panel is showing them right now — including by the home fallback,
+    /// which is why this is computed from the *effective* selection and not
+    /// from what somebody clicked.
+    pub selected: bool,
+    /// ⭐ **This deployment's own publisher.** The row a visitor arriving at a
+    /// domain is looking for, and the one the panel falls back to when nobody
+    /// has chosen — see `FeedModel::effective_selection`.
+    pub home: bool,
+    /// Us. Marked rather than filtered: *your own posts* have their own section
+    /// and read out of the tree, while this row reads them back over a road, so
+    /// the two are different facts about the same peer and hiding one of them
+    /// makes a publisher's own view of themselves unreachable.
+    pub own: bool,
 }
 
 /// One gatherer this profile reads through.
@@ -159,7 +307,15 @@ pub struct EntryRow {
     /// The body's authored `fallback` — EMBED §3 makes it mandatory and
     /// non-empty precisely so that a reader with no renderer for the payload
     /// still has a sentence.
+    ///
+    /// ⚠ **This is the DEGRADATION, not the body.** Draw [`Self::body`]; this
+    /// field is what that resolves to on the ladder's last rung, and it is kept
+    /// separate so a renderer cannot reach for it by accident — which is
+    /// precisely what both call sites did until 2026-09-16.
     pub text: String,
+    /// ⭐ **What a person actually reads** — EMBED §6's ladder, decided by
+    /// [`crate::feed_body::decide`].
+    pub body: crate::feed_body::BodyRender,
     pub created_at: u64,
     /// Whether a renderer may name the author. Mirrors
     /// [`Attribution::may_name_the_author`](crate::feed_read::Attribution::may_name_the_author)
@@ -191,7 +347,12 @@ pub struct OwnPostRow {
     pub hash_hex: String,
     /// Shortened, for display beside the text.
     pub id_short: String,
+    /// The authored `fallback` — see [`EntryRow::text`]; draw [`Self::body`].
     pub text: String,
+    /// What a person reads. Your own post goes through the **same** ladder a
+    /// stranger's does — one code path, which is `SYSTEM-DATA-EXCHANGE` §1.1's
+    /// rule applied where it is cheapest to get wrong.
+    pub body: crate::feed_body::BodyRender,
     pub created_at: u64,
 }
 
@@ -231,5 +392,125 @@ impl ComposeNotice {
             ComposeNotice::Refused => "feed.compose.refused",
             ComposeNotice::Removed => crate::feed_compose::RemovalMeaning::COPY_KEY,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⭐ **Three outcomes, and the count is asserted** so a fourth relation
+    /// cannot quietly reuse one of these arms. The pair a two-state answer
+    /// merges is `Stranger` and `Own` — both *"not followed"*, and only one of
+    /// them may be offered a Follow button.
+    #[test]
+    fn a_publisher_is_a_stranger_a_follow_or_us_and_never_two_of_them() {
+        let all = [
+            relation(false, false),
+            relation(false, true),
+            relation(true, false),
+        ];
+        assert_eq!(all, [Relation::Stranger, Relation::Followed, Relation::Own]);
+
+        let distinct: std::collections::BTreeSet<_> =
+            all.iter().map(|r| format!("{r:?}")).collect();
+        assert_eq!(distinct.len(), 3, "each relation needs its own answer");
+    }
+
+    /// **The arm that offers nothing wins a contradiction.** `feed_follows::follow`
+    /// refuses our own peer (`FollowOutcome::ThatIsYou`), so the pair cannot both
+    /// be true through any supported path — but a hand-written entity or an older
+    /// build could produce one, and *offer no control* is the safe answer to a
+    /// state that should not exist.
+    #[test]
+    fn our_own_peer_is_never_offered_a_follow_control_even_if_a_row_claims_we_follow_it() {
+        assert_eq!(relation(true, true), Relation::Own);
+    }
+
+    /// ⭐ **Three headings, each its own key, and `own` outranks `home`.**
+    ///
+    /// A deployment publishing under this profile's own peer is *both*, and
+    /// *this is you* is the more specific statement — the one a person can act
+    /// on. The count is asserted so a fourth case cannot quietly reuse one of
+    /// these, which is how a heading starts lying about a publisher.
+    #[test]
+    fn a_publisher_with_no_name_is_still_called_something_and_you_outrank_the_deployment() {
+        let sel = |own, home| Selection {
+            peer_id: "2KSOMEBODY".to_string(),
+            followed: false,
+            own,
+            home,
+        };
+        // The generic arm reuses the table's column key — see `heading_key`.
+        assert_eq!(sel(false, false).heading_key(), "feed.known.col.publisher");
+        assert_eq!(sel(false, true).heading_key(), "feed.panel.home");
+        assert_eq!(sel(true, false).heading_key(), "feed.panel.you");
+        assert_eq!(
+            sel(true, true).heading_key(),
+            "feed.panel.you",
+            "a deployment publishing as us is still us"
+        );
+
+        let distinct: std::collections::BTreeSet<_> =
+            [sel(false, false), sel(false, true), sel(true, false)]
+                .iter()
+                .map(|s| s.heading_key())
+                .collect();
+        assert_eq!(distinct.len(), 3, "each heading needs its own key");
+    }
+
+    /// ⛔ **The heading is never the peer id, and never a piece of one.**
+    ///
+    /// Both directions are the defect this replaced: the id *was* the section
+    /// title, and the obvious repair — shortening it — is worse, because half an
+    /// identifier can neither be read nor copied. The id is rendered in full
+    /// beside the heading instead. This asserts the property rather than the
+    /// wording, so a re-worded heading does not red it.
+    #[test]
+    fn no_heading_key_carries_any_part_of_the_publishers_identifier() {
+        let peer = "2KABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFG";
+        for (own, home) in [(false, false), (false, true), (true, false)] {
+            let key = Selection {
+                peer_id: peer.to_string(),
+                followed: false,
+                own,
+                home,
+            }
+            .heading_key();
+            assert!(key.starts_with("feed."), "a catalog key, never a value");
+            assert!(
+                !peer.contains(key) && !key.contains(&peer[..8]),
+                "the heading must not carry the identifier or a prefix of it"
+            );
+        }
+    }
+
+    /// `selected_peer` is the whole of what a caller that does not care about
+    /// the relation should see — and `None` stays `None` rather than becoming a
+    /// `Selection` with an empty peer id.
+    #[test]
+    fn nobody_selected_reads_as_nobody_rather_than_an_empty_publisher() {
+        let mut out = FeedOutput {
+            window_id: 1,
+            follows: Vec::new(),
+            known: Vec::new(),
+            gatherers: Vec::new(),
+            selected: None,
+            panel: FeedPanel::NobodySelected,
+            notice: None,
+            own_posts: Vec::new(),
+            compose_notice: None,
+            manage_open: false,
+            can_author: false,
+        };
+        assert_eq!(out.selected_peer(), None);
+
+        out.selected = Some(Selection {
+            peer_id: "2KSOMEBODY".to_string(),
+            followed: true,
+            own: false,
+            home: false,
+        });
+        assert_eq!(out.selected_peer(), Some("2KSOMEBODY"));
     }
 }

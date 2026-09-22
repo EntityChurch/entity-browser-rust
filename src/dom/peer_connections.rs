@@ -490,6 +490,21 @@ fn meet_mode_label(status: &crate::views::peer_connections::output::MeetStatusRo
     }
 }
 
+/// How long the search has left, in the locale's own words.
+///
+/// The bucketing is [`TimeLeft`]'s and is already done — this places a string
+/// and nothing else. **`NotSearching` renders empty rather than "0"**: the
+/// caller only reaches here while searching, and a zero is a countdown to
+/// nothing, which is the shape this whole line exists to remove.
+fn meet_time_left(left: crate::views::peer_connections::output::TimeLeft) -> String {
+    use crate::views::peer_connections::output::TimeLeft;
+    match left {
+        TimeLeft::Minutes(n) => crate::i18n::t("peerconn.meet_time_minutes", &[("n", &n.to_string())]),
+        TimeLeft::UnderAMinute => crate::i18n::t("peerconn.meet_time_under_minute", &[]),
+        TimeLeft::NotSearching => String::new(),
+    }
+}
+
 /// **Meet at a name** — the `lobby` / `tag` / `secret` modes
 /// (`crate::rendezvous`), the localized surface over the `meet` shell verb.
 ///
@@ -687,8 +702,7 @@ fn render_meet(parent: &Element, output: &PeerConnectionsOutput, ctx: &DomCtx) {
                 &[
                     ("mode", &meet_mode_label(status)),
                     ("node", &output.meet.node_short),
-                    ("polls", &status.polls.to_string()),
-                    ("max", &status.max_polls.to_string()),
+                    ("left", &meet_time_left(status.time_left)),
                 ],
             ),
         );
@@ -1004,6 +1018,13 @@ fn render_add_node_form(card: &Element, output: &PeerConnectionsOutput, ctx: &Do
         &crate::i18n::t("peerconn.connector_add", &[]),
         components::ButtonKind::Primary,
     );
+    // **Tagged because four gates used to click this button by its LABEL**, and
+    // a label is copy: renaming "Add connector" to match the card it sits in
+    // broke all four at once, at runtime, with nothing in `make lint` able to
+    // see it. A control a test must PRESS is the one case where selecting by
+    // attribute beats selecting by text — the opposite of reading a card, where
+    // the text is the subject and a hook would measure the hook.
+    add_btn.set_attribute("data-field", "connector-add").ok();
     {
         let actions = ctx.actions.clone();
         let rp = ctx.repaint.clone();

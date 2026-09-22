@@ -22,8 +22,18 @@
 //! | app → host | [`MSG_REQUEST_FILE`] | `{accept?}`                          |
 //! | host → app | [`MSG_FILE`]         | `{name, media_type, data}`           |
 //!
-//! and the opt-in is the catalog key [`MANIFEST_KEY`]. If entity-apps rules on
-//! a shape, the rename is this module's constants and one catalog field.
+//! and the opt-in is the catalog key [`MANIFEST_KEY`], with [`INIT_KEY`] the
+//! host's answering offer.
+//!
+//! ⭐ **RULED 2026-09-15 — this is no longer a local extension.** entity-apps
+//! answered `AP-2` **yes**: the family is adopted into their SDK as `x-files`,
+//! with the `x-` spelling kept for now (`BR-4`) rather than unprefixed, because
+//! renaming a vocabulary across two repos during a machine migration is two
+//! failures in one commit. So the table above is **their** contract now, not our
+//! prototype of one, and `docs/EMBEDDING.md` §8 is where it lives. Two
+//! consequences: the shape is not ours to change unilaterally, and every rule in
+//! that section binds us — including the one we were failing until 2026-09-16
+//! (see [`INIT_KEY`]).
 //!
 //! ## Opt-in, and what "not declared" does
 //!
@@ -59,6 +69,25 @@ use crate::file_offer::MAX_OFFER_BYTES;
 /// The catalog (`index.json` / `app/app-catalog` entry) key an app sets to
 /// `true` to receive the file verbs.
 pub const MANIFEST_KEY: &str = "x-files";
+
+/// The `init` key by which the HOST tells the app it will answer the file verbs.
+///
+/// ⚠ **Offering this is not optional, and saying nothing is its own defect.**
+/// entity-apps' SDK reads the host's offer — `available: () => !!(init &&
+/// init[KEY.files] === true)` — so a host that implements the verbs and stays
+/// silent is *indistinguishable from one that will never answer*, and an app
+/// that asks first and waits gets a timeout instead of a decision. Their
+/// `docs/EMBEDDING.md` §8 states it as a rule: *"Offer it the day you implement
+/// it, exactly as for the other two."*
+///
+/// We implemented the verbs on 2026-09-14 and did **not** offer it until
+/// 2026-09-16 — found by reviewing their tree rather than by any gate of ours.
+/// Same spelling as [`MANIFEST_KEY`] and a separate constant on purpose: the
+/// catalog slot (*the app asks*) and the init slot (*the host answers*) are two
+/// facts that happen to share a word, exactly as `x-assets` and `x-workspace`
+/// each carry both. The value is a strict boolean — their SDK compares `=== true`,
+/// so a truthy string or `1` reads as *no offer*.
+pub const INIT_KEY: &str = "x-files";
 
 /// app → host: "keep this file"; host → app: "here is a file".
 pub const MSG_FILE: &str = "x-file";
@@ -241,11 +270,17 @@ mod tests {
 
     #[test]
     fn the_extension_names_are_x_prefixed() {
-        // The promise in ROUTING-2026-09-11-q: a local extension, never a name
-        // in entity-apps' contract. Unprefixing one of these is a contract change
-        // and belongs to them.
-        for name in [MANIFEST_KEY, MSG_FILE, MSG_REQUEST_FILE, MSG_FILE_RESULT] {
-            assert!(name.starts_with("x-"), "{name} must stay x-prefixed until entity-apps rules");
+        // ⚠ THE STATUS OF THESE NAMES CHANGED ON 2026-09-15 AND THE RULING WAS
+        // "KEEP". They began as a local extension pending entity-apps' decision
+        // (ROUTING-2026-09-11-q). entity-apps answered `AP-2` yes — the family is
+        // adopted into their SDK as `x-files` — and ruled separately (`BR-4`) that
+        // the `x-` SPELLING stays for now, because renaming a vocabulary across two
+        // repos during a machine migration is two failures in one commit. So these
+        // are no longer ours to rename unilaterally for the opposite reason to
+        // before: not "unruled" but "ruled, and the answer was keep". If it ever
+        // collides with another host's `x-foo`, their stated answer is `x-entity-*`.
+        for name in [MANIFEST_KEY, INIT_KEY, MSG_FILE, MSG_REQUEST_FILE, MSG_FILE_RESULT] {
+            assert!(name.starts_with("x-"), "{name} must stay x-prefixed — entity-apps ruled KEEP");
         }
     }
 }

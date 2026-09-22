@@ -43,6 +43,13 @@ const INFO_SITE_ID: &str = "entity-info";
 
 /// CLI entry: `entity-browser publish [OUT_DIR] [flags]`. `args[0]` is the
 /// `publish` verb. Flags:
+/// - **The site arm — exactly one of `--ingest=<dir>` / `--demo-sites` /
+///   `--no-sites`, and silence is refused.** See [`SiteSource`]. `--ingest`
+///   sources the tree from a content-team `render/` emit (one site dir, or a
+///   parent of site dirs); `--demo-sites` publishes the bundled `demo` +
+///   `entity-info` set on purpose; `--no-sites` publishes none, for a feed-only
+///   or apps-only domain. Not to be confused with `--demo-identity`, which picks
+///   the *keypair* — the two are orthogonal and both are explicit.
 /// - `--bare-root` — render a **single** site at the domain root (the SSG
 ///   on-ramp, [F1]) instead of the multi-site `sites/{peer}/{site}/` projection.
 /// - `--site=ID` — which site to render in bare-root mode (default: the demo
@@ -197,12 +204,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // regenerated between the calls. `resolve_publish_source` consumes its copy
     // building the source peer; this one goes to the `RootProjector`.
     let publisher_key = keypair.clone_inner();
-    // `--ingest=<dir>` sources the tree from a content-team `render/` emit
-    // (one site dir, or a parent of site dirs) instead of the bundled demo
-    // seed — the disk→tree half of the cross-team pipeline.
-    let ingest_dir: Option<PathBuf> = args
-        .iter()
-        .find_map(|a| a.strip_prefix("--ingest=").map(PathBuf::from));
+    // The SITE arm — `--ingest=<dir>` / `--demo-sites` / `--no-sites`, exactly
+    // one, and **silence is refused**. See [`SiteSource`] for why the default
+    // was worse than an unwanted demo site: the clean is wholesale, so a publish
+    // that meant `--ingest` and omitted it replaced a domain's real sites.
+    //
+    // Parsed here with the other flags, and **refused below the `--verify`
+    // return**: verifying an already-published tree asks nothing about a source,
+    // so requiring an arm for it would refuse a verification for a reason with
+    // no bearing on it — the same ordering rule the emit-time guards follow.
+    let site_source = parse_site_source(args);
     // App sets (games + apps) ride along on EVERY publish (same `.bin` two-hop
     // content data, a different subgraph `{peer}/apps/{set}/…`; the live
     // Games/Apps window fetches a bundle on click-through like a site asset).
@@ -289,6 +300,32 @@ pub fn run(args: &[String]) -> ExitCode {
         let peers = Peers::new_direct_with_keypair(keypair);
         let peer_id = peers.primary_peer_id().to_string();
         return run_verify(&out_dir, &peer_id, &prefix, &publisher_key);
+    }
+
+    // The site arm, now that `--verify` has returned. Refused before any
+    // filesystem work, like the surface typo below it.
+    let site_source = match site_source {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("publish: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // A declared arm contradicting a site-shaped mode is refused HERE, at the
+    // flags, rather than falling through to the emptiness check below — that one
+    // reports *"no sites found on peer X"*, which reads as a discovery about the
+    // tree when the operator said it on the command line.
+    //
+    // ONE expression of *"this mode projects a site"*, consulted by this guard
+    // and by the emptiness check below — two spellings of it is C15's drift.
+    let site_shaped = bare_root || html_only;
+    if site_source == SiteSource::None && site_shaped {
+        eprintln!(
+            "publish --no-sites: {} projects a site, and this publish declares none — drop one.",
+            if bare_root { "--bare-root" } else { "--html-only" }
+        );
+        return ExitCode::FAILURE;
     }
 
     // Validate the deployment-config surface up front (fail the build on a typo,
@@ -427,13 +464,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // [A] Resolve the source peer + read every publish axis off the tree.
     let PublishSource { peer_id, sites, app_sets, feed } = match resolve_publish_source(
         keypair,
-        ingest_dir.as_deref(),
+        &site_source,
         ingest_apps.as_deref(),
         ingest_feed.as_deref(),
     ) {
         Ok(source) => source,
         Err(e) => {
-            eprintln!("publish --ingest: {e}");
+            // Not `publish --ingest:` — every axis ingests through this call and
+            // a feed's parse error wearing the site flag's name sends an author
+            // to the wrong directory.
+            eprintln!("publish: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -445,14 +485,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // site is a publishable tree. The emptiness question is asked of the axis
     // table so a fourth convention answers it without editing this line.
     //
-    // ⚠ **The feed-and-no-site case is UNREACHABLE from the CLI today and has
-    // no gate**, so this is not a tested branch: `resolve_publish_source` seeds
-    // the demo site set whenever `--ingest` is absent, and `--ingest` refuses a
-    // directory with no `site.manifest.json`. It becomes reachable the moment
-    // that function's stand-in body is replaced by *"open a persisted peer dir →
-    // read its real sites"*, which is the change its own doc comment describes.
-    // Stated rather than implied — a branch nobody can reach is not a branch
-    // anybody has checked.
+    // **Reachable from the CLI as of 2026-09-16 (`--no-sites`), and gated.**
+    // It was written before the arm existed and said so — *"a branch nobody can
+    // reach is not a branch anybody has checked"* — which is what made the arm's
+    // absence findable when `<coordination-tree>` went looking for it.
     // [A2] Gather, **before anything is cleaned**. The carried bytes are held in
     // memory from here on, which is what makes `--gather=<author>@<this same
     // out-dir>` sound: the blobs behind that author's tree live in the SHARED
@@ -467,7 +503,6 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let site_shaped = bare_root || html_only;
     let carries_nothing =
         crate::publish_axes::axes(&peer_id, &sites, &app_sets, feed.as_ref(), &mirrors)
             .iter()
@@ -486,8 +521,42 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // A deployment config naming a home site that isn't published would point
     // the SPA at a 404 — fail fast rather than emit a broken config.
+    //
+    // ## The site-free deployment's posture — `B-4`'s two riding questions
+    //
+    // A domain with no sites has **no home site**, and the surface has to be one
+    // that does not need one. Both were open questions when the arm was asked
+    // for; they are answered here, at the flags, because the alternative is a
+    // document that is syntactically fine and boots a visitor into nothing.
+    //
+    // - **`home_site` is omitted** — see [`emit_deployment_config`]. Measured
+    //   rather than assumed: with no `home_site` the document affirms no peer
+    //   ([`crate::deployment_config::DeploymentConfig::affirmed_home`] returns
+    //   `""`), `stale_against_declared` filters the empty peer out, an empty
+    //   `current` drops nothing, and `decide_home` answers `Unchanged`. So a
+    //   site-free domain is inert for every returning profile rather than
+    //   quietly clearing anybody's supersession records.
+    // - **`--surface=site` is refused** — the overlay's entire content is a
+    //   site, and on a fresh peer it resolves its default home to a missing
+    //   local one (*"No site manifest at 'demo'"*).
+    // - **`--surface=window` is refused unless `--window-target` names what the
+    //   window opens at.** The default window type is a Site Browser whose
+    //   default aim is the home site, so a window surface with no sites and no
+    //   address is a real window with a plausible title and an empty rail — the
+    //   shipped bug `open_target` was built to retire. With an address it is
+    //   coherent and is the *point* of the arm: a Feed window on a timeline
+    //   domain. `chrome` needs nothing and is the answer for everything else.
+    // - **`--set-home` is refused** — it moves a home onto the peer being
+    //   published, and there is none to move.
     if deployment_config {
         if let Some(id) = &config_site {
+            if sites.is_empty() {
+                eprintln!(
+                    "publish --deployment-config: --config-site={id:?}, but this publish \
+                     carries no sites — there is nothing for it to name."
+                );
+                return ExitCode::FAILURE;
+            }
             if !sites.iter().any(|s| &s.site_id == id) {
                 eprintln!(
                     "publish --deployment-config: --config-site={id:?} not among published \
@@ -495,6 +564,39 @@ pub fn run(args: &[String]) -> ExitCode {
                     sites.iter().map(|s| s.site_id.as_str()).collect::<Vec<_>>()
                 );
                 return ExitCode::FAILURE;
+            }
+        }
+        if sites.is_empty() {
+            if config_set_home {
+                eprintln!(
+                    "publish --deployment-config: --set-home moves this domain's home site \
+                     onto the peer being published, and this publish carries no sites — \
+                     there is no home to move."
+                );
+                return ExitCode::FAILURE;
+            }
+            match config_surface.as_str() {
+                "site" => {
+                    eprintln!(
+                        "publish --deployment-config: --surface=site is the site overlay and \
+                         this publish carries no sites — a visitor would land on a home site \
+                         that is not there. Use --surface=chrome, or --surface=window with a \
+                         --window-target naming what the window opens at."
+                    );
+                    return ExitCode::FAILURE;
+                }
+                "window" if config_window_target.is_empty() => {
+                    eprintln!(
+                        "publish --deployment-config: --surface=window with no --window-target \
+                         opens {config_window_type:?} at this domain's home site, and this \
+                         publish carries no sites. Name what the window opens at \
+                         (--window-target=entity+ref://<peer-id>/app/feed/index), or use \
+                         --surface=chrome.\nNote --surface defaults to window, so this is \
+                         also what you get by saying nothing."
+                    );
+                    return ExitCode::FAILURE;
+                }
+                _ => {}
             }
         }
     }
@@ -1001,7 +1103,38 @@ fn warn_out_of_set_links(dangling: &[static_export::DanglingLink], strict: bool)
     true
 }
 
+/// **What a drop guard is scoped to: THIS OUTPUT DIRECTORY, never the estate.**
+///
+/// [`projected_site_ids`], [`projected_app_sets`] and [`projected_feed_posts`]
+/// all answer *what is already in `{out}`* — so on a build-fresh publisher they
+/// all read zero and `--plan` reports **"nothing would be removed"** on a
+/// publish that replaces everything an origin is serving. `<coordination-tree>`
+/// found this against their own pipeline, which does `rm -rf "$out"; mkdir -p
+/// "$out"` before every run (their `B-5`).
+///
+/// ⭐ **The guards are not wrong; the sentence they produce was.** A comparison
+/// against the out dir is exactly right for *"this run is about to clobber what
+/// the last run put here"*, which is what they were built for. It is simply not
+/// an answer to *"what am I about to replace at the origin"*, and a `0` reads as
+/// the second. **`nothing would be removed` and `there is nothing here to
+/// compare against` are different facts** (AP40) and only one of them is
+/// reassuring.
+///
+/// Returns `false` when this peer has **no prior projection at all** in this
+/// out dir, which is the case where every count below is uninformative.
+fn prior_projection_present(out_dir: &Path, peer_id: &str, prefix: &str) -> bool {
+    let root = paths::prefixed_root(out_dir, prefix);
+    // Any of the three axis roots existing means the last run left something
+    // here, so the counts are a real comparison. Checked as *existence*, not as
+    // a non-empty read: a publisher that emptied a set deliberately still leaves
+    // the directory, and that is a comparison we can make.
+    root.join(SITE_URL_PREFIX).join(peer_id).exists() || root.join(peer_id).exists()
+}
+
 /// The site ids already projected under `{out}/{prefix}/sites/{peer}/`, sorted.
+///
+/// **Scoped to the output directory** — see [`prior_projection_present`] for
+/// what that does and does not license you to say.
 ///
 /// Read **before** the projection clean, because that clean is wholesale (see
 /// [`warn_replaced_sites`]) and afterwards there is nothing left to compare
@@ -1151,6 +1284,8 @@ fn projected_mirrors(out_dir: &Path, peer_id: &str, prefix: &str) -> usize {
 /// How many feed posts are already projected under
 /// `{out}/{prefix}/{peer}/app/feed/entries/`.
 ///
+/// **Scoped to the output directory** — see [`prior_projection_present`].
+///
 /// The third axis's counterpart of [`projected_site_ids`] and
 /// [`projected_app_sets`], and it exists for the third time for the same reason
 /// — the clean removes `{base}/{peer}/` wholesale, so a publish invoked without
@@ -1173,6 +1308,8 @@ fn projected_feed_posts(out_dir: &Path, peer_id: &str, prefix: &str) -> usize {
 
 /// The app sets already projected under `{out}/{prefix}/{peer}/apps/`, each
 /// with the number of bundle pointers under it.
+///
+/// **Scoped to the output directory** — see [`prior_projection_present`].
 ///
 /// The apps counterpart of [`projected_site_ids`], and it exists for the same
 /// reason: `run_projection` cleans `{base}/{peer}/` wholesale when emitting
@@ -1868,6 +2005,38 @@ fn verify_signed_root(
             continue;
         }
 
+        // **An app's asset-bundle index declares one blob per file**, and gets
+        // the arm in the commit that introduces it — F8's rule, which the site
+        // asset and the feed entry both paid for after the fact. A missing file
+        // here is the worst of the three: the app launches, its index resolves,
+        // and the first key it asks for comes back `unavailable` from inside a
+        // running program, nowhere near the publish that dropped it.
+        if entity.entity_type == crate::apps::assets::INDEX_TYPE {
+            match crate::apps::assets::AssetIndex::from_entity(&entity) {
+                Ok(index) => {
+                    for blob in index.blobs() {
+                        if fetcher.content(&blob).is_ok() {
+                            queue.push(blob);
+                        } else if missing_hashes.insert(blob.to_hex()) {
+                            eprintln!(
+                                "publish --verify: BROKEN app asset closure — blob {} is DECLARED \
+                                 by asset index {} but not projected. The app will ask for it \
+                                 and be told it is unavailable.",
+                                blob.to_hex(),
+                                h.to_hex()
+                            );
+                        }
+                    }
+                }
+                Err(why) => eprintln!(
+                    "publish --verify: asset index {} did not decode ({why}) — its closure could \
+                     not be checked",
+                    h.to_hex()
+                ),
+            }
+            continue;
+        }
+
         // **An `app/feed/entry` declares its body's blob the same way, and this
         // arm landed with the third publish axis rather than after it.** F8's
         // lesson is that a heuristic scan filters on presence and therefore
@@ -2256,6 +2425,24 @@ fn run_plan(
 
     let where_ = paths::prefixed_root(out_dir, prefix).join(SITE_URL_PREFIX).join(peer_id);
     eprintln!("publish --plan: {} (peer {peer_id})", where_.display());
+
+    // ⭐ **Say what the counts are scoped to BEFORE printing any of them.**
+    // Every "present" below is read from this output directory, so a pipeline
+    // that recreates `{out}` on each run (`rm -rf "$out"; mkdir -p "$out"` —
+    // meta's, and the shape that earned this) makes all three axes read zero and
+    // the plan report "0 REMOVED" for a publish that replaces an entire estate.
+    // `nothing would be removed` and `there is nothing here to compare against`
+    // are different facts and only one of them is reassuring, so the empty case
+    // gets its own sentence rather than a reassuring zero (AP40).
+    if !prior_projection_present(out_dir, peer_id, prefix) {
+        eprintln!(
+            "publish --plan: this output directory holds NO prior projection for this peer, so \
+             every count below is 0 — that is a fact about {}, NOT about what an origin is \
+             currently serving. If your pipeline recreates the output directory on each run, \
+             --plan cannot tell you what a deploy would replace; compare against the origin.",
+            out_dir.display()
+        );
+    }
     eprintln!(
         "publish --plan: {} present, {} incoming — {kept} kept, {} added, {} REMOVED",
         existing.len(),
@@ -2344,7 +2531,22 @@ fn run_plan(
 
     if removed.is_empty() && app_removed.is_empty() && feed_removed == 0 && mirrors_removed == 0
     {
-        eprintln!("publish --plan: nothing would be removed.");
+        // ⭐ **The verdict, not just the counts.** A bare *"nothing would be
+        // removed"* is the sentence `<coordination-tree>`'s `B-5` is about: with
+        // no prior projection to compare against it is true of this directory
+        // and says nothing about the deploy, which is the question the operator
+        // is actually asking. Two outcomes, two sentences (AP40) — and the exit
+        // code stays `SUCCESS` for both, because *we cannot tell* is not a
+        // refusal and a pipeline that gates on this must not start failing.
+        if prior_projection_present(out_dir, peer_id, prefix) {
+            eprintln!("publish --plan: nothing would be removed.");
+        } else {
+            eprintln!(
+                "publish --plan: nothing would be removed FROM THIS DIRECTORY — which held no \
+                 prior projection for this peer, so that is not a statement about what a deploy \
+                 would replace."
+            );
+        }
         ExitCode::SUCCESS
     } else {
         if !removed.is_empty() {
@@ -2650,7 +2852,8 @@ fn run_projection(
 
 /// Emit `{out}/entity-deployment.json` (cut 2b) — the per-domain config that
 /// points a generic SPA bundle at this publish. The home `peer` is the publish
-/// peer-id (content lives under `sites/{peer}/…`); `origins[peer]` is the
+/// peer-id (content lives under `sites/{peer}/…`) **and the whole `home_site`
+/// key is absent when this publish carries no sites**; `origins[peer]` is the
 /// serving origin (`""` = same-origin, the SPA expands it at runtime). The
 /// startup `surface` is emitted directly (with `window_type` for a window), and
 /// a locked overlay kiosk (`surface=site --locked`) spells out the granular
@@ -2664,9 +2867,17 @@ fn emit_deployment_config(
     spec: &DeployConfigSpec,
 ) -> std::io::Result<PathBuf> {
     // Home site: explicit `--config-site` (must exist), else demo, else first.
-    let site_id = match &spec.site {
-        Some(id) => id.clone(),
-        None => pick_bare_site(sites, None).map(|s| s.site_id.clone()).unwrap_or_default(),
+    //
+    // **`None` when this publish carries no sites, and the key is then ABSENT
+    // from the document rather than present-and-empty.** A `home_site` naming
+    // the empty site id is dropped by `DeploymentConfig::parse` anyway, so the
+    // two arms agree at the consumer — what differs is that one of them is a
+    // field on the wire asserting a home that does not exist, for every reader
+    // and every diff. The refusals in `run` mean a site-free document is always
+    // `surface=chrome`, or a `window` with its own address.
+    let site_id: Option<String> = match &spec.site {
+        Some(id) => Some(id.clone()),
+        None => pick_bare_site(sites, None).map(|s| s.site_id.clone()),
     };
 
     let mut origins = serde_json::Map::new();
@@ -2674,10 +2885,15 @@ fn emit_deployment_config(
 
     let mut doc = serde_json::json!({
         "surface": spec.surface,
-        "home_site": { "peer": peer_id, "site": site_id, "loc": "" },
         "origins": origins,
     });
     let obj = doc.as_object_mut().expect("json! built an object");
+    if let Some(site_id) = &site_id {
+        obj.insert(
+            "home_site".into(),
+            serde_json::json!({ "peer": peer_id, "site": site_id, "loc": "" }),
+        );
+    }
     // The §7.4 preload: the registry this deployment seeds. Emitted only when
     // asked for — a build that ships no pin is the fail-closed default, and an
     // empty object here would read as "a pin that resolves nothing".
@@ -3003,6 +3219,88 @@ pub(crate) struct PublishSource {
     pub feed: Option<crate::feed_tree::OwnedFeed>,
 }
 
+/// Where a publish's **sites** come from — the first content axis, and the only
+/// one that ever had a default.
+///
+/// ## ⭐ THE AXIS THAT INVENTED CONTENT, AND THE ARGUMENT AGAINST IT IS OUR OWN
+///
+/// [`resolve_publish_source`]'s own comment on `--ingest-feed` reads: *"a publish
+/// that invented an empty feed would claim every site publisher has one."* That
+/// is exactly right, and until 2026-09-16 the sites axis did the thing it
+/// refuses — absent `--ingest` it seeded `demo` + `entity-info` and claimed
+/// every publisher had them. **The asymmetry was not a decision anybody made:**
+/// when the seeding was written, every publish had sites.
+///
+/// **The consequence is larger than two unwanted sites, because the clean is
+/// wholesale.** `run_projection` removes `{base}/{peer}` and rebuilds it, so a
+/// publish that forgot `--ingest` did not merely *add* the demo set — it
+/// replaced a domain's real sites with it, under that domain's own identity, and
+/// exited `0`. **Silence is refused now** ([`parse_site_source`]): a publish
+/// states its site arm or does not run.
+///
+/// The three arms are 1:1 with `<coordination-tree>`'s `estate.conf` axis
+/// vocabulary (`papers` / `builtin` / `none`), which is where the ask came from
+/// (`TRACKER-<coordination-tree>.md` `B-4`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SiteSource {
+    /// `--ingest=<dir>` — a content-team `render/` emit, disk → tree.
+    Ingest(PathBuf),
+    /// `--demo-sites` — the bundled `demo` + `entity-info` set, **on purpose**.
+    /// This is what silence used to mean; it is a flag now so that a publish
+    /// carrying it says so in its own command line.
+    Demo,
+    /// `--no-sites` — this publish carries no sites, deliberately. A feed-only
+    /// or apps-only domain; the other two axes decide whether it is empty.
+    None,
+}
+
+/// Parse the site arm out of the command line. **Exactly one of three, and
+/// silence is an error** — pure so the whole matrix is gated by `make test`
+/// rather than only through a process invocation.
+///
+/// **Refusing silence is the point of the change, not a side effect of it.**
+/// *"You forgot `--ingest`"* and *"this domain has no sites"* produced the same
+/// command line, so no guard anywhere — ours or the caller's — could tell them
+/// apart. They are different command lines now.
+fn parse_site_source(args: &[String]) -> Result<SiteSource, String> {
+    let ingest: Option<PathBuf> =
+        args.iter().find_map(|a| a.strip_prefix("--ingest=").map(PathBuf::from));
+    let demo = args.iter().any(|a| a == "--demo-sites");
+    let none = args.iter().any(|a| a == "--no-sites");
+    match (ingest, demo, none) {
+        (Some(dir), false, false) => Ok(SiteSource::Ingest(dir)),
+        (None, true, false) => Ok(SiteSource::Demo),
+        (None, false, true) => Ok(SiteSource::None),
+        (None, false, false) => Err(
+            "this publish does not say where its SITES come from. Pass exactly one of:\n  \
+             --ingest=<dir>   publish a render/ emit (the content-team pipeline)\n  \
+             --demo-sites     publish the bundled demo + entity-info set, on purpose\n  \
+             --no-sites       publish no sites — a feed-only or apps-only domain\n\
+             Silence used to mean --demo-sites. It is refused because the clean is \
+             wholesale: a publish that meant --ingest and omitted it replaced a domain's \
+             real sites with the demo set, under that domain's own identity, and exited 0."
+                .to_string(),
+        ),
+        (i, d, n) => {
+            let mut passed: Vec<&str> = Vec::new();
+            if i.is_some() {
+                passed.push("--ingest");
+            }
+            if d {
+                passed.push("--demo-sites");
+            }
+            if n {
+                passed.push("--no-sites");
+            }
+            Err(format!(
+                "the site arm is exactly one of --ingest=<dir> / --demo-sites / --no-sites, \
+                 and this command passes {}. They are three different publishes — pick one.",
+                passed.join(" and ")
+            ))
+        }
+    }
+}
+
 /// Resolve which peer to publish and read every axis off its tree. **The seam**
 /// (see the module docs): today it builds a Direct peer under the supplied
 /// **publisher `keypair`** (durable by default; `--identity-seed` / `--demo-identity`
@@ -3054,16 +3352,16 @@ pub(crate) struct PublishSource {
 /// one"; it is that plus the policy, and their measurement is the price tag.**
 fn resolve_publish_source(
     keypair: entity_crypto::Keypair,
-    ingest_dir: Option<&Path>,
+    sites: &SiteSource,
     ingest_apps: Option<&Path>,
     ingest_feed: Option<&Path>,
 ) -> Result<PublishSource, String> {
     let peers = Peers::new_direct_with_keypair(keypair);
     let peer_id = peers.primary_peer_id().to_string();
-    match ingest_dir {
+    match sites {
         // Real content: ingest a `render/` emit (disk→tree), then read it
         // back through the same path the demo source uses.
-        Some(dir) => {
+        SiteSource::Ingest(dir) => {
             let ids = super::ingest::ingest_path(&peers, &peer_id, dir)?;
             eprintln!(
                 "publish --ingest: ingested {} site(s) from {} — {:?}",
@@ -3072,8 +3370,14 @@ fn resolve_publish_source(
                 ids
             );
         }
-        // Default: the bundled demo site set (the SSG / demo generator).
-        None => seed_demo_site_set(&peers, &peer_id),
+        // The bundled demo site set (the SSG / demo generator), **asked for**.
+        SiteSource::Demo => {
+            seed_demo_site_set(&peers, &peer_id);
+            eprintln!("publish --demo-sites: seeded the bundled demo site set");
+        }
+        // The arm that did not exist. Nothing is seeded and nothing is read;
+        // the other two axes decide whether this publish carries anything.
+        SiteSource::None => eprintln!("publish --no-sites: this publish carries no sites"),
     }
     // App sets (games + apps) ride a publish only when there are real apps to
     // ship: an explicit `--ingest-apps=<dir>` (entity-apps `dist/`) ingests +
@@ -3089,8 +3393,19 @@ fn resolve_publish_source(
     // a source there is nothing to read, and a publish that invented an empty
     // feed would claim every site publisher has one.
     if let Some(dir) = ingest_feed {
-        let n = crate::feed_ingest::ingest_path(&peers, &peer_id, dir)?;
-        eprintln!("publish --ingest-feed: ingested {n} post(s) from {}", dir.display());
+        let got = crate::feed_ingest::ingest_path(&peers, &peer_id, dir)?;
+        eprintln!(
+            "publish --ingest-feed: ingested {} post(s) from {}",
+            got.posts,
+            dir.display()
+        );
+        // An authored key the entry could not carry. Printed AFTER the count so
+        // the happy line is not buried, and printed at all because until
+        // 2026-09-16 this loss was silent here while `entity-core-papers`'
+        // authoring gate warned about it — see `feed_ingest`'s `params` loop.
+        for note in &got.notes {
+            eprintln!("publish --ingest-feed: dropped {note}");
+        }
     }
     let sites = read::read_all_sites(&peers, &peer_id);
     let app_sets = crate::apps::read::read_all_app_sets(&peers, &peer_id);
@@ -3159,7 +3474,16 @@ fn report_projection(
     if !prefix.is_empty() {
         println!("  prefix: {prefix} (hosting scope)");
     }
-    // The sites index lands at `{prefix}/sites/` (just `sites/` at the root).
+    // The sites index lands at `{prefix}/sites/` (just `sites/` at the root) —
+    // and a publish carrying no sites does not emit one, so pointing a reader
+    // at it would be a 404 in the closing line of a successful publish.
+    if sites.is_empty() {
+        println!(
+            "  view: this publish carries no sites, so there is no /{SITE_URL_PREFIX}/ page \
+             — its content is read by a consumer, not browsed as HTML"
+        );
+        return;
+    }
     let view_path = paths::href_prefix(prefix);
     println!(
         "  view: (cd {} && python3 -m http.server 8099) → http://localhost:8099{}/{}/",
@@ -3192,20 +3516,24 @@ mod tests {
     #[test]
     fn publish_source_reads_the_seeded_demo_set() {
         let demo_kp = || entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let PublishSource { peer_id, sites, app_sets, .. } = resolve_publish_source(demo_kp(), None, None, None).unwrap();
+        let PublishSource { peer_id, sites, app_sets, .. } =
+            resolve_publish_source(demo_kp(), &SiteSource::Demo, None, None).unwrap();
         assert!(!peer_id.is_empty());
 
         // The publisher identity is STABLE across runs for a given seed — the
         // whole point (no more shifting peer-ids / broken permalinks).
-        let PublishSource { peer_id: peer_id_again, .. } = resolve_publish_source(demo_kp(), None, None, None).unwrap();
+        let PublishSource { peer_id: peer_id_again, .. } =
+            resolve_publish_source(demo_kp(), &SiteSource::Demo, None, None).unwrap();
         assert_eq!(peer_id, peer_id_again, "publish peer-id must be reproducible");
 
         // A DIFFERENT system seed → a different (but still reproducible) peer-id,
         // so each deployment can publish under its own identity (`--identity-seed`).
         let other_kp = || entity_crypto::Keypair::from_seed(*b"different-publisher-seed-here!!!");
-        let PublishSource { peer_id: other_pid, .. } = resolve_publish_source(other_kp(), None, None, None).unwrap();
+        let PublishSource { peer_id: other_pid, .. } =
+            resolve_publish_source(other_kp(), &SiteSource::Demo, None, None).unwrap();
         assert_ne!(peer_id, other_pid, "a custom seed must yield its own peer-id");
-        let PublishSource { peer_id: other_pid_again, .. } = resolve_publish_source(other_kp(), None, None, None).unwrap();
+        let PublishSource { peer_id: other_pid_again, .. } =
+            resolve_publish_source(other_kp(), &SiteSource::Demo, None, None).unwrap();
         assert_eq!(other_pid, other_pid_again, "custom-seed peer-id must be reproducible");
 
         let ids: Vec<&str> = sites.iter().map(|s| s.site_id.as_str()).collect();
@@ -3372,7 +3700,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         let plan = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -3390,7 +3723,8 @@ mod tests {
         // real publish would delete it, and the plan must say so with the
         // destructive exit code rather than SUCCESS.
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
+        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = 
+            resolve_publish_source(demo_kp, &SiteSource::Demo, None, None).unwrap();
         let root = tmp.join(SITE_URL_PREFIX).join(&pid);
         std::fs::create_dir_all(root.join("a-site-nobody-is-publishing")).unwrap();
 
@@ -3472,6 +3806,7 @@ mod tests {
 
         let code = run(&[
             "publish".into(),
+            "--demo-sites".into(),
             out.to_string_lossy().to_string(),
             "--demo-identity".into(),
             format!("--ingest-feed={}", posts.display()),
@@ -3540,6 +3875,7 @@ mod tests {
 
         let code = run(&[
             "publish".into(),
+            "--demo-sites".into(),
             out.to_string_lossy().to_string(),
             "--demo-identity".into(),
             format!("--ingest-feed={}", posts.display()),
@@ -3637,6 +3973,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.to_string_lossy().to_string(),
                 author_seed_arg(),
                 format!("--ingest-feed={}", posts.display()),
@@ -3675,6 +4012,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.to_string_lossy().to_string(),
                 "--demo-identity".into(),
                 format!("--gather={author}@{}", author_out.display()),
@@ -3753,6 +4091,7 @@ mod tests {
         let publish = |extra: &[String]| {
             let mut args = vec![
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.to_string_lossy().to_string(),
                 "--demo-identity".into(),
             ];
@@ -3834,6 +4173,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.to_string_lossy().to_string(),
                 "--demo-identity".into(),
                 format!("--gather={author}@{}", author_out.display()),
@@ -3843,6 +4183,7 @@ mod tests {
         let verify = || {
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.to_string_lossy().to_string(),
                 "--demo-identity".into(),
                 "--verify".into(),
@@ -3988,6 +4329,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.to_string_lossy().to_string(),
                 "--demo-identity".into(),
                 "--prefix=scope".into(),
@@ -4013,6 +4355,321 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// ⭐ **A plan against a freshly-created output directory says so, instead of
+    /// reporting a reassuring zero — `<coordination-tree>`'s `B-5`.**
+    ///
+    /// All three drop guards count what is already in `{out}`. Their pipeline
+    /// does `rm -rf "$out"; mkdir -p "$out"` before every run, so all three read
+    /// zero and `--plan` reported *"nothing would be removed"* on a publish that
+    /// replaces an entire estate. The guards are right about what they measure;
+    /// the sentence was wrong about what it meant. **`nothing would be removed`
+    /// and `there is nothing here to compare against` are different facts**, and
+    /// a publisher deciding whether a deploy is safe needs the second one said
+    /// out loud.
+    ///
+    /// Both arms, because a predicate asserted from one side passes for an
+    /// implementation that always answers that way — the `F-5` lesson.
+    #[test]
+    fn a_plan_against_a_fresh_output_directory_does_not_report_a_reassuring_zero() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-plan-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let pid = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+
+        // ARM 1: what meta's pipeline hands us — the directory exists and holds
+        // nothing. Every count is 0 and none of them means "safe".
+        std::fs::create_dir_all(&out).unwrap();
+        assert!(
+            !prior_projection_present(&out, &pid, ""),
+            "a recreated output directory has nothing to compare against, and the \
+             plan must not present its zeros as 'nothing would be removed'"
+        );
+        assert_eq!(projected_site_ids(&out, &pid, "").len(), 0, "…and the counts really are 0");
+        assert_eq!(projected_feed_posts(&out, &pid, ""), 0);
+
+        // ARM 2: after a real publish the comparison has a subject, so the note
+        // must NOT fire — otherwise it prints on every run and stops being read.
+        let args = vec![
+            "publish".to_string(),
+            "--demo-sites".to_string(),
+            out.to_string_lossy().to_string(),
+            "--demo-identity".into(),
+        ];
+        assert_eq!(run(&args), ExitCode::SUCCESS);
+        assert!(
+            prior_projection_present(&out, &pid, ""),
+            "a populated out dir IS a real comparison — the note must stay quiet here"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // `B-4` — the site arm. Three ways to say where sites come from, and
+    // silence is not one of them.
+    // -----------------------------------------------------------------------
+
+    /// **The decision, at the level it lives.** Pure, so every combination is
+    /// gated by `make test` rather than only through a process invocation.
+    ///
+    /// The last two rows are the ones a later edit breaks: `--ingest-apps` and
+    /// `--ingest-feed` are *other axes*, and a `starts_with("--ingest")` here
+    /// would silently read a feed publish as a site publish.
+    #[test]
+    fn the_site_arm_is_exactly_one_of_three_and_silence_is_an_error() {
+        let arm = |v: &[&str]| {
+            let mut args = vec!["publish".to_string(), "out".to_string()];
+            args.extend(v.iter().map(|s| s.to_string()));
+            parse_site_source(&args)
+        };
+
+        assert_eq!(arm(&["--ingest=/render"]), Ok(SiteSource::Ingest(PathBuf::from("/render"))));
+        assert_eq!(arm(&["--demo-sites"]), Ok(SiteSource::Demo));
+        assert_eq!(arm(&["--no-sites"]), Ok(SiteSource::None));
+
+        // Silence. This is the whole change: it used to mean `--demo-sites`,
+        // which is the same command line as forgetting `--ingest`.
+        let err = arm(&[]).unwrap_err();
+        for arm_name in ["--ingest=", "--demo-sites", "--no-sites"] {
+            assert!(err.contains(arm_name), "the refusal must name every arm; got: {err}");
+        }
+
+        // Every pair and the triple. Each refusal names *what was passed*, so an
+        // operator reads their own two flags back rather than a rule to go find.
+        for combo in [
+            vec!["--ingest=/r", "--demo-sites"],
+            vec!["--ingest=/r", "--no-sites"],
+            vec!["--demo-sites", "--no-sites"],
+            vec!["--ingest=/r", "--demo-sites", "--no-sites"],
+        ] {
+            let err = arm(&combo).unwrap_err();
+            for flag in &combo {
+                let name = flag.split('=').next().unwrap();
+                assert!(err.contains(name), "{err}\n…should name {name}");
+            }
+        }
+
+        assert!(arm(&["--ingest-feed=/posts"]).is_err(), "the feed axis is not the site arm");
+        assert!(arm(&["--ingest-apps=/dist"]).is_err(), "the apps axis is not the site arm");
+        assert_eq!(arm(&["--ingest-apps=/dist", "--no-sites"]), Ok(SiteSource::None));
+    }
+
+    /// **A publish that says nothing about sites writes nothing at all.**
+    ///
+    /// The `--verify` row is the ordering half: verifying an already-published
+    /// tree asks nothing about a source, so requiring an arm for it would refuse
+    /// a verification for a reason with no bearing on it.
+    #[test]
+    fn a_publish_that_names_no_site_arm_refuses_before_it_writes() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-nosilence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let out_s = out.to_string_lossy().to_string();
+
+        assert_eq!(
+            run(&["publish".to_string(), out_s.clone(), "--demo-identity".into()]),
+            ExitCode::FAILURE,
+            "silence is refused"
+        );
+        assert!(!out.exists(), "a refused publish creates nothing — not even the out dir");
+
+        // The arm is refused BELOW the `--verify` return, so a verification of a
+        // tree that does not exist fails on the tree, not on a missing flag.
+        // Both are FAILURE here; what distinguishes them is that the publish
+        // below now succeeds against the same flags plus an arm.
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out_s.clone(),
+                "--demo-identity".into(),
+                "--demo-sites".into(),
+            ]),
+            ExitCode::SUCCESS,
+            "…and the same command WITH an arm publishes"
+        );
+        assert_eq!(
+            run(&["publish".to_string(), out_s, "--demo-identity".into(), "--verify".into()]),
+            ExitCode::SUCCESS,
+            "--verify needs no site arm: it reads a tree, it does not resolve a source"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **`B-4`'s shape: publish a feed and nothing else.** A real domain whose
+    /// whole purpose is a timeline — declarable in `<coordination-tree>`'s
+    /// `estate.conf` since 2026-09-15, and refused by their `publish.sh` until
+    /// this arm existed because the alternative was two demo sites nobody asked
+    /// for.
+    ///
+    /// The `sites/` assertion is the gate: *the feed published* is equally true
+    /// of a publish that carried the demo set along beside it.
+    #[test]
+    fn a_feed_only_publish_carries_a_feed_and_no_sites() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-feedonly-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("out");
+        let posts = posts_dir(&tmp, 4);
+        let pid = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED).peer_id().to_string();
+
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+                "--no-sites".into(),
+                format!("--ingest-feed={}", posts.display()),
+            ]),
+            ExitCode::SUCCESS
+        );
+
+        assert_eq!(projected_feed_posts(&out, &pid, ""), 4, "the feed is what this domain serves");
+        assert!(
+            projected_site_ids(&out, &pid, "").is_empty(),
+            "…and NOTHING invented a site beside it"
+        );
+        assert!(
+            !out.join(SITE_URL_PREFIX).exists(),
+            "no sites/ projection at all — not an empty one"
+        );
+        // Reachable through the signed root, not merely present on disk.
+        assert!(
+            resolve_signed(&out, &pid, crate::feed::index_head_key()).is_ok(),
+            "the feed index resolves through this publish's own signed root"
+        );
+
+        // The two site-shaped modes project a site, so the arm contradicts them
+        // — refused at the flags, where the operator can read their own word
+        // back, rather than as "no sites found on peer X" further in.
+        for mode in ["--bare-root", "--html-only"] {
+            assert_eq!(
+                run(&[
+                    "publish".to_string(),
+                    out.to_string_lossy().to_string(),
+                    "--demo-identity".into(),
+                    "--no-sites".into(),
+                    mode.to_string(),
+                ]),
+                ExitCode::FAILURE,
+                "{mode} projects a site and --no-sites declares none"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **`B-4`'s two riding questions, answered where a visitor feels them.**
+    ///
+    /// A site-free domain has no home site and cannot boot into one. The
+    /// document omits `home_site` entirely; `--surface=site` and a bare
+    /// `--surface=window` are refused; a `window` that names its own address is
+    /// the coherent case and is the point of the whole arm.
+    ///
+    /// **`--surface` defaults to `window`**, so the refusal is also what a
+    /// caller gets for saying nothing — which is why the message names both
+    /// ways forward rather than only the flag that was wrong.
+    #[test]
+    fn a_site_free_deployment_has_no_home_site_and_a_surface_that_needs_none() {
+        let tmp =
+            std::env::temp_dir().join(format!("entity-publish-nohome-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let posts = posts_dir(&tmp, 2);
+        let feed_flag = format!("--ingest-feed={}", posts.display());
+        let call = |out: &Path, extra: &[&str]| {
+            let mut args = vec![
+                "publish".to_string(),
+                out.to_string_lossy().to_string(),
+                "--demo-identity".into(),
+                "--no-sites".into(),
+                feed_flag.clone(),
+                "--deployment-config".into(),
+            ];
+            args.extend(extra.iter().map(|s| s.to_string()));
+            run(&args)
+        };
+
+        // The answer: chrome, and no home_site key at all.
+        let chrome = tmp.join("chrome");
+        assert_eq!(call(&chrome, &["--surface=chrome"]), ExitCode::SUCCESS);
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(chrome.join("entity-deployment.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            doc.get("home_site").is_none(),
+            "a domain with no sites has no home site — the key is ABSENT, not empty: {doc}"
+        );
+        assert_eq!(doc["surface"], "chrome");
+        // …and the consumer agrees it affirms nobody, which is what keeps a
+        // site-free domain from clearing a returning profile's records.
+        let parsed = crate::deployment_config::DeploymentConfig::parse(&doc.to_string()).unwrap();
+        assert_eq!(parsed.affirmed_home(), "", "no home_site affirms no peer");
+        assert!(
+            crate::peer_supersession::stale_against_declared(
+                &[("OLD".to_string(), "NEW".to_string())].into_iter().collect(),
+                parsed.affirmed_home(),
+                &parsed.superseded,
+            )
+            .is_empty(),
+            "an empty `current` drops nothing — a feed-only domain is inert for a \
+             returning profile, it does not quietly wipe its supersession records"
+        );
+
+        // A window that names what it opens at is coherent with no sites, and is
+        // the reason the arm is worth having.
+        let aimed = tmp.join("aimed");
+        let address = crate::open_target::feed("2KPUBLISHEREXAMPLE").to_uri().unwrap();
+        assert_eq!(
+            call(
+                &aimed,
+                &["--surface=window", "--window-type=Feed", &format!("--window-target={address}")]
+            ),
+            ExitCode::SUCCESS
+        );
+        let aimed_doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(aimed.join("entity-deployment.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(aimed_doc.get("home_site").is_none());
+        assert_eq!(aimed_doc["window_target"], serde_json::Value::String(address));
+
+        // Three refusals, each its own mistake.
+        let bad = tmp.join("bad");
+        assert_eq!(
+            call(&bad, &["--surface=site"]),
+            ExitCode::FAILURE,
+            "the overlay's entire content is a site"
+        );
+        assert_eq!(
+            call(&bad, &["--surface=window"]),
+            ExitCode::FAILURE,
+            "a Site Browser aimed at a home site that does not exist is an empty rail"
+        );
+        assert_eq!(
+            call(&bad, &["--surface=chrome", "--set-home"]),
+            ExitCode::FAILURE,
+            "--set-home moves a home onto this peer and there is none to move"
+        );
+        assert_eq!(
+            call(&bad, &["--surface=chrome", "--config-site=demo"]),
+            ExitCode::FAILURE,
+            "--config-site names a site this publish does not carry"
+        );
+        assert!(
+            !bad.join("entity-deployment.json").exists(),
+            "every one of those refused BEFORE emitting a document"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// **`run_plan` owes every axis a term, and this is the feed's.** Its own
     /// doc comment states the rule — *"if a future emitter adds a third subgraph
     /// under the peer prefix, it owes a term here in the same commit"* — and the
@@ -4034,7 +4691,12 @@ mod tests {
         let with_feed = format!("--ingest-feed={}", posts.display());
         let call = |extra: &[&str]| {
             let mut args =
-                vec!["publish".to_string(), out.to_string_lossy().to_string(), "--demo-identity".into()];
+                vec![
+                    "publish".to_string(),
+                    "--demo-sites".into(),
+                    out.to_string_lossy().to_string(),
+                    "--demo-identity".into(),
+                ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -4127,7 +4789,12 @@ mod tests {
 
         let out_s = out.to_string_lossy().to_string();
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out_s.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out_s.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -4210,13 +4877,19 @@ mod tests {
         let out = out_dir.to_string_lossy().to_string();
         let ingest_apps = format!("--ingest-apps={}", apps_dist.display());
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
 
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
+        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = 
+            resolve_publish_source(demo_kp, &SiteSource::Demo, None, None).unwrap();
 
         // 1. Publish WITH apps.
         assert_eq!(call(&[&ingest_apps]), ExitCode::SUCCESS);
@@ -4308,7 +4981,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
 
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
+        let PublishSource { peer_id: pid, sites: _sites, app_sets: _apps, .. } = 
+            resolve_publish_source(demo_kp, &SiteSource::Demo, None, None).unwrap();
         // Seed an apps projection by hand — the shape a previous publish left.
         let bundles = tmp.join(&pid).join("apps").join("games").join("bundles");
         std::fs::create_dir_all(&bundles).unwrap();
@@ -4318,6 +4992,7 @@ mod tests {
         let out = tmp.to_string_lossy().to_string();
         let args = vec![
             "publish".to_string(),
+            "--demo-sites".to_string(),
             out,
             "--demo-identity".into(),
             "--plan".into(),
@@ -4358,7 +5033,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -4421,6 +5101,7 @@ mod tests {
         let publish = |seed_hex: &str, prefix: &str| {
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 format!("--identity-seed={seed_hex}"),
@@ -4465,6 +5146,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 "--set-home".to_string(),
@@ -4522,6 +5204,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 format!("--identity-seed={a}"),
@@ -4536,6 +5219,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 format!("--identity-seed={b}"),
@@ -4554,6 +5238,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 format!("--identity-seed={a}"),
@@ -4575,6 +5260,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 format!("--identity-seed={a}"),
@@ -4635,6 +5321,7 @@ mod tests {
         let publish = |seed: &str| {
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--deployment-config".to_string(),
                 format!("--identity-seed={seed}"),
@@ -4643,6 +5330,7 @@ mod tests {
         let verify = |seed: &str| {
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 out.clone(),
                 "--verify".to_string(),
                 format!("--identity-seed={seed}"),
@@ -4694,6 +5382,7 @@ mod tests {
         assert_ne!(
             run(&[
                 "publish".to_string(),
+                "--demo-sites".to_string(),
                 tmp.to_string_lossy().to_string(),
                 "--deployment-config".to_string(),
                 "--demo-identity".to_string(),
@@ -4718,7 +5407,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -4824,7 +5518,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -4914,7 +5613,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -5055,6 +5759,76 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// **An app's asset-bundle index declares its files, so a missing file is a
+    /// broken tree** — the same structural arm the site asset and the feed entry
+    /// have, landed with the type rather than after it. Through the real CLI:
+    /// `--ingest-apps` a `dist/` whose app declares a bundle, verify clean,
+    /// delete the one file blob, verify must fail, restore, clean again.
+    #[test]
+    fn an_app_asset_bundle_declares_its_files_so_verify_fails_when_one_is_missing() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-appassets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let dist = tmp.join("dist");
+        let out = tmp.join("out");
+        std::fs::create_dir_all(dist.join("vm.assets/guest")).unwrap();
+        std::fs::write(
+            dist.join("index.json"),
+            br#"[{"id":"vm","name":"VM","type":"tool","x-assets":["guest"]}]"#,
+        )
+        .unwrap();
+        std::fs::write(dist.join("vm.html"), b"<html><body>vm</body></html>").unwrap();
+        std::fs::write(dist.join("vm.assets/guest/kernel"), b"the only file in the bundle").unwrap();
+
+        let out_s = out.to_string_lossy().to_string();
+        let call = |extra: &[&str]| {
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out_s.clone(),
+                "--demo-identity".into(),
+            ];
+            args.extend(extra.iter().map(|s| s.to_string()));
+            run(&args)
+        };
+        assert_eq!(
+            call(&[&format!("--ingest-apps={}", dist.to_string_lossy())]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "the published tree is clean");
+
+        // The one `system/content/blob` in the tree is the bundle file's: the
+        // catalog and app bundle are plain entities, not chunked content.
+        let mut files = Vec::new();
+        collect_files(&out.join("content"), "", &mut files);
+        let blob = files
+            .iter()
+            .find(|p| {
+                std::fs::read(p)
+                    .ok()
+                    .and_then(|b| ciborium::from_reader::<ciborium::Value, _>(&b[..]).ok())
+                    .and_then(|v| {
+                        use entity_ecf::ValueExt;
+                        v.get("type").and_then(|t| t.as_str()).map(|t| t == entity_types::TYPE_CONTENT_BLOB)
+                    })
+                    .unwrap_or(false)
+            })
+            .expect("the publish emitted the bundle file's blob")
+            .clone();
+
+        let bytes = std::fs::read(&blob).unwrap();
+        std::fs::remove_file(&blob).unwrap();
+        assert_eq!(
+            call(&["--verify"]),
+            ExitCode::from(VERIFY_DEFECT_EXIT),
+            "a file the asset index DECLARES is not projected — the app would be told it is \
+             unavailable, and verify must say so first"
+        );
+        std::fs::write(&blob, &bytes).unwrap();
+        assert_eq!(call(&["--verify"]), ExitCode::SUCCESS, "restored tree is clean again");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// An orphaned blob is reported but does **not** fail the tree: nothing
     /// links to it, so no reader can hit it, and a tree mid-cutover legitimately
     /// holds blobs its pointers have not adopted yet. Failing on this would make
@@ -5067,7 +5841,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         let call = |extra: &[&str]| {
-            let mut args = vec!["publish".to_string(), out.clone(), "--demo-identity".into()];
+            let mut args = vec![
+                "publish".to_string(),
+                "--demo-sites".into(),
+                out.clone(),
+                "--demo-identity".into(),
+            ];
             args.extend(extra.iter().map(|s| s.to_string()));
             run(&args)
         };
@@ -5116,7 +5895,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let out = tmp.to_string_lossy().to_string();
         assert_eq!(
-            run(&["publish".to_string(), out.clone(), "--demo-identity".into()]),
+            run(&["publish".to_string(), "--demo-sites".into(), out.clone(), "--demo-identity".into()]),
             ExitCode::SUCCESS
         );
 
@@ -5211,7 +5990,8 @@ mod tests {
     #[test]
     fn bundled_demo_set_has_no_dangling_nav_links() {
         let demo_kp = entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED);
-        let PublishSource { peer_id: _pid, sites, app_sets: _apps, .. } = resolve_publish_source(demo_kp, None, None, None).unwrap();
+        let PublishSource { peer_id: _pid, sites, app_sets: _apps, .. } = 
+            resolve_publish_source(demo_kp, &SiteSource::Demo, None, None).unwrap();
         assert_eq!(
             warn_dangling_nav_links(&sites),
             0,
@@ -5282,6 +6062,7 @@ mod tests {
         // publish-fixture-driven, every one of them green when run alone.
         let _ = run(&[
             "publish".to_string(),
+            "--demo-sites".to_string(),
             "dist".to_string(),
             "--deployment-config".to_string(),
             "--set-home".to_string(),
@@ -5353,6 +6134,7 @@ mod tests {
         // `dist/` carries none) and so DEFINES rather than takes.
         let mut args = vec![
             "publish".to_string(),
+            "--demo-sites".to_string(),
             out.clone(),
             "--deployment-config".to_string(),
             "--set-home".to_string(),
@@ -5433,6 +6215,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 author_out.to_string_lossy().to_string(),
                 format!("--identity-seed={author_hex}"),
                 format!("--ingest-feed={}", posts.display()),
@@ -5448,6 +6231,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.clone(),
                 format!("--identity-seed={gatherer_hex}"),
                 format!("--gather={author}@{}", author_out.display()),
@@ -5568,6 +6352,7 @@ mod tests {
         assert_eq!(
             run(&[
                 "publish".into(),
+                "--demo-sites".into(),
                 out.clone(),
                 format!("--identity-seed={hex}"),
                 format!("--ingest-feed={}", posts.display()),
@@ -5649,6 +6434,7 @@ mod tests {
         .unwrap();
         let args = vec![
             "publish".to_string(),
+            "--demo-sites".to_string(),
             out.clone(),
             "--deployment-config".to_string(),
             "--set-home".to_string(),
@@ -5872,6 +6658,7 @@ mod tests {
         let hex = crate::vault_codec::seed_to_hex(&APP_REPUBLISH_SEED);
         let _ = run(&[
             "publish".to_string(),
+            "--demo-sites".to_string(),
             out.clone(),
             "--deployment-config".to_string(),
             // Defines this scenario's domain — see `emit_deployment_config_fixture`.
@@ -6080,7 +6867,7 @@ mod tests {
         let PublishSource { peer_id, sites, app_sets: _games, .. } =
             resolve_publish_source(
                 entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
-                None,
+                &SiteSource::Demo,
                 None,
                 None,
             )
@@ -6181,7 +6968,7 @@ mod tests {
         let PublishSource { peer_id, sites, app_sets: _apps, .. } =
             resolve_publish_source(
                 entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
-                None,
+                &SiteSource::Demo,
                 None,
                 None,
             )
@@ -6237,7 +7024,7 @@ mod tests {
         let PublishSource { peer_id, sites, app_sets: _games, .. } =
             resolve_publish_source(
                 entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
-                None,
+                &SiteSource::Demo,
                 None,
                 None,
             )
@@ -6289,7 +7076,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let PublishSource { peer_id, sites, .. } = resolve_publish_source(
             entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
-            None,
+            &SiteSource::Demo,
             None,
             None,
         )
@@ -6342,7 +7129,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let PublishSource { peer_id, sites, .. } = resolve_publish_source(
             entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
-            None,
+            &SiteSource::Demo,
             None,
             None,
         )
@@ -6405,7 +7192,7 @@ mod tests {
         let PublishSource { peer_id: _pid, sites, app_sets: _games, .. } =
             resolve_publish_source(
                 entity_crypto::Keypair::from_seed(DEMO_PUBLISH_SEED),
-                None,
+                &SiteSource::Demo,
                 None,
                 None,
             )

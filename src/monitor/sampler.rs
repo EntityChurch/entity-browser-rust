@@ -416,6 +416,68 @@ mod tests {
         t
     }
 
+    /// **What one frame of sampling costs, dormant vs active.** Asserts
+    /// nothing and prints — a threshold nobody has earned is a flake, and the
+    /// question this answers is *"can the status bar hold a `MonitorHold` for
+    /// the life of the tab"*, which is a shape, not a bound.
+    ///
+    /// The whole design rests on a cost argument (*"dormant unless a monitor
+    /// is open"*), and a status-bar gauge spends it. So measure it rather than
+    /// reason about it — the charter's rule for exactly this case.
+    ///
+    /// Native arithmetic only: no DOM, no rAF, no allocator pressure from the
+    /// rest of a real frame. Read it as a **floor** on the per-frame cost, not
+    /// as the cost in a browser.
+    ///
+    ///   `make test-one T="the_cost_of_sampling_every_frame --ignored"`
+    #[test]
+    #[ignore]
+    fn the_cost_of_sampling_every_frame() {
+        use std::time::Instant;
+
+        const FRAMES: usize = 60_000; // ~16 min of wall clock at 60 Hz
+
+        // Rebuilt every frame, because that is what the caller does: the app
+        // hands `note_open_windows` a fresh iterator of owned titles once per
+        // frame. Counting the construction is counting the real cost, and it
+        // is in BOTH arms so the delta stays the hooks' own.
+        let one_frame = |t: f64| {
+            let windows = [
+                open(1, "Apps", Some("alpine")),
+                open(2, "Shell", None),
+                open(3, "System Monitor", None),
+            ];
+            let sections: Vec<(String, WindowId, f64)> =
+                windows.iter().map(|w| (w.type_name.to_string(), w.id, 1.5)).collect();
+            note_frame(t, 4.0);
+            note_sections(&sections);
+            note_open_windows(windows.into_iter());
+        };
+
+        // Dormant: no hold exists, so every hook returns on a Cell read.
+        let start = Instant::now();
+        for i in 0..FRAMES {
+            one_frame(i as f64 * 16.7);
+        }
+        let dormant = start.elapsed();
+
+        // Active: one hold, as a status-bar gauge would keep.
+        let held = hold();
+        let start = Instant::now();
+        for i in 0..FRAMES {
+            one_frame(i as f64 * 16.7);
+        }
+        let active = start.elapsed();
+        drop(held);
+
+        let ns = |d: std::time::Duration| d.as_nanos() as f64 / FRAMES as f64;
+        let (d, a) = (ns(dormant), ns(active));
+        println!("sampler cost per frame, 3 windows, {FRAMES} frames:");
+        println!("  dormant: {d:>8.0} ns");
+        println!("  active:  {a:>8.0} ns   (+{:.0} ns, {:.1}x)", a - d, a / d.max(1.0));
+        println!("  active cost as a share of one 16.7 ms frame: {:.4}%", (a - d) / 16_700_000.0 * 100.0);
+    }
+
     #[test]
     fn with_no_monitor_open_nothing_is_recorded() {
         note_frame(0.0, 5.0);

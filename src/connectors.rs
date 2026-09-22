@@ -48,20 +48,35 @@
 //!
 //! ## Precedence
 //!
-//! [`crate::session_config::webrtc_provisioning_from_query`] (URL) beats this,
-//! this beats the build knob:
+//! **Chosen beats seeded.** The user's selection is on top; everything below it
+//! is a default somebody else picked:
 //!
 //! ```text
-//!   ?webrtc_node_*        dev / showcase / e2e — dynamic, never persisted
-//!   > connector selection the user's choice, durable
+//!   connector selection   the user's CHOICE, durable
+//!   > ?webrtc_node_*      seeded by the page that served us (and by e2e)
 //!   > ENTITY_WEBRTC_NODE_* the deployment default baked at build time
 //! ```
 //!
-//! The URL staying on top is load-bearing for the harness: `make e2e-webrtc-chat`
-//! hands each browser a signaling node on a **dynamic port**, which no durable
-//! or build-time value can predict. The user's durable choice beating the build
-//! knob is the actual point of the feature — otherwise "my connector" loses to
-//! whatever the deployment was compiled with.
+//! ⭐ **The URL was on top until 2026-09-16 and moving it is D25**, not taste. It
+//! reads as a deliberate act and is not one: `src-tauri`'s app server redirects
+//! `/` → `/?webrtc_node_peer=…&webrtc_node=…`, so *every* device that walks over
+//! and types the desktop's address arrives carrying one, having chosen nothing.
+//! Meanwhile [`node_in_force`] — what `meet` dials — read the registry first. Two
+//! expressions of "which node is this session on", disagreeing exactly when a
+//! user on a desktop-served page adds a connector: they **met at their new node
+//! and stayed reachable only at the URL's**, with nothing erroring. The act of
+//! configuring it was what broke it.
+//!
+//! The harness is unaffected and that is worth stating, because the old note
+//! called the URL's precedence load-bearing for it: `make e2e-webrtc-chat` hands
+//! each browser a node on a **dynamic port** that no durable value can predict —
+//! and those profiles are fresh, so there is no selection to lose to. What the
+//! URL must never do is beat a choice a person made.
+//!
+//! The seeded node stays reachable: `EntityApp::adopt_url_rendezvous` writes it
+//! into the registry as a labelled row, so a returning profile whose selection
+//! points elsewhere can still see what this page offers and pick it. Without
+//! that row the flip would strand the person it exists to help.
 
 use entity_entity::Entity;
 
@@ -363,37 +378,86 @@ fn selection_marker(peers: &Peers, peer_id: &str) -> Option<String> {
 /// browser that loads the desktop's served URL. Both provision by a path that
 /// leaves the registry empty.
 ///
-/// # Why synthesize rather than write a row
+/// # ⭐ It answers from the ARM, and that is the whole repair (2026-09-16)
 ///
-/// A registry row is durable, user-owned state — the thing `connector rm` and
-/// the connector list manage. URL provisioning is explicitly *"never persisted"*
-/// and the build knob is a property of the binary; materializing either as a row
-/// would put a connector the user cannot account for into their list, and
-/// re-materialize it after they removed it. The synthesized row is derived,
-/// lasts one call, and carries `label` empty so no surface claims the user named
-/// it.
+/// This used to read `selected_connector` first and fall back to the boot
+/// snapshot. That is a **second expression of "which node is this session
+/// on"**, and it disagreed with the first — `arm_webrtc_if_provisioned`
+/// resolves through [`resolve_provisioning_quietly`], whose order was
+/// URL-first. On a desktop-served page (which is every device that types the
+/// desktop's address, because `src-tauri`'s app server redirects into
+/// `?webrtc_node_peer=…&webrtc_node=…`) a user who added and selected a
+/// connector **met at their new node while the establisher stayed on the
+/// URL's**: findable at B, reachable only at A, nothing erroring anywhere.
+/// *The act of configuring it was what broke it.*
+///
+/// So there is one direction now: selection → mirror → the arm → here. Meeting
+/// at a node you are not armed at is structurally broken — a peer who finds you
+/// there has no way to connect back — so this returns
+/// [`applied_snapshot`], *what this session is actually running on*, and cannot
+/// name a different node from the one that makes us reachable even for a frame.
+///
+/// # Why the registry row is consulted for the label only
+///
+/// Identity, address and reflectors come from the arm, because those are what a
+/// dial uses and a row edited after arming would re-open the split one field
+/// down. The row supplies the **label** — the name the user gave it — which is
+/// what lets a surface say *"via the node you called `kitchen laptop`"* instead
+/// of `via 2KGdRY92…`. A name cannot put us in the wrong bucket.
 ///
 /// **Callers that manage the registry must keep using [`selected_connector`]** —
 /// this is for callers that need *a node to talk to*.
 #[cfg(target_arch = "wasm32")]
 pub fn node_in_force(peers: &Peers, peer_id: &str) -> Option<Connector> {
-    if let Some(c) = selected_connector(peers, peer_id) {
-        return Some(c);
-    }
-    // No row: fall back to what this session BOOTED with, so the node we dial is
-    // the node the establisher was actually installed with, by construction.
+    node_in_force_from(
+        applied_snapshot(),
+        selected_connector(peers, peer_id),
+        &read_connectors(peers, peer_id),
+    )
+}
+
+/// The decision behind [`node_in_force`], native so `make test` gates it.
+///
+/// **Identity, address and reflectors come from `applied` and only the label
+/// comes from a row.** That asymmetry is the guarantee: a row edited (or moved,
+/// or re-added at a different port) after the establisher armed cannot re-open
+/// the split by putting a different address in front of a dial. A name cannot
+/// put us in the wrong bucket; an address can.
+pub fn node_in_force_from(
+    applied: Option<WebRtcProvisioning>,
+    selected: Option<Connector>,
+    rows: &[Connector],
+) -> Option<Connector> {
+    // **The selection is a fallback, never a competitor** — and the difference
+    // is the whole repair. When something IS armed, that is the answer: meeting
+    // at a node we are not armed at is the split this function exists to close.
+    // When nothing is armed, there is no competing answer to disagree with, and
+    // the user's selected row is the only statement of intent there is.
     //
-    // `booted_snapshot`, not a fresh `resolve_provisioning_quietly` — a re-resolve
-    // here has no URL to read (the verb holds only `&Peers`), so it would silently
-    // skip the highest-precedence source and answer with the build knob or
-    // nothing. It would also drift from the installed establisher the moment the
-    // selection mirror changed, which is the same "what a reload would use"
-    // vacuity `capture_booted` exists to prevent.
-    let p = booted_snapshot()?;
+    // Not hypothetical: `applied_snapshot` is written by the main-thread late
+    // arm, so on the **Worker arm** — where the establisher is installed at
+    // `Init` from the same resolve and nothing records an "applied" value — a
+    // first cut answered `None` with a connector plainly selected, and the Meet
+    // form disappeared from Peer Connections. Caught by
+    // `worker_boots_and_opens_all_windows` phase 14.7, which is exactly the
+    // unfiltered run this repo's charter says to do before landing.
+    //
+    // It cannot re-open the split, because the two arms are mutually exclusive:
+    // you cannot be armed at A and fall through to B. A session with nothing
+    // armed has no establisher at all, which `MeetReach` already says out loud.
+    let p = match applied {
+        Some(p) => p,
+        None => return selected,
+    };
+    let label = rows
+        .iter()
+        .find(|c| c.node_peer_id == p.node_peer_id)
+        .map(|c| c.label.clone())
+        .unwrap_or_default();
     Some(Connector {
         node_peer_id: p.node_peer_id,
         node_addr: p.node_addr,
-        label: String::new(),
+        label,
         // The reflectors ride the provisioning too; they are already merged and
         // parsed there, and re-deriving them here would be a second expression
         // of the merge that could disagree with the one the agent got.
@@ -1286,17 +1350,114 @@ pub fn reach_node(
     local_peer_id: &str,
     c: &Connector,
 ) -> impl std::future::Future<Output = Result<(), String>> + 'static {
-    let connected = crate::peer_liveness::liveness_of(peers, &c.node_peer_id).is_connected();
-    let dial = if connected {
+    // ⭐ **Believing we are connected is not knowing it — AP36, second instance
+    // (2026-09-16, `K-7`).**
+    //
+    // This returned `Ok(())` without dialing whenever the kernel read-model said
+    // `Connected`, which reads as an obvious saving and is the whole of the
+    // restarted-node bug: liveness is corrected only when something *dispatches*
+    // and fails, so after a node dies and comes back `system/peer/status` still
+    // says `connected`, `reach_node` answers *"already reached"*, and
+    // `MeetSession` proceeds over a carrier that is gone. Measured 3/3 with the
+    // node's own log naming neither browser after the restart, against a control
+    // of 2/2 — and a reload being the only way back is the operator's standing
+    // report with a cause under it.
+    //
+    // **`is_connected()` was answering two questions** — *do I need to dial?*
+    // and *is this belief current?* — exactly as `ReachKeeper::due` was before
+    // the sleep/wake fix. Same predicate, same conflation, different subsystem.
+    //
+    // **Dialing unconditionally does NOT fix it**, and that is the part worth
+    // knowing before "simplifying" this: `core/peer`'s connect opens with
+    // `if let Some(conn) = pool.get(peer_id) { return Ok(conn) }`, so a dial
+    // against a wedged binding is handed the corpse. The binding has to be
+    // EVICTED first, and the only sanctioned way to cause that is to dispatch at
+    // it and let the send fail — the §A1 seam, which demotes and evicts in one
+    // event. That is `peer_probe`, whose own doc already describes this case:
+    // *"while a path is believed to exist, issuing it is the only way to learn
+    // that the belief is false."* We are its third caller and its second for
+    // that reason.
+    //
+    // So: probe only when we believe (probing while disconnected would consult
+    // the establish ladder for nothing), then dial regardless. On a healthy
+    // carrier both steps are cheap — one small round trip, then `pool.get`.
+    // **We write no liveness here**; the kernel observes the failure and owns
+    // the demotion, which is what keeps this out of AP12/D8's fourth store.
+    let believed_connected =
+        crate::peer_liveness::liveness_of(peers, &c.node_peer_id).is_connected();
+    let probe = if believed_connected {
+        crate::peer_probe::probe(peers, local_peer_id, &c.node_peer_id)
+    } else {
+        None
+    };
+    // **Not an unconditional dial, and that is measured rather than assumed.**
+    // A first cut dialed every time on the reasoning that `core/peer`'s connect
+    // opens with `pool.get` and is therefore free on a live carrier. It is not:
+    // `make e2e-webrtc-meet`'s §11.5 deposit count went **4–5/side → 8/side**,
+    // twice each, on fresh grids, and survived removing the probe — so the dial
+    // was the cost, about one extra establishment per meet, against an O(1)
+    // bound of 8. It also bought nothing observable: with it in, the
+    // node-restart gate still read `dial ok` and the node still saw nothing.
+    // *Paying an establishment for a repair that does not repair is the worst
+    // of both.*
+    let dial = if believed_connected {
         None
     } else {
         Some(peers.connect_peer(local_peer_id, c.node_addr.clone()))
     };
     let node = c.node_peer_id.clone();
     let addr = c.node_addr.clone();
+    // **The must-be-present control this module did not have.** `K-7`'s
+    // investigation could not tell *branch not taken* from *module silent*,
+    // because the only `tracing::` call anywhere near the carrier was a
+    // conditional re-dial line — and a zero from a needle with no control is not
+    // evidence (2026-09-08's own lesson, on this gate family). This line is
+    // emitted on **every** call whatever happens next, so a later zero on any of
+    // the lines below means something.
+    tracing::debug!(
+        node = %node, %addr, believed_connected, probing = probe.is_some(),
+        "connector: reaching the rendezvous node"
+    );
+    // **Spawned, not awaited** — the idiom both existing callers use, and the
+    // reason is the one this repo already paid for: the probe's *outcome* is not
+    // wanted by anybody (`peer_probe`'s own doc says so), only the fact that a
+    // dispatch was attempted, because that is what the kernel needs in order to
+    // observe the truth. Awaiting it puts a round trip — and, on a genuinely
+    // dead carrier, a request deadline — on the critical path of a `meet` the
+    // user just typed, for information we then discard.
+    if let Some(probe) = probe {
+        let node_for_log = node.clone();
+        crate::peer_probe::spawn(async move {
+            probe.await;
+            tracing::debug!(
+                node = %node_for_log,
+                "connector: probed a carrier we believed was live — if it was not, \
+                 the kernel has now seen the failure and the next reach will dial"
+            );
+        });
+    }
     async move {
+        // Believed connected: the probe above is all we may do. Evicting the
+        // binding ourselves is what §A1 forbids and what 2026-09-08 measured as
+        // strictly worse — the seam's no-clobber guard then refuses the
+        // demotion and nothing is left to write `suspect`.
         let Some(dial) = dial else { return Ok(()) };
-        match dial.await {
+        let outcome = dial.await;
+        // The other half of the control. `connect_peer` resolves through the
+        // kernel's pool-first connect, so an `Ok` here is ambiguous BY DESIGN —
+        // it is either a fresh dial or `pool.get` handing back a binding that
+        // may be dead. Printing which arm we took is what lets a zero at the
+        // node be attributed rather than guessed at.
+        match &outcome {
+            Ok(reached) => tracing::debug!(
+                node = %node, %addr, reached = %reached,
+                "connector: the dial resolved OK (fresh connection, or the pooled one)"
+            ),
+            Err(e) => tracing::debug!(
+                node = %node, %addr, error = %e, "connector: the dial failed"
+            ),
+        }
+        match outcome {
             Ok(reached) => {
                 // The address is the identity we hold; a node answering under a
                 // different peer-id is not the node the user selected, and
@@ -1358,7 +1519,8 @@ pub fn read_selection_mirror() -> Option<WebRtcProvisioning> {
 }
 
 /// Resolve the §6.5 provisioning for this session, applying the module's
-/// precedence: **URL > durable connector selection > build knob.**
+/// precedence: **durable connector selection > URL > build knob** — chosen
+/// beats seeded; see the module header for why the URL moved down.
 ///
 /// One resolver, called from both provisioning sites (the Worker `InitParams`
 /// and the Direct-arm establisher), because those two sourcing the node
@@ -1380,18 +1542,62 @@ pub fn resolve_provisioning(url_query: &str) -> Option<WebRtcProvisioning> {
 /// Split out rather than duplicated deliberately: two expressions of this
 /// precedence is the exact bug class [`resolve_provisioning`]'s doc warns about,
 /// so there is still only one, and the logging wrapper is the only difference.
+/// **The precedence itself, as a function of its three sources.** Native, so
+/// `make test` gates the ordering.
+///
+/// Split out from [`resolve_provisioning_quietly`] because that one reads
+/// `localStorage`, the URL and a compile-time knob — three pieces of
+/// environment, none reachable from a native test — and the *order* is the
+/// entire subject. Before this existed the ordering was gated only through
+/// Selenium, which is how it stayed wrong for weeks while every gate was green.
+///
+/// `source` is the D13 half: with three ways to end up at a node, *which one
+/// won* is the only thing that makes a wrong node diagnosable.
+pub fn pick_provisioning(
+    selection: Option<WebRtcProvisioning>,
+    url: Option<WebRtcProvisioning>,
+    knob: Option<WebRtcProvisioning>,
+) -> Option<(WebRtcProvisioning, &'static str)> {
+    if let Some(p) = selection {
+        return Some((p, "the selected connector (durable registry)"));
+    }
+    if let Some(p) = url {
+        return Some((p, "URL query"));
+    }
+    Some((knob?, "the build knob"))
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn resolve_provisioning_quietly(
     url_query: &str,
 ) -> Option<(WebRtcProvisioning, &'static str)> {
-    if let Some(p) = crate::session_config::webrtc_provisioning_from_query(url_query) {
-        return Some((p, "URL query"));
-    }
-    if let Some(p) = read_selection_mirror() {
-        return Some((p, "the selected connector (durable registry)"));
-    }
-    let p = crate::session_config::webrtc_provisioning_default()?;
-    Some((p, "the build knob"))
+    // **The selection is above the URL as of 2026-09-16, and it is D25, not a
+    // preference.** A `?webrtc_node=` is *seeded*: `src-tauri`'s app server
+    // redirects `/` → `/?webrtc_node_peer=…&webrtc_node=…`, so every device that
+    // walks over and types the desktop's address arrives carrying one without
+    // having chosen anything. A selected connector is *chosen* — the user opened
+    // Peer Connections, or typed `connector use`. D25's rule is that a
+    // deliberately chosen value outranks a seeded one on every later resolve,
+    // and the two were byte-identical here with nothing recording which was
+    // which.
+    //
+    // What it cost while the URL was on top: `node_in_force` (what `meet` dials)
+    // reads the registry first, this reads the URL first, so a user on a
+    // desktop-served page who added a connector to fix a connection **met at
+    // their new node while staying reachable only at the URL's**. Findable at B,
+    // reachable at A, nothing erroring — the act of configuring it was what
+    // broke it. See `node_in_force` for the other half of the repair.
+    //
+    // The seeded node does not vanish: `EntityApp::adopt_url_rendezvous` writes
+    // it into the registry as a labelled row, so a returning profile whose
+    // selection points somewhere else can still see the node this page is
+    // offering and pick it. Without that row this flip would strand exactly the
+    // person it is meant to help.
+    pick_provisioning(
+        read_selection_mirror(),
+        crate::session_config::webrtc_provisioning_from_query(url_query),
+        crate::session_config::webrtc_provisioning_default(),
+    )
 }
 
 /// Resolve the provisioning for **this session** and remember it, in one
@@ -1413,9 +1619,9 @@ pub fn capture_booted(url_query: &str) -> Option<WebRtcProvisioning> {
     // The *quiet* resolver: `webrtc_init_config` already logs which source won
     // during the same boot, and a second identical line reads as two
     // provisioning decisions having been taken.
-    let booted = resolve_provisioning_quietly(url_query).map(|(p, _)| p);
+    let booted = resolve_provisioning_quietly(url_query);
     BOOTED.with(|b| *b.borrow_mut() = booted.clone());
-    booted
+    booted.map(|(p, _)| p)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1424,7 +1630,7 @@ thread_local! {
     /// property that makes it safe for a render input to read without a dirty
     /// signal (the *moving* side is the mirror, which `ConnectorRegistry`
     /// watches).
-    static BOOTED: std::cell::RefCell<Option<WebRtcProvisioning>> =
+    static BOOTED: std::cell::RefCell<Option<(WebRtcProvisioning, &'static str)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1432,21 +1638,21 @@ thread_local! {
 /// reference (the Shell's verbs get `&Peers` and nothing else).
 #[cfg(target_arch = "wasm32")]
 pub fn booted_snapshot() -> Option<WebRtcProvisioning> {
-    BOOTED.with(|b| b.borrow().clone())
+    BOOTED.with(|b| b.borrow().clone()).map(|(p, _)| p)
 }
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     /// What the running session last ARMED from, once late arming has acted.
     /// `None` = it never has, so boot is still the truth.
-    static APPLIED: std::cell::RefCell<Option<Option<WebRtcProvisioning>>> =
+    static APPLIED: std::cell::RefCell<Option<Option<(WebRtcProvisioning, &'static str)>>> =
         const { std::cell::RefCell::new(None) };
 }
 
 /// Record what late arming just applied (`EntityApp::arm_webrtc_if_provisioned`
 /// is the only writer).
 #[cfg(target_arch = "wasm32")]
-pub fn record_applied(p: Option<WebRtcProvisioning>) {
+pub fn record_applied(p: Option<(WebRtcProvisioning, &'static str)>) {
     APPLIED.with(|a| *a.borrow_mut() = Some(p));
 }
 
@@ -1459,7 +1665,26 @@ pub fn record_applied(p: Option<WebRtcProvisioning>) {
 /// Connections notice gave, one surface over.
 #[cfg(target_arch = "wasm32")]
 pub fn applied_snapshot() -> Option<WebRtcProvisioning> {
-    APPLIED.with(|a| a.borrow().clone()).unwrap_or_else(booted_snapshot)
+    applied_with_source().map(|(p, _)| p)
+}
+
+/// **Why we are on this node**, as the one sentence a surface may quote.
+///
+/// Carried in the same cell as the value rather than a second thread-local
+/// beside it: two cells holding one decision is how a surface ends up naming a
+/// node and a source that were resolved at different moments. `meet` prints it
+/// because *"is it just using the last node I connected to?"* is the question a
+/// person actually has, and a short peer-id answers none of it.
+#[cfg(target_arch = "wasm32")]
+pub fn applied_source() -> Option<&'static str> {
+    applied_with_source().map(|(_, s)| s)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn applied_with_source() -> Option<(WebRtcProvisioning, &'static str)> {
+    APPLIED
+        .with(|a| a.borrow().clone())
+        .unwrap_or_else(|| BOOTED.with(|b| b.borrow().clone()))
 }
 
 /// Has the provisioning a reload would use drifted from what this session
@@ -1552,6 +1777,131 @@ pub(crate) mod tests {
             relay_username: String::new(),
             relay_credential: String::new(),
         }
+    }
+
+    fn prov(id: &str, addr: &str) -> WebRtcProvisioning {
+        WebRtcProvisioning {
+            node_peer_id: id.to_string(),
+            node_addr: addr.to_string(),
+            ice_servers: Vec::new(),
+            poll_interval_ms: None,
+            max_deadline_ms: None,
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Which node is this session on — one answer, and chosen beats seeded
+    // -----------------------------------------------------------------
+
+    /// ⭐ **The bug this whole pair of functions was re-shaped around
+    /// (2026-09-16).**
+    ///
+    /// `src-tauri`'s app server redirects `/` → `/?webrtc_node_peer=…`, so a
+    /// device that walks over and types the desktop's address arrives with a
+    /// URL-seeded node it never chose. It then adds a connector to fix a
+    /// connection — and with the URL on top, the establisher stayed on the
+    /// URL's node while `meet` (which read the registry first) moved to the new
+    /// one. Findable at B, reachable only at A, nothing erroring anywhere: the
+    /// act of configuring it was what broke it.
+    ///
+    /// D25 decides it — a value the user deliberately chose outranks one that
+    /// was seeded for them — and that is what this pins.
+    #[test]
+    fn a_connector_the_user_chose_outranks_a_node_the_page_seeded() {
+        let (p, source) = pick_provisioning(
+            Some(prov("2KChosen", "ws://chosen:1")),
+            Some(prov("2KSeeded", "ws://seeded:2")),
+            Some(prov("2KKnob", "ws://knob:3")),
+        )
+        .expect("something is provisioned");
+        assert_eq!(p.node_peer_id, "2KChosen", "source was {source}");
+        assert!(source.contains("selected"), "the winning source must be nameable: {source}");
+    }
+
+    /// The zero-config LAN path, unchanged and asserted as such: a **fresh**
+    /// profile has no selection, so the page's node is what provisions it. This
+    /// is the case the flip must not cost anything — and it is also every
+    /// WebRTC e2e rig, which hands a node on a dynamic port to a clean profile.
+    #[test]
+    fn with_nothing_chosen_the_page_still_provisions_the_session() {
+        let (p, source) = pick_provisioning(
+            None,
+            Some(prov("2KSeeded", "ws://seeded:2")),
+            Some(prov("2KKnob", "ws://knob:3")),
+        )
+        .expect("the page provisions it");
+        assert_eq!(p.node_peer_id, "2KSeeded");
+        assert_eq!(source, "URL query");
+    }
+
+    /// The build knob is last and is still reachable — it is what
+    /// `make pair-serve` bakes in.
+    #[test]
+    fn the_build_knob_is_the_floor_not_a_dead_arm() {
+        let (p, source) =
+            pick_provisioning(None, None, Some(prov("2KKnob", "ws://knob:3"))).expect("knob");
+        assert_eq!(p.node_peer_id, "2KKnob");
+        assert_eq!(source, "the build knob");
+        assert!(pick_provisioning(None, None, None).is_none(), "nothing configured is None");
+    }
+
+    /// ⭐ **`meet` dials the node we are ARMED at, never a second opinion.**
+    /// The row supplies the label and nothing else — so a row edited, moved or
+    /// re-added at a different port after the establisher armed cannot put a
+    /// different address in front of a dial. A name cannot put us in the wrong
+    /// bucket; an address can.
+    #[test]
+    fn the_node_in_force_is_the_armed_one_and_a_row_may_only_name_it() {
+        let rows = vec![
+            Connector { label: "kitchen laptop".into(), ..conn("2KArmed", "ws://stale-edit:9") },
+            conn("2KOther", "ws://other:1"),
+        ];
+        let c = node_in_force_from(Some(prov("2KArmed", "ws://armed:7")), None, &rows)
+            .expect("armed, so there is a node");
+        assert_eq!(c.node_peer_id, "2KArmed");
+        assert_eq!(
+            c.node_addr, "ws://armed:7",
+            "the ADDRESS comes from the arm — a row is not allowed to redirect a dial"
+        );
+        assert_eq!(c.label, "kitchen laptop", "the row supplies the name");
+    }
+
+    /// A node in force with no row of its own is still dialable, and carries no
+    /// label rather than borrowing somebody else's.
+    #[test]
+    fn an_armed_node_with_no_row_is_still_the_node_in_force() {
+        let c = node_in_force_from(Some(prov("2KArmed", "ws://armed:7")), None, &[conn("2KOther", "ws://o:1")])
+            .expect("armed");
+        assert_eq!(c.node_peer_id, "2KArmed");
+        assert!(c.label.is_empty(), "no row, no name — never another row's");
+    }
+
+    /// Nothing armed is nothing to meet at. The old version answered from the
+    /// registry here, which is precisely how a selection could be dialed while
+    /// no establisher had ever been built from it.
+    #[test]
+    fn a_session_that_armed_nothing_has_no_node_in_force_however_full_the_registry_is() {
+        assert!(
+            node_in_force_from(None, None, &[conn("2KSelected", "ws://sel:1")]).is_none(),
+            "an unselected registry row is not a rendezvous this session can be reached at"
+        );
+        // …but a SELECTED one is, when nothing is armed to contradict it. This
+        // is the Worker arm, where the establisher is installed at `Init` and
+        // nothing records an applied value — answering `None` here made the
+        // Meet form vanish with a connector plainly selected.
+        assert_eq!(
+            node_in_force_from(None, Some(conn("2KSelected", "ws://sel:1")), &[]),
+            Some(conn("2KSelected", "ws://sel:1")),
+            "with nothing armed there is no competing answer — the user's choice stands"
+        );
+        // And the arm still wins whenever there IS one: that is the split.
+        let c = node_in_force_from(
+            Some(prov("2KArmed", "ws://armed:7")),
+            Some(conn("2KSelected", "ws://sel:1")),
+            &[],
+        )
+        .expect("armed");
+        assert_eq!(c.node_peer_id, "2KArmed", "armed outranks selected, always");
     }
 
     // -----------------------------------------------------------------

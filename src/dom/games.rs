@@ -1183,6 +1183,21 @@ pub fn render_player(
                         &JsValue::from_bool(ws.usable()),
                     );
                 }
+                // The file verbs, only for an app that declared them. THIS ARM WAS
+                // MISSING until 2026-09-16 while the verbs themselves shipped on
+                // 09-14, so entity-apps' `ext.files.available()` — which reads this
+                // offer, `=== true` — could only ever answer false against us. An
+                // app would then either draw no file affordance or ask and wait for
+                // a host it had been given no way to recognise. Their EMBEDDING §8:
+                // "a host that implements the verbs and says nothing leaves an app
+                // unable to tell it from a host that will never answer."
+                if files_declared {
+                    let _ = js_sys::Reflect::set(
+                        &out,
+                        &JsValue::from_str(crate::app_files::INIT_KEY),
+                        &JsValue::from_bool(true),
+                    );
+                }
                 let _ = content.post_message(&out, "*");
                 // Record what locale we initialized this app with — a debug
                 // affordance + the e2e's observable that the host delivered it.

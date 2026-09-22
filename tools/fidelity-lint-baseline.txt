@@ -1,0 +1,48 @@
+# fidelity-lint baseline — durable writes that re-encode a DECODED view.
+#
+# Format: <path> <binding> <reason>
+#
+# NAMES, not a count, and the set must match EXACTLY in both directions. A row
+# here is a claim that somebody asked "whose bytes are these?" and answered
+# "ours". See tools/fidelity-lint.py for why a count would not do.
+#
+# Read src/obtained.rs before adding a row. The short version: re-encoding is
+# correct when we ARE the author, and a defect when the value came from
+# somebody else — because it drops what we do not model and moves the address.
+
+# -- Our own durable state, deliberately modified then written back ------------
+# The session config at /{me}/…: read, one field derived from another
+# (`cfg.active = cfg.active_from_boot_surface()`), written back. We author it,
+# so our encoding is canonical for it.
+src/app.rs cfg deliberate-our-own-session-config
+
+# -- The site editor: the rewrite IS the feature -------------------------------
+# `rebuild_nav` and the page-rename path decode our own site's manifest, change
+# `nav`/`root`, and write it back. Editing is exactly the "unless you
+# intentionally decide to do so" case — the write is the point, not collateral.
+#
+# ⚠ Boundary, recorded rather than fixed because it is unreachable today: these
+# are PARTIAL edits. A field this build does not model is dropped as a side
+# effect of an edit that only meant to touch `nav`. Our own encoder wrote these
+# manifests and our own decoder models every key in them, so there is nothing to
+# drop. What would make it reachable is a VERSION skew on our own state — a
+# newer build adding a manifest field, then an older build editing the nav — the
+# rollback exposure AGENTS.md already records for the desktop (`data_root()` has
+# no version in its path, and reinstalling the previous installer is ordinary
+# user behaviour). Fixing it needs a merge-preserving edit (decode to a Value,
+# mutate one key, re-encode), which is a different mechanism from `Obtained<T>`
+# and should be built when it is reachable, not before.
+src/views/site_editor/model.rs manifest deliberate-editing-our-own-site
+src/views/site_editor/model.rs sp deliberate-editing-our-own-site
+
+# -- Name reuse, not a decode --------------------------------------------------
+# `WorkFile { .. }` is constructed fresh from the caller's bytes at the write
+# site; the flagged binding is a different `file` earlier in the module. The
+# heuristic keys on the name, so this is a known false positive rather than an
+# unanswered question.
+src/apps/workspace.rs file not-a-decode-constructed-fresh
+
+# `ensure_demo_set` builds an `AppCatalog` from baked demo tokens and writes it;
+# the decoded `catalog` the heuristic keyed on is a different binding further
+# down the same file. Ours, authored, and behind `--features demo-apps`.
+src/views/games/mod.rs catalog not-a-decode-constructed-fresh

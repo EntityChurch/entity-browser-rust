@@ -193,6 +193,56 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   missing app), and **`Unchanged` writes nothing and flips nothing dirty** — on the Apps surface
   a spurious dirty restarts a running app. Background:
   `docs/architecture/reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-EVERY-COPY-OF-SOMEONE-ELSES-BYTES.md`.
+- ⭐⭐ **AN ENTITY YOU DID NOT AUTHOR TRAVELS AS BYTES; A STRUCT IS ONLY A VIEW OF IT — hold it in
+  `Obtained<T>` (`src/obtained.rs`), which carries the reasoning, the measurement and the gates.**
+  If someone else gives you an entity, **that** is what you store — not your re-encoding of the
+  fields you happened to model. V7 §2.6's MUST-ignore governs *reading*; it licenses nothing about
+  what you write back. **This is the second appearance of one root** (the first is the 09-10 asset
+  regression's *"if your cache re-encodes rather than storing bytes, it can only cache what it
+  fully understands"*, mitigated with a skip rather than fixed) — **a third, in a subsystem that is
+  not `persist_to_cache`, makes it a discipline rather than this entry.**
+  **The consequence is not the fidelity, and that is why it survived.** The content-site
+  write-through and `foreign_cache::ensure_current` land at the **same key**
+  (`ForeignArtifact::Manifest::store_path` *is* `paths::manifest_path`), and D24 decides *did
+  anything change* by comparing the held `content_hash` against the origin's 58-byte hop-1 pointer
+  — so a rewritten copy's hash can never equal the pointer it came from and every sweep answered
+  `Fetched`, forever. **D24's mechanism defeated not by a missing trigger — the failure it was
+  written about — but by a sibling writer at the same path putting bytes the trigger cannot
+  recognise.** ⇒ ***when two code paths write one tree key, they owe the same bytes.***
+  ⚠ **The arm that decides it is a defect contains NO unknown field:** an ordinary one-page site
+  omits `nav` (SITE §4 makes it optional; *title-only is conformant*) and our encoder added
+  `nav: []` — 25 B in, 30 B out, address moved. **Do not file this as forward-compatibility
+  hygiene;** it was reachable by every conformant publisher who differs from us by one optional
+  key. Same shape as `gpin4-joint`'s *same absence, two encodings*, arriving where it cost
+  something.
+  **Why a type and not a rule: it already decayed as a rule.** `foreign_cache` (written *for* D24)
+  carries the `Entity` and is right; `feed_mirror` carries it and says so in a comment; the
+  content-site resolver is older than both and was wrong at three call sites in one function while
+  **its own doc comment claimed the writes were byte-faithful** (AP44). Nobody was careless — the
+  decoded struct is what a renderer needs, so by the time anything wants to *store* the value the
+  bytes are three frames gone. `Obtained<T>` derefs to the view (every read site is untouched) and
+  `entity()` is the only way out. **`None` means WE authored it** — a synthesized section index, a
+  notice — a real answer kept apart from *"we had bytes and lost them"* (AP40).
+  **Enforcement point: `tools/fidelity-lint.py` (in `make lint`, baseline NAMES not counts).** It
+  flags every durable write whose value re-encodes a decoded view; a row says *we authored this* or
+  *the write IS an edit*, and a new site fails the build until somebody answers. It **fails both
+  ways** — a row with no live finding is also red — because a SWAP is the dangerous case here and is
+  exactly what `net-lint`/`ecf-lint`'s counts cannot see (`vocab-lint`'s lesson, second use).
+  ⚠⚠ **ITS FIRST CUT WAS FALSIFIED BY THE VERY DEFECT IT WAS WRITTEN FOR, AND THE SHAPE IS GENERAL:
+  a matcher that reads the WRITE's arguments misses a re-encode that was bound to a variable.**
+  `let manifest_entity = rp.manifest.to_entity(); … seed_write(…, manifest_entity.clone())` — the
+  argument is a name, so a one-level matcher sees nothing, and reinstating the real bug left the
+  gate **green**. The asset and page writes at the same site inline the call and *were* caught,
+  which is what made the hole look like coverage. Two levels of taint now (decoded → re-encoded
+  binding → write), and the wider matcher immediately surfaced a site the first had missed. ⇒ ***a
+  gate you falsified only with the defect's tidiest spelling is a gate you have not falsified*** —
+  reproduce the ORIGINAL line, not a cleaned-up version of it.
+  ⚠ **And the revert trap, one step past the `git checkout` lesson: a NEW tool file is untracked, so
+  `git checkout` cannot restore it** — it errors, the neuter stays in, and the next run reports on
+  neutered code. Restore by inverse edit, and re-run to confirm the gate is back before believing
+  any green.
+  ⇒ **Standing check when you add a durable write of anything fetched: ask what a `from_entity`
+  dropped on the way in, and whether anything downstream compares the address.**
 - **`make e2e-worker T=an_app_republished` is D24's behavioural gate — publish, boot, republish
   under the SAME identity, boot again, assert the new bytes are on screen.** It exists because
   **no gate here had ever visited an origin twice across a publish**, which is exactly why
@@ -603,60 +653,6 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   nothing, which is the state we are getting back to. **It is lossy and that is accepted** — it
   removes the offline shell — and it touches **no** peer data, the same scope line the console's
   program reset draws, for the same reason (no export path).
-- ⭐⭐ **A REPORTER THAT LIVES INSIDE THE THING THAT DIES IS NOT A REPORTER — the dead-instance
-  detector, `index.html`, 2026-09-15, and it is the WASM tier of the argument G8 already makes
-  about the recovery console.** Measured on a real session: the instance stopped resolving its own
-  closures and the page threw `RuntimeError: index out of bounds` from a wasm-bindgen closure shim
-  **388 times**, alternating between two shim signatures. Not a Rust panic —
-  `console_error_panic_hook` was installed and printed nothing; on a closure-invoke shim that
-  message is a `call_indirect` at a function-table index the table does not have. **After the first
-  one, not one more tracing line was emitted** — not even the 5-minute `build_update` interval that
-  had been ticking right up to it. That silence *is* the unresponsiveness.
-  **THREE DETECTORS, ALL SILENT, AND NONE OF THEM WAS BROKEN.** `diagnostics.rs` installs `window`
-  error/rejection capture whose module doc states its whole purpose is that "a browser-level failure
-  is captured and visible *in-app*" — **zero** lines against those 388 errors, because the handler is
-  itself a wasm closure. `watchdog.rs` does the hard part right (the watcher is off-thread in a
-  Worker) and then reports back through a main-thread wasm `onmsg` closure, so the watcher kept
-  ticking into a corpse. And it is installed `show_banner = false`, so even a correct detection drew
-  nothing. ⇒ **when you build a failure reporter, name the failure it cannot report, and check that
-  is not the one you built it for.** All three of ours had the same blind spot and it was the whole
-  subject.
-  **The detector is plain JS in the shell** — same tier as `__ENTITY_RECOVERY__` and
-  `__ENTITY_BUILD_SLOT__` — and it **reports and offers, never acts**: no auto-reload, because a
-  crash-loop reload is a brick generator and the WASM-load retry one block up already records what a
-  post-start auto-reload cost (it wiped live sessions on a denied `clipboard.writeText`). **A banner
-  rather than a modal, and that is F2's lease-not-deed instinct applied to a verdict** — if we are
-  wrong about the app being dead, a full-screen overlay is us bricking a working session on our own
-  false positive; hence the Dismiss beside the Reload and the Recovery link.
-  **Four outcomes (AP40) and the two collapses both cost something.** `pre-start` is not a weaker
-  `isolated`: before the module executes, an error belongs to the WASM-**load** auto-retry, which
-  owns that failure — counting it here puts *"the program stopped"* over a boot that never started,
-  a different fault with different advice. `isolated` is not a weaker `dead`: one freed closure is a
-  defect, not evidence the instance is over.
-  **The record names the FIRST trap and keeps its stack.** The 388th is an echo of a closure that
-  was already gone; the first is the only one whose stack names it. Written to `localStorage`
-  (`entity_last_trap`) under the routing mirror's rules — bounded, **nothing branches on it** — and
-  **System Recovery renders it**, because a record only a devtools console prints is one the stuck
-  person on a phone cannot read (the console's own founding argument, one screen over).
-  **Gate: `make e2e-worker T=a_dead_wasm_instance`, six rows, six neuters, each landing on a
-  distinct row** (no threshold · no trap classification · verdict with no banner · record follows
-  the latest trap · no durable record · no recovery exemption). **Scope, stated in the gate's own
-  doc comment so the name cannot be read wider than the measurement: it gates the DETECTOR, not a
-  trap.** The events are synthetic and dispatched at the real `window`, so everything above the trap
-  itself is the production path; producing a real trap needs a deliberately broken bundle and is a
-  different rig. `?deadinstance=<n>` lowers the threshold — a test affordance, same shape and same
-  reason as `?bootstall=`, and nothing in the product sets it.
-  ⛔ **WHAT KILLED THAT INSTANCE IS STILL OPEN.** The obvious candidate — a failed §6.5 negotiation
-  leaking a live `RTCPeerConnection` over freed handlers — is **covered**: `discard_session` runs on
-  the failure path and calls `pc.close()`, and `main_thread_establish.rs` states the rule in its own
-  header. Do not report it as the cause. Standing context from that session, none of it established
-  as causal: a 32 s frame gap (`wake_probe` `gap_ms = 32005`) immediately before the first trap; a
-  §6.5 channel that had opened and then died, followed by ~100 re-negotiations (the trailing numbers
-  on those log lines are Firefox console repeat counts) all `role=answerer, sdp_exchange=INCOMPLETE,
-  candidates posted=0/fed=0`; sustained `HIGH REBUILD RATE 11–14/sec`, 4438 rebuilds; and the alpine
-  VM mounted with ~172 MB of bundles. **The build was `-dirty`, so those two shim hashes are not
-  resolvable from any commit** — which is the build-pair entry's own subject arriving as a
-  diagnostic cost rather than a release one.
 - **The health checks live in System Overview's *Problems* card — not a window, and never called
   "Doctor" on screen.** `src/doctor.rs` is the pure verdict logic (checks 1–3 of the resilience
   design §7.2: domain identity, fetch-failure-by-peer, catalog completeness) and
@@ -2442,6 +2438,60 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   on disk and never in the app. *(The bound that used to sit here — "the entry list, the seven
   attribution verdicts and a successful walk are still native-only, because the rig registers no
   origin and publishes no feed to one" — is retired by the published-leg gate below.)*
+- ⭐⭐ **A SURFACE REACHABLE ONLY BY TYPING AN IDENTIFIER IS NOT REACHABLE — the browse list,
+  2026-09-16.** Every mechanism this surface needs had shipped: route planning over two legs,
+  per-entry verification, mirrors, paging, the composer. A visitor arriving at a deployment still
+  could not read that deployment's own posts, because the only way in was pasting a **45-character
+  peer id** they had no way to obtain. The bytes were in the signed root, `entity-deployment.json`
+  said nothing about them, and `feed_follows` is written only by the Follow button. ⇒ ***when a
+  surface asks for an identifier, ask where a person gets one*** — and if the answer is *"from
+  somewhere this profile already knows"*, the list is the feature and the box is the escape hatch.
+  The tell is cheap and was in the copy: the window's own hint said *"Follow a publisher by peer id"*,
+  which is the surface documenting its escape hatch as the front door.
+  ⭐ **The set is the ROUTED set — `origins::list_origins`, and nothing new.** A row with no origin
+  can only produce `NoRoute`, so offering it is **AP54 pointed forward: a viewer must not offer what
+  it cannot open.** That accessor is also already the supersession chokepoint, so a retired publisher
+  is resolved rather than advertised, and the deployment's own publisher is in it for free because
+  `adopt_deployment_origin` put it there at boot. **Rows are deliberately NOT probed** —
+  `publication_probe` would answer *does this peer publish a feed* at **one signed-root walk per
+  row**, i.e. O(list) round trips to decorate a list, and selecting a row already answers the same
+  question through `FeedPanel`'s four honest states at the moment somebody asks it.
+  ⭐⭐ **A DEFAULT VIEW IS DERIVED, NEVER WRITTEN — and that is what keeps it out of D25.**
+  `effective_selection` is *explicit choice, else the home publisher*, computed per render. Writing
+  it into `self.selected` at open would have been the obvious shape and is wrong three ways: it
+  fights a person who then picks another row, it goes stale when a later boot declares a different
+  home, and a **stored** default starts to look like a deployment deciding something on a visitor's
+  behalf. Derived and session-only, it is a *view*, so the ownership census never engages. It can
+  land on a publisher with no feed and render `NoPosts` — **an honest empty state is not the invented
+  answer AP54 is about**; what that anti-pattern forbids is *guessing* which publisher was meant, and
+  with no home declared this surface selects nobody rather than picking one.
+  **Two more `watch_prefix` calls, both load-bearing rather than tidy** (five now): the origin
+  registry is filled by `boot_phase2`'s adoption, which lands **after** a startup window has been
+  spawned, and the session config settles there too — so without them the list renders empty on the
+  one boot that matters and never re-renders, and on the Worker arm an unsubscribed prefix answers
+  EMPTY/`None` from the mirror, which would make the fallback unreachable on the arm that has it
+  hardest. *The dead-button defect two registries over, in the place it would read as "this
+  deployment knows nobody."*
+  ⚠ **AND THE GATE LESSON, which is the one to carry off this repo: AN ANTI-VACUITY ANCHOR MUST NOT
+  BE A COPY STRING.** Three Feed gates guarded a vacuous render with
+  `text.contains("Follow a publisher by peer id")`, under a comment explaining it was chosen because
+  *"`dom::feed::render` draws it and nothing else does"* — true, and it is a **sentence translated in
+  thirty locales**. Rewording the hint (which this change had to do, because it no longer described
+  the way in) reds three gates about nothing. `READ_FEED` already knew better everywhere else —
+  `data-via` carries its own note about the no-route sentence going stale and being red for a day —
+  and the vacuity guard was the one place still reading words. It reads `[data-field="feed-peer"]`
+  now. ⇒ ***"only the body draws it" is a reason to pick a structural marker, not a reason to pick a
+  sentence***; copy is the thing most likely to change for reasons unrelated to the gate.
+  **Gates:** six native, headline
+  `arriving_at_a_deployment_reads_its_own_publisher_without_anybody_choosing` (falsified — drop the
+  fallback and it reds alone; make the list the *followed* set instead of the routed one and all six
+  red). Browser: the routed-set rule rides `a_gathered_feed_reaches`' step 3, which already
+  establishes a followed author with no origin, and the probe emits **`known_ids` rather than a
+  count** — the rule is a claim about *which* peers appear and a count cannot falsify it.
+  ⛔ **What this does NOT close: DISCOVERY.** The list is *what this profile can already reach*, which
+  is a routing fact — how a reader learns a publisher exists at all is still `EXTENSION-DISCOVERY`'s
+  question, FEED §9.5's open navigation half, and the reason `publication_probe`'s module doc ends
+  where it does. Nothing here invents an answer to it.
 - **THE ORDINARY LEG HAD NO BROWSER GATE AND THE EXTRAORDINARY ONE DID — closed 2026-09-12,
   `make e2e-worker T=a_published_feed_reaches`.** A §6 mirror carrying an author a browser cannot
   reach had a gate; *follow a publisher and read what they published at their own origin* did not,
@@ -2592,6 +2642,217 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   CONTROL reds**, reporting the published leg served it.
   **Stated bounds:** nothing durable of a gatherer's is held (D24 not engaged), and no *window*
   publishes a mirror — `--gather` is a CLI verb.
+- ⭐⭐ **THE COMPOSER SHIPPED — AND *PUBLISH* IS A WORD WITH TWO MEANINGS, ONE OF WHICH HAS A VERB AND
+  A PIPELINE AND A DIRECTORY. THE ONE WITH MACHINERY LOOKS LIKE THE REAL ONE (2026-09-15,
+  `src/feed_compose.rs`).** Four verbs — add/remove an entry, add/remove from a collection — writing
+  into the bound peer's own tree, plus `app/feed/collection`, the seventh of seven FEED types and the
+  only one no seat had built.
+  **Writing `app/feed/entry` into your own tree IS publishing.** A connected peer asks and you serve
+  your tree, like everything else in it. The **static** road — projecting a signed root and putting
+  bytes at an origin — is an *additional*, operational act that freezes a tree into a version others
+  can pull while you are down; it already exists (`publish_axes`/`feed_publish`) and mints over
+  whatever is in the tree when it runs. ⚠ **This was got backwards twice in one week, once by arch
+  (recorded against themselves in their `ROUTING-2026-09-15-d` §1) and once here**, both times by
+  treating the static emit as *publishing* and the tree write as a precursor. ⇒ **when a word in this
+  system has a verb, a flag and an out-dir behind one of its meanings, check which meaning the
+  sentence needs before you reach for the machinery.**
+  ⇒ **CANONICAL HOME AS OF 2026-09-16: `REFERENCE-PUBLISHING-PIPELINE` §0.0**, with the two roads as
+  a table and *what is built on each*, measured. It went there rather than being restated here for
+  AP56's corollary — **the fix for *"the model was not where I looked"* is almost never *"state it
+  again where I looked"***, and §0.1 next door was already the canonical statement of the half that
+  had one. It is a third instance of the same confusion that put it there: the operator named it as a
+  thing this seat keeps re-deriving, and the doc that *is* the model was silent on it while §0's own
+  opening line — *"there is no application server"* — is true of the static road and reads as a claim
+  about the system.
+  ⭐ **MEASURED, AND IT IS A LOAD-BEARING FACT ABOUT THIS PRODUCT: A BROWSER PEER IS NOT A PUBLISHER.**
+  Arch ruled the composer as *mint-after-append* on `entity-workbench-go`'s measurement (a 4th entry
+  authored with no re-mint; a verifying live reader sees 3, with no error and no warning). Right about
+  a peer that mints. **Ours does not.** Through `Peers::new_direct_with_connector` — the construction
+  `PeerManager` gives the app — `published_root_head` and `system/tree/root` are **`None` before and
+  after a feed write**: `PeerManager` never calls `with_published_root` and `EntitySDKBuilder` has **no
+  passthrough for it**, so no prefix is tracked and there is nothing to re-sign. Armed by hand
+  (`PeerBuilder::with_published_root("/")`) it works and is cheap — **200 feed puts → `seq` 200,
+  exactly one mint per write, 176 µs/put** — and *every* tree write mints, including a window-state
+  persist. **Do not describe a browser profile as a publisher without arming that, and do not arm it
+  without deciding whether every profile should pay a mint per write.**
+  ⭐⭐ **AND THE PREFIX QUESTION IS EVIDENCE FOR THE UNRULED `A-38`:** a root scoped to `app/feed/` —
+  arch's own wording — commits every entry and **no entry's signature**, because `FEED-R2`'s detached
+  signature lives at V7 §3.5's invariant pointer `system/signature/{hex}`, **outside the convention's
+  own prefix**. `"/"` is the only prefix under which a feed is self-contained. *The convention's `R2`
+  obligation is discharged at a path the convention does not own.*
+  ⛔ **THE SIGNATURE IS THE HALF THAT GETS FORGOTTEN, IN BOTH DIRECTIONS.** An add that writes only
+  the entry publishes something `feed_read::attribute` answers `NoSignature` for; a remove that
+  unbinds only the entry leaves a signature bound to bytes that are gone, which is exactly the trace
+  §7.3 says does not exist (*"byte-identical to a tree that never contained it. Not similar —
+  identical."*). Both gated, both neuters falsified **separately**, so the two directions are
+  independently measured.
+  ⭐⭐ **AN ADDRESS MUST BE CARRIED, NEVER RECOMPUTED — and the obvious repair is silent and total.**
+  The authoring surface needs each post's hash, and `feed_tree::read_owned_feed` (the *publish
+  projection's* reader) drops it. The reflex is `entry.to_entity().content_hash`. **V7 §2.6 makes
+  unknown fields MUST-ignore**, so an entry carrying a term this build does not model — authored by a
+  later version of us, another impl, or a convention revision — decodes fine, drops the term, and
+  **re-encodes to a different hash**. Remove then builds a key naming no binding, unbinds nothing, and
+  prints §7.5's unpublication sentence: *the post stays up and the person is told it came down.* So
+  `feed_compose::own_posts` reads the address from the **key**, which is where `entry_key` put it.
+  ⇒ **whenever a decode is lossy by design, a value derived from a re-encode is a different value.**
+  ⭐ **ALLOWING DUPLICATES MAKES REMOVAL POSITIONAL, and a length assertion sails straight through the
+  bug.** §5's *membership is not exclusive* holds **within** one collection — a playlist that plays a
+  track twice is an ordinary playlist — so `plan_add_to_collection` does not dedupe. Therefore *"remove
+  this member"* does not name one binding: with `[a, b, a]`, a by-value remove takes the first match
+  and leaves `[b, a]` instead of `[a, b]`. **Same length, different content, and order IS content
+  (`FEED-R15`)** — data loss wearing a no-op's clothes. `plan_remove_from_collection` takes a
+  **position**, which makes the ambiguity inexpressible rather than resolved silently (`MirrorSubject`'s
+  argument-list guard, one type over) and is the only form a list UI can supply honestly: what the
+  person clicked is a row, and a row is a position.
+  **`FEED-R21` lives on the button.** §7.5 makes presenting removal as deletion a **MUST NOT** and puts
+  the honest sentence *"at the moment of the action rather than in a help page"*, so the removal verb
+  **returns** `RemovalMeaning` — a caller cannot take the plan without being handed what it owes — and
+  the gate asserts the **rendered string** (no *"delet"*, and §7.5's load-bearing second clause
+  present), not the enum variant, because the MUST NOT is about what a person is told.
+  **Two rig lessons, both paid for twice.** (1) A `Peers` generates its own primary and has **no writer
+  and no SDK for any other peer id**, so a test signing with a stand-in key lands on `Refused` and
+  reads as a product defect — `FEED-R1`'s fact one layer down. Both new test helpers had to be
+  corrected to author *as the profile's own peer*, independently, in two files. (2) **`tests/escape_hatch_budget.rs`
+  refused the obvious way to reach a peer's own identity** (`direct_peer_shared`, an L0 hatch that
+  answers `None` on the Worker arm) — **not allowlisted**: the test builds both handles from one seed
+  instead. *A budget that can be waived by adding a line is only worth having if you first ask whether
+  you needed the hatch at all.*
+  **Found on the way and fixed:** `KeyType::label()` is the kernel's canonical V7 §3.5 name and we
+  restated it **twice** — `signed_root::algorithm()` through a wildcard (`_ => "ed25519"`, wrong for
+  `ExperimentalTest`) and `feed_read::key_type_name` exhaustively. The second's doc said it *"mirrors
+  `RootProjector::algorithm` rather than re-deriving"*, and it did not. *A comment claiming a factoring
+  is not the factoring* — the tell is the one this file already gives: ask which module would have to
+  change if the shared thing changed.
+  **Stated bounds:** collections are **model-complete and unwired** (verbs 3 and 4 are gated; nothing
+  on screen calls them) · the window still cannot author a collection · nothing here mints, by design.
+  *(The "no browser gate for the composer" bound is retired 2026-09-16 —
+  `make e2e-worker T=a_default_profile_can_post` — and the entry below is what the concession cost
+  while it stood.)*
+- ⭐⭐ **THE COMPOSER WAS UNREACHABLE FOR EVERY VISITOR FOR A DAY, BECAUSE THE PROFILE'S OWN KEY IS IN
+  THE OTHER DRAWER (2026-09-16).** `feed_compose::authoring_keypair` enumerated the `entity_peers`
+  **vault** — which is the *spawn list*, the peers a person explicitly created. Every window on a
+  default profile is bound to the **system peer**, whose seed lives under `entity_system_seed`, a
+  drawer whose own constant is documented in as many words as *"distinct from the `entity_peers`
+  spawn-list"*. So the lookup answered `None` for the one identity the app is definitionally running
+  as, and the surface said *"this profile does not hold its key"* about a key in localStorage, held in
+  memory, and signing that session's traffic. **Writing into your own tree IS the publish, and the
+  surface built to do it refused on the shipped default.** Fixed via
+  `persistence::held_keypairs` — the single answer to *may I author as this peer*, knowing both
+  drawers, so a third durable identity added tomorrow is one row rather than a sweep of every surface
+  that authors.
+  ⭐ **THE TRANSFERABLE HALF IS WHY NINE NATIVE GATES AND TWO BROWSER GATES STAYED GREEN, AND IT
+  INDICTS A REFACTOR THIS FILE WOULD OTHERWISE PRAISE.** The model splits `post` into
+  `post_signed_by(.., signer: Option<&Keypair>)`, and its own doc comment states the reason: *"the
+  lookup reads process-global persistence, so a model that did it inline had exactly one reachable
+  outcome in a native test (`NotOurPeer`) … a parameter is the difference between a wired surface and
+  a gated one."* **That reasoning is correct and the split is good design — and it moved the ONLY
+  untested thing (*which drawers do we look in*) outside everything that tests the composer.** Every
+  native gate hands the keypair in. ⇒ ***when you split an impure lookup out to make a decision
+  testable, the lookup is now the untested half — and it is the half that fails in production.***
+  Name it in the doc comment and gate it from a surface, or the split has traded a reachable bug for
+  an unreachable one.
+  **The population argument at its plainest, and note what the missing shape was.** Not an encoding,
+  not another implementation, not a foreign publisher: **a profile nobody had hand-fed a key to** —
+  which is to say the only kind that exists in production. *A test double that supplies the thing you
+  forgot to ask for cannot notice that you forgot*, third instance (`OriginFeedSource`'s empty origin,
+  `feed_fetch`'s two-legged mirror double, this).
+  **The fix's shape is a WITNESS, and a read-only re-read would NOT have been equivalent (AP44).** The
+  system seed is recorded inside `system_seed()` — the function that mints it — rather than by a
+  `remember_system_seed(seed)` added to `new_wasm` beside the existing call, so there is no second
+  call site for the next author who constructs a primary to know about. A read-only localStorage
+  re-read is a *different answer*: when storage is unavailable `system_seed` returns a fresh
+  per-session identity it never persists, so re-reading would report that we do not hold the key for
+  the peer we are at that moment running as. `EntityApp::webrtc_seed` already carries that exact
+  reasoning for the carrier identity, one consumer over — **the argument was in the tree and the
+  second consumer did not inherit it.**
+  **Gate: `make e2e-worker T=a_default_profile_can_post`** — the composer is offered · a post lands
+  and is on screen (the whole draft → `WindowEvent` → `plan_add_entry` → `apply` → tree → re-read
+  loop) · **it survives a reload**, which is what separates *we wrote to the tree* from *we appended
+  to a session vector* and is the claim the operator actually made · removal unbinds it without
+  calling itself deletion (§7.5). Falsified: restore the vault-only lookup and row 2 reds with the
+  production sentence, `can_author=false compose_blocked=true`. **`can_author` and `compose_blocked`
+  are read as two separate selectors, never one negated boolean** — a `render_composer` that drew
+  *neither* would otherwise pass as the healthy arm.
+  ⚠ **And the durability row waits on the STORE, not the render.** The Direct/IDB arm is write-behind
+  (250 ms debounce) and a `goto` abandons the pending drain, so a reload issued on the click races the
+  flush and the row fails wearing the composer's costume — reporting *"the post was never in the
+  tree"* about a post that was. It polls `durable_hash_for("app/feed/entries/")` and **asserts the
+  probe found something**, because a probe that silently found nothing is a wait for nothing.
+- ⭐ **AN ENUMERATION OF WHAT A MODULE DOES *NOT* CONTAIN IS A CLAIM ABOUT CODE NOBODY HAS WRITTEN YET
+  (2026-09-15).** `feed.rs`'s module doc opened *"four of the convention's six types… `collection` and
+  `mirror` are deliberately not here"* — while `FEED_MIRROR_TYPE` was defined **twenty lines below that
+  sentence** and `feed_mirror.rs` was 1,417 lines. `entity-core-papers` read it and published *"four of
+  six"*: their conclusion was right and their evidence was our drifted artifact. **Nothing anywhere
+  re-reads a list of absences when the module grows** — the same shape as `window_hydration_census`'s
+  `code_only` helper claiming it *"only has to stop the two false positives this census can actually
+  produce"*, which is also a statement about the future. ⇒ **prefer *"all N"* to a list of exclusions,
+  and where an exclusion is real, say what would retire it.** Second-order: this is the *stale-doc*
+  family AP40 warns about, arriving where no gate can see it — a module doc is prose, and
+  `publish-doc-check` says in its own output that prose is not checked.
+- ⭐ **A DOCUMENT THAT WAS NEVER ADDRESSED TO ANYBODY CANNOT BE UNDELIVERED, SO NO DELIVERY DISCIPLINE
+  FIRES ON IT (2026-09-15).** This file already carries *archived is not delivered* and *filed ≠ routed
+  ≠ answered*, both written about things that **were** packets.
+  `PROPOSAL-2026-09-11-PORTS-…` sat in `docs/plans/` with **zero citations in arch's tree** — not late,
+  not held, not lost, just invisible to `spec inbound`, which enumerates `docs/status/ROUTING-*` — while
+  the question it answers was asked twice. Arch found it and asked for a one-line stub.
+  ⇒ **if a plan answers somebody else's ask, the answer is a packet, not a plan.** Sibling to the
+  standing rule that *a held packet is a row on the tracker, not a banner on the packet*: both are cases
+  where the artifact exists, is correct, and is not in the channel that anyone reads.
+- ⭐⭐ **A BOUND STATED HONESTLY IS NOT A BOUND MEASURED — the pointer body, found by publishing
+  somebody else's real corpus and looking at it (2026-09-16, `src/feed_body.rs` + `FeedSource::blob`).**
+  EMBED §3 caps an inline payload at `bstr .size (1..16384)`, so **every post over 16 KiB is REQUIRED
+  to take the pointer arm**. The publisher had done that correctly since `asset_store::stage`: blob
+  and chunks into the closure, `--verify` confirming them. **Nothing on the reader side resolved
+  one** — `read_feed` returned the entry, the body was a `Pointer`, and the ladder bottomed out on
+  the authored fallback. ⇒ **an 18 KB post arrived on screen as its title, bytes published, signed
+  and verified at the origin.** `FallbackReason::PayloadNotInHand`'s own doc called it *"not a
+  permanent verdict — a statement about this call site"*, which was true, honest, and had no trigger
+  measurement behind it.
+  ⭐ **The `app/site-asset` work had already run exactly this measurement one vocabulary over** —
+  *629 of 1,346 site assets are over 16 KiB (47%)*, with the conclusion written into this file:
+  *before pricing a conformance fix, measure how much production traffic sits in the governed case.*
+  Nobody ran it for feed bodies. ⇒ ***a measurement recorded for one subsystem does not fire for its
+  neighbour; when you meet a shared constant, grep for who else already priced it.***
+  ⛔ **THREE REASONS NO GATE COULD SEE IT, AND THE THIRD IS NEW.** (1) Every feed fixture on either
+  seat was a short post, so the arm was reachable only by a test that built it deliberately. (2) The
+  one test that did asserted the **publisher's** obligation — the blob is served — and then
+  **hand-assembled the closure itself** with a `MemoryContentStore` and three kernel calls, so it
+  proved the bytes were there and never read one back through a reader. (3) ⭐ **Every `FeedSource`
+  in the crate, doubles included, answered the defaulted *cannot resolve blobs*** — so the production
+  gap was invisible from inside the suite. That is *a test double that supplies the thing you forgot
+  to ask for cannot notice that you forgot* (fourth instance) **in the direction where it supplies
+  NOTHING and both sides agree about the absence** — strictly harder to see than the `OriginFeedSource`
+  empty-origin case, where the double supplied a wrong value. ⇒ **when you add a defaulted trait
+  method, give the test double the real override or the default becomes the tested behaviour.**
+  **`BlobMiss` is the AP40 split one level in.** *We hold no bytes yet* was itself three facts:
+  **`SourceCannot`** (ours — no resolver; the defaulted arm) · **`Absent`** (theirs — a signed
+  closure naming a blob the origin will not serve, which `--verify` catches) · **`Failed`** (neither
+  — transport). The error type on the trait is `BlobMiss` rather than `String` precisely so the
+  distinction survives the call, and `data-fallback-miss` carries it to the surface as a **second
+  attribute**: *what the reader is doing* and *whose situation it is* are orthogonal axes, and one
+  key would merge them.
+  ⚠ **The gate's first cut failed honestly and the reason is the transferable half: the fallback
+  string was the body's own `# The long one` heading**, so *"the fallback reached the screen"* and
+  *"the body reached the screen"* produced the same substring. ***A gate whose two outcomes render
+  the same string is not a gate*** — the fallback is a sentinel appearing nowhere in the body now.
+  ⚠ **And the classifier was written twice** (shipped `OriginFeedSource::blob`, plus the
+  directory-backed `SignedOrigin::blob` the gate runs against), so the tested copy and the shipped
+  copy could disagree and both pass. `feed_fetch::resolve_blob_over` is the one expression;
+  **the double calls it**, which is what makes the falsification mean anything. C15 in the place it
+  is least visible.
+  Gates: `a_post_too_long_to_inline_is_read_back_as_markup_and_not_as_its_title` (the whole chain,
+  asserted as **markup on screen** rather than as `Resolved` — a blob resolved into a renderer nobody
+  called passes a structural check and fails the claim) ·
+  `a_source_that_cannot_resolve_blobs_says_so_rather_than_blaming_the_publisher` ·
+  `a_blob_the_origin_will_not_serve_is_reported_as_theirs_not_as_our_missing_resolver` (which also
+  asserts the feed does **not shorten** and the entry still **verifies** — a body we cannot fetch
+  says nothing about whether the author signed it). Two neuters, landing on different gates.
+  **Stated bounds:** a **mirrored** long post and one of our **own** posts still show their title —
+  `read_mirror`'s scoped source and `feed_compose::own_posts` resolve no closure — both reported as
+  `source-cannot`, both unreachable today, both stated in source.
+  ⇒ **Standing check when a spec gives you a size, a count or a depth ceiling: publish a real corpus
+  across it before you believe the arm above it works.** Ours came from `entity-core-papers` — **2 of
+  58 posts** over the ceiling, and they were the two longest, i.e. the subset a reader most wants.
 - **AN ADDRESS IS A FIELD NOW — `src/open_target.rs` is the read side of `publish_axes`, and a
   viewer is a row there plus a `WindowView::aim` override (built 2026-09-12).** `Action::SpawnWindow`
   carried a window kind and a peer and **no address**, so a caller who knew exactly what a reader
@@ -2837,6 +3098,16 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   cost is not the merged value but the wrong destination. `AssetPayload::Unsupported { tag }` is the
   same row with a different owner (capability rather than policy), and both are second-seat evidence
   for the replication proposal's seventh outcome.
+- ⭐ **THE SITES AXIS HAD A DEFAULT AND THE DEFAULT INVENTED CONTENT — three arms now, and silence
+  is refused (2026-09-16, `SiteSource` / `parse_site_source`).** `--ingest=<dir>` / `--demo-sites` /
+  `--no-sites`, exactly one; `--verify` is exempt because it resolves no source. **The account is
+  `REFERENCE-PUBLISHING-PIPELINE.md` §0.2, not here** (AP56's corollary). Two sentences worth
+  carrying out of it: **the cost of an invented default is decided by what the operation DELETES**
+  — the clean is wholesale, so a publish that meant `--ingest` and omitted it *replaced* a domain's
+  real sites rather than adding to them, exit `0`; and **the argument against it was already in the
+  file, one axis over** (`--ingest-feed`'s *"a publish that invented an empty feed would claim every
+  site publisher has one"*), pointed at its neighbour by nobody for two months. ⇒ ***when you write
+  down why an axis must be opt-in, read it back at the axis next to it.***
 - **THE THIRD PUBLISH AXIS SHIPPED, AND `src/publish_axes.rs` IS NOW *THE* LIST OF WHAT ENTERS A
   PROJECTION (2026-09-10).** `feed_tree::read_owned_feed` reads a peer's own feed off the tree,
   `feed_ingest::ingest_path` writes an authored `posts/` dir into it, `publish --ingest-feed=<dir>`
@@ -3016,6 +3287,52 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   about a publisher that changes between reads — and their own readback is **not** cross-impl
   evidence (one encoder, one decoder, both theirs), which their gate header says. Ours is the
   reader half.
+- ⭐⭐ **CORRIDOR ② IS THE *AUTHORING* BOUNDARY, AND A COUNTERPART'S GATE BEING LOUDER THAN THE
+  AUTHORITY IT RESTATES IS A DEFECT IN THE AUTHORITY (2026-09-16, `entity-core-papers`).**
+  Corridor ① is somebody else's *wire bytes* through our reader. This is somebody else's **authored
+  source** through our ingest: their 58 posts across four domains, every one accepted, each domain
+  publishing and `--verify`ing clean — and `entity-core-protocol`'s 34 crossing §4.3's page boundary
+  at 32, which makes it **the only real-corpus feed on either seat that exercises paging**, arranged
+  by nobody. `--ingest-feed`'s whole fixture population was `examples/entity-demo/feed/`, which we
+  wrote. *A test population you generated cannot contain the shape you are missing*, one layer
+  further out than the wire: here the missing shape is **another seat's authors**.
+  ⭐ **The finding is the direction nobody looks — they were louder than us.** `tools/feed/emit.py`
+  restates our refusals at the seat where the author stands and reported a loss our own ingest was
+  silent about: `params` is EMBED §3's open bag and is strings only, so `tags = ["a", "b"]` — the
+  shape an author reaches for — went nowhere *quietly*, at the one boundary where the person who can
+  fix it is standing. Fixed (`ce91d6fe`): `ingest_path` returns `Ingested { posts, notes }` rather
+  than a count, which is meta's `B-5` reason one verb over — *a count alone lets a caller report a
+  clean `ingested N post(s)` over a set that quietly lost something.* **Reported, not refused**:
+  `created_at` is fatal because it has no correct answer without the author; an attribute the bag
+  cannot carry has an obvious one. ⇒ **when a counterpart builds a gate against your behaviour, read
+  what it says and not only whether it agrees** — the row where they warn and you do not is yours.
+  ⚠ **AND THE RESTATEMENT IS C15 WITH NO COMPILER ANYWHERE IN IT.** Two expressions of one rule
+  across a repo boundary, gated in neither direction; six weeks produced two places their gate
+  **accepts a post we refuse**, both measured with identical bytes on both sides, both latent in
+  their corpus. A false accept is the one direction that defeats a gate whose purpose is to keep the
+  refusal away from devops' publish. Their transferable half is worth keeping even though the defect
+  is theirs: **handing a string back to a DOCUMENT parser is not handing it to a VALUE parser** —
+  `tomllib.loads(f"created_at = {value}")` comment-strips the string's own contents — and their doc
+  comment claimed the property the re-wrap breaks. Ours gets it from one `toml::value::Datetime`
+  `FromStr`; *the shape is the fix, not the sentence.* Routed with three options and no enforcement
+  point chosen: `ROUTING-2026-09-16-b-…` §3, tracker `PA-4`. **`vocab-lint` is the only precedent
+  here for a gate that reads another repo**, and its rule applies if one is built — a baseline of
+  names fails both ways, a baseline of counts cannot see a swap.
+  ⛔ **Bound as written on 2026-09-16 — *a visitor to a published domain cannot FIND the feed,
+  reaching a domain's own posts means pasting a 45-character peer id* — AND IT WAS RETIRED THE SAME
+  DAY, BY THE BROWSE LIST, WHICH DID NOT COME BACK AND SAY SO.** `origins::list_origins` is the set,
+  `adopt_deployment_origin` puts the deployment's own publisher in it at boot, and
+  `effective_selection` reads that publisher with nobody choosing. The peer-id box is the escape
+  hatch now. **Noted here rather than deleted, because the failure is the charter's own ratchet rule
+  missing a beat: *when you land something that spends a stated concession, grep for the sentence it
+  retires* — two entries in one file, one session apart, and the newer one never looked.** A bound
+  that outlives its cause is the expensive direction (*a shipped capability recorded as deferred
+  reads as work still owed*), and it is exactly what a later session prices work off.
+  **What is genuinely still open is one step further out: DISCOVERY.** The list is *what this profile
+  can already reach*, which is a routing fact. How a reader learns a publisher exists **that this
+  deployment does not already route to** is `EXTENSION-DISCOVERY`'s question and FEED §9.5's open
+  navigation half; `publication_probe` answers *does this peer publish a feed* about a peer you
+  already hold, and nothing invents one.
 - **A TRAIT SHAPED BY ITS TEST DOUBLE RATHER THAN BY ITS PRODUCTION IMPLEMENTATION IS A SEAM THAT
   FITS NOTHING — `FeedSource`, found on the first day anything tried to use it (2026-09-10).**
   It was **synchronous**, and **every real source of a foreign entity in this repo is `async`** —
@@ -4126,6 +4443,61 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   **a successful reconcile was reportable for a profile that had recorded nothing at all.**
   *When a surface renders two sources side by side, assert the LINE, never the card* — and when a
   gate reds at step N, check whether step N-1 was capable of failing.
+- ⛔⭐ **AND THE SERVE PORT IS THE WORSE HALF OF THE SAME COLLISION — `:8092`, 2026-09-16.** The entry
+  below is about the **grid**; this is about the test's own HTTP server, and the two fail in opposite
+  ways. A grid collision **refuses** (`webdriver server did not respond`), which reads as a rig fault.
+  **A serve collision ANSWERS — with another seat's build** — which reads as a product defect.
+  Measured: 79/3 unfiltered, and two of the three were this.
+  `a_chat_window_can_be_pointed_at_a_second_peer_without_reopening_it` died on
+  `connectionFailure` to `localhost:8092`, and
+  `a_default_profile_can_post_to_its_own_tree_and_the_post_survives_a_reload` reported
+  **`RED (VACUOUS) — the Feed window body rendered nothing`** over a window whose copy
+  (*"Follow a publisher by peer id"*) **does not exist anywhere in this tree** — because it had loaded
+  the VM worktree's app, measured separately at `:8092` as `55eca78a-dirty`. On `E2E_HTTP_PORT=8490`
+  both pass, verified one at a time.
+  ⇒ ***the cheap tell is a needle that cannot be true: grep the failing assertion's own dumped text
+  for a string in your source, and if it is not there you are looking at somebody else's build.***
+  A vacuity guard firing on a surface you just watched work by hand is the same signal from the other
+  end. **`E2E_HTTP_PORT` is the knob and `make e2e-worker` does not pick a free port** — `ss -ltn`
+  first; this box carried **119 listeners** the day this was measured, and a port free an hour
+  earlier was not.
+  ⚠ **Related and separate: `make serve PORT=` fails the same way and louder.** `8201` looked free,
+  was taken, and the serve died with `Address already in use` in a backgrounded log **while an
+  unrelated process answered `200` on the apex** — so the first probe read *"apex healthy, deployment
+  config 404"* and pointed at the publish. Check the log of a backgrounded serve, and verify the
+  build stamp of what answered.
+- ⛔ **A 55-OF-81 RED CAN BE A PORT COLLISION. `make e2e-grid` IS `--network host`, SO IS THE OTHER
+  SEAT'S SELENIUM, AND BOTH WANT :4444 (2026-09-16).** Measured: `tcabs-fx` (another seat, same
+  image) had held :4444 for two hours; `make e2e-grid` stood ours up beside it and the suite read
+  **26/55**, then **25/56** on a second fresh-grid headless run — reproducible, which is exactly what
+  makes it read as a catastrophic regression rather than a rig fault. The tell is in the failure
+  text, not the count: `webdriver server did not respond` and `Connection refused` on
+  `127.0.0.1:4444` for everything after the first few tests. **The fix is one flag and the Makefile
+  already documents it** (`WEBDRIVER ?= a PRIVATE grid. This box routinely carries other seats'
+  Selenium`): `make e2e-grid GRID_PORT=4455` then `make e2e-worker WEBDRIVER=http://localhost:4455`
+  — which took the same tree to **80/1**. `GRID_NAME` derives from the port, so the private grid is a
+  separate container and **neither seat touches the other's** (still: never kill theirs — take
+  *yours* down with `make e2e-grid-down`, which is what stops the interference).
+  ⇒ **Before believing any unfiltered red, `podman ps` for a second `standalone-firefox`.** Two
+  seconds, and it separates *the product broke* from *two containers want one port*. Same family as
+  the stale-grid A/B lesson — **the rig is shared mutable state and the other seat is part of it** —
+  and note this is a *different* mechanism from the retired SELinux advice: that one was a relabel
+  war with no clean escape, this one has a documented flag.
+  **And the residual after the fix was not ours either.**
+  `a_drag_on_a_windows_grip_survives_the_window_rebuilding_under_it` reds under concurrent load
+  (`swaps: 1`) and is **4/4 green alone with `swaps: 0`**. Its own comment names the mechanism —
+  *"the monitor rebuilds every second, so one can land between this script and the press"* — a 1 Hz
+  rebuild racing a 2.5 s hold, on a box also running another seat's `rtc-a`/`rtc-b`. **Settled
+  structurally rather than by an A/B:** the test opens the **System Monitor**, nothing anywhere
+  compares `ResolvedPage` for a rebuild, and the diff touched no window chrome — *ask whether your
+  change can REACH the failing surface before you spend half an hour bisecting it.*
+- ⚠ **AND THE RUN BEFORE THOSE WAS INVALID BY MY OWN HAND: I falsified a lint WHILE the suite was in
+  flight**, editing `src/content_site/resolver.rs` four times (two neuters, two `git checkout`s).
+  This file already says *"do not edit `src/` while the suite is running — fixtures shell out to
+  `cargo test` AT RUNTIME"*, and I read that rule as being about *feature work*, not about the
+  two-minute neuter-and-revert cycle that is the most likely thing to overlap a long background run.
+  ⇒ **a falsification is an edit to `src/`.** Finish every edit, commit, *then* start the suite —
+  and if you have already started one, the neuter waits.
 - **`make e2e-grid` before you run the suite. "Flaky e2e" on this box was TWO INFRASTRUCTURE
   DEFECTS (here) plus ONE GATE DEFECT (the entry above) — all three fixed 2026-09-03. Do not write
   the word "flaky" again without re-reading both.** Unfiltered runs before the infrastructure fixes:

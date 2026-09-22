@@ -28,10 +28,71 @@ Content Site surface this pipeline feeds).
 > Python dev server, an R2 bucket behind a CDN — serves it. The SPA boots in the
 > browser, fetches the tree over plain HTTP, and renders it live.
 
-There is **no application server**. `dist/` is the whole product. "Will the CDN
-work?" → yes, because R2 and `python -m http.server` are interchangeable static
-file servers, and the SPA fetches **same-origin-relative** (or from an explicit
-origin map — see §5).
+There is **no application server** *on this road* — see §0.0 for the other one.
+`dist/` is the whole product. "Will the CDN work?" → yes, because R2 and
+`python -m http.server` are interchangeable static file servers, and the SPA
+fetches **same-origin-relative** (or from an explicit origin map — see §5).
+
+### 0.0 ⭐ TWO THINGS ARE CALLED PUBLISHING, AND ONLY ONE OF THEM HAS A VERB
+
+**Read this before §0.1.** This distinction has been got backwards at least
+three times across two seats — once by arch, recorded against themselves in
+`ROUTING-2026-09-15-d` §1, and twice here — always in the same direction, and the
+reason is mechanical rather than conceptual: **one of the two meanings has a
+verb, a flag, an out-dir and a whole pipeline behind it, so it looks like the
+real one.**
+
+| | **the tree road** (live) | **the static road** (snapshot) |
+|---|---|---|
+| the act | write an entity into your peer's tree | project that tree into a directory and sign a root over it |
+| what makes it public | a connected peer asks and you serve it, like everything else in your tree | a static file server hands the bytes to anyone, whether you are running or not |
+| the verb | none — `put` is the whole of it | `entity-browser publish` |
+| who reads it | `feed_peer::PeerFeedSource`, `remote_read` — a peer over the transport | `SignedSession` over HTTP — a browser, `DirFetcher`, another impl |
+| the authority | **the tree** | **the tree** — this is a snapshot *of* it |
+
+**The tree road is publishing.** Writing an `app/feed/entry` into your own tree
+*is* posting; `src/feed_compose.rs`'s four verbs do exactly that and reach no
+out-dir. The static road is an **additional, operational** act: it freezes a
+version others can pull while you are asleep, offline, behind a NAT, or simply
+not running. It does not make the content public — it makes it *available
+without you*.
+
+⇒ **When a sentence in this system needs the word "publish", decide which road it
+is on before reaching for the machinery.** Most confusion here is a sentence that
+means the tree road being answered with the static road's tooling.
+
+#### What is actually built on each road, measured — so nobody re-derives it
+
+Stated because the gaps are asymmetric, and reading either road's code alone
+gives a wrong picture of the other.
+
+- **A browser peer is not a publisher, and that is a fact about construction.**
+  Through `Peers::new_direct_with_connector` — the construction `PeerManager`
+  gives the app — nothing calls `PeerBuilder::with_published_root`, so no prefix
+  is tracked and a tree write mints no signed root. Verified 2026-09-16: **zero
+  callers in `src/`**, and in `entity-core-rust` only its own tests. Armed by
+  hand it works (~176 µs/put, one mint per write, *including* a window-state
+  persist) — so arming it is a decision about whether every profile pays a mint
+  per write, not a missing feature.
+- **The desktop peer serves the SPA and never its own tree.**
+  `src-tauri/src/app_server.rs` is one exact-key lookup against the embedded
+  `frontendDist` (`assets.get(lookup)`); `EXTENSION-NETWORK` §6.5.6's live
+  serving mode is unimplemented. So the one component here with a real
+  long-lived tree cannot expose it over HTTP.
+- **`publish` cannot publish a peer's tree.** `resolve_publish_source` builds a
+  **fresh in-memory peer** each run and seeds it; only the *keypair* is durable.
+  There is no verb naming a long-lived native store and no flag naming a
+  subtree. That is `F3`, it is pre-existing, and it applies to sites exactly as
+  it does to a feed.
+- **A live read works today and is one leg of a priority list, not an
+  alternative to the other.** `feed_route::plan` tries live then published,
+  because a publisher may serve at only one — and an *empty* answer from one leg
+  is not evidence about the other (`feed_route`, and the gate asserting the
+  second leg is still consulted). ⚠ The live leg is the **weaker** read right
+  now: FEED §4.2's index is a **publish artifact**, built by `plan_index` on the
+  way out and never written into the tree, so a key-resolving live reader falls
+  through to §4.3 rule 6's prefix enumeration and *reconstructs* the order the
+  index would have carried.
 
 ### 0.1 The model in one screen — read this before changing anything that publishes
 
@@ -85,7 +146,7 @@ to write it down somewhere else, link here instead. It is one function:
 
 | axis | tree prefix | reader | ingest flag | `make` variable | worked example |
 |---|---|---|---|---|---|
-| sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` | `INGEST=<dir>` | `examples/entity-demo/` |
+| sites (`APP-CONVENTION-SEMANTIC-CONTENT-SITE`) | `sites/` | `content_site::read::read_all_sites` | `--ingest=<dir>` · `--demo-sites` · `--no-sites` (**exactly one, required**) | `INGEST=<dir>` · `DEMO_SITES=1` · `NO_SITES=1` | `examples/entity-demo/` |
 | apps | `apps/` | `apps::read::read_all_app_sets` | `--ingest-apps=<dir>` | `APPS_DIST=<dir>` | the `entity-apps` repo's `dist/` |
 | feed (`APP-CONVENTION-FEED`) | `app/feed/` | `feed_tree::read_owned_feed` | `--ingest-feed=<dir>` | `FEED=<dir>` | `examples/entity-demo/feed/` |
 | mirrors (`APP-CONVENTION-FEED` §6) | `app/feed/mirrors/` **+ each carried author's segment** | `feed_gather::gather_timeline` — somebody ELSE's tree, not ours | `--gather=<peer_id>@<dir>` | — (no make variable: the value is a `peer@dir` pair, and the dir is another publisher's out-tree rather than an authored source) | — |
@@ -100,8 +161,46 @@ from a bare `cargo run` and from no `make` target, which on a podman-only host m
 reachable by nobody. *An axis with a flag and no staged variable is an axis a person cannot
 publish.*
 
+⭐ **SECOND INSTANCE, 2026-09-16, and it is NOT an axis — so the rule is wider than the row it
+was written in.** `--window-target` shipped 2026-09-12 with a row in the flag table, three CLI
+refusals and a browser gate, and **no `make` variable**, so for four days the only aimed-window
+deployment reachable on a podman-only host was none. It was found by needing it: a site-free
+`--deployment-config` refuses `--surface=window` *unless* a target is named, and there was no way
+to name one through `make`. ⇒ ***the deliverable for any publish flag an operator must set is the
+flag, the `make` variable, and a worked example*** — not only for the `--ingest*` family, which is
+what the `FEED=` lesson looked like when it had one instance. `WINDOW_TARGET=` is wired into all
+three deployment-config verbs; `site-bare` gained the site arm and staging in the same commit, for
+the same reason.
+
 The fourth row is the only one whose reader points outside this peer and the
 only one with a non-empty `carried_peers`; §0.2a is what that costs.
+
+⭐ **THE FIRST ROW IS THE ONLY ONE THAT EVER HAD A DEFAULT, AND THE DEFAULT INVENTED
+CONTENT — closed 2026-09-16, on `<coordination-tree>`'s `B-4`.** Absent `--ingest`,
+`resolve_publish_source` seeded `demo` + `entity-info`; apps and feed were both
+`if let Some(dir)` and genuinely optional. **The asymmetry was not a decision anybody
+made** — when the seeding was written, every publish had sites — and the argument against
+it was already in this repo, one axis over, as `--ingest-feed`'s own comment: *"a publish
+that invented an empty feed would claim every site publisher has one."*
+
+**The cost is not two unwanted sites; it is that the clean is wholesale.** `run_projection`
+removes `{base}/{peer}` and rebuilds it, so a publish that *meant* `--ingest` and omitted it
+did not add the demo set beside a domain's real sites — it **replaced** them, under that
+domain's own identity, and exited `0`. *"You forgot `--ingest`"* and *"this domain has no
+sites"* were the same command line, so no guard at any layer could tell them apart.
+
+**Three arms, exactly one, and silence is refused** (`SiteSource` / `parse_site_source`).
+They are 1:1 with `<coordination-tree>`'s `estate.conf` axis vocabulary — `papers` →
+`--ingest`, `builtin` → `--demo-sites`, `none` → `--no-sites` — which is where the ask came
+from, and their board had already reached the same rule for the same reason: *"all three are
+required and none of them defaults."* **`--verify` is exempt and that ordering is
+load-bearing**: it reads an output tree and resolves no source, so demanding an arm for it
+would refuse a verification for a reason with no bearing on it.
+
+**A site-free publish emits no site chrome** (`static_export::export_site_set` returns before
+`write_root_index` / `write_landing_redirect`) and no `home_site` key. Found by a gate, not
+by reading: the first cut published a feed-only tree that still served a `sites/index.html`
+listing nothing and redirected `/` to it.
 
 Three things about the feed axis that are decisions, not details:
 
@@ -282,7 +381,9 @@ python3 -m http.server 8081 --directory dist
 | Flag | Effect |
 |---|---|
 | *(positional)* `dist` | output directory (the static bundle) |
-| `--ingest=<dir>` | read a site dir tree from disk into the tree first (else publishes the seeded demo set) |
+| `--ingest=<dir>` | **site arm 1 of 3** — read a site dir tree from disk into the tree first |
+| `--demo-sites` | **site arm 2 of 3** — publish the bundled `demo` + `entity-info` set, *on purpose*. This is what an absent `--ingest` silently meant until 2026-09-16 |
+| `--no-sites` | **site arm 3 of 3** — publish **no** sites: a feed-only or apps-only domain. Refused with `--bare-root` / `--html-only` (both project a site); with `--deployment-config` it emits no `home_site` and requires `--surface=chrome`, or `--surface=window` with a `--window-target` |
 | `--deployment-config` | also emit `entity-deployment.json` (home site, origins, posture) |
 | `--config-site=<id>` | the SPA's **home site** (what it boots into) |
 | `--surface=<chrome\|site\|window>` | cold-boot **surface** baked into the deployment config (default `window`) |
@@ -306,7 +407,7 @@ python3 -m http.server 8081 --directory dist
 | `--identity-seed=<64 hex>` | publish under a **specific** system identity. Default is the durable publisher keypair under `{ENTITY_DATA_DIR}/publish/` |
 | `--demo-identity` | the fixed demo publisher seed (dev/testing only). `--identity-seed` wins over it |
 
-> **This table is the whole flag set as of 2026-09-10** (23 entries, cross-checked against
+> **This table is the whole flag set as of 2026-09-16** (25 entries, cross-checked against
 > `grep -oE '"--[a-z-]+' src/content_site/publish.rs`). It was **10 of 22** until the 09-10 audit — the
 > missing twelve included `--verify`, `--set-home` and `--supersede`, all three load-bearing.
 > `tools/publish-doc-check.py` (in `make lint`) now fails the build if a flag is added to `publish.rs`

@@ -455,8 +455,11 @@ impl PeerConnectionsModel {
                             crate::rendezvous::MeetPhase::Failed(e) => Some(e.clone()),
                             _ => None,
                         },
-                        polls: st.polls,
-                        max_polls: st.max_polls,
+                        time_left:
+                            crate::views::peer_connections::output::TimeLeft::from_remaining_ms(
+                                st.remaining_ms,
+                                !st.phase.is_settled(),
+                            ),
                         found: st
                             .found
                             .into_iter()

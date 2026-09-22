@@ -14,9 +14,22 @@ pub mod sampler;
 
 /// App → host: *here is what I did since my last report* — `busy_ms` of work
 /// over `span_ms`, and optionally `instructions` executed and `memory_bytes`
-/// held. A **local extension** like `x-files`, sent about once a second; an app
-/// that does not send it is shown as *not reporting*, never as idle. The VM
-/// pages send it from `tools/run-env/vm-sdk/vm-sdk.js`.
+/// held. Sent about once a second; an app that does not send it is shown as
+/// *not reporting*, never as idle.
+///
+/// ⭐ **No longer a local extension, and no longer single-producer** (2026-09-15).
+/// entity-apps answered `AP-5` **yes** and built it: `x-stats` is the `stats`
+/// family in their `sdk/hostext.js`, engine-agnostic and opt-in, with a producer
+/// *and* a renderer on their side. So the honest statement of this constant
+/// changed twice over — it was ours pending a ruling, then theirs; and the
+/// producer moved out of this repo with the machines (their `sdk/vm/vm-sdk.js`,
+/// **not** the `tools/run-env/vm-sdk/vm-sdk.js` this comment used to name, which
+/// is superseded — see that directory's README).
+///
+/// That matters for what an empty System Monitor row means: while we were the
+/// only producer, *no numbers* meant *no VM open*. Now any app of theirs that
+/// opts in reports, so a blank row is a claim about **that app**, not about the
+/// mechanism.
 pub const MSG_STATS: &str = "x-stats";
 
 /// A [`BinSource`](crate::content_site::http_poll::BinSource) that tells the

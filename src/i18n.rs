@@ -386,6 +386,26 @@ pub const EN: &[(&str, Message)] = &[
     ("status.granted", Message::Simple("granted")),
     // Status-bar durability label (capitalized, sentence position — distinct
     // from status.saved "saved" used as an inline chip).
+    // Status-bar gauges (DESIGN-2026-09-16). The braille itself is aria-hidden,
+    // so these labels are the ONLY thing a screen reader gets — they say the
+    // reading in words, never "graph".
+    ("statusbar.smoothness", Message::Simple("Smoothness: {ms} ms per second waiting")),
+    (
+        "statusbar.smoothness.tip",
+        Message::Simple(
+            "How much of each second this tab was held past one frame — the time taps and keys waited.",
+        ),
+    ),
+    ("statusbar.drawing", Message::Simple("Drawing: {ms} ms per second")),
+    (
+        "statusbar.drawing.tip",
+        Message::Simple("The part of the held time this app spent drawing its own windows."),
+    ),
+    ("statusbar.top_app", Message::Simple("{app}: {ms} ms per second, reported by the app")),
+    (
+        "statusbar.top_app.tip",
+        Message::Simple("The busiest app that reports its own work. Most apps report nothing."),
+    ),
     ("statusbar.saved", Message::Simple("Saved")),
     ("statusbar.not_saved", Message::Simple("Not saved")),
     // Inline on/off state words (system-peers posture line).
@@ -1208,6 +1228,13 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Show the site toggle in the status bar"),
     ),
     ("settings.show_inspector", Message::Simple("Show inspector panel")),
+    ("settings.status_gauges", Message::Simple("Show performance gauges in the status bar")),
+    (
+        "settings.status_gauges.hint",
+        Message::Simple(
+            "Turning these off stops the measuring, not just the drawing. The window and peer counts stay.",
+        ),
+    ),
     (
         "settings.auto_connect",
         Message::Simple("Auto-connect to known peers on startup"),
@@ -1332,7 +1359,7 @@ pub const EN: &[(&str, Message)] = &[
         "chat.reach_no_reflector",
         Message::Simple(
             "No reflector is set up, so this app can only reach devices on your local \
-             network. Add one on the connector you rendezvous through.",
+             network. Add one on the rendezvous node you meet through.",
         ),
     ),
     (
@@ -1346,7 +1373,7 @@ pub const EN: &[(&str, Message)] = &[
         "chat.reach_no_direct_path",
         Message::Simple(
             "This network needs a relay — neither device can be reached directly. \
-             Add a relay on the connector you rendezvous through.",
+             Add a relay on the rendezvous node you meet through.",
         ),
     ),
     ("window.chain_trace", Message::Simple("Chain Trace")),
@@ -2004,39 +2031,6 @@ pub const EN: &[(&str, Message)] = &[
         "feed.attr.bad_signature",
         Message::Simple("unsigned — the signature does not verify"),
     ),
-    // ⛔ `FEED-R21` is a **MUST NOT**: a conformant application MUST NOT present
-    // removal as deletion. §7.5 also says where this belongs — *"at the moment
-    // of the action rather than in a help page"* — and supplies the wording,
-    // which is taken here almost verbatim because it is the honest sentence and
-    // because a paraphrase is where the promise creeps back in. Translators: the
-    // second clause is the load-bearing one. There is no global takedown and no
-    // protocol operation reaches into another peer's store, so any rendering
-    // that reads as *erased*, *deleted* or *destroyed* is non-conformant, not
-    // merely loose.
-    (
-        "feed.compose.removal_is_unpublication",
-        Message::Simple(
-            "Removed from your feed — people who already have it still have it.",
-        ),
-    ),
-    ("feed.compose.heading", Message::Simple("Your feed")),
-    ("feed.compose.post", Message::Simple("Post")),
-    ("feed.compose.placeholder", Message::Simple("Write something")),
-    ("feed.compose.remove", Message::Simple("Remove")),
-    (
-        "feed.compose.posted",
-        Message::Simple("Posted. Anyone connected to you can read it."),
-    ),
-    ("feed.compose.empty", Message::Simple("Nothing to post.")),
-    // Translators: this is not a failure the reader can retry or type their way
-    // out of — the profile does not hold the signing key for this peer, so it
-    // cannot author as them. Avoid wording that suggests trying again.
-    (
-        "feed.compose.not_our_peer",
-        Message::Simple("You cannot post as this peer — this profile does not hold its key."),
-    ),
-    ("feed.compose.refused", Message::Simple("That post could not be written.")),
-    ("feed.compose.no_posts", Message::Simple("You have not posted anything yet.")),
     (
         "contentstream.hint",
         Message::Simple(
@@ -2105,6 +2099,12 @@ pub const EN: &[(&str, Message)] = &[
     // and the message names the reload, because the row takes effect for
     // *reaching* people only on the next load [AP22].
     ("connector.this_desktop", Message::Simple("This desktop")),
+    // The node a browser was handed by the page it loaded — the app server's
+    // `?webrtc_node_peer=…` redirect. A real row for the same reason the one
+    // above is: it is listed, selectable and removable, and until 2026-09-16 it
+    // was none of those. Named for what the user did ("I typed that machine's
+    // address"), not for a peer-id they have never seen.
+    ("connector.served_this_page", Message::Simple("The device serving this page")),
     (
         "connector.adopted_backend",
         Message::Simple(
@@ -2251,7 +2251,7 @@ pub const EN: &[(&str, Message)] = &[
              username and the credential are required.",
         ),
     ),
-    ("peerconn.connector_add", Message::Simple("Add connector")),
+    ("peerconn.connector_add", Message::Simple("Add rendezvous node")),
     ("peerconn.connector_use", Message::Simple("Use")),
     ("peerconn.connector_in_use", Message::Simple("In use")),
     ("peerconn.connector_check", Message::Simple("Check")),
@@ -2275,7 +2275,7 @@ pub const EN: &[(&str, Message)] = &[
     ),
     (
         "peerconn.meet_needs_connector",
-        Message::Simple("Select a connector first — a meet happens at a signaling node."),
+        Message::Simple("Choose a rendezvous node first — a meet happens at one."),
     ),
     // The meet runs, and the peers it finds are real — but they will not be able
     // to reach back, because this peer has no §6.5 establisher. Worth saying at
@@ -2332,7 +2332,7 @@ pub const EN: &[(&str, Message)] = &[
         "peerconn.meet_no_node",
         Message::Simple(
             "Heads up: peers you meet will find you but won't reach you — no \
-             rendezvous node is set up. Add one under Connectors, then reload this \
+             rendezvous node is set up. Add one under Rendezvous nodes, then reload \
              page to become reachable.",
         ),
     ),
@@ -2371,17 +2371,22 @@ pub const EN: &[(&str, Message)] = &[
     ),
     ("peerconn.meet_start", Message::Simple("Meet")),
     ("peerconn.meet_stop", Message::Simple("Stop")),
+    // No counter. The poll count used to be here, climbing toward its bound with
+    // nothing to say what the bound meant; what a person waiting for a friend to
+    // press a button needs is roughly how long this goes on for.
     (
         "peerconn.meet_searching",
-        Message::Simple("Searching at {mode} via {node} — {polls}/{max}"),
+        Message::Simple("Searching at {mode} via {node} — {left}"),
     ),
+    ("peerconn.meet_time_minutes", Message::Simple("about {n} min left")),
+    ("peerconn.meet_time_under_minute", Message::Simple("under a minute left")),
     // The honest empty result, with the two things that have to be true for a
     // meet to work — otherwise "nobody there" reads as "this is broken".
     (
         "peerconn.meet_none",
         Message::Simple(
             "Nobody else was there. Both sides have to be searching at the same name, \
-             through the same connector.",
+             through the same rendezvous node.",
         ),
     ),
     ("peerconn.meet_unverified", Message::Simple("unverified claim")),

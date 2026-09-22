@@ -202,6 +202,83 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   dirty"* is a **feature** on the Apps surface, where a spurious dirty restarts a running app.
   Same mechanism, opposite requirement — decide per surface.
 
+- ⭐⭐ **A WARNING THAT REPORTS A RATE AND NOT A CULPRIT IS A NUMBER, NOT EVIDENCE — and the
+  breakdown was already computed FOUR LINES BELOW IT (2026-09-16, `src/rebuild_attribution.rs`).**
+  The 2026-09-15 crash capture carries **32** occurrences of `DOM: HIGH REBUILD RATE
+  rebuilds_per_sec=13 total=4438` and not one names a window. In the same function,
+  `DOM: SLOW REBUILD` prints a full per-section breakdown out of `section_timings` — which
+  `render()` populates **every frame regardless** and which the rate warning simply did not read.
+  So a sustained 11–14/sec ran for the life of that session and had to be filed as *"its own
+  defect, and a plausible amplifier for anything closure-lifetime shaped"* with no way to say
+  whose. ⇒ **when you emit a rate, ask what the next reader will do with it** — and check whether
+  the answer is already sitting in a local three lines away.
+  ⭐ **The distinction that decides whether the tally can be read at all: ONE WINDOW REBUILDING
+  ELEVEN TIMES and ELEVEN WINDOWS REBUILT ONCE BY A GLOBAL FORCE produce an identical per-window
+  tally and implicate opposite things.** A locale switch or a moving `reachability::generation()`
+  rebuilds every open window by design and implicates nobody. So forced frames are counted
+  separately and always printed, worded as a **cause** rather than added to the counts — folding
+  them in sends the next session to audit eleven windows that did nothing.
+  **Every counted rebuild lands in a named bucket**, because `any_section_changed` is also set by
+  a section being *removed*, which contributes no timing entry: an empty culprit list would be
+  indistinguishable from an unwired instrument, so removals and palette rebuilds are counted and
+  an empty interval says *"nothing attributed"* in words.
+  Decision native (`make test`, 7 tests) because `src/dom/` is wasm-only; **wiring** gated by
+  `make e2e-worker T=a_high_rebuild_rate`, falsified. `?rebuildrate=<n>` lowers the threshold —
+  test affordance, same shape as `?bootstall=`, nothing in the product sets it. Stated bound: the
+  `forced=` arm is gated natively only; reaching it from a browser needs a mid-session locale
+  switch.
+
+- ⭐⭐ **A SPARKLINE'S SCALE DECIDES WHETHER ITS HEIGHT SAYS ANYTHING, AND OURS SAID NOTHING
+  ACROSS THE WHOLE RANGE THE COLOURS DISCRIMINATE (2026-09-16, `src/status_bar.rs`).** The status
+  bar's held-time gauge filled against **1000 ms** — the obvious scale, *a second* — while the
+  `Good`/`Warn` boundary is 50 ms and `Warn`/`Bad` is 200 ms. A braille cell has **four** dot
+  levels, so the entire Good band and most of Warn resolved to one dot, which `braille_axis`
+  already draws as the baseline for an idle series. **A 52 ms hold and an idle tab were
+  byte-identical sparklines.**
+  ⭐ **The expensive half is that the module doc asserted the opposite, in a sentence written to
+  justify the colour choice**: *"the level is encoded twice — in bar height and in colour — which
+  is what makes green/amber/red safe for a red-green colourblind reader."* False across exactly
+  the range the bands exist to separate, which is the half that reader depends on: they had the
+  colour and nothing else. ⇒ ***a doc comment claiming a property is where the property is least
+  likely to be checked*** — the same shape as a census asserting its own claim about itself, and
+  the cheap instrument is the same: **render two readings you know differ and assert the output
+  differs.** Found that way, by a test about smoothing that came back with two identical strings.
+  **The fix is derivation, not tuning:** scale to the `Warn`/`Bad` boundary (`STALL_MS * 4.0`) and
+  the geometry *becomes* the bands — `ceil` to four levels puts the Good ceiling at exactly one
+  dot, so **good is a flat line and the first dot above it is the Warn boundary to the
+  millisecond**, with everything past Bad pinned at full height. Pinned from **both sides**
+  (`a_good_tab_draws_a_flat_line_and_the_first_dot_above_it_is_the_warn_boundary`), because a
+  scale that drew everything tall passes a one-sided check.
+  ⭐ **Second defect, same root, and it is the one a person sees first: TWO KINDS OF NUMBER WERE
+  SHARING ONE SCALE AND ONE BAND FUNCTION.** Held time is a **fault threshold**; an app's own busy
+  ms/s is a **share of the second**. Running both through `level_for` made a VM reporting 400 ms/s
+  permanently **red** — the product telling somebody that the thing they deliberately started is
+  a fault. Now `Level::Neutral` and a separate 1000 ms scale: *busy is not bad, and green would be
+  as much a verdict as red.* Which app costs you most is already said by the ranking (it is
+  leftmost), so the colour had nothing left to add. ⇒ **before reusing a threshold, ask whether the
+  new series is the same KIND of quantity** — sharing the units is not sharing the meaning.
+
+- ⭐⭐ **A PREFERENCE RE-READ GATED ON SOMETHING THE PREFERENCE SWITCHES OFF IS A ONE-WAY SWITCH —
+  AP36 in its smallest form (2026-09-16, `app::update_status_bar`).** The status bar's gauges got
+  a settings toggle; off drops the frame path's `MonitorHold`, which is what makes it a real off
+  rather than a drawing suppressed. The preference is re-read once a second, and the first cut
+  took that cadence from the signal already on the path — `sampler::roll`, which returns whether
+  the second turned. **`with_active` returns early when nothing holds the sampler, so `roll`
+  answers `false` forever once the gauges are off.** Off was reachable; on was not.
+  ⇒ ***the guard went on the ACQUISITION (is the sampler running) when the question is a DECISION
+  (does the user still want it running) — and the acquisition is precisely what the decision
+  switches off.*** The general check is one question: **for any signal you use to drive a
+  re-evaluation, ask whether the outcome of that evaluation can stop the signal.** If it can, the
+  signal is inside the loop it is supposed to control, and you own the clock instead
+  (`settings_recheck_due`, pure, with a *clock went backwards is due rather than never due* arm —
+  never-due is the failure mode with no way out of it).
+  **Found by reading `with_active` while falsifying an unrelated neuter, not by a test** — which
+  is why it got a gate rather than a note: `mod dom` and the frame path are `cfg(wasm32)`, and a
+  gate asserting only that the switch turns things **off** would have shipped it green.
+  `make e2e-worker T=the_gauge_switch` drives the real checkbox off *and back on* and was
+  falsified against the literal first cut. **When a switch has two directions, the easy one is
+  never the gate.**
+
 ## State, subscriptions & change detection
 
 - **A RUNNING APP WAS TORN DOWN BY ITS OWN SAVE — the Apps window subscribed the prefix it is also
@@ -909,6 +986,72 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Connectivity — WebRTC, rendezvous, NAT & relays
 
+- ⭐⭐ **TWO ANSWERS TO "WHICH SIGNALING NODE IS THIS SESSION ON", AND THE ACT OF CONFIGURING IT WAS
+  WHAT BROKE IT — fixed 2026-09-16, reported from outside as *"you add a signaling node and then the
+  meet doesn't say meet at this particular signaling node; is it just pulling the last one I
+  connected to?"*.** Both halves of that sentence were real and they were one bug.
+  `meet` dialed `connectors::node_in_force`, which read the **connector registry** first. Being
+  *reachable* — the §6.5 establisher — resolved through `resolve_provisioning_quietly`, which read
+  the **URL** first. Those disagree in the commonest session there is: `src-tauri`'s app server
+  redirects `/` → `/?webrtc_node_peer=…&webrtc_node=…`, so **every device that walks over and types
+  the desktop's address arrives URL-provisioned**. With no selection both paths agree; add a
+  connector — exactly what you do when a connection is not working — and you **meet at your new node
+  while staying reachable only at the URL's**. Findable at B, reachable at A, nothing erroring.
+  **The fix is D25, not taste.** A `?webrtc_node=` the app server put in the address bar is
+  *seeded*; a connector the user selected is *chosen*; the two were byte-identical with nothing
+  recording which was which. So **chosen beats seeded**: selection > URL > build knob.
+  ⚠ **The flip is only safe because the seeded node becomes a ROW** (`adopt_url_rendezvous`).
+  Without it a returning profile with a selection would have no way to reach the node the page is
+  offering — it would lose *silently and unlistably*. It was already unlistable: no list, no
+  `connector rm`, nothing able to name it, which is the fourth hidden source
+  `adopt_backend_rendezvous`'s own doc argues against for the desktop's backend. *The principle was
+  written down and applied to one of the two sources.*
+  **`node_in_force` answers from the ARM now** (`applied_snapshot`), so meet and reachability cannot
+  name different nodes even for a frame — and a registry row supplies the **label only**, because a
+  row edited or re-added at a different port after arming must not put another address in front of a
+  dial. *A name cannot put you in the wrong bucket; an address can.*
+  ⭐ **`make test` was blind to all of it**: the resolvers read localStorage, the URL and a
+  compile-time knob, so the ordering was gated only through Selenium — which is how it stayed wrong
+  while every gate was green. `pick_provisioning` and `node_in_force_from` are pure and native now;
+  both falsified, on distinct tests.
+  **Gates for any change here** (provisioning precedence / the connector registry):
+  `e2e-webrtc-chat` (the URL path on a fresh profile), `-meet`, `-meet-noreload`,
+  `-file-noreload` — all four green on this.
+
+- ⭐⭐ **AP36, SECOND INSTANCE: `is_connected()` ANSWERS *DO I BELIEVE?*, NEVER *IS THIS BELIEF
+  CURRENT?* — `connectors::reach_node`, 2026-09-16.** The first instance is `ReachKeeper::due`
+  skipping every peer the kernel calls `Connected`, which after a suspend is all of them. This is
+  the same predicate, the same conflation, a different subsystem: `reach_node` returned `Ok(())` —
+  *"the node is reached"* — **without doing anything at all** when the read-model said connected.
+  Liveness is corrected only when something *dispatches and fails*, so after a rendezvous node
+  restarts the belief is stale, `reach_node` answers *already reached*, and `MeetSession` proceeds
+  over a carrier that is gone — **with the app never touching it**, which is what made the failure
+  unreachable by the kernel as well. ⇒ **when a guard skips work on a belief, ask what would ever
+  correct the belief**, and if the answer is *"using it"*, the guard has switched off the only
+  correction.
+  The repair is the wake probe's, third caller: **probe, spawned not awaited** (`peer_probe`'s own
+  doc already describes this case). We write no liveness — the §A1 seam owns the demotion.
+  ⛔ **It does NOT close `K-7` and the gate is still red**, said plainly because the shape reads like
+  a fix. What it buys is attribution: `reach_node calls=2 (believed-connected=1, probed=1, dial ok=2)`
+  beside `node lines after the mark: A=0 B=0` — the app asks, probes, gets `Ok` from the connect, and
+  the node receives nothing. A dead pooled binding survives both, and `connect_and_pool` opens with
+  `pool.get`. Kernel-side; evicting from the app is what §A1 forbids.
+  ⭐ **And our short-circuit would have MASKED a kernel fix** — no eviction they add could be
+  triggered by a meet that never touched the carrier. *Two defects in series: clearing the near one
+  is what makes the far one measurable.*
+  ⚠ **"Just always reconnect" is measurably not free.** An unconditional dial was the first cut, on
+  the reasoning that `core/peer`'s connect is pool-first and therefore cheap. `e2e-webrtc-meet`'s
+  §11.5 deposit count went **4–5/side → 8/8** on fresh grids and **survived removing the probe**, so
+  the dial was the cost — about one extra establishment per meet against an O(1) bound of 8 — and it
+  bought nothing observable. Reverted.
+  ⭐ **Sample sizes, because this metric is the one that lies.** Final arm 4/8/8 (n=3) against a
+  control of 4/5/4/4/8 (n=5): both bimodal, all inside the bound, **not separable**. Stated rather
+  than claimed either way — the 09-09 audit recorded this same metric reading 16/8/12/8 on a single
+  arm, so two runs per arm can "prove" anything you like.
+  **The module had no must-be-present control** and that is why the previous investigation could
+  only shrug. Every `reach_node` call logs now whatever it decides next, and the spike reads the
+  counts back, so a zero at the node is evidence.
+
 - **A "RELOAD TO APPLY" NOTICE MUST COMPARE AGAINST WHAT IS APPLIED, NEVER AGAINST WHAT BOOTED —
   fixed 2026-09-14, and it was the reload the late arm (09-07) had already removed.** Peer
   Connections' *"takes effect on reload"* and the `net` preflight's *"none in effect this session"*
@@ -1422,9 +1565,38 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     configured a reflector sends them to buy the wrong thing. The four **"raises no false unreachable
     note"** assertions now cover the classifier too (`FALSE_NOTES` in `spike_meet_then_chat.py`);
     reword a string and you must update that tuple, or the check silently stops matching.
-  - **Ordering inside `classify` is load-bearing**: an agent that gathered **nothing** is checked
-    first and classifies `Unknown`. Written below the `reflectors_configured` arm at first, it called
-    a never-started ICE agent `ReflectorUnreachable` — a test caught it before the gate could.
+  - **Ordering inside `classify` is load-bearing**: an agent that gathered **nothing** classifies
+    `Unknown`, above every arm that makes a claim about the **network**. Written below the
+    `reflectors_configured` arm at first, it called a never-started ICE agent
+    `ReflectorUnreachable` — a test caught it before the gate could.
+    ⭐⭐ **AND IT WAS ONE ARM TOO HIGH FOR TWO WEEKS — an ordering chosen to stop ONE wrong claim
+    silenced the only right one (2026-09-16, `AUDIT-2026-09-15-a` item 2).** The empty-gather arm
+    also sat above `NoCounterpart`, pinned by an explicit assertion and the reasoning *"an agent
+    that gathered nothing is about **us**, so it outranks a statement about them"*. A real session
+    then ran **~100 consecutive negotiations**, every one `role=answerer,
+    sdp_exchange=INCOMPLETE, bucket=0 msg(s), candidates posted=0/fed=0` — and the app said
+    **nothing at all**, for the life of the session. Not a wrong sentence: no sentence, which on a
+    surface that otherwise shows a spinner reads as *still working on it*.
+    **The case analysis was missing its own main case: an ANSWERER WITH NO OFFER TO ANSWER never
+    calls `create_answer`, so gathering never starts.** There the empty gather is the *consequence*
+    of the counterpart's absence, not an independent fault of ours — so the arm written to stop us
+    blaming them for our fault was, in the dominant shape, refusing to report their absence.
+    ⇒ ***when you order two arms by "which claim is cheaper and truer", enumerate what actually
+    REACHES each one*** — AP40, applied to precedence rather than to a collapsed value.
+    **What made the reversal safe is a fact about the input, not a preference:** only
+    `WebRtcError::Timeout` carries `answered`, and a `Timeout` means the negotiation loop ran to
+    its deadline — a `create_offer`/`create_answer` that *threw* is a substrate error reporting
+    `None`. So `Some(false)` is a fact about the **pair** reaching a deadline with neither side
+    closing the exchange, which an empty local gather cannot contradict. `None` still falls through
+    to `Unknown`.
+    **The assertion that pinned the old ordering is INVERTED IN PLACE, not deleted** — it recorded
+    a decision, and the record of why it changed is worth more than a clean diff (AP45's shape,
+    handled deliberately). Gate:
+    `an_answerer_with_nothing_to_answer_is_told_nobody_was_there`, falsified.
+    ⚠ **A change here makes strictly MORE observations advisory, so run the three gates that assert
+    *"a header raises no false unreachable note"* before landing one** — `e2e-webrtc-meet`,
+    `-nat`, `-chat`. All three green on this one; `-nat` is untouched because that rig gathers
+    `[Host]` with `sdp_exchange_complete = Some(true)` and never reaches the reordered arm.
   - **`reflectors_configured` MEANS REFLECTORS, and the relay field made that a real distinction one
     commit later** [buildout 27]. The install site read `!ice_servers.is_empty()` — exactly right
     until `with_relay` made that list **mixed**, at which point a relay-only session reported a
@@ -4762,6 +4934,122 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Testing & the gates
 
+- ⭐⭐ **TWO SEATS ON ONE BOX SHARE A PORT SPACE, AND THE SUITE RAN A FULL UNFILTERED PASS AGAINST
+  ANOTHER CHECKOUT'S `dist/` — 2026-09-16, and every unfiltered number from that session was
+  withdrawn.** `make e2e-worker` serves over `--network host`, so there is no namespace between two
+  worktrees: whichever binds `:8092` first owns it, and the loser's browser fetches the winner's
+  bytes. Measured — `curl http://localhost:8092/index.html` returned `entity-build content="63f958bc"`,
+  a commit in no checkout of mine.
+  **The guard that was supposed to catch this is real, and it loses a race.** `await_server_ready`
+  checks *"did our child exit?"* before *"is something listening?"* and its own comment calls that
+  order load-bearing. It is — **for a child that has already died.** On the first pass a
+  freshly-spawned python has not yet had time to fail its bind, so `try_wait()` answers `None`, the
+  HTTP probe takes its 200 from the **foreign** server, and the helper returns `Ok` over a child that
+  is about to exit. ⇒ ***an "is it up?" probe cannot answer "is it OURS?", and the second question is
+  the one that matters when a box has more than one seat on it.***
+  **The contamination is invisible in the results, which is what makes it expensive.** The failure
+  set moves run to run with whatever the *other* tree happens to hold, so a baseline came back
+  **worse** (73/11) than the branch under test (83/2) and read as a branch-quality difference. It was
+  an overlap window. **A clean run and a contaminated one look the same** — there is no number you
+  can inspect to tell them apart.
+  ⭐ **The suite named its own cause and it was read as a cascade.**
+  `system_recovery_renders_readonly_inventory_without_booting` is the one gate that reads the build
+  stamp, so it is the only one that *could* report this — and it did, in as many words: *"running
+  63f958bc"*. It was filed as fallout from an earlier failure and skipped. ⇒ **when one failure names
+  a value you do not recognise, that is the diagnosis, not the debris** — and the repo already
+  carried the instrument one port over (*"when someone says nothing is on that port, check how they
+  looked"*, about `:8081`), which nobody applied to `:8092`.
+  **Closed structurally: `refuse_if_port_is_already_served`, called before the bind at both fixed-port
+  server starts.** It **refuses** rather than reporting — deliberately the opposite of the Selenium
+  preflight one file over, which reports and proceeds because a leaked session is exactly what
+  `reap_stale_sessions` rescues; here there is no reaper and nothing to rescue, since a foreign server
+  makes every assertion a statement about a build nobody chose. **It names the build it found**, which
+  is the whole diagnostic: *whose bytes are these* is what turns a session of bisecting into one line.
+  Falsified both ways — squatter on the port → refused in **0.04 s** naming `build deadbeef`; port
+  free → the same filtered gate passes.
+  **Two defects in the refusal itself, both found by running it rather than reading it.** (1) The call
+  site appended *"Is dist/ built? Run `make wasm` first"* — one cause among three, and **wrong** for
+  this one; the reader acts on the last sentence, so a wrapper that guesses outranks the specific
+  inner diagnostic (AP40's cost is the wrong sentence). The wrapper adds nothing now; both inner
+  errors already carry their own remedy. (2) A returned error is rendered `{:?}` by the harness, so
+  the block was **one line of `\n` escapes** — legible in the source and unreadable on screen. It
+  `eprintln!`s the block and returns a one-liner that still names the cause.
+  **Stated scope:** this guards the two **fixed, well-known** ports every seat shares
+  (`E2E_HTTP_PORT`/8092, `E2E_BLACKHOLE_PORT`/8093). The staging servers take `pick_free_port()`,
+  where the OS picks — a cross-seat collision there needs an unlucky ephemeral reuse, not a shared
+  default. **Isolation spelling:** `make e2e-grid GRID_PORT=4455` then
+  `make e2e-worker WEBDRIVER=http://localhost:4455 E2E_HTTP_PORT=8492 E2E_BLACKHOLE_PORT=8493`.
+  ⚠ **And the one that is still open: five staging servers `spawn` then `sleep(400ms)` with no
+  readiness check at all** — the exact *"a fixed sleep then navigate is a guess about someone else's
+  startup"* that `await_server_ready`'s own doc comment forbids. The rule was written at two sites and
+  never reached the other five (AP44). They are on OS-picked ports so the collision risk is low, but
+  the *readiness* half is ungated.
+
+- ⭐⭐ **`vocab-lint` READS A SIBLING SEAT'S WORKING COPY, SO "THE SIBLING MOVED" AND "THE SIBLING
+  IS MID-EDIT" PRODUCE THE IDENTICAL RED — and one day apart it was each of them, on the same two
+  rows (2026-09-15/16, `app/feed/mirror`, `app/feed/mirror-page`).** The gate resolves the other
+  application seats **by directory** and scans what is on disk there, so a counterpart's
+  *untracked* file changes our verdict: on 2026-09-16 the mirror family read two-seat on this box
+  and single-seat at **every commit in either repo**. The rows were removed, the gate went green,
+  and they were **put back** — retiring them would have recorded a state reproducible from no
+  commit anywhere, in the direction that silently re-admits debt. One day later
+  `entity-workbench-go` committed the file (`89fe6fa`) and the identical report was a landing.
+  ⇒ ***when this gate names a family you did not touch, the first command is
+  `git -C <sibling> status --short`*** — and the answer decides whether you are looking at a win
+  or at somebody else's uncommitted afternoon. It is the `Cargo.lock`-from-a-path-dep hazard one
+  tool over (that entry is in the charter's routing section), and the asymmetry is the same:
+  `CORE_RUST_REF` solves it for the kernel by building from a `git archive`, and **there is no
+  equivalent for a sibling seat's source**. The analyzer's own `dirty` flag is per-seat and is not
+  consulted for other seats — routed.
+  **Do not read this as "ignore the gate when it is inconvenient."** Both reds were correct
+  reports of what was on disk; what differed was whether the state they reported was one a commit
+  could reproduce. The set-comparison is what made the distinction visible at all — a count-based
+  baseline would have passed the swap in both directions and told you nothing either day.
+
+- ⭐ **A COUNT IS NOT A CLAIM, INCLUDING IN YOUR OWN COMMIT MESSAGE (2026-09-16).** `798ba24d`
+  states `make test 2069 -> 2072`; it is 2069, unchanged — the new assertions went *inside* an
+  existing test, so no test count moved. The message was written from the expectation rather
+  than from the run. The repo already carries the useful direction of this (*a count that did
+  NOT move when you added something is itself a claim*); the mirror is that **a delta you
+  predicted is not a delta you measured**, and a commit message is a durable statement that
+  nothing re-checks. ⇒ read `make test`'s total **after** the change and before writing the
+  number down, and if it is already pushed, correct it forward rather than rewriting history.
+
+- ⭐⭐ **A HIT FROM AN UNVALIDATED NEEDLE IS NOT EVIDENCE EITHER — and this one made a gate GREEN
+  on the line it was written to reject (2026-09-16).** This file already carries *a zero from an
+  unvalidated needle is not evidence* (the vanished-peer panel). The positive direction is
+  cheaper to trip and harder to notice, because a pass ends the investigation.
+  `a_high_rebuild_rate_names_a_window` asserted that the warning names a window section by
+  looking for the `type#id` spelling — `line.contains('#')`. **`tracing-wasm` appends its own CSS
+  to every rendered line** (`color: orange; background: #444 …`), so the needle matched the
+  *colour*, on a line whose payload read `attributed_to = palette=1`: no window named, gate green.
+  ⇒ ***a log assertion is a coupling to a FORMATTER, not to your log call*** — isolate the field
+  before you match on it (`attributed_value()` splits `attributed_to = ` to the next `;`), and
+  **print the extracted value on PASS**, because the line that showed the defect was the one the
+  test printed about itself.
+  **It was caught by running the gate and reading its output rather than its exit code.** Same
+  family as *a tool reporting that it did something is not evidence it did the thing you meant*,
+  and the reason the charter's neuter discipline says to falsify: the neuter here (drop the
+  `note_section` loop) reds correctly — against the *fixed* needle. Against the original needle it
+  would have passed too, and the whole instrument would have shipped measuring CSS.
+
+- ⚠ **SHARDING THE BROWSER SUITE: THE PORTS ARE PARAMETERISED AND THE FILESYSTEM IS NOT — re-priced
+  2026-09-16, correcting `HANDOFF-2026-09-15-g` §5.3's *"every seam exists"*.** The port seams
+  really are all there (`GRID_PORT` moves all three grid ports and derives `GRID_NAME`; `WEBDRIVER`
+  selects the grid; `E2E_HTTP_PORT` moves the suite's HTTP port). **What is not parameterised is
+  `dist/`**, and every shard would share one: the static server is spawned with a literal
+  `--directory dist` and so is `blackhole-serve.py`; **`setup()` — which every test calls — does
+  `remove_file("dist/entity-deployment.json")`**; one phase *writes* that file; another creates and
+  then `remove_dir_all`s `dist/remote-fixture/`; and the publish fixtures shell out to `cargo test`
+  at runtime to write into the tree. Two shards in one checkout race on all of it, and the symptom
+  would be the 41-passed/24-failed fixture-isolation shape — *every failure green when run alone*,
+  which is the most expensive way for a suite to be wrong.
+  ⇒ **the split is a `dist/`-per-shard job (an `E2E_DIST_DIR` threaded through those four sites, or
+  a staged copy per shard), not a ports job.** Stated so the next session prices it from the
+  hardcoded literals rather than from the sentence. And note what the ceiling is: the stateful phase
+  monolith must stay whole on one shard, so the speedup is bounded by **its** wall time, not by the
+  serial total (measured serial total, headless, 2026-09-16: **869 s / 83 tests, 83 passed**).
+
 - **A poll that breaks on the FIRST frame matching "recovered" samples a transient — wait for the end
   state (2026-09-13).** The kill-switch drill (`the_kill_switch_recovers_…`) was red ~1 run in 3 with
   nothing under test, and it read as a flaky rig. It was two assertions made one poll too early: the
@@ -5541,6 +5829,49 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   ⚠ **The cost is real and stated: this gate does not run in a worktree at all.** It is the one
   class no test here can see alone, so **run `make lint` from `entity-browser-rust` before landing
   anything that mints or retires a type tag** — a skip is honest, not coverage.
+
+- ⭐⭐ **A TEST SUITE THAT DOES THE CALLER'S JOB IN SETUP CANNOT NOTICE THE CALLER IS MISSING —
+  the status-bar gauges, 2026-09-16.** `monitor::sampler` has two halves: hooks that accumulate
+  into a current-second bucket, and `roll(now)` which moves that bucket into the history rings.
+  When the status bar adopted the sampler it took a `MonitorHold`, every hook fired, every
+  accumulator grew — and `history()` stayed **empty forever**, because `roll`'s only caller was
+  the System Monitor window's own tick. The bar correctly degraded to its three counts, so the
+  defect rendered as *the feature is switched off*, which is the shape you cannot tell from
+  working.
+  ⇒ ***the sampler's own suite is complete about what `roll` DOES and silent about WHO DOES IT***
+  — all fourteen of its tests call `roll()` by hand in setup. Same family as *a test double that
+  supplies the thing you forgot to ask for cannot notice that you forgot*, one level up: here the
+  double is the test body itself. **When you adopt a dormant subsystem, list what its tests do for
+  it in setup — each of those is a production caller somebody owes**, and a green suite is
+  evidence about none of them.
+  Found by `make e2e-worker T=the_status_bar`, which was written to *prove the gauges work* and
+  red on its third row — the fourth instance here of *a gate written to prove a fix works is the
+  one that finds it does not*. Fixed on the frame path, not in a window (AP44: `roll` is per-tab
+  state and every surface reading history needs it to have happened). Falsified: drop the roll and
+  the gate reds with the production symptom verbatim.
+
+- **A MINIMUM TIER WIDER THAN THE TIER ABOVE IT IS UNREACHABLE, AND ONLY ARITHMETIC SAYS SO
+  (2026-09-16).** `DESIGN-2026-09-16` §3 specified the status bar's narrowest tier as the shipped
+  phrase *"2 windows · 1 peer · Saved"*, below an icons-only tier. The phrase is ~32 character
+  cells and the three icons are ~19, so a narrowing bar reaches the icons **first** and can never
+  fall through to the sentence. The tier was in the design, reviewed, and impossible.
+  ⇒ **when a degradation ladder substitutes one rendering for another rather than dropping, check
+  that each rung is actually SMALLER than the one above** — a ladder that only ever drops is
+  monotone for free, and the moment a rung is a substitution that property has to be asserted.
+  Pinned as an **inequality** (`the_shipped_phrase_is_wider_than_the_icons_it_would_have_replaced`)
+  rather than as two cell counts: the relation is the finding and the wording will move. The phrase
+  kept its job by changing it — it is the bar's `aria-label`, which is better than a tier, because
+  a screen reader gets one sentence at every width instead of three isolated marks at one.
+
+- **`mod dom` IS `cfg(wasm32)`, SO A PURE FUNCTION THAT DRIFTS INTO IT IS CHECKED BY NOTHING.**
+  The status bar's px→cells estimate and its selector keys were first written beside the renderer
+  in `src/dom/status_bar.rs`, with two tests. Those tests compiled on **no target and ran on none**
+  — `make test` builds the native target where `mod dom` does not exist, and the wasm build runs no
+  tests. **The tell was a count: `make test` came back +11 after 13 tests were added.** Both moved
+  to the native module, and the delta became +13. *A test that cannot fail is worse than no test*,
+  and in this crate the cheapest way to write one is to put it under `src/dom/`. **Anything with a
+  decision in it belongs outside `dom/`; what stays is element creation, attributes and append
+  order, which only a browser gate can measure.**
 
 ## The recovery console (L1 BIOS)
 

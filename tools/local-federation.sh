@@ -104,7 +104,16 @@ for row in "${DOMAINS[@]}"; do
   # SAME one, which is the point: the pin is keyed by registry peer-id, so four
   # sites seeding it converge on one rather than accumulating four.
   args+=("--deployment-config" "--registry-pin=$REGISTRY_PEER@$REGISTRY_ORIGIN")
-  [ -n "$ingest" ] && args+=("--ingest=$ingest")
+  # The SITE arm — `publish` takes exactly one of --ingest / --demo-sites /
+  # --no-sites and refuses silence, so the rig states which one it means. A
+  # domain row with no ingest path publishes the bundled demo set ON PURPOSE:
+  # that is what this local rig is for, and it is now said rather than inherited
+  # from an absent flag.
+  if [ -n "$ingest" ]; then
+    args+=("--ingest=$ingest")
+  else
+    args+=("--demo-sites")
+  fi
   # The publish prints its resolved peer-id; that id is what the registry binds
   # and what a consumer pins. Reading it back beats recomputing it here — one
   # source of truth for a derivation we would otherwise duplicate.
