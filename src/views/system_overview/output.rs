@@ -44,6 +44,10 @@ pub struct BackendStatusView {
 pub struct HealthView {
     /// Whether the checks have completed at least once this window-open.
     pub ran: bool,
+    /// Whether a run is in flight **right now**. Orthogonal to `ran`: on a
+    /// re-check both are true, and the renderer keeps showing the last answer
+    /// while saying it is looking again.
+    pub checking: bool,
     /// Every finding, including the clear ones — the renderer decides what to
     /// show. Handing it only the problems would make "quiet when healthy" a
     /// property of the model, where nothing can see it change.

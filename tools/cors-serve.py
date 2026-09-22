@@ -35,12 +35,36 @@ direction: **immutable only for bytes whose NAME is their hash**, everything els
 revalidated. An under-cached immutable file is slow; a mis-cached mutable file is
 a deployment that cannot be corrected.
 
-  /content/…                    immutable — content-addressed by construction
-  name-<16 hex>.wasm|.js        immutable — trunk stamps the hash into the name,
+  …/content/{aa}/{bb}/{hash}    immutable — content-addressed by construction,
+                                where `aa`/`bb` are the hash's OWN first four hex
+                                characters
+  name-<8+ hex>.wasm|.js        immutable — trunk stamps the hash into the name,
                                 so a new build is a new URL
   everything else               no-store — including the signed root, whose
                                 staleness silently defeats the `seq` floor
                                 (runbook §3), and the four above
+
+**C15: this rule is not this file's to define.** It is expressed four times in
+three languages — here, `src/cache_policy_rule.rs` (which `src-tauri` also
+compiles), and `docs/PUBLISHING-QUICKSTART.md` §6.2, the recipe an operator
+copies into a CDN. `REVIEW-2026-08-25` §2.1 found all four disagreeing, with
+`GOTCHAS.md` asserting they could not. They are pinned to ONE file now —
+`tools/cache-policy-vectors.txt` — which the Rust tests and
+`tools/cache-policy-lint.sh` (in `make lint`) both run. **Change the rule there
+and here in the same commit, or the lint reds.**
+
+Two divergences this file specifically had, both fixed here:
+
+  * it tested `"/content/" in path` — a SUBSTRING, so an ingested Hugo/Zola site
+    published at `/{peer}/sites/<site>/content/about.html` was pinned for a year
+    while its bytes stayed mutable at a stable URL. That is the dangerous
+    direction, and this is the file the quickstart tells operators to copy.
+  * it tested the RAW TARGET including the query string, so
+    `/index.html?x=/content/` classified immutable.
+
+Matching the shard structure instead is exact in both directions and it is
+self-verifying — and it keeps PREFIXED deployments (`/docs/content/…`), which a
+`startswith("/content/")` test silently strips of all immutable caching.
 
     ./tools/cors-serve.py [DIR] [PORT] [--tls CERT KEY]
 
@@ -60,9 +84,16 @@ import re
 
 # A filename whose own name carries its hash: trunk emits `entity-browser-<16
 # hex>_bg.wasm` / `.js`, so a rebuild changes the URL and the old one may be
-# cached forever. Anchored on a hex run of 8+ to avoid calling an ordinary
-# hyphenated name content-addressed.
-HASHED_ASSET = re.compile(r"-[0-9a-f]{8,}(_bg)?\.(wasm|js)$")
+# cached forever. Anchored on a hex run of 8+ that must REACH the extension, with
+# a non-empty head, so an ordinary hyphenated name is not mistaken for one.
+HASHED_ASSET = re.compile(r"[^/]-[0-9a-f]{8,}(_bg)?\.(wasm|js)$")
+
+# The content-addressed blob store. The two shard directories must be the hash's
+# OWN first four hex characters — that is what makes this a statement about
+# content-addressing rather than about a directory that happens to be named
+# `content`, and it is what keeps an ingested Hugo/Zola `content/` tree out.
+# Any prefix may precede it, so prefixed deployments keep immutable caching.
+CONTENT_BLOB = re.compile(r"(?:^|/)content/([0-9a-f]{2})/([0-9a-f]{2})/([0-9a-f]{32,})$")
 
 
 def is_immutable(path: str) -> bool:
@@ -71,8 +102,19 @@ def is_immutable(path: str) -> bool:
     Deliberately a whitelist. The previous shape whitelisted *mutability* and
     defaulted to a one-year immutable cache, which silently applied to
     `entity-deployment.json`, `transport-profile`, `index.html` and `sw.js`.
+
+    Mirrors `src/cache_policy_rule.rs`. Both are pinned to
+    `tools/cache-policy-vectors.txt` by `tools/cache-policy-lint.sh` — the
+    mirroring is GATED, not asked for in a comment, because the comment version
+    is what drifted four ways (C15 / REVIEW-2026-08-25 §2.1).
     """
-    return "/content/" in path or bool(HASHED_ASSET.search(path))
+    # Strip the query/fragment: this used to run against the raw target, so
+    # `/index.html?x=/content/` classified immutable.
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    m = CONTENT_BLOB.search(path)
+    if m and m.group(3).startswith(m.group(1) + m.group(2)):
+        return True
+    return bool(HASHED_ASSET.search(path))
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

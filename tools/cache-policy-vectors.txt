@@ -1,0 +1,95 @@
+# Cache-immutability vectors — the SHARED specification for C15.
+#
+# The rule ("may these bytes be cached `max-age=31536000, immutable`?") has four
+# expressions in three languages and they cannot all be one function:
+#
+#   1. src/cache_policy.rs                 — the canonical Rust rule
+#   2. src-tauri/src/app_server.rs         — `include!`s (1) verbatim
+#   3. tools/cors-serve.py                 — the dev/CDN reference server (Python)
+#   4. docs/PUBLISHING-QUICKSTART.md §6.2  — the CDN recipe an operator copies
+#
+# So they are pinned to THIS FILE instead. `cache_policy`'s unit tests read it,
+# and `tools/cache-policy-lint.sh` (in `make lint`) runs the Python expression
+# over the same lines. Two implementations that cannot disagree without a red
+# gate is what "one rule" reduces to across three languages — a comment asking
+# the next author to keep them in step is what drifted (REVIEW-2026-08-25 §2.1).
+#
+# Format: `immutable|mutable  <request target>`, `#` comments, blank lines ok.
+# Targets are request targets, not filenames: a query string is part of the
+# input, because testing the raw target instead of the path was one of the four
+# divergences.
+#
+# ADDING A VECTOR IS THE CHEAP HALF OF FIXING A CACHE BUG. Put the failing path
+# here first; it lands in the Rust gate and the Python gate in the same commit.
+
+# ── The content-addressed blob store: content/{aa}/{bb}/{hash} ──────────────
+# `aa`/`bb` are the hash's OWN first four hex characters, which is what makes
+# this a statement about content-addressing and not about a directory name.
+immutable  /content/00/ca/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0
+immutable  /content/ff/02/ff02caf1894d7e41d52780116631750d412b9f76737a69bff0f4f565c66e9cb4fd
+immutable  /2K9hBVEiswop4fbNDdWeJZXj6LMZMojmgGQamuJkYMGzfm/content/00/ea/00ea5a627a4c49dd90f070bdf8a5bdea32e2c095d0342cd18dc66e0217e8f1baa6
+# Query strings do not change what the bytes are.
+immutable  /content/00/ca/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0?download=1
+
+# PREFIXED deployments must keep immutable caching — `starts_with("/content/")`
+# lost all of these. `dist-federation` emits exactly this shape across five
+# prefixes; 92 blobs, and nothing would have told the operator.
+immutable  /docs/content/00/cf/00cf5860c3afbf86d503007e2b128cf56aca94095b4ba5e5a6757dca305c878d68
+immutable  /protocol/content/00/c8/00c8754505546d88141fcf17c393e9d5fd866b2067e365addf0058aac7a0c4250f
+immutable  /foundation/content/00/02/0002caf1894d7e41d52780116631750d412b9f76737a69bff0f4f565c66e9cb4fd
+
+# ── Hash-named bundles: trunk's output, where a rebuild is a new URL ────────
+# Real names copied from `dist/`, NOT invented — an invented fixture is how the
+# missing `_bg` shipped and re-downloaded the whole wasm on every load.
+immutable  /entity-browser-ee8896686ebf0754_bg.wasm
+immutable  /entity-browser-ee8896686ebf0754.js
+
+# ── The mutable set. Every one of these cached for a year is an incident. ───
+mutable  /
+mutable  /index.html
+mutable  /sw.js
+mutable  /sw-selfdestruct.js
+mutable  /entity-deployment.json
+# App code that is NOT hash-named. REVIEW-2026-08-25 §3.3 is about the service
+# worker treating this pair as immutable anyway, on a borrowed identity; this
+# rule does not, and must not start to.
+mutable  /entity-worker.js
+mutable  /entity-worker_bg.wasm
+mutable  /entity-worker-loader.js
+# C9's additions. `builds.json` changes every release; a retained shell is
+# overwritten whenever the same build id is republished. Both are the mutable
+# tier, and caching either for a year would freeze the rollback mechanism itself
+# — the one thing that must still work when everything else is wrong.
+mutable  /builds.json
+mutable  /builds/0123456789abcdef/index.html
+# A stale signed root silently defeats the rollback protection it exists to give.
+mutable  /2K9hBVEiswop4fbNDdWeJZXj6LMZMojmgGQamuJkYMGzfm/system/peer/published-root
+mutable  /2K9hBVEiswop4fbNDdWeJZXj6LMZMojmgGQamuJkYMGzfm/sites.list
+mutable  /2K9hBVEiswop4fbNDdWeJZXj6LMZMojmgGQamuJkYMGzfm/transport-profile
+
+# ── The traps. Each of these was accepted by at least one of the four. ──────
+# (a) An ingested site's OWN `content/` directory. Hugo, Zola and Lektor all
+#     name the source tree that, so this is mutable HTML at a stable URL —
+#     pinned for a year by `contains("content/")`. The dangerous direction.
+mutable  /2K9hBVEiswop4fbNDdWeJZXj6LMZMojmgGQamuJkYMGzfm/sites/blog/content/about.html
+mutable  /2K9hBVEiswop4fbNDdWeJZXj6LMZMojmgGQamuJkYMGzfm/sites/blog/content/2026/01/post.html
+# (b) No leading slash — the loosest expression matched these too.
+mutable  /mycontent/ab/cd/abcd1234abcd1234abcd1234abcd1234
+mutable  /oldcontent/ab/cd/abcd1234abcd1234abcd1234abcd1234
+# (c) A shard that is not the hash's own prefix. Looks like the store; isn't.
+mutable  /content/ff/ff/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0
+mutable  /content/00/ff/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0
+# (d) Not a hash at all under a real-looking shard.
+mutable  /content/ab/cd/notahash.html
+# (e) The query-string smuggle. `cors-serve.py` tested the RAW target, in the
+#     very file the quickstart tells operators to copy.
+mutable  /index.html?x=/content/00/ca/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0
+mutable  /sw.js?v=/content/00/ca/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0
+# (f) Near-miss bundle names: the hex run must reach the extension, there must
+#     be a name before the dash, and it must be long enough to be a hash.
+mutable  /foo-1a2b3c4dxyz.js
+mutable  /-deadbeef12.js
+mutable  /entity-browser-abc.js
+# (g) Uppercase falls to the safe side — widening is the unsafe direction.
+mutable  /entity-browser-EE8896686EBF0754.js
+mutable  /content/00/CA/00CAE3408B6ED7AD12BE0CDE47E2957F768F252AC20E0AFDF7B70DDA5812B66AC0

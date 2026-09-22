@@ -462,8 +462,16 @@ federation-vectors:
 # locales. It gates the one mechanical signal available (a translated value
 # carries a character of its own script) and deliberately says nothing about the
 # 17 Latin-script locales, where a cognate cannot be told from a skipped string.
+#
+# + `cargo clippy --features e2e --tests`, which is the only thing in ANY gate
+# that compiles `tests/e2e_worker.rs`. That file is `#![cfg(feature = "e2e")]`,
+# so `make test` compiles it to nothing (AGENTS.md says so) — and plain `cargo
+# clippy` does not build test targets or enable the feature, so `make lint` had
+# the same hole and nobody had said so. A ~25k-line suite that no gate
+# type-checks surfaces its compile errors 11 minutes into a Selenium run, on the
+# box that happens to have a grid. It needs NO grid to compile.
 lint: image
-	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
+	$(call RUN,cargo clippy && cargo clippy --features e2e --tests && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/cache-policy-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image
@@ -772,6 +780,68 @@ e2e-phases:
 # directions (drop the `!important` -> red on visibility; drop the inline
 # `display:none` -> red on the control).
 #
+# === builds-manifest — GIVE A BAD BUILD SOMEWHERE TO FALL BACK TO (C9) =======
+#
+# Retains the assembled tree's shell at /builds/<build_id>/index.html and records
+# it in /builds.json. Row 10: today `/` is the only shell and each deploy
+# overwrites it, so the previous Entry is destroyed while all its Assets survive
+# — and there is no rollback mechanism whatsoever (design §3.0's own table).
+#
+# RUN IT LAST. It reads the shell that will actually be served, so it has to come
+# after wasm-release AND after the publish, which is why `site-dist` calls it as a
+# third sub-make rather than listing it as a prerequisite (prerequisites are
+# order-independent under -j, and this target exists to depend on an order).
+#
+#   NOTES=…       the changelog line a person reads in the recovery UI
+#   RELEASED_AT=… publish timestamp. Passed IN, never read from the clock, so a
+#                 re-run is reproducible. (build-stamp.sh carries no timestamp on
+#                 purpose; builds.json is a publish fact, not a build fact.)
+#   KEEP=N        how many shells to retain (default 3, ~50 KB each)
+#   PRUNE=1       remove shells beyond KEEP. Opt-in, and it NEVER removes an
+#                 asset a surviving shell names — a retained build whose bundle
+#                 was pruned is a slot that 404s at the moment it is needed.
+#   MIN_ROLLBACK_INDEX=N  advance the anti-rollback floor. Monotone; only for a
+#                 build that fixes something not safely rollback-able, and only
+#                 AFTER it is known good.
+BUILDS_KEEP ?= 3
+.PHONY: builds-manifest
+builds-manifest:
+	$(call RUN,cargo run --quiet --bin entity-browser -- builds $(DIST) --keep=$(BUILDS_KEEP) $(if $(NOTES),--notes="$(NOTES)",) $(if $(RELEASED_AT),--released-at="$(RELEASED_AT)",) $(if $(PRUNE),--prune,) $(if $(MIN_ROLLBACK_INDEX),--min-rollback-index=$(MIN_ROLLBACK_INDEX),))
+
+# === fleet-probe — WHAT IS DEPLOYED, and can it still be corrected? (C16) =====
+#
+# Two answers from one set of requests, both of which a deploy leaves open:
+#
+#   INVENTORY — which build is each domain on? A branch is bookkeeping; the only
+#   authority is the artifact the domain serves. Measured 2026-08-26: both live
+#   domains were on `archive/dev-0.9.0`, reachable from NEITHER `dev` nor
+#   `master`, and no branch comparison would have said so. `build-stamp.sh` had
+#   made this answerable and nobody had asked.
+#
+#   HEADERS — is any MUTABLE url cached beyond correction? That is brick-matrix
+#   #7/#8, and #9 (browser AND cdn) has no remedy at all. This half was blocked
+#   on C15: a probe needs a rule to check against, and there were four
+#   disagreeing ones. It now imports the same `is_immutable` the serve path uses.
+#
+# GET, never HEAD — Cloudflare does not populate its cache from a HEAD, so a
+# HEAD probe can report headers the cached path never produces.
+#
+# NOT in `make lint` and not in any gate: it talks to live origins. It belongs in
+# the deploy runbook — run it BEFORE a cutover to record what is out there, and
+# AFTER to prove the new headers landed.
+#
+#   make fleet-probe DOMAINS="https://example.org https://other.org"
+#
+# Exit 0 clean - 1 a mutable url is cached dangerously - 2 a domain was
+# unreachable (INCONCLUSIVE: "could not check" is never "healthy").
+# Under-caching an immutable file is reported and does NOT fail the run — it is
+# slow, not unrecoverable, and conflating the two directions is how the rule went
+# wrong in the first place.
+.PHONY: fleet-probe
+fleet-probe:
+	@test -n "$(DOMAINS)" || { echo '!! DOMAINS= is required, e.g. make fleet-probe DOMAINS="https://example.org"'; exit 2; }
+	python3 tools/fleet-probe.py $(DOMAINS)
+
 # NOT in `make lint`: it needs Selenium on :4444, which `lint` must not. Run it
 # when index.html changes. **Never beside `e2e-worker`** — that suite's
 # `setup()` DELETEs every session on the grid, so the two take each other down.
@@ -1281,12 +1351,21 @@ program-fixtures:
 		golang:1.25-bookworm \
 		sh -c "go mod tidy && go run . -out ../../assets/programs"
 
-# Serve whatever is currently in dist/ (no rebuild). Fast, but does NOT
+# Serve whatever is currently in $(DIST) (no rebuild). Fast, but does NOT
 # guarantee the bundle is current — use `make build-serve` when you need
 # certainty you're serving the latest optimized build.
+#
+# **Honors `DIST=`, and until 2026-09-02 it did not** — this recipe passed the
+# literal `dist` while `site-dist` printed `make serve DIST=$(SITE_DIST_OUT)` as
+# its own closing advice, so the one command for reviewing the *uploadable* tree
+# silently served the SPA-only one instead. AP37: a documented invocation is a
+# coupling no compiler maintains. It matters beyond tidiness because `dist/`
+# carries **no `entity-deployment.json`** and `dist-site/` does, so the two trees
+# differ in exactly the behaviour anyone would be serving them to compare.
 serve:
-	@echo "  → $(SCHEME)://localhost:$(PORT)   (override with: make serve PORT=8082)"
-	$(call RUN_SERVE,dist)
+	@echo "  → $(SCHEME)://localhost:$(PORT)/   serving $(DIST)/   (override: make serve PORT=8082 DIST=dist-site)"
+	@test -f $(DIST)/index.html || { echo "!! $(DIST)/index.html is missing — nothing to serve. Build first (make wasm / make site-dist)."; exit 1; }
+	$(call RUN_SERVE,$(DIST))
 
 # Build WITH the demo apps (incl. the L5 Ping + Life demos) and serve — the
 # one-command way to actually try L5 app-hosting in a real browser. Open the
@@ -1580,6 +1659,9 @@ site-dist:
 	@echo ""
 	@echo "==> verifying the tree we are about to be able to upload"
 	$(MAKE) site OUT=$(SITE_DIST_OUT) VERIFY=1
+	@echo ""
+	@echo "==> retaining this shell as a rollback target (C9)"
+	$(MAKE) builds-manifest DIST=$(SITE_DIST_OUT)
 	@echo ""
 	@echo "=== uploadable web tree: $(SITE_DIST_OUT)/ ==="
 	@echo "  objects: $$(find $(SITE_DIST_OUT) -type f | wc -l)   size: $$(du -sh $(SITE_DIST_OUT) | cut -f1)"
@@ -1926,5 +2008,5 @@ publish publish-bare publish-serve:
 	@echo '  namespace and did NOT change: entity-browser publish <dir>'
 	@exit 1
 
-.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-dist site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle e2e-webrtc-lan
+.PHONY: e2e-webrtc-file program-fixtures native test lint wasm wasm-release wasm-test-protocol wasm-measurement e2e-worker e2e-phases e2e-webrtc e2e-webrtc-chat e2e-webrtc-meet e2e-webrtc-nat tauri tauri-run host-run appimage tauri-bundle tauri-bundle-run serve build-serve check-dist site site-dist site-bare site-serve dist dist-preflight dist-web dist-native dist-web-native publish publish-bare publish-serve e2e-webrtc-advertised e2e-webrtc-traverse e2e-webrtc-idle e2e-webrtc-lan fleet-probe builds-manifest
 

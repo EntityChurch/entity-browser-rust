@@ -609,6 +609,25 @@ pub fn collect(peers: &crate::peers::Peers, bound_peer_id: &str) -> Facts {
 /// Direct) and `getUserMedia` (so the QR scanner is simply absent). All of that
 /// gets logged; none of it reaches a person who is not in devtools.
 ///
+/// **There are THREE uniform losses, not two — the service worker is the one
+/// this enumeration missed (audited 2026-09-02).** Registration is restricted
+/// to secure contexts in every engine, so `'serviceWorker' in navigator` is
+/// simply false here and `index.html`'s registration block is skipped without
+/// an error. The consequence is **no offline shell**: a phone paired to a
+/// desktop over `http://` cannot open the app at all when that desktop sleeps,
+/// even though its own tree is sitting in IndexedDB, which does work on an
+/// insecure origin. It also means none of the service-worker heal path — the
+/// hotfix route, the kill switch, the recovery console's registration
+/// enumeration — has anything to act on at this origin. That is the *safe*
+/// direction for staleness (no cache, so no stale cache) and a real loss of
+/// availability, and those are different facts.
+///
+/// **The user-facing banner still names only two**, because its
+/// `readiness.insecure_origin` string is translated into 30 locales and the
+/// i18n parity check is by KEY, not by content — editing the English value
+/// silently leaves 30 stale translations and no gate would say so. Recorded as
+/// owed rather than half-done.
+///
 /// **It does NOT categorically cost you WebRTC, and this banner used to say it
 /// did.** Measured against Firefox 149 at an http LAN origin,
 /// `RTCPeerConnection` constructs and gathers host candidates normally. Engines
@@ -629,9 +648,11 @@ pub fn warn_if_insecure_origin() {
     let origin = win.location().origin().unwrap_or_default();
     tracing::warn!(
         %origin,
-        "insecure origin — OPFS (Worker storage) and getUserMedia (QR scanning) \
-         are unavailable here. WebRTC availability is engine-specific and is \
-         measured by the `net` preflight. Use https:// in production."
+        "insecure origin — OPFS (Worker storage), getUserMedia (QR scanning) and \
+         the SERVICE WORKER (so no offline shell: this origin cannot open the app \
+         when the machine serving it is unreachable) are unavailable here. WebRTC \
+         availability is engine-specific and is measured by the `net` preflight. \
+         Use https:// in production."
     );
     crate::storage_durability::inject_banner_with_id(
         "insecure-origin-banner",

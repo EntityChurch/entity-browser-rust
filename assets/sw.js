@@ -324,13 +324,47 @@ function fetchWithDeadline(req, init) {
 // rebuilt bytes can keep an old mtime and 304. `reload` forces an
 // UNCONDITIONAL network fetch (no If-Modified-Since), so we always get the
 // true latest bytes on the first online reload — dev server or CDN alike.
+// Is this navigation a request for the ORIGIN'S OWN shell — the thing `/`
+// serves — as opposed to some other navigable document?
+//
+// Until C9 there was only one navigable document and the query string was the
+// only thing that varied, so "a navigation" and "`/`" were the same statement.
+// C9 retains shells at `/builds/<build_id>/index.html`, and C10 navigates to
+// one to honour a rollback pin. Those are DIFFERENT DOCUMENTS: caching them
+// under `/` makes the canonical offline shell the rolled-back build, which then
+// outlives all three of the pin's ways out (TTL, self-clear, attempt counter),
+// because each of those only runs on a load of `/` and offline `/` is served
+// from that entry. `currentBuildId` reads it too, so the build id a page
+// reports offline would be the rolled-back one.
+//
+// `/` caches what `/` serves. A retained shell is cached under its own URL by
+// the `else` branch, which also makes a pinned build work offline — it did not
+// before, since its navigation was stored under a key it never requests.
+function isCanonicalShell(req) {
+    try {
+        const p = new URL(req.url).pathname;
+        return p === '/' || p === '/index.html';
+    } catch (_) {
+        // Unparseable URL: fall back to the old behaviour rather than losing the
+        // shell entry entirely. A shell cached under `/` is the recoverable
+        // mistake; no shell at all is the offline-503 one.
+        return true;
+    }
+}
+
 async function networkFirst(req) {
     const cache = await caches.open(CACHE_NAME);
     const fresh = await fetchWithDeadline(req, { cache: 'reload' }).then(async (resp) => {
         if (resp && resp.ok) {
-            if (req.mode === 'navigate') {
-                // A navigation is cached under the CANONICAL `/`, never under its own
-                // URL, and the put is AWAITED.
+            if (req.mode === 'navigate' && isCanonicalShell(req)) {
+                // A navigation TO THE ORIGIN'S OWN SHELL is cached under the
+                // CANONICAL `/`, never under its own URL, and the put is AWAITED.
+                //
+                // **`isCanonicalShell` is not decoration — see its comment.** This
+                // rule was written when every navigation WAS `/` (only the query
+                // string varied). C9 added a second navigable document, and folding
+                // a retained shell into `/` poisons the offline shell with the
+                // rolled-back build.
                 //
                 // Both halves are load-bearing and the first one cost a caught bug.
                 // `buildScopedAsset` reads this build's id out of the cached shell; an

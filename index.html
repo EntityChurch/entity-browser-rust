@@ -39,6 +39,178 @@
                 return v === '' || v === '1' || v === 'true';
             } catch (_) { return false; }
         })();
+
+        // ── C10: BOOT-TIME SLOT SELECTION ────────────────────────────────
+        //
+        // Row 10 / design 3.4. If a build is broken for this user, they need a
+        // way onto one that is not. `entity-browser builds` (C9) retains each
+        // shell at /builds/<build_id>/index.html and lists them in
+        // /builds.json; this is the half that HONOURS a choice among them.
+        //
+        // **It runs here, in the first <script>, in plain JS, before the module
+        // script and before any WASM — the same tier as __ENTITY_RECOVERY__ and
+        // for the same reason: it has to work when the WASM is the broken
+        // thing.** Anything that needs the app to boot in order to escape a
+        // build that will not boot is not a recovery mechanism.
+        //
+        // The retained shells work from any path because trunk emits
+        // ROOT-ABSOLUTE asset references (the main bundle is referenced as
+        // `/entity-browser<dash><hash>.js`, spelled around here on purpose —
+        // see below) and the worker registers `/sw.js` at root scope. Verified
+        // against dist/. If that ever becomes relative, every retained shell
+        // 404s its own bundle and this whole mechanism silently stops working.
+        //
+        // **The literal bundle prefix is deliberately NOT written in this file.**
+        // `build_id::parse_bundle_hash` scans the shell for it, and an earlier
+        // version of this comment that spelled it out made the app unable to
+        // name the build it was running — caught by
+        // `the_app_reports_the_build_it_is_running`. That parser is hardened
+        // now, so this is belt and braces; a shell should not carry decoys of
+        // the string things grep it for.
+        //
+        // **THE PIN IS A LEASE, NOT A DEED.** Three independent ways out, because
+        // a rollback a user cannot fall out of is a brick with better manners
+        // (audit F2, shipped once already):
+        //   1. a TTL;
+        //   2. self-clear when the origin has moved on from what we rolled AWAY
+        //      from — evidence the thing we were escaping was replaced;
+        //   3. an attempt counter, so a pin naming a shell that 404s heals
+        //      instead of stranding someone on a dead URL forever.
+        //
+        // (3) is the one that is easy to miss and is the difference between a
+        // recovery tool and a new brick: if the pinned shell does not exist, the
+        // browser shows a 404 and NONE of this code runs there, so it cannot
+        // self-heal from the failure — it has to heal on the next visit to `/`,
+        // which is exactly what a stuck person does. Armed before the redirect,
+        // disarmed on arrival. Same shape the crash-loop counter needs (C11).
+        //
+        // Scope, stated: this honours a pin. It does not yet SET one from a
+        // crash loop (C11), and "arrived" here means the pinned shell loaded,
+        // not that the app booted — the `successful` bit is C11's, and until it
+        // exists nothing in the product writes a durable pin at all.
+        window.__ENTITY_BUILD_SLOT__ = (function () {
+            var PIN = 'entity_build_pin';        // {build, from, exp, index}
+            var FLOOR = 'entity_build_floor';    // highest min_rollback_index seen
+            var ATTEMPT = 'entity_build_attempt';// {build, n} — localStorage, not session
+            var MAX_ATTEMPTS = 2;
+            var out = { id: null, pin: null, action: 'none', reason: '' };
+
+            function readJSON(k) {
+                try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (_) { return null; }
+            }
+            function write(k, v) {
+                try {
+                    if (v === null) localStorage.removeItem(k);
+                    else localStorage.setItem(k, JSON.stringify(v));
+                } catch (_) { /* private mode: a pin that cannot persist is a pin that cannot strand */ }
+            }
+            function meta(name) {
+                var el = document.querySelector('meta[name="' + name + '"]');
+                return el ? (el.getAttribute('content') || '') : '';
+            }
+            function go(id) {
+                var u = new URL(location.href);
+                u.searchParams.delete('build');
+                location.replace('/builds/' + encodeURIComponent(id) + '/index.html'
+                                 + u.search + u.hash);
+            }
+
+            try {
+                // Recovery must never be redirected. It is the surface that can
+                // CLEAR a pin, so a pin that captured it would take away the one
+                // page able to undo it.
+                if (window.__ENTITY_RECOVERY__) { out.action = 'skipped-recovery'; return out; }
+
+                var myId = meta('entity-build-id');
+                out.id = myId || null;
+                var onRetained = location.pathname.indexOf('/builds/') === 0;
+                var pin = readJSON(PIN);
+                var attempt = readJSON(ATTEMPT);
+
+                // `?build=` — one load, no durable write, and `default` is the
+                // documented way OUT. Both are advanced affordances; nothing in
+                // the product links to them.
+                var q = new URLSearchParams(location.search).get('build');
+                if (q !== null) {
+                    if (q === '' || q === 'default') {
+                        write(PIN, null); write(ATTEMPT, null);
+                        out.action = 'pin-cleared'; out.reason = '?build=default';
+                        return out;
+                    }
+                    if (q !== myId) { out.action = 'redirect'; out.reason = '?build=' + q; go(q); return out; }
+                    out.action = 'already-on-requested'; return out;
+                }
+
+                if (!pin || !pin.build) { out.action = 'no-pin'; return out; }
+                out.pin = pin;
+
+                // (1) TTL.
+                if (pin.exp && Date.now() > pin.exp) {
+                    write(PIN, null); write(ATTEMPT, null);
+                    out.action = 'pin-expired'; return out;
+                }
+
+                // Arrived. Disarm the attempt counter — this is the ONLY place
+                // that clears it, so a redirect that never lands never looks
+                // like one that did.
+                if (pin.build === myId) {
+                    if (attempt) write(ATTEMPT, null);
+                    out.action = 'on-pinned-build'; return out;
+                }
+
+                // A retained shell that is not the pinned one: someone navigated
+                // here directly. Honour the URL they typed rather than bouncing
+                // them, and do not treat it as a failed attempt.
+                if (onRetained) { out.action = 'on-other-retained-build'; return out; }
+
+                // (3) The pinned shell is not reachable. Heal rather than loop.
+                if (attempt && attempt.build === pin.build && attempt.n >= MAX_ATTEMPTS) {
+                    write(PIN, null); write(ATTEMPT, null);
+                    out.action = 'pin-unreachable';
+                    out.reason = 'the pinned build did not load after ' + attempt.n + ' attempts';
+                    return out;
+                }
+
+                // (2) The origin has moved on from what we rolled AWAY from, so
+                // whatever we were escaping has been replaced. Fall forward.
+                if (myId && pin.from && myId !== pin.from) {
+                    write(PIN, null); write(ATTEMPT, null);
+                    out.action = 'pin-superseded';
+                    out.reason = 'origin now serves ' + myId + ', rolled away from ' + pin.from;
+                    return out;
+                }
+
+                // (3, armed) Anti-rollback floor, as far as this tier can know
+                // it: only a pin that RECORDED its index can be compared, and
+                // only against a floor a previous boot stored. A hand-typed
+                // `?build=` carries no index and is not checked here — that
+                // check belongs where builds.json is in hand.
+                var floor = readJSON(FLOOR);
+                if (typeof floor === 'number' && typeof pin.index === 'number' && pin.index < floor) {
+                    write(PIN, null); write(ATTEMPT, null);
+                    out.action = 'pin-below-floor';
+                    out.reason = 'pinned index ' + pin.index + ' is below the anti-rollback floor ' + floor;
+                    return out;
+                }
+
+                write(ATTEMPT, { build: pin.build, n: (attempt && attempt.build === pin.build ? attempt.n : 0) + 1 });
+                out.action = 'redirect'; out.reason = 'durable pin';
+                go(pin.build);
+                return out;
+            } catch (e) {
+                // This gate must never be the reason a page does not load. A
+                // thrown exception here means no slot selection, not no app.
+                out.action = 'error'; out.reason = String(e);
+                return out;
+            }
+        })();
+        try {
+            if (window.__ENTITY_BUILD_SLOT__ && window.__ENTITY_BUILD_SLOT__.action !== 'no-pin') {
+                console.info('[slot] build=' + (window.__ENTITY_BUILD_SLOT__.id || 'unstamped')
+                    + ' action=' + window.__ENTITY_BUILD_SLOT__.action
+                    + (window.__ENTITY_BUILD_SLOT__.reason ? ' (' + window.__ENTITY_BUILD_SLOT__.reason + ')' : ''));
+            }
+        } catch (_) { }
 </script>
     <!-- data-wasm-opt="z": wasm-opt -Oz (smallest). C8 shipping size pass.
          wasm-opt only runs on release builds; debug builds skip it. -->
@@ -46,6 +218,14 @@
     <link data-trunk rel="rust" data-wasm-opt="z" data-bin="entity-worker" data-cargo-no-default-features data-type="worker" />
     <link data-trunk rel="copy-file" href="assets/entity-worker-loader.js" />
     <link data-trunk rel="copy-file" href="assets/sw.js" />
+    <!-- The kill switch (C17). Shipped but NOT registered by anything: the
+         recovery for a worker that breaks navigation is to serve these bytes at
+         `/sw.js`, and shipping them means devops can do that with a file copy at
+         the origin instead of a rebuild during an incident. Deleting `sw.js`
+         does not retire a registration — the spec does not unregister on a
+         failing response — so this file is the only mechanism there is.
+         Runbook: docs/RUNBOOK-SERVICE-WORKER-KILL-SWITCH.md -->
+    <link data-trunk rel="copy-file" href="assets/sw-selfdestruct.js" />
     <script>
         // Console capture for E2E tests (tests/e2e_worker.rs).
         // Wraps `console.{log,info,warn,error,debug}` so they ALSO push to
@@ -1095,9 +1275,16 @@
             // when the app is usable — `boot_load` then awaits ~14 more steps
             // with no frame loop and no watchdog behind them (both install
             // after it returns). So this keys off the one signal that means
-            // the app actually owns the page: `boot_progress::armed()` hiding
-            // #loading. Anything else would report a stalled boot as a healthy
-            // one, which is the failure this exists to end.
+            // the app actually owns the page: `boot_progress::surface_down()`
+            // hiding #loading. Anything else would report a stalled boot as a
+            // healthy one, which is the failure this exists to end.
+            //
+            // That signal still means what it says after the two-phase split
+            // (2026-09-02), and that is why the split kept them apart: the rAF
+            // arm is EARLIER now, but it is not the hand-over — the app is
+            // rendering behind this surface with its startup surface still
+            // undecided. Keying off the frame loop instead would report a boot
+            // still waiting on the deployment document as a finished one.
             //
             // The threshold sits above a normal boot and below the bounded
             // worst case (one 3 s deployment-document deadline + four 5 s

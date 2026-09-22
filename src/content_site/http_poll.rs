@@ -93,6 +93,39 @@ pub enum PollError {
     NotFound(u16),
 }
 
+impl PollError {
+    /// **Whether asking again can change this answer.**
+    ///
+    /// The reasoning is [`NotFound`](PollError::NotFound)'s own doc comment —
+    /// *the one outcome an origin chooses*, ruled terminal by `EXTENSION-TREE`
+    /// §3.3a — and this method is that paragraph made executable, so a retry
+    /// ladder does not have to re-derive it. Two consumers already draw the same
+    /// line by hand for a *different* question (`foreign_cache::record` asks
+    /// *what happened*, `resolve_page` asks *what do we tell the reader*); this
+    /// one asks *do we wait and try again*, which is why it is a third method
+    /// and not a share of theirs.
+    ///
+    /// **Everything else is retryable, deliberately, including the ones that
+    /// look like publisher errors.** A truncated body decodes as
+    /// [`Decode`](PollError::Decode) and a proxy-mangled one as
+    /// [`HashMismatch`](PollError::HashMismatch); both are transport faults
+    /// wearing a content fault's name, and both clear on the next attempt. The
+    /// conservative line is the same one the variant states: *the origin said it
+    /// is absent*, and nothing weaker.
+    ///
+    /// The match is exhaustive on purpose — a sixth variant does not get a
+    /// default, it gets a decision.
+    pub fn is_terminal(&self) -> bool {
+        match self {
+            PollError::NotFound(_) => true,
+            PollError::Decode(_)
+            | PollError::NotAPointer
+            | PollError::BadPointer(_)
+            | PollError::HashMismatch => false,
+        }
+    }
+}
+
 impl std::fmt::Display for PollError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -627,6 +660,40 @@ mod tests {
             .get(&content_url(&fx.origin, &h))
             .ok_or_else(|| PollError::Decode("404 content".into()))?;
         verify_and_decode(body, &h)
+    }
+
+    /// **The census for [`PollError::is_terminal`]** — every variant, classified,
+    /// with the count asserted so a sixth cannot be added and quietly inherit
+    /// somebody's default.
+    ///
+    /// The predicate is what a retry ladder branches on, so the cost of getting
+    /// it wrong runs both ways: calling a transient fault terminal turns a CDN
+    /// hiccup into a permanently missing app, and calling a withheld artifact
+    /// retryable is the ~9 s the Apps window used to spend on an answer that had
+    /// already arrived (the design's R3).
+    #[test]
+    fn only_the_answer_an_origin_chooses_is_terminal() {
+        let all = [
+            PollError::Decode("truncated".into()),
+            PollError::NotAPointer,
+            PollError::BadPointer("31 bytes".into()),
+            PollError::HashMismatch,
+            PollError::NotFound(404),
+            PollError::NotFound(410),
+        ];
+        let terminal: Vec<&PollError> = all.iter().filter(|e| e.is_terminal()).collect();
+        assert_eq!(
+            terminal.len(),
+            2,
+            "exactly the two NotFound spellings are terminal; got {terminal:?}"
+        );
+        assert!(terminal.iter().all(|e| matches!(e, PollError::NotFound(_))));
+
+        // Stated the other way round, because this is the half that costs a user
+        // an app rather than a few seconds: a corrupt or truncated body is a
+        // transport fault wearing a content fault's name, and must be retried.
+        assert!(!PollError::HashMismatch.is_terminal());
+        assert!(!PollError::Decode("short read".into()).is_terminal());
     }
 
     #[test]

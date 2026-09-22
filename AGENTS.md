@@ -23,10 +23,14 @@ D12–D16 here are ours, earned on our own bugs.
   `docs/architecture/specs/DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md` —
   D1–D16 and D19–D21 ratified, plus **D23** (no unbounded network await on the boot
   path — ratified 2026-08-27 on a reproduced run, with all three enforcement points)
-  and **D24** (any durable copy of someone else's bytes is a cache and needs a currency
-  trigger — ratified 2026-08-29 on a gate observed red, with both enforcement points);
+  **D24** (any durable copy of someone else's bytes is a cache and needs a currency
+  trigger — ratified 2026-08-29 on a gate observed red, with both enforcement points)
+  and **D25** (a refreshable value carries who set it; a heuristic on the value is not
+  provenance — ratified 2026-09-02 on two instances in different subsystems, with both
+  enforcement points, and **on the ladder's early-promotion terms**: reviewed against a
+  third instance found by someone else, removed if unearned within a release cycle);
   candidates at D17, D18, D22. The per-diff review questions (nine + 5b), anti-pattern
-  catalog AP1–AP45.
+  catalog AP1–AP49.
 - **Doctrines** (Feature/Audit procedures — the *how*):
   `docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md` — open the Feature
   Development Doctrine (F0–F8) for "build X", the Audit Doctrine (A0–A12) for "Y is broken".
@@ -152,7 +156,15 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   `sw.js` one; `tools/net-lint.sh` (in `make lint`, baseline-ratcheted) gates new raw fetches;
   the behavioural gate is the black-hole pair below. **The rule bounds an await blocking a
   DEFINED ALTERNATIVE outcome, not every `fetch`** — two `sw.js` fetches are deliberately
-  unbounded and the baseline carries them by name. Read the GOTCHAS entry before "fixing" one.
+  unbounded. Read the GOTCHAS entry before "fixing" one.
+  **The baseline carries a COUNT, not names, and this file said "by name" until 2026-09-02.**
+  `assets/sw.js sw_raw_fetch=3` is the whole record: the two deliberate ones **plus
+  `fetchWithDeadline` itself**, which is a bare `fetch` by construction (the same reason
+  `index.html`'s BIOS helper holds the one bare fetch there). **The gap that wording hid: a SWAP
+  passes.** Delete a deliberate fetch, add an accidental unbounded one, and the count is still 3
+  and `make lint` stays green — so the ratchet catches *more* raw fetches and cannot catch a
+  *different* one. D23's lint is a floor on quantity, not an allowlist of sites; when you change
+  any of the three, re-read them rather than trusting the number.
 - **ANY copy of someone else's bytes is a cache and needs a currency trigger; `if absent` is not
   one — D24. Go through `content_site::foreign_cache::ensure_current`; do not call
   `http_poll::fetch_*` yourself** (`tools/foreign-cache-lint.sh` in `make lint` will stop you,
@@ -183,10 +195,13 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   and the property the whole deploy story rests on.** *We will ship bugs, so a fix must be picked
   up on the next refresh and heal the profile.* If a service worker can pin a broken shell, a bad
   deploy is not an incident, it is a **brick** (matrix cell #10, recoverable only via C17's
-  self-destruct worker — **not built, never rehearsed**). It stages an isolated SPA copy, boots
-  it, **asserts a service worker is CONTROLLING the page**, moves the shell's `entity-build`
-  stamp, reloads once, and asserts the app reports the new build. Run it for any change to
-  `assets/sw.js`, `index.html`'s registration block, or the cache headers.
+  self-destruct worker — **built and drilled 2026-09-02**, and still the expensive path: it costs
+  every visitor their offline shell, so this gate staying green is what keeps you off it). It
+  stages an isolated SPA copy, boots it, **asserts a service worker is CONTROLLING the page**,
+  moves the shell's `entity-build` stamp, reloads once, and asserts the app reports the new build.
+  Run it for any change to `assets/sw.js`, `index.html`'s registration block, or the cache
+  headers — **and run `T=the_kill_switch` beside it**, since the two are the same subsystem's
+  ordinary path and its last resort.
   **It existed as a sentence, not a gate, until 2026-09-01** — the deploy transition was recorded
   in `the_worker_bundle_is_fetched_once_per_build_not_once_per_load`'s doc comment as
   *"mutation-checked in both directions"*, i.e. a manual check months ago, on the path we can
@@ -463,6 +478,16 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   and when an override was deleted by accident it stayed **green**, because the model carries a
   `#[cfg(test)]` helper of the same name. It scopes to the `impl WindowView` block now and ships
   its own two-way falsifier as a test. **A census you have not falsified reports what you hoped.**
+- **A scripted edit to a structured document must be verified by reading back the ROW, not by the
+  script reporting success.** A regex-and-replace marking two design-doc rows done printed
+  `C9/C10 marked`, passed both of its own asserts, marked one row correctly — and wrote the other
+  row's completion note onto **an unrelated row three entries up**, destroying its status cell. The
+  board then read the finished item as open and the untouched item as done. Recovered from
+  `git show`; verified byte-identical afterwards. **`.replace()` on a match you did not re-locate,
+  and offset arithmetic like `old[:-4]`, are the two ingredients.** Prefer an exact-anchor `Edit`,
+  or index the lines and assert the line you are about to write starts with the row you mean.
+  Same class as a neuter that passes and a gate satisfied by its fallback: *a tool reporting that
+  it did something is not evidence that it did the thing you meant.*
 - **A documented invocation is a coupling no compiler maintains — run it before you write it
   down (AP37).** Two gates' doc comments instructed `E2E_EXTRA='--ignored'`; the variable did
   not exist, make ignored it silently, and the command printed `0 passed; 2 ignored` — a
@@ -505,17 +530,51 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   **(b)** the outcome is decided by a **witness** — re-enumerating after — not by what
   `unregister()` returned, and the four outcomes stay apart (AP40): *"there was nothing to
   remove"* must never render as *"fixed"*; **(c)** it does **not** close heal-path row 9 — a
-  worker that breaks navigation takes this page down with it, and that is still C17, unbuilt and
-  never drilled. The console's own copy also told users *"clear site data … only removes the
-  cached program"*, which is **false and destroys the tree**; corrected in the same change.
+  worker that breaks navigation takes this page down with it, and that is **C17, built and
+  drilled 2026-09-02** (see the kill-switch entry below), not this console. The console's own copy
+  also told users *"clear site data … only removes the cached program"*, which is **false and
+  destroys the tree**; corrected in the same change.
+- **A worker that breaks NAVIGATION is a different failure from a worker that caches wrong, and
+  only one of them has an in-page fix. C17 — the kill switch — is `assets/sw-selfdestruct.js`,
+  shipped with every build and registered by nothing.** Row 9a's recovery console cannot help
+  here by construction: it arrives over the same channel the worker has poisoned, and **G8
+  asserts that** rather than arguing it (it loads `?systemrecovery=1` through the broken worker
+  and requires it to be bricked too). Runbook:
+  `docs/RUNBOOK-SERVICE-WORKER-KILL-SWITCH.md`. Drill: `make e2e-worker T=the_kill_switch`.
+  **Deleting `sw.js` is not a fix and is the trap** — the spec deliberately does not unregister on
+  a failing response, so 404, 410 and a bad MIME type all leave the bad worker installed; the
+  server-side kill-switch header was proposed in 2015 and never built. Serving self-removing bytes
+  at that URL is the *only* mechanism, which makes *"can you still serve `/sw.js`"* the runbook's
+  step 1 and the spec's 24-hour worker-staleness cap the floor when you cannot.
+  **Four things it cost that reading the design did not produce.**
+  **(1) The drill must not reload after serving the cure.** Recovery has to arrive from
+  `clients.navigate()` inside the worker, because unregistering does **not** release a page the
+  old worker already controls — a gate that issued its own reload passes with that line deleted,
+  and the fix would reach only the people who closed the tab.
+  **(2) "The app came back" is not sufficient evidence.** With `unregister()` removed the page
+  still recovers, because the self-destruct worker has no `fetch` handler and passes navigations
+  through; the registration count is a separate assertion. Same shape as row 9a's witness rule.
+  **(3) Read the artifact from the STAGED BUILD, not from `assets/`.** An operator copies it at
+  the origin during an incident, so a build that stopped shipping it must red the gate instead of
+  quietly testing the source tree.
+  **(4) The broken worker in the drill must be checked for actually breaking** — the vacuity
+  guard is falsified too, and without it a browser that never installed the bad worker sails
+  through every assertion and reports a rehearsed kill switch.
+  **No `fetch` handler in the artifact, deliberately:** a worker with no fetch listener intercepts
+  nothing, which is the state we are getting back to. **It is lossy and that is accepted** — it
+  removes the offline shell — and it touches **no** peer data, the same scope line the console's
+  program reset draws, for the same reason (no export path).
 - **The health checks live in System Overview's *Problems* card — not a window, and never called
   "Doctor" on screen.** `src/doctor.rs` is the pure verdict logic (checks 1–3 of the resilience
   design §7.2: domain identity, fetch-failure-by-peer, catalog completeness) and
   `src/refresh_ledger.rs` is the session-scoped recording seam a failed refresh lands in. Both are
   native, so `make test` gates the whole product; the window only places the strings.
-  **Four things to know before touching it.**
-  **(1) "I could not check" must never render as "healthy"** — `Verdict` has five states, three of
-  which establish nothing, and only `Agrees` is clear.
+  **Seven things to know before touching it.**
+  **(1) "I could not check" must never render as "healthy"** — `Verdict` has **six** states, three
+  of which establish nothing, and none of those three may ever be clear. The gate asserts *that*,
+  not a count of clear states: `nothing_that_established_nothing_counts_as_clear` replaced
+  `only_agrees_counts_as_clear` when `UserOwned` landed, because a count-based invariant would
+  have forced a legitimately-healthy state to lie about itself to stay green.
   **(2) The render filter is `warrants_attention`, NOT `!is_clear()`** — that mistake put three
   non-problems under a heading that says *Problems* on a perfectly healthy profile (AP48). The
   predicate lives on the model so no renderer re-derives it.
@@ -523,12 +582,116 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   return** or it ships to the desktop app only — which is how the section first shipped, invisible
   in the browser where both incidents actually happened.
   **(4) A remedy may never be destructive** — `no_remedy_is_destructive` asserts it of every
-  variant, because there is still no export path (design §5). Remedies report what they *did*
-  ("Asked"), never a repair they cannot yet observe.
-  **The known gap: there is no browser gate on this surface** — placement, quietness and the
-  retry button reaching the launcher are all unmeasured. And **`doctor.rs` is English-only by
+  variant, because there is still no export path (design §5). Remedies report what they *did*,
+  never a repair they cannot yet observe — **and "Asked" is not the only thing they can have
+  done.** `RemedyOutcome::NobodyListening` exists because the retry told users *"this section
+  updates on its own when the retry finishes"* with **no Apps window open**, so nothing could
+  finish; the count of listeners is an RAII `RetryHolder` held by the window, i.e. a witness, not
+  a registry. Same rule as the recovery console's four outcomes one row over.
+  **(5) Check 1 CONSUMES `session_config::decide_home`; it does not re-derive it.** *"Is this
+  divergence a fault?"* has exactly one answer in the tree, and when the check computed its own it
+  disagreed with the code that acts on it — telling a visitor who had set their own home that
+  their profile was pointed at a retired publisher and that reopening would repair it, while boot
+  was deliberately repairing nothing. **Enumerating the match arms on one axis is not enumerating
+  them**: the arms were exhaustive over every `DocumentRead` and a catch-all over every shape of
+  *belief*, which is AP40 hiding inside a function whose doc comment cites AP40.
+  **(6) A check that could not see everything says so.** `Snapshot::truncated` had two readers and
+  check 2 ignored it, returning `Agrees` off a capped list — the exact thing that field's own doc
+  warns against. And note *why* no test caught it: the fixture helper hardcoded `truncated: false`,
+  so no check-2 test could construct the other half of the field's domain (AP39).
+  **(7) The browser gate is `make e2e-worker T=the_problems_card`, and it runs on the BLACK-HOLE
+  RIG for the same reason the boot-surface gate does.** Both defects this surface has actually had
+  were invisible to every test of the model (AP48), so the gate asserts what a person sees:
+  the card is **there in a plain browser** (N: move it below the `!output.tauri` return → red),
+  it carries **zero findings on a healthy profile** (N: filter on `!is_clear()` → red, with the
+  three non-problems printed), *Check again* **has a visible state** (N: ignore `checking` → red),
+  and a check that **could not run is put in front of the user** (N: drop `Undetermined` from
+  `warrants_attention` → red, showing *"No problems found"* while a check could not run). It reads
+  the card by **text**, anchored on the `h3` — there is no class to select and adding one would
+  measure the hook. The stall is load-bearing twice: `DocumentRead::Unheard` needs an origin that
+  *accepts and never answers*, and the ~3 s deadline is what makes the *Checking…* window
+  observable rather than a race. **Still uncovered:** the remedy button reaching an open Apps
+  window — that needs check 3 to fire, i.e. a publisher that withholds a set, which is a different
+  rig; `RemedyOutcome` is gated natively. And **`doctor.rs` is English-only by
   decision**; every user-facing string is in that one file, and its count is declared debt in
-  `tools/i18n-lint-baseline.txt`.
+  `tools/i18n-lint-baseline.txt`. That line **went UP** (59 → 66) on 2026-09-02, deliberately and
+  on the operator's call — the audit's fixes needed new outcomes to have their own words. It is
+  the one place the i18n ratchet has been spent upward; translate before release and it goes to 0.
+- **A value with no PROVENANCE cannot be refreshed from its source, and a heuristic on the value
+  is not provenance — D25** (ratified 2026-09-02; AP49 stays as the incident record).
+  `MODEL-STAKEHOLDERS-AND-OWNERSHIP` §2.2 states it outright: *a value
+  a deployment seeded and a value the end user deliberately chose are byte-identical in the
+  entity.* The warm-boot reconcile refreshes exactly one such field, `home_site`, and it guarded
+  on `home_is_local` — which reads *"the user set this"* as *"the user set this to something
+  **local**"*. So a user who picked a **cached foreign** site (the boot-target picker offers them,
+  labelled `"{site} (cached)"`) had it overwritten on the next boot **and** got a durable
+  supersession record naming their own choice as *retired*, which then rewrote every stored
+  reference to it. **No re-key required** — the branch is `new_peer != stale_peer`, true the
+  moment the user's choice differs from the domain's declaration. The home reverting is E1; the
+  supersession is not (revalidation keeps it, because the domain does not contradict it).
+  **The mechanism was already built, twice, for the same question one field over** — that is what
+  makes this an anti-pattern and not a bug: site origins carry `source: deployment | user` with
+  `Adoption::KeptUserOverride`, and the registry pin has `pinned_registry() -> (RegistryPin,
+  PinSource)`. Four answers to one question in one codebase is the failure the stakeholder model
+  was written to stop, and it names Partition B as *"the gap to close for refresh semantics"*.
+  **Do NOT close it by building Partition B** — the model says so itself (*"not a prerequisite…
+  treating it as one over-scopes that work"*). One field, one mark.
+  **Two enforcement points, and the second is the transferable one.** `session_config::decide_home`
+  is now the single, **pure** expression of the precedence (five outcomes, not a bool — *kept it,
+  the user chose it* / *kept it, it is local* / *nothing to do* are three different facts), so
+  every combination of provenance × declaration is gated by `make test` on both arms instead of
+  only through Selenium. And `every_deployment_declared_field_says_who_owns_it`
+  (`deployment_config.rs`) is a **census**: one row per field the document may declare, each
+  classified as deployer-only / user-may-override-by-*named mechanism* / adopted-only-on-first-
+  contact, with the count asserted — so adding a field to `/entity-deployment.json` fails the
+  build until someone answers *whose value wins on the next boot*. A row claiming a mechanism must
+  name it; a claim with nothing behind it is the defect the census exists to catch.
+  Gates: `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration` (browser,
+  through the real Settings picker — falsified both ways, on the writer half and the reader half
+  independently) and `a_user_chosen_home_is_kept_and_a_deployment_seeded_one_is_adopted` (native,
+  one bit apart, so incident A's repair cannot be lost to this fix).
+  **Unmarked reads as `Deployment`**, for B1's stated reason, and the cost is real and stated: a
+  user who chose a remote home under an older build is not protected until they choose again.
+  **Ratified as D25 on the ladder's early-promotion terms**, recorded rather than dropped: the
+  second instance was found and fixed by the session that wrote the rule, which is when a rule is
+  most likely over-generalised — so it is reviewed against a third instance found by someone else
+  and removed if unearned within a release cycle. What the census does **not** see is a value
+  adopted from a registry or a peer; it only covers fields the deployment document declares.
+  Audit: `docs/plans/AUDIT-HEAL-PATH-AND-THE-OWNERSHIP-GAP-2026-09-01.md`.
+- **The refresh ledger is fed by `foreign_cache::ensure_current`, NOT by its callers.** It was fed
+  by **one of three** consumers — the Apps window — so the health section's check 2, documented as
+  *"the signature from incident A"*, could not see incident A's own fetches (the boot content-site
+  sweep and the discovery sweep recorded nothing), and its `Agrees` line claimed *"every publisher
+  asked has served something"* over a set that was not the set that was asked. Recording at the
+  chokepoint is a **witness, not a notification** (AP44): `tools/foreign-cache-lint.sh` already
+  makes `ensure_current` the only legal way to fetch a foreign artifact, so a consumer added
+  tomorrow is covered without knowing the ledger exists. Do not add a `refresh_ledger::record`
+  call to a new fetch path — if you feel the need to, the fetch is bypassing `ensure_current` and
+  that is the bug.
+- **A retry ladder branches on `PollError::is_terminal`, never on a status or a variant match of
+  its own.** *Do not retry a 404* was the design's R3 and stayed open for weeks while the Apps
+  window's ladder matched `Currency::Unavailable(_)` and consulted the error only **after** five
+  attempts — so a set the publisher had withheld cost ~9 s of waiting on an answer that arrived in
+  the first 200 ms, and the health finding that reports it could not appear until the ladder ended.
+  The ruling was never missing: `PollError::NotFound`'s doc comment already argued terminality
+  (`EXTENSION-TREE` §3.3a) and named the trap — *"a 5xx or a dropped connection is not this"*.
+  `is_terminal()` is that paragraph made executable, with an exhaustive match so a sixth variant
+  gets a decision rather than a default, and a census
+  (`only_the_answer_an_origin_chooses_is_terminal`) that asserts the count.
+  **Both directions cost something, which is why the conservative line is 404/410 and nothing
+  weaker:** calling a transient fault terminal turns a CDN hiccup into a permanently missing app,
+  and a truncated body arrives as `Decode` while a proxy-mangled one arrives as `HashMismatch` —
+  transport faults wearing a content fault's name.
+  **The ladder's decision is pure and native (`ladder_step` → `Retry | Withheld | Exhausted`)**,
+  because its only caller is a `spawn_local` inside a `cfg(wasm32)` block that no native test can
+  reach — and *"~9 s of coverage for a blip"* is exactly the kind of claim that lives in a comment
+  and drifts (`the_ladder_costs_what_its_comment_says` computes it). Three words, not two: the two
+  arms that stop differ in what they license you to say, and *reopen the window to retry* is wrong
+  advice for a publisher that already answered (AP40). Falsified both ways at
+  `PollError::is_terminal`.
+  Note what is **not** changed: `resolver.rs`'s per-site failure backoff still re-asks a withdrawn
+  site after its backoff, deliberately — it renders the error immediately, costs the user no wait,
+  and a site that returns should be picked up.
 - **`poll_json` returns `Ok(last_value)` on timeout — it does NOT error, so `.await?` is not a
   check (AP47).** That is the right design for its common caller (poll, *then* assert), and a
   trap for the other one: `poll_json(..).await.map_err(|e| "X never happened")?` describes a
@@ -563,6 +726,318 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   read"* line from the B-3 handoff describes today's API surface only — `PeerContext` already
   has capability-checked async `get`/`put`/`list`, so it is a pass-through to add, not a router
   rewrite. **Observability and non-fatality are separable; only the first was cheap.**
+- **The boot is TWO PHASES, the split point is the one NETWORK read, and the deferred order is
+  the DEFAULT since 2026-09-02 — there is no flicker and no trade left to pick.** `boot_load` is
+  phase 1 (local reads only: roster, window index, durable session config, supersessions) and
+  returns a `BootPlan`; `EntityApp::boot_phase2` is everything that depends on
+  `/entity-deployment.json`, and it runs spawned, behind a live frame loop. `?boot=inline`
+  restores the old order as an escape hatch and as the gate's control; nothing in the product
+  sets it.
+  **The flicker was real and it was NOT inherent to the ordering — it was one signal doing two
+  jobs.** `boot_progress::armed()` meant *the rAF loop is live* AND *take the boot surface down*,
+  so deferring phase 2 necessarily painted a surface phase 2 might then change. Those are
+  **`frame_loop_live()` and `surface_down(reason)`** now. The frame loop goes live early — that
+  is the entire anti-brick property, and it is bought by *where the loop is armed*, never by
+  *when the surface comes down* — and the boot surface stays up until phase 2 hands the page
+  over. **The user sees exactly one transition, the same one they always saw.**
+  Why the surface genuinely cannot come down earlier: the startup surface is decided in phase 2,
+  behind the document *and* the supersession adoption, which
+  `rekeyed_domain_heals_on_next_boot_window_surface` already established as a **data dependency**
+  when a first cut put the spawn in phase 1 and reproduced the re-key incident's symptom.
+  Painting before that is guessing.
+  **The hold is bounded in `boot_progress` itself, and that failsafe IS the guarantee (AP44).**
+  Holding until phase 2 reports back re-creates the brick if phase 2 never reports back, so
+  `frame_loop_live()` — one call site — arms a `HOLD_FAILSAFE_MS` (30 s) timer that takes the
+  surface down regardless. **30 s is deliberately ABOVE phase 2's own worst case** (one 3 s D23
+  document deadline + up to four 5 s origin seeds ≈ 23 s); a failsafe *under* that number fires
+  on a boot that is merely slow and produces the exact flicker this shape avoids. `?boothold=<ms>`
+  is a test affordance nothing in the product sets — same shape and same reason as `?bootstall=`,
+  since reaching the branch honestly means a 30 s gate.
+  **The hand-over is an RAII guard, not a line at the end** — `boot_progress::HandOver`, armed at
+  *did not complete* and promoted by `completed()`. A trailing call is reached only when phase 2
+  returns normally, and the paths that most need the page handed over are a panic unwinding out of
+  an await and an early return added later. Three reasons, kept apart (AP40): `phase 2 complete` /
+  `phase 2 did not complete` / `hold failsafe`.
+  **Measured, black-hole rig, one build: frame loop live at 258 ms, boot surface correctly still
+  up, phase 2 landing behind it; control (`?boot=inline`) 3252 ms; 0 FRAME SKIP.**
+  Gate: `make e2e-worker T=the_two_phase_boot_arms` — **three claims, each falsified**: the loop
+  arms without the document (neuter `boot_inline_requested()` → `ROW 8 RED`, log tail stopping at
+  *"phase 1 complete"*); the page is **not** handed over yet (neuter: call `surface_down()` from
+  `frame_loop_live()` → reds on `FLICKER`, which is the shape that was rejected); and a phase 2
+  that never reports back cannot hold the page (neuter: delete the failsafe `spawn_local` → reds
+  with the surface still up). **The central assertion is INVERTED from the flagged version** — the
+  old one demanded the surface be *down*, i.e. it encoded the flicker as the feature.
+  **The prior handoff's review recipe is void and the reason is worth carrying:** it prescribed
+  eyeballing both orders on localhost, where `/entity-deployment.json` answers in **0.4–5.8 ms**
+  against a 16.7 ms frame. A *prescribed manual check is a test rig* — ask whether it can exhibit
+  what it is written to exhibit before you prescribe it, and state the magnitude someone is being
+  asked to perceive. The answer was not to build the rig; it was that the flicker did not have to
+  exist.
+  **`EntityApp::boot_document_read` is a SEPARATE associated fn and that is load-bearing, not
+  tidiness** — it is awaited holding **no app borrow**. A `boot_phase2(&mut self)` that fetched
+  its own document would hold `borrow_mut()` across the one await that actually stalls, which is
+  §4a's blocker reproduced with a flag on it. **Hoisting it also removed a guard rather than
+  adding one:** there used to be two `read_document()` call sites under exhaustive, mutually
+  exclusive conditions, and the `!config_was_absent` guard that kept it to one fetch is the one
+  whose absence took G1 from 3244 ms to 6195 ms. One call site holds that structurally.
+  **The phase boundary is a DATA-DEPENDENCY boundary, not a rendering one — and a gate had to say
+  so.** The first cut put the §4-B surface spawn in phase 1, on the obvious reasoning that the
+  phase whose job is *paint something* should pick the surface.
+  `rekeyed_domain_heals_on_next_boot_window_surface` red **on the default path** with *"stale
+  cached outline shown: true"* — the re-key incident's own symptom. Phase 1's
+  `peer_supersession::load` loads the records a **previous** boot wrote; `persist` writes *this*
+  boot's A→B and is phase-2 work by construction, because it is discovered from the document. A
+  window spawned before it hydrates a location naming the retired publisher, which is the contract
+  the code states in `boot_load` itself. **The overlay survives the same ordering and a window does
+  not** — the overlay has a re-point (`config_was_absent || adopted_identity`), a spawned window
+  has no equivalent, and that asymmetry is what makes this look arm-specific when it is not. So the
+  spawn, the `?site=` deep-link navigation and the remote-fixture seed all sit **behind the
+  adoption**. Anything that resolves a durable reference through state phase 2 discovers belongs in
+  phase 2, however much it looks like "what the user sees" — and the resulting chrome-then-window
+  on a `surface=window` deployment is not a defect to engineer away, it is the flicker §4 priced,
+  made visible.
+  **`AGENTS.md` said the scope was "widen one handle" and that understates it.** `DispatchHandle`
+  really is `Clone` with the async twins available — but **every phase-2 helper takes `&Peers` by
+  reference** (`roster::read_roster_async`, `peer_supersession::load`/`persist`/`revalidate`,
+  `origins::adopt_deployment_origin`, `mirror_to_all_local_peers`, `WindowView::hydrate_durable`)
+  and `Peers` is owned **by value** in `EntityApp` — so holding one across an await holds the app
+  borrow. The real scope is *widen the handle **and** convert each phase-2 reader off `&Peers`*.
+  **Stated bound, not buried:** the deferred *local* tree work still holds the borrow. That is a
+  stutter on a painted page, not a blank one — measured at **0 skipped frames**, and the gate
+  **prints the `FRAME SKIP` count rather than asserting a threshold nobody has earned**, so a
+  regression shows up as the number climbing. Gate:
+  `make e2e-worker T=the_two_phase_boot_arms` — black-hole rig, with the **shipped order as an
+  in-session control** (a second `connect_browser()` contends with its own first on a
+  single-slot node). Background: `AUDIT-BOOT-PATH-2026-08-27.md` **§4c**.
+- **A bad build has somewhere to fall back TO — row 10, C9+C10, 2026-09-02.** Two halves that are
+  only testable together (a pin with nothing to pin to has no target; a `builds.json` nothing reads
+  is a file).
+  **C9, the publisher half:** `entity-browser builds <DIR>` / `make builds-manifest`
+  (`src/build_slots.rs`, native-tested; `site-dist`'s third sub-make, so it reads the shell that
+  will actually be served). Retains the shell at `/builds/<build_id>/index.html` and writes
+  `/builds.json`. **`build_id` is the BUNDLE HASH, the commit is only a label** (§3.1) — two
+  docs-only commits produce byte-identical wasm, which §4A.0 measured on the live fleet, so they
+  are one slot. **The limit that will bite someone: a change confined to UNHASHED assets
+  (`sw.js`, the worker pair) does not move the id and is not a distinct slot.** Three things the
+  naive version gets wrong: a republished id **keeps its index** (a docs-only release must not push
+  the ordering forward); `next_index()` is **max+1, not `len()`**, so a prune cannot hand a later
+  build an index a client already stored as its anti-rollback floor; and a **malformed**
+  `builds.json` is a hard stop, never an implicit fresh start — *"there is none"* and *"there is one
+  and I cannot read it"* decide different things. `--prune` is opt-in and **never removes an asset a
+  surviving shell names**: a retained build whose bundle was pruned is a slot that 404s at exactly
+  the moment someone falls back to it.
+  **C10, the client half:** `window.__ENTITY_BUILD_SLOT__`, the **first `<script>` in
+  `index.html`, plain JS, before the module script** — the same tier as `__ENTITY_RECOVERY__` and
+  for the same reason, since anything needing the app to boot in order to escape a build that will
+  not boot is not a recovery mechanism. `build-stamp.sh` now stamps **`entity-build-id`** (the
+  bundle hash) beside `entity-build` (the commit) so the gate can tell whether it *is* the pinned
+  build before the body is parsed; it is derived from the same reference `build_id.rs` and `sw.js`
+  parse, so it is a convenience for the pre-WASM tier, **not a second source of truth**.
+  **Retained shells boot from any path only because trunk emits ROOT-ABSOLUTE asset references and
+  the worker registers at root scope** — if that ever becomes relative, every retained shell 404s
+  its own bundle and the mechanism silently stops working, which is why the gate asserts the app
+  **booted** there and not that the URL changed.
+  **THE PIN IS A LEASE, NOT A DEED — three independent ways out**, because a rollback a user cannot
+  fall out of is a brick with better manners (audit F2, already shipped once): a **TTL**;
+  **self-clear** when `/` no longer serves what the pin rolled *away* from; and an **attempt
+  counter** so a pin naming a missing shell heals instead of stranding someone. That third one is
+  the difference between recovery and a new brick and is easy to miss: **a 404 means none of our
+  code runs at the target, so it cannot self-heal there** — it heals on the next visit to `/`,
+  which is what a stuck person does. Armed before the redirect, disarmed **only** on arrival.
+  **Recovery is exempt from redirection**, since it is the surface that can clear a pin.
+  Gate: `make e2e-worker T=a_pinned_build_is_honoured` — falsified three ways (drop the attempt
+  counter → *"a NEW brick built by the mechanism meant to remove one"*; drop the recovery exemption
+  → *"eat its own escape hatch"*; drop the self-clear → *"a lease that outlives the reason it was
+  taken is a deed"*).
+  **Stated bound: nothing in the product SETS a durable pin yet.** That is C11's crash-loop counter
+  and §3.5's recovery Boot section. Today the mechanism is reachable by a hand-typed
+  `?build=<id>` — real for an operator or support, inert for everyone else. **Do not describe row
+  10 as closed.**
+  **A default that is also a MEANINGFUL value collapses *absent* into *unreadable* — and pick the
+  arm by which mistake you can afford (AP40, applied to a parse).** `BuildsManifest::from_json`
+  hard-stopped on a malformed `builds`/`index` and then read the anti-rollback floor with
+  `unwrap_or(0)`. A `min_rollback_index` that was **present but unreadable** — a string, a float, a
+  negative, a representation widened by a newer publisher — became **0**, which is not a neutral
+  default: it is the one value that disarms `--min-rollback-index`'s refuse-to-lower guard *and*
+  gets written straight back out by the next ordinary publish, erasing the floor with **no flag and
+  no warning**. The field carrying the safety property got the only silent default in the parser.
+  Absent (or explicit `null`) is still a real zero — a first publish must not be a hard stop — and
+  present-and-unreadable now fails the whole document, like everything else in it. Gate:
+  `a_floor_that_is_present_but_unreadable_is_malformed_not_zero`, seen red first.
+- **ROLLBACK IS PARTIAL, AND `sw.js` CACHED THE ROLLED-BACK SHELL AS THE CANONICAL ONE.** Two
+  findings at the C9/C10 × service-worker seam, which no gate covered because the two features were
+  built four days apart and the rollback gate asserted nothing about the worker.
+  **(1) Fixed:** `networkFirst` cached **every** navigation under the canonical `/`. That rule was
+  written when every navigation *was* `/` (only the query varied); **C9 added a second navigable
+  document**, so honouring a pin overwrote the offline shell with the rolled-back build — which
+  then **outlives all three of the pin's ways out**, because TTL, self-clear and attempt counter
+  each only run on a load of `/`, and offline `/` is served from that entry. `currentBuildId` reads
+  it too. `isCanonicalShell` now gates the put on `pathname === '/' || '/index.html'`; a retained
+  shell caches under its own URL, which also makes a pinned build work offline for the first time.
+  Measured before the fix, not reasoned: cached `/` reported the retained id while the origin
+  served the live one. Gate: the `1b` block in `a_pinned_build_is_honoured…`, **seen red first**.
+  **(2) NOT fixed, and it bounds what row 10 can promise: a rolled-back shell runs against the
+  CURRENT worker and the CURRENT `sw.js`.** Those are unhashed, the origin serves exactly one of
+  each, and there is no `/builds/<id>/entity-worker_bg.wasm`. `AGENTS.md` already records C9's
+  limit in one direction (*a change confined to unhashed assets does not move the build id*); this
+  is **the converse — a build id that moves does not carry the unhashed assets with it**. So
+  **if the bug you are rolling back from is in the worker or in `sw.js`, rolling back the shell
+  does not escape it.** Do not describe row 10 as "a bad build has somewhere to fall back to"
+  without this qualifier. Note also why `dropSupersededBuilds` makes the old shape strictly worse
+  rather than accidentally right: it sweeps the previous build's worker entry when the new one
+  lands, so a rolled-back shell never finds its own worker cached — it fetches the current one and,
+  under the old code, stored those bytes **under the rolled-back id**, defeating the very invariant
+  `buildScopedAsset` exists to hold.
+- **TORI IS NOT A SMALLER BROWSER — audit it against its OWN substrate, 2026-09-02.** The heal-path
+  arc is browser-shaped and most of it genuinely does not apply: `frontendDist` is embedded in the
+  executable, so the WebView has no service worker cache of a remote origin, no CDN, and no build
+  slots; there is **no updater plugin**, so the "auto-reload users into a broken build" risk (S-5)
+  is browser-only. Verified sound on its own terms: `app_server` looks assets up by **exact key**
+  in the embedded map (traversal structurally impossible), `redirect_target` percent-encodes CR/LF
+  (no header injection), `sanitize_name` is an allowlist `[a-z0-9-_]` capped at 32 (no traversal via
+  peer label), and C15's shared rule is real — `#[path = "../../src/cache_policy_rule.rs"]`.
+  **Three things that DO cross over, and one of them inverts:**
+  **(1)** Tori is a **publisher** — `app_server` serves the SPA to a phone over `http://<lan-ip>`,
+  which is **not a secure context**, so that browser gets **no service worker at all** and
+  therefore no offline shell: it cannot open the app when the desktop sleeps, even though its tree
+  is in IndexedDB, which works fine on an insecure origin. `readiness.rs` enumerated *"the two
+  losses that are uniform"* (OPFS, `getUserMedia`) and there are **three**.
+  **(2)** **Desktop has rollback EXPOSURE without rollback MACHINERY**, which is not the same as no
+  exposure — and §4C's premise (*"nothing could ever run an older build against newer data"*) is
+  true of the browser and **false of Tori**. `data_root()` is `$HOME/.entity` with no version in
+  the path, and reinstalling the previous installer is ordinary user behaviour. So §4C.2's lossy
+  round-trip is reachable today with no floor, no version check (`ROSTER_SCHEMA_VERSION` is written
+  and discarded), and the **longest** exposure, since no updater carries anyone forward. **The
+  inversion worth carrying: the browser's risk is high-probability/short-duration, Tori's is
+  low-probability/indefinite** — so "out of scope for rollback" must not be read as "no rollback
+  risk."
+  **(3)** Coverage is thin where it is most privileged: `src-tauri/src/lib.rs` is **1516 lines with
+  2 tests** and holds the entire IPC command surface.
+- **NO GATE COMPILED `tests/e2e_worker.rs` — `make lint` had the same hole `make test` is already
+  documented as having.** The file is `#![cfg(feature = "e2e")]`, so `make test` compiles it to
+  nothing (this file said so); plain `cargo clippy` builds neither test targets nor that feature,
+  so **~25k lines were type-checked by nothing but an 11-minute Selenium run on a box with a grid.**
+  `make lint` now runs `cargo clippy --features e2e --tests` as its second step — **compiling needs
+  no grid**, and it costs ~48 s for the whole lint. Falsified both ways with a deliberate type
+  error: plain `cargo clippy` exits **0** and never sees it; `make lint` exits **2** with
+  `error[E0308]`. The transferable half: *this file already recorded the `make test` half of the
+  hole, and recording it is what made it look handled* — a known gap in one gate is not a reason to
+  assume the neighbouring gate covers it. Check what each gate actually compiles, not what its name
+  suggests.
+- **AP47 has a live instance whenever a `poll_json` result is consumed by `map_err` alone.**
+  `poll_json` returns `Ok(last_value)` on TIMEOUT and its own doc says *"the caller still asserts"*
+  — so `.map_err(|_| "the worker never finished wasm init")?` named a condition it could not
+  detect. Found in `the_worker_bundle_is_fetched_once_per_build_not_once_per_load`, where it was
+  the **vacuity guard for loads 2..N**: the downstream `fetches == 0` branch only catches a worker
+  that never spawned *at all*, while a worker that spawns on load 1 and silently fails afterwards
+  also yields `fetches == 1` — the passing value — so the gate could report *"fetched once across
+  3 loads"* for exactly the wrong reason. Now asserts on the returned value; falsified by pointing
+  the log filter at a string that never appears, which **timed out at 31 s and still returned
+  `Ok`** — the clearest possible demonstration that the old `map_err` was unreachable. **Audit
+  rule: grep `poll_json` call sites for `map_err` and check each one asserts on the value.** One
+  site had it; the other 72 assert correctly.
+- **UN-NAME BEFORE YOU REMOVE — and a set that is only PRINTED is not a guard.** `--prune`
+  deleted retired shells and left their entries in `builds.json`, so the manifest advertised slots
+  that 404. Latent today (nothing reads `builds.json` at runtime yet) and aimed squarely at
+  **C14's slot list**: a *"Boot this version"* button that 404s at the moment someone is falling
+  back, where **none of our code runs**, so C10's attempt counter can only heal it on a later visit
+  to `/`. The publish ordering (§3.2: entry → `/` → `builds.json`) run backwards is the rule —
+  un-name, then remove; **a shell nothing names is unreachable, a name with no shell is the
+  failure.** Dropping the OLDEST entries cannot move the counter, because `retained` keeps the
+  newest and `next_index` is max+1 — verified end-to-end (prune 4→2, fifth publish took index
+  **4**, not a reused 2), and falsified by neutering the drop. **The second half is the
+  transferable one:** `assets_named_by` was computed, printed, and used by nothing, while the
+  module doc called it *"the whole safety argument"* for prune — a guard on an operation that does
+  not exist reads as wired to the next author. It now says so in the line it prints. Two limits
+  stated rather than overclaimed: prune removes **shells only**, and a shell is ~100 KB against a
+  bundle measured in MB, so it reclaims the small half while the hashed bundles accumulate.
+- **A tool that answers *"what is deployed"* must use the identity the PUBLISHER uses — C15's class,
+  one layer out.** `make fleet-probe` judged fleet uniformity on the `entity-build` **commit label**
+  while `BuildsManifest::record` keys slots by the **bundle hash**, so the probe and the publisher
+  held two expressions of *what a build is*. Measured on the first live run (2026-09-02): the two
+  domains carry commits `1ad7ca4` and `56c0921` on the **byte-identical bundle `6a41dc151b1b09ba`**,
+  and the probe reported *"NOT uniform — 2 distinct builds"* for what §3.1 rules is **one build with
+  two labels, and one rollback slot**. The direction of the error is the costly one going into a
+  release: it invents a rollback target that does not exist. Identity is the bundle hash; the label
+  is printed beside it and is never the verdict. The id is derived from the bundle filenames
+  `HASHED_REF` already matched, **not** by a second scan of the document — the required extension is
+  what keeps a prose mention from being parsed as the build, which is the trap `parse_bundle_hash`
+  hit on 2026-09-02.
+- **The live fleet is CORRECTABLE, measured 2026-09-02 (first real `fleet-probe` run, exit 0).**
+  Both domains serve every mutable URL (`/`, `/index.html`, `/sw.js`, `/entity-deployment.json`) at
+  `max-age=1, must-revalidate`, and both bundles `immutable`. So brick-matrix **#7/#8/#9 are not
+  live risks**, a hotfix lands on the next refresh, and C17's kill switch is available *because*
+  `/sw.js` is correctable. **And `dev` is not missing deployed work:** the deployed commits sit on
+  `archive/dev-0.9.0`, reachable from neither `dev` nor `master`, which is a history rewrite at the
+  release boundary (merge-base 2026-06-30), **not** lost work — zero code files under
+  `src/`/`tools/`/`assets/` are deleted in `dev` relative to the deployed tree, and four spot-checked
+  live fixes are present by symbol. Stated limit: that is a spot check plus a file-level census, not
+  a line-by-line tree equality proof.
+- **The cache-immutability rule has ONE expression and four call sites gated against it — C15,
+  closed 2026-09-02.** `src/cache_policy_rule.rs` is the rule; `src/cache_policy.rs` wraps it for
+  the app crate and `src-tauri/src/app_server.rs` takes it by `#[path]` module, so the two Rust
+  servers compile **the same source**. Python (`tools/cors-serve.py`) and prose
+  (`PUBLISHING-QUICKSTART` §6.2) cannot, so all four are pinned to **`tools/cache-policy-vectors.txt`**:
+  the Rust tests read it (`make test`, `make test-tauri`), `tools/cache-policy-lint.sh` runs the
+  Python rule over it, and `tools/cache-policy-doc-check.py` holds the document to the same two
+  match expressions — both in `make lint`. **Add the failing path to the vector file first; it
+  lands in every gate in the same commit.**
+  **Why this was worth a module.** `REVIEW-2026-08-25` §2.1 found the rule written four times, no
+  two the same, while `GOTCHAS.md` asserted they *"cannot disagree"* — a guarantee nobody enforced,
+  false when written. Each expression passed its own tests, which is exactly why the drift was
+  invisible. A mis-cached mutable file is brick-matrix cell **#9: no remedy at all**.
+  **The rule itself changed in BOTH directions, and the shard test is the whole safety argument.**
+  Immutable iff the path tail is `content/{aa}/{bb}/{hash}` **where `aa`/`bb` are the hash's own
+  first four hex characters** — self-verifying, so a directory cannot satisfy it by accident.
+  `contains("content/")` was the dangerous one (Hugo, Zola and Lektor all name their source tree
+  `content/`, so an ingested site pins mutable HTML for a year); `starts_with("/content/")` was
+  safe but silently stripped every **prefixed** deployment of immutable caching (`dist-federation`
+  emits 92 such blobs). Measured across every published tree on this box: **7653 files under a
+  `content/` segment, 7653 matching, zero exceptions.** The query string is stripped — it was not,
+  in the one file operators are told to copy — and hex is lowercase-only, because widening the
+  immutable set is the unsafe direction.
+  **Falsified across the tree:** one line changed in `cache_policy_rule.rs` reds the app crate and
+  `make test-tauri` together; the doc gate reds on a retired spelling returning to the rules table
+  and on the rule moving without the document.
+  **Two honest limits.** §6.2 is prose, so the doc gate proves it has not *drifted*, never that
+  the CDN recipe is right. And the FORBIDDEN check is scoped to **table rows**, because a
+  document-wide grep flagged the document's own note explaining which spelling was retired — a doc
+  that may not name the rule it replaced cannot warn anyone off it.
+- **`dist/` HAS NO `entity-deployment.json` — so `make serve` / `make build-serve` is a deployment
+  that declares nothing, and any behaviour driven by that document is UNREACHABLE there.** Written
+  after a human review of the two-phase boot came back *"no difference between the two"*: correct,
+  and worth nothing, because the origin 404s the document, `deployment` is `None`, and both orders
+  were sequencing the same empty set. **AP34/AP35 one layer out from the engine matrix** — green
+  because the configuration that exhibits the behaviour was not in the population, not green by
+  inheritance. `make site-dist` is the target that emits a deployment document; a plain `dist/`
+  never has one — so **`make site-dist && make serve DIST=dist-site`** is how you serve a tree that
+  actually declares something. **`serve` only started honouring `DIST=` on 2026-09-02**: it passed
+  the literal `dist` while `site-dist` printed that exact command as its own closing advice, so the
+  one invocation for reviewing the uploadable tree silently served the SPA-only one (AP37 — and the
+  two trees differ in precisely the behaviour you would be comparing them for).
+  To review anything document-driven by hand you need **all three**: the file
+  (`printf '{"surface":"site"}' > dist/entity-deployment.json`, written **after** the build since
+  `wasm-release` rewrites `dist/`), **a profile with no durable config** (private window — a
+  persisted config always wins, so a warm profile takes the `Unchanged`/`LocalHome` arms and
+  nothing moves), and both loads on that same build. **For the two-phase flicker specifically
+  there is a FOURTH condition and nothing in this repo supplies it — a slow-but-answering
+  origin.** The three above only make the deferred work *non-empty*; what makes it *visible* is
+  latency. Asking someone to eyeball those three on localhost is asking them to see a sub-frame
+  difference, which is the same error one layer further in: a recipe that cannot exhibit what it
+  is written to exhibit. **And do not let *"we looked and saw nothing"* be recorded as *"the
+  behaviour is acceptable"*** — they are different claims, and neither is available from a rig
+  that cannot produce the phenomenon.
+- **A falsifier that does NOT red can be a fact about the CODE, not a hole in the gate — and then
+  the test is what changes.** Written for the two-phase gate: moving `spawn_local` above
+  `boot_progress::armed()` left it green, and the reason is that the swap is a **no-op** —
+  `spawn_local` queues, so the block runs after `start()` returns whichever line comes first, and
+  no log a test can read distinguishes them. The assertion claiming to catch it was **removed
+  rather than weakened**, and replaced with the comparison that *is* falsifiable (*armed before
+  complete* — the inversion the feature performs). This is AP47's shape one layer out: **an
+  assertion describing a condition it has no way to detect**, and it is invisible until the
+  neuter is actually run instead of reasoned about. The rule the handoffs already carry —
+  *a neuter that passes has two possible causes and you owe both* — has a **third**: the neuter
+  landed, the gate is sound, and **the thing you neutered does not do what you thought it did**.
 - **`:4444` is usually held by `perf-firefox`, an UNOWNED long-lived container — and the
   "another seat is using it" story is folklore. Measured 2026-09-01.** Nothing in this repo
   creates, names or removes it (`grep -rn perf-firefox` hits **only handoffs**, from
@@ -581,6 +1056,24 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   nobody dialled. Standalone needs **all three** ports moved, not just HTTP; the ZeroMQ event
   bus collides otherwise and the container dies with `ZMQException: Address already in use`:
   `-e SE_OPTS="--port 4455" -e SE_EVENT_BUS_PUBLISH_PORT=4452 -e SE_EVENT_BUS_SUBSCRIBE_PORT=4453`.
+- **A mass e2e failure blaming `:8092` is usually SELinux, and there IS a real cross-repo
+  collision on this box — a different resource from the `:4444` folklore above.** Two unfiltered
+  runs came back 21/61 and 28/61 failed, every message after the first saying *"something else is
+  holding :8092 and answering"*. Nothing held it; the server could not **read** `dist/`. Our
+  Makefile bind-mounts the **shared parent** (`<shared-parent>`), a sibling repo's container
+  mounts the same parent, and its private SELinux MCS categories landed on the whole tree
+  mid-run. Unlike the `:4444` story this one is evidenced: the tree's label matched a running
+  container's `ProcessLabel` exactly. `chcon -R -l s0 . ../entity-core-rust` fixes it
+  cooperatively (both trees — our path deps are under the same parent) and takes nothing from the
+  other container. **Check `ls -ldZ dist/index.html` before believing the port message** — and
+  note the cascade's *first* casualty was a boot gate failing with *"0 log lines captured"*,
+  which reads like the app.
+  **The relabel is stolen back on every sibling container start** — measured at roughly one every
+  four minutes during a `make test-each-native` loop, which is shorter than an unfiltered run, so
+  four attempts in a row died and a filtered single-gate run passed. Relabel, then run
+  **filtered**, or wait for `podman ps` to show nothing bound to `<shared-parent>`. **Do not
+  kill the other seat's container**, and report a blocked unfiltered run as blocked. Full
+  write-up in [GOTCHAS — Testing & the gates](docs/architecture/guides/GOTCHAS.md#testing--the-gates).
 - **A FAILING e2e test leaks its WebDriver session, and the next run then hangs wearing the
   costume of a product wedge.** An assertion panics *before* `client.close()`, so the session is
   never quit; the node is `maxSessions=1` and Selenium's `sessionTimeout` is **300 s**, so the
@@ -598,6 +1091,12 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   (`ready:false`), a filtered run now reaps it and completes in ~3 s instead of queueing.
   And **prefer one session per test** — a gate that opens a second `connect_browser()` contends
   with its own first one on a single-slot node (measured: 60 s, then a 240 s watchdog).
+- **`make e2e-worker` fixtures shell out to `cargo test` AT RUNTIME — do not edit `src/` while the
+  suite is running.** An unfiltered run came back with 11 failures all reading *"fixture
+  `content_site::publish::tests::emit_… ` failed: could not compile"*, which reads like a product
+  break and was a concurrent edit. The suite compiles `dist/` and the test binary up front, so it
+  *looks* safe after that; the publish fixtures do not. Docs and `tools/` are fine, `src/` and
+  `Cargo.toml` are not.
 - **Run `make e2e-worker` for any peer-routing / arm-dispatch / peer-display change** —
   worker peer routes register *asynchronously*, so a fresh peer can be invisible while
   compile and unit tests stay green. The default browser arm is Worker-or-IDB, never

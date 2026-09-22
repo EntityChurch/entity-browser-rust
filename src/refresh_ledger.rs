@@ -150,6 +150,7 @@ pub fn reset_for_test() {
     ATTEMPTED.with(|a| *a.borrow_mut() = 0);
     TRUNCATED.with(|t| *t.borrow_mut() = false);
     RETRY_GENERATION.with(|g| g.set(0));
+    RETRY_HOLDERS.with(|h| h.set(0));
 }
 
 // ── The retry signal — how a remedy reaches the mechanism ────────────────────
@@ -175,15 +176,66 @@ pub fn reset_for_test() {
 
 thread_local! {
     static RETRY_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RETRY_HOLDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Ask every surface holding a once-per-window fetch guard to drop it. Returns
-/// the new generation, so a caller can report what it did rather than assert it.
-pub fn request_retry() -> u64 {
-    RETRY_GENERATION.with(|g| {
+/// **Proof that something is in a position to act on a retry**, held for as long
+/// as the surface that would act on it exists.
+///
+/// A count, not a registry: the reporting surface still does not learn *which*
+/// windows exist or how to call them, so AP44's argument for the generation
+/// counter is untouched. What it adds is the one thing the counter could not
+/// say — *was anyone there?* — which the remedy was answering wrongly by
+/// assuming yes and telling the user to wait for an update that could never
+/// arrive (audit F5).
+///
+/// **RAII rather than a pair of calls**, so a window added later cannot forget
+/// to decrement and there is no close path to remember (AP44 again: prefer a
+/// witness). Deliberately not `#[cfg(wasm)]` — the count is plain Rust, and
+/// gating it would make the whole outcome untestable natively, which is the
+/// half that would then rot.
+#[derive(Debug)]
+pub struct RetryHolder(());
+
+impl RetryHolder {
+    /// Register. Held by every surface that drops a fetch guard in response to
+    /// [`retry_generation`] moving.
+    pub fn new() -> Self {
+        RETRY_HOLDERS.with(|h| h.set(h.get().saturating_add(1)));
+        RetryHolder(())
+    }
+}
+
+impl Default for RetryHolder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for RetryHolder {
+    fn drop(&mut self) {
+        RETRY_HOLDERS.with(|h| h.set(h.get().saturating_sub(1)));
+    }
+}
+
+/// How many surfaces are currently in a position to act on a retry.
+pub fn retry_holders() -> usize {
+    RETRY_HOLDERS.with(|h| h.get())
+}
+
+/// Ask every surface holding a once-per-window fetch guard to drop it.
+///
+/// Returns `(new generation, how many holders exist)` — the second is what lets
+/// the caller **report what happened instead of asserting it**. The generation
+/// moves either way: a window opened after the request starts at the current
+/// generation and re-fetches from scratch anyway, so a bump nobody heard is
+/// harmless, and pretending it was heard is not.
+pub fn request_retry() -> (u64, usize) {
+    let generation = RETRY_GENERATION.with(|g| {
         g.set(g.get() + 1);
         g.get()
-    })
+    });
+    (generation, retry_holders())
 }
 
 /// The current retry generation. A holder stores what it last acted on and
@@ -224,12 +276,38 @@ mod tests {
     fn a_retry_request_moves_the_generation_so_a_holder_can_notice() {
         reset_for_test();
         let before = retry_generation();
-        let after = request_retry();
+        let (after, _) = request_retry();
         assert_eq!(after, before + 1);
         assert_eq!(retry_generation(), after);
         // Two requests are two distinct generations: a user pressing Retry
         // twice must re-arm twice, not be de-duplicated into one.
-        assert_eq!(request_retry(), after + 1);
+        assert_eq!(request_retry().0, after + 1);
+    }
+
+    /// **"Asked" and "there was nobody to ask" are different facts**, and the
+    /// remedy reported the first for both until this existed (audit F5). The
+    /// holder count is what tells them apart, and it is RAII so a closed window
+    /// cannot leave a stale registration behind.
+    #[test]
+    fn a_retry_reports_whether_anything_was_listening() {
+        reset_for_test();
+        assert_eq!(retry_holders(), 0, "a fresh session holds nothing");
+        assert_eq!(request_retry().1, 0, "with no launcher open, nobody is listening");
+
+        let held = RetryHolder::new();
+        assert_eq!(request_retry().1, 1);
+        {
+            let _second = RetryHolder::new();
+            assert_eq!(request_retry().1, 2, "two launchers, two listeners");
+        }
+        assert_eq!(request_retry().1, 1, "the inner holder's Drop must deregister it");
+        drop(held);
+        assert_eq!(
+            request_retry().1,
+            0,
+            "a closed window must not leave a listener behind — otherwise the remedy \
+             promises an update from a surface that no longer exists"
+        );
     }
 
     /// The cap must not be able to freeze a stale failure. If an update at an

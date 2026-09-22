@@ -226,6 +226,12 @@ impl DeploymentConfig {
         }
         if let Some(home) = &self.home_site {
             cfg.home_site = home.clone();
+            // **Stamp the provenance here, not at the call sites.** This is the
+            // deployment's own writer — every path by which a document reaches
+            // a `SessionConfig` goes through it — so the mark cannot be
+            // forgotten by a caller added later (AP44). Its twin is
+            // `session_config::set_home_site`, which stamps `User`.
+            cfg.home_site_source = crate::session_config::HomeSource::Deployment;
         }
         if self.name_resolver_max_ttl_ms.is_some() {
             cfg.name_resolver_max_ttl_ms = self.name_resolver_max_ttl_ms;
@@ -378,6 +384,16 @@ impl DocumentRead {
     /// The usable config, if there is one. The shape every existing caller
     /// wants; the distinction above is for the caller that needs to *report*.
     pub fn into_config(self) -> Option<DeploymentConfig> {
+        match self {
+            Self::Served(cfg) => Some(cfg),
+            _ => None,
+        }
+    }
+
+    /// The same thing without consuming the read — for a caller that needs both
+    /// the config *and* the outcome it arrived by, which is every caller that
+    /// reports rather than acts.
+    pub fn config(&self) -> Option<&DeploymentConfig> {
         match self {
             Self::Served(cfg) => Some(cfg),
             _ => None,
@@ -559,6 +575,111 @@ pub async fn read_document() -> DocumentRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── The provenance census — AP49's enforcement point ─────────────────────
+    //
+    // **Every field a deployment can declare gets classified, and the count is
+    // asserted**, so adding one to this document forces the question that was
+    // never asked about `home_site`: *if the end user has also set this, whose
+    // value wins on the next boot, and how does the code tell them apart?*
+    //
+    // This is a census rather than a structural guarantee because the answer is
+    // genuinely per-field — and a census you have not falsified reports what you
+    // hoped, so `Owned::User` is only claimed where a mechanism exists and can
+    // be named.
+
+    /// Who owns a field once the end user has also expressed a preference about
+    /// it, and by what mechanism the code can tell.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Owned {
+        /// The deployer's, always. The end user has no way to set it, so there
+        /// is nothing to conflate.
+        DeployerOnly,
+        /// **Both can set it, and a mechanism distinguishes them.** Name the
+        /// mechanism in the row — a row claiming this with nothing behind it is
+        /// the defect this census exists to make impossible.
+        UserMayOverride(&'static str),
+        /// Both can set it, and nothing distinguishes them — the `home_site`
+        /// shape before this audit. **Only legal for a field that is never
+        /// adopted over an established value.** Say which arm keeps it out.
+        AdoptedOnlyOnFirstContact(&'static str),
+    }
+
+    /// The census. One row per `DeploymentConfig` field, in declaration order.
+    #[test]
+    fn every_deployment_declared_field_says_who_owns_it() {
+        let rows: Vec<(&str, Owned)> = vec![
+            (
+                "surface",
+                Owned::AdoptedOnlyOnFirstContact(
+                    "HomeDecision::FirstContact — apply_to runs on a profile that never \
+                     read a document; the warm-boot arms never touch posture",
+                ),
+            ),
+            ("window_type", Owned::AdoptedOnlyOnFirstContact("with `surface`")),
+            (
+                "home_site",
+                Owned::UserMayOverride(
+                    "session_config::HomeSource — stamped `User` by set_home_site, \
+                     `Deployment` by apply_to; read by decide_home",
+                ),
+            ),
+            (
+                "origins",
+                Owned::UserMayOverride(
+                    "content_site::origins `source: deployment | user`, with \
+                     Adoption::KeptUserOverride",
+                ),
+            ),
+            ("site_mode", Owned::AdoptedOnlyOnFirstContact("with `surface`")),
+            ("fast_paint", Owned::AdoptedOnlyOnFirstContact("with `surface`")),
+            ("peer_creation_enabled", Owned::DeployerOnly),
+            ("name_resolver_max_ttl_ms", Owned::DeployerOnly),
+            (
+                "name_registry_pin",
+                Owned::UserMayOverride(
+                    "session_config::pinned_registry — the user's mirror above the \
+                     deployment's seed, PinSource::{User, Deployment}",
+                ),
+            ),
+        ];
+
+        // The count is the gate. A field added to `DeploymentConfig` without a
+        // row here fails, which is the only moment anyone is guaranteed to ask
+        // the ownership question about it.
+        assert_eq!(
+            rows.len(),
+            9,
+            "a field was added to or removed from DeploymentConfig without classifying it. \
+             MODEL-STAKEHOLDERS-AND-OWNERSHIP §5: answer 1 (which role owns it) and 5 (who \
+             can fix it) before shipping"
+        );
+
+        // No row may claim a mechanism it does not name.
+        for (field, owned) in &rows {
+            match owned {
+                Owned::UserMayOverride(m) | Owned::AdoptedOnlyOnFirstContact(m) => assert!(
+                    !m.trim().is_empty(),
+                    "{field} claims a mechanism without naming one — that is the shape the \
+                     census exists to catch"
+                ),
+                Owned::DeployerOnly => {}
+            }
+        }
+
+        // …and the two fields the reconcile actually adopts over an ESTABLISHED
+        // value must both be `UserMayOverride`. This is the assertion that would
+        // have failed before the fix.
+        for field in ["home_site", "name_registry_pin"] {
+            let row = rows.iter().find(|(f, _)| *f == field).expect("row present");
+            assert!(
+                matches!(row.1, Owned::UserMayOverride(_)),
+                "{field} is adopted on a WARM boot over a value the user may have set, and \
+                 nothing distinguishes the two. That is AP49, and it is how a deliberate \
+                 setting gets silently overwritten"
+            );
+        }
+    }
     use crate::session_config::{BootSurface, DEMO_SITE_ID};
 
     #[test]

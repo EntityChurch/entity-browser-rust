@@ -18387,7 +18387,18 @@ async fn the_worker_bundle_is_fetched_once_per_build_not_once_per_load(
         // bundle we are counting is fetched in the worker's realm, after boot.
         // Polled, never slept: a fixed wait here would make the count depend on
         // how loaded the box is, which is the very shape being fixed.
-        poll_json(
+        // AP47: `poll_json` returns `Ok(last_value)` on TIMEOUT — it does not
+        // error — so `.map_err(|_| "the worker never finished wasm init")` named
+        // a condition it could never detect. Assert on the value it returned,
+        // which is what its own doc asks the caller to do.
+        //
+        // This is the vacuity guard for loads 2..N and it has to be able to
+        // fire. The `fetches == 0` branch below only catches a worker that never
+        // spawned AT ALL; a worker that spawns on load 1 and silently fails
+        // afterwards also yields `fetches == 1`, which is the passing value —
+        // so without this assertion the gate can report "fetched once across 3
+        // loads" for exactly the wrong reason.
+        let inits = poll_json(
             &client,
             "return (window.__entity_browser_log||[])\
              .map(e => (e && e.args ? e.args.join(' ') : String(e)))\
@@ -18396,7 +18407,13 @@ async fn the_worker_bundle_is_fetched_once_per_build_not_once_per_load(
             |v| v.as_u64().unwrap_or(0) >= 1,
         )
         .await
-        .map_err(|e| format!("load {n}: the worker never finished wasm init ({e})"))?;
+        .map_err(|e| format!("load {n}: could not read the worker init log ({e})"))?;
+        assert!(
+            inits.as_u64().unwrap_or(0) >= 1,
+            "load {n} of {LOADS}: the worker never finished wasm init (saw {inits} \
+             'wasm_bindgen init resolved' lines). The fetch count below cannot mean \
+             anything about caching if the worker did not spawn on every load."
+        );
     }
 
     let fetches = server.request_count("entity-worker_bg.wasm");
@@ -19990,6 +20007,296 @@ async fn a_stalled_boot_shows_the_boot_surface_instead_of_a_blank_page(
     Ok(())
 }
 
+/// **Heal-path row 8 — the two-phase boot, now the shipped order, measured
+/// against the order it replaced.**
+///
+/// `AUDIT-BOOT-PATH-2026-08-27` §4/§4a/§4b: an application-tier boot step must
+/// not be able to blank the page. The deployment-document read is the only
+/// NETWORK await on that path and the one that has actually stalled in
+/// production. It runs after the frame loop is live; `?boot=inline` restores the
+/// old order as the control.
+///
+/// **What changed on 2026-09-02, and it is why this gate's central assertion is
+/// INVERTED from the version behind the flag.** The flagged version took the
+/// boot surface down at the rAF arm, which painted a surface phase 2 might then
+/// change — the flicker that kept the default off. The two signals are separate
+/// now: the frame loop goes live early (that is the whole anti-brick property),
+/// and the surface comes down when phase 2 hands the page over. So this gate
+/// asserts the boot surface is **still up** at the moment the loop arms. The old
+/// assertion — *"the surface is down, or nothing was gained"* — encoded the
+/// flicker as the feature.
+///
+/// **The three claims, and each has its own falsifier:**
+///
+/// 1. *The loop arms without the document.* Falsified by making
+///    `boot_inline_requested()` return `true` unconditionally: reds on `ROW 8
+///    RED`, log tail stopping at *"phase 1 complete"*, which is the production
+///    symptom named.
+/// 2. *And the page is not handed over yet.* Falsified by calling
+///    `surface_down()` from `frame_loop_live()`: reds on the flicker assertion,
+///    which is the shape the operator rejected.
+/// 3. *And a phase 2 that never reports back cannot hold the page forever.*
+///    `?boothold=` drives the failsafe branch; falsified by deleting the
+///    `spawn_local` in `frame_loop_live()`, which reds because the surface is
+///    still up after the hold.
+///
+/// **The control is what makes 1 non-vacuous.** On this rig the old order takes
+/// ~3.2 s to arm — the whole D23 deadline — because the document read sits in
+/// front of the loop. All three loads run in ONE browser session (a second
+/// `connect_browser()` contends with its own first on a single-slot node).
+///
+/// **What it does NOT claim.** The deferred apply still holds `borrow_mut()`
+/// across its LOCAL tree awaits — a stated bound, not an oversight
+/// (`EntityApp::boot_phase2`'s doc comment) — so this gate *counts* `FRAME SKIP`
+/// and prints it rather than asserting it away. A number that starts climbing is
+/// the signal that the bound stopped being cheap.
+///
+/// **A falsifier was tried on the flagged version and did NOT red, which changed
+/// the test.** Moving the `spawn_local` above the arm in `start()` left it green
+/// — not a hole, but that the swap is a **no-op**: `spawn_local` queues, so the
+/// block runs after `start()` returns whichever line comes first, and no log this
+/// test can read distinguishes them. The ordering assertion that claimed to catch
+/// it was removed rather than weakened. AP47's shape one layer out, and the
+/// reason claim 2 above is asserted on the *rendered surface* and not on a log.
+#[tokio::test]
+async fn the_two_phase_boot_arms_the_frame_loop_before_the_deployment_document_answers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    /// Comfortably inside the ~3.2 s the black-holed document costs the old
+    /// order, and comfortably outside a healthy phase 1 (108–711 ms measured).
+    /// The margin is what makes the control meaningful in both directions.
+    const ARM_BUDGET_MS: u64 = 2_000;
+
+    /// The failsafe override for claim 3. Well under the ~3.2 s the document
+    /// black-holes for, so the failsafe is genuinely the thing that takes the
+    /// surface down and not phase 2 finishing underneath the assertion.
+    const HOLD_MS: u64 = 600;
+
+    const SURFACE_PROBE: &str = r#"
+        var l = document.getElementById('loading');
+        var vis = function(e) {
+            if (!e) return false;
+            var c = getComputedStyle(e);
+            if (c.display === 'none' || c.visibility === 'hidden') return false;
+            return e.getClientRects().length > 0;
+        };
+        return { present: !!l, visible: vis(l), body: (document.body && document.body.innerText || '').length };
+    "#;
+
+    let _server = start_blackhole_server(&["/entity-deployment.json"])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+
+    // ── Claim 1: the loop arms without the document ────────────────────────
+    client
+        .goto(&format!("http://localhost:{port}/?log=trace"))
+        .await?;
+
+    let armed_at = std::time::Instant::now();
+    let mut deferred_log: Vec<String> = Vec::new();
+    let mut armed_ms = None;
+    while armed_at.elapsed().as_millis() as u64 <= ARM_BUDGET_MS {
+        deferred_log = capture_log(&client).await?;
+        if deferred_log.iter().any(|l| l.contains("Frame loop started")) {
+            armed_ms = Some(armed_at.elapsed().as_millis() as u64);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let armed_ms = armed_ms.ok_or_else(|| {
+        let tail: Vec<String> = deferred_log.iter().rev().take(30).cloned().collect();
+        format!(
+            "ROW 8 RED — the frame loop did NOT arm within {ARM_BUDGET_MS}ms while \
+             /entity-deployment.json black-holes. That is the whole claim of the \
+             deferred order: phase 1 is local-only, so it must not be waiting on the \
+             network. Either the deferral is not happening, or a network read is still \
+             sitting in phase 1. Last 30 log lines (newest first): {tail:#?}"
+        )
+    })?;
+
+    // ── Claim 2: and the page has NOT been handed over yet ─────────────────
+    //
+    // The anti-flicker half. The app is rendering behind the boot surface with
+    // its startup surface still undecided — phase 2 owns that decision, behind
+    // the deployment document and the supersession adoption. A build that takes
+    // the surface down here shows a guessed surface and corrects it a moment
+    // later, which is the flicker the flagged version was rejected for.
+    let surface = client.execute(SURFACE_PROBE, vec![]).await?;
+    assert!(
+        surface["present"].as_bool().unwrap_or(false),
+        "VACUOUS: no #loading element exists at all, so every statement here about \
+         the boot surface is a statement about nothing — it was renamed or removed. \
+         Probe: {surface}"
+    );
+    assert!(
+        surface["visible"].as_bool().unwrap_or(false),
+        "FLICKER — the frame loop armed and the boot surface came down WITH THE \
+         DEPLOYMENT DOCUMENT STILL UNANSWERED, so the user is looking at a surface \
+         phase 2 is about to change underneath them. The two signals are separate on \
+         purpose: `frame_loop_live()` is the anti-brick property, `surface_down()` is \
+         the hand-over, and only phase 2 may trigger the second. Probe: {surface}"
+    );
+
+    // We took the DEFERRED branch, and not a fast boot that happened to beat the
+    // budget. Without this the gate could go green on a build where the deferral
+    // does nothing and phase 2 simply finished quickly.
+    let defer_idx = deferred_log
+        .iter()
+        .position(|l| l.contains("boot phase 2: DEFERRED"))
+        .ok_or_else(|| {
+            format!(
+                "the frame loop armed fast, but nothing logged 'boot phase 2: DEFERRED' \
+                 — so this may be a fast boot rather than a deferred one, and every \
+                 assertion here would be about the wrong thing. Log: {deferred_log:#?}"
+            )
+        })?;
+    let arm_idx = deferred_log
+        .iter()
+        .position(|l| l.contains("Frame loop started"));
+    let complete_idx = deferred_log
+        .iter()
+        .position(|l| l.contains("boot_load: complete"));
+
+    // **THE INVERSION, which is the ordering claim in one comparison.** Under the
+    // old order `boot_load: complete` precedes `Frame loop started` — every
+    // application-tier step finishes before a frame can render, which is why one
+    // of them stalling was a page that never painted.
+    assert!(
+        complete_idx.is_none() || arm_idx < complete_idx,
+        "the frame loop armed only AFTER phase 2 had already reported complete \
+         (arm={arm_idx:?}, complete={complete_idx:?}, defer={defer_idx}) — so the \
+         deferral is nominal and the application tier is still in front of the \
+         first frame. That is the old order wearing the new one's name."
+    );
+
+    // And the deferred half still LANDS, and hands the page over when it does. A
+    // boot that arms fast by dropping work on the floor is not the feature, and a
+    // boot that finishes without taking the surface down is a page nobody can use.
+    let completed = poll_json(
+        &client,
+        "return { done: (window.__entity_browser_log || []).some(function(e){ \
+         return (e.args||[]).join(' ').indexOf('boot_load: complete') >= 0; }), \
+         handed: (window.__entity_browser_log || []).some(function(e){ \
+         return (e.args||[]).join(' ').indexOf('phase 2 complete') >= 0; }) };",
+        Duration::from_millis(8_000),
+        |v| v["done"].as_bool().unwrap_or(false) && v["handed"].as_bool().unwrap_or(false),
+    )
+    .await?;
+    // AP47: `poll_json` returns Ok(last_value) on timeout — it does not error, so
+    // the assertion below is the check, not the `?` above.
+    assert!(
+        completed["done"].as_bool().unwrap_or(false),
+        "the frame loop armed but phase 2 never reported 'boot_load: complete' — the \
+         deferred half did not finish, so the deployment document's origins, \
+         supersession revalidation and home provisioning were silently dropped. That \
+         is a worse failure than the stall it replaced. Probe: {completed}"
+    );
+    assert!(
+        completed["handed"].as_bool().unwrap_or(false),
+        "phase 2 completed but the boot surface was never handed over with reason \
+         'phase 2 complete' — so the user is left on the waiting screen in front of a \
+         finished app until the 30 s failsafe. The `HandOver` guard is what reports \
+         this; it drops on every path out of the phase-2 task. Probe: {completed}"
+    );
+    let handed = client.execute(SURFACE_PROBE, vec![]).await?;
+    assert!(
+        !handed["visible"].as_bool().unwrap_or(true),
+        "phase 2 reported the hand-over but #loading is STILL covering the app — the \
+         reason string was logged without the surface actually coming down, which is \
+         a log that describes something that did not happen. Probe: {handed}"
+    );
+
+    // The STATED BOUND, measured rather than argued. The deferred apply holds
+    // `borrow_mut()` across its local tree awaits, so the rAF loop skips frames
+    // for that window. Printed, not asserted — there is no honest threshold yet,
+    // and a number in the output is what makes a regression visible.
+    let after = capture_log(&client).await?;
+    let frame_skips = after.iter().filter(|l| l.contains("FRAME SKIP")).count();
+
+    // ── Claim 3: a phase 2 that never reports back cannot hold the page ────
+    //
+    // The branch that only runs on the bad day, made reachable the same way the
+    // stall reporter's is: a test-only affordance nothing in the product sets.
+    // Reaching it honestly would mean a 30 s gate against an origin stalling for
+    // all of it.
+    client
+        .goto(&format!(
+            "http://localhost:{port}/?log=trace&boothold={HOLD_MS}"
+        ))
+        .await?;
+    let failsafe = poll_json(
+        &client,
+        "var l = document.getElementById('loading');
+         var vis = l && getComputedStyle(l).display !== 'none' && l.getClientRects().length > 0;
+         return { present: !!l, visible: !!vis,
+                  fired: (window.__entity_browser_log || []).some(function(e){
+                    return (e.args||[]).join(' ').indexOf('BOOT HOLD FAILSAFE') >= 0; }) };",
+        Duration::from_millis(2_500),
+        |v| v["fired"].as_bool().unwrap_or(false) && !v["visible"].as_bool().unwrap_or(true),
+    )
+    .await?;
+    assert!(
+        failsafe["present"].as_bool().unwrap_or(false),
+        "VACUOUS: #loading is gone on the failsafe load, so 'the surface came down' \
+         is a statement about nothing. Probe: {failsafe}"
+    );
+    assert!(
+        failsafe["fired"].as_bool().unwrap_or(false),
+        "the hold failsafe never fired at boothold={HOLD_MS}ms while the deployment \
+         document black-holes for ~3.2 s. Without it, a phase 2 that hangs past its \
+         own bounds holds the boot surface up forever — the unbounded wait this \
+         ordering exists to bound, reintroduced one layer in. Probe: {failsafe}"
+    );
+    assert!(
+        !failsafe["visible"].as_bool().unwrap_or(true),
+        "the failsafe LOGGED but the boot surface is still covering the app, so the \
+         guarantee is a log line and not a behaviour. Probe: {failsafe}"
+    );
+
+    // ── The control: the OLD order, same rig, same session ─────────────────
+    client
+        .goto(&format!("http://localhost:{port}/?log=trace&boot=inline"))
+        .await?;
+    let control_at = std::time::Instant::now();
+    let mut control_armed = None;
+    while control_at.elapsed().as_millis() as u64 <= ARM_BUDGET_MS {
+        let log = capture_log(&client).await?;
+        if log.iter().any(|l| l.contains("Frame loop started")) {
+            control_armed = Some(control_at.elapsed().as_millis() as u64);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // `wait_for_boot` restarts its own clock, so its return value is the time
+    // AFTER the budget loop above — not the boot. Measuring from `control_at` is
+    // the only honest comparison against `armed_ms`, and reporting the helper's
+    // number instead would have printed a control that looked FASTER than the
+    // thing it is the control for.
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    let control_boot_ms = control_at.elapsed().as_millis() as u64;
+    client.close().await.ok();
+
+    assert!(
+        control_armed.is_none(),
+        "VACUOUS GATE — the OLD order (?boot=inline) also armed within \
+         {ARM_BUDGET_MS}ms (at {:?}ms) on a rig whose /entity-deployment.json never \
+         answers. Then claim 1 above proved nothing: both orders look the same and \
+         this test cannot tell a deferred boot from a normal one. Either the \
+         black-hole server is not actually stalling that path, or the document read \
+         left phase 2.",
+        control_armed
+    );
+
+    println!(
+        "  ROW 8 [shipped: deferred]: frame loop live at {armed_ms}ms with the \
+         deployment document still black-holed, boot surface correctly STILL UP; \
+         phase 2 landed afterwards and handed the page over. \
+         Hold failsafe fired at boothold={HOLD_MS}ms. \
+         CONTROL (?boot=inline, same rig): {control_boot_ms}ms. \
+         Stated bound — FRAME SKIP frames during the deferred apply: {frame_skips}."
+    );
+    Ok(())
+}
+
 /// **B-1, the stall reporter — the branch that only runs on the bad day.**
 ///
 /// Split out from the gate above deliberately. That one proves the surface is up
@@ -20628,16 +20935,26 @@ async fn the_app_reports_the_build_it_is_running() -> Result<(), Box<dyn std::er
         .and_then(|rest| rest.split('"').next())
         .map(str::to_string)
         .ok_or("dist/index.html carries no entity-build stamp — tools/build-stamp.sh did not run")?;
+    // **Read the bundle hash from the STAMP, not by re-parsing the shell.**
+    // This used to re-implement `build_id::parse_bundle_hash` here (tests/ cannot
+    // import a bin crate), which made it a second expression of the same fragile
+    // rule — and both were fragile in the same way: first-occurrence, extension
+    // not required. A prose mention of the bundle in an `index.html` comment
+    // broke them. Taking `entity-build-id` instead removes the duplicate AND
+    // strengthens the gate: `tools/build-stamp.sh` derives that value with a
+    // regex, `build_id.rs` derives it by scanning, and this now asserts the two
+    // agree on the real artifact rather than assuming they do.
     let expect_bundle = shell
-        .split("entity-browser-")
+        .split("name=\"entity-build-id\" content=\"")
         .nth(1)
-        .map(|rest| {
-            rest.chars()
-                .take_while(|c| c.is_ascii_hexdigit())
-                .collect::<String>()
-        })
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_string)
         .filter(|h| h.len() >= 8)
-        .ok_or("dist/index.html names no hashed main bundle")?;
+        .ok_or(
+            "dist/index.html carries no entity-build-id stamp — tools/build-stamp.sh found no \
+             hashed main bundle to derive one from, so the shell cannot name its own slot and \
+             C9/C10 have nothing to key on",
+        )?;
 
     let (client, _server) = setup().await?;
     client
@@ -20667,10 +20984,13 @@ async fn the_app_reports_the_build_it_is_running() -> Result<(), Box<dyn std::er
     assert!(
         line.contains(&expect_bundle),
         "the app did not report the main bundle hash, or reported a different one. \
-         Reading it from the shell's <head> is what keeps this in step with \
-         `assets/sw.js`'s BUNDLE_HASH — if those two disagree, the service worker \
-         keys its build-scoped worker cache on a build the app does not think it is.\n\
-         dist/ says bundle: {expect_bundle}\n  logged: {line}"
+         The expectation is the `entity-build-id` STAMP, derived by \
+         `tools/build-stamp.sh`; the logged value comes from \
+         `build_id::parse_bundle_hash` scanning the same document. A mismatch means \
+         THOSE TWO DISAGREE about what this build is — and `assets/sw.js` derives it a \
+         third way for its build-scoped worker cache, so a disagreement here means the \
+         worker may key on a build the app does not think it is.\n\
+         stamp says bundle: {expect_bundle}\n  logged: {line}"
     );
 
     println!("  C5: app reports commit={expect_commit} bundle={expect_bundle}, matching dist/");
@@ -21901,5 +22221,1316 @@ async fn a_local_home_profile_reads_the_deployment_document_and_keeps_its_home(
     r?;
 
     client.close().await.ok();
+    Ok(())
+}
+
+/// Rewrite a staged `entity-deployment.json` into the shape this gate needs:
+/// a **chrome** surface (so Settings is reachable), a declared home, and an
+/// `origins` entry per publisher so both trees are cached and therefore
+/// selectable in the boot-target picker.
+///
+/// One helper rather than three calls, because the three fields are one
+/// scenario: a domain that declares a home *and* tells the browser where every
+/// publisher it knows about lives.
+fn stage_chrome_document_with_two_publishers(
+    root: &str,
+    declared_home_peer: &str,
+    site: &str,
+    also_origin_for: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = format!("{root}/entity-deployment.json");
+    let raw = std::fs::read_to_string(&path)?;
+    let mut doc: serde_json::Value = serde_json::from_str(&raw)?;
+    let obj = doc.as_object_mut().ok_or("deployment config is not a JSON object")?;
+    obj.insert("surface".into(), serde_json::Value::String("chrome".into()));
+    obj.remove("window_type");
+    // The re-key fixtures publish a LOCKED site surface; a locked overlay has no
+    // spawn rail, so Settings — the whole user path this gate is about — would
+    // be unreachable.
+    obj.insert(
+        "site_mode".into(),
+        serde_json::json!({ "enabled": true, "show_toggle": true, "locked": false }),
+    );
+    obj.insert(
+        "home_site".into(),
+        serde_json::json!({ "peer": declared_home_peer, "site": site, "loc": "" }),
+    );
+    let mut origins = serde_json::Map::new();
+    // Empty origin = same origin, which is where both trees are staged.
+    origins.insert(declared_home_peer.to_string(), serde_json::Value::String(String::new()));
+    origins.insert(also_origin_for.to_string(), serde_json::Value::String(String::new()));
+    obj.insert("origins".into(), serde_json::Value::Object(origins));
+    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&doc)?))?;
+    Ok(())
+}
+
+// ── The user-chosen home gate — AUDIT-HEAL-PATH… F1 ───────────────────────────
+//
+// **The finding, in one line:** `home_site` is adopted from the deployment
+// document with **no provenance**, so a home the *user* chose is
+// indistinguishable from one the *deployment* seeded — and the warm-boot
+// reconcile overwrites it and writes a durable supersession record naming the
+// user's chosen publisher as **retired**.
+//
+// `MODEL-STAKEHOLDERS-AND-OWNERSHIP` §2.2 predicted exactly this: *"no field can
+// be safely refreshed from its source, because a value a deployment seeded and a
+// value the end user deliberately chose are byte-identical in the entity."*
+// `home_site` is that field, and it is the one field the reconcile refreshes.
+//
+// **It needs no re-key**, which is what makes it worse than the incident it
+// shares a code path with. The branch is `new_peer != stale_peer`
+// (`app.rs:2159`), and that is true the moment the user's choice differs from
+// the domain's declaration — i.e. immediately, on the very next boot.
+//
+// **Why `home_is_local` does not cover it.** The guard (`app.rs:2065`) reads
+// *"the user set this"* as *"the user set this to something **local**"* — empty
+// peer, or the system peer. A user who picks a **cached foreign** site is not
+// local, so the gate opens. The picker offers exactly those: boot targets span
+// the whole universal tree and a cached one is labelled `"{site} (cached)"`
+// (`views/settings/model.rs:475-494`).
+//
+// **Why no existing gate sees it.** `rekeyed_domain_heals_on_next_boot` asserts
+// the *same* branch does its job, and it is right to — for a home the deployment
+// seeded, adopting is correct. The two cases are byte-identical in the config,
+// which is the finding. And on a dev profile there is no deployment document at
+// all, so the whole block is skipped and the defect is unreachable locally.
+//
+// **What this gate does NOT claim.** Nothing about the content under the
+// pointer. A cached foreign site's *bytes* are the publisher's and stay
+// `ensure_current`'s business (D24) — the user owns which site they point at,
+// never a frozen copy of it. Those are two different questions and this one is
+// only about the pointer.
+#[tokio::test(flavor = "current_thread")]
+async fn a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-user-home".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    /// The WARN the wrong branch prints. Its presence IS the defect.
+    const ADOPTED: &str = "the domain now publishes under a DIFFERENT identity";
+    /// The durable half — and the half that does not undo itself.
+    const RETIRED: &str = "peer-supersession: recorded a retired publisher";
+
+    let r = async {
+        // ── 1. A domain with two publishers, declaring one of them home ─────
+        // Both publish a site called `demo`, so the two boot targets differ
+        // ONLY by peer — which is the axis under test and nothing else.
+        run_rekey_fixture("emit_rekey_fixture_before", &root);
+        let declared = deployment_home_peer(&root);
+        run_rekey_fixture("emit_rekey_fixture_after", &root);
+        let chosen = deployment_home_peer(&root);
+        assert_ne!(declared, chosen, "user-home: the two fixtures published one identity");
+        stage_chrome_document_with_two_publishers(&root, &declared, "demo", &chosen)?;
+        println!("  user-home: domain declares {declared}; the other publisher is {chosen}");
+
+        // ── 2. A genuine cold boot, which adopts the DECLARED home ──────────
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let cold = capture_log(&client).await?;
+        if !cold.iter().any(|l| l.contains("deployment-config: applied")) {
+            print_log(&cold);
+            return Err("user-home: the cold boot never applied the document".into());
+        }
+
+        // ── 3. The user picks the OTHER publisher's site as their home ──────
+        // Through the real Settings controls, not by writing the config: the
+        // whole finding is about provenance, so a value this gate planted
+        // itself would prove nothing about who set it.
+        let spawn = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const b of root.querySelectorAll('button.spawn-btn')) {
+                    if (b.textContent.trim() === '+ Settings') { b.click(); return 'clicked'; }
+                }
+                return 'no-settings-btn';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            spawn.as_str(),
+            Some("clicked"),
+            "user-home: no '+ Settings' spawn button — the document's surface is not chrome, \
+             so the user path this gate is about is unreachable and nothing below is measured"
+        );
+        sleep(Duration::from_millis(700)).await;
+
+        let kind = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                const r = root.querySelector('input[data-kind="site"]');
+                if (!r) return 'no-site-radio';
+                r.click();
+                return 'clicked';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(kind.as_str(), Some("clicked"), "user-home: no 'site' boot-kind radio");
+        sleep(Duration::from_millis(900)).await;
+
+        // The picker must OFFER the other publisher's site. That is half the
+        // finding on its own — if it does not, the state F1 describes is not
+        // reachable through the product and the gate should say so plainly
+        // rather than fail somewhere further down wearing another cause.
+        let want = format!("{chosen}/demo");
+        let options = poll_json(
+            &client,
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const sel = root.querySelector('select[name="boot_target"]');
+            return sel ? Array.from(sel.options).map(o => o.value) : [];
+            "#,
+            Duration::from_millis(15_000),
+            |v| v.as_array().map(|a| a.len() >= 2).unwrap_or(false),
+        )
+        .await?;
+        let offered: Vec<String> = options
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        assert!(
+            offered.iter().any(|o| o == &want),
+            "user-home: the boot-target picker never offered the cached foreign site \
+             '{want}'. Offered: {offered:?}. Without it a user cannot reach the state this \
+             gate is about"
+        );
+
+        let set = client
+            .execute(
+                &format!(
+                    r#"
+                    const layer = document.getElementById('dom-layer');
+                    const root = layer.shadowRoot || layer;
+                    const sel = root.querySelector('select[name="boot_target"]');
+                    if (!sel) return 'no-target-select';
+                    sel.value = {want:?};
+                    sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return sel.value;
+                    "#
+                ),
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            set.as_str(),
+            Some(want.as_str()),
+            "user-home: could not select '{want}' as the boot target"
+        );
+        sleep(Duration::from_millis(1200)).await;
+        println!("  user-home: the user chose {want} through Settings ✓");
+
+        // ── 4. The next load. Nothing about the DOMAIN has changed ──────────
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let warm = capture_log(&client).await?;
+        let overwrote = warm.iter().any(|l| l.contains(ADOPTED));
+        let retired_the_users_choice =
+            warm.iter().any(|l| l.contains(RETIRED) && l.contains(chosen.as_str()));
+        if overwrote || retired_the_users_choice {
+            print_log(&warm);
+        }
+
+        // **N-CRITICAL.** The domain did not re-key. It declares what it always
+        // declared. The only thing that changed is that the user chose
+        // something else, and that is not a divergence to reconcile.
+        assert!(
+            !overwrote,
+            "RED — the deployment's declared home overwrote a home the USER chose \
+             ({want}). Nothing about the domain moved; the reconcile fired because \
+             `home_site` carries no provenance, so a user's choice and a deployment's seed \
+             are the same bytes (MODEL-STAKEHOLDERS §2.2). `home_is_local` does not cover \
+             this: the user's choice is a cached FOREIGN site, so it is not local"
+        );
+        // **And this is the half that does not undo itself.** The record is
+        // durable, has no user-facing removal path, and revalidation keeps it —
+        // `stale_against` drops a record only when its replacement is NOT the
+        // current publisher, and this one's is.
+        assert!(
+            !retired_the_users_choice,
+            "RED — a supersession record was written naming the user's chosen publisher \
+             ({chosen}) as RETIRED. `resolve()` now rewrites every stored reference to it, \
+             and revalidation will not drop the record because the domain does not \
+             contradict it. The home reverting is recoverable; this is not"
+        );
+
+        // ── 5. The user-visible half — they are still where they chose ──────
+        // `?chrome=1` because step 3 also set the boot surface to Site, so this
+        // boot lands in the overlay; the escape hatch is how the picker is
+        // reachable again, and reading it back is the only assertion here that
+        // a person could make for themselves.
+        client.goto(&format!("{url}&chrome=1")).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const b of root.querySelectorAll('button.spawn-btn')) {
+                    if (b.textContent.trim() === '+ Settings') { b.click(); return 'clicked'; }
+                }
+                return 'no-settings-btn';
+                "#,
+                vec![],
+            )
+            .await?;
+        sleep(Duration::from_millis(900)).await;
+        let still = poll_json(
+            &client,
+            r#"
+            const layer = document.getElementById('dom-layer');
+            const root = layer.shadowRoot || layer;
+            const sel = root.querySelector('select[name="boot_target"]');
+            return sel ? sel.value : '';
+            "#,
+            Duration::from_millis(15_000),
+            |v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        )
+        .await?;
+        let selected = still.as_str().unwrap_or("").to_string();
+        assert_eq!(
+            selected, want,
+            "RED — the Settings picker shows '{selected}' where the user chose '{want}'. \
+             This is the same defect as the log assertions above, read off the screen the \
+             user set it on"
+        );
+        println!("  user-home: the user's choice survived the reload ✓");
+
+        let panics = count_panics(&warm);
+        assert!(panics.is_empty(), "panics across the user-home boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Read the *Problems* card out of the running app.
+///
+/// **By text, not by a class or a test id.** The card is `components::card` plus
+/// inline styles — there is no hook to hang a selector on, and adding one for
+/// this gate would measure the hook rather than the screen. The `h3` carrying
+/// `doctor::copy::TITLE` is the anchor, and the chips are counted by their glyph
+/// prefix: `health_chip` is the only producer of that shape anywhere in the app
+/// (grepped), so a chip inside this card is a finding and nothing else.
+///
+/// Returns `found: false` with the layer's text when the card is absent, because
+/// *the card is not there* and *the card is there and says nothing* are the two
+/// outcomes this whole gate exists to tell apart.
+async fn problems_card(client: &Client) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(client
+        .execute(
+            r#"
+            const layer = document.getElementById('dom-layer');
+            if (!layer) return { found: false, why: 'no-dom-layer' };
+            const root = layer.shadowRoot || layer;
+            let card = null;
+            for (const h of root.querySelectorAll('h3')) {
+                if (h.textContent.trim() === 'Problems') { card = h.parentElement; break; }
+            }
+            if (!card) {
+                return { found: false, why: 'no-problems-card',
+                         layer: (root.textContent || '').slice(0, 800) };
+            }
+            const chips = Array.from(card.querySelectorAll('span'))
+                .map(s => s.textContent.trim())
+                .filter(t => /^[⚠◌●]\s/.test(t));
+            return { found: true, text: card.textContent || '', chips };
+            "#,
+            vec![],
+        )
+        .await?)
+}
+
+/// **The Problems surface, measured in a browser — the standing hole the
+/// heal-path audit named and could not close.**
+///
+/// `doctor.rs` ships with a large native suite and *"the model is covered"* says
+/// nothing about the surface: both defects this section has actually had were
+/// invisible to every test of the model (AP48). One was **placement** — the card
+/// was appended below `dom::system_overview::render`'s `!output.tauri` early
+/// return, so it existed in the desktop app and **not in a browser**, which is
+/// where both of the incidents it answers happened, one of them on a phone. The
+/// other was **noise** — the renderer filtered on `!is_clear()`, four of six
+/// verdicts, so an ordinary healthy profile rendered three paragraphs of
+/// non-problems under a heading that says *Problems*. Both were found by running
+/// the app. Neither is reachable from `doctor.rs`.
+///
+/// So this gate asserts the two things a person can see and no unit test can:
+///
+/// 1. **It is there, in a plain browser**, and quiet — the card renders, says it
+///    checked, and carries **zero** findings on a healthy profile.
+/// 2. **It gets loud when a check genuinely cannot run**, and says so in the
+///    words that mean *nothing was established* rather than *nothing is wrong*.
+///
+/// **Run on the black-hole rig, and that choice is load-bearing** — the same
+/// reasoning as the boot-surface gate. An origin that *refuses* produces a
+/// prompt error; the state under test here is `DocumentRead::Unheard`, which
+/// needs an origin that accepts a request and never answers it, and which is
+/// also what makes the ~3 s *Checking…* window wide enough to observe rather
+/// than a race. A healthy domain would make step 3 a coin flip.
+///
+/// **What it does NOT cover, stated so the next reader does not inherit a
+/// wider claim than the gate makes:** the remedy button reaching an open Apps
+/// window. That needs check 3 to fire, which needs a ledger of failed refreshes,
+/// which needs a publisher that withholds an app set — a different rig. The
+/// remedy's own outcomes are gated natively (`RemedyOutcome::NobodyListening`).
+#[tokio::test(flavor = "current_thread")]
+async fn the_problems_card_is_in_the_browser_and_quiet_until_something_is_actually_wrong(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Start clean: the healthy half has to be measured against an origin that
+    // answers, or "quiet" cannot be told from "never ran".
+    let server = start_blackhole_server(&[])?;
+    let client = connect_browser().await?;
+    let port = blackhole_server_port();
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let r = async {
+        // ── 1. A genuine cold boot on a domain that answers ─────────────────
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+        // Open the window. The palette label is the window's display name; in
+        // `en` that is its type key verbatim.
+        let spawn = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const b of root.querySelectorAll('button.spawn-btn')) {
+                    if (b.textContent.trim() === '+ System Overview') { b.click(); return 'clicked'; }
+                }
+                return 'no-system-overview-btn';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            spawn.as_str(),
+            Some("clicked"),
+            "problems: no '+ System Overview' spawn button — the surface under test is \
+             unreachable and nothing below this line measures anything"
+        );
+
+        // The checks are a spawned probe with a bounded document read, so poll
+        // for a *settled* card rather than sleeping a guess.
+        let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        let mut card = problems_card(&client).await?;
+        while Instant::now() < deadline {
+            let settled = card.get("found").and_then(|v| v.as_bool()) == Some(true)
+                && !card
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .contains("Checking…");
+            if settled {
+                break;
+            }
+            sleep(Duration::from_millis(250)).await;
+            card = problems_card(&client).await?;
+        }
+
+        // **(a) Placement.** This is the assertion that reds when the section
+        // drifts back below the `!output.tauri` return: in a plain browser the
+        // window renders perfectly and the card is simply not there.
+        assert_eq!(
+            card.get("found").and_then(|v| v.as_bool()),
+            Some(true),
+            "RED — System Overview rendered in a browser with NO 'Problems' card. \
+             That is AP48(a): the section lives above `render`'s `!output.tauri` early \
+             return precisely because everything below it ships to the desktop app only, \
+             and both incidents this answers happened in a browser. Window text was: {:?}",
+            card.get("layer").and_then(|v| v.as_str()).unwrap_or("(none)")
+        );
+        let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let chips: Vec<String> = card
+            .get("chips")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        // **(b) Quietness.** The one that reds if the render filter goes back to
+        // `!is_clear()`: on an ordinary profile the three checks come back
+        // `SourceSilent`/`NothingToCheck`, and listing those puts non-problems
+        // under a heading that says *Problems* — the screen people learn to close.
+        assert!(
+            chips.is_empty(),
+            "RED — a healthy profile is showing {} finding(s) under a heading that says \
+             'Problems': {chips:?}. The render filter is `warrants_attention`, NOT \
+             `!is_clear()` — 'nothing to compare' and 'not checked yet' are not problems \
+             (AP48(b)). Card text: {text:?}",
+            chips.len()
+        );
+
+        // **(c) It says it checked.** Quiet is not silent: a section that renders
+        // nothing when healthy cannot be told from one that never ran.
+        assert!(
+            text.contains("No problems found."),
+            "RED — the Problems card is present but never reached its clear state on a \
+             healthy profile. Card text: {text:?}"
+        );
+        assert!(
+            text.contains("checks ran just now"),
+            "RED — the clear line carries no count behind it, so 'no problems' cannot be \
+             told from 'nothing ran'. Card text: {text:?}"
+        );
+        println!("  problems: present in a browser and quiet on a healthy profile ✓");
+
+        // ── 2. Now make a check genuinely impossible to run ─────────────────
+        // Not "wrong" — *unknowable*. The domain accepts the request for its
+        // deployment document and never answers, so `read_document` expires at
+        // D23's deadline and check 1 has nothing to compare against.
+        let control = set_blackhole(&["/entity-deployment.json"])?;
+        assert!(
+            control.contains("stalling: /entity-deployment.json"),
+            "the black-hole control endpoint did not take the stall set: {control}"
+        );
+
+        let clicked = client
+            .execute(
+                r#"
+                const layer = document.getElementById('dom-layer');
+                const root = layer.shadowRoot || layer;
+                for (const h of root.querySelectorAll('h3')) {
+                    if (h.textContent.trim() !== 'Problems') continue;
+                    for (const b of h.parentElement.querySelectorAll('button')) {
+                        if (b.textContent.trim() === 'Check again') { b.click(); return 'clicked'; }
+                    }
+                    return 'no-recheck-button';
+                }
+                return 'no-problems-card';
+                "#,
+                vec![],
+            )
+            .await?;
+        assert_eq!(
+            clicked.as_str(),
+            Some("clicked"),
+            "problems: the card offers no 'Check again' control, so the surface cannot be \
+             re-run by the person reading it"
+        );
+
+        // **(d) The re-check says which of its two states it is in** (audit F6).
+        // Pressing it keeps the previous findings on screen — they are still the
+        // best answer available — so without a distinct `checking` state the
+        // button changed nothing visible: up to 3 s of nothing here, and forever
+        // whenever the findings come back the same, which is the common case.
+        // The stall is what makes this window observable instead of a race.
+        let mut saw_checking = false;
+        let checking_deadline = Instant::now() + Duration::from_millis(3_000);
+        while Instant::now() < checking_deadline {
+            let c = problems_card(&client).await?;
+            if c.get("text").and_then(|v| v.as_str()).unwrap_or("").contains("Checking…") {
+                saw_checking = true;
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            saw_checking,
+            "RED — 'Check again' produced no observable change. The card keeps rendering \
+             the previous findings (correctly), so with no `checking` state distinct from \
+             `ran` the control is dead for the whole document read and forever after when \
+             the answer is unchanged (audit F6)."
+        );
+
+        // **(e) It gets loud, in the words that mean "nothing was established".**
+        let deadline = Instant::now() + ASYNC_ROUND_TRIP_BUDGET;
+        let mut card = problems_card(&client).await?;
+        while Instant::now() < deadline {
+            let chips = card.get("chips").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            if chips > 0 {
+                break;
+            }
+            sleep(Duration::from_millis(250)).await;
+            card = problems_card(&client).await?;
+        }
+        let text = card.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let chips: Vec<String> = card
+            .get("chips")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        assert!(
+            chips.iter().any(|c| c.contains("could not check")),
+            "RED — the domain accepted the request for its deployment document and never \
+             answered, and the Problems card reports nothing. `Unheard` is `Undetermined`, \
+             which `warrants_attention` puts in front of the user precisely because a \
+             check that TRIED AND COULD NOT TELL must never be silent — an absent warning \
+             reads as an all-clear. Chips: {chips:?}. Card text: {text:?}"
+        );
+        assert!(
+            text.contains("this is not a clean bill of health"),
+            "RED — a finding was listed but the honest banner is missing, so a reader who \
+             sees one undetermined check has no line telling them the rest is not a clean \
+             bill of health. Card text: {text:?}"
+        );
+        assert!(
+            !text.contains("No problems found."),
+            "RED — the card is showing a finding AND the all-clear line at the same time. \
+             Card text: {text:?}"
+        );
+
+        // Anti-vacuity, at the wire: if nothing was ever stalled, the loud half
+        // above was produced by something other than the condition under test.
+        let stalled = server.request_count("STALL");
+        assert!(
+            stalled >= 1,
+            "VACUOUS: the origin was never asked for a black-holed path, so the \
+             'could not check' finding did not come from the condition this gate stages. \
+             Control endpoint said: {control}"
+        );
+        println!(
+            "  problems: an unanswerable check is put in front of the user ✓ \
+             ({stalled} request(s) stalled at the wire)"
+        );
+
+        let log = capture_log(&client).await?;
+        let panics = count_panics(&log);
+        assert!(panics.is_empty(), "panics across the Problems-card boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    // Leave the rig clean for the next test whatever happened above.
+    let _ = set_blackhole(&[]);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// What the page in front of the user actually is, read without assuming the
+/// application is running.
+///
+/// Every other probe in this suite goes through `capture_log`, which needs the
+/// shell's console-capture shim — i.e. it needs the app to have loaded. That is
+/// exactly the assumption a bricked page breaks, so this reads the document.
+async fn kill_switch_page_state(
+    client: &Client,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(client
+        .execute_async(
+            r#"
+            const cb = arguments[arguments.length - 1];
+            (async () => {
+                let regs = [];
+                let cacheNames = [];
+                try {
+                    const rs = await navigator.serviceWorker.getRegistrations();
+                    regs = rs.map(r => (r.active && r.active.scriptURL) || 'inactive');
+                } catch (e) {}
+                try { cacheNames = await caches.keys(); } catch (e) {}
+                const body = (document.body && document.body.textContent) || '';
+                return {
+                    bricked: body.indexOf('BRICKED-BY-A-BAD-WORKER') !== -1,
+                    app: !!document.getElementById('dom-layer'),
+                    controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+                    registrations: regs,
+                    caches: cacheNames,
+                };
+            })().then(r => cb(r), e => cb({ error: String(e) }));
+            "#,
+            vec![],
+        )
+        .await?)
+}
+
+/// **G8 — THE KILL-SWITCH DRILL. Heal-path row 9b, and the only cell on the
+/// brick matrix whose recovery had never been run.**
+///
+/// Row 9 is two failures that look alike in a bug report and share almost
+/// nothing:
+///
+/// * **a bad worker, page still loads** — the user fixes it themselves from
+///   `?systemrecovery=1`, gated by
+///   `the_recovery_console_resets_the_program_and_keeps_the_tree`;
+/// * **a worker that breaks navigation itself** — nothing in the page arrives,
+///   *including the recovery console*, because it comes over the same channel
+///   the worker has poisoned. No in-page affordance can help, by construction.
+///
+/// The second is C17's, and until this gate existed it was a paragraph in a
+/// design document. **Never rehearsed means it does not exist** — the design
+/// says so itself, and the heal-path table carried the row as *"OPEN — never
+/// built, never rehearsed"*.
+///
+/// **Why a self-destruct worker is the only mechanism.** Deleting `sw.js` does
+/// not retire a registration: the spec deliberately does not unregister on a
+/// failing response, so a 404, a 410 and a wrong MIME type all leave the bad
+/// worker installed. The kill-switch *header* that would have solved this was
+/// proposed in 2015 (w3c/ServiceWorker#614) and never built. The only exit is to
+/// serve bytes at that same URL that take themselves down — which is why this
+/// gate's precondition, stated in the runbook as step 1, is *can you still serve
+/// `/sw.js`*.
+///
+/// **The anti-vacuity assertion is the design.** A recovery is only a recovery
+/// from a break, so this asserts the page is **genuinely bricked** — a worker
+/// controlling it and serving a document that is not the app — before it deploys
+/// the cure. Without that, a browser that never installed the bad worker would
+/// sail through every assertion below and report a rehearsed kill switch.
+///
+/// **And it deliberately does not navigate after the swap.** Recovery has to
+/// arrive on its own, because the third load-bearing line in
+/// `assets/sw-selfdestruct.js` is `clients.navigate()`: unregistering does not
+/// release a page the old worker already controls, so a tab the user is staring
+/// at must be reloaded *for* them. If this gate issued its own reload it would
+/// pass with that line deleted, and the fix would only reach the people who
+/// happened to close the tab.
+///
+/// Falsified three ways, each removing one line of the artifact: no
+/// `unregister()`, no `clients.navigate()`, no `skipWaiting()`.
+///
+/// **Scope, stated:** it drills the mechanism, not the deploy. Whether `/sw.js`
+/// is reachable at a given CDN is the runbook's step 1 and is not testable from
+/// here; the spec's 24-hour worker-staleness cap is the floor when it is not.
+#[tokio::test(flavor = "current_thread")]
+async fn the_kill_switch_recovers_a_browser_a_bad_worker_has_bricked(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    // Isolated copy on its own port: this test installs a deliberately broken
+    // service worker, and `dist/` is shared with every other gate.
+    let root = "target/e2e-kill-switch".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+
+    let sw_path = format!("{root}/sw.js");
+    let healthy_sw = std::fs::read_to_string(&sw_path)?;
+    // The artifact under test, read from the STAGED BUILD rather than from
+    // `assets/`. That is the file an operator would copy at the origin during an
+    // incident, so if the build ever stopped shipping it this gate must fail
+    // instead of quietly testing the source tree.
+    let self_destruct = std::fs::read_to_string(format!("{root}/sw-selfdestruct.js"))
+        .map_err(|e| format!(
+            "the build does not ship `sw-selfdestruct.js` ({e}). The kill switch is a file \
+             an operator copies over `sw.js` AT THE ORIGIN during an incident — if it is not \
+             in the deployed tree there is nothing to copy, and the runbook's step 2 is a \
+             dead instruction. See the copy-file link in index.html."
+        ))?;
+    assert!(
+        self_destruct.contains("registration.unregister"),
+        "the shipped sw-selfdestruct.js does not unregister anything"
+    );
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    let r = async {
+        // ── 1. A healthy origin, with a worker that controls the page ───────
+        // Reset first: `pick_free_port` can hand back a port an earlier test
+        // used, and a stale registration there would poison the baseline.
+        client.goto(&url).await?;
+        let _ = client
+            .execute_async(
+                r#"const cb = arguments[arguments.length - 1];
+                   (async () => {
+                       try {
+                           const rs = await navigator.serviceWorker.getRegistrations();
+                           for (const r of rs) { try { await r.unregister(); } catch (e) {} }
+                       } catch (e) {}
+                       try {
+                           const ks = await caches.keys();
+                           for (const k of ks) { try { await caches.delete(k); } catch (e) {} }
+                       } catch (e) {}
+                       cb('reset');
+                   })();"#,
+                vec![],
+            )
+            .await?;
+        wipe_all_storage(&client).await?;
+
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+        let controller = poll_json(
+            &client,
+            "return navigator.serviceWorker && navigator.serviceWorker.controller \
+             ? (navigator.serviceWorker.controller.scriptURL || 'controller-no-url') : '';",
+            Duration::from_millis(10_000),
+            |v| !v.as_str().unwrap_or("").is_empty(),
+        )
+        .await?;
+        assert!(
+            controller.as_str().unwrap_or("").ends_with("/sw.js"),
+            "PRECONDITION FAILED: no service worker took control of this origin, so there is \
+             nothing for a bad worker to break and nothing for the kill switch to remove. \
+             A secure context is required; `localhost` is one. Controller: {controller:?}"
+        );
+
+        // ── 2. Ship a worker that breaks navigation ─────────────────────────
+        // Not a hang: a worker that answers navigations with a document that is
+        // not the app is the same failure, deterministic, and it makes the
+        // break OBSERVABLE — which is what the anti-vacuity assertion needs.
+        // `skipWaiting` + `claim` because a real bad deploy would have them;
+        // without both, the broken worker would sit in `waiting` and never take
+        // over, and this gate would rehearse nothing.
+        let broken_sw = r#"
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => {
+    if (event.request.mode === 'navigate') {
+        event.respondWith(new Response(
+            '<!doctype html><title>x</title><body>BRICKED-BY-A-BAD-WORKER</body>',
+            { status: 200, headers: { 'Content-Type': 'text/html' } }
+        ));
+    }
+});
+"#;
+        std::fs::write(&sw_path, broken_sw)?;
+
+        // The update check rides a navigation, and claiming lands a beat after
+        // it, so the brick shows on a later load rather than this one. Poll by
+        // navigating rather than sleeping a guess.
+        let mut state = serde_json::Value::Null;
+        for _ in 0..10 {
+            client.goto(&url).await?;
+            sleep(Duration::from_millis(600)).await;
+            state = kill_switch_page_state(&client).await?;
+            if state.get("bricked").and_then(|v| v.as_bool()) == Some(true) {
+                break;
+            }
+        }
+
+        // **N-CRITICAL, and it guards every assertion below.** If the browser
+        // is not actually broken, the recovery has nothing to recover from and
+        // a green here would be a rehearsal of nothing.
+        assert_eq!(
+            state.get("bricked").and_then(|v| v.as_bool()),
+            Some(true),
+            "VACUOUS: the deliberately-broken worker never took over, so this browser was \
+             never bricked and everything below would pass without exercising the kill \
+             switch. State: {state:?}"
+        );
+        assert_eq!(
+            state.get("controlled").and_then(|v| v.as_bool()),
+            Some(true),
+            "the page is showing the broken document but reports no controller — read the \
+             probe before believing the brick"
+        );
+        println!("  G8: the browser is bricked by a bad worker (page is not the app) ✓");
+
+        // The console a user would be told to open is gone too. This is the
+        // whole reason row 9b needs its own mechanism rather than row 9a's
+        // button — stated as an assertion so it cannot rot into a claim.
+        client.goto(&format!("http://localhost:{port}/?systemrecovery=1")).await?;
+        sleep(Duration::from_millis(600)).await;
+        let recovery = kill_switch_page_state(&client).await?;
+        assert_eq!(
+            recovery.get("bricked").and_then(|v| v.as_bool()),
+            Some(true),
+            "the recovery console loaded through a worker that breaks navigation. If that is \
+             genuinely true this row collapses into 9a and the kill switch is not needed — \
+             but check the broken worker is intercepting `?systemrecovery=1` before believing \
+             it. State: {recovery:?}"
+        );
+        println!("  G8: `?systemrecovery=1` is bricked too — no in-page affordance can help ✓");
+
+        // ── 3. The runbook's step 2: serve the kill switch at /sw.js ────────
+        std::fs::write(&sw_path, &self_destruct)?;
+
+        // ── 4. Recovery must arrive ON ITS OWN ──────────────────────────────
+        // Exactly ONE navigation, to trigger the out-of-band `/sw.js` update
+        // check — and then nothing. The reload that follows has to come from
+        // `clients.navigate()` inside the worker, because that is the line that
+        // reaches a user who is staring at a broken tab rather than closing it.
+        client.goto(&url).await?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut recovered = kill_switch_page_state(&client).await?;
+        while Instant::now() < deadline {
+            let clean = recovered.get("app").and_then(|v| v.as_bool()) == Some(true)
+                && recovered.get("bricked").and_then(|v| v.as_bool()) == Some(false);
+            if clean {
+                break;
+            }
+            sleep(Duration::from_millis(500)).await;
+            recovered = kill_switch_page_state(&client).await?;
+        }
+
+        assert_eq!(
+            recovered.get("bricked").and_then(|v| v.as_bool()),
+            Some(false),
+            "G8 RED — THE KILL SWITCH DID NOT FIRE. The self-destruct worker was served at \
+             /sw.js and the tab is still showing the broken worker's document with no further \
+             navigation from this gate.\n\
+             This is brick-matrix cell #10 unrecovered: deleting sw.js cannot help (the spec \
+             does not unregister on a failing response), so if these bytes do not take the \
+             registration down there is no exit at all.\n\
+             Check all three lines of assets/sw-selfdestruct.js: `skipWaiting()` (or the new \
+             worker waits for tabs nobody is closing), `registration.unregister()`, and \
+             `clients.navigate()` (or the page stays controlled and the user still sees the \
+             break).\nState: {recovered:?}"
+        );
+        assert_eq!(
+            recovered.get("app").and_then(|v| v.as_bool()),
+            Some(true),
+            "the brick is gone but the application did not come back — recovery means the \
+             app boots, not merely that the broken document stopped rendering. \
+             State: {recovered:?}"
+        );
+
+        // …and it took itself down with it, or the next deploy fights it.
+        let regs = recovered
+            .get("registrations")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(usize::MAX);
+        assert_eq!(
+            regs, 0,
+            "the page recovered but a service worker is still registered. The kill switch \
+             must leave nothing behind — a registration that survives it is one the next \
+             incident inherits. State: {recovered:?}"
+        );
+        let cache_count = recovered
+            .get("caches")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(usize::MAX);
+        assert_eq!(
+            cache_count, 0,
+            "the worker is gone but its caches are not. Enumerating `caches.keys()` rather \
+             than deleting our own names is deliberate: a broken worker may have written \
+             caches this project has never heard of. State: {recovered:?}"
+        );
+
+        println!(
+            "  G8: kill switch fired — registration and caches gone, app back, with NO \
+             reload from this gate ✓"
+        );
+
+        // Restore the healthy worker, and prove the return trip is ordinary:
+        // there is nothing special about coming back off the kill switch.
+        std::fs::write(&sw_path, &healthy_sw)?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+        let back = poll_json(
+            &client,
+            "return navigator.serviceWorker && navigator.serviceWorker.controller \
+             ? (navigator.serviceWorker.controller.scriptURL || 'controller-no-url') : '';",
+            Duration::from_millis(15_000),
+            |v| !v.as_str().unwrap_or("").is_empty(),
+        )
+        .await?;
+        assert!(
+            back.as_str().unwrap_or("").ends_with("/sw.js"),
+            "the real worker did not re-install after the kill switch was withdrawn, so the \
+             runbook's step 5 — 'deploy the real sw.js again' — does not work and the site \
+             would be left with no offline shell. Controller: {back:?}"
+        );
+        println!("  G8: the real worker re-installs afterwards (runbook step 5) ✓");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}
+
+/// Stage an SPA tree with TWO builds: the one at `/`, and a retained one at
+/// `/builds/<id>/index.html` — the shape `entity-browser builds` (C9) produces.
+///
+/// The retained shell is the live one with its `entity-build-id` rewritten, which
+/// is exactly what makes this a real test of the mechanism: both shells reference
+/// the SAME root-absolute bundle, so the retained one genuinely boots. If trunk
+/// ever emitted relative asset paths, this staging would still succeed and the
+/// browser would 404 its own bundle — which is the failure the gate below would
+/// then report, and is why "the app booted there" is asserted and not just "the
+/// URL changed".
+fn stage_two_build_spa(
+    port: u16,
+) -> Result<(FederationServer, String, String), Box<dyn std::error::Error>> {
+    let root = std::path::PathBuf::from("target/e2e-build-slots");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    fn link_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if e.file_type()?.is_dir() {
+                link_tree(&src, &dst)?;
+            } else if std::fs::hard_link(&src, &dst).is_err() {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+        Ok(())
+    }
+    link_tree(std::path::Path::new("dist"), &root)?;
+
+    let shell = std::fs::read_to_string(root.join("index.html"))?;
+    let needle = "<meta name=\"entity-build-id\" content=\"";
+    let start = shell.find(needle).ok_or(
+        "the staged shell carries no <meta name=\"entity-build-id\"> — tools/build-stamp.sh \
+         did not stamp the slot identity, so C10 has nothing to compare against and every \
+         assertion below would be about the wrong thing",
+    )? + needle.len();
+    let live_id = shell[start..]
+        .split('"')
+        .next()
+        .ok_or("malformed entity-build-id meta")?
+        .to_string();
+    assert!(
+        !live_id.is_empty(),
+        "the staged shell's build id is EMPTY. A shell that cannot name itself cannot be a \
+         rollback target and cannot tell whether it is the pinned one."
+    );
+
+    // A distinct, obviously-synthetic id. Hex and 16 chars so it is shaped like
+    // a real one, but it cannot collide with a bundle hash we actually built.
+    let retained_id = "0123456789abcdef".to_string();
+    assert_ne!(live_id, retained_id, "the two builds must differ or nothing redirects");
+    let retained_shell = shell.replace(
+        &format!("{needle}{live_id}\">"),
+        &format!("{needle}{retained_id}\">"),
+    );
+    assert!(
+        retained_shell.contains(&retained_id),
+        "rewriting the retained shell's build id did not take — the meta spelling moved"
+    );
+    let dest = root.join("builds").join(&retained_id);
+    std::fs::create_dir_all(&dest)?;
+    std::fs::write(dest.join("index.html"), &retained_shell)?;
+    std::fs::write(
+        root.join("builds.json"),
+        format!(
+            r#"{{"min_rollback_index":0,"builds":[
+                 {{"build_id":"{live_id}","commit":"live","released_at":"t1","notes":"current","index":1}},
+                 {{"build_id":"{retained_id}","commit":"older","released_at":"t0","notes":"previous","index":0}}]}}"#
+        ),
+    )?;
+
+    let child = Command::new("python3")
+        .args(["tools/cors-serve.py", root.to_str().unwrap(), &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    Ok((FederationServer(child), live_id, retained_id))
+}
+
+/// **Heal-path row 10, C9+C10 — a bad build has somewhere to fall back TO, and a
+/// pin is a lease rather than a deed.**
+///
+/// C9 and C10 are gated together because neither is testable alone: a pin with
+/// nothing to pin to has no target, and a `builds.json` nothing reads is a file.
+/// C9's manifest logic is native (`build_slots`); this is the browser half —
+/// the gate that runs in **the first `<script>`, before any WASM**, which is the
+/// only tier that can help when the WASM is the broken thing.
+///
+/// **Five properties, and four of them are about getting back OUT.** A rollback
+/// mechanism with no exit is not a safety feature, it is a nicer-looking brick
+/// (audit F2, which this repo has already shipped once):
+///
+/// 1. **A pin redirects, and the pinned build actually boots.** Asserted on the
+///    booted app, never on the URL alone — the retained shell shares the live
+///    one's root-absolute bundle references, so "the URL changed" would pass on
+///    a shell that 404s everything it needs.
+/// 2. **A pin naming a shell that does not exist HEALS.** This is the one that
+///    is easy to miss and is the difference between recovery and a new brick: a
+///    404 means none of our code runs at the target, so it cannot self-heal
+///    there — it heals on the next visit to `/`, which is what a stuck person
+///    does. Armed before the redirect, disarmed on arrival.
+/// 3. **`?build=default` clears it** — the documented way out.
+/// 4. **Recovery is never captured by a pin.** It is the surface that can clear
+///    one, so a pin that redirected it would take away the page able to undo it.
+/// 5. **The origin moving on clears it** — evidence the build we were escaping
+///    has been replaced, so stop escaping it.
+///
+/// **ONE browser session throughout**, because the grid is `maxSessions=1` and a
+/// second `connect_browser()` contends with its own first (measured elsewhere in
+/// this file at 60 s, then a 240 s watchdog).
+#[tokio::test]
+async fn a_pinned_build_is_honoured_and_every_way_out_of_the_pin_works(
+) -> Result<(), Box<dyn std::error::Error>> {
+    const PIN: &str = "entity_build_pin";
+    const ATTEMPT: &str = "entity_build_attempt";
+
+    let port = pick_free_port()?;
+    let (_server, live_id, retained_id) = stage_two_build_spa(port)?;
+    let base = format!("http://localhost:{port}");
+    let client = connect_browser().await?;
+
+    // Establish the origin so localStorage is writable, and take the control:
+    // with no pin, nothing redirects.
+    client.goto(&format!("{base}/?log=trace")).await?;
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    let url = client.current_url().await?;
+    assert!(
+        !url.as_str().contains("/builds/"),
+        "VACUOUS CONTROL — a browser with NO pin was already redirected to a retained \
+         build ({url}). Then every assertion below would pass without the pin doing \
+         anything."
+    );
+
+    // ── 1. A pin redirects, and the pinned build boots ──────────────────────
+    client
+        .execute(
+            &format!(
+                "localStorage.setItem('{PIN}', JSON.stringify({{build:'{retained_id}', \
+                 from:'{live_id}', exp: Date.now() + 3600000}})); return 1;"
+            ),
+            vec![],
+        )
+        .await?;
+    client.goto(&format!("{base}/?log=trace")).await?;
+    let url = client.current_url().await?;
+    assert!(
+        url.as_str().contains(&format!("/builds/{retained_id}/index.html")),
+        "ROW 10 RED — a durable pin naming a retained build did NOT redirect. The whole \
+         mechanism is the first <script> honouring the pin before any WASM runs; if it does \
+         not fire, a user on a broken build has no way onto a working one. Landed on: {url}"
+    );
+    // The load-bearing half: it BOOTED there. A redirect to a shell that cannot
+    // find its own bundle is a worse outcome than no redirect at all.
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+    let arrived = client
+        .execute(
+            "return { id: (document.querySelector('meta[name=\"entity-build-id\"]')||{}).content, \
+             slot: (window.__ENTITY_BUILD_SLOT__||{}).action, \
+             attempt: localStorage.getItem('entity_build_attempt') };",
+            vec![],
+        )
+        .await?;
+    assert_eq!(
+        arrived["id"].as_str(),
+        Some(retained_id.as_str()),
+        "we landed on /builds/{retained_id}/ but the shell there does not identify as that \
+         build — the retained shell was not rewritten, so this gate is comparing a build \
+         against itself. Probe: {arrived}"
+    );
+    assert_eq!(
+        arrived["slot"].as_str(),
+        Some("on-pinned-build"),
+        "the pinned shell did not recognise itself as the pin's target, so it would keep \
+         redirecting. Probe: {arrived}"
+    );
+    assert!(
+        arrived["attempt"].is_null(),
+        "the attempt counter was NOT disarmed on arrival. It is armed before every redirect \
+         and cleared only here; leaving it set means a successful rollback is indistinguishable \
+         from one that never landed, and the pin would be discarded on the next boot. \
+         Probe: {arrived}"
+    );
+
+    // ── 1b. The rollback must not poison the CANONICAL OFFLINE SHELL ────────
+    //
+    // `sw.js` caches EVERY navigation under `/`, and that rule predates there
+    // being more than one navigable document. C9 added a second one
+    // (`/builds/<id>/index.html`), so a rollback navigation overwrites the
+    // cached `/` with the ROLLED-BACK shell — and the pin is a LEASE. Offline,
+    // that shell outlives every one of the three ways out (TTL, self-clear,
+    // attempt counter), because each of those only takes effect on a load of
+    // `/` and offline `/` is served from this entry. `currentBuildId` also
+    // reads the build id out of exactly this entry.
+    //
+    // `/` should cache what `/` serves.
+    let shell_cache = client
+        .execute_async(
+            r#"const cb = arguments[arguments.length - 1];
+               (async () => {
+                   try {
+                       const ks = await caches.keys();
+                       for (const k of ks) {
+                           const c = await caches.open(k);
+                           const r = await c.match('/');
+                           if (!r) continue;
+                           const t = await r.text();
+                           const m = t.match(/name="entity-build-id" content="([^"]*)"/);
+                           cb({ cache: k, build: m ? m[1] : null });
+                           return;
+                       }
+                       cb({ cache: null, build: null });
+                   } catch (e) { cb({ error: String(e) }); }
+               })();"#,
+            vec![],
+        )
+        .await?;
+    if let Some(cached_build) = shell_cache["build"].as_str() {
+        assert_eq!(
+            cached_build, live_id,
+            "ROW 10 RED — the rollback navigation overwrote the canonical offline shell. \
+             The service worker cached `/builds/{retained_id}/index.html` under `/`, so the \
+             cached `/` now reports build {cached_build} instead of what the origin actually \
+             serves at `/` ({live_id}). The pin is a LEASE: offline, this entry outlives the \
+             TTL, the self-clear and the attempt counter, because all three only run on a load \
+             of `/` and offline `/` is served from here. `currentBuildId` reads this entry too. \
+             Probe: {shell_cache}"
+        );
+    }
+
+    // ── 2. A pin naming a build that does not exist heals ───────────────────
+    // Two redirects to a 404, then the third visit to `/` gives up and clears.
+    client
+        .execute(
+            &format!(
+                "localStorage.setItem('{PIN}', JSON.stringify({{build:'ghostbuild0000', \
+                 from:'{live_id}', exp: Date.now() + 3600000}})); \
+                 localStorage.removeItem('{ATTEMPT}'); return 1;"
+            ),
+            vec![],
+        )
+        .await?;
+    let mut healed_on = None;
+    for visit in 1..=4 {
+        client.goto(&format!("{base}/?log=trace")).await?;
+        let u = client.current_url().await?;
+        if !u.as_str().contains("/builds/") {
+            healed_on = Some(visit);
+            break;
+        }
+    }
+    let healed_on = healed_on.ok_or(
+        "ROW 10 RED — a pin naming a build that does not exist redirected forever. The user \
+         is stranded on a 404 where none of our code runs, with a durable pin they cannot \
+         clear from the app because the app never loads. That is a NEW brick built by the \
+         mechanism meant to remove one.",
+    )?;
+    let after = client
+        .execute(&format!("return {{ pin: localStorage.getItem('{PIN}'), attempt: localStorage.getItem('{ATTEMPT}') }};"), vec![])
+        .await?;
+    assert!(
+        after["pin"].is_null(),
+        "the redirect loop stopped but the pin SURVIVED, so the next visit starts the same \
+         dance again. Healing means the lease is dropped, not merely not-followed. Probe: {after}"
+    );
+    assert!(
+        after["attempt"].is_null(),
+        "the attempt counter outlived the pin it belonged to — a later, legitimate pin would \
+         inherit its count and give up early. Probe: {after}"
+    );
+    wait_for_boot(&client, BOOT_BUDGET_MS).await?;
+
+    // ── 3. `?build=default` is the documented way out ───────────────────────
+    client
+        .execute(
+            &format!(
+                "localStorage.setItem('{PIN}', JSON.stringify({{build:'{retained_id}', \
+                 from:'{live_id}', exp: Date.now() + 3600000}})); return 1;"
+            ),
+            vec![],
+        )
+        .await?;
+    client.goto(&format!("{base}/?build=default&log=trace")).await?;
+    let u = client.current_url().await?;
+    assert!(
+        !u.as_str().contains("/builds/"),
+        "?build=default was itself redirected by the pin it exists to clear ({u})"
+    );
+    let cleared = client
+        .execute(&format!("return {{ pin: localStorage.getItem('{PIN}') }};"), vec![])
+        .await?;
+    assert!(
+        cleared["pin"].is_null(),
+        "?build=default did not clear the durable pin. Probe: {cleared}"
+    );
+
+    // ── 4. Recovery is never captured by a pin ──────────────────────────────
+    client
+        .execute(
+            &format!(
+                "localStorage.setItem('{PIN}', JSON.stringify({{build:'{retained_id}', \
+                 from:'{live_id}', exp: Date.now() + 3600000}})); return 1;"
+            ),
+            vec![],
+        )
+        .await?;
+    client.goto(&format!("{base}/?systemrecovery=1")).await?;
+    let u = client.current_url().await?;
+    assert!(
+        !u.as_str().contains("/builds/"),
+        "the recovery console was REDIRECTED by a build pin ({u}). Recovery is the surface \
+         that can clear a pin, so a pin able to capture it removes the one page that can \
+         undo it — the mechanism would eat its own escape hatch."
+    );
+
+    // ── 5. The origin moving on clears the pin ──────────────────────────────
+    // `from` names a build that is no longer what `/` serves, i.e. whatever we
+    // rolled away from has been replaced. Stop escaping it.
+    client
+        .execute(
+            &format!(
+                "localStorage.setItem('{PIN}', JSON.stringify({{build:'{retained_id}', \
+                 from:'somethingelse00', exp: Date.now() + 3600000}})); \
+                 localStorage.removeItem('{ATTEMPT}'); return 1;"
+            ),
+            vec![],
+        )
+        .await?;
+    client.goto(&format!("{base}/?log=trace")).await?;
+    let u = client.current_url().await?;
+    let superseded = client
+        .execute(
+            &format!("return {{ pin: localStorage.getItem('{PIN}'), action: (window.__ENTITY_BUILD_SLOT__||{{}}).action }};"),
+            vec![],
+        )
+        .await?;
+    client.close().await.ok();
+    assert!(
+        !u.as_str().contains("/builds/"),
+        "the origin has moved on from the build this pin rolled AWAY from, and the pin was \
+         still followed ({u}). A lease that outlives the reason it was taken is a deed."
+    );
+    assert!(
+        superseded["pin"].is_null(),
+        "the pin was not followed but was also not DROPPED, so it lingers until its TTL. \
+         Probe: {superseded}"
+    );
+    assert_eq!(
+        superseded["action"].as_str(),
+        Some("pin-superseded"),
+        "the pin was cleared but for the wrong stated reason — 'the origin moved on', \
+         'you asked me to', 'it expired' and 'it did not load' are four different facts \
+         about a user's profile and a log that renders them as one cannot be debugged. \
+         Probe: {superseded}"
+    );
+
+    println!(
+        "  ROW 10 [C9+C10]: pin honoured (live={live_id} -> retained={retained_id}, booted \
+         there); a pin naming a missing build healed on visit {healed_on}; ?build=default, \
+         recovery-immunity and origin-moved-on all clear it."
+    );
     Ok(())
 }

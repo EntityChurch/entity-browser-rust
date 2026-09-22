@@ -776,6 +776,122 @@ per-subscription mirror that fills asynchronously, so a Worker run can miss its
 own cache, refetch, and go green for a reason unrelated to the fix. A Worker run
 is a second, separately-labelled assertion — never the one quoted as proof.
 
+**D25 — A value that can be refreshed from a remote source carries WHO SET IT.
+A heuristic on the value is not provenance.** Any field a deployment, registry or
+peer may declare, and that the local profile may also let the end user set, holds
+a mark saying which of them wrote the copy we hold. The refresh path branches on
+**the mark**, never on what the value happens to look like.
+
+*Why a value test can never answer this.* `MODEL-STAKEHOLDERS-AND-OWNERSHIP` §2.2
+states the premise outright: **a value a deployment seeded and a value the end
+user deliberately chose are byte-identical in the entity.** There is no residue
+to inspect. So every value test is a guess about intent dressed as a fact, and it
+fails in whichever direction its author did not picture — `home_is_local` read
+*"the user set this"* as *"the user set this to something **local**"*, and the
+whole remote half of the choice space fell through a guard that had been reasoned
+out correctly in its own comment thirty lines above.
+
+*Why it is a discipline and not a reminder.* The mechanism was already built,
+twice, for the same question one field over — site origins carry
+`source: deployment | user` with `Adoption::KeptUserOverride`, and the registry
+pin resolves to `(RegistryPin, PinSource)`. **Four answers to one question in one
+codebase, and the two fields that answered it with nothing are the two that had
+defects.** That is precisely the failure the stakeholder model was written to
+stop; its own opening records four design threads each drawing this line
+differently before anyone wrote it down. A rule that says *put a mark on it* is
+therefore not new machinery, it is the standing instruction to stop inventing a
+fifth answer.
+
+*Source: two incidents, in different subsystems, with different consequences —
+which is what cleared the ladder.* **(a)** Site origins, B1: `put_if_absent`
+standing in for *"the user overrode this"*, where the cost was a silently ignored
+override. **(b)** `home_site`, 2026-09-02: `home_is_local` standing in for *"the
+user set this"*, where the cost was **larger than the field** — a user who picked
+a cached foreign site as their startup page had it overwritten on the next boot
+*and* got a **durable supersession record naming their own choice as a retired
+publisher**, after which `resolve()` rewrote every stored reference to it. No
+re-key was required to reach it: the adoption branch is `new_peer != stale_peer`,
+true the moment the user's choice differs from the domain's declaration.
+Reproduced red through the real Settings picker before any fix, with both halves
+in the log.
+
+*The corollary that decides the shape of the fix.* **Unmarked must read as the
+party who cannot be asked** — here, `Deployment`, for B1's stated reason. The cost
+is real and is stated rather than hidden: a user who chose a remote home under an
+older build is not protected until they choose again. The alternative — treating
+unmarked as *user* — would freeze every profile that ever contacted a deployment
+against the routing repair that incident A's fix exists to deliver.
+
+*And the scope corollary, because this is where the rule gets over-applied.*
+**One field, one mark.** The model says so itself: the tree-wide ownership
+partition (R6) is *"not a prerequisite… treating it as one over-scopes that
+work."* D25 obliges a mark on the field being refreshed, not a partition of the
+tree.
+
+*How / enforcement — both halves, as owed:*
+1. **`session_config::decide_home`** — the single, **pure** expression of the
+   precedence, returning **five** outcomes rather than a bool (*kept it, the user
+   chose it* / *kept it, it is local* / *adopted the declaration* / *nothing to
+   do* are different facts, AP40). Being pure and native, every combination of
+   provenance × declaration is gated by `make test` on both arms instead of only
+   through Selenium — and Doctor's check 1 **consumes** it rather than
+   re-deriving it, which is how the first version came to tell a user their
+   deliberate local home was a stale routing fact.
+2. **`every_deployment_declared_field_says_who_owns_it`** (`deployment_config.rs`)
+   — a **census**: one row per field the document may declare, each classified as
+   deployer-only / user-may-override-by-*named mechanism* / adopted-only-on-first
+   -contact, **with the count asserted**. Adding a field to
+   `/entity-deployment.json` fails the build until someone answers *whose value
+   wins on the next boot*, and a row claiming a mechanism must name it — a claim
+   with nothing behind it is the defect the census exists to catch.
+3. Behavioural, both directions:
+   `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration`
+   (browser, through the real Settings picker) and
+   `a_user_chosen_home_is_kept_and_a_deployment_seeded_one_is_adopted` (native,
+   **one bit apart**, so incident A's repair cannot be lost to this fix).
+   Falsified on the writer half and the reader half independently.
+
+*Ratified 2026-09-02, on the operator's call, with the caveat recorded rather
+than dropped:* the second instance was found and fixed by the same session that
+wrote the rule, which is exactly when a rule is most likely to be
+over-generalised. It is ratified now because the evidence is in one place and
+both enforcement points exist; **it is reviewed against a third instance found by
+someone else, and removed if unearned within a release cycle** — which is the
+ladder's own term for a discipline promoted early, and is why the scope corollary
+above is part of the rule and not a footnote to it.
+
+*What this does NOT close.* It marks one field. Nothing forces a *new*
+refreshable field to carry a mark except the census — and the census only sees
+fields the **deployment document** declares, so a value adopted from a registry
+or a peer is outside its reach. It also says nothing about **when** a divergence
+should be reported rather than obeyed; that is check 1's job, and check 1 has no
+browser gate.
+
+*The early-promotion review, run 2026-09-02 by a later session (the rule's own
+term, discharged).* Swept the gap the paragraph above names — values adopted from
+a registry or a peer, which the census cannot see. **Verdict: the shape recurs;
+no third defect.** D25 stays.
+- **Checked and already marked:** site origins (`source: deployment | user`),
+  the registry pin (`pinned_registry() -> (RegistryPin, PinSource)`), `home_site`
+  (fixed). **Checked and not applicable:** `RosterEntry::label` is user-set with
+  no remote writer, so there is nothing to be refreshed *from*.
+- **The census is complete at the top level** — nine rows against nine
+  document-declared fields, count asserted; `enabled`/`show_toggle`/`locked` are
+  nested under `site_mode`, which is classified as a whole.
+- **The third instance of the SHAPE, and why it is not a third incident:**
+  `connectors::plan_self_adoption` keeps a user-edited connector label across a
+  backend repoint by testing `!prev_label.trim().is_empty()` — **a value
+  heuristic standing in for *"the user set this"***, which is precisely D25's
+  premise. It is worth recording because the function's own doc opens *"A label
+  is the user's; an address is the backend's"*: the author had the ownership
+  question explicitly in hand and still answered it with a guess. But it fails
+  only in the direction its author chose deliberately and documented in a test
+  (*"a blank stored label is not an edit"*), and the cost is a cosmetic revert to
+  the default name, self-correcting on the next edit. So: **evidence the rule
+  generalises, not evidence of a third harm.**
+- **Standing limit, unchanged:** this review was a targeted sweep of adoption
+  paths, not an exhaustive audit of every durable write.
+
 ---
 
 ## 4. The review questions (run on every diff)
@@ -2024,12 +2140,51 @@ these shipped in this repo.
   front of the user. A one-way test would have passed the silent version.
   **And the honest note about how both were found: by running the app.** Not by review, not by a
   gate. A surface's *placement* and its *noise level* are correctness properties, and this repo
-  had no gate that could observe either. That is a standing hole, named here rather than
-  papered over.
+  had no gate that could observe either.
+  **That hole is closed for this surface as of 2026-09-02** —
+  `the_problems_card_is_in_the_browser_and_quiet_until_something_is_actually_wrong` asserts both,
+  by **text** (there is no class to select on, and adding one would measure the hook), and both
+  neuters red: moving the section below the `!output.tauri` return, and restoring the
+  `!is_clear()` filter, which reds printing the three non-problems by name. It runs on the
+  **black-hole rig**, because the state that makes the surface speak — `DocumentRead::Unheard` —
+  needs an origin that accepts and never answers, and because D23's deadline is what makes the
+  *Checking…* window observable rather than a race. **Closed for this surface, not for the
+  class:** every other window's placement and noise level are still unmeasured, and the lesson
+  above is what says whether that matters for one you are about to add.
   [AP40, AP44, D13, `doctor::Verdict::warrants_attention`,
   `nothing_to_compare_is_not_a_problem_and_a_divergence_always_is`,
   `a_real_divergence_is_always_put_in_front_of_the_user`,
   `dom/system_overview.rs` (the `!output.tauri` return, with the reason at the call site)]
+
+- **AP49 — A heuristic on the VALUE standing in for provenance, on a field that gets refreshed
+  from a remote source.** **PROMOTED to D25 on 2026-09-02**, in the change that landed both
+  enforcement points. The entry stays as the **incident record** — the two shapes and what each
+  cost — because the discipline states the rule and not the evidence; **D25 is the rule.**
+  *(a)* Site origins, B1: `put_if_absent` used to mean *"the user overrode this"*, so an
+  override was silently ignored. *(b)* `home_site`, 2026-09-02, found by a consolidation audit
+  with no failing symptom: `home_is_local = !never_established && (peer.is_empty() || peer ==
+  system_pid)` used to mean *"the user set this"*, which reads the user's deliberate choice as
+  *"a deliberate choice of something **local**"*. A reader who picked a **cached foreign** site
+  in the boot-target picker — which offers them, labelled `"{site} (cached)"` — lost it on the
+  next boot **and** acquired a durable `peer_supersession` record naming their own chosen peer
+  as *retired*, which `resolve()` then applied to every stored reference to it. The home
+  reverting is E1; the supersession is not — it has no user-facing removal path, and
+  revalidation *keeps* it, because the domain does not contradict it.
+  **Three things worth carrying, none of which is "add a mark".**
+  **(1) The guard was reasoned out correctly and implemented one step short.** Its own comment
+  says *"routing may be adopted and preferences may not"* — the invariant is right there, and
+  the code below it tests the value instead of the intent. A comment stating the right rule is
+  not evidence the code implements it.
+  **(2) The defect was unreachable on a dev profile**, where the domain declares nothing and the
+  whole block is skipped — so *"it works here"* covered the entire space in which it cannot fail.
+  **(3) The gate-first order is what turned a five-link code read into a measurement.** F1 was
+  written up as *confirmed by reading, unrun*; the browser gate reproduced it before any fix and
+  the log carried both halves, which is why the audit struck its own "cannot say without
+  instrumentation" line rather than deleting it.
+  [D25, AP30, AP40, `MODEL-STAKEHOLDERS-AND-OWNERSHIP` §2.2, `session_config::decide_home`,
+  `every_deployment_declared_field_says_who_owns_it`,
+  `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration`,
+  `AUDIT-HEAL-PATH-AND-THE-OWNERSHIP-GAP-2026-09-01.md`]
 
 ---
 

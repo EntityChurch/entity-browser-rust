@@ -268,17 +268,26 @@ fn render_health(
         util::append(&card, &components::success(msg));
     }
 
+    // **The re-check control says which of its two states it is in.** Pressing
+    // it keeps the previous findings on screen — they are still the best answer
+    // available — so without this the button changed nothing visible: up to 3 s
+    // of nothing on a slow domain (D23's deadline), and forever when the
+    // findings come back the same, which is the common case (audit F6).
     let row = util::create_element("div");
     row.set_attribute("style", theme::BTN_ROW).ok();
-    util::append(
-        &row,
-        &components::button(
-            ctx,
-            copy::RECHECK,
-            components::ButtonKind::Small,
-            crate::views::system_overview::HEALTH_RECHECK_EVENT,
-        ),
-    );
+    if health.checking {
+        util::append(&row, &components::loading(copy::CHECKING));
+    } else {
+        util::append(
+            &row,
+            &components::button(
+                ctx,
+                copy::RECHECK,
+                components::ButtonKind::Small,
+                crate::views::system_overview::HEALTH_RECHECK_EVENT,
+            ),
+        );
+    }
     util::append(&card, &row);
 
     util::append(parent, &card);

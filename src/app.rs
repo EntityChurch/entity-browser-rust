@@ -864,6 +864,36 @@ struct PendingIdbPeer {
     label: Option<String>,
 }
 
+/// What [`EntityApp::boot_load`] (phase 1) hands to [`EntityApp::boot_phase2`].
+///
+/// Deliberately **only the values phase 2 reads**, not a snapshot of the app: the
+/// two phases run on the same `EntityApp`, and anything phase 2 wants from it it
+/// reads through `self`. What cannot survive the split is the set of *locals*
+/// phase 1 computed — the resolved config and the two facts that decide what the
+/// document is allowed to do with it.
+///
+/// `config_was_absent` is the one that carries the most weight: it is the honest
+/// "is there persisted browse state to preserve?" signal (deliberately **not**
+/// `boot_class.tree_is_durable()`, which misclassifies a fresh IDB boot), and it
+/// gates both the cold document read and the overlay re-point.
+#[cfg(target_arch = "wasm32")]
+pub struct BootPlan {
+    /// The system peer — where the global session config and the origin
+    /// registry live.
+    system_pid: String,
+    /// The primary peer — the remote-fixture hook's origin seed is scoped to
+    /// it, not to the system peer. The two are the same id today; carrying both
+    /// keeps the future split a pure change rather than a bug.
+    primary_pid: String,
+    /// `session_config::state_path(&system_pid)`, computed once.
+    cfg_path: String,
+    /// The config as phase 1 resolved it: the persisted one, or the build
+    /// default. Phase 2 applies the deployment document over this.
+    cfg: crate::session_config::SessionConfig,
+    /// Whether NO durable session config pre-existed this boot.
+    config_was_absent: bool,
+}
+
 /// `setTimeout`-backed async sleep for the inbound access-log poll loop (no
 /// timer-crate dep). Mirrors the System Backend window's poll cadence helper.
 #[cfg(target_arch = "wasm32")]
@@ -903,7 +933,7 @@ impl EntityApp {
     /// `false` on the multi-tab-secondary / worker-downgrade paths, which
     /// must not open the shared IDB database (see design §9 multi-tab).
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_wasm(use_idb: bool) -> (Self, bool) {
+    pub async fn new_wasm(use_idb: bool) -> (Self, bool, BootPlan) {
         // Drain any pending OPFS tombstones before any worker spawn —
         // post-spawn the sync access handles would block removeEntry.
         crate::opfs_cleanup::run_at_boot().await;
@@ -1088,8 +1118,8 @@ impl EntityApp {
         }
         let mut app = Self::build_wasm_app(peer_manager, pending);
         // Direct arm: the system-peer tree is durable iff the IDB store came up.
-        app.boot_load(boot_class, idb_active).await;
-        (app, idb_active)
+        let plan = app.boot_load(boot_class, idb_active).await;
+        (app, idb_active, plan)
     }
 
     /// Worker-mode WASM constructor. Spawns the worker, awaits Ready,
@@ -1097,7 +1127,7 @@ impl EntityApp {
     /// Skips Direct-only init (ingest, event bridges); writers/signal
     /// become no-op stubs in Worker mode.
     #[cfg(target_arch = "wasm32")]
-    pub async fn new_wasm_worker() -> Result<Self, wasm_bindgen::JsValue> {
+    pub async fn new_wasm_worker() -> Result<(Self, BootPlan), wasm_bindgen::JsValue> {
         use entity_wasm_worker_protocol::{InitParams, PersistedPeer as WirePersistedPeer};
         use entity_wasm_worker_proxy::WorkerProxy;
 
@@ -1307,8 +1337,8 @@ impl EntityApp {
         let peers = Peers::new_worker(store);
         let mut app = Self::build_wasm_app_with_boot_control(peers, pending, Some(port_main));
         // Worker arm: the OPFS journal is flush-on-write durable, always.
-        app.boot_load(boot_class, true).await;
-        Ok(app)
+        let plan = app.boot_load(boot_class, true).await;
+        Ok((app, plan))
     }
 
     /// Common WASM bootstrap — runs in both Direct and Worker modes.
@@ -1684,7 +1714,16 @@ impl EntityApp {
     /// The roster backfill/reconcile need "is the substrate durable", which
     /// `BootClass` loses on a cold boot (durable + ephemeral first-boots both
     /// classify `Cold`), so the caller threads the real bit here.
-    async fn boot_load(&mut self, boot_class: crate::boot::BootClass, durable_substrate: bool) {
+    ///
+    /// **Returns the [`BootPlan`] phase 2 needs.** The caller decides *when* to
+    /// run phase 2 — spawned after the frame loop goes live (the shipped order)
+    /// or inline before it (`?boot=inline`, the control and the escape hatch).
+    /// See [`EntityApp::boot_phase2`].
+    async fn boot_load(
+        &mut self,
+        boot_class: crate::boot::BootClass,
+        durable_substrate: bool,
+    ) -> BootPlan {
         // 1a durability gate (MAP §10): record whether this tab can durably
         // save, so `CreatePeerWithMode` can refuse on an ephemeral/secondary
         // primary instead of writing a peer whose tree evaporates on reload.
@@ -1899,7 +1938,11 @@ impl EntityApp {
         // The write is AWAITED + cache-reflected (`put_and_wait`, covered by
         // the overlay's session-config subscription) so the first
         // `apply_site_mode` reads the correct surface — no boot-write race.
-        {
+        // The config block yields the four locals phase 2 needs. It was a bare
+        // scope before the boot split; making it an expression keeps that
+        // scoping (nothing else in phase 1 can see `durable`, `deployment` and
+        // friends) while letting the `BootPlan` be built from them below.
+        let (cfg_path, cfg, config_was_absent) = {
             crate::boot_progress::step("session config"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
             let cfg_path = crate::session_config::state_path(&system_pid);
             let durable = self
@@ -1933,34 +1976,311 @@ impl EntityApp {
             // one thing for all of them. `not-heard` in particular is a fact
             // about the network, never about whether the deployment has a
             // document.
-            let mut doc_outcome = "not-read";
-            let mut deployment = if durable.is_none() {
-                // The first of the two D23-bounded network reads on this path,
-                // and the longest single await a cold boot takes.
-                crate::boot_progress::step("deployment document"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
-                let read = crate::deployment_config::read_document().await;
-                doc_outcome = read.label();
-                read.into_config()
+            // **Two-phase boot (row 8).** The per-domain deployment document is
+            // a NETWORK read, and it is the only thing on this path that can
+            // block for a bounded-but-visible stretch. It, and everything that
+            // depends on it, now lives in `boot_phase2` — see that function's
+            // doc comment for the split and its stated bound. Phase 1 derives
+            // the config from what is already durable: a returning profile's
+            // persisted config (which always won anyway), or the build-time
+            // default. Phase 2 applies the document over it.
+            let mut cfg = match durable {
+                Some(e) => crate::session_config::SessionConfig::from_entity(&e),
+                None => crate::session_config::boot_default(),
+            };
+            // Retired publishers, loaded BEFORE anything hydrates persisted
+            // navigation state. Ordering is the whole contract: a surface that
+            // decodes its stored location before this lands would resolve
+            // against an empty map and keep the dead peer for the life of that
+            // session. See `peer_supersession`.
+            crate::boot_progress::step("publisher records"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
+            crate::peer_supersession::load(&self.peer_manager, &system_pid).await;
+            // DERIVE the runtime surface from the durable `boot_surface` — boot
+            // lands where config says, not wherever a previous session's toggle
+            // last left it. Everything else on the entity (boot_surface,
+            // home_site, posture) is PRESERVED — re-seeding a default over a
+            // persisted config was the original clobber bug.
+            cfg.active = cfg.active_from_boot_surface();
+            match self
+                .peer_manager
+                .put_and_wait(&system_pid, &cfg_path, cfg.to_entity(), SEED_TIMEOUT_MS)
+                .await
+            {
+                Ok(()) => tracing::info!(
+                    boot_surface = %cfg.boot_surface.describe(),
+                    active = cfg.active,
+                    home_site = %cfg.home_site.id,
+                    show_toggle = cfg.site_mode.show_toggle,
+                    "boot_load: session config resolved (config preserved, surface derived)"
+                ),
+                Err(e) => tracing::error!(error = %e, "boot_load: session config write failed"),
+            }
+            // ADOPT THE PERSISTED LOCATION, authoritatively.
+            //
+            // `SiteOverlay::new` ran ~700 lines above this, synchronously, and
+            // its `ContentSiteModel::initialize` read the nav state with the
+            // SYNC `get_entity`. On the Worker arm — the arm a `?worker=1`
+            // browser defaults to — that answers from the per-prefix cache
+            // mirror, which holds only prefixes some `watch_prefix` has primed;
+            // the overlay subscribes *after* the read, and **nothing subscribes
+            // the overlay's state path at all**. So that read is `None` on every
+            // Worker boot, warm or cold, and the overlay opened on the build
+            // default with the user's real location sitting in the tree unread.
+            // Measured with the `audit-worker-reads` lamp
+            // (`docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md` §7).
+            //
+            // The rule is not new — it is the one stated 300 lines up for this
+            // very config (*"we read it from the durable tree (L1
+            // `get_entity_async`, not the cold cache mirror)"*) and in
+            // `tree_listing_async`'s doc comment for listings. The nav state
+            // never got it.
+            //
+            // Placement is load-bearing, both ends:
+            //   * AFTER the `put_and_wait` above, so the config this reads is
+            //     the final one and the default it derives is the deployment's
+            //     home rather than the build default;
+            //   * BEFORE the `config_was_absent || adopted_identity` re-point
+            //     below, so that branch decides against the real location and
+            //     its `navigate` — which bumps `nav_generation` — wins over
+            //     anything this adopted.
+            // It is unconditional on purpose: a local-home profile persists a
+            // location exactly like a remote-home one (AP36 — put the guard on
+            // the decision, never on the acquisition).
+            if let Some(overlay) = self.site_overlay.as_ref() {
+                // Five outcomes, one field — `adopted` alone would have said
+                // the same thing for "we restored your location" and "you have
+                // never had one", which is the conflation this whole thread has
+                // been about. `unheard` in particular is the one an incident is
+                // debugged from: it means the location on screen is a default
+                // standing in for a value we could not read, not a default
+                // because there is nothing to read.
+                let outcome = overlay.hydrate_durable(&self.peer_manager).await;
+                tracing::info!(
+                    location = outcome.label(),
+                    "boot_load: overlay location resolved against the durable tree"
+                );
+            }
+            // Keep the pre-peer fast-paint kill switch (localStorage mirror, cut
+            // 2c) in sync with the durable config. The mirror is what `start()`
+            // reads BEFORE the peer exists; refreshing it here self-heals it for
+            // the next boot from whatever the persisted config now says (the
+            // settings toggle also writes it immediately for this-reload effect).
+            crate::boot_fast_paint::write_enabled_mirror(cfg.fast_paint);
+
+            // Same move for the §6a resolver ceiling: mirror the durable value
+            // where a resolution can read it. The shell's `name` verb runs in a
+            // `spawn_task` holding no config, and a ceiling that applies only
+            // where a handle happened to be threaded is the half-reachable-gate
+            // shape. Set from the RESOLVED config, so a deployment's value and a
+            // returning profile's persisted one land identically.
+            crate::session_config::set_active_resolver_ceiling(cfg.name_resolver_max_ttl_ms);
+
+            // And the §7.4 registry pin, by the same mechanism and for the same
+            // reason. Setting it from the RESOLVED config is the load-bearing
+            // half: a warm boot never re-fetches `/entity-deployment.json`, so a
+            // pin installed at fetch time would be present on a cold boot and
+            // absent on every one after it — a default that works once [AP22].
+            crate::session_config::set_active_registry_pin(cfg.name_registry_pin.clone());
+
+            // The USER's pin, restored from its localStorage mirror. It only
+            // ever outranks the deployment's — never replaces it — so restoring
+            // it here rather than in the seed above keeps the precedence in one
+            // place (`session_config::pinned_registry`). A user who pinned a
+            // registry and reloaded must not be silently moved back onto the
+            // deployment's, which is what a pin scoped to one window did.
+            #[cfg(target_arch = "wasm32")]
+            crate::session_config::restore_user_registry_pin();
+
+            // **The §4-B surface spawn is NOT here, and that is a finding.** It
+            // was, for one run: phase 1 looked like the right home for "what the
+            // user is looking at". It is not, and
+            // `rekeyed_domain_heals_on_next_boot_window_surface` reds on it —
+            // because a spawned window hydrates its persisted location, and on a
+            // re-key that location names the RETIRED publisher until phase 2's
+            // `peer_supersession::persist` records A→B. The contract is already
+            // written down seventy lines up: *"loaded BEFORE anything hydrates
+            // persisted navigation state ... a surface that decodes its stored
+            // location before this lands would resolve against an empty map and
+            // keep the dead peer for the life of that session."* Phase 1 loads
+            // the records a PREVIOUS boot wrote; the one this boot discovers is
+            // phase 2's. So the spawn stays behind the adoption.
+            //
+            // The overlay survives the same ordering only because it has a
+            // re-point (`config_was_absent || adopted_identity`) that a spawned
+            // window has no equivalent of.
+            (cfg_path, cfg, config_was_absent)
+        };
+
+        tracing::info!("boot_load: phase 1 complete (durable config resolved, surface applied)");
+        BootPlan {
+            system_pid,
+            primary_pid,
+            cfg_path,
+            cfg,
+            config_was_absent,
+        }
+    }
+
+    /// Apply a [`BootSurface::Window`] surface: spawn the window on its peer and
+    /// promote it to the full-viewport surface. Extracted from `boot_load` when
+    /// the boot split landed, because **both phases may apply a surface** — phase
+    /// 1 from the durable config, phase 2 if the deployment document declares a
+    /// different one — and two copies of this branch is how the two would drift.
+    ///
+    /// A non-`Window` surface is a no-op here: the overlay's visibility is
+    /// derived from the persisted config (`active_from_boot_surface`) and
+    /// propagates through the config write, not through this call.
+    #[cfg(target_arch = "wasm32")]
+    fn apply_window_surface(
+        &mut self,
+        effective_surface: &crate::session_config::BootSurface,
+        system_pid: &str,
+    ) {
+        if let crate::session_config::BootSurface::Window { peer_id, window_type } =
+            &effective_surface
+        {
+            // Resolve the target peer: empty `peer_id` = the system peer
+            // (presets/overrides can't bake a runtime id). Then VALIDATE it
+            // exists — a config can reference a peer that was since deleted
+            // (the delete path self-heals the config, but this is the boot-
+            // time backstop, handoff §4 reactive self-heal). A gone peer →
+            // fall back to chrome, loudly, rather than spawn into the void.
+            let target_peer = if peer_id.is_empty() {
+                system_pid.to_string()
+            } else {
+                peer_id.clone()
+            };
+            if !self.peer_manager.peer_ids().iter().any(|p| p == &target_peer) {
+                tracing::warn!(
+                    window_type = %window_type,
+                    target_peer = %target_peer,
+                    "boot_load: BootSurface::Window targets a peer that no longer \
+                     exists; falling back to chrome"
+                );
+            } else {
+                // Spawn the window on its peer and promote it to the full-
+                // viewport surface via the SAME maximize path used at runtime
+                // (step 5) — no parallel host, no new render path. `active`
+                // stayed false (a `Window` surface is non-overlay via
+                // `active_from_boot_surface`), so the site overlay is off.
+                // Window ids are ephemeral → the durable `(peer, type)` is
+                // the stable identifier, re-spawned each boot; no extra
+                // persistence needed.
+                match self
+                    .window_manager
+                    .spawn(window_type, &target_peer, &self.peer_manager)
+                {
+                    Some(id) => {
+                        self.maximized_window = Some(id);
+                        tracing::info!(
+                            window_type = %window_type,
+                            target_peer = %target_peer,
+                            window_id = id,
+                            "boot_load: booted into maximized window surface"
+                        );
+                    }
+                    None => tracing::warn!(
+                        window_type = %window_type,
+                        "boot_load: BootSurface::Window names an unknown window type; \
+                         staying in chrome"
+                    ),
+                }
+            }
+        }
+    }
+
+
+    /// **Phase 2 of the boot — everything that depends on the per-domain
+    /// deployment document** (`/entity-deployment.json`): the routing reconcile,
+    /// supersession revalidation, origin registration and the home-site
+    /// provision that follows from them.
+    ///
+    /// # Why it is a separate phase
+    ///
+    /// `AUDIT-BOOT-PATH-2026-08-27` §4: an application-tier boot step must not be
+    /// able to blank the page. The document read is the only NETWORK await on
+    /// this path, it is the step that has actually stalled in production, and
+    /// it runs **after the frame loop is live** — so a stalled origin costs a
+    /// late-arriving config, not a dead app.
+    ///
+    /// # The cost that was priced here, and why it turned out not to exist
+    ///
+    /// This function shipped behind `?boot=twophase`, default off, on the belief
+    /// that deferring cost a visible flicker: the first frames rendering against
+    /// a not-yet-reconciled config, so on a profile with no durable config the
+    /// surface changes (chrome → the deployment's site) and the overlay re-points
+    /// once the home is known. **That was real, and it was an artifact of taking
+    /// the boot surface down at the rAF arm — not of the ordering.** The two are
+    /// separate signals now ([`crate::boot_progress`]): the frame loop goes live
+    /// early, which is the entire anti-brick property, and the boot surface comes
+    /// down when *this* function hands the page over. The user sees the same
+    /// single transition they always did. There is no trade left to price, so
+    /// this is the default and `?boot=inline` is only a control.
+    ///
+    /// # The bound this stage does NOT yet close
+    ///
+    /// The deferred **network** read holds no borrow of the app. The local tree
+    /// work after it does — this function takes `&mut self`, so on the deferred
+    /// path the rAF loop logs `FRAME SKIP` for its duration (normally
+    /// milliseconds; the pathological ceiling is the `SEED_TIMEOUT_MS` seeds).
+    /// That is a stutter on a painted page, not a blank one, and it is strictly
+    /// better than today's behaviour, where the same window is spent before the
+    /// loop exists at all. Removing it entirely means giving the deferred helpers
+    /// an owned handle (`DispatchHandle` widened with `get`/`list`) instead of
+    /// `&Peers`; that is the next stage and it does not change what the operator
+    /// is being asked to look at.
+    /// The one NETWORK read on the boot path, lifted out of [`Self::boot_phase2`]
+    /// so it can be awaited **holding no borrow of the app**.
+    ///
+    /// This separation is the entire point of the split and it is not cosmetic:
+    /// on the deferred path the frame loop is already running, and a
+    /// `RefCell::borrow_mut()` held across this await is the `FRAME SKIP` blank
+    /// page that `AUDIT-BOOT-PATH` §4a warns the naive fix reproduces. Awaiting
+    /// here, then borrowing to apply the result, is the shape `DispatchHandle`'s
+    /// module doc describes.
+    ///
+    /// **One read serves both branches, and that is today's behaviour, not a
+    /// change.** The old inline code had two `read_document()` call sites — a
+    /// cold-boot one and a warm-boot one — under conditions (`config_was_absent`
+    /// / `deployment.is_none() && !config_was_absent`) that are exhaustive and
+    /// mutually exclusive, so exactly one ever fired. The `!config_was_absent`
+    /// guard that made that true is documented as costing a second full D23
+    /// deadline when it was missing (G1: 3244 ms → 6195 ms); hoisting keeps the
+    /// property structurally instead of by a guard someone has to preserve.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn boot_document_read() -> crate::deployment_config::DocumentRead {
+        crate::boot_progress::step("deployment document"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
+        crate::deployment_config::read_document().await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn boot_phase2(
+        &mut self,
+        plan: BootPlan,
+        read: crate::deployment_config::DocumentRead,
+    ) {
+        const SEED_TIMEOUT_MS: u32 = 5_000;
+        let BootPlan {
+            system_pid,
+            primary_pid,
+            cfg_path,
+            mut cfg,
+            config_was_absent,
+        } = plan;
+        {
+            let doc_outcome = read.label();
+            let document = read.into_config();
+            // The cold-boot arm: no durable config, so the document is the
+            // deployment's chance to say what this profile should be. Applied
+            // over the build default exactly as it was when this stood inline.
+            let mut deployment = if config_was_absent {
+                document.clone()
             } else {
                 None
             };
-            // Absent durable config → the per-domain deployment config applied
-            // over the build-time default surface (§5, `ENTITY_STARTUP_SURFACE`
-            // + `ENTITY_HOME_*`), NOT a hard `Chrome` default — so a `site`
-            // deployment (baked OR fetched) cold-boots into its surface. A
-            // persisted config (the `Some` arm) always wins; this only shapes a
-            // fresh or wiped deployment.
-            let mut cfg = match durable {
-                Some(e) => crate::session_config::SessionConfig::from_entity(&e),
-                None => {
-                    let base = crate::session_config::boot_default();
-                    match &deployment {
-                        Some(dc) => dc.apply_to(base),
-                        None => base,
-                    }
-                }
-            };
-
+            if let Some(dc) = &deployment {
+                cfg = dc.apply_to(cfg);
+            }
             // (R1) WARM-BOOT ROUTING RECONCILE — **replaces the old (1.2.5)
             // origin reconcile**, which used to sit ~200 lines below this and is
             // gone. Read the whole story before changing this block:
@@ -1998,13 +2318,6 @@ impl EntityApp {
             // the invariant (1.2.5)'s comment got right and is preserved here.
             // Nothing the user holds state in is replaced, which is why this
             // does not wait on the atomic-vs-per-item adoption decision.
-            // Retired publishers, loaded BEFORE anything hydrates persisted
-            // navigation state. Ordering is the whole contract: a surface that
-            // decodes its stored location before this lands would resolve
-            // against an empty map and keep the dead peer for the life of that
-            // session. See `peer_supersession`.
-            crate::boot_progress::step("publisher records"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
-            crate::peer_supersession::load(&self.peer_manager, &system_pid).await;
 
             let mut adopted_identity = false;
             // `!config_was_absent` — do not re-ask an origin this boot already
@@ -2024,46 +2337,14 @@ impl EntityApp {
             // targets, rather than a retry loop inside one boot.
             if deployment.is_none() && !config_was_absent {
                 let stale_peer = cfg.home_site.peer_id.clone();
-                // **"No home at all" is the ABSENCE of a preference, not one of
-                // its values** — and it is exactly how a first contact that
-                // could not read `/entity-deployment.json` ends up. That boot
-                // falls back to `boot_default()` (empty `home_site`) and
-                // PERSISTS it; every later boot then saw an empty peer, called
-                // it local, and never re-read the document. One unlucky first
-                // visit pinned the profile to the build-time default surface
-                // with no exit but clearing site data — an E5. Reproduced by
-                // `a_first_contact_that_missed_the_deployment_config_recovers`.
-                //
-                // **The signal is the WHOLE default, not an empty field**, and
-                // that is worth spelling out because the obvious cheaper tests
-                // are both wrong:
-                //
-                //  * `peer_id.is_empty()` is a legitimate sentinel meaning *the
-                //    system peer* (`set_home_site`: "empty `target_peer` = the
-                //    system peer"; `repair_for_deleted_peer` writes it when a
-                //    home's peer is deleted). Re-probing on it would re-adopt
-                //    the domain's home over a user's deliberate local one on
-                //    every boot — a worse bug, and a violation of this
-                //    reconcile's own invariant that routing may be adopted but
-                //    preferences may not.
-                //  * `id.is_empty()` **can never be true.** `home_site_from`
-                //    falls back to `DEMO_SITE_ID` by design — "the site id is
-                //    never empty, the overlay always needs a site to point at"
-                //    — so a guard on it is dead code that silently never fires.
-                //    Measured, after writing exactly that guard and watching the
-                //    gate stay red.
-                //
-                // What a failed first contact actually leaves behind is
-                // `home_site_default()` **entire** — the build-time value,
-                // untouched by any document or any user action. Comparing
-                // against it is the narrowest available "nothing has ever set
-                // this" test, and adoption stays ROUTING-ONLY, so the blast
-                // radius of a false positive is that a profile parked on the
-                // build default gets pointed at the domain's home. That is what
-                // a correct first contact would have done anyway.
-                let never_established = cfg.home_site == crate::session_config::home_site_default();
-                let home_is_local =
-                    !never_established && (stale_peer.is_empty() || stale_peer == system_pid);
+                // **The whole "which home wins" question moved out of this
+                // function.** `session_config::decide_home` is the single
+                // expression of it, pure and exhaustively gated natively; every
+                // hard-won rule that used to be spelled out here — why the
+                // signal is the WHOLE build default rather than an empty field,
+                // why `peer_id.is_empty()` is a sentinel and not a test, why
+                // `id.is_empty()` is dead code that can never fire — lives in
+                // its doc comment now, next to the code that obeys it.
                 // (B2) **READ the document on every warm boot; ADOPT only what a
                 // remote-home profile does not own.** The fetch used to sit
                 // inside the `!home_is_local` gate, which conflated two
@@ -2108,117 +2389,154 @@ impl EntityApp {
                 // fetch within one boot — the regression that took G1 from
                 // 3244 ms to 6195 ms and that only a budget printing on success
                 // caught.
-                crate::boot_progress::step("deployment document"); // i18n-ignore — the pre-app boot surface is English by construction (index.html has no i18n); see boot_progress
-                let read = crate::deployment_config::read_document().await;
-                doc_outcome = read.label();
-                deployment = read.into_config();
-                if !home_is_local {
-                    if let Some(dc) = &deployment {
-                        // An absent/empty `home_site.peer` is NOT a divergence —
-                        // it is a doc that declines to say. Treating "says
-                        // nothing" as "says something different" would let a
-                        // truncated or partially-written document silently
-                        // re-home a working browser, which is a worse failure
-                        // than the one being fixed.
-                        let declared = dc.home_site.as_ref().map(|h| h.peer_id.as_str());
-                        if let Some(new_peer) = declared.filter(|p| !p.is_empty()) {
-                            if never_established {
-                                // **The first contact that failed, run late.**
-                                // Not a re-key: nothing was ever adopted, so
-                                // there is no divergence and no retired
-                                // publisher to record. Routing alone is not
-                                // enough here — it would leave the profile
-                                // reachable but permanently on the build-time
-                                // surface, so a kiosk deployment would boot into
-                                // windowed chrome forever. Apply the WHOLE
-                                // document, which is what the cold path would
-                                // have done.
-                                //
-                                // Applied over the CURRENT config, never over
-                                // `boot_default()`: `apply_to` only sets fields
-                                // the document actually declares, so anything it
-                                // is silent about (and anything the user has
-                                // changed that the deployment does not speak to)
-                                // survives. Rebuilding from the build default
-                                // would discard those.
-                                //
-                                // The blast radius if `never_established` is
-                                // ever a false positive: a profile still parked
-                                // on the untouched build default gets the
-                                // deployment's posture — which is precisely what
-                                // that profile was supposed to receive on its
-                                // first load.
-                                tracing::warn!(
-                                    new_peer = %new_peer,
-                                    "boot_load: this profile never read the deployment \
-                                     document — applying it now (a first contact that \
-                                     failed, recovered on a later boot)"
-                                );
-                                cfg = dc.apply_to(cfg);
-                                adopted_identity = dc.home_site.is_some();
-                            } else if new_peer != stale_peer {
-                                tracing::warn!(
-                                    stale_peer = %stale_peer,
-                                    new_peer = %new_peer,
-                                    "boot_load: warm boot — the domain now publishes under a \
-                                     DIFFERENT identity; adopting the new routing facts \
-                                     (posture preserved)"
-                                );
-                                // The whole `SiteRef`, not just the peer: if the
-                                // publisher moved, the domain's declaration of
-                                // *which* site is home is the authority, and
-                                // keeping a site id from the retired publisher
-                                // can leave a dangling home under the new one.
-                                if let Some(home) = dc.home_site.clone() {
-                                    cfg.home_site = home;
-                                }
-                                // The pin is a routing fact by the same argument.
-                                // The USER's pin still outranks it —
-                                // `restore_user_registry_pin()` below runs after
-                                // this and is where that precedence lives.
-                                if let Some(pin) = dc.name_registry_pin.clone() {
-                                    cfg.name_registry_pin = Some(pin);
-                                }
-                                // Record the supersession DURABLY. This is what
-                                // repairs every *other* durable reference to the
-                                // retired peer — every window's nav state, the
-                                // overlay's, and anything added later — without
-                                // enumerating any of them.
-                                //
-                                // It must be durable because this branch runs
-                                // exactly ONCE: the next boot's config already
-                                // agrees with the domain, so there is no
-                                // divergence left to detect. An in-memory-only
-                                // record would repair whatever happened to be
-                                // open and nothing else, ever again.
-                                crate::peer_supersession::persist(
-                                    &self.peer_manager,
-                                    &system_pid,
-                                    &stale_peer,
-                                    new_peer,
-                                )
-                                .await;
-                                adopted_identity = true;
-                            }
+                // The read itself was hoisted to `boot_document_read` (see its
+                // doc comment) — it is the same single fetch this line used to
+                // make, awaited before any borrow of the app is taken. The
+                // branch stays exactly where it was, because *what the document
+                // is allowed to do* is decided here and nowhere else.
+                deployment = document.clone();
+                // **The decision is not made here.** `decide_home` is pure and
+                // lives beside the config it reasons about
+                // (`session_config::decide_home`), so every combination of
+                // provenance × declaration is gated by `make test` on both arms
+                // instead of only through a browser — the same split as
+                // `pinned_registry`, and for the same reason.
+                //
+                // What used to stand here was an inline chain over
+                // `never_established` / `home_is_local` / `new_peer != stale_peer`,
+                // and it carried the defect: `home_is_local` reads *"the user set
+                // this"* as *"the user set this to something LOCAL"*, so a user
+                // who chose a cached FOREIGN site had it overwritten on the next
+                // boot and got a durable supersession record naming their own
+                // choice as retired. Gate:
+                // `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration`.
+                //
+                // An absent/empty declared peer is a document declining to say,
+                // never a statement that this profile's home is wrong — a
+                // truncated file must not be able to re-home a working browser.
+                let declared = deployment
+                    .as_ref()
+                    .and_then(|dc| dc.home_site.as_ref().map(|h| h.peer_id.as_str()))
+                    .filter(|p| !p.is_empty());
+                let decision = crate::session_config::decide_home(&cfg, &system_pid, declared);
+                match decision {
+                    // **The first contact that failed, run late.** Not a re-key:
+                    // nothing was ever adopted, so there is no divergence and no
+                    // retired publisher to record. Routing alone is not enough
+                    // — it would leave the profile reachable but permanently on
+                    // the build-time surface, so a kiosk deployment would boot
+                    // into windowed chrome forever. Apply the WHOLE document,
+                    // which is what the cold path would have done.
+                    //
+                    // Applied over the CURRENT config, never over
+                    // `boot_default()`: `apply_to` only sets fields the document
+                    // actually declares, so anything it is silent about survives.
+                    crate::session_config::HomeDecision::FirstContact => {
+                        if let Some(dc) = &deployment {
+                            tracing::warn!(
+                                new_peer = ?declared,
+                                "boot_load: this profile never read the deployment \
+                                 document — applying it now (a first contact that \
+                                 failed, recovered on a later boot)"
+                            );
+                            cfg = dc.apply_to(cfg);
+                            adopted_identity = dc.home_site.is_some();
                         }
                     }
-                } else {
+                    // The home came from a deployment and the deployment now
+                    // names someone else. This is incident A, and adopting is
+                    // correct **because the value was theirs**.
+                    crate::session_config::HomeDecision::AdoptDeclared => {
+                        if let (Some(dc), Some(new_peer)) = (&deployment, declared) {
+                            tracing::warn!(
+                                stale_peer = %stale_peer,
+                                new_peer = %new_peer,
+                                "boot_load: warm boot — the domain now publishes under a \
+                                 DIFFERENT identity; adopting the new routing facts \
+                                 (posture preserved)"
+                            );
+                            // The whole `SiteRef`, not just the peer: if the
+                            // publisher moved, the domain's declaration of
+                            // *which* site is home is the authority, and keeping
+                            // a site id from the retired publisher can leave a
+                            // dangling home under the new one.
+                            if let Some(home) = dc.home_site.clone() {
+                                cfg.home_site = home;
+                                cfg.home_site_source =
+                                    crate::session_config::HomeSource::Deployment;
+                            }
+                            // The pin is a routing fact by the same argument.
+                            // The USER's pin still outranks it —
+                            // `restore_user_registry_pin()` below runs after
+                            // this and is where that precedence lives.
+                            if let Some(pin) = dc.name_registry_pin.clone() {
+                                cfg.name_registry_pin = Some(pin);
+                            }
+                            // Record the supersession DURABLY. This is what
+                            // repairs every *other* durable reference to the
+                            // retired peer — every window's nav state, the
+                            // overlay's, and anything added later — without
+                            // enumerating any of them.
+                            //
+                            // It must be durable because this branch runs
+                            // exactly ONCE: the next boot's config already
+                            // agrees with the domain, so there is no divergence
+                            // left to detect. An in-memory-only record would
+                            // repair whatever happened to be open and nothing
+                            // else, ever again.
+                            crate::peer_supersession::persist(
+                                &self.peer_manager,
+                                &system_pid,
+                                &stale_peer,
+                                new_peer,
+                            )
+                            .await;
+                            adopted_identity = true;
+                        }
+                    }
+                    // **The user chose this home. Report, do not obey.**
+                    //
+                    // A divergence here is a fact about the world worth stating
+                    // — the domain publishes as someone else and this profile is
+                    // deliberately pointed elsewhere — but it is not a fault and
+                    // it is not ours to reconcile. Writing a supersession record
+                    // here would name the user's own choice as *retired* and
+                    // rewrite every stored reference to it, which is the defect
+                    // this arm exists to remove.
+                    //
+                    // This line is the D13 channel for the whole class, and it
+                    // is what the health check reads: without it, "we kept your
+                    // choice" and "there was nothing to decide" are the same
+                    // silence.
+                    crate::session_config::HomeDecision::KeptUserChoice => {
+                        tracing::info!(
+                            chosen_peer = %stale_peer,
+                            declared_peer = ?declared,
+                            decision = decision.label(),
+                            "boot_load: the domain declares a different publisher, and this \
+                             profile's home was chosen by the user — keeping it. Routing \
+                             facts are still adopted; the home is not"
+                        );
+                    }
                     // (B2) The local-home profile. The document was READ — its
                     // origins are adopted below, F2 revalidation has its input,
                     // and `fetch()` has already logged `applied` / `unreachable`
                     // / `not served`. Nothing it declares about the HOME is
                     // touched: that is this profile's own setting, and adopting
                     // it here is the rejected fix, not the fix.
-                    tracing::debug!(
-                        home_site = %cfg.home_site.id,
-                        document = doc_outcome,
-                        "boot_load: local home — deployment document read for routing only \
-                         (origins, supersession revalidation); the home is this profile's own \
-                         and is not adopted from it"
-                    );
+                    crate::session_config::HomeDecision::LocalHome => {
+                        tracing::debug!(
+                            home_site = %cfg.home_site.id,
+                            document = doc_outcome,
+                            decision = decision.label(),
+                            "boot_load: local home — deployment document read for routing only \
+                             (origins, supersession revalidation); the home is this profile's own \
+                             and is not adopted from it"
+                        );
+                    }
+                    crate::session_config::HomeDecision::Unchanged => {}
                 }
             }
-
             // (F2) REVALIDATE the durable supersession records against the live
             // deployment document, and drop the ones it contradicts.
             //
@@ -2267,7 +2585,6 @@ impl EntityApp {
                      left untouched (absence of evidence is not evidence)"
                 );
             }
-
             // DERIVE the runtime surface from the durable `boot_surface` — boot
             // lands where config says, not wherever a previous session's toggle
             // last left it. Everything else on the entity (boot_surface,
@@ -2288,53 +2605,6 @@ impl EntityApp {
                 ),
                 Err(e) => tracing::error!(error = %e, "boot_load: session config write failed"),
             }
-
-            // ADOPT THE PERSISTED LOCATION, authoritatively.
-            //
-            // `SiteOverlay::new` ran ~700 lines above this, synchronously, and
-            // its `ContentSiteModel::initialize` read the nav state with the
-            // SYNC `get_entity`. On the Worker arm — the arm a `?worker=1`
-            // browser defaults to — that answers from the per-prefix cache
-            // mirror, which holds only prefixes some `watch_prefix` has primed;
-            // the overlay subscribes *after* the read, and **nothing subscribes
-            // the overlay's state path at all**. So that read is `None` on every
-            // Worker boot, warm or cold, and the overlay opened on the build
-            // default with the user's real location sitting in the tree unread.
-            // Measured with the `audit-worker-reads` lamp
-            // (`docs/plans/AUDIT-WORKER-ARM-NAVIGATION-2026-08-30.md` §7).
-            //
-            // The rule is not new — it is the one stated 300 lines up for this
-            // very config (*"we read it from the durable tree (L1
-            // `get_entity_async`, not the cold cache mirror)"*) and in
-            // `tree_listing_async`'s doc comment for listings. The nav state
-            // never got it.
-            //
-            // Placement is load-bearing, both ends:
-            //   * AFTER the `put_and_wait` above, so the config this reads is
-            //     the final one and the default it derives is the deployment's
-            //     home rather than the build default;
-            //   * BEFORE the `config_was_absent || adopted_identity` re-point
-            //     below, so that branch decides against the real location and
-            //     its `navigate` — which bumps `nav_generation` — wins over
-            //     anything this adopted.
-            // It is unconditional on purpose: a local-home profile persists a
-            // location exactly like a remote-home one (AP36 — put the guard on
-            // the decision, never on the acquisition).
-            if let Some(overlay) = self.site_overlay.as_ref() {
-                // Five outcomes, one field — `adopted` alone would have said
-                // the same thing for "we restored your location" and "you have
-                // never had one", which is the conflation this whole thread has
-                // been about. `unheard` in particular is the one an incident is
-                // debugged from: it means the location on screen is a default
-                // standing in for a value we could not read, not a default
-                // because there is nothing to read.
-                let outcome = overlay.hydrate_durable(&self.peer_manager).await;
-                tracing::info!(
-                    location = outcome.label(),
-                    "boot_load: overlay location resolved against the durable tree"
-                );
-            }
-
             // Mirror the routing facts where a DEAD app can still be read.
             //
             // The `ecdeos.org` re-key was undiagnosed for days not because the
@@ -2359,14 +2629,6 @@ impl EntityApp {
                 &cfg.home_site.id,
                 &crate::peer_supersession::snapshot(),
             );
-
-            // Keep the pre-peer fast-paint kill switch (localStorage mirror, cut
-            // 2c) in sync with the durable config. The mirror is what `start()`
-            // reads BEFORE the peer exists; refreshing it here self-heals it for
-            // the next boot from whatever the persisted config now says (the
-            // settings toggle also writes it immediately for this-reload effect).
-            crate::boot_fast_paint::write_enabled_mirror(cfg.fast_paint);
-
             // Same move for the §6a resolver ceiling: mirror the durable value
             // where a resolution can read it. The shell's `name` verb runs in a
             // `spawn_task` holding no config, and a ceiling that applies only
@@ -2381,15 +2643,6 @@ impl EntityApp {
             // pin installed at fetch time would be present on a cold boot and
             // absent on every one after it — a default that works once [AP22].
             crate::session_config::set_active_registry_pin(cfg.name_registry_pin.clone());
-
-            // The USER's pin, restored from its localStorage mirror. It only
-            // ever outranks the deployment's — never replaces it — so restoring
-            // it here rather than in the seed above keeps the precedence in one
-            // place (`session_config::pinned_registry`). A user who pinned a
-            // registry and reloaded must not be silently moved back onto the
-            // deployment's, which is what a pin scoped to one window did.
-            #[cfg(target_arch = "wasm32")]
-            crate::session_config::restore_user_registry_pin();
 
             // NOTE: the old "(1.2.5) Warm-boot origin RECONCILE" stood here. It
             // is **retired, not moved** — superseded by the (R1) routing
@@ -2494,7 +2747,6 @@ impl EntityApp {
                     warm_targets,
                 );
             }
-
             // Make the origin writers reach every reader. Both production
             // writers — the adopt above and the Registry Browser's *Open in
             // Site Browser* — register under the SYSTEM peer, while a Site
@@ -2512,7 +2764,6 @@ impl EntityApp {
             // Runs after the adopt loop, so the source is final before it is
             // copied. See `origins::mirror_to_all_local_peers` for the bound.
             crate::content_site::origins::mirror_to_all_local_peers(&self.peer_manager).await;
-
             // (1.4) Provision the home site — thin-lens, not eager warehouse
             // (boot-closure reframe). The bundled demo is seeded
             // ONLY when `home_site` is the LOCAL demo (empty/system peer +
@@ -2686,14 +2937,19 @@ impl EntityApp {
             }
 
             // §4-B Surfaces seam: boot straight into a maximized window on a
-            // chosen peer. The EFFECTIVE surface this session is the persisted
+            // chosen peer. **Placed here — after the adoption, the supersession
+            // record and the overlay re-point — and not earlier.** See the note
+            // in phase 1 for what moving it costs: a window hydrates its
+            // persisted location, and on a re-key that location names the
+            // retired publisher until this boot's A→B record is written above.
+            //
+            // The EFFECTIVE surface this session is the persisted
             // `boot_surface`, except a `?boot_window=[{peer}:]{type}` URL
             // override (e2e/showcase, never production) wins — for the *spawn
-            // only*. The override is deliberately NOT folded into `cfg` above,
-            // so it can't clobber the durable config (a normal reload still
-            // honors the real persisted surface). In production
-            // `effective_surface` IS `cfg.boot_surface`, so a persisted `Window`
-            // boots identically.
+            // only*. The override is deliberately NOT folded into `cfg`, so it
+            // can't clobber the durable config (a normal reload still honors the
+            // real persisted surface). In production `effective_surface` IS
+            // `cfg.boot_surface`, so a persisted `Window` boots identically.
             let effective_surface = boot_window_override()
                 .map(|raw| {
                     // `{peer}:{type}` or bare `{type}` (peer empty → system).
@@ -2704,59 +2960,8 @@ impl EntityApp {
                     crate::session_config::BootSurface::Window { peer_id, window_type }
                 })
                 .unwrap_or_else(|| cfg.boot_surface.clone());
-            if let crate::session_config::BootSurface::Window { peer_id, window_type } =
-                &effective_surface
-            {
-                // Resolve the target peer: empty `peer_id` = the system peer
-                // (presets/overrides can't bake a runtime id). Then VALIDATE it
-                // exists — a config can reference a peer that was since deleted
-                // (the delete path self-heals the config, but this is the boot-
-                // time backstop, handoff §4 reactive self-heal). A gone peer →
-                // fall back to chrome, loudly, rather than spawn into the void.
-                let target_peer = if peer_id.is_empty() {
-                    system_pid.clone()
-                } else {
-                    peer_id.clone()
-                };
-                if !self.peer_manager.peer_ids().iter().any(|p| p == &target_peer) {
-                    tracing::warn!(
-                        window_type = %window_type,
-                        target_peer = %target_peer,
-                        "boot_load: BootSurface::Window targets a peer that no longer \
-                         exists; falling back to chrome"
-                    );
-                } else {
-                    // Spawn the window on its peer and promote it to the full-
-                    // viewport surface via the SAME maximize path used at runtime
-                    // (step 5) — no parallel host, no new render path. `active`
-                    // stayed false (a `Window` surface is non-overlay via
-                    // `active_from_boot_surface`), so the site overlay is off.
-                    // Window ids are ephemeral → the durable `(peer, type)` is
-                    // the stable identifier, re-spawned each boot; no extra
-                    // persistence needed.
-                    match self
-                        .window_manager
-                        .spawn(window_type, &target_peer, &self.peer_manager)
-                    {
-                        Some(id) => {
-                            self.maximized_window = Some(id);
-                            tracing::info!(
-                                window_type = %window_type,
-                                target_peer = %target_peer,
-                                window_id = id,
-                                "boot_load: booted into maximized window surface"
-                            );
-                        }
-                        None => tracing::warn!(
-                            window_type = %window_type,
-                            "boot_load: BootSurface::Window names an unknown window type; \
-                             staying in chrome"
-                        ),
-                    }
-                }
-            }
+            self.apply_window_surface(&effective_surface, &system_pid);
         }
-
         // (1.5) Deep-link override: `?site={peer}/{site}/{page}` boots straight
         // into the site overlay at that page — the static→live round-trip ([F3]).
         // Ephemeral like `?boot_window=`: we navigate the overlay + force it on

@@ -69,23 +69,47 @@ impl BuildId {
 /// `assets/sw.js`, which derives the same value independently for its
 /// build-scoped worker cache. Two readers of one fact; if they disagree the
 /// worker cache keys on a build the app does not think it is.
+///
+/// # It SCANS, and it requires the extension — both were bugs, found 2026-09-02
+///
+/// This used to take the **first** occurrence of `entity-browser-` and accept
+/// whatever hex followed, extension or not. `sw.js`'s regex —
+/// `entity-browser-([0-9a-f]{8,})(?:_bg)?\.(?:js|wasm)` — scans for the first
+/// **match**, and requires the extension. So the two readers this doc comment
+/// says must agree **did not**, on any document containing a near-miss ahead of
+/// the real reference.
+///
+/// That is not hypothetical: adding a comment to `index.html` that mentioned
+/// `/entity-browser-<hash>.js` in prose made this function return `None` for the
+/// whole shell while `sw.js` kept working, so the app could not name the build it
+/// was running. Caught by `the_app_reports_the_build_it_is_running`.
+///
+/// The literal is gone from that comment too — a shell should not carry decoys —
+/// but relying on that is relying on nobody ever writing the string again. This
+/// is the half that does not depend on memory.
 pub fn parse_bundle_hash(haystack: &str) -> Option<String> {
-    // `entity-browser-<hex>{,_bg}.{js,wasm}` — the same shape `sw.js` matches.
-    let needle = "entity-browser-";
-    let start = haystack.find(needle)? + needle.len();
-    let rest = &haystack[start..];
-    let hex: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_hexdigit())
-        .collect();
-    // Trunk emits 16 hex chars; `sw.js` requires 8+. Match that floor rather
-    // than the observed length, so a bundler change in either direction does
-    // not silently stop identifying the build.
-    if hex.len() >= 8 {
-        Some(hex)
-    } else {
-        None
+    // `entity-browser-<hex>{,_bg}.{js,wasm}` — the same shape `sw.js` matches,
+    // including the extension, which is what makes a prose mention a non-match
+    // rather than a hijack.
+    const NEEDLE: &str = "entity-browser-";
+    let mut from = 0usize;
+    while let Some(off) = haystack[from..].find(NEEDLE) {
+        let start = from + off + NEEDLE.len();
+        let rest = &haystack[start..];
+        let hex: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        // Trunk emits 16 hex chars; `sw.js` requires 8+. Match that floor rather
+        // than the observed length, so a bundler change in either direction does
+        // not silently stop identifying the build.
+        if hex.len() >= 8 {
+            let tail = &rest[hex.len()..];
+            let tail = tail.strip_prefix("_bg").unwrap_or(tail);
+            if tail.starts_with(".js") || tail.starts_with(".wasm") {
+                return Some(hex);
+            }
+        }
+        from = start;
     }
+    None
 }
 
 /// Read this build's identity out of the live document.
@@ -151,6 +175,42 @@ mod tests {
         // let the app and the service worker key on different builds while both
         // believed they had an answer, which is worse than neither having one.
         assert_eq!(parse_bundle_hash("entity-browser-abc.js"), None);
+    }
+
+    /// **The two readers of this fact must agree, and they did not.** `sw.js`
+    /// scans for a MATCH; this used to take the first *occurrence* and accept
+    /// any hex after it. A prose mention of the bundle in `index.html` was
+    /// enough to make them disagree.
+    #[test]
+    fn a_prose_mention_ahead_of_the_real_reference_does_not_hijack_the_parse() {
+        let shell = r#"<head>
+            <script>
+                // ROOT-ABSOLUTE asset references (`/entity-browser-<hash>.js`)
+            </script>
+            <link rel="preload" href="/entity-browser-bf88e94c97f60358_bg.wasm">
+            <script type="module" src="/entity-browser-bf88e94c97f60358.js"></script>
+        </head>"#;
+        assert_eq!(
+            parse_bundle_hash(shell).as_deref(),
+            Some("bf88e94c97f60358"),
+            "a near-miss BEFORE the real reference must be skipped, not returned and not              treated as a failure for the whole document"
+        );
+    }
+
+    /// The extension is what separates a reference from a mention, so a hex run
+    /// long enough to look like a hash still is not one without it.
+    #[test]
+    fn a_long_hex_run_with_no_extension_is_not_a_bundle_reference() {
+        assert_eq!(parse_bundle_hash("entity-browser-deadbeefdeadbeef"), None);
+        assert_eq!(parse_bundle_hash("entity-browser-deadbeefdeadbeef.txt"), None);
+        assert_eq!(
+            parse_bundle_hash("entity-browser-deadbeefdeadbeef_bg.wasm").as_deref(),
+            Some("deadbeefdeadbeef")
+        );
+        assert_eq!(
+            parse_bundle_hash("entity-browser-deadbeefdeadbeef.js").as_deref(),
+            Some("deadbeefdeadbeef")
+        );
     }
 
     #[test]

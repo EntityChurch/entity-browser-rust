@@ -101,6 +101,12 @@ mod storage_durability;
 mod multitab;
 // Bounded network reads — the D23 chokepoint for every boot-path fetch.
 mod net;
+// THE cache-immutability rule (C15) — one expression, four call sites, pinned
+// to tools/cache-policy-vectors.txt. A mis-cached mutable file is a deployment
+// nobody can correct for a year.
+mod cache_policy;
+// C9 — retained shells + /builds.json, the publisher half of rollback (row 10).
+mod build_slots;
 #[cfg(target_arch = "wasm32")]
 mod diagnostics;
 #[cfg(target_arch = "wasm32")]
@@ -148,6 +154,12 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("registry") {
         return content_site::registry_publish::run(&args);
     }
+    // C9 — retain this tree's shell as a rollback target and record it in
+    // /builds.json. A separate verb because it acts on an ASSEMBLED tree and is
+    // the last step, after both halves of `site-dist` have written it.
+    if args.first().map(String::as_str) == Some("builds") {
+        return build_slots::run(&args);
+    }
 
     eprintln!("entity-browser: there is no native UI build.");
     eprintln!();
@@ -161,6 +173,14 @@ fn main() -> std::process::ExitCode {
     eprintln!("      [--ttl-days=N]                — binding lifetime (default 30; a null ttl is not expressible)");
     eprintln!("      [--identity-seed=HEX]         — 32-byte hex; omit to use the durable registry identity");
     eprintln!("      flags take `=`                — `--bind NAME=…` with a space is NOT this flag");
+    eprintln!("  entity-browser builds OUT_DIR [--notes=…] [--released-at=…] [--keep=N] [--prune]");
+    eprintln!("                                    — retain this tree's shell at /builds/<id>/ and record");
+    eprintln!("                                      it in /builds.json, so a bad build has somewhere to");
+    eprintln!("                                      fall back TO (row 10 / C9). Run it LAST.");
+    eprintln!("      [--min-rollback-index=N]      — advance the anti-rollback floor. Monotone; only for a");
+    eprintln!("                                      build that fixes something not safely rollback-able");
+    eprintln!("      --prune                       — remove retained shells beyond --keep. NEVER removes an");
+    eprintln!("                                      asset a surviving shell names");
     eprintln!("  entity-browser registry OUT_DIR --verify");
     eprintln!("                                    — prove an emitted registry: pointers, signature, walkable closure");
     eprintln!("                                      (use THIS, not `publish --verify` — different durable identity)");
@@ -265,6 +285,37 @@ fn system_recovery_requested() -> bool {
         }
     }
     false
+}
+
+/// `?boot=inline` — the PRE-2026-09-02 order: run the deployment-document half
+/// of the boot before the frame loop exists.
+///
+/// **The two-phase order is the default now and there is no product trade left
+/// to pick.** The flag it replaced (`?boot=twophase`, default off) existed
+/// because deferring phase 2 was believed to cost a visible flicker — the first
+/// frames rendering against a not-yet-reconciled config. That cost was an
+/// artifact of taking the boot surface down at the rAF arm; it is not inherent
+/// to the ordering. The surface now comes down when phase 2 finishes
+/// ([`crate::boot_progress`]), so the user sees the same single transition they
+/// always did, while the frame loop — and with it the watchdog and the recovery
+/// hatch — is live underneath the whole application tier.
+///
+/// So this flag is not an experiment and nothing is expected to set it. It is
+/// kept for two uses: an **escape hatch** if the deferred order is ever
+/// implicated in an incident, and the **control** the row-8 gate compares
+/// against, which needs the old order reachable on the same build to be able to
+/// tell a deferred boot from a fast one.
+///
+/// Accepts `?boot=inline` only — an unrecognised `?boot=` value is *not* a
+/// silent opt-out (a typo must land on the shipped order).
+#[cfg(target_arch = "wasm32")]
+fn boot_inline_requested() -> bool {
+    let Some(window) = web_sys::window() else { return false };
+    let Ok(search) = window.location().search() else { return false };
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .any(|pair| pair == "boot=inline")
 }
 
 /// `?app-host=<program>` — the stripped-startup "L5 app" boot mode: boot minimal
@@ -418,8 +469,9 @@ pub async fn start() -> Result<(), JsValue> {
         return app_host::run(&program).await;
     }
 
-    // The loading indicator STAYS UP until the frame loop is armed
-    // (`boot_progress::armed()`, below). It used to be hidden right here —
+    // The loading indicator STAYS UP until boot phase 2 hands the page over
+    // (`boot_progress::surface_down()`, below — NOT the rAF arm, which is a
+    // separate signal since the two-phase split). It used to be hidden right here —
     // before peer construction and before `boot_load`'s ~14 awaits — which,
     // with `boot_fast_paint` disabled for the site-surface consolidation, left
     // the page **blank** for the whole application-tier boot and took the
@@ -526,9 +578,9 @@ pub async fn start() -> Result<(), JsValue> {
 
     use storage_durability::BootStorageStatus;
     boot_progress::step("opening storage");
-    let (app, storage_status) = if try_worker {
+    let (app, boot_plan, storage_status) = if try_worker {
         match app::EntityApp::new_wasm_worker().await {
-            Ok(app) => (app, BootStorageStatus::DurableWorker),
+            Ok((app, plan)) => (app, plan, BootStorageStatus::DurableWorker),
             Err(err) => {
                 // C5b: the silent Worker→Direct downgrade orphans the durable
                 // OPFS tree and looks wiped. Warn loudly and flag the banner.
@@ -540,10 +592,8 @@ pub async fn start() -> Result<(), JsValue> {
                 // Worker failed: do NOT also open the IDB primary — the
                 // orphaned-OPFS interaction + shared-db concerns make the
                 // durable IDB path its own follow-up. Keep ephemeral here.
-                (
-                    app::EntityApp::new_wasm(false).await.0,
-                    BootStorageStatus::DowngradedToDirect,
-                )
+                let (app, _, plan) = app::EntityApp::new_wasm(false).await;
+                (app, plan, BootStorageStatus::DowngradedToDirect)
             }
         }
     } else if multitab_secondary {
@@ -551,10 +601,8 @@ pub async fn start() -> Result<(), JsValue> {
         // specific banner so it isn't mistaken for storage eviction.
         // Secondary tab must NOT open the shared IDB primary (last-writer-
         // wins race, design §9 multi-tab) — stay ephemeral on purpose.
-        (
-            app::EntityApp::new_wasm(false).await.0,
-            BootStorageStatus::SecondaryTabEphemeral,
-        )
+        let (app, _, plan) = app::EntityApp::new_wasm(false).await;
+        (app, plan, BootStorageStatus::SecondaryTabEphemeral)
     } else {
         // The clean Direct boot (`?worker=0`, no worker support, Tauri
         // WebView): the primary is IDB-durable, and IDB has no exclusivity
@@ -565,21 +613,19 @@ pub async fn start() -> Result<(), JsValue> {
         if direct_secondary {
             // Another tab owns the durable IDB peer — stay ephemeral on
             // purpose (do NOT open the shared db) with the specific banner.
-            (
-                app::EntityApp::new_wasm(false).await.0,
-                BootStorageStatus::SecondaryTabEphemeral,
-            )
+            let (app, _, plan) = app::EntityApp::new_wasm(false).await;
+            (app, plan, BootStorageStatus::SecondaryTabEphemeral)
         } else {
             // Leader (or single tab): make the primary IDB-durable.
             // `idb_active` picks the honest banner — durable when IDB came up,
             // ephemeral if it didn't.
-            let (app, idb_active) = app::EntityApp::new_wasm(true).await;
+            let (app, idb_active, plan) = app::EntityApp::new_wasm(true).await;
             let status = if idb_active {
                 BootStorageStatus::DurableDirectIdb
             } else {
                 BootStorageStatus::EphemeralDirect
             };
-            (app, status)
+            (app, plan, status)
         }
     };
     // D13 honesty: which peer-host arm actually booted (the default is now the
@@ -641,6 +687,37 @@ pub async fn start() -> Result<(), JsValue> {
     }
 
     let app = std::rc::Rc::new(std::cell::RefCell::new(app));
+
+    // ---- Boot phase 2: the deployment-document half. -----------------------
+    //
+    // Heal-path row 8 / `AUDIT-BOOT-PATH-2026-08-27` §4. Phase 1 ran inside the
+    // constructor and resolved everything already durable — the session config,
+    // the window index, the persisted location. Phase 2 is the part that depends
+    // on `/entity-deployment.json`, and it is **deferred by default since
+    // 2026-09-02**: it runs behind a live frame loop, so an application-tier step
+    // that stalls or panics costs a late config instead of a page that never
+    // paints.
+    //
+    // `?boot=inline` restores the old order as an escape hatch and as the gate's
+    // control; see `boot_inline_requested`. Nothing in the product sets it.
+    //
+    // **The boot surface does not come down here.** It comes down when phase 2
+    // finishes, so the user still sees exactly one transition and the deferral
+    // costs no flicker — see `boot_progress`, which owns that hand-over and
+    // bounds it.
+    let inline = boot_inline_requested();
+    let mut deferred_plan = None;
+    if inline {
+        // The network read is awaited holding NO borrow even on the inline path.
+        // It costs nothing here (no loop is running yet) and it keeps ONE call
+        // shape: the borrow discipline the deferred path depends on is exercised
+        // by this branch too, rather than living only down the path the control
+        // never runs.
+        let read = app::EntityApp::boot_document_read().await;
+        app.borrow_mut().boot_phase2(boot_plan, read).await;
+    } else {
+        deferred_plan = Some(boot_plan);
+    }
 
     // requestAnimationFrame loop.
     let callback: std::rc::Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
@@ -710,12 +787,19 @@ pub async fn start() -> Result<(), JsValue> {
             .ok();
     }
 
-    // The app owns the page from here — take the boot surface down. This is
-    // `boot_progress`'s ONE structural signal: placed after the first frame is
-    // scheduled, so the surface comes down when there is something behind it,
-    // and a boot that dies earlier leaves it up carrying the recovery link
-    // rather than exposing a blank page that looks like a finished one.
-    boot_progress::armed();
+    // The frame loop is live from here — the app is rendering BEHIND the boot
+    // surface. This is `boot_progress`'s ONE structural signal and it is what
+    // makes the application tier non-fatal: past this line a phase-2 step that
+    // stalls, panics or hangs has a live frame loop, an installed watchdog and a
+    // reachable recovery hatch under it. It also arms the hold failsafe, so the
+    // surface comes down in bounded time even if phase 2 never reports back.
+    //
+    // It does NOT take the surface down. The startup surface is decided in phase
+    // 2 — behind the deployment document and the supersession adoption, which is
+    // a data dependency, not a preference — so painting a guessed surface here
+    // and correcting it a moment later is precisely the flicker. See
+    // `boot_progress`'s module note.
+    boot_progress::frame_loop_live();
 
     let boot_ms = perf_now() - wasm_start_ms;
     tracing::info!(
@@ -723,6 +807,44 @@ pub async fn start() -> Result<(), JsValue> {
         boot_ms,
         "Frame loop started (cold-start timing)"
     );
+
+    // The deferred half — the shipped order. Spawned AFTER `frame_loop_live()`,
+    // which is the property itself and not a formality: phase 2 runs with a live
+    // frame loop behind it, so its worst outcome is a config that never arrives
+    // rather than an app that never starts.
+    //
+    // The document read holds no borrow. The apply that follows takes
+    // `borrow_mut()` and holds it across its LOCAL tree awaits — a stated bound,
+    // not an oversight: `FRAME SKIP` names it in the log if it ever gets long,
+    // and removing it means giving the phase-2 helpers an owned handle instead of
+    // `&Peers` (`boot_phase2`'s doc comment says what that costs).
+    //
+    // **The hand-over is an RAII guard, not a line at the end (AP44).** A
+    // `surface_down()` call in the tail is only reached when phase 2 returns
+    // normally, and the two cases that most need the page handed over are the
+    // ones that do not return normally: an application-tier panic unwinding out
+    // of an await, and an early return added later by someone who did not have
+    // this rule in their head. `HandOver` drops on every one of those paths and
+    // reports which it was. The failsafe in `boot_progress` is still the outer
+    // bound; this is what keeps the ordinary and the panicking boot from both
+    // waiting it out.
+    if let Some(plan) = deferred_plan {
+        let app_phase2 = app.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut handover = boot_progress::HandOver::pending();
+            tracing::info!(
+                "boot phase 2: DEFERRED — the frame loop is live; the deployment \
+                 document is being read behind the boot surface"
+            );
+            let read = app::EntityApp::boot_document_read().await;
+            app_phase2.borrow_mut().boot_phase2(plan, read).await;
+            handover.completed();
+        });
+    } else {
+        // The `?boot=inline` control: phase 2 already ran, above, before the loop
+        // existed. Nothing is pending, so hand the page over now.
+        boot_progress::surface_down("phase 2 inline");
+    }
     Ok(())
 }
 

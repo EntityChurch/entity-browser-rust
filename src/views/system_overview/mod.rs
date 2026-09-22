@@ -43,6 +43,14 @@ pub const HEALTH_REMEDY_EVENT: &str = "health_remedy";
 #[derive(Default)]
 struct HealthState {
     ran: bool,
+    /// **A probe is in flight right now.** Separate from `ran`, and that is the
+    /// point: on a re-check `ran` stays true — the previous findings are still
+    /// the best answer available and blanking them would flash the card — so
+    /// without this flag pressing *Check again* changed nothing on screen at
+    /// all. With an unreachable domain the read is bounded at 3 s (D23), so the
+    /// button looked dead for that long; with unchanged findings, which is the
+    /// common case, it looked dead forever (audit F6).
+    checking: bool,
     findings: Vec<crate::doctor::Finding>,
     remedy_message: Option<String>,
 }
@@ -236,7 +244,14 @@ impl WindowView for SystemOverviewWindow {
                     // Clear the previous remedy note: it described the last
                     // action, and leaving it above a fresh set of findings
                     // would read as a report on *these* results.
-                    self.health.borrow_mut().remedy_message = None;
+                    {
+                        let mut h = self.health.borrow_mut();
+                        h.remedy_message = None;
+                        // Say so before the probe starts, not after it lands: a
+                        // control whose only feedback arrives with the result
+                        // is a control the user presses again.
+                        h.checking = true;
+                    }
                     self.needs_health.set(true);
                     self.watch.mark_dirty();
                 }
@@ -342,28 +357,53 @@ impl WindowView for SystemOverviewWindow {
             );
             let slot = self.health.clone();
             let flag = self.watch.flag();
+            // Captured before the spawn — nothing here may borrow `Peers`
+            // across an await.
+            let system_pid = peers.system_peer_id().to_string();
             wasm_bindgen_futures::spawn_local(async move {
-                // What this profile believes. An errored or absent read is
-                // `None`, which check 1 reports as "nothing to check" — never
-                // as agreement (AP30 corollary: an errored round-trip is not an
-                // answer).
-                let believed = match cfg_fut.await {
-                    Ok(Some(e)) => {
-                        let home = crate::session_config::SessionConfig::from_entity(&e).home_site;
-                        Some(home.peer_id).filter(|p| !p.is_empty())
-                    }
+                // The WHOLE config, not just the home peer: check 1 needs the
+                // provenance too, and reconstructing "did the user choose this"
+                // from the peer id alone is what the check used to do wrong.
+                //
+                // An errored or absent read yields `None`, which check 1
+                // reports as "nothing to check" — never as agreement (AP30
+                // corollary: an errored round-trip is not an answer).
+                let cfg = match cfg_fut.await {
+                    Ok(Some(e)) => Some(crate::session_config::SessionConfig::from_entity(&e)),
                     _ => None,
                 };
+                let believed = cfg
+                    .as_ref()
+                    .map(|c| c.home_site.peer_id.clone())
+                    .filter(|p| !p.is_empty());
                 // What the domain says. Bounded by D23 — this is the same
                 // reader boot uses, deadline and all, so a black-holing origin
                 // cannot wedge the window that is supposed to explain it.
                 let doc = crate::deployment_config::read_document().await;
                 let ledger = crate::refresh_ledger::snapshot();
 
-                let findings = crate::doctor::run_checks(believed.as_deref(), &doc, &ledger);
+                // **The decision boot makes, not a second opinion.** Same
+                // function, same inputs — so the surface reports what the boot
+                // path did rather than re-deriving whether it should have.
+                // Without a config there is nothing to decide, and `Unchanged`
+                // is the arm that claims nothing.
+                let home = match &cfg {
+                    Some(c) => {
+                        let declared = doc
+                            .config()
+                            .and_then(|d| d.home_site.as_ref().map(|h| h.peer_id.as_str()))
+                            .filter(|p| !p.is_empty());
+                        crate::session_config::decide_home(c, &system_pid, declared)
+                    }
+                    None => crate::session_config::HomeDecision::Unchanged,
+                };
+
+                let findings =
+                    crate::doctor::run_checks(believed.as_deref(), home, &doc, &ledger);
                 let mut h = slot.borrow_mut();
                 h.findings = findings;
                 h.ran = true;
+                h.checking = false;
                 drop(h);
                 flag.mark();
             });
@@ -373,6 +413,7 @@ impl WindowView for SystemOverviewWindow {
             let h = self.health.borrow();
             crate::views::system_overview::output::HealthView {
                 ran: h.ran,
+                checking: h.checking,
                 findings: h.findings.clone(),
                 remedy_message: h.remedy_message.clone(),
             }

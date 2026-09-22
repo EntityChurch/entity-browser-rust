@@ -3714,6 +3714,32 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Build, packaging & tree hygiene
 
+- **A document that MENTIONS the string a parser greps it for will eventually be parsed as
+  itself.** `build_id::parse_bundle_hash` took the **first** occurrence of `entity-browser-` in
+  `index.html` and accepted whatever hex followed, extension or not. `assets/sw.js` derives the
+  same value with a regex that scans for the first **match** and requires the extension. The
+  function's own doc comment said the two *"must stay in step … if they disagree the worker cache
+  keys on a build the app does not think it is"* — and they already could not agree on any
+  document containing a near-miss ahead of the real reference.
+  **It took one comment.** Adding a C10 note to `index.html` that mentioned the bundle path in
+  prose put a non-hex `<hash>` ahead of the real `<link>`, so the app reported **no bundle at
+  all** while `sw.js` carried on working. Caught by `the_app_reports_the_build_it_is_running`,
+  which is the whole reason that gate exists — and note the shape: the shell had been carrying
+  `entity-browser-log` (a BroadcastChannel name) for months, harmless only because trunk's
+  injected references happened to sort ahead of it in the built output. **Position was doing the
+  work of a predicate.**
+  **Fixed in the parser, not in the comment.** It scans every occurrence and requires
+  `.js`/`.wasm` (with an optional `_bg`), which is `sw.js`'s rule exactly. The decoy came out of
+  the comment too — a shell should not carry look-alikes of a string things grep it for — but
+  that half depends on nobody ever writing it again, and is belt and braces.
+  **The gate got stronger in the same change, by deleting a duplicate.** It had re-implemented
+  the same fragile parse to compute its expectation (tests/ cannot import a bin crate), so both
+  expressions were wrong the same way and the gate could not see it. It now reads the
+  `entity-build-id` stamp that `tools/build-stamp.sh` derives with a **third** expression, so the
+  assertion is *do the stamp and the scanner agree on the real artifact* rather than
+  *does the scanner agree with a copy of itself*. Falsified: decoy + the old first-occurrence
+  parser reds with *"THOSE TWO DISAGREE about what this build is"*.
+
 - **D23 IS NOT A RULE ABOUT THE WORD `fetch`, AND "FIXING" THE REMAINING UNBOUNDED ONES IS A
   REGRESSION.** The discipline bounds an await that is **blocking a defined alternative
   outcome** — build-time defaults (D16), a cached shell. Two fetches in `assets/sw.js` are
@@ -3756,8 +3782,10 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   **Invisible locally** (a fresh container has no cache) and not noticeable the day you set it —
   you notice the first time you need to correct something. Now: immutable **only** for `/content/`
   and for `name-<8+ hex>.wasm|.js` (trunk stamps the hash into the name, so a rebuild is a new
-  URL); everything else `no-store`. The same rule is duplicated in `named_site.rs`'s test server
-  so the config an operator copies and the server our tests trust cannot disagree.
+  URL); everything else `no-store`. The same rule was duplicated in `named_site.rs`'s test server
+  "so the config an operator copies and the server our tests trust cannot disagree" — **that
+  sentence was a guarantee nobody enforced, and it was false when written. See the correction
+  immediately below, and C15 for how it was closed.**
   - **THEY DISAGREE. Audited 2026-08-25: the rule has FOUR expressions and no two are the same** —
     `cors-serve.py` (`"/content/" in path`, on the raw target *including the query*),
     `app_server.rs` (`starts_with("/content/")`, query stripped), `named_site.rs`
@@ -3773,6 +3801,24 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     92 files of the second in `dist-federation`. Full audit:
     `docs/status/REVIEW-2026-08-25-cache-classification-and-the-service-worker.md`.
     **Two expressions of one rule that can disagree eventually do — and four of them already have.**
+  - **CLOSED 2026-09-02 (C15) — one rule, one vector file, four call sites gated against it.**
+    `src/cache_policy_rule.rs` is the rule; `src/cache_policy.rs` wraps it for the app crate and
+    `src-tauri/src/app_server.rs` takes it by `#[path]` module, so the two Rust servers compile the
+    *same source*, not two careful copies. Python and prose cannot do that, so all four are pinned
+    to **`tools/cache-policy-vectors.txt`**: the Rust tests read it (`make test`, `make test-tauri`),
+    `tools/cache-policy-lint.sh` runs `cors-serve.py` over it, and
+    `tools/cache-policy-doc-check.py` asserts `PUBLISHING-QUICKSTART` §6.2 still carries the same
+    two match expressions and none of the retired spellings — both in `make lint`.
+    **The rule itself changed, in both directions.** The content test is now the SHARD structure —
+    `content/{aa}/{bb}/{hash}` where `aa`/`bb` are the hash's own first four hex characters — which
+    is self-verifying, excludes an ingested Hugo/Zola `content/` tree, and *keeps* prefixed
+    deployments that `starts_with` was silently under-caching. Measured across every published tree
+    on the box: **7653 files under a `content/` segment, 7653 matching, zero exceptions.** The query
+    string is stripped (it was not, in the one file operators are told to copy), and hex is
+    lowercase-only because widening the immutable set is the unsafe direction.
+    **What is still only a spelling check:** §6.2 is prose and cannot be executed, so the doc gate
+    proves it has not *drifted*, never that the CDN recipe is right. That is the honest limit of
+    gating a document, and it is strictly more than the comment it replaced.
   **The general shape: when a policy enumerates the exceptions and defaults the rest to the unsafe
   value, every artifact added later inherits the unsafe value silently.** And note what could not
   catch it — every gate we own runs against a server with no cache in front of it.
@@ -3785,7 +3831,7 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     now runs `tools/cors-serve.py` (it takes `(directory, port)` and is already
     `ThreadingHTTPServer` on `0.0.0.0`), so `serve` / `build-serve` / `site-serve` / `dist-web` all
     get the documented policy: `no-store` for the mutable shell, `immutable` only for
-    `/content/` and hash-named bundles. **The reference implementation of a policy is worth
+    the content-store shard shape and hash-named bundles. **The reference implementation of a policy is worth
     nothing while the thing everyone actually runs does not call it** — same shape as a documented
     invariant with no enforcement point, one layer over.
 - **Publish outputs must NOT live under `dist/` — `trunk` wipes it [F10].** `make federation`
@@ -4145,6 +4191,49 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Testing & the gates
 
+- **A mass e2e failure whose message says *"something is holding :8092"* is usually SELinux, not
+  a port — and the harness names the wrong cause. Measured 2026-09-02.** Two consecutive
+  unfiltered runs came back **21/61 and 28/61 failed**, every failure after the first reading
+  *"the dist server never served a 200 for /index.html on :8092 within 20s… something else is
+  holding :8092 and answering."* Nothing was holding it. The server started fine and could not
+  **read** what it was serving:
+  ```
+  Error: "cannot read dist/index.html — Permission denied (os error 13)"
+  python3: can't open file '…/tools/e2e/blackhole-serve.py': [Errno 13] Permission denied
+  $ ls -ldZ dist/index.html
+  … system_u:object_r:container_file_t:s0:c122,c874 …      # ← private MCS categories
+  ```
+  **What happened.** Our Makefile bind-mounts the **shared parent** (`<shared-parent>` →
+  `/src/entity-systems`), and so does at least one sibling repo's container. A concurrent run
+  from another repo on this box relabelled that whole parent with **its own** MCS category pair,
+  and our container — which gets a different pair — lost read access **mid-run**. The culprit is
+  identifiable, and this is the one command worth knowing:
+  ```
+  $ for c in $(podman ps -q); do podman inspect $c \
+        --format '{{.Name}} {{.ProcessLabel}}'; done
+  practical_hugle  system_u:system_r:container_t:s0:c122,c874    # ← the tree's label, exactly
+  ```
+  **The fix is cooperative, not a fight:** `chcon -R -l s0 .` over our own subtree returns it to
+  the shared level (no categories), which every `container_t` can read — that is what `:z` means,
+  and it does not take anything away from the other container. Re-run after that.
+  **It is not enough on its own, and here is the part that decides whether you can run at all.**
+  Our path deps live in `../entity-core-rust`, under the *same* shared parent, so that tree needs
+  the same treatment or the build dies at `failed to read …/core/capability/Cargo.toml:
+  Permission denied` before any test starts. And **the relabel is stolen back on every container
+  start**: measured 2026-09-02, a sibling seat's `make test-each-native` (golang, mounting the
+  same parent) spawned a fresh container roughly **every four minutes**, each one stamping a new
+  MCS pair on the tree. Four unfiltered runs in a row died that way — 21, 28, 23 failed, then a
+  build failure — while a **filtered** run of one gate finished inside the window and passed.
+  So: relabel, then either run **filtered**, or wait until `podman ps` shows no sibling container
+  bound to `<shared-parent>`. **Do not kill the other container to get a green run** — and
+  when you report, say the unfiltered run was *blocked*, not that it was green.
+  **Two things to carry.** (1) **This is not the `:4444` folklore.** That note is about a single
+  Selenium container and says the "other seats" story was never evidenced; here the evidence is
+  a running container, its mount, and its label matching the tree's byte for byte. Different
+  resource, real collision. (2) **Do not read the first failure as the cause.** The cascade's
+  first casualty was an ordinary boot gate failing with *"0 log lines captured"*, which reads
+  like an app that never started; everything after it inherited a message about a port. Check
+  `ls -ldZ dist/index.html` before believing any of it.
 - **`tree put: stored` IS NOT DURABILITY on the Direct-IDB arm — a gate that reloads on the
   put races the flush.** The IDB store is **write-behind**: puts queue and drain on a 250 ms
   debounce (`DEBOUNCE_MS`, `entity-core-rust/core/store/src/idb.rs`), and only
@@ -4302,7 +4391,10 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   app; the real cause was a **stale `python3 -m http.server` from another session squatting the
   port**, so `cors-serve.py` never bound (its stderr was sent to `/dev/null`) and the browser was
   talking to a server that serves 404s and no CORS. Two rules earned: **a rig's own server must be
-  probed before the browser is asked to trust it** (`assert_federation_origin_healthy` checks
+  probed before the browser is asked to trust it** (the origin-health probe in `up()`,
+  `tools/e2e/federation-multihost.sh` — inline bash, **not** a named function; this bullet cited a
+  symbol `assert_federation_origin_healthy` that has never existed anywhere in the tree, which is
+  the citation half of AP37: it checks
   200 **and** the `Access-Control-Allow-Origin` header, and names the squatter hypothesis in its
   failure text — mutation-checked by swapping in `http.server`, which reports `200=true cors=false`),
   and **never `Stdio::null()` a helper server's stderr** — a bind failure is precisely the error that

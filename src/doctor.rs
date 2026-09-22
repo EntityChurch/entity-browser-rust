@@ -20,10 +20,19 @@
 //! **"I could not check" must never render as "healthy."** A diagnostic whose
 //! unknown state is indistinguishable from its good state is worse than no
 //! diagnostic, because it converts *"I do not know"* into *"you are fine"* on
-//! the one screen a worried user is reading. So [`Verdict`] has five states,
+//! the one screen a worried user is reading. So [`Verdict`] has six states,
 //! there is no boolean anywhere in this module, and every `match` on an input
 //! enumerates its arms rather than falling into a `_ =>` that would hand the
 //! weakest evidence the strongest sentence (AP40).
+//!
+//! **And enumerating the arms on ONE axis is not enumerating them.** Check 1
+//! was written that way — exhaustive over every shape of `DocumentRead`, and a
+//! catch-all over every shape of *belief* — so a home the user had deliberately
+//! chosen fell into the last arm and was reported as a stale routing fact, with
+//! advice the boot path specifically prevents. The fix is not another arm: the
+//! check now takes [`crate::session_config::HomeDecision`], the same value boot
+//! acts on, so the surface **reports the decision rather than re-deriving it**
+//! (AP48's transferable half, applied at the input instead of the output).
 //!
 //! # It fixes things too, and that half is the point
 //!
@@ -123,7 +132,7 @@ impl Check {
     }
 }
 
-/// What a check concluded. **Five states, and four of them are not "healthy".**
+/// What a check concluded. **Six states, and four of them are not "healthy".**
 ///
 /// The ordering is severity, worst first, so a surface can sort by it and a
 /// summary can take the maximum without a second table.
@@ -144,11 +153,28 @@ pub enum Verdict {
     NothingToCheck,
     /// Checked, and they agree.
     Agrees,
+    /// **The belief and the source differ, and that is the user's own doing.**
+    ///
+    /// Added 2026-09-01 (`AUDIT-HEAL-PATH-AND-THE-OWNERSHIP-GAP` F2) and it is
+    /// the sixth state on purpose. Check 1 used to compare *the publisher this
+    /// profile points at* with *the publisher the domain declares* and call any
+    /// difference a divergence — which told a visitor who had deliberately set
+    /// their own home that their profile was misconfigured, and offered advice
+    /// (*"opening the app again repairs this"*) that the boot path specifically
+    /// prevents.
+    ///
+    /// Folding this into [`NothingToCheck`](Verdict::NothingToCheck) was the
+    /// tempting cheap fix and it is the same mistake one layer along: *"nobody
+    /// has set this yet"* and *"you set this yourself"* are opposite facts about
+    /// who is in control (AP40). It is [`is_clear`](Verdict::is_clear), because
+    /// a profile pointed where its owner chose is the healthy case, not an
+    /// unexamined one.
+    UserOwned,
 }
 
 impl Verdict {
-    /// One word, for the status chip and for the log line. Five distinct
-    /// labels; a sixth verdict cannot silently reuse one (gated).
+    /// One word, for the status chip and for the log line. Six distinct
+    /// labels; a seventh verdict cannot silently reuse one (gated).
     pub fn label(&self) -> &'static str {
         match self {
             Verdict::Diverges => "diverges",
@@ -156,14 +182,23 @@ impl Verdict {
             Verdict::SourceSilent => "source-silent",
             Verdict::NothingToCheck => "nothing-to-check",
             Verdict::Agrees => "agrees",
+            Verdict::UserOwned => "user-owned",
         }
     }
 
-    /// Whether this verdict is a positive statement of health. **Only one is.**
-    /// The method exists so no call site has to re-derive that, and so the
-    /// question "does this count as OK?" has exactly one answer in the tree.
+    /// Whether this verdict is a positive statement of health. **Two are, and
+    /// the second one is not a widening.** The method exists so no call site
+    /// has to re-derive it, and so the question "does this count as OK?" has
+    /// exactly one answer in the tree.
+    ///
+    /// [`Agrees`](Verdict::Agrees) is *we checked and they match*.
+    /// [`UserOwned`](Verdict::UserOwned) is *they do not match and the person
+    /// reading this is the reason* — a profile pointed where its owner chose is
+    /// the healthy case. What must never become clear is any of the three that
+    /// establish **nothing**, and the gate below asserts exactly that rather
+    /// than a count.
     pub fn is_clear(&self) -> bool {
-        matches!(self, Verdict::Agrees)
+        matches!(self, Verdict::Agrees | Verdict::UserOwned)
     }
 
     /// **Is this worth putting in front of a person?** — and it is deliberately
@@ -193,8 +228,8 @@ impl Verdict {
     /// the stable log/gate token and must stay a token — a reworded chip that
     /// silently changed a log field is how a grep stops finding an incident.
     ///
-    /// Read these four non-clear words together: none of them says *"OK"*, and
-    /// none says *"error"* either. Three of the five mean *this was not
+    /// Read the four non-clear words together: none of them says *"OK"*, and
+    /// none says *"error"* either. Three of the six mean *this was not
     /// established*, and the surface has to carry that difference rather than
     /// rounding it to a tick or a cross.
     pub fn chip(&self) -> &'static str {
@@ -204,13 +239,17 @@ impl Verdict {
             Verdict::SourceSilent => "nothing to compare",
             Verdict::NothingToCheck => "not checked yet",
             Verdict::Agrees => "all good",
+            // Not "all good" — the same words for a match and for a deliberate
+            // mismatch would throw away the only distinction this state exists
+            // to carry.
+            Verdict::UserOwned => "your choice",
         }
     }
 
-    /// How much of the user's attention this deserves. **Three bands from five
+    /// How much of the user's attention this deserves. **Three bands from six
     /// verdicts** — and the mapping is where the "unknown is not good news"
     /// rule becomes visible: the three verdicts that establish nothing all land
-    /// on `Unknown`, never on `Clear`. Only `Agrees` is `Clear`.
+    /// on `Unknown`, never on `Clear`.
     #[cfg(target_arch = "wasm32")]
     pub fn tone(&self) -> crate::dom::components::HealthTone {
         use crate::dom::components::HealthTone;
@@ -219,7 +258,7 @@ impl Verdict {
             Verdict::Undetermined | Verdict::SourceSilent | Verdict::NothingToCheck => {
                 HealthTone::Unknown
             }
-            Verdict::Agrees => HealthTone::Clear,
+            Verdict::Agrees | Verdict::UserOwned => HealthTone::Clear,
         }
     }
 }
@@ -330,27 +369,51 @@ impl Remedy {
     pub fn apply(&self) -> RemedyOutcome {
         match self {
             Remedy::RetryFailedRefreshes => {
-                let generation = crate::refresh_ledger::request_retry();
+                // **Ask, then say whether anyone was there.** `request_retry`
+                // bumps a counter that any open launcher picks up in `tick`;
+                // with none open the bump is real and nothing acts on it, which
+                // is a different outcome and must read as one.
+                let (generation, listeners) = crate::refresh_ledger::request_retry();
+                let outcome = if listeners == 0 {
+                    RemedyOutcome::NobodyListening
+                } else {
+                    RemedyOutcome::Requested
+                };
                 tracing::info!(
                     remedy = self.key(),
                     generation,
+                    listeners,
+                    outcome = ?outcome,
                     "health: remedy applied — asked open launchers to retry the sets that \
                      failed"
                 );
-                RemedyOutcome::Requested
+                outcome
             }
         }
     }
 }
 
-/// What applying a remedy did. **Deliberately not a bool.** The retry is a
-/// request to a mechanism that answers later, and reporting that as *"fixed"*
-/// would be the same lie this whole surface exists to stop telling.
+/// What applying a remedy did. **Deliberately not a bool, and deliberately not
+/// one arm.** The retry is a request to a mechanism that answers later, and
+/// reporting that as *"fixed"* would be the same lie this whole surface exists
+/// to stop telling.
+///
+/// [`NobodyListening`](RemedyOutcome::NobodyListening) was added 2026-09-01
+/// (audit F5). With one arm the surface said *"Asked. This section updates on
+/// its own when the retry finishes"* even when **no launcher was open to ask** —
+/// so nothing could ever finish and the user was left waiting on an update that
+/// was never coming. That is the collapsed-outcome shape the recovery console
+/// one row over was built specifically to avoid, where *"there was nothing to
+/// remove"* must never render as *"fixed"* (AP40).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemedyOutcome {
-    /// Asked. The result arrives when the mechanism answers, and the check
-    /// above re-reports it from the same evidence as before.
+    /// Asked, and something was listening. The result arrives when the
+    /// mechanism answers, and the check above re-reports it from the same
+    /// evidence as before.
     Requested,
+    /// Nothing was in a position to act. Not a failure and not a success — a
+    /// fact about the machine, and one the user can do something about.
+    NobodyListening,
 }
 
 impl RemedyOutcome {
@@ -360,6 +423,10 @@ impl RemedyOutcome {
             RemedyOutcome::Requested => {
                 "Asked. This section updates on its own when the retry finishes — if the \
                  publisher still does not have them, it will say so again."
+            }
+            RemedyOutcome::NobodyListening => {
+                "Nothing happened: the Apps window is not open, and it is what does the \
+                 loading. Open it and the sets that failed will be tried again."
             }
         }
     }
@@ -394,7 +461,19 @@ pub struct Finding {
 /// and because the reconcile cannot run when the document could not be read.
 ///
 /// `believed` is `None` when this profile has no home publisher recorded.
-pub fn check_domain_identity(believed: Option<&str>, doc: &DocumentRead) -> Finding {
+///
+/// `home` is the decision boot itself makes
+/// ([`session_config::decide_home`](crate::session_config::decide_home)) — not
+/// a second opinion. A check that re-derived *"is this divergence a fault?"*
+/// would be free to disagree with the code that acts on it, and did: it told a
+/// user who had chosen their own home that their profile was pointed at a
+/// retired publisher, and that reopening the app would repair it, while
+/// `boot_load` was deliberately not repairing anything.
+pub fn check_domain_identity(
+    believed: Option<&str>,
+    home: crate::session_config::HomeDecision,
+    doc: &DocumentRead,
+) -> Finding {
     let declared: Option<&str> = match doc {
         DocumentRead::Served(cfg) => cfg
             .home_site
@@ -473,6 +552,31 @@ pub fn check_domain_identity(believed: Option<&str>, doc: &DocumentRead) -> Find
              Routing is not your problem."
                 .to_string(),
         ),
+        // **The belief axis is enumerated too now, and this is the arm that
+        // was missing.** A home the user chose, or one that is this profile's
+        // own peer, differs from the domain's declaration *by design*. Reading
+        // that as a stale routing fact is the diagnostic manufacturing the
+        // fault it is looking for.
+        (
+            Some(_),
+            DocumentRead::Served(_),
+            Some(d),
+        ) if matches!(
+            home,
+            crate::session_config::HomeDecision::KeptUserChoice
+                | crate::session_config::HomeDecision::LocalHome
+        ) =>
+        {
+            (
+                Verdict::UserOwned,
+                format!("this domain publishes as {d}"),
+                "This profile points somewhere you chose, which is not the site this domain \
+                 publishes. That is not a fault and nothing will change it back — your \
+                 choice is kept on every load. Change it in Settings if you want the \
+                 domain's own home again."
+                    .to_string(),
+            )
+        }
         (Some(_), DocumentRead::Served(_), Some(d)) => (
             Verdict::Diverges,
             format!("this domain publishes as {d}"),
@@ -553,6 +657,23 @@ pub fn check_fetch_failure_by_peer(ledger: &Snapshot) -> Finding {
             detail: "This is recorded from the moment the app starts and is cleared by a \
                      reload, so an empty list means nothing has been asked for yet — not \
                      that everything succeeded. Open the Apps window and come back."
+                .to_string(),
+            remedy: None,
+        };
+    }
+    // **A truncated ledger cannot clear anybody**, and this check ignored the
+    // flag until 2026-09-01 while its sibling honoured it — the field's own doc
+    // says *"a reader that reports 'all clear' off a truncated ledger is
+    // reporting the cap"*, and one of its two readers was doing exactly that.
+    if ledger.truncated {
+        return Finding {
+            check: Check::FetchFailureByPeer,
+            verdict: Verdict::Undetermined,
+            belief: format!("{} request(s) made this session", ledger.attempted),
+            source: "more was asked than this session can keep track of".to_string(),
+            detail: "This session made more requests than the list can hold, so some are \
+                     not represented and nothing can be concluded about them. Nothing here \
+                     says anything is wrong; it says this check could not be completed."
                 .to_string(),
             remedy: None,
         };
@@ -639,10 +760,17 @@ pub fn check_catalog_completeness(ledger: &Snapshot) -> Finding {
                  than unreachable, retrying will not help and the publisher no longer has \
                  them."
             .to_string(),
-        // **The one finding here that this app can actually act on.** The rest
-        // report on a world it does not control; this one is a guard it set
-        // itself, so it can drop it.
-        remedy: Some(Remedy::RetryFailedRefreshes),
+        // **Only when retrying can actually change the answer.** The detail
+        // above says, correctly, that a *withheld* set will not come back by
+        // asking again — the publisher answered and does not have it. Offering
+        // "Try loading them again" beside that sentence was a button
+        // contradicting the paragraph next to it (audit F5). An unreachable set
+        // is the opposite: waiting is exactly what fixes it.
+        //
+        // The rest of the findings here carry no remedy and that is honest —
+        // they report on a world this app does not control. This one is a guard
+        // it set itself, so it can drop it.
+        remedy: (withheld < failed.len()).then_some(Remedy::RetryFailedRefreshes),
     }
 }
 
@@ -673,11 +801,12 @@ pub fn overall(findings: &[Finding]) -> Verdict {
 /// reconstructed from a log the user can hand over.
 pub fn run_checks(
     believed_home_peer: Option<&str>,
+    home: crate::session_config::HomeDecision,
     doc: &DocumentRead,
     ledger: &Snapshot,
 ) -> Vec<Finding> {
     let findings = vec![
-        check_domain_identity(believed_home_peer, doc),
+        check_domain_identity(believed_home_peer, home, doc),
         check_fetch_failure_by_peer(ledger),
         check_catalog_completeness(ledger),
     ];
@@ -716,15 +845,30 @@ mod tests {
         Snapshot { records, attempted, truncated: false }
     }
 
+    /// The same, truncated. A separate constructor rather than a parameter,
+    /// because the helper above hardcoded `false` and **that is why no check-2
+    /// test could reach the flag at all** — a fixture that can only build one
+    /// half of a field's domain silently bounds what the suite can see.
+    fn truncated_ledger(records: Vec<RefreshRecord>, attempted: usize) -> Snapshot {
+        Snapshot { records, attempted, truncated: true }
+    }
+
     fn rec(peer: &str, what: &str, outcome: RefreshOutcome) -> RefreshRecord {
         RefreshRecord { peer_id: peer.into(), what: what.into(), outcome }
     }
+
+    /// The decision boot makes for a **deployment-seeded** home that the domain
+    /// now contradicts — i.e. incident A. Named rather than inlined so the
+    /// check-1 tests below read as *"this is a re-key"* and the one test that
+    /// uses a different decision stands out.
+    const SEEDED: crate::session_config::HomeDecision =
+        crate::session_config::HomeDecision::AdoptDeclared;
 
     // ── Check 1 ──────────────────────────────────────────────────────────────
 
     #[test]
     fn a_profile_pointed_at_a_retired_publisher_diverges() {
-        let f = check_domain_identity(Some("peerOLD"), &served(Some("peerNEW")));
+        let f = check_domain_identity(Some("peerOLD"), SEEDED, &served(Some("peerNEW")));
         assert_eq!(f.verdict, Verdict::Diverges);
         assert!(f.source.contains("peerNEW"), "the finding must name what the domain says");
         assert!(f.belief.contains("peerOLD"), "and what this profile believes");
@@ -732,7 +876,7 @@ mod tests {
 
     #[test]
     fn a_profile_pointed_at_the_current_publisher_agrees() {
-        let f = check_domain_identity(Some("peerA"), &served(Some("peerA")));
+        let f = check_domain_identity(Some("peerA"), crate::session_config::HomeDecision::Unchanged, &served(Some("peerA")));
         assert_eq!(f.verdict, Verdict::Agrees);
     }
 
@@ -746,7 +890,7 @@ mod tests {
             DocumentRead::OriginError { status: 502 },
             DocumentRead::Unreadable { status: 200 },
         ] {
-            let f = check_domain_identity(Some("peerA"), &doc);
+            let f = check_domain_identity(Some("peerA"), SEEDED, &doc);
             assert_eq!(f.verdict, Verdict::Undetermined, "{doc:?}");
             assert!(
                 !f.verdict.is_clear(),
@@ -761,8 +905,8 @@ mod tests {
     /// decide whether silence is expected.
     #[test]
     fn a_domain_that_serves_no_document_is_not_the_same_as_one_that_did_not_answer() {
-        let silent = check_domain_identity(Some("peerA"), &DocumentRead::NoDocument { status: 404 });
-        let unheard = check_domain_identity(Some("peerA"), &DocumentRead::Unheard);
+        let silent = check_domain_identity(Some("peerA"), SEEDED, &DocumentRead::NoDocument { status: 404 });
+        let unheard = check_domain_identity(Some("peerA"), SEEDED, &DocumentRead::Unheard);
         assert_eq!(silent.verdict, Verdict::SourceSilent);
         assert_eq!(unheard.verdict, Verdict::Undetermined);
         assert_ne!(
@@ -779,8 +923,8 @@ mod tests {
     /// screen with none of the code to blame.
     #[test]
     fn an_origin_fault_is_not_reported_as_a_deployment_that_declares_nothing() {
-        let fault = check_domain_identity(Some("peerA"), &DocumentRead::OriginError { status: 502 });
-        let chosen = check_domain_identity(Some("peerA"), &DocumentRead::NoDocument { status: 404 });
+        let fault = check_domain_identity(Some("peerA"), SEEDED, &DocumentRead::OriginError { status: 502 });
+        let chosen = check_domain_identity(Some("peerA"), SEEDED, &DocumentRead::NoDocument { status: 404 });
         assert_eq!(fault.verdict, Verdict::Undetermined);
         assert_eq!(chosen.verdict, Verdict::SourceSilent);
         assert!(
@@ -791,15 +935,15 @@ mod tests {
 
     #[test]
     fn a_served_document_naming_no_publisher_is_silent_not_divergent() {
-        let f = check_domain_identity(Some("peerA"), &served(None));
+        let f = check_domain_identity(Some("peerA"), SEEDED, &served(None));
         assert_eq!(f.verdict, Verdict::SourceSilent);
     }
 
     #[test]
     fn a_profile_with_no_recorded_publisher_has_nothing_to_check() {
-        let f = check_domain_identity(None, &served(Some("peerA")));
+        let f = check_domain_identity(None, crate::session_config::HomeDecision::FirstContact, &served(Some("peerA")));
         assert_eq!(f.verdict, Verdict::NothingToCheck);
-        let f = check_domain_identity(Some(""), &served(Some("peerA")));
+        let f = check_domain_identity(Some(""), crate::session_config::HomeDecision::FirstContact, &served(Some("peerA")));
         assert_eq!(f.verdict, Verdict::NothingToCheck, "an empty id is not a belief");
     }
 
@@ -921,39 +1065,86 @@ mod tests {
 
     // ── The surface-level invariants ─────────────────────────────────────────
 
-    /// Five verdicts, five distinct words, and the COUNT is asserted — so a
-    /// sixth state cannot quietly reuse an existing label. (The same shape as
+    /// Every verdict, in one place — so the two invariants below cannot drift
+    /// apart from the enum by being written out twice.
+    const ALL_VERDICTS: [Verdict; 6] = [
+        Verdict::Diverges,
+        Verdict::Undetermined,
+        Verdict::SourceSilent,
+        Verdict::NothingToCheck,
+        Verdict::Agrees,
+        Verdict::UserOwned,
+    ];
+
+    /// Six verdicts, six distinct words, and the COUNT is asserted — so a
+    /// seventh state cannot quietly reuse an existing label. (The same shape as
     /// `every_hydration_outcome_has_its_own_word`, which caught exactly this.)
     #[test]
     fn every_verdict_has_its_own_word() {
-        let all = [
-            Verdict::Diverges,
-            Verdict::Undetermined,
-            Verdict::SourceSilent,
-            Verdict::NothingToCheck,
-            Verdict::Agrees,
-        ];
-        let labels: std::collections::BTreeSet<&str> = all.iter().map(|v| v.label()).collect();
-        assert_eq!(labels.len(), all.len(), "two verdicts share a word");
-        assert_eq!(all.len(), 5, "a verdict was added or removed without updating this test");
+        let labels: std::collections::BTreeSet<&str> =
+            ALL_VERDICTS.iter().map(|v| v.label()).collect();
+        assert_eq!(labels.len(), ALL_VERDICTS.len(), "two verdicts share a word");
+        assert_eq!(
+            ALL_VERDICTS.len(),
+            6,
+            "a verdict was added or removed without updating this test"
+        );
     }
 
-    /// **Exactly one verdict may read as OK.** If a second ever does, every
-    /// summary line and status chip in the product silently widens what it
-    /// calls healthy.
+    /// **No verdict that established NOTHING may read as OK.**
+    ///
+    /// This was `only_agrees_counts_as_clear`, asserting a count of one, and the
+    /// count was the wrong invariant: `UserOwned` is legitimately clear (the
+    /// profile is pointed where its owner chose), and a count-based gate would
+    /// have forced that state to lie about itself to stay green. What actually
+    /// matters — and what the count was standing in for — is that the three
+    /// states meaning *this was not established* never widen into health.
     #[test]
-    fn only_agrees_counts_as_clear() {
-        let clear = [
+    fn nothing_that_established_nothing_counts_as_clear() {
+        for v in [Verdict::Undetermined, Verdict::SourceSilent, Verdict::NothingToCheck] {
+            assert!(!v.is_clear(), "{v:?} established nothing and reported as healthy");
+        }
+        assert!(!Verdict::Diverges.is_clear(), "a divergence is not health");
+        assert!(Verdict::Agrees.is_clear());
+        assert!(Verdict::UserOwned.is_clear());
+    }
+
+    /// **F2 — the arm that was missing.** A home the user chose, or this
+    /// profile's own, differs from the domain's declaration by design; reading
+    /// that as a stale routing fact told a correctly-configured visitor they
+    /// were broken and promised a repair the boot path specifically prevents.
+    ///
+    /// The three cases are one test deliberately: they share every input except
+    /// the decision, so it is impossible for this to pass by accident.
+    #[test]
+    fn a_home_its_owner_chose_is_not_reported_as_a_stale_routing_fact() {
+        use crate::session_config::HomeDecision;
+        for decision in [HomeDecision::KeptUserChoice, HomeDecision::LocalHome] {
+            let f = check_domain_identity(Some("peerMINE"), decision, &served(Some("peerDOMAIN")));
+            assert_eq!(f.verdict, Verdict::UserOwned, "{decision:?}");
+            assert!(
+                !f.verdict.warrants_attention(),
+                "{decision:?} was put in front of the user as a problem"
+            );
+            assert!(
+                !f.detail.contains("no longer uses"),
+                "{decision:?} was described as a retired publisher: {}",
+                f.detail
+            );
+            assert!(
+                !f.detail.contains("Opening the app again repairs this"),
+                "{decision:?} promised a repair boot deliberately does not perform: {}",
+                f.detail
+            );
+        }
+        // …and the re-key is still a divergence. Same inputs, one bit different.
+        let rekey = check_domain_identity(Some("peerMINE"), SEEDED, &served(Some("peerDOMAIN")));
+        assert_eq!(
+            rekey.verdict,
             Verdict::Diverges,
-            Verdict::Undetermined,
-            Verdict::SourceSilent,
-            Verdict::NothingToCheck,
-            Verdict::Agrees,
-        ]
-        .iter()
-        .filter(|v| v.is_clear())
-        .count();
-        assert_eq!(clear, 1, "more than one verdict reports as a clean bill of health");
+            "incident A must still be reported — the provenance fix must not silence the \
+             check it was built for"
+        );
     }
 
     /// The summary must be the worst thing found, and an empty run must not
@@ -1029,6 +1220,8 @@ mod tests {
     #[test]
     fn the_retry_remedy_moves_the_signal_and_reports_only_what_it_did() {
         crate::refresh_ledger::reset_for_test();
+        // A launcher is open — otherwise the honest answer is the one below.
+        let _launcher = crate::refresh_ledger::RetryHolder::new();
         let before = crate::refresh_ledger::retry_generation();
         let outcome = Remedy::RetryFailedRefreshes.apply();
         assert_eq!(outcome, RemedyOutcome::Requested);
@@ -1037,6 +1230,98 @@ mod tests {
             "the remedy reported success without moving the signal any launcher watches — \
              that is a placebo button on a diagnostic screen"
         );
+    }
+
+    /// **With nothing open to act, the remedy must say so** — audit F5. The old
+    /// single-arm outcome told the user *"Asked. This section updates on its own
+    /// when the retry finishes"*, and with no launcher open nothing could ever
+    /// finish, so they were left waiting on a report that was never coming.
+    ///
+    /// Falsifiable by construction: the only difference between this and the
+    /// test above is whether a holder exists.
+    #[test]
+    fn a_retry_with_no_launcher_open_says_nothing_happened_rather_than_asked() {
+        crate::refresh_ledger::reset_for_test();
+        let outcome = Remedy::RetryFailedRefreshes.apply();
+        assert_eq!(outcome, RemedyOutcome::NobodyListening);
+        assert!(
+            !outcome.message().contains("updates on its own"),
+            "the surface promised an update from a window that is not open: {}",
+            outcome.message()
+        );
+        assert!(
+            outcome.message().contains("Apps window"),
+            "the report must name what the user can do about it: {}",
+            outcome.message()
+        );
+    }
+
+    /// **The button and the paragraph beside it must agree** — audit F5.
+    /// Check 3's own detail says, correctly, that a *withheld* set will not come
+    /// back by asking again: the publisher answered and does not have it. It
+    /// offered "Try loading them again" underneath that sentence anyway.
+    ///
+    /// The three cases are one test because they differ only in the mix of
+    /// outcomes, which is exactly the axis the condition reads.
+    #[test]
+    fn the_retry_is_offered_only_when_retrying_could_change_the_answer() {
+        let withheld_only = check_catalog_completeness(&ledger(
+            vec![rec("pubA", "games", RefreshOutcome::Withheld)],
+            1,
+        ));
+        assert_eq!(withheld_only.verdict, Verdict::Diverges, "it is still a finding");
+        assert!(
+            withheld_only.remedy.is_none(),
+            "a retry was offered beside a sentence saying retrying will not help"
+        );
+
+        let unreachable_only = check_catalog_completeness(&ledger(
+            vec![rec("pubA", "games", RefreshOutcome::Unreachable("timeout".into()))],
+            1,
+        ));
+        assert_eq!(unreachable_only.remedy, Some(Remedy::RetryFailedRefreshes));
+
+        // Mixed: one of them can still be fixed by waiting, so the button earns
+        // its place. Offering nothing here would be the opposite mistake.
+        let mixed = check_catalog_completeness(&ledger(
+            vec![
+                rec("pubA", "games", RefreshOutcome::Withheld),
+                rec("pubA", "apps", RefreshOutcome::Unreachable("timeout".into())),
+            ],
+            2,
+        ));
+        assert_eq!(mixed.remedy, Some(Remedy::RetryFailedRefreshes));
+    }
+
+    /// **A truncated ledger clears nobody** — audit F4. `Snapshot::truncated`
+    /// had two readers and check 2 ignored it, returning `Agrees` off a list
+    /// that is missing entries. Its own field doc says a reader doing that "is
+    /// reporting the cap".
+    #[test]
+    fn a_truncated_ledger_cannot_clear_a_publisher() {
+        let f = check_fetch_failure_by_peer(&truncated_ledger(
+            vec![rec("pubA", "games", RefreshOutcome::Current)],
+            300,
+        ));
+        assert_eq!(f.verdict, Verdict::Undetermined);
+        assert!(!f.verdict.is_clear(), "a capped list reported as a clean bill of health");
+        // …and an untruncated one with the same records still agrees, so this
+        // is the flag doing the work and not the records.
+        let honest = check_fetch_failure_by_peer(&ledger(
+            vec![rec("pubA", "games", RefreshOutcome::Current)],
+            1,
+        ));
+        assert_eq!(honest.verdict, Verdict::Agrees);
+    }
+
+    /// Two outcomes, two distinct sentences — the same rule the verdicts and the
+    /// recovery console's four results each carry.
+    #[test]
+    fn every_remedy_outcome_has_its_own_sentence() {
+        let all = [RemedyOutcome::Requested, RemedyOutcome::NobodyListening];
+        let msgs: std::collections::BTreeSet<&str> = all.iter().map(|o| o.message()).collect();
+        assert_eq!(msgs.len(), all.len(), "two outcomes share a sentence");
+        assert_eq!(all.len(), 2, "an outcome was added without updating this count");
     }
 
     /// The finding that has a repair must offer it, and the ones that do not
@@ -1051,8 +1336,8 @@ mod tests {
         assert_eq!(incomplete.remedy, Some(Remedy::RetryFailedRefreshes));
 
         for f in [
-            check_domain_identity(Some("old"), &served(Some("new"))),
-            check_domain_identity(Some("a"), &DocumentRead::Unheard),
+            check_domain_identity(Some("old"), SEEDED, &served(Some("new"))),
+            check_domain_identity(Some("a"), SEEDED, &DocumentRead::Unheard),
             check_fetch_failure_by_peer(&ledger(
                 vec![rec("p", "apps", RefreshOutcome::Withheld)],
                 1,
@@ -1086,7 +1371,12 @@ mod tests {
         assert!(Verdict::Undetermined.warrants_attention());
 
         // The whole ordinary-healthy shape: three checks, nothing reportable.
-        let findings = run_checks(None, &DocumentRead::NoDocument { status: 404 }, &ledger(vec![], 0));
+        let findings = run_checks(
+            None,
+            crate::session_config::HomeDecision::Unchanged,
+            &DocumentRead::NoDocument { status: 404 },
+            &ledger(vec![], 0),
+        );
         assert_eq!(findings.len(), 3);
         assert_eq!(
             findings.iter().filter(|f| f.verdict.warrants_attention()).count(),
@@ -1107,6 +1397,7 @@ mod tests {
     fn a_real_divergence_is_always_put_in_front_of_the_user() {
         let findings = run_checks(
             Some("peerOLD"),
+            SEEDED,
             &served(Some("peerNEW")),
             &ledger(vec![rec("peerOLD", "games", RefreshOutcome::Withheld)], 1),
         );
@@ -1154,7 +1445,12 @@ mod tests {
     #[test]
     fn the_runner_reports_every_check_exactly_once() {
         use std::collections::BTreeSet;
-        let findings = run_checks(Some("a"), &served(Some("a")), &ledger(vec![], 0));
+        let findings = run_checks(
+            Some("a"),
+            crate::session_config::HomeDecision::Unchanged,
+            &served(Some("a")),
+            &ledger(vec![], 0),
+        );
         let seen: BTreeSet<&str> = findings.iter().map(|f| f.check.key()).collect();
         assert_eq!(
             seen.len(),
@@ -1187,6 +1483,9 @@ mod tests {
         assert_eq!(f.verdict, Verdict::Diverges, "the incomplete load was not detected");
         let remedy = f.remedy.expect("the finding must offer the repair");
 
+        // The launcher that reported the failure is still open — which is the
+        // whole situation this remedy exists for.
+        let _launcher = crate::refresh_ledger::RetryHolder::new();
         let before = crate::refresh_ledger::retry_generation();
         assert_eq!(remedy.apply(), RemedyOutcome::Requested);
         assert!(

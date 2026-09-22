@@ -147,6 +147,159 @@ pub struct SiteRef {
     pub loc: String,
 }
 
+/// **Who last set `home_site`** — the provenance the warm-boot reconcile needs
+/// and the one field it refreshes did not carry.
+///
+/// `MODEL-STAKEHOLDERS-AND-OWNERSHIP` §2.2 states the disease exactly: *"no
+/// field can be safely refreshed from its source, because a value a deployment
+/// seeded and a value the end user deliberately chose are byte-identical in the
+/// entity."* `home_site` is that field. Without a mark, R1 compared the domain's
+/// declaration against a value it had no reason to believe it had written, and a
+/// user who chose a **cached foreign** site had it overwritten on the next boot
+/// *and* got a durable supersession record naming their own choice as retired
+/// (gate: `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration`).
+///
+/// **The mark, not a heuristic on the value.** The guard that stood here —
+/// *is the home local?* — is a proxy for *did the user set it?*, and it is only
+/// right at one end: a deliberate **local** home was protected, a deliberate
+/// **remote** one was not. This is deliberately the same shape that already
+/// ships on site origins (`content_site::origins`, `source: deployment | user`,
+/// `Adoption::KeptUserOverride`), because that mechanism was reasoned out in
+/// full for the identical question one field over.
+///
+/// **Unmarked reads as `Deployment`**, for B1's stated reason: records written
+/// before this overwhelmingly *are* deployment-seeded, and the alternative
+/// freezes exactly the strand being fixed. The cost is stated rather than
+/// hidden — a user who chose a remote home under an older build is not
+/// protected until they choose again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HomeSource {
+    /// Adopted from `/entity-deployment.json`, or never set by anyone.
+    #[default]
+    Deployment,
+    /// The end user chose it — every UI path lands in [`set_home_site`].
+    User,
+}
+
+impl HomeSource {
+    /// The wire token. Stable; never a display string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HomeSource::Deployment => "deployment",
+            HomeSource::User => "user",
+        }
+    }
+
+    /// Decode. **Anything unrecognised is `Deployment`**, which is the same
+    /// answer as absent — an unknown mark is not evidence the user chose
+    /// anything.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "user" => HomeSource::User,
+            _ => HomeSource::Deployment,
+        }
+    }
+}
+
+/// What boot may do with the home the domain declares.
+///
+/// **One expression of that precedence, and it is pure** — the same shape as
+/// [`pinned_registry`], and for the same reason: the decision is the whole
+/// product here, so it is gated by `make test` on every arm instead of only
+/// through a browser. `boot_load` matches on this; it does not re-derive it.
+///
+/// Five outcomes rather than a bool, because *"keep it, the user chose it"* and
+/// *"keep it, it is local"* and *"nothing to do"* are three different facts and
+/// only one of them is worth telling anybody about (AP40).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeDecision {
+    /// Nothing was ever established here — this is a first contact that failed,
+    /// running late. Apply the **whole** document, not routing alone.
+    FirstContact,
+    /// The home came from a deployment and the deployment now names a different
+    /// publisher. Adopt the routing facts and record the supersession.
+    AdoptDeclared,
+    /// **The user chose this home.** Keep it, and *report* the divergence
+    /// rather than silently obeying it.
+    KeptUserChoice,
+    /// The home is this profile's own peer. Read routing; adopt nothing.
+    LocalHome,
+    /// The document declares no home, or declares the one already held.
+    Unchanged,
+}
+
+impl HomeDecision {
+    /// One word for the log line and for gates.
+    pub fn label(&self) -> &'static str {
+        match self {
+            HomeDecision::FirstContact => "first-contact",
+            HomeDecision::AdoptDeclared => "adopt-declared",
+            HomeDecision::KeptUserChoice => "kept-user-choice",
+            HomeDecision::LocalHome => "local-home",
+            HomeDecision::Unchanged => "unchanged",
+        }
+    }
+}
+
+/// **Decide what to do with the domain's declared home.** Pure; every input is
+/// an argument.
+///
+/// `declared` is the document's `home_site.peer`, already filtered to non-empty
+/// — an absent or empty declaration is a document declining to say, never a
+/// statement that this profile's home is wrong.
+///
+/// # The two cheaper tests, and why both are wrong
+///
+/// Carried here from `boot_load`, where they were learned, because this is now
+/// the code that obeys them.
+///
+/// * **`peer_id.is_empty()` is not "nothing was ever set".** It is a legitimate
+///   sentinel meaning *the system peer* ([`set_home_site`]: "empty
+///   `target_peer` = the system peer"; [`repair_for_deleted_peer`] writes it
+///   when a home's peer is deleted). Re-probing on it would re-adopt the
+///   domain's home over a user's deliberate local one on every boot — a worse
+///   bug, and the fix that is rejected on the record.
+/// * **`id.is_empty()` can never be true.** `home_site_from` falls back to
+///   `DEMO_SITE_ID` by design — the overlay always needs a site to point at —
+///   so a guard on it is dead code that silently never fires. Measured, after
+///   writing exactly that guard and watching the gate stay red.
+///
+/// What a failed first contact actually leaves behind is [`home_site_default`]
+/// **entire**: the build-time value, untouched by any document or any user
+/// action. Comparing against the whole of it is the narrowest available
+/// "nothing has ever set this" test.
+pub fn decide_home(
+    cfg: &SessionConfig,
+    system_peer_id: &str,
+    declared: Option<&str>,
+) -> HomeDecision {
+    // **Order matters and this arm is first.** The build default is what a
+    // failed first contact leaves behind, and its peer is empty — which would
+    // otherwise read as a deliberate local home and never recover (the R-1
+    // blocker).
+    if cfg.home_site == home_site_default() {
+        return match declared {
+            Some(_) => HomeDecision::FirstContact,
+            None => HomeDecision::Unchanged,
+        };
+    }
+    let held = cfg.home_site.peer_id.as_str();
+    // An empty peer-id is the documented sentinel for *the system peer*
+    // (`set_home_site`, `repair_for_deleted_peer`), so both spellings of "my
+    // own" land here. Adopting over this is the rejected fix, on the record.
+    if held.is_empty() || held == system_peer_id {
+        return HomeDecision::LocalHome;
+    }
+    let Some(declared) = declared else { return HomeDecision::Unchanged };
+    if declared == held {
+        return HomeDecision::Unchanged;
+    }
+    match cfg.home_site_source {
+        HomeSource::User => HomeDecision::KeptUserChoice,
+        HomeSource::Deployment => HomeDecision::AdoptDeclared,
+    }
+}
+
 /// The content-site overlay's posture (availability / chrome toggle /
 /// lockdown). `locked` is a **held seam** — stored and readable, but no
 /// behavior gates on it yet (§4-C).
@@ -530,6 +683,10 @@ pub fn resolve_webrtc_provisioning(
 pub struct SessionConfig {
     pub boot_surface: BootSurface,
     pub home_site: SiteRef,
+    /// **Who set [`home_site`](Self::home_site)** — see [`HomeSource`]. Absent
+    /// in a pre-provenance persisted config → `Deployment` (from `default()`),
+    /// which is what such records overwhelmingly are.
+    pub home_site_source: HomeSource,
     pub site_mode: SiteModePosture,
     /// Runtime surface flag — overlay showing now. Derived at boot from
     /// `boot_surface`; toggled live. Not part of the durable *config* proper,
@@ -798,6 +955,8 @@ impl Default for SessionConfig {
         SessionConfig {
             boot_surface: BootSurface::Chrome,
             home_site: home_site_default(),
+            // Nobody has set it, so it is not the user's — see `HomeSource`.
+            home_site_source: HomeSource::Deployment,
             site_mode: SiteModePosture { enabled: true, show_toggle: true, locked: false },
             // No ceiling declared by default — see the field docs. Conformant,
             // and honest: we do not ship a number nobody can defend.
@@ -877,6 +1036,11 @@ impl SessionConfig {
                 Some("home_site_peer") => {
                     if let Some(s) = v.as_text() {
                         cfg.home_site.peer_id = s.to_string();
+                    }
+                }
+                Some("home_site_source") => {
+                    if let Some(s) = v.as_text() {
+                        cfg.home_site_source = HomeSource::from_str(s);
                     }
                 }
                 Some("home_site_id") => {
@@ -983,6 +1147,10 @@ impl SessionConfig {
             "home_site_peer" => entity_ecf::text(&self.home_site.peer_id),
             "home_site_id" => entity_ecf::text(&self.home_site.id),
             "home_site_loc" => entity_ecf::text(&self.home_site.loc),
+            // Provenance, not a preference: which party's value this is. An
+            // absent key decodes as `Deployment`, so an older profile
+            // round-trips without a migration.
+            "home_site_source" => entity_ecf::text(self.home_site_source.as_str()),
             "site_enabled" => entity_ecf::bool_val(self.site_mode.enabled),
             "show_toggle" => entity_ecf::bool_val(self.site_mode.show_toggle),
             "locked" => entity_ecf::bool_val(self.site_mode.locked),
@@ -1319,10 +1487,18 @@ pub fn set_active(peers: &Peers, peer_id: &str, value: bool) -> bool {
 
 /// Set which site is home (the default the overlay / a `Site` boot points at),
 /// on a specific peer. Empty `target_peer` = the system peer (resolved at boot).
+///
+/// **This is the user path, and it stamps [`HomeSource::User`].** It is the
+/// only writer the Settings surface reaches (`views/settings/model.rs`), so
+/// putting the mark here means no picker, radio or deep-link has to remember to
+/// carry it — the one construction path every member already takes (AP44). The
+/// deployment's own adoption writes `cfg.home_site` directly in `boot_load` and
+/// stamps `Deployment` there.
 pub fn set_home_site(peers: &Peers, peer_id: &str, target_peer: &str, id: &str) {
     let mut cfg = read(peers, peer_id);
     cfg.home_site.peer_id = target_peer.to_string();
     cfg.home_site.id = id.to_string();
+    cfg.home_site_source = HomeSource::User;
     write(peers, peer_id, &cfg);
 }
 
@@ -1420,6 +1596,11 @@ mod tests {
                 id: "church".into(),
                 loc: "about".into(),
             },
+            // The NON-default provenance, so the round-trip covers the mark and
+            // not just the value it qualifies — a field that decoded as
+            // `Deployment` whatever was written would silently un-protect every
+            // user-chosen home.
+            home_site_source: HomeSource::User,
             site_mode: SiteModePosture { enabled: true, show_toggle: false, locked: true },
             active: true,
             fast_paint: false,
@@ -1679,6 +1860,156 @@ mod tests {
         let cfg = read(&peers, &pid);
         assert_eq!(cfg.home_site.id, "labs");
         assert_eq!(cfg.home_site.peer_id, "labs-peer");
+        // **The provenance rides with the value.** Every Settings path lands
+        // here, so this one assertion is what keeps a user's choice
+        // distinguishable from a deployment's seed for the whole surface.
+        assert_eq!(
+            cfg.home_site_source,
+            HomeSource::User,
+            "the user path must stamp its own provenance; without it the warm-boot \
+             reconcile cannot tell this from a value it wrote itself"
+        );
+    }
+
+    // ── `decide_home` — the whole "which home wins" question ─────────────────
+    //
+    // Exhaustive on purpose: this is the decision the product turns on, and
+    // before it was extracted it lived inline in `boot_load` where only a
+    // browser run could reach it. Every case below was previously untestable
+    // without Selenium.
+
+    fn cfg_with(home_peer: &str, source: HomeSource) -> SessionConfig {
+        let mut cfg = SessionConfig::default();
+        cfg.home_site = SiteRef {
+            peer_id: home_peer.to_string(),
+            // NOT the build default's id — otherwise the whole-default compare
+            // fires and every case below reads as a first contact.
+            id: "chosen".into(),
+            loc: String::new(),
+        };
+        cfg.home_site_source = source;
+        cfg
+    }
+
+    /// **The finding this whole mechanism exists for.** A home the user chose
+    /// is kept even though the domain declares someone else — and the same
+    /// value, marked as the deployment's, is adopted.
+    ///
+    /// The two assertions are one test deliberately: they differ in exactly one
+    /// bit, and that bit is the entire fix. Split apart, either could pass
+    /// while the discriminator did nothing.
+    #[test]
+    fn a_user_chosen_home_is_kept_and_a_deployment_seeded_one_is_adopted() {
+        let sys = "2KSystem";
+        assert_eq!(
+            decide_home(&cfg_with("2KFriend", HomeSource::User), sys, Some("2KDomain")),
+            HomeDecision::KeptUserChoice,
+            "a home the user chose must survive the domain declaring another publisher"
+        );
+        assert_eq!(
+            decide_home(&cfg_with("2KFriend", HomeSource::Deployment), sys, Some("2KDomain")),
+            HomeDecision::AdoptDeclared,
+            "a home the DEPLOYMENT seeded must still be adopted — that is incident A, and \
+             the re-key repair must not be lost to the provenance fix"
+        );
+    }
+
+    /// Unmarked (a profile written before provenance existed) reads as the
+    /// deployment's. Stated as a test because it is a **deliberate** cost, not
+    /// an accident: the alternative freezes exactly the strand B1 was fixing.
+    #[test]
+    fn an_unmarked_home_is_treated_as_the_deployments() {
+        // The pre-provenance encoding: the key simply is not there. Built by
+        // hand rather than by round-tripping a config, because `to_entity`
+        // always writes the mark now — the whole point is a record that
+        // predates it.
+        let raw = Entity::new(
+            STATE_TYPE,
+            entity_ecf::to_ecf(&entity_ecf::cbor_map! {
+                "home_site_peer" => entity_ecf::text("2KFriend"),
+                "home_site_id" => entity_ecf::text("chosen")
+            }),
+        )
+        .unwrap();
+        let cfg = SessionConfig::from_entity(&raw);
+        assert_eq!(cfg.home_site_source, HomeSource::Deployment);
+        assert_eq!(
+            decide_home(&cfg, "2KSystem", Some("2KDomain")),
+            HomeDecision::AdoptDeclared
+        );
+    }
+
+    /// Both spellings of "my own peer" are local, and the mark does not matter
+    /// there — this is the arm the rejected fix would have broken.
+    #[test]
+    fn a_local_home_is_local_however_it_is_spelled_and_whoever_set_it() {
+        for source in [HomeSource::User, HomeSource::Deployment] {
+            for held in ["", "2KSystem"] {
+                assert_eq!(
+                    decide_home(&cfg_with(held, source), "2KSystem", Some("2KDomain")),
+                    HomeDecision::LocalHome,
+                    "held={held:?} source={source:?} must be local"
+                );
+            }
+        }
+    }
+
+    /// The build default beats everything, and it must: it is what a failed
+    /// first contact leaves behind, and its peer is empty — which would
+    /// otherwise read as a deliberate local home and never recover (the R-1
+    /// blocker, reproduced once and not to be reintroduced).
+    #[test]
+    fn an_untouched_build_default_is_a_first_contact_not_a_local_home() {
+        let cfg = SessionConfig::default();
+        assert!(cfg.home_site.peer_id.is_empty(), "the build default's peer is empty");
+        assert_eq!(
+            decide_home(&cfg, "2KSystem", Some("2KDomain")),
+            HomeDecision::FirstContact
+        );
+        // …and with nothing declared there is still nothing to do. A document
+        // that declines to say is not a document that says something else.
+        assert_eq!(decide_home(&cfg, "2KSystem", None), HomeDecision::Unchanged);
+    }
+
+    /// **Absence of evidence, at the decision layer** (AP30 corollary (a)). A
+    /// document that declares no home — truncated, silent, or deliberately
+    /// quiet — changes nothing, whoever set the home.
+    #[test]
+    fn a_document_that_declares_nothing_changes_nothing() {
+        for source in [HomeSource::User, HomeSource::Deployment] {
+            assert_eq!(
+                decide_home(&cfg_with("2KFriend", source), "2KSystem", None),
+                HomeDecision::Unchanged,
+                "source={source:?}"
+            );
+        }
+    }
+
+    /// Agreement is not adoption: there is nothing to write, nothing to
+    /// supersede, and nothing to tell anybody.
+    #[test]
+    fn a_declaration_we_already_agree_with_is_unchanged() {
+        assert_eq!(
+            decide_home(&cfg_with("2KDomain", HomeSource::Deployment), "2KSystem", Some("2KDomain")),
+            HomeDecision::Unchanged
+        );
+    }
+
+    /// Five decisions, five distinct words — so a sixth cannot quietly reuse
+    /// one, and a log line stays greppable across a rename. Same shape as
+    /// `Hydration`'s and `Verdict`'s label gates.
+    #[test]
+    fn every_home_decision_has_its_own_word() {
+        let all = [
+            HomeDecision::FirstContact,
+            HomeDecision::AdoptDeclared,
+            HomeDecision::KeptUserChoice,
+            HomeDecision::LocalHome,
+            HomeDecision::Unchanged,
+        ];
+        let labels: std::collections::BTreeSet<&str> = all.iter().map(|d| d.label()).collect();
+        assert_eq!(labels.len(), all.len(), "two decisions share a label: {labels:?}");
+        assert_eq!(all.len(), 5, "a new decision needs its own word and its own arm here");
     }
 
     #[test]

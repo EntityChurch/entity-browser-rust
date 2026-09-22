@@ -108,6 +108,34 @@ impl ForeignArtifact {
             Self::AppBundle { peer, set, id } => crate::apps::paths::bundle_path(peer, set, id),
         }
     }
+
+    /// Whose bytes these are — the peer the origin was asked about.
+    ///
+    /// This is the join key for the health section's check 2 (*"the origin
+    /// answers, and yet everything under one peer comes back 'not here'"*), so
+    /// it must be the **publisher**, never the peer doing the caching.
+    pub fn peer(&self) -> &str {
+        match self {
+            Self::Manifest { peer, .. }
+            | Self::AppCatalog { peer, .. }
+            | Self::AppBundle { peer, .. } => peer,
+        }
+    }
+
+    /// How this artifact is named in the refresh ledger, and from there in the
+    /// health section's report.
+    ///
+    /// **Identifiers, not prose.** The sentence around them is composed in
+    /// `doctor.rs`, which keeps every user-facing string on this path in one
+    /// file — what makes translating that surface one extraction rather than a
+    /// hunt.
+    pub fn ledger_name(&self) -> String {
+        match self {
+            Self::Manifest { site, .. } => site.clone(),
+            Self::AppCatalog { set, .. } => set.clone(),
+            Self::AppBundle { set, id, .. } => format!("{set}/{id}"),
+        }
+    }
 }
 
 /// The content hash of the copy we currently hold, if any.
@@ -225,19 +253,52 @@ pub async fn ensure_current(
     // never issued.
     let remote = match http_poll::fetch_pointer(src, &bin_url).await {
         Ok(h) => h,
-        Err(e) => return Currency::Unavailable(e),
+        Err(e) => return record(what, Currency::Unavailable(e)),
     };
     if held.0 == Some(remote) {
-        return Currency::Unchanged;
+        return record(what, Currency::Unchanged);
     }
     // Hop 2 — content-addressed and hash-verified by `fetch_content`.
     match http_poll::fetch_content(src, origin, &remote).await {
         Ok(entity) => {
             writer.put(what.store_path(), entity.clone());
-            Currency::Fetched(entity)
+            record(what, Currency::Fetched(entity))
         }
-        Err(e) => Currency::Unavailable(e),
+        Err(e) => record(what, Currency::Unavailable(e)),
     }
+}
+
+/// **Every outcome lands in the refresh ledger, on the way out.**
+///
+/// This used to be three `refresh_ledger::record` calls in the Apps window —
+/// one of the **three** consumers of `ensure_current`. The boot content-site
+/// sweep (`app.rs`) and the discovery sweep (`content_site::discovery`) recorded
+/// nothing, so Doctor's check 2 — documented as *"the signature from incident
+/// A"* — could not see incident A's own fetches. It saw only the launcher, which
+/// is incident **B**'s surface, and its `Agrees` line claimed *"every publisher
+/// asked has served something"* over a set that was not the set that was asked.
+///
+/// Recording here is a **witness, not a notification** (AP44): this function is
+/// the only legal way to fetch a foreign artifact — `tools/foreign-cache-lint.sh`
+/// enforces that from the other side — so a consumer added tomorrow is covered
+/// without knowing the ledger exists.
+///
+/// Note what is *not* recorded: nothing at all, ever, is skipped. `Unchanged` is
+/// recorded as `Current` because *our copy is the current bytes* is the same
+/// fact about the world as *we just fetched them* — a steady-state session where
+/// nothing moves must not look like a session that never asked.
+fn record(what: &ForeignArtifact, outcome: Currency) -> Currency {
+    use crate::refresh_ledger::RefreshOutcome;
+    let ledger_outcome = match &outcome {
+        Currency::Fetched(_) | Currency::Unchanged => RefreshOutcome::Current,
+        // The 404/network split is `PollError`'s, not ours, and it is carried
+        // rather than flattened: waiting fixes one and never the other, so the
+        // health section gives different advice.
+        Currency::Unavailable(PollError::NotFound(_)) => RefreshOutcome::Withheld,
+        Currency::Unavailable(e) => RefreshOutcome::Unreachable(e.to_string()),
+    };
+    crate::refresh_ledger::record(what.peer(), &what.ledger_name(), ledger_outcome);
+    outcome
 }
 
 #[cfg(test)]

@@ -353,14 +353,34 @@ deploy), you can skip this. Add it the moment a second origin appears.
 The rule is **opt *in* to immutable**, and that direction is the whole point:
 
 ```
-/content/…                     public, max-age=31536000, immutable
+…/content/{aa}/{bb}/{hash}     public, max-age=31536000, immutable
 *-<8+ hex>.wasm  *-<8+ hex>.js public, max-age=31536000, immutable
 EVERYTHING ELSE                no-store
 ```
 
 Content blobs are addressed by their own hash and the app bundle is hash-named,
 so for both of those a new build is a new URL and a one-year cache is free and
-correct. **Everything else in the tree is mutable**, including four files it is
+correct.
+
+**Match the blob store by its SHARD STRUCTURE, not by the word `content`** — the
+two directory levels are the hash's own first four hex characters, so the pattern
+verifies itself:
+
+```
+content/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{32,}
+```
+
+That distinction is the one that bites, in both directions:
+
+- **Too loose is unrecoverable.** Hugo, Zola and Lektor all name their source
+  tree `content/`, so an ingested site publishes
+  `/{peer}/sites/<site>/content/about.html`. A rule that matches *any* path
+  containing `content/` pins that mutable HTML for a year at a stable URL.
+- **Too tight is silent.** A rule anchored at `/content/` (path start) misses
+  every **prefixed** deployment — `/docs/content/…`, `/protocol/content/…` — so
+  the entire blob store loses immutable caching and nothing tells you.
+
+**Everything else in the tree is mutable**, including four files it is
 very easy to forget:
 
 | File | If you cache it for a year |
@@ -376,8 +396,16 @@ locally** — a fresh container has no cache — and it is not something you not
 the day you set it. You notice the first time you need to fix something.
 
 The reference implementation of this policy is `tools/cors-serve.py`
-(~80 lines, readable). It is what our own local serving uses, and copying its
-`is_immutable()` rule into a CDN config is the intended path.
+(~80 lines, readable). It is what our own local serving uses, and translating its
+`is_immutable()` rule into a CDN config is the intended path — the worked version
+is §6.2 below.
+
+> **This rule has one definition and several expressions, and they are gated
+> against each other.** `tools/cache-policy-vectors.txt` lists the cases; the
+> Rust servers, the Python server and this document are all checked against it
+> (`make lint`). That machinery exists because these expressions were once
+> hand-copied and drifted four ways — the loosest of them matching any path
+> containing `content/`. If you extend the rule, add the case to that file first.
 
 ### 6.2 Cloudflare (R2) — the shape we run
 
@@ -393,10 +421,16 @@ want, so set them explicitly:
 
 | # | Match | Set |
 |---|---|---|
-| 1 | `URI Path starts with "/content/"` **or** `URI Path matches ".*-[0-9a-f]{8,}(_bg)?\.(wasm\|js)$"` | Edge TTL: **1 year** · Browser TTL: **1 year** |
+| 1 | `URI Path matches ".*content/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{32,}$"` **or** `URI Path matches ".*-[0-9a-f]{8,}(_bg)?\.(wasm\|js)$"` | Edge TTL: **1 year** · Browser TTL: **1 year** |
 | 2 | *(everything else)* | **Bypass cache** / `no-store` |
 
 Rule 2 is the one people skip. Add it.
+
+**Rule 1 used to read `URI Path starts with "/content/"` here.** That is safe but
+it silently drops every prefixed deployment out of immutable caching; the
+shard-matching form above covers those and still excludes an ingested site's own
+`content/` directory. Do not "simplify" it back to a prefix or a substring —
+§6.1 explains what each of those two costs.
 
 **3. Compression — one rule you will want.** Cloudflare Brotlis text
 (HTML/JS/WASM) automatically, for free, nothing to do. It does **not** compress
@@ -428,22 +462,75 @@ Instead:
    `entity-deployment.json` flips with it because it sits at the served root.
 4. **Roll back** by repointing the rewrite. The old directory is untouched.
 
+### 6.2a Retained builds — giving a bad deploy somewhere to fall back to
+
+`make site-dist` now also writes two things, and they are the only reason a broken
+release is recoverable rather than terminal:
+
+```
+/builds.json                     the list of releases, newest first
+/builds/<build_id>/index.html    each release's shell, kept
+```
+
+Without them, `/` is the only shell and **every deploy destroys the previous one**
+while all its hashed assets survive — so there is nothing to roll back *to*, only
+orphaned parts. Retaining a shell costs ~50 KB; the bundles are already shared by
+hash and already retained.
+
+**Both are MUTABLE** — `no-store`, per §6.1. `builds.json` changes every release,
+and a retained shell is overwritten whenever the same build id is republished.
+
+**Upload order matters, and it is the same rule as §6.2(5)'s cutover:**
+
+```
+1. assets  (hashed, immutable — safe in any order, nothing points at them yet)
+2. /builds/<id>/index.html      the new release's retained shell
+3. /                            the shell everyone gets
+4. /builds.json                 last, because it ADVERTISES what steps 2–3 placed
+5. (much later, separately)     prune
+```
+
+A `builds.json` uploaded before the shell it names advertises a rollback target
+that 404s — which fails at exactly the moment someone needs it. **Never delete an
+asset a retained build names**; `entity-browser builds --prune` enforces that for
+the shells it manages, but a hand-run `--delete` sync does not know about it.
+
+`make builds-manifest DIST=<dir> NOTES="…" RELEASED_AT="…"` runs it on a tree you
+already have; `KEEP=N` sets how many shells to retain (default 3).
+
 ### 6.3 S3 / anything else
 
 ```bash
 aws s3 sync --delete dist-site/ s3://your-bucket/
 ```
 
+> **This command alone is not a deployment.** S3 sets no `Cache-Control` of its
+> own, and a response with none is *not* uncached — browsers apply heuristic
+> freshness and will serve it without revalidating. Set the headers from §6.1 in
+> the same session you first sync (see the end of this section), or you have
+> shipped the mutable half of the tree with no freshness policy at all.
+
 `--delete` is what keeps the bucket from accumulating orphans across republishes
 — removed pages, pruned blobs, and an old `{peer}/` subtree if you ever changed
 identity.
 
-Add **`--size-only`** if you want to skip re-uploading the immutable blob store:
+Add **`--size-only`** *scoped to the blob store* if you want to skip re-uploading it:
 unchanged files are physically rewritten on each publish (fresh mtimes), so a
 default size+mtime comparison re-uploads byte-identical blobs. Since a
 `content/…` path *is* the content hash, a path match already proves the bytes
 match, which makes `--size-only` safe there. The mutable files are few and small
 — let them sync normally.
+
+**Scope it, do not add it to the whole sync.** `--size-only` on the mutable half
+skips any file whose length did not change, and the files most likely to change
+without changing length are exactly the ones that must not go stale: a
+`entity-deployment.json` whose registry pin was edited in place, an `index.html`
+whose bundle hash moved. Two passes:
+
+```bash
+aws s3 sync --delete --size-only dist-site/ s3://your-bucket/ --exclude "*" --include "*/content/*"
+aws s3 sync --delete           dist-site/ s3://your-bucket/ --exclude "*/content/*"
+```
 
 Then set the headers from §6.1 on the bucket/CDN. On S3 that is per-object
 metadata (`--cache-control` on the sync, scoped by prefix); on nginx it is two

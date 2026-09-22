@@ -130,57 +130,34 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// `Cache-Control` for one asset path.
-///
-/// **Opt in to immutable, never default to it.** The inverse rule — enumerate
-/// the mutable files and let everything else be `immutable` for a year — is what
-/// put a one-year cache on the file carrying the registry pin
-/// (`tools/cors-serve.py`, fixed 2026-08-20); every artifact added afterwards
-/// inherits the unsafe value silently, and it is invisible locally because a
-/// fresh browser has no cache. Note also that "no `Cache-Control`" is not
-/// "uncached": a browser then applies heuristic freshness off `Last-Modified`
-/// and serves a stale shell without revalidating.
-///
-/// Trunk stamps the content hash into the bundle filename, so a rebuild is a new
-/// URL and those are safe to pin forever.
-fn cache_control(path: &str) -> &'static str {
-    // Content-addressed by construction — the path IS the hash. Present when a
-    // `tauri-bundle` has published sites into the embedded tree.
-    if path.starts_with("/content/") || is_hash_named_bundle(path) {
-        "public, max-age=31536000, immutable"
-    } else {
-        "no-store"
-    }
-}
-
-/// `entity-browser-<hex>.js` / `entity-browser-<hex>_bg.wasm` — trunk's
-/// content-hashed output.
-///
-/// **The `_bg` suffix is load-bearing and this function shipped without it.**
-/// wasm-bindgen names the module `…-<hash>_bg.wasm`, so requiring the hex run to
-/// be the *last* segment classified the real 29 MB wasm — the single biggest
-/// thing this server hands out — as `no-store`, re-downloaded on every load. The
-/// unit test did not catch it because the fixture filename was **invented**
-/// rather than copied from `dist/`; it only surfaced from reading the actual
-/// build output. Same shape as this repo's `data:` URL ceiling: a fixture that
-/// never resembles the real artifact cannot fail the way the real artifact does.
-///
-/// Mirrors `tools/cors-serve.py`'s `HASHED_ASSET` deliberately — that file is
-/// the reference implementation of this policy, and two expressions of one rule
-/// that can disagree eventually do.
-fn is_hash_named_bundle(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let Some(stem) = name.strip_suffix(".wasm").or_else(|| name.strip_suffix(".js")) else {
-        return false;
-    };
-    let stem = stem.strip_suffix("_bg").unwrap_or(stem);
-    let Some((head, tail)) = stem.rsplit_once('-') else {
-        return false;
-    };
-    // A bare `-<hex>.js` with nothing before the dash is not a build artifact
-    // name; requiring a head keeps the rule anchored the way the regex is.
-    !head.is_empty() && tail.len() >= 8 && tail.chars().all(|c| c.is_ascii_hexdigit())
-}
+// `Cache-Control` for one asset path.
+//
+// **Opt in to immutable, never default to it.** The inverse rule — enumerate the
+// mutable files and let everything else be `immutable` for a year — is what put a
+// one-year cache on the file carrying the registry pin (`tools/cors-serve.py`,
+// fixed 2026-08-20); every artifact added afterwards inherits the unsafe value
+// silently, and it is invisible locally because a fresh browser has no cache.
+// Note also that "no `Cache-Control`" is not "uncached": a browser then applies
+// heuristic freshness off `Last-Modified` and serves a stale shell without
+// revalidating.
+//
+// **C15 — THE cache-immutability rule, included verbatim, not re-expressed.**
+//
+// This file used to carry its own `starts_with("/content/")` +
+// `is_hash_named_bundle()` pair. `REVIEW-2026-08-25` §2.1 found four such pairs
+// across the repo disagreeing in four different ways, each individually
+// reasonable, with `GOTCHAS.md` asserting they could not disagree. The rule now
+// lives in ONE file and every Rust call site takes it by `include!` — there is
+// no `[lib]` target in the app crate to depend on, and a fifth careful copy is
+// the thing being fixed. Both halves of the tree are pinned to the same
+// `tools/cache-policy-vectors.txt`; see the test at the bottom of this file.
+//
+// The `#[path]` module brings in `is_immutable`/`cache_control` and their
+// helpers. If it fails to resolve, the app crate moved — fix the path, do NOT
+// inline a copy.
+#[path = "../../src/cache_policy_rule.rs"]
+mod cache_policy_rule;
+use cache_policy_rule::cache_control;
 
 /// A parsed `GET`/`HEAD` request line.
 #[derive(Debug, PartialEq, Eq)]
@@ -458,8 +435,26 @@ mod tests {
         // Real names, `make wasm` output, 2026-08-21.
         assert_eq!(cache_control("/entity-browser-84dedeb6fa50b5bf_bg.wasm"), IMMUTABLE);
         assert_eq!(cache_control("/entity-browser-84dedeb6fa50b5bf.js"), IMMUTABLE);
-        // Content is addressed by its hash, so the path is the version.
-        assert_eq!(cache_control("/content/ab/cd/abcd1234"), IMMUTABLE);
+        // Content is addressed by its hash, so the path is the version — and
+        // the SHARD must be the hash's own first four characters, which is what
+        // separates the blob store from an ingested site's `content/` directory
+        // (C15; `/content/ab/cd/abcd1234` used to pass here and is now correctly
+        // mutable, because eight characters is not a hash).
+        assert_eq!(
+            cache_control("/content/00/ca/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0"),
+            IMMUTABLE
+        );
+        assert_eq!(cache_control("/content/ab/cd/abcd1234"), "no-store");
+        // A prefixed deployment keeps its immutable blobs — `starts_with` lost
+        // these, which is the safe-but-costly direction this rule also fixes.
+        assert_eq!(
+            cache_control("/docs/content/00/ca/00cae3408b6ed7ad12be0cde47e2957f768f252ac20e0afdf7b70dda5812b66ac0"),
+            IMMUTABLE
+        );
+        // An ingested Hugo/Zola site's own `content/` tree is mutable HTML at a
+        // stable URL. This is the case that produces a deployment nobody can
+        // correct for a year.
+        assert_eq!(cache_control("/2K9hB/sites/blog/content/about.html"), "no-store");
 
         // The shell and anything carrying deployment posture must revalidate —
         // note both of these are real `dist/` entries too, and neither is hashed.
@@ -474,6 +469,37 @@ mod tests {
         assert_eq!(cache_control("/a-1a2b3c.js"), "no-store", "6 hex is under the 8 floor");
         assert_eq!(cache_control("/a-zzzzzzzz.js"), "no-store", "not hex");
         assert_eq!(cache_control("/-1a2b3c4d.js"), "no-store", "no head: not an artifact name");
+    }
+
+    /// **C15's cross-tree pin.** The app crate asserts the same file; this side
+    /// asserts it too, so the `#[path]` include cannot silently stop resolving
+    /// to the rule everyone else is testing. If this red-lines and the app
+    /// crate's twin does not, the two trees have diverged again — which is the
+    /// whole failure this arrangement replaced.
+    #[test]
+    fn the_desktop_server_agrees_with_the_shared_cache_vectors() {
+        const VECTORS: &str = include_str!("../../tools/cache-policy-vectors.txt");
+        const IMMUTABLE_CC: &str = "public, max-age=31536000, immutable";
+        let mut n = 0;
+        let mut wrong = Vec::new();
+        for line in VECTORS.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (expect, path) = line.split_once(char::is_whitespace).expect("malformed vector");
+            let path = path.trim();
+            let want = match expect {
+                "immutable" => IMMUTABLE_CC,
+                "mutable" => "no-store",
+                other => panic!("bad expectation {other:?}"),
+            };
+            n += 1;
+            if cache_control(path) != want {
+                wrong.push(format!("{path:?}: wanted {want}, got {}", cache_control(path)));
+            }
+        }
+        assert!(n >= 20, "only {n} vectors reached this side — the include path or the file moved");
+        assert!(wrong.is_empty(), "desktop server disagrees with the shared vectors:\n{wrong:#?}");
     }
 
     #[test]

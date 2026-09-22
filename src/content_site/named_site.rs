@@ -1576,17 +1576,14 @@ mod tests {
                         // and `sw.js`. Only bytes whose NAME is their hash may
                         // cache hard; a mis-cached mutable file is a deployment
                         // that cannot be corrected for a year.
-                        let hashed_asset = rel.rsplit('/').next().is_some_and(|f| {
-                            (f.ends_with(".wasm") || f.ends_with(".js"))
-                                && f.rsplit('-').next().is_some_and(|tail| {
-                                    tail.chars().take_while(|c| c.is_ascii_hexdigit()).count() >= 8
-                                })
-                        });
-                        let cache = if rel.contains("content/") || hashed_asset {
-                            "public, max-age=31536000, immutable"
-                        } else {
-                            "no-store"
-                        };
+                        // C15: THE rule, not a third careful copy of it. This
+                        // server's own version was the loosest of the four —
+                        // `contains("content/")` with no leading slash, and a
+                        // hex run that did not have to reach the extension — so
+                        // the server our tests trust classified differently from
+                        // the config an operator copies, which is precisely what
+                        // `GOTCHAS.md` claimed could not happen.
+                        let cache = crate::cache_policy::cache_control(rel);
                         let head = format!(
                             "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\n\
                              Access-Control-Allow-Methods: GET, HEAD\r\n\

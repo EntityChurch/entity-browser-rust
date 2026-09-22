@@ -424,22 +424,6 @@ impl FetchWhat {
         }
     }
 
-    /// How this artifact is named in the refresh ledger, and from there in the
-    /// health section's report.
-    ///
-    /// **Identifiers, not prose.** The sentence around them is composed in
-    /// `doctor.rs`, which keeps every user-facing string on this path in one
-    /// file — the thing that makes translating that surface one extraction
-    /// rather than a hunt. Distinct from [`key`](Self::key) only in intent
-    /// today; kept separate because `key` is an in-flight de-dup token that is
-    /// free to change shape, and this one is read by a person.
-    fn ledger_name(&self, set: &str) -> String {
-        match self {
-            FetchWhat::Catalog => set.to_string(),
-            FetchWhat::Bundle(id) => format!("{set}/{id}"),
-        }
-    }
-
     /// The foreign artifact this is, for
     /// [`foreign_cache`](crate::content_site::foreign_cache) — the single entry
     /// point that owns presence **and currency**. Both kinds are somebody
@@ -577,6 +561,13 @@ pub struct AppWindow {
     /// have to (AP44 — no listener registry to keep in step).
     #[cfg(target_arch = "wasm32")]
     retry_seen: std::cell::Cell<u64>,
+    /// **Proof, for as long as this window lives, that a retry has somewhere to
+    /// land.** Held rather than registered: the reporting surface still learns
+    /// nothing about which windows exist, it only learns whether asking is
+    /// worth anything — which is the difference between *"Asked"* and *"nothing
+    /// happened, open the Apps window"* (audit F5). Dropped with the window, so
+    /// there is no close path to remember.
+    _retry_holder: crate::refresh_ledger::RetryHolder,
 }
 
 impl AppWindow {
@@ -598,6 +589,7 @@ impl AppWindow {
             // arming it again would fire a second round of fetches for nothing.
             #[cfg(target_arch = "wasm32")]
             retry_seen: std::cell::Cell::new(crate::refresh_ledger::retry_generation()),
+            _retry_holder: crate::refresh_ledger::RetryHolder::new(),
         }
     }
 
@@ -1064,9 +1056,6 @@ impl AppWindow {
         let dirty = self.watch.flag();
         let origin = origin.to_string();
         let apps_peer = apps_peer.to_string();
-        // What this attempt is called in Doctor's report. Built here, where the
-        // set name is still in scope, rather than reconstructed from `key`.
-        let ledger_label = what.ledger_name(set);
         wasm_bindgen_futures::spawn_local(async move {
             use crate::content_site::foreign_cache::{ensure_current, Currency};
             use crate::content_site::http_poll::FetchBinSource;
@@ -1078,7 +1067,10 @@ impl AppWindow {
             // sometimes not" bug). Localhost never fails so it hid; a real CDN
             // hiccups. Retry transient failures here (capped exponential), and on
             // final give-up log loudly (D13) rather than fail silent.
-            const MAX_ATTEMPTS: u32 = 5;
+            //
+            // **Which failures are "transient" is `ladder_step`'s call, not this
+            // loop's** — it is pure and native, so the ladder's cost and its
+            // terminal case are gated by `make test` rather than asserted here.
             let mut attempt: u32 = 0;
             loop {
                 attempt += 1;
@@ -1087,15 +1079,6 @@ impl AppWindow {
                     // has already written it durably. Flip dirty so the surface
                     // re-renders against the new bytes.
                     Currency::Fetched(_) => {
-                        // Recorded on SUCCESS too. Without this, Doctor cannot
-                        // tell "nothing failed" from "nothing was attempted",
-                        // and an untouched session would render as a clean bill
-                        // of health — the `warn!` bug with better typography.
-                        crate::refresh_ledger::record(
-                            &apps_peer,
-                            &ledger_label,
-                            crate::refresh_ledger::RefreshOutcome::Current,
-                        );
                         dirty.mark();
                         break;
                     }
@@ -1103,60 +1086,100 @@ impl AppWindow {
                     // rebuild here would replace the player's `<iframe>` and
                     // restart a running app for no reason (the same hazard the
                     // save-write gate in `create_apps` exists for).
-                    Currency::Unchanged => {
-                        // Our copy IS current, which is the same fact about the
-                        // world as `Fetched` and must record identically —
-                        // otherwise a steady-state session (where nothing ever
-                        // moves) looks like a session that never asked.
-                        crate::refresh_ledger::record(
-                            &apps_peer,
-                            &ledger_label,
-                            crate::refresh_ledger::RefreshOutcome::Current,
-                        );
-                        break;
-                    }
-                    Currency::Unavailable(_) if attempt < MAX_ATTEMPTS => {
-                        // 600ms, 1.2s, 2.4s, 4.8s — ~9s of coverage for a blip.
-                        let backoff = 600u32.saturating_mul(1 << (attempt - 1)).min(5000);
-                        sleep_ms(backoff as i32).await;
-                    }
-                    // Give up loudly (D13) rather than fail silent. Whatever copy
-                    // we already hold is still there and still renders — an
-                    // unreachable origin never removes a working app.
-                    Currency::Unavailable(e) => {
-                        // **This is incident B's exact line.** Until now the
-                        // only report was the `warn!` below — "reopen the window
-                        // to retry", in a console nobody has on a phone — while
-                        // the other set rendered and the grid looked complete.
-                        // The ledger is where that fact goes so a surface can
-                        // state it (design §2, §3: a failed refresh is a fact
-                        // about the belief, not a no-op).
-                        //
-                        // The 404/network split is `PollError`'s, not ours, and
-                        // it is carried rather than flattened: waiting fixes one
-                        // and never the other, so Doctor gives different advice.
-                        use crate::content_site::http_poll::PollError;
-                        let outcome = match &e {
-                            PollError::NotFound(_) => {
-                                crate::refresh_ledger::RefreshOutcome::Withheld
-                            }
-                            other => crate::refresh_ledger::RefreshOutcome::Unreachable(
-                                other.to_string(),
-                            ),
-                        };
-                        crate::refresh_ledger::record(&apps_peer, &ledger_label, outcome);
-                        tracing::warn!(
-                            peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
-                            "apps: live fetch failed after retries — reopen the window to retry \
-                             (recorded for Entity Doctor)"
-                        );
-                        break;
-                    }
+                    Currency::Unchanged => break,
+                    // Whatever copy we already hold is still there and still
+                    // renders either way — an origin that fails never removes a
+                    // working app. What differs between the two stopping arms is
+                    // what we may *say*, so they are two arms and not one.
+                    Currency::Unavailable(e) => match ladder_step(&e, attempt) {
+                        LadderStep::Retry { backoff_ms } => {
+                            sleep_ms(backoff_ms as i32).await;
+                        }
+                        // The origin answered. Retrying cannot change that, and
+                        // the advice the exhausted arm gives — *reopen the
+                        // window* — would be wrong here: reopening asks the same
+                        // question and gets the same answer.
+                        LadderStep::Withheld => {
+                            tracing::warn!(
+                                peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
+                                "apps: the origin answered and does not carry this — not retried; \
+                                 the publisher withheld it (recorded for Entity Doctor)"
+                            );
+                            break;
+                        }
+                        // **Incident B's exact line.** Give up loudly (D13)
+                        // rather than fail silent. The ledger entry that makes it
+                        // reportable is written by `ensure_current` itself now —
+                        // every one of its three consumers gets it, not just this
+                        // one (AP44). This arm only has to say so loudly.
+                        LadderStep::Exhausted => {
+                            tracing::warn!(
+                                peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
+                                "apps: live fetch failed after retries — reopen the window to \
+                                 retry (recorded for Entity Doctor)"
+                            );
+                            break;
+                        }
+                    },
                 }
             }
             fetching.borrow_mut().remove(&key);
         });
     }
+}
+
+/// How many times the Apps window asks a **retryable** failure again.
+///
+/// Native (not `cfg(wasm32)`) so [`ladder_step`]'s tests can state the ladder's
+/// total cost rather than repeat a number from a comment.
+const MAX_ATTEMPTS: u32 = 5;
+
+/// What the bounded retry ladder does after one failed attempt.
+///
+/// Three outcomes, each with its own word, because the two that stop differ in
+/// what they license the surface to say (AP40): *the publisher does not carry
+/// this* and *we could not reach the publisher* want different log lines and
+/// different advice, and the ledger already keeps them apart one layer down
+/// (`RefreshOutcome::{Withheld, Unreachable}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+enum LadderStep {
+    /// Retryable, and the ladder has attempts left: wait this long, ask again.
+    Retry { backoff_ms: u32 },
+    /// The origin **answered**, and said it is not there. Stop now — the
+    /// remaining attempts would cost the user seconds and buy nothing.
+    Withheld,
+    /// Retryable, but the ladder is spent.
+    Exhausted,
+}
+
+/// The ladder's one decision, pure and native so `make test` gates it — its
+/// only caller is a `spawn_local` inside a `cfg(wasm32)` block, which no native
+/// test can reach, and *"a bounded ladder that burns ~9 s on an answer that will
+/// not change"* is precisely the kind of claim that survives in a comment.
+///
+/// **A terminal answer is not retried at all** — the design's R3, open since it
+/// was written and made user-visible by the refresh ledger: a withheld set used
+/// to cost the full five attempts *before* the finding that reports it could
+/// appear. Terminality is [`PollError::is_terminal`], which is the variant's own
+/// ruling rather than a status test repeated here (AP40).
+///
+/// The terminal check comes **first**, deliberately: a withheld artifact on
+/// attempt 1 must stop on attempt 1, which is the whole point.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn ladder_step(e: &crate::content_site::http_poll::PollError, attempt: u32) -> LadderStep {
+    if e.is_terminal() {
+        return LadderStep::Withheld;
+    }
+    if attempt >= MAX_ATTEMPTS {
+        return LadderStep::Exhausted;
+    }
+    // 600ms, 1.2s, 2.4s, 4.8s — capped, and `saturating_sub` keeps the shift
+    // defined if a caller ever starts counting at zero.
+    let backoff_ms = 600u32
+        .saturating_mul(1u32 << attempt.saturating_sub(1).min(16))
+        .min(5000);
+    LadderStep::Retry { backoff_ms }
 }
 
 /// Await a `setTimeout(ms)` — the async sleep the bounded-retry backoff needs.
@@ -1546,6 +1569,69 @@ impl Drop for AppWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::content_site::http_poll::PollError;
+
+    /// **R3 — do not retry a 404.** The one that was open: a withheld set burned
+    /// the full five attempts before the finding that reports it could appear,
+    /// so the user waited ~9 s for an answer the origin gave in the first 200 ms.
+    #[test]
+    fn a_withheld_artifact_is_not_retried_at_all() {
+        assert_eq!(
+            ladder_step(&PollError::NotFound(404), 1),
+            LadderStep::Withheld,
+            "the origin answered on attempt 1 — there is nothing to wait for"
+        );
+        assert_eq!(ladder_step(&PollError::NotFound(410), 1), LadderStep::Withheld);
+    }
+
+    /// The retryable half is unchanged, and that is the point: this fix must not
+    /// buy R3 by making a CDN hiccup fatal. Every attempt below the cap still
+    /// waits the documented backoff.
+    #[test]
+    fn a_retryable_failure_still_climbs_the_documented_ladder() {
+        let e = PollError::Decode("truncated".into());
+        for (attempt, expected) in [(1, 600), (2, 1200), (3, 2400), (4, 4800)] {
+            assert_eq!(
+                ladder_step(&e, attempt),
+                LadderStep::Retry { backoff_ms: expected },
+                "attempt {attempt}"
+            );
+        }
+        assert_eq!(
+            ladder_step(&e, MAX_ATTEMPTS),
+            LadderStep::Exhausted,
+            "the ladder is spent at the cap — and 'spent' is not 'withheld'"
+        );
+    }
+
+    /// The comment says *~9 s of coverage for a blip*. A number in a comment
+    /// drifts; this is the same number, computed. It is also what makes the
+    /// withheld case's cost concrete — that is the wait R3 removes.
+    #[test]
+    fn the_ladder_costs_what_its_comment_says() {
+        let e = PollError::HashMismatch;
+        let total: u32 = (1..MAX_ATTEMPTS)
+            .map(|a| match ladder_step(&e, a) {
+                LadderStep::Retry { backoff_ms } => backoff_ms,
+                other => panic!("attempt {a} should still retry, got {other:?}"),
+            })
+            .sum();
+        assert_eq!(total, 9000, "600 + 1200 + 2400 + 4800");
+    }
+
+    /// **The three stopping/continuing outcomes stay apart** (AP40). `Withheld`
+    /// and `Exhausted` both end the loop, and collapsing them is how the
+    /// launcher ends up telling a user to *reopen the window to retry* a
+    /// publisher that already said it does not carry the set.
+    #[test]
+    fn a_withheld_answer_and_a_spent_ladder_are_different_words() {
+        assert_ne!(
+            ladder_step(&PollError::NotFound(404), MAX_ATTEMPTS),
+            ladder_step(&PollError::Decode("x".into()), MAX_ATTEMPTS),
+            "at the cap both stop, but only one of them was answered"
+        );
+    }
 
     #[test]
     fn the_apps_window_type_is_peer_scoped() {
