@@ -2251,20 +2251,30 @@ impl EntityApp {
                         );
                         continue;
                     };
-                    match self
-                        .peer_manager
-                        .put_if_absent(
-                            &system_pid,
-                            crate::content_site::origins::origin_path(&system_pid, target_peer),
-                            crate::content_site::origins::origin_entity(&resolved),
-                            SEED_TIMEOUT_MS,
-                        )
-                        .await
+                    // **Adopt, do not merely seed.** This used to be
+                    // `put_if_absent`, on the rationale that a returning user's
+                    // override wins — but an absence check cannot tell "the user
+                    // overrode this" from "we wrote it ourselves last boot", so a
+                    // domain that moved a peer's origin (new CDN, same publisher
+                    // identity) left every returning profile on the old one
+                    // FOREVER. R1 does not catch that: it compares identity, and
+                    // the identity did not change. The override is now marked,
+                    // which is the only thing that can actually deliver the
+                    // stated rationale (AP30 / D24, one layer down from the
+                    // record shape).
+                    match crate::content_site::origins::adopt_deployment_origin(
+                        &self.peer_manager,
+                        &system_pid,
+                        target_peer,
+                        &resolved,
+                        SEED_TIMEOUT_MS,
+                    )
+                    .await
                     {
-                        Ok(seeded) => tracing::info!(
+                        Ok(outcome) => tracing::info!(
                             target_peer = %target_peer,
                             origin = %resolved,
-                            seeded,
+                            outcome = ?outcome,
                             "boot_load: registered deployment-config origin"
                         ),
                         Err(e) => tracing::error!(
@@ -2381,12 +2391,45 @@ impl EntityApp {
                         ),
                     }
                 } else {
-                    tracing::warn!(
-                        home_peer = %home_peer,
-                        "boot_load: remote home has no registered origin (no deployment config \
-                         entry, ENTITY_HOME_ORIGIN unset) — it will only resolve if the origin \
-                         is persisted/registered elsewhere"
-                    );
+                    // **Ask before diagnosing.** This used to warn unconditionally,
+                    // with the warning's own text conceding it could not tell the
+                    // cases apart (*"it will only resolve if the origin is
+                    // persisted/registered elsewhere"*) — and that escape hatch is
+                    // what applies on a HEALTHY profile whose origin was persisted
+                    // on an earlier boot. So the line fired on working profiles,
+                    // and a devops seat debugging the stale-bundle incident read it
+                    // as the cause: two round trips spent on a red herring.
+                    //
+                    // AP33, one surface out from the user, and it extends that
+                    // entry from user-facing strings to LOG LINES — whose audience
+                    // is someone debugging an incident at their least skeptical.
+                    // The read is authoritative (`get_entity_async`, not the Worker
+                    // cache mirror, which is unsubscribed for this prefix at boot
+                    // and would answer `None` for every profile).
+                    let registered = self
+                        .peer_manager
+                        .get_entity_async(
+                            &system_pid,
+                            &crate::content_site::origins::origin_path(&system_pid, &home_peer),
+                        )
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    if registered {
+                        tracing::debug!(
+                            home_peer = %home_peer,
+                            "boot_load: remote home origin is registered from an earlier boot \
+                             (no deployment-config entry this boot, ENTITY_HOME_ORIGIN unset)"
+                        );
+                    } else {
+                        tracing::warn!(
+                            home_peer = %home_peer,
+                            "boot_load: remote home has NO registered origin — no \
+                             deployment-config entry, ENTITY_HOME_ORIGIN unset, and none \
+                             persisted from an earlier boot. This home cannot resolve."
+                        );
+                    }
                 }
                 // Re-point the overlay when there is no durable config (a fresh
                 // deployment) OR when (R1) just adopted a new publisher identity.
@@ -2597,31 +2640,48 @@ impl EntityApp {
     }
 
     /// Fire-and-forget cache-awareness: for each registered foreign origin,
-    /// fetch its `sites.list` and pre-cache the MANIFEST of every site it lists
-    /// that we don't already hold — written into MY store at the natural
+    /// fetch its `sites.list` and bring the MANIFEST of every site it lists **up
+    /// to date** — written into MY store at the natural
     /// `/{foreign}/sites/{site}/manifest` cached-foreign address + a provenance
     /// record, exactly like the resolver's on-navigate write-through
     /// ([`crate::content_site::resolver`] `persist_to_cache`), but eagerly and
     /// for ALL sites. This is what lets [`crate::content_site::discovery::scan_local_sites`]
     /// enumerate a freshly-published peer's whole site set so the directory rail
     /// shows every site up front. Manifest-only (lightweight); page bodies fetch
-    /// lazily on first visit. Idempotent: a sync snapshot of already-cached sites
-    /// is taken up front, so a warm boot re-fetches only the per-peer `sites.list`
-    /// (cheap) and skips manifests it already holds. Borrows nothing across the
-    /// await — grabs a `'static` writer handle + the origin roster first (the
+    /// lazily on first visit. Borrows nothing across the await — grabs a
+    /// `'static` writer handle + the origin roster first (the
     /// `refresh_site_index` pattern).
+    ///
+    /// # It used to skip manifests it already held, and that was the defect
+    ///
+    /// The sync snapshot taken up front used to be a **presence set**, and a
+    /// site in it was skipped outright — so a returning profile's directory rail
+    /// showed whatever titles it first saw, for the life of the profile, while
+    /// its sibling [`crate::content_site::discovery::warm_peer_sites`] refetched
+    /// every manifest unconditionally. Two functions that each other's comments
+    /// call siblings, disagreeing about when a copy is current.
+    ///
+    /// The snapshot is now a **pin set** ([`foreign_cache::held_set`]): the
+    /// per-site request that says whether anything moved is always issued (58
+    /// bytes, `no-store`), and only the *body* is skipped when it did not. Blast
+    /// radius of the old behaviour, stated because it is smaller than it sounds:
+    /// page bodies were never affected — `resolve_closure_via` is a pure-network
+    /// two-hop — so what went stale was the directory listing, not the content.
     #[cfg(target_arch = "wasm32")]
     fn precache_origin_sites(&self, me: &str) {
-        use crate::content_site::{cache, discovery, http_poll, origins, paths};
+        use crate::content_site::foreign_cache::{self, Currency, ForeignArtifact};
+        use crate::content_site::{cache, discovery, http_poll, origins};
 
         let origins_list = origins::list_origins(&self.peer_manager, me);
-        // Foreign sites already physically in my store — skip re-fetching these.
-        let already: std::collections::BTreeSet<(String, String)> =
+        // What we currently hold, as PINS rather than as a presence set — see
+        // the doc comment. Foreign sites only; our own are not fetched over HTTP.
+        let held_artifacts: Vec<ForeignArtifact> =
             discovery::scan_local_sites(&self.peer_manager, me)
                 .into_iter()
                 .filter(|r| !r.owned)
-                .map(|r| (r.peer, r.site))
+                .map(|r| ForeignArtifact::Manifest { peer: r.peer, site: r.site })
                 .collect();
+        let held = foreign_cache::held_set(&self.peer_manager, me, &held_artifacts);
         let Some(writer) = self.peer_manager.writer_handle_for(me) else {
             return;
         };
@@ -2637,34 +2697,56 @@ impl EntityApp {
                     tracing::debug!(peer = %foreign, "precache: peer exposes no sites.list — skipping enumeration");
                     continue;
                 };
-                let mut cached = 0usize;
+                let (mut fetched, mut current) = (0usize, 0usize);
                 for site in &site_ids {
-                    if already.contains(&(foreign.clone(), site.clone())) {
-                        continue;
-                    }
-                    match http_poll::fetch_manifest(&src, &origin, &foreign, site).await {
-                        Ok(manifest_ent) => {
-                            writer.put(paths::manifest_path(&foreign, site), manifest_ent.clone());
+                    let what =
+                        ForeignArtifact::Manifest { peer: foreign.clone(), site: site.clone() };
+                    match foreign_cache::ensure_current(
+                        &src,
+                        &writer,
+                        held.get(&what),
+                        &origin,
+                        &what,
+                    )
+                    .await
+                    {
+                        // `ensure_current` wrote the manifest; the provenance
+                        // record is ours to keep beside it — it is what the rail
+                        // reads for "which host served this", and (see
+                        // `warm_site_writes`) it is the dirty signal every Site
+                        // Browser watches unconditionally.
+                        //
+                        // Written only on a real change: rewriting an unchanged
+                        // record every boot is a durable write per site per boot
+                        // that nothing decides on (D9), and it would flip every
+                        // open Site Browser dirty on every boot.
+                        Currency::Fetched(manifest_ent) => {
+                            fetched += 1;
                             let prov = cache::CacheProvenance {
                                 last_reconciled: now_ms().unwrap_or(0.0) as u64,
                                 pinned_root_hash: cache::manifest_hash_hex(&manifest_ent),
                                 source_transport: origin.clone(),
                             };
-                            writer.put(cache::provenance_path(&me, &foreign, site), prov.to_entity());
-                            cached += 1;
+                            writer.put(
+                                cache::provenance_path(&me, &foreign, site),
+                                prov.to_entity(),
+                            );
                         }
-                        Err(e) => tracing::debug!(
+                        Currency::Unchanged => current += 1,
+                        Currency::Unavailable(e) => tracing::debug!(
                             peer = %foreign, site = %site, error = ?e,
-                            "precache: manifest fetch failed — site stays lazy"
+                            "precache: manifest check failed — the copy we hold stands"
                         ),
                     }
                 }
-                if cached > 0 {
-                    tracing::info!(
-                        peer = %foreign, cached, listed = site_ids.len(),
-                        "precache: cached foreign site manifests for directory awareness"
-                    );
-                }
+                // Printed unconditionally, including the zero case: this is the
+                // boot sweep's price, and a measurement that only speaks when it
+                // is interesting cannot tell a cheap sweep from one that did not
+                // run (the standing "a budget prints on success" rule).
+                tracing::info!(
+                    peer = %foreign, fetched, current, listed = site_ids.len(),
+                    "precache: {fetched} manifest(s) fetched, {current} already current"
+                );
             }
         });
     }

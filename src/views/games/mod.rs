@@ -397,6 +397,30 @@ impl FetchWhat {
             FetchWhat::Bundle(id) => format!("{set}:bundle:{id}"),
         }
     }
+
+    /// The foreign artifact this is, for
+    /// [`foreign_cache`](crate::content_site::foreign_cache) — the single entry
+    /// point that owns presence **and currency**. Both kinds are somebody
+    /// else's bytes cached in our tree, which is why neither may be gated on
+    /// "do I already have one".
+    fn artifact(
+        &self,
+        apps_peer: &str,
+        set: &str,
+    ) -> crate::content_site::foreign_cache::ForeignArtifact {
+        use crate::content_site::foreign_cache::ForeignArtifact;
+        match self {
+            FetchWhat::Catalog => ForeignArtifact::AppCatalog {
+                peer: apps_peer.to_string(),
+                set: set.to_string(),
+            },
+            FetchWhat::Bundle(id) => ForeignArtifact::AppBundle {
+                peer: apps_peer.to_string(),
+                set: set.to_string(),
+                id: id.clone(),
+            },
+        }
+    }
 }
 
 /// The window's stable English type identifier — an identity string used for
@@ -933,11 +957,19 @@ impl AppWindow {
         }
     }
 
-    /// Kick a live-consumer fetch (browser only) for one set's `catalog` or a
-    /// `bundle`, caching the fetched entity into MY store at the **foreign
-    /// peer's natural path** (`/{apps_peer}/apps/{set}/…`) — the same
-    /// cache-at-natural-path shape as `precache_origin_sites`. In-flight guarded
-    /// per `(set, kind)`, so the two sets' catalog fetches never de-dup together.
+    /// Bring one set's `catalog` or a `bundle` **up to date** (browser only),
+    /// caching into MY store at the **foreign peer's natural path**
+    /// (`/{apps_peer}/apps/{set}/…`) — the same cache-at-natural-path shape as
+    /// `precache_origin_sites`. In-flight guarded per `(set, kind)`, so the two
+    /// sets' catalog fetches never de-dup together.
+    ///
+    /// **Currency, not presence.** This goes through
+    /// [`foreign_cache::ensure_current`](crate::content_site::foreign_cache::ensure_current),
+    /// which always issues hop 1 (the 58-byte pointer, `no-store`) and downloads
+    /// the body only when the pointer moved. The caller may guard on "have I
+    /// asked this session" — it may **not** guard on "do I already hold a copy",
+    /// which is the defect that left every returning visitor running the app code
+    /// they first downloaded (AP30's cache shape).
     #[cfg(target_arch = "wasm32")]
     fn ensure_fetched(
         &self,
@@ -958,6 +990,11 @@ impl AppWindow {
             tracing::warn!(peer = %self.peer_id, "apps: no writer handle — fetch skipped");
             return;
         };
+        // What we hold RIGHT NOW, captured synchronously — nothing here borrows
+        // `Peers` across the await (the `refresh_site_index` rule), so the pin
+        // has to be read before the spawn, not inside it.
+        let artifact = what.artifact(apps_peer, set);
+        let held = crate::content_site::foreign_cache::held_hash(peers, &self.peer_id, &artifact);
         self.fetching.borrow_mut().insert(key.clone());
         let fetching = self.fetching.clone();
         // A clonable handle to THIS window's dirty flag. On a successful fetch we
@@ -969,7 +1006,8 @@ impl AppWindow {
         let origin = origin.to_string();
         let apps_peer = apps_peer.to_string();
         wasm_bindgen_futures::spawn_local(async move {
-            use crate::content_site::http_poll::{self, FetchBinSource};
+            use crate::content_site::foreign_cache::{ensure_current, Currency};
+            use crate::content_site::http_poll::FetchBinSource;
             let src = FetchBinSource;
             // Bounded backoff retry. The render loop is **dirty-gated**: a failed
             // fetch writes nothing, fires no subscription, and so never flips the
@@ -982,30 +1020,28 @@ impl AppWindow {
             let mut attempt: u32 = 0;
             loop {
                 attempt += 1;
-                let fetched = match &what {
-                    FetchWhat::Catalog => {
-                        http_poll::fetch_app_catalog(&src, &origin, &apps_peer, set)
-                            .await
-                            .map(|ent| (paths::catalog_path(&apps_peer, set), ent))
-                    }
-                    FetchWhat::Bundle(id) => {
-                        http_poll::fetch_app_bundle(&src, &origin, &apps_peer, set, id)
-                            .await
-                            .map(|ent| (paths::bundle_path(&apps_peer, set, id), ent))
-                    }
-                };
-                match fetched {
-                    Ok((path, ent)) => {
-                        writer.put(path, ent);
+                match ensure_current(&src, &writer, held, &origin, &artifact).await {
+                    // The source moved (or we held nothing): `ensure_current`
+                    // has already written it durably. Flip dirty so the surface
+                    // re-renders against the new bytes.
+                    Currency::Fetched(_) => {
                         dirty.mark();
                         break;
                     }
-                    Err(_) if attempt < MAX_ATTEMPTS => {
+                    // Our copy IS the current bytes. **Do not mark dirty** — a
+                    // rebuild here would replace the player's `<iframe>` and
+                    // restart a running app for no reason (the same hazard the
+                    // save-write gate in `create_apps` exists for).
+                    Currency::Unchanged => break,
+                    Currency::Unavailable(_) if attempt < MAX_ATTEMPTS => {
                         // 600ms, 1.2s, 2.4s, 4.8s — ~9s of coverage for a blip.
                         let backoff = 600u32.saturating_mul(1 << (attempt - 1)).min(5000);
                         sleep_ms(backoff as i32).await;
                     }
-                    Err(e) => {
+                    // Give up loudly (D13) rather than fail silent. Whatever copy
+                    // we already hold is still there and still renders — an
+                    // unreachable origin never removes a working app.
+                    Currency::Unavailable(e) => {
                         tracing::warn!(
                             peer = %apps_peer, key = %key, attempts = attempt, error = ?e,
                             "apps: live fetch failed after retries — reopen the window to retry"
@@ -1261,8 +1297,20 @@ impl WindowView for AppWindow {
             return;
         }
 
-        // The launcher grid unless an app is selected AND its bundle is present;
-        // fetch the bundle on click-through when it isn't yet cached locally.
+        // The launcher grid unless an app is selected AND its bundle is present.
+        //
+        // **The bundle is refreshed once per window-open, exactly like the
+        // catalog above — NOT "only when absent".** That gate is the defect that
+        // wedged every returning visitor: a profile ran the app code it first
+        // downloaded, forever, because nothing upstream moves when app code does
+        // (`AppEntry` carries no content hash and no version, so a republish
+        // emits a byte-identical catalog — measured on the fixture pair behind
+        // `an_app_republished_under_a_stable_identity_reaches_a_returning_profile`).
+        //
+        // The refresh is cheap and cannot storm: `ensure_current` issues the
+        // 58-byte pointer and stops there unless it moved, and the `refreshed`
+        // set makes it one-shot per open. A cached copy still renders
+        // immediately — this never blocks the paint on the network.
         let picked = resolve_selected(&sets, &view.selected);
         let bundle = picked.and_then(|(sv, entry)| {
             let b = peers
@@ -1271,15 +1319,10 @@ impl WindowView for AppWindow {
                     &paths::bundle_path(&sv.apps_peer, sv.set, &entry.id),
                 )
                 .map(|e| AppBundle::from_entity(&e));
-            if b.is_none() {
-                if let Some(o) = &sv.origin {
-                    self.ensure_fetched(
-                        peers,
-                        sv.set,
-                        &sv.apps_peer,
-                        o,
-                        FetchWhat::Bundle(entry.id.clone()),
-                    );
+            if let Some(o) = &sv.origin {
+                let what = FetchWhat::Bundle(entry.id.clone());
+                if self.refreshed.borrow_mut().insert(what.key(sv.set)) {
+                    self.ensure_fetched(peers, sv.set, &sv.apps_peer, o, what);
                 }
             }
             b

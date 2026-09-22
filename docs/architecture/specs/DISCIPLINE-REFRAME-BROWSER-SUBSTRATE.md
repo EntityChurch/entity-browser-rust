@@ -685,6 +685,97 @@ first-ever visit to a black-holing origin has nothing to fall back to, and no
 deadline creates one — that remains E1 (reload retries), and it is the residual
 the boot-slot work addresses, not this discipline.
 
+**D24 — Any durable copy of someone else's bytes is a cache, and needs a
+currency trigger. `if absent` is not one.** The durable entity tree is the single
+source of truth *for state we own*. The moment a foreign artifact is written into
+it under `/{me}/{foreign}/…` it is a **cache** of a remote mutable artifact, and
+it needs a freshness model like every other cache layer here. A consumer may
+guard on *"have I asked this session"*; it may not guard on *"do I already hold
+a copy"*.
+
+*Why this is a missing abstraction and not a reminder.* Every cache we designed
+**as** a cache has a freshness model — `sw.js` is network-first for the mutable
+shell, the browser HTTP cache gets `Freshness::Mutable` → `no-store`, the registry
+has a TTL. The one that became a cache **by accident** has none, and it sits on
+top of the ones that are correct: a presence check in the store short-circuits
+all three, **because no request is issued at all**. `if cached.is_none() {
+fetch() }` is the natural thing to write, it is correct for immutable content,
+and nothing about the store signals that this path holds someone else's mutable
+artifact. That is why it recurred per app, per site, per feature.
+
+*We did not have to invent change detection; we were bypassing it.*
+`fetch_entity_two_hop` already splits a **pointer** at a stable path
+(`Freshness::Mutable`, `no-store`, 58 bytes, changes iff the entity changed) from
+a **body** addressed by its hash. The pointer *is* the version and the answer is
+exact — not a TTL, not a heuristic. And the local half of the comparison is
+already in the tree: an `Entity` carries its canonical `content_hash`, the same
+`Hash::compute(type, data)` the pointer holds. **The pin was never missing.**
+`CacheProvenance::pinned_root_hash` — added to hand-roll this answer at a second
+layer, and read by nothing that decides — is therefore not merely unwired, it is
+a duplicate of a fact the substrate already stores. Two correct implementations
+of change detection and a consumer layer that called neither.
+
+*Source:* four incidents in two shapes, which is what promoted **AP30** from
+anti-pattern to discipline. The **record** shape (`peer_supersession`, 2026-08-27:
+a durable record of a remote assertion with no way to re-ask) and the **cache**
+shape (2026-08-28, found on live production by devops): the **app bundle**, fetched
+only when absent, so every returning profile ran the app code it first downloaded,
+**silently** — `boot_load: complete`, frame loop armed, every fetch `ok`,
+week-old app on screen; `precache_origin_sites` **skipping every manifest it
+already held** while its own sibling `warm_peer_sites` refetched unconditionally;
+and the already-fixed **catalog**, whose repair landed on the file carrying
+metadata and not the file carrying the app, in a diff that stared at both.
+
+*Two corollaries, both of which are where the naive version goes wrong.*
+**(a) Absence of evidence is never evidence** — an unreachable origin, an
+unparseable answer or an expired D23 deadline must leave the held copy
+**untouched**. A cache that drops what it cannot re-verify converts a brief
+outage into a missing app, which is strictly worse than the staleness being
+fixed. **(b) Unchanged must be free of side effects** — no durable write, no
+dirty flip. A "refresh" that rewrites an identical record every boot is
+accumulation (D9), and on this surface it would replace a running app's
+`<iframe>` and restart it.
+
+*How / enforcement — both halves, as owed:*
+1. **`src/content_site/foreign_cache.rs`** — `ensure_current`, the one entry
+   point, owning presence **and** currency. `Currency` is
+   `Fetched | Unchanged | Unavailable` and deliberately **has no variant meaning
+   "I already had one, so I did not look."** `HeldHash` can only be produced by
+   `held_hash`/`held_set`, so a consumer cannot hand it a judgement of its own.
+2. **`tools/foreign-cache-lint.sh`** (in `make lint`, baseline-ratcheted) —
+   direct calls to the per-artifact fetchers outside the entry point. It lints
+   the **module boundary**, not the defect's shape: the audit's proposed rule
+   (a durable read of a foreign path used as a fetch guard) is the true one and
+   an unreliable grep, and **AP29** is the entry for a gate that counts prose.
+   Verified by mutation — it fires and names the file.
+3. **`an_app_republished_under_a_stable_identity_reaches_a_returning_profile`**
+   (`tests/e2e_worker.rs`) — publish, boot, **republish under the same
+   identity**, boot the same profile again, assert the new bytes are in the
+   player's `srcdoc`. It asserts the rendered marker, never that a fetch
+   happened (AP31), and its negative half asserts the **old** marker is gone.
+
+*Ratified on the gate, not on the count.* AP30 named its own condition — *"a
+discipline with no enforcement point does not count; ratify D24 in the same change
+that lands the gate"* — because none existed for the cache shape. **No gate
+anywhere in this repo had ever visited an origin twice across a publish**, which
+is exactly why devops found this in minutes on a real deploy and a green suite
+never could. The gate now exists, was observed **red on the unfixed tree** with
+the failure being the stated mechanism (the returning profile still rendering
+`APP-MARKER-V1`), and green after the fix. Its fixture also reproduces the
+production shape offline for the first time: across two publishes the catalog is
+**byte-identical** (`146bfc3d…` → `146bfc3d…`) and only the bundle pointer moves
+(`cfbfc227…` → `e48d98cb…`) — which is devops' edge measurement (139/139 objects
+byte-identical, `active_version` unmoved) in a test.
+
+*What this does NOT close.* The lint cannot catch a consumer that calls
+`ensure_current` *conditionally* on holding a copy — the boundary stops the
+fetch from being reachable, not the call from being guarded. That is what the
+gate is for, and it covers one artifact (an app bundle) on one arm (Direct-IDB).
+The **Worker arm** has executed none of it: there, the sync read answers from a
+per-subscription mirror that fills asynchronously, so a Worker run can miss its
+own cache, refetch, and go green for a reason unrelated to the fix. A Worker run
+is a second, separately-labelled assertion — never the one quoted as proof.
+
 ---
 
 ## 4. The review questions (run on every diff)
@@ -1223,14 +1314,14 @@ these shipped in this repo.
   feature, and why a reminder will not fix it: it is a missing abstraction, not carelessness.**
   The fix is to move the trigger to the layer that already owns freshness, and give the
   provenance ledger a reader.
-  **Promotion status: earned, not yet ratified.** Four incidents in two shapes clears the
-  ladder's bar — but a discipline with no enforcement point does not count, and none exists for
-  the cache shape. Two are named in the audit §3: a gate that **republishes and asserts a
-  returning profile sees the new bytes** (no gate anywhere currently boots a profile twice
-  across a publish, which is exactly why devops found this in minutes and we never had), and a
-  baseline-ratcheted **lint on the shape** — a durable read of a foreign-qualified path used as
-  the condition guarding a fetch. Ratify D24 in the same change that lands them; do not mint it
-  before.
+  **PROMOTED to D24 on 2026-08-29**, in the change that landed both enforcement points it
+  named — `an_app_republished_under_a_stable_identity_reaches_a_returning_profile` (observed
+  **red** on the unfixed tree, green after) and `tools/foreign-cache-lint.sh` (observed firing
+  on a deliberate violation). The lint that shipped guards the **module boundary**
+  (`content_site::foreign_cache` is the only door to the per-artifact fetchers) rather than the
+  guard *shape* this entry proposed: the shape rule is the true one and an unreliable grep, and
+  **AP29** is this catalog's own entry for a gate that counts prose. The entry stays here as the
+  incident record; **D24 is the rule.**
   [D16, `src/views/games/mod.rs`, `src/app.rs`, `src/apps/format.rs` `AppEntry`,
   `src/content_site/cache.rs`, `reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-EVERY-COPY-OF-SOMEONE-ELSES-BYTES.md`,
   meta `ROUTING-2026-08-28-THE-BUNDLE-IS-FETCHED-ONLY-WHEN-ABSENT.md`]
@@ -1357,6 +1448,15 @@ these shipped in this repo.
   cost is not the ignoring, it is the two hours spent chasing it the one time they don't.
   Either establish the distinction (is the origin resolvable *now*?) before choosing the
   string, or drop it to `debug!` and state the observation without the diagnosis.
+  *Closed 2026-08-29, by the first route.* Boot now performs the authoritative read
+  (`get_entity_async` on the origin path — **not** the sync mirror, which is unsubscribed for
+  that prefix at boot and would answer `None` for every profile, turning the fix into the same
+  bug with more code) and picks between a `debug!` *"registered from an earlier boot"* and a
+  `warn!` *"NO registered origin… this home cannot resolve."* The warning kept its teeth: the
+  broken case still warns, and it now says something that is only true when it is true. Note
+  which half of AP33 this closes — the **log** incident, where the distinguishing fact was
+  cheaply available. The **user-facing** half (incident 1) still cannot be fixed by rewording:
+  it needs the withdrawn/unreachable/retired split, which does not exist yet.
 
 - **AP34 — A gate whose POPULATION excludes the failing configuration.** Not a weak
   assertion and not a stale artifact: the assertions are right and the rig is clean, but the

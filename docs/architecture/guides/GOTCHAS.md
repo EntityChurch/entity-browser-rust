@@ -1550,6 +1550,21 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     (`site_mode`, `surface`, `window_type`) is a user preference and must not move. An
     absent/empty `home_site.peer` is **not** a divergence, or a truncated doc could re-home a
     healthy browser.
+  - **A MOVED ORIGIN under a STABLE identity is a second, separate strand — R1 cannot see it,
+    because R1 compares identity and the identity did not change.** Fixed 2026-08-29; the
+    mechanism is worth carrying because it is the general lesson. Boot registered
+    deployment-config origins with `put_if_absent`, rationale *"a returning user's override
+    wins"* — and **an absence check cannot tell "the user overrode this" from "we wrote it
+    ourselves last boot"**, so a new CDN under the same publisher identity left every returning
+    profile on the old host forever, with no client-side recovery and no signal, presenting
+    exactly like the re-key. Origin records now carry `source` (`deployment` | `user`) and boot
+    calls `origins::adopt_deployment_origin`, which **replaces a deployment-written value and
+    reports a user-written one**. Two things not to change back: an **unmarked** legacy record
+    reads as deployment-written (treating it as an override would freeze the strand on every
+    profile that has ever booted, and there has never been a surface where a user types an
+    origin), and a repeated origin must return `Unchanged` — every boot re-registers every
+    origin, so a rewrite there is a durable write per hosted peer per boot. **Preserving a real
+    override needs a marked override, not an absence check** (AP30/D24, one layer down).
   - **The session config is only half the repair, and the other half is NOT per-surface.**
     Nav state persists its own `peer` (`ContentSiteState`), so fixing the config alone parks
     the user on the retired publisher *while the config reports healthy*. The first attempt
@@ -2785,11 +2800,17 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Apps & embedded programs
 
-- **A RETURNING PROFILE NEVER RE-FETCHES AN APP BUNDLE — OPEN, UNFIXED, and it is why a
-  verified publish reaches nobody who has visited before.** `src/views/games/mod.rs` refreshes
-  the **catalog** once per window-open but fetches a **bundle** only `if b.is_none()`. Found on
+- **A RETURNING PROFILE NEVER RE-FETCHED AN APP BUNDLE — FIXED 2026-08-29 (D24), and the
+  history is kept because the fix is a rule, not a line.** `src/views/games/mod.rs` refreshed
+  the **catalog** once per window-open but fetched a **bundle** only `if b.is_none()`. Found on
   live production 2026-08-28 by devops, on two domains, immediately after two edge-verified
   publishes; verified here against the code.
+  - **What it is now:** both go through `content_site::foreign_cache::ensure_current`, which
+    always issues hop 1 (the 58-byte pointer, `no-store`) and downloads the body only if it
+    moved. The bundle is keyed once-per-window-open in the same `refreshed` set as the catalog.
+    **You cannot express "only if absent" any more** — `Currency` has no such variant, and
+    `tools/foreign-cache-lint.sh` stops a new consumer reaching the fetchers directly.
+  - **Gate:** `make e2e-worker T=an_app_republished`, observed red on the unfixed tree.
   - **Nothing upstream can compensate, so do not try to fix this by publishing.** `AppEntry`
     (`src/apps/format.rs`) carries **no content hash and no version** — `id, name, description,
     saves, category, glyph, icon, size, app_type` — so two publishes whose app code differs
@@ -2802,15 +2823,17 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     comment says *"this used to fetch only when absent, so apps added after the first visit
     NEVER appeared."* The repair landed on the file carrying metadata, not the one carrying the
     app. AP30 incidents 2–3.
-  - **Fix shape (not applied — held for the hotfix):** give the selected app's bundle the same
-    once-per-open refresh, keyed in the existing `refreshed` set. It is a conditional GET of 58
-    bytes, not a payload re-download; the multi-MB blob behind it is content-addressed and
-    immutable and only moves when the hash moves. **Whether the trigger should be the bundle
-    pointer or `published-root` is our call, not devops'** — their constraint is only that
-    *something a returning profile re-reads has to move when app code moves*.
-  - **No gate anywhere boots a profile twice across a publish**, which is why this was
-    invisible to us and visible to them within minutes of a real deploy. That gate is the
-    enforcement point owed before AP30's rule can be ratified as a discipline.
+  - **The trigger is the bundle pointer, not `published-root`.** Per-app, already on this code
+    path, no boot-path work. Devops' constraint was only that *something a returning profile
+    re-reads has to move when app code moves* — the pointer does, and it is 58 bytes.
+  - **No gate anywhere booted a profile twice across a publish**, which is why this was
+    invisible to us and visible to them within minutes of a real deploy. That gate now exists
+    and is what ratified D24 — the enforcement point AP30 named as its own condition.
+  - **Two things not to "clean up" in the fix.** `Unchanged` must **not** mark the window
+    dirty: a rebuild replaces the player's `<iframe>` and restarts a running app (the same
+    hazard `create_apps`' save-write gate exists for). And an unreachable origin must leave the
+    held bundle alone — otherwise a CDN blip becomes a missing app, which is worse than the
+    staleness being fixed.
 
 - **DO NOT TELL ANYONE TO CLEAR SITE DATA TO GET THE NEW BUILD — IT DESTROYS THEIR SAVED
   GAMES, AND THERE IS NO EXPORT PATH.** Saves live under the **user's own peer**

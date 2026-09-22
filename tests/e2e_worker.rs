@@ -18358,3 +18358,287 @@ async fn a_cached_shell_survives_an_origin_that_stalls_the_body(
     println!("  body-stall: reload painted with {stalled} headers-then-stall request(s)");
     Ok(())
 }
+
+// ── The republish gate — AP30's cache shape, and the sequence no gate covers ──
+//
+// **Why this exists.** Every gate in this repo boots a profile against an origin
+// whose content does not move underneath it. Not one of them visits an origin
+// TWICE ACROSS A PUBLISH — which is precisely why devops found a wedged app
+// within minutes of a real deploy and we never had, with a green suite. The
+// missing coverage is not a weak assertion, it is a missing SEQUENCE: the
+// population of every existing test excludes the second visit.
+//
+// **What it reproduces.** `src/views/games/mod.rs` refreshes an app's CATALOG
+// once per window-open and fetches its BUNDLE only `if b.is_none()`. Nothing
+// upstream can compensate, because `AppEntry` carries no content hash and no
+// version — so two publishes with entirely different app code emit
+// byte-identical catalogs. Measured on the fixture pair that backs this test:
+//
+//     catalog.bin  146bfc3d…  →  146bfc3d…   (identical)
+//     bundles/…bin cfbfc227…  →  e48d98cb…   (the ONLY thing that moves)
+//
+// which is devops' production measurement (139/139 objects byte-identical at the
+// edge, `active_version` unmoved) reproduced offline for the first time.
+//
+// **What it asserts.** The rendered `srcdoc` of the sandboxed player — the bytes
+// that actually reached the app — not that a fetch occurred. A gate asserting on
+// a fetch passes on a fetch whose bytes never reach the screen, which is AP31.
+//
+// **The negative half is in here too**, and it is the one that matters most:
+// step 5 asserts the V1 marker is GONE, not merely that V2 is present. A surface
+// that rendered both (two players, a stale grid beside a fresh one) would satisfy
+// "contains V2" while being exactly as broken.
+//
+// **Arm note (§4 of `PLAN-2026-08-29-THE-CHANGE-MAP…`).** This runs on the
+// Direct-IDB default, deliberately. On the Worker arm the presence check reads a
+// per-subscription mirror that fills ASYNCHRONOUSLY, so a Worker run can miss its
+// own cache, refetch, and go green for a reason unrelated to the fix. Direct is
+// where the defect is deterministic. A Worker run is worth adding as a SECOND,
+// separately-labelled assertion — never as the one quoted as proof.
+#[tokio::test(flavor = "current_thread")]
+async fn an_app_republished_under_a_stable_identity_reaches_a_returning_profile(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    // Same isolation rule as `rekey_scenario` / `demo_pull_scenario`, for the
+    // same earned reason: publish into a COPY of the SPA on its own port, never
+    // into the shared `dist/`, or Phase 27's fixture fails with "publisher bound
+    // no signature" and the suite reads as flaky in a file that has nothing to
+    // do with this.
+    let root = "target/e2e-app-republish".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+    let _ = std::fs::remove_file(format!("{root}/entity-deployment.json"));
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let url = format!("http://localhost:{port}/?log=trace");
+
+    // Open the Apps window from the palette and return what its grid holds. The
+    // window may already be open on the warm boot (the workspace persists), so
+    // this is idempotent: it spawns only when no Apps window is present.
+    const OPEN_APPS: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        if (!layer) return 'no-layer';
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (h3 && h3.textContent.trim() === 'Apps') return 'already-open';
+        }
+        for (const b of root.querySelectorAll('button.spawn-btn')) {
+            if (b.textContent.trim().replace(/^\+\s*/, '') === 'Apps') { b.click(); return 'spawned'; }
+        }
+        return 'no-spawn-button';
+    "#;
+
+    // The launcher grid's card labels, as one string so `poll_rendered` can wait
+    // on the foreign catalog arriving (the fetch is async and off the boot path).
+    const READ_CARDS: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        if (!layer) return '';
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            return Array.from(sec.querySelectorAll('button'))
+                .filter(b => !b.hasAttribute('data-chip'))
+                .map(b => b.textContent.trim()).join(' | ');
+        }
+        return '';
+    "#;
+
+    const CLICK_MARKER_APP: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        if (!layer) return 'no-layer';
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const card = Array.from(sec.querySelectorAll('button'))
+                .find(b => !b.hasAttribute('data-chip') && b.textContent.includes('Marker App'));
+            if (!card) return 'no-marker-card';
+            card.click();
+            return 'clicked';
+        }
+        return 'no-apps-window';
+    "#;
+
+    // The bytes that reached the sandbox. Self-contained apps are delivered as
+    // the iframe's `srcdoc` (`src/dom/games.rs`, `AppDelivery::Srcdoc`), so this
+    // is the app's actual body — readable from the host document without
+    // crossing the sandbox boundary.
+    const READ_PLAYER_SRCDOC: &str = r#"
+        const layer = document.getElementById('dom-layer');
+        if (!layer) return '';
+        const root = layer.shadowRoot || layer;
+        for (const sec of root.querySelectorAll('section.window')) {
+            const h3 = sec.querySelector('header h3');
+            if (!h3 || h3.textContent.trim() !== 'Apps') continue;
+            const fr = sec.querySelector('iframe[sandbox]');
+            if (!fr) return '';
+            return fr.getAttribute('srcdoc') || '';
+        }
+        return '';
+    "#;
+
+    let r = async {
+        // ── 1. The build the visitor met first ────────────────────────────
+        run_rekey_fixture("emit_app_republish_v1", &root);
+        let publisher = deployment_home_peer(&root);
+        let bundle_bin = format!("{root}/{publisher}/apps/apps/bundles/marker-app.bin");
+        let catalog_bin = format!("{root}/{publisher}/apps/apps/catalog.bin");
+        let v1_bundle = std::fs::read(&bundle_bin)?;
+        let v1_catalog = std::fs::read(&catalog_bin)?;
+        println!("  app-republish: published V1 as {publisher}");
+
+        client.goto(&url).await?;
+        wipe_all_storage(&client).await?;
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+
+        let opened = client.execute(OPEN_APPS, vec![]).await?;
+        assert_ne!(
+            opened.as_str().unwrap_or(""),
+            "no-spawn-button",
+            "app-republish: no '+ Apps' button in the palette — the window roster moved"
+        );
+        let cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+        // STAGING. The foreign app must genuinely have arrived over HTTP from
+        // the publisher, or the republish below moves something this browser was
+        // never using and the warm assertion would be about a scenario that
+        // never existed.
+        assert!(
+            cards.contains("Marker App"),
+            "app-republish: the published app never reached the launcher on the cold boot. \
+             Cards: {cards:?}"
+        );
+        assert_eq!(
+            client.execute(CLICK_MARKER_APP, vec![]).await?.as_str().unwrap_or(""),
+            "clicked",
+            "app-republish: could not launch Marker App on the cold boot"
+        );
+        let cold_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V1").await?;
+        let cold_log = capture_log(&client).await?;
+        if !cold_body.contains("APP-MARKER-V1") {
+            print_log(&cold_log);
+        }
+        assert!(
+            cold_body.contains("APP-MARKER-V1"),
+            "app-republish: the V1 bundle did not reach the player's srcdoc on the cold \
+             boot. Got {} character(s)",
+            cold_body.chars().count()
+        );
+        println!("  app-republish: V1 is on screen");
+
+        // ── 2. The republish ──────────────────────────────────────────────
+        // Same publisher, same catalog, new app code. Published for real through
+        // the same path a content team takes.
+        run_rekey_fixture("emit_app_republish_v2", &root);
+        assert_eq!(
+            deployment_home_peer(&root),
+            publisher,
+            "app-republish: the publisher identity moved — that is the RE-KEY scenario, \
+             which heals by a mechanism this test is specifically not exercising"
+        );
+        let v2_bundle = std::fs::read(&bundle_bin)?;
+        let v2_catalog = std::fs::read(&catalog_bin)?;
+        // The two halves of the production shape, asserted on the ARTIFACT so a
+        // failure names the fixture rather than the browser.
+        assert_ne!(
+            v1_bundle, v2_bundle,
+            "app-republish: the bundle pointer did not move across the republish — the \
+             fixture published nothing new and every assertion below would be vacuous"
+        );
+        assert_eq!(
+            v1_catalog, v2_catalog,
+            "app-republish: the catalogs differ across the republish. That is NOT the \
+             production shape this gate reproduces (AppEntry carries no hash and no \
+             version, so real publishes emit byte-identical catalogs) — and a moved \
+             catalog would let the existing once-per-open catalog refresh carry the \
+             bundle, hiding the defect"
+        );
+        println!("  app-republish: V2 published — bundle moved, catalog byte-identical");
+
+        // ── 3. The returning visitor ──────────────────────────────────────
+        // Same profile, same storage, one reload. No wipe: a wiped profile is a
+        // first-time visitor and would pass on the cold path.
+        client.goto(&url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        client.execute(OPEN_APPS, vec![]).await?;
+
+        // **The returning visitor lands straight back INSIDE the app.** The
+        // window's selection persists, so the reload re-mounts the player from
+        // the cached bundle without anyone touching the launcher — which is the
+        // wedge in its purest form and the shape a real user meets. Measured
+        // here, not assumed: the first version of this gate went looking for the
+        // grid and found the player's chrome ("← Apps | ⤢ Expand"), because the
+        // grid was never rendered at all.
+        //
+        // So: read the mounted player if there is one, and only fall back to the
+        // launcher when the reload did NOT restore a selection. Both routes must
+        // end on V2 — a fix that refreshed only on an explicit re-launch would
+        // leave every returning user on stale code until they happened to go
+        // back to the grid.
+        let mut warm_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V2").await?;
+        if warm_body.is_empty() {
+            println!("  app-republish: warm boot restored the LAUNCHER, not the player");
+            let warm_cards = poll_rendered(&client, READ_CARDS, "Marker App").await?;
+            assert!(
+                warm_cards.contains("Marker App"),
+                "app-republish: the app vanished from the launcher on the warm boot — that \
+                 is a different defect from the one under test. Cards: {warm_cards:?}"
+            );
+            assert_eq!(
+                client.execute(CLICK_MARKER_APP, vec![]).await?.as_str().unwrap_or(""),
+                "clicked",
+                "app-republish: could not launch Marker App on the warm boot"
+            );
+            warm_body = poll_rendered(&client, READ_PLAYER_SRCDOC, "APP-MARKER-V2").await?;
+        } else {
+            println!("  app-republish: warm boot restored the PLAYER directly (persisted selection)");
+        }
+        let warm_log = capture_log(&client).await?;
+        if !warm_body.contains("APP-MARKER-V2") {
+            print_log(&warm_log);
+        }
+
+        // THE GATE. Both halves, and the negative one is not redundant: a
+        // surface rendering the stale player beside a fresh one would satisfy
+        // "contains V2" while being exactly as broken.
+        assert!(
+            warm_body.contains("APP-MARKER-V2"),
+            "RED — a returning profile is still running the app code it first downloaded. \
+             The publisher republished under a STABLE identity and the new bundle never \
+             reached the player: this is AP30's cache shape, `if b.is_none()` in \
+             `src/views/games/mod.rs`. Player body was {} character(s)",
+            warm_body.chars().count()
+        );
+        assert!(
+            !warm_body.contains("APP-MARKER-V1"),
+            "app-republish: the V1 bundle is STILL on screen alongside V2 — the refresh \
+             landed but the stale copy is still being rendered"
+        );
+        println!("  app-republish: V2 reached the returning profile ✓");
+
+        let panics = count_panics(&warm_log);
+        assert!(panics.is_empty(), "panics across the republish boots:\n{panics:#?}");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+
+    client.close().await.ok();
+    Ok(())
+}

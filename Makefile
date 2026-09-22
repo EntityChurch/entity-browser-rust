@@ -463,7 +463,7 @@ federation-vectors:
 # carries a character of its own script) and deliberately says nothing about the
 # 17 Latin-script locales, where a cognate cannot be told from a skipped string.
 lint: image
-	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
+	$(call RUN,cargo clippy && ./tools/ui-lint.sh && ./tools/net-lint.sh && ./tools/foreign-cache-lint.sh && ./tools/i18n-lint.sh && python3 tools/i18n_locale_check.py && python3 tools/i18n_callsite_check.py && python3 tools/i18n_untranslated_check.py && ./tools/tree-hygiene.sh)
 
 # Tier-1 fmt = autoformat (writes), in-container.
 fmt: image

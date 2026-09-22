@@ -3135,6 +3135,137 @@ mod tests {
         );
     }
 
+    // ── The app-republish fixtures (D24 / AP30, the cache shape) ──────────
+    //
+    // The scenario devops met in production, reduced to two publishes: **the
+    // same publisher ships new app code under a stable identity.** Not a re-key
+    // (the identity is fixed) and not a withdrawal (nothing leaves the tree) —
+    // an ordinary content update, which is the case no gate in this repo has
+    // ever covered, because **nothing here visits an origin twice across a
+    // publish.**
+    //
+    // The catalog is deliberately IDENTICAL across the two publishes. That is
+    // not a simplification, it is the production shape: `AppEntry` carries no
+    // content hash and no version (`src/apps/format.rs`), so two publishes with
+    // entirely different app code emit byte-identical catalogs — devops measured
+    // exactly that, 139/139 objects byte-identical at the edge. The **only**
+    // thing that moves between v1 and v2 is the bundle, which is precisely the
+    // artifact a returning profile never re-reads.
+    //
+    // Consumed by `tests/e2e_worker.rs`
+    // `an_app_republished_under_a_stable_identity_reaches_a_returning_profile`.
+
+    /// The publisher that republishes. Distinct from the re-key and demo seeds
+    /// (asserted by `rekey_fixture_seeds_are_three_distinct_identities`'s
+    /// sibling below) so a fixture that published under the wrong identity
+    /// cannot pass as this scenario.
+    const APP_REPUBLISH_SEED: [u8; 32] = *b"entity-app-republish-seed-v1\0\0\0\0";
+
+    /// The app id both publishes ship. Stable across the pair — a moved id would
+    /// make this an "app added" test, which already passes today (the catalog
+    /// refresh covers it) and is not the defect.
+    const APP_REPUBLISH_ID: &str = "marker-app";
+
+    /// Publish the demo site set + a locked-free `chrome` deployment config +
+    /// ONE app whose bundle body carries `marker`, under a FIXED identity.
+    ///
+    /// `--surface=chrome` because the consumer opens the Apps window from the
+    /// palette: a `site`/`window` surface boots into the overlay or the Site
+    /// Browser and the spawn button is not where the test reaches for it.
+    ///
+    /// The deployment config is re-emitted on both publishes (unlike the
+    /// demo-pull fixture, which deliberately withholds it) because nothing about
+    /// it changes here — the routing is stable and only the bytes move. Emitting
+    /// it twice keeps the second publish a pure content update.
+    fn emit_app_republish_fixture(marker: &str) {
+        let out = std::env::var("ENTITY_REKEY_OUT").unwrap_or_else(|_| "dist".to_string());
+
+        // An entity-apps `dist/`: `index.json` (the catalog) + one
+        // `<id>.html` self-contained bundle. See `crate::apps::ingest::read_dist`.
+        let apps_dist = std::env::temp_dir().join(format!("entity-app-republish-{marker}"));
+        let _ = std::fs::remove_dir_all(&apps_dist);
+        std::fs::create_dir_all(&apps_dist).expect("stage the apps dist dir");
+        std::fs::write(
+            apps_dist.join("index.json"),
+            format!(
+                r#"[{{"id":"{APP_REPUBLISH_ID}","name":"Marker App",
+                     "description":"Prints the build it was published from",
+                     "type":"tool","saves":false}}]"#
+            ),
+        )
+        .expect("write index.json");
+        // The marker is in the BODY, so it reaches the iframe `srcdoc` the
+        // consumer reads. A marker in a comment or an attribute would be just as
+        // detectable and far less honest about whether the app actually renders.
+        std::fs::write(
+            apps_dist.join(format!("{APP_REPUBLISH_ID}.html")),
+            format!(
+                "<!doctype html><html><head><title>Marker App</title></head>\
+                 <body><h1>{marker}</h1></body></html>"
+            ),
+        )
+        .expect("write the bundle");
+
+        let hex = crate::vault_codec::seed_to_hex(&APP_REPUBLISH_SEED);
+        let _ = run(&[
+            "publish".to_string(),
+            out.clone(),
+            "--deployment-config".to_string(),
+            "--surface=chrome".to_string(),
+            format!("--identity-seed={hex}"),
+            format!("--ingest-apps={}", apps_dist.display()),
+        ]);
+
+        // Asserted on the ARTIFACT, not on the exit code: what the browser meets
+        // is the served tree. A publish that reported success while emitting no
+        // bundle would stage a scenario that proves nothing (the same
+        // vacuous-pass shape `--exact` guards one layer up).
+        let peer = entity_crypto::Keypair::from_seed(APP_REPUBLISH_SEED).peer_id().to_string();
+        let out_root = std::path::Path::new(&out);
+        let bundle = out_root
+            .join(&peer)
+            .join("apps")
+            .join("apps") // set id: `type: "tool"` → `set_for_type` → the `apps` set
+            .join("bundles")
+            .join(format!("{APP_REPUBLISH_ID}.bin"));
+        assert!(
+            bundle.is_file(),
+            "app-republish fixture: no bundle at {} — the app did not publish",
+            bundle.display()
+        );
+        assert!(
+            out_root.join("entity-deployment.json").is_file(),
+            "app-republish fixture: deployment config not emitted into {out}/"
+        );
+    }
+
+    /// The build a returning visitor met first.
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_app_republish_v1() {
+        emit_app_republish_fixture("APP-MARKER-V1");
+    }
+
+    /// The republish. **Same identity, same catalog, new bundle bytes.**
+    #[test]
+    #[ignore = "e2e fixture generator; run by the e2e harness via --ignored"]
+    fn emit_app_republish_v2() {
+        emit_app_republish_fixture("APP-MARKER-V2");
+    }
+
+    /// The app-republish publisher must not collide with any other fixture
+    /// identity. Same rationale as the re-key seed check: a collision would let
+    /// the e2e publish over another fixture's tree and pass while testing
+    /// something else.
+    #[test]
+    fn app_republish_seed_is_a_distinct_identity() {
+        let pid = |s: [u8; 32]| entity_crypto::Keypair::from_seed(s).peer_id();
+        let mine = pid(APP_REPUBLISH_SEED);
+        assert_ne!(mine, pid(REKEY_SEED_BEFORE), "collides with REKEY_SEED_BEFORE");
+        assert_ne!(mine, pid(REKEY_SEED_AFTER), "collides with REKEY_SEED_AFTER");
+        assert_ne!(mine, pid(DEMO_PUBLISH_SEED), "collides with the demo publisher");
+    }
+
     /// The fixtures must name two DIFFERENT publishers, and neither may collide
     /// with the demo seed. Cheap, but it is the one property the whole
     /// reproduction rests on: if these ever converged, the e2e would publish,

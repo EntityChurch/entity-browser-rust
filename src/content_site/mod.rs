@@ -28,6 +28,9 @@ pub mod cache;
 pub mod discovery;
 pub mod doc_css;
 pub mod embed;
+/// The one entry point for reading someone else's bytes — presence **and**
+/// currency in one call, so a consumer cannot express "only if absent".
+pub mod foreign_cache;
 pub mod format;
 pub mod http_poll;
 #[cfg(not(target_arch = "wasm32"))]

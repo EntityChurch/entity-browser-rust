@@ -486,7 +486,8 @@ fn warm_site_writes(
 /// [`origins::list_origins`]: crate::content_site::origins::list_origins
 #[cfg(target_arch = "wasm32")]
 pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) {
-    use crate::content_site::http_poll::{fetch_manifest, fetch_sites_list, FetchBinSource};
+    use crate::content_site::foreign_cache::{self, Currency, ForeignArtifact};
+    use crate::content_site::http_poll::{fetch_sites_list, FetchBinSource};
     // Don't warm MY own peer (its sites are owned/local, not fetched over HTTP).
     let targets: Vec<(String, String)> =
         targets.into_iter().filter(|(peer, _)| peer != me).collect();
@@ -497,6 +498,15 @@ pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) 
         tracing::warn!(me = %me, "warm_peer_sites: no writer handle for peer — site warm-up skipped");
         return;
     };
+    // The pins for what we already hold from these peers, snapshotted before the
+    // spawn (nothing may borrow `Peers` across the await). Anything not in here
+    // simply fetches — a miss is always safe in that direction.
+    let held_artifacts: Vec<ForeignArtifact> = scan_local_sites(peers, me)
+        .into_iter()
+        .filter(|r| !r.owned)
+        .map(|r| ForeignArtifact::Manifest { peer: r.peer, site: r.site })
+        .collect();
+    let held = foreign_cache::held_set(peers, me, &held_artifacts);
     let me = me.to_string();
     wasm_bindgen_futures::spawn_local(async move {
         for (peer, origin) in targets {
@@ -508,30 +518,78 @@ pub fn warm_peer_sites(peers: &Peers, me: &str, targets: Vec<(String, String)>) 
                     continue;
                 }
             };
-            let mut cached = 0usize;
+            let (mut fetched, mut current) = (0usize, 0usize);
             for site in &sites {
-                match fetch_manifest(&FetchBinSource, &origin, &peer, site).await {
-                    Ok(manifest) => {
+                let what = ForeignArtifact::Manifest { peer: peer.clone(), site: site.clone() };
+                let pin = held.get(&what);
+                match foreign_cache::ensure_current(
+                    &FetchBinSource,
+                    &writer,
+                    pin,
+                    &origin,
+                    &what,
+                )
+                .await
+                {
+                    Currency::Fetched(manifest) => {
                         // Both writes, from one place — see `warm_site_writes`.
                         // WALL clock: `last_reconciled` answers "when did we
                         // last fetch", and `performance.now()` would answer
                         // "how long after this page loaded".
-                        for (path, entity) in
-                            warm_site_writes(&me, &peer, site, &origin, &manifest, js_sys::Date::now() as u64)
-                        {
+                        for (path, entity) in warm_site_writes(
+                            &me,
+                            &peer,
+                            site,
+                            &origin,
+                            &manifest,
+                            js_sys::Date::now() as u64,
+                        ) {
                             writer.put(path, entity);
                         }
-                        cached += 1;
+                        fetched += 1;
                     }
-                    Err(e) => tracing::debug!(peer = %peer, site = %site, error = ?e,
-                        "warm_peer_sites: manifest fetch failed — skipping this site"),
+                    // **The provenance record is refreshed even when nothing
+                    // moved, and this is the one place that is right.**
+                    //
+                    // Its boot-time sibling (`precache_origin_sites`) writes it
+                    // only on a change, because at boot there is no open reader
+                    // to wake and a per-site write per boot is pure accumulation.
+                    // This function has a MID-SESSION caller — the Registry
+                    // Browser's *Open in Site Browser*, which warms a publisher
+                    // nobody had heard of a second ago — and the provenance write
+                    // is that reader's only dirty signal (it watches
+                    // `system/cache/` unconditionally; it cannot have subscribed
+                    // to a foreign prefix it did not know about at open). Writing
+                    // it only on change would leave the rail at "0 of 3" for a
+                    // peer whose manifests we already hold and are current.
+                    //
+                    // The two siblings now agree on the thing that matters —
+                    // when a copy is CURRENT — and differ only on bookkeeping,
+                    // for a stated reason. That difference is deliberate; the old
+                    // one (disagreeing about whether to look at all) was not.
+                    Currency::Unchanged => {
+                        current += 1;
+                        let prov = crate::content_site::cache::CacheProvenance {
+                            last_reconciled: js_sys::Date::now() as u64,
+                            pinned_root_hash: pin.hex().unwrap_or_default(),
+                            source_transport: origin.clone(),
+                        };
+                        writer.put(
+                            crate::content_site::cache::provenance_path(&me, &peer, site),
+                            prov.to_entity(),
+                        );
+                    }
+                    Currency::Unavailable(e) => tracing::debug!(peer = %peer, site = %site, error = ?e,
+                        "warm_peer_sites: manifest check failed — the copy we hold stands"),
                 }
             }
             // Info-level so the effect is observable (and e2e-assertable): the
-            // foreign peer's sites are now in MY store on first paint.
+            // foreign peer's sites are now in MY store on first paint. Both
+            // counts print, always — an unchanged sweep and a sweep that never
+            // ran look identical if only the interesting number speaks.
             tracing::info!(
-                peer = %peer, cached, listed = sites.len(),
-                "warm_peer_sites: cached {cached} foreign site manifest(s) on boot"
+                peer = %peer, fetched, current, listed = sites.len(),
+                "warm_peer_sites: cached {fetched} foreign site manifest(s) on boot, {current} already current"
             );
         }
     });

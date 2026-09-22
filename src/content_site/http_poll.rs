@@ -452,12 +452,42 @@ async fn fetch_entity_two_hop(
     origin: &str,
     bin_url: &str,
 ) -> Result<Entity, PollError> {
-    // Hop 1: the pointer is a mutable tree node at a stable path → always fresh.
+    let h = fetch_pointer(src, bin_url).await?;
+    fetch_content(src, origin, &h).await
+}
+
+/// **Hop 1 alone: what does the origin say this path holds RIGHT NOW?**
+///
+/// The pointer is a mutable tree node at a stable path, fetched `no-store`, and
+/// it is 58 bytes. Its content changes **if and only if** the entity changed, so
+/// this is exact change detection — not a TTL, not a heuristic, not a guess —
+/// for the price of one conditional GET.
+///
+/// Split out of [`fetch_entity_two_hop`] so a caller can ask *"has this moved?"*
+/// without paying for the body. That question is the whole of
+/// [`crate::content_site::foreign_cache`], and the reason it is a separate
+/// function is that **every cache-staleness defect this repo has had was a
+/// consumer that never issued this hop** (AP30's cache shape): it decided from a
+/// presence check in its own store that it already had the artifact, which
+/// short-circuits `Freshness::Mutable` by never issuing a request at all.
+pub async fn fetch_pointer(src: &dyn BinSource, bin_url: &str) -> Result<Hash, PollError> {
     let bin = src.get(bin_url.to_string(), Freshness::Mutable).await?;
-    let h = crack_pointer(&bin)?;
-    // Hop 2: the content blob is addressed by its hash → safe to cache.
-    let body = src.get(content_url(origin, &h), Freshness::Immutable).await?;
-    verify_and_decode(&body, &h)
+    crack_pointer(&bin)
+}
+
+/// **Hop 2 alone: the content blob for a hash we already hold.**
+///
+/// Addressed by its hash and verified against it, so a cached copy is always
+/// correct and a changed entity always has a different URL — which is why this
+/// half is `Freshness::Immutable` and why re-fetching it is only ever needed
+/// when [`fetch_pointer`] says the hash moved.
+pub async fn fetch_content(
+    src: &dyn BinSource,
+    origin: &str,
+    h: &Hash,
+) -> Result<Entity, PollError> {
+    let body = src.get(content_url(origin, h), Freshness::Immutable).await?;
+    verify_and_decode(&body, h)
 }
 
 /// Hop 1: decode a fetched `.bin` leaf as a `system/hash` pointer and
@@ -510,10 +540,17 @@ fn decode_bare_pair(bytes: &[u8]) -> Result<(String, entity_ecf::Value), PollErr
     Ok((etype, data))
 }
 
+/// The in-memory published origin every native test drives.
+///
+/// **One publisher fixture, not one per module.** `foreign_cache`'s tests need
+/// exactly this — a tree path whose pointer can be re-published to a new body —
+/// and a second copy of it would be a second definition of what "published"
+/// means, which is the shape of drift that makes two test suites agree with each
+/// other while both drift from the producer.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::content_site::format::{NavItem, SiteManifest, SitePage};
+pub(crate) mod fixture {
+    use super::{content_url, HASH_POINTER_TYPE};
+    use entity_entity::Entity;
     use std::collections::HashMap;
 
     /// An in-memory stand-in for a published static dir: URL → bytes.
@@ -521,28 +558,33 @@ mod tests {
     /// producer uses (`ecf_for_hash` / `ecf_for_hash_value`), so the bytes
     /// have **cross-impl parity** — this proves the mechanism *and* the
     /// wire shape. (Parity against a real wb-go publish is the live proof.)
-    struct PublishedFixture {
+    pub(crate) struct PublishedFixture {
         files: HashMap<String, Vec<u8>>,
-        origin: String,
+        pub(crate) origin: String,
     }
 
     impl PublishedFixture {
-        fn new(origin: &str) -> Self {
+        pub(crate) fn new(origin: &str) -> Self {
             Self { files: HashMap::new(), origin: origin.trim_end_matches('/').to_string() }
         }
 
-        fn get(&self, url: &str) -> Option<&[u8]> {
+        pub(crate) fn get(&self, url: &str) -> Option<&[u8]> {
             self.files.get(url).map(Vec::as_slice)
         }
 
-        fn put(&mut self, url: impl Into<String>, bytes: Vec<u8>) {
+        pub(crate) fn put(&mut self, url: impl Into<String>, bytes: Vec<u8>) {
             self.files.insert(url.into(), bytes);
         }
 
         /// "Publish" an entity: store its bare hashable body at the
         /// content-addressed URL, and place a `system/hash` `.bin` pointer
         /// at `tree_path`.
-        fn publish(&mut self, tree_path: &str, ent: &Entity) {
+        ///
+        /// Re-publishing a different entity at the same `tree_path` **moves the
+        /// pointer and leaves the old body in place** — which is exactly what a
+        /// real content hotfix does (it does not prune), and the reason a stale
+        /// cached copy still resolves instead of 404-ing.
+        pub(crate) fn publish(&mut self, tree_path: &str, ent: &Entity) {
             let h = ent.content_hash.clone();
             // content body = bare 2-key hashable pre-image (Go EncodeHashable parity).
             self.put(content_url(&self.origin, &h), entity_ecf::ecf_for_hash(&ent.entity_type, &ent.data));
@@ -555,6 +597,13 @@ mod tests {
             self.put(url, pointer);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content_site::format::{NavItem, SiteManifest, SitePage};
+    use crate::content_site::http_poll::fixture::PublishedFixture;
 
     /// The exact two-hop the async `HttpPollResolver` will run, driven
     /// synchronously over the fixture (no async, no network): fetch the

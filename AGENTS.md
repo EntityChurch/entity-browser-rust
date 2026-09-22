@@ -22,9 +22,11 @@ D12–D16 here are ours, earned on our own bugs.
 - **Disciplines** (invariants — the *what*):
   `docs/architecture/specs/DISCIPLINE-REFRAME-BROWSER-SUBSTRATE.md` —
   D1–D16 and D19–D21 ratified, plus **D23** (no unbounded network await on the boot
-  path — ratified 2026-08-27 on a reproduced run, with all three enforcement points);
+  path — ratified 2026-08-27 on a reproduced run, with all three enforcement points)
+  and **D24** (any durable copy of someone else's bytes is a cache and needs a currency
+  trigger — ratified 2026-08-29 on a gate observed red, with both enforcement points);
   candidates at D17, D18, D22. The per-diff review questions (nine + 5b), anti-pattern
-  catalog AP1–AP29.
+  catalog AP1–AP35.
 - **Doctrines** (Feature/Audit procedures — the *how*):
   `docs/architecture/specs/DOCTRINES-BROWSER-SUBSTRATE.md` — open the Feature
   Development Doctrine (F0–F8) for "build X", the Audit Doctrine (A0–A12) for "Y is broken".
@@ -151,18 +153,32 @@ session notes have quoted interchangeably. Re-measure, and say what you measured
   the behavioural gate is the black-hole pair below. **The rule bounds an await blocking a
   DEFINED ALTERNATIVE outcome, not every `fetch`** — two `sw.js` fetches are deliberately
   unbounded and the baseline carries them by name. Read the GOTCHAS entry before "fixing" one.
-- **ANY copy of someone else's bytes needs a re-read trigger, and `if absent` is not one —
-  AP30, and read `docs/architecture/reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-EVERY-COPY-OF-SOMEONE-ELSES-BYTES.md`
-  before you cache anything fetched from an origin.** The durable entity tree is the single
-  source of truth *for state we own*; the moment you write a foreign artifact into it under
-  `/{me}/{foreign}/…` it is **a cache**, and it is the one cache layer here with no freshness
-  model. `sw.js`, the browser HTTP cache (`Freshness::Mutable` → `no-store`) and the registry
-  TTL all get this right — and a presence check in the store **short-circuits all three,
-  because no request is issued at all**. Four incidents: the app bundle (wedged every returning
-  visitor), the warm-boot deployment config, the already-fixed catalog, and a provenance ledger
-  built expressly to answer *"is my cache stale?"* whose `pinned_root_hash` **nothing compares**.
-  Two rules from that audit: **the trigger belongs with the freshness model, not at the call
-  site**; and **building the instrument is not the work — making something branch on it is.**
+- **ANY copy of someone else's bytes is a cache and needs a currency trigger; `if absent` is not
+  one — D24. Go through `content_site::foreign_cache::ensure_current`; do not call
+  `http_poll::fetch_*` yourself** (`tools/foreign-cache-lint.sh` in `make lint` will stop you,
+  baseline-ratcheted). The durable entity tree is the single source of truth *for state we own*;
+  the moment you write a foreign artifact into it under `/{me}/{foreign}/…` it is **a cache**.
+  `sw.js`, the browser HTTP cache (`Freshness::Mutable` → `no-store`) and the registry TTL all
+  get this right — and a presence check in the store **short-circuits all three, because no
+  request is issued at all**. **We never had to invent change detection: hop 1 of the two-hop is
+  a 58-byte pointer that changes iff the entity changed, and the local half is already in the
+  tree** (an `Entity` carries its canonical `content_hash`) — which is also why
+  `CacheProvenance::pinned_root_hash` was a duplicate of a fact we already had, not a missing
+  instrument. Two corollaries that are where this goes wrong: **an unreachable origin leaves the
+  held copy untouched** (a cache that drops what it cannot re-verify turns an outage into a
+  missing app), and **`Unchanged` writes nothing and flips nothing dirty** — on the Apps surface
+  a spurious dirty restarts a running app. Background:
+  `docs/architecture/reviews/AUDIT-2026-08-28-CACHE-FRESHNESS-EVERY-COPY-OF-SOMEONE-ELSES-BYTES.md`.
+- **`make e2e-worker T=an_app_republished` is D24's behavioural gate — publish, boot, republish
+  under the SAME identity, boot again, assert the new bytes are on screen.** It exists because
+  **no gate here had ever visited an origin twice across a publish**, which is exactly why
+  devops found a wedged app within minutes of a real deploy and a green suite never could. Run
+  it for any change to the fetch layer, `foreign_cache`, the Apps window's fetch path, or either
+  site-manifest sweep. Its fixture pair (`emit_app_republish_v1`/`_v2`) reproduces the
+  production shape: **byte-identical catalogs, only the bundle pointer moves.** Assert the
+  rendered marker, never that a fetch happened (AP31) — and note it runs on the Direct arm,
+  because on the Worker arm the presence read answers from an asynchronously-filled mirror and
+  can go green for the wrong reason.
 - **A durable record of a REMOTE assertion carries the path back to that assertion — AP30.**
   Anything written down because a deployment doc, registry or peer said so must be re-checked
   whenever the source is in hand, and dropped when the source contradicts it; a write path
