@@ -48,6 +48,45 @@
 //! directory that is a note in a doc comment. Over an origin that 404s
 //! `app/feed/index` it is a person being told an author has no feed when the
 //! author has posted for a year.
+//!
+//! ## ⛔ THE CURSOR IS BUILT AND THIS POLLER DOES NOT HOLD ONE YET, AND THE
+//! REASON IS A DESIGN QUESTION RATHER THAN A MISSING LINE
+//!
+//! [`crate::feed_read::read_feed_from`] implements §4.4's `{page, applied}` and
+//! `FEED-R14`, and [`walk_route`] still calls the positionless
+//! [`read_feed`](crate::feed_read::read_feed). That is deliberate and it is not
+//! done. **A position belongs to an `(author, LEG)` pair, not to an author** —
+//! which is the same rule `AT-58` states one tier up about `(reader, thing)`,
+//! and this is where it bites:
+//!
+//! | leg | what a position means there |
+//! |---|---|
+//! | [`Leg::Published`] | §4.4 exactly — pages exist, `{page, applied}` is the position |
+//! | live (a peer's own tree) | **[`Resumed::Unpositioned`]** — the index is a publish artifact, so there are no pages and our order is reconstructed |
+//! | [`Leg::Mirror`] | a gatherer's set layer is one record naming pins (`SYSTEM-DATA-EXCHANGE` §1.2 — *"and they are allowed to be"* different shapes). `read_mirror` has no cursor concept at all |
+//!
+//! So a single `Option<Cursor>` beside a [`FeedState`] would be a position from
+//! one leg applied to whichever leg answers next, which is a wrong answer
+//! wearing a resumption's clothes. What the wiring owes, stated so the next
+//! session does not rediscover it:
+//!
+//! 1. **Position per leg**, keyed the way the route keys its legs.
+//! 2. **A merge**, because [`Resumed::FromPage`] deliberately re-delivers a page
+//!    — `FEED-R14`'s cost — so the held rows and the new rows overlap and the
+//!    surface must dedupe by entry hash rather than concatenate.
+//! 3. **A re-poll on [`Resumed::Behind`]**, which is the one outcome that says
+//!    *there is more between here and your position*; serving it without asking
+//!    again renders a permanent hole as a complete feed.
+//!
+//! **What it buys, and why it is worth doing properly:** today a refresh is
+//! `forget` + a whole walk, so pressing it on an author with a long archive
+//! re-reads [`LIMIT`] entries and re-verifies every signature. §4.3 rule 4's
+//! `O(new)` is the difference between that and one head fetch, one page fetch
+//! and zero entry fetches when nothing has changed.
+//!
+//! [`Resumed::Unpositioned`]: crate::feed_read::Resumed::Unpositioned
+//! [`Resumed::FromPage`]: crate::feed_read::Resumed::FromPage
+//! [`Resumed::Behind`]: crate::feed_read::Resumed::Behind
 
 #![allow(dead_code)] // no window calls this yet; the gates are native
 

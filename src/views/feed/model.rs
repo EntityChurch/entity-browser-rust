@@ -34,18 +34,29 @@ use crate::feed_route::{self, Resolution};
 use crate::peers::Peers;
 use crate::window::WindowId;
 
-use super::output::{EntryRow, FeedOutput, FeedPanel, FollowRow, GathererRow, Notice, Via};
+use super::output::{
+    ComposeNotice, EntryRow, FeedOutput, FeedPanel, FollowRow, GathererRow, Notice, OwnPostRow, Via,
+};
 
 pub struct FeedModel {
     window_id: WindowId,
     poller: FeedPoller,
     selected: Option<String>,
     notice: Option<Notice>,
+    /// What the last compose act was. **Session-only** — see
+    /// [`super::output::FeedOutput::compose_notice`].
+    compose_notice: Option<ComposeNotice>,
 }
 
 impl FeedModel {
     pub fn new(window_id: WindowId, repaint: crate::content_site::resolver::RepaintCell) -> Self {
-        Self { window_id, poller: FeedPoller::new(repaint), selected: None, notice: None }
+        Self {
+            window_id,
+            poller: FeedPoller::new(repaint),
+            selected: None,
+            notice: None,
+            compose_notice: None,
+        }
     }
 
     /// Hand the poller the repaint handle the render path owns — see
@@ -120,6 +131,105 @@ impl FeedModel {
         feed_gatherers::remove(peers, our_peer_id, gatherer);
         self.poller.forget_all();
         self.notice = None;
+    }
+
+    /// **Post.** Mint an entry into the bound peer's own tree, sign it, and bind
+    /// both.
+    ///
+    /// This is the whole publish on the live road — no origin, no root, no
+    /// network. See [`crate::feed_compose`] for why that is the act and not a
+    /// reduced version of one.
+    ///
+    /// ⚠ **The poller is NOT forgotten here, deliberately**, which is the
+    /// opposite of [`Self::add_gatherer`]'s rule and worth stating because the
+    /// two look alike. A gatherer changes the *route* for every author, so every
+    /// held walk is an answer to a question that no longer applies. A post
+    /// changes *our own tree*, which no held walk is an answer about — and
+    /// dropping them would make posting silently re-fetch every author somebody
+    /// was reading. Your own posts do not come from the poller at all; they are
+    /// read from the tree each render.
+    pub fn post(&mut self, peers: &Peers, our_peer_id: &str, typed: &str, now: u64) {
+        let signer = crate::feed_compose::authoring_keypair(our_peer_id);
+        self.post_signed_by(peers, our_peer_id, signer.as_ref(), typed, now);
+    }
+
+    /// [`Self::post`] with the authoring key supplied — **the testable core**,
+    /// split for `persistence::publisher_keypair_in`'s reason and not a second
+    /// entry point.
+    ///
+    /// The lookup reads process-global persistence, so a model that did it
+    /// inline had exactly one reachable outcome in a native test
+    /// (`NotOurPeer`), and the half that matters — mint, apply, notice — could
+    /// only ever be exercised through a browser. A parameter is the difference
+    /// between a wired surface and a gated one.
+    pub fn post_signed_by(
+        &mut self,
+        peers: &Peers,
+        our_peer_id: &str,
+        signer: Option<&entity_crypto::IdentityKeypair>,
+        typed: &str,
+        now: u64,
+    ) {
+        let text = typed.trim();
+        if text.is_empty() {
+            self.compose_notice = Some(ComposeNotice::Empty);
+            return;
+        }
+        let Some(signer) = signer else {
+            self.compose_notice = Some(ComposeNotice::NotOurPeer);
+            return;
+        };
+        let entry = crate::feed::FeedEntry::new(
+            our_peer_id,
+            now,
+            crate::embed::EmbedNode::new(
+                "text/plain",
+                crate::embed::EmbedData::new(
+                    crate::embed::EmbedPayload::Inline(text.as_bytes().to_vec()),
+                    text,
+                ),
+            ),
+        );
+        match crate::feed_compose::plan_add_entry(signer, &entry) {
+            Ok(minted) => match peers.writer_handle_for(our_peer_id) {
+                Some(writer) => {
+                    crate::feed_compose::apply(&writer, our_peer_id, &minted.plan);
+                    self.compose_notice = Some(ComposeNotice::Posted);
+                }
+                None => self.compose_notice = Some(ComposeNotice::Refused),
+            },
+            Err(why) => {
+                tracing::warn!(error = %why, "feed compose: the post was refused");
+                self.compose_notice = Some(ComposeNotice::Refused);
+            }
+        }
+    }
+
+    /// **Unpublish** one of your own posts — §7.3's unbinding, entry and
+    /// signature both.
+    ///
+    /// ⛔ **The notice is `FEED-R21`'s sentence and there is no success variant
+    /// beside it.** §7.5 makes presenting removal as deletion a MUST NOT and
+    /// puts the honest wording at the moment of the action. The verb hands that
+    /// sentence back ([`crate::feed_compose::RemovalMeaning`]) so a surface
+    /// cannot take the plan without it.
+    ///
+    /// A malformed hash is refused rather than ignored: unbinding a key built
+    /// from a hash we could not parse would remove nothing and report success.
+    pub fn remove_post(&mut self, peers: &Peers, our_peer_id: &str, hash_hex: &str) {
+        let Some(hash) = crate::entity_ref::hash_from_hex(hash_hex) else {
+            self.compose_notice = Some(ComposeNotice::Refused);
+            return;
+        };
+        let (plan, meaning) = crate::feed_compose::plan_remove_entry(our_peer_id, &hash);
+        match peers.writer_handle_for(our_peer_id) {
+            Some(writer) => {
+                crate::feed_compose::apply(&writer, our_peer_id, &plan);
+                let _ = meaning;
+                self.compose_notice = Some(ComposeNotice::Removed);
+            }
+            None => self.compose_notice = Some(ComposeNotice::Refused),
+        }
     }
 
     /// Drop what is held for the selected peer so the next render walks again.
@@ -199,6 +309,39 @@ impl FeedModel {
             })
             .collect();
 
+        // **Your own posts, read per render and never retained** — AP41's rule,
+        // and the same one the follow list above is written to. `read_owned_feed`
+        // is a synchronous `tree_listing` + `get_entity`, so it answers from the
+        // per-prefix mirror; the window subscribes the entry prefix, so a post
+        // marks it dirty and the next frame re-reads.
+        //
+        // Newest first, which is §4.5's within-a-page order and the one a person
+        // expects of their own timeline. Sorted here rather than trusted from the
+        // listing: `read_owned_feed` collects into a hash-keyed `BTreeSet`, so
+        // its order is by content hash — arbitrary, and stable enough to look
+        // deliberate.
+        let mut own_posts: Vec<OwnPostRow> = crate::feed_compose::own_posts(peers, our_peer_id)
+            .into_iter()
+            .map(|post| {
+                let hex = post.hash.to_hex();
+                OwnPostRow {
+                    id_short: hex.chars().take(12).collect(),
+                    hash_hex: hex,
+                    text: post.entry.body.data.fallback.clone(),
+                    created_at: post.entry.created_at,
+                }
+            })
+            .collect();
+        own_posts.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                // Two posts in the same millisecond still need a total order, or
+                // the list reshuffles between frames on nothing — `sort_key`'s
+                // argument one surface up, where the cost is a rewritten
+                // archive and here it is a list that will not sit still.
+                .then_with(|| a.hash_hex.cmp(&b.hash_hex))
+        });
+
         FeedOutput {
             window_id: self.window_id,
             follows,
@@ -206,6 +349,12 @@ impl FeedModel {
             selected: self.selected.clone(),
             panel,
             notice: self.notice,
+            own_posts,
+            compose_notice: self.compose_notice,
+            // Read per render, not captured: a profile can gain the key for a
+            // peer between frames, and a composer that decided once would stay
+            // switched off for the session.
+            can_author: crate::feed_compose::authoring_keypair(our_peer_id).is_some(),
         }
     }
 }
@@ -357,6 +506,175 @@ mod tests {
     /// are.
     fn route(peers: &Peers, me: &str, them: &str) {
         crate::content_site::origins::set_origin(peers, me, them, "http://publisher.example");
+    }
+
+    // -- the composer -----------------------------------------------------
+
+    /// A profile authoring **as itself**, plus the key to sign with.
+    ///
+    /// ⚠ **The profile is constructed FROM the seed, and that is not a
+    /// convenience.** A `Peers` generates its own primary, and a composer
+    /// pointed at any other peer id has no writer for it (`writer_handle_for`
+    /// answers `None`) and no SDK to read it back through — so a test that
+    /// signed with a stand-in key would land on `Refused` and look like a
+    /// product defect. The same fact `plan_add_entry` refuses on under
+    /// `FEED-R1`, one layer down. One seed, two handles: the profile is built
+    /// with it and the composer signs with it.
+    fn authoring_profile(seed: u8) -> (Peers, entity_crypto::IdentityKeypair, String) {
+        let kp = entity_crypto::IdentityKeypair::Ed25519(entity_crypto::Keypair::from_seed(
+            [seed; 32],
+        ));
+        let peers = Peers::new_direct_with_keypair(entity_crypto::Keypair::from_seed([seed; 32]));
+        let me = peers.primary_peer_id().to_string();
+        assert_eq!(me, kp.peer_id().to_string(), "authoring as ourselves");
+        (peers, kp, me)
+    }
+
+    /// ⭐ **A post lands in the tree and comes back on the surface.** The
+    /// round trip the window performs: mint, apply, then `render_output` reading
+    /// the entry prefix — which is the read the third `watch_prefix` exists to
+    /// keep fresh.
+    #[test]
+    fn a_post_appears_in_your_own_posts() {
+        let (peers, kp, me) = authoring_profile(9);
+        let mut m = FeedModel::new(1, Default::default());
+
+        assert!(
+            m.render_output(&peers, &me, CLOCK).own_posts.is_empty(),
+            "nothing posted yet"
+        );
+
+        m.post_signed_by(&peers, &me, Some(&kp), "hello world", NOW_MS);
+        assert_eq!(m.compose_notice, Some(ComposeNotice::Posted));
+
+        let out = m.render_output(&peers, &me, CLOCK);
+        assert_eq!(out.own_posts.len(), 1);
+        assert_eq!(out.own_posts[0].text, "hello world");
+        assert_eq!(out.own_posts[0].created_at, NOW_MS);
+        assert_eq!(
+            out.own_posts[0].hash_hex.len(),
+            66,
+            "the FULL address, not the shortened id — a remove is built from it"
+        );
+        assert_eq!(out.own_posts[0].id_short.len(), 12);
+    }
+
+    /// ⛔ **And removing it takes it away — entry AND signature.** The signature
+    /// half is asserted at the tree, because the surface cannot show it and §7.3
+    /// is precisely about what the tree carries afterwards.
+    #[test]
+    fn removing_a_post_leaves_no_trace_of_it_in_the_tree() {
+        let (peers, kp, me) = authoring_profile(10);
+        let mut m = FeedModel::new(1, Default::default());
+        m.post_signed_by(&peers, &me, Some(&kp), "up for a moment", NOW_MS);
+
+        let out = m.render_output(&peers, &me, CLOCK);
+        let hash_hex = out.own_posts[0].hash_hex.clone();
+        let hash = crate::entity_ref::hash_from_hex(&hash_hex).unwrap();
+        let sig_path = format!("/{me}/{}", crate::feed::signature_key(&me, &hash));
+        assert!(peers.get_entity(&me, &sig_path).is_some(), "signed on the way in");
+
+        m.remove_post(&peers, &me, &hash_hex);
+
+        assert!(
+            m.render_output(&peers, &me, CLOCK).own_posts.is_empty(),
+            "gone from the surface"
+        );
+        assert!(
+            peers.get_entity(&me, &sig_path).is_none(),
+            "§7.3: the signature goes with it — a tree the entry was removed from \
+             is byte-identical to one that never held it"
+        );
+    }
+
+    /// ⛔ **`FEED-R21`: the removal notice is the unpublication sentence and it
+    /// must not read as deletion.** Asserted on the rendered string, because the
+    /// MUST NOT is about what a person is told, not about which enum variant was
+    /// chosen.
+    #[test]
+    fn a_removal_never_tells_anybody_the_post_was_deleted() {
+        let (peers, kp, me) = authoring_profile(11);
+        let mut m = FeedModel::new(1, Default::default());
+        m.post_signed_by(&peers, &me, Some(&kp), "x", NOW_MS);
+        let hash_hex = m.render_output(&peers, &me, CLOCK).own_posts[0].hash_hex.clone();
+
+        m.remove_post(&peers, &me, &hash_hex);
+
+        let notice = m.compose_notice.expect("a removal says something");
+        assert_eq!(notice, ComposeNotice::Removed);
+        let rendered = crate::i18n::t(notice.key(), &[]).to_lowercase();
+        assert!(!rendered.contains("delet"), "FEED-R21 is a MUST NOT: {rendered:?}");
+        assert!(
+            rendered.contains("still have it"),
+            "§7.5's second clause is the load-bearing one: {rendered:?}"
+        );
+    }
+
+    /// Three refusals, three different mistakes, and none of them is silence.
+    #[test]
+    fn every_compose_refusal_says_which_one_it_is() {
+        let (peers, kp, me) = authoring_profile(12);
+        let mut m = FeedModel::new(1, Default::default());
+
+        m.post_signed_by(&peers, &me, Some(&kp), "   ", NOW_MS);
+        assert_eq!(m.compose_notice, Some(ComposeNotice::Empty), "whitespace is empty");
+
+        m.post_signed_by(&peers, &me, None, "real text", NOW_MS);
+        assert_eq!(
+            m.compose_notice,
+            Some(ComposeNotice::NotOurPeer),
+            "no key is not a typo and not a retry"
+        );
+
+        m.remove_post(&peers, &me, "not-a-hash");
+        assert_eq!(
+            m.compose_notice,
+            Some(ComposeNotice::Refused),
+            "an address we could not parse would unbind nothing and must not \
+             report the unpublication sentence"
+        );
+    }
+
+    /// **Every compose outcome gets its own key, and the count is asserted** —
+    /// `doctor.rs`'s rule, so a sixth outcome cannot quietly reuse an existing
+    /// sentence. `Removed` in particular must never share a key with `Posted`.
+    #[test]
+    fn every_compose_outcome_has_its_own_word() {
+        let all = [
+            ComposeNotice::Posted,
+            ComposeNotice::Empty,
+            ComposeNotice::NotOurPeer,
+            ComposeNotice::Refused,
+            ComposeNotice::Removed,
+        ];
+        assert_eq!(all.len(), 5, "a sixth outcome needs a row here and a sentence");
+        let keys: std::collections::BTreeSet<&str> = all.iter().map(|o| o.key()).collect();
+        assert_eq!(keys.len(), all.len(), "no two outcomes share a sentence");
+        for o in all {
+            let rendered = crate::i18n::t(o.key(), &[]);
+            assert_ne!(rendered, o.key(), "{:?} has no catalog entry", o);
+        }
+    }
+
+    /// Newest first, and a millisecond tie still has a total order — otherwise
+    /// the list reshuffles between frames on nothing.
+    #[test]
+    fn your_own_posts_are_newest_first_and_the_order_is_total() {
+        let (peers, kp, me) = authoring_profile(13);
+        let mut m = FeedModel::new(1, Default::default());
+        m.post_signed_by(&peers, &me, Some(&kp), "older", NOW_MS);
+        m.post_signed_by(&peers, &me, Some(&kp), "newer", NOW_MS + 1000);
+        // Two in the same millisecond — the tie-break case.
+        m.post_signed_by(&peers, &me, Some(&kp), "tie a", NOW_MS + 2000);
+        m.post_signed_by(&peers, &me, Some(&kp), "tie b", NOW_MS + 2000);
+
+        let first = m.render_output(&peers, &me, CLOCK).own_posts;
+        assert_eq!(first.len(), 4);
+        assert_eq!(first[first.len() - 1].text, "older", "oldest last");
+        assert_eq!(first[1].created_at, NOW_MS + 2000);
+
+        let again = m.render_output(&peers, &me, CLOCK).own_posts;
+        assert_eq!(first, again, "two renders of one tree give one order");
     }
 
     /// **Every attribution verdict gets its own key, and the count is

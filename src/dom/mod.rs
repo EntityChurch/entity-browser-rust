@@ -143,6 +143,11 @@ pub struct DomRenderer {
     /// when a window opens, removed when it closes, and updated
     /// in-place when their content hash changes.
     window_sections: HashMap<WindowId, WindowSectionState>,
+    /// Windows whose rebuild was held back while their grip was dragged
+    /// ([`crate::window_size::holding`]); rebuilt on the first frame after.
+    /// Kept here rather than re-marked on the watch, because a closed
+    /// `RebuildGate` would drop a re-mark and the change with it.
+    deferred_rebuild: std::collections::HashSet<WindowId>,
     /// First-run / all-windows-closed hint shown in the otherwise-blank window
     /// area. Present only while no window is open; removed when one opens and
     /// re-added when the last one closes. `None` when not currently shown.
@@ -243,6 +248,7 @@ impl DomRenderer {
             last_palette_signature: String::new(),
             palette_closures: crate::window::new_closure_vec(),
             window_sections: HashMap::new(),
+            deferred_rebuild: std::collections::HashSet::new(),
             empty_state: None,
             rebuild_count: 0,
             last_rebuild_log: 0.0,
@@ -302,6 +308,7 @@ impl DomRenderer {
         dial_markers: &crate::dial_markers::DialMarkers,
         connect_attempt: &crate::connect_attempt::ConnectAttempt,
         offer_attempt: &crate::offer_attempt::OfferAttempt,
+        pull_attempt: &crate::pull_attempt::PullAttempt,
         provisioning_drifted: bool,
     ) {
         // Always drain pending actions.
@@ -327,7 +334,7 @@ impl DomRenderer {
         // when the slow-rebuild warning fires.
         let mut section_timings: Vec<(String, WindowId, f64)> = Vec::new();
         let any_section_changed =
-            self.update_window_sections(peers, window_manager, &mut section_timings, maximized, dial_markers, connect_attempt, offer_attempt, provisioning_drifted);
+            self.update_window_sections(peers, window_manager, &mut section_timings, maximized, dial_markers, connect_attempt, offer_attempt, pull_attempt, provisioning_drifted);
         // The System Monitor's hooks — no-ops unless a monitor is open. The
         // timings were always measured; this is where they stop being thrown away.
         crate::monitor::sampler::note_sections(&section_timings);
@@ -359,6 +366,12 @@ impl DomRenderer {
         // `maximized`. Cheap idempotent classList writes. (The app also marks
         // the affected windows dirty so the button label rebuilds; this keeps
         // the full-screen promotion correct regardless.)
+        // The grip's release handler takes the iframe shield down; a grip replaced
+        // before its release never runs it, and a shield left up makes every app
+        // in the window area unclickable. So no held grip means no shield.
+        if !crate::window_size::holding_any(js_sys::Date::now()) {
+            let _ = self.window_area.class_list().remove_1("grip-drag"); // i18n-ignore — CSS class name
+        }
         for (id, state) in self.window_sections.iter_mut() {
             let mut sized = false;
             if let Some(win) = window_manager.get(*id) {
@@ -710,6 +723,8 @@ impl DomRenderer {
                         actions_rc.borrow_mut().push(Action::SpawnWindow {
                             type_name: name,
                             peer_id: Some(pid.clone()),
+                            // The palette names a window, never a subject.
+                            target: None,
                         });
                         *so.borrow_mut() = false; // auto-close the mobile menu
                         rp();
@@ -728,6 +743,7 @@ impl DomRenderer {
                         actions_rc.borrow_mut().push(Action::SpawnWindow {
                             type_name: name,
                             peer_id: if pid.is_empty() { None } else { Some(pid) },
+                            target: None,
                         });
                         *so.borrow_mut() = false; // auto-close the mobile menu
                         rp();
@@ -892,6 +908,7 @@ impl DomRenderer {
         dial_markers: &crate::dial_markers::DialMarkers,
         connect_attempt: &crate::connect_attempt::ConnectAttempt,
         offer_attempt: &crate::offer_attempt::OfferAttempt,
+        pull_attempt: &crate::pull_attempt::PullAttempt,
         provisioning_drifted: bool,
     ) -> bool {
         use std::collections::HashSet;
@@ -956,8 +973,14 @@ impl DomRenderer {
             let first = !self.window_sections.contains_key(&win.id);
             // `take_dirty()` must run every iteration to clear the flag, even
             // when `force_all` or `first` will rebuild anyway.
-            let dirty = watch.take_dirty();
+            let dirty = watch.take_dirty() | self.deferred_rebuild.remove(&win.id);
             if !dirty && !first && !force_all {
+                continue;
+            }
+            // A rebuild replaces the grip, and a replaced grip ends a drag in
+            // progress (`window_size::holding`). Hold it until the release.
+            if !first && crate::window_size::holding(win.id, js_sys::Date::now()) {
+                self.deferred_rebuild.insert(win.id);
                 continue;
             }
             any_changed = true;
@@ -1147,6 +1170,7 @@ impl DomRenderer {
                 dial_markers: dial_markers.clone(),
                 connect_attempt: connect_attempt.clone(),
                 offer_attempt: offer_attempt.clone(),
+                pull_attempt: pull_attempt.clone(),
                 provisioning_drifted,
             };
 
@@ -1211,7 +1235,7 @@ fn build_size_grip(
     repaint: &crate::window::RepaintFn,
     closures: &crate::window::ClosureVec,
 ) -> Element {
-    use crate::window_size::{clamp_px, set_live, SizePref, STEP_PX};
+    use crate::window_size::{clamp_px, set_held, set_live, SizePref, STEP_PX};
     let grip = util::create_element_with_class("div", "win-grip"); // i18n-ignore — CSS class name
     util::set_attr(&grip, "data-field", "window-size-grip");
     util::set_attr(&grip, "role", "separator");
@@ -1241,6 +1265,17 @@ fn build_size_grip(
                     return;
                 }
                 ev.prevent_default();
+                // Before capture, and synchronously: Chromium applies pointer
+                // capture only at the NEXT pointer event, and a first move that
+                // lands on an app's iframe (its own process) is routed to the
+                // iframe — the grip never gets capture and never hears the
+                // release. Measured 2026-09-15: a quick 150 px drag toward a
+                // running VM changed nothing. With the window area's iframes out
+                // of hit-testing for the drag, every move lands on this page.
+                if let Some(area) = section.parent_element() {
+                    let _ = area.class_list().add_1("grip-drag"); // i18n-ignore — CSS class name
+                }
+                set_held(wid, Some(js_sys::Date::now()));
                 let _ = grip_el.set_pointer_capture(p.pointer_id());
                 let h = height_of(&section);
                 drag.set(Some((p.pointer_id(), p.client_y() as f64, h, clamp_px(h))));
@@ -1249,7 +1284,7 @@ fn build_size_grip(
         );
     }
     {
-        let (drag, rp) = (drag.clone(), repaint.clone());
+        let (drag, rp, section) = (drag.clone(), repaint.clone(), section.clone());
         util::listen(
             &grip,
             "pointermove",
@@ -1260,6 +1295,20 @@ fn build_size_grip(
                 if p.pointer_id() != pid {
                     return;
                 }
+                // No button down means the release happened where we did not
+                // hear it: end the drag now, rather than leave the window's
+                // rebuilds held back until the stale limit.
+                if p.buttons() & 1 == 0 {
+                    drag.set(None);
+                    set_live(wid, None);
+                    set_held(wid, None);
+                    if let Some(area) = section.parent_element() {
+                        let _ = area.class_list().remove_1("grip-drag"); // i18n-ignore — CSS class name
+                    }
+                    rp();
+                    return;
+                }
+                set_held(wid, Some(js_sys::Date::now()));
                 let px = clamp_px(h0 + p.client_y() as f64 - y0);
                 drag.set(Some((pid, y0, h0, px)));
                 set_live(wid, Some(px));
@@ -1268,12 +1317,18 @@ fn build_size_grip(
             closures,
         );
     }
-    for end in ["pointerup", "pointercancel"] {
-        let (drag, actions, rp) = (drag.clone(), actions.clone(), repaint.clone());
+    // `lostpointercapture` too: capture can end without a release reaching the
+    // grip, and a drag left armed would resize the window on the next hover.
+    for end in ["pointerup", "pointercancel", "lostpointercapture"] {
+        let (drag, actions, rp, section) = (drag.clone(), actions.clone(), repaint.clone(), section.clone());
         util::listen(
             &grip,
             end,
             move |ev| {
+                set_held(wid, None);
+                if let Some(area) = section.parent_element() {
+                    let _ = area.class_list().remove_1("grip-drag"); // i18n-ignore — CSS class name
+                }
                 let Some((pid, _, h0, px)) = drag.get() else { return };
                 if ev.dyn_ref::<web_sys::PointerEvent>().is_some_and(|p| p.pointer_id() != pid) {
                     return;

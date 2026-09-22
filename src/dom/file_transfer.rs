@@ -198,7 +198,7 @@ fn render_access(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
             ctx,
             &crate::i18n::t("filetransfer.authorize_device", &[]),
             components::ButtonKind::Primary,
-            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None }, // i18n-ignore — identity key; registry lookup
+            Action::SpawnWindow { type_name: "Peer Connections", peer_id: None, target: None }, // i18n-ignore — identity key; registry lookup
         );
         util::append(parent, &btn);
     }
@@ -243,6 +243,24 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     if let Some(err) = &output.browse_error {
         util::append(parent, &components::error(err));
     }
+    // No answer is not a failure the device reported, and the kernel's string
+    // for it ("no transport profile for peer") names a routing fall-through
+    // nobody can act on. Say what is true and what will happen; keep the detail
+    // for whoever hovers. The window reloads by itself when the device is back.
+    if let Some(detail) = &output.browse_unreachable {
+        let note = components::empty(&crate::i18n::t("filetransfer.unreachable", &[]));
+        note.set_attribute("title", detail).ok();
+        note.set_attribute("data-field", "ft-unreachable").ok();
+        util::append(parent, &note);
+    }
+    // The offers half is the whole listing for a peer with no share, so its
+    // failure is the reason an empty pane is empty — say so there, and only there.
+    if let (Some(detail), true) = (&output.offers_error, output.share_absent && output.tree_rows.is_empty()) {
+        let note = components::empty(&crate::i18n::t("filetransfer.offers_failed", &[]));
+        note.set_attribute("title", detail).ok();
+        note.set_attribute("data-field", "ft-offers-failed").ok();
+        util::append(parent, &note);
+    }
     // …and the quiet counterpart, shown only when it is the reason the pane is
     // empty. Beside a peer's offered files an absent share needs no sentence.
     if output.share_absent && output.tree_rows.is_empty() {
@@ -255,6 +273,17 @@ fn render_file_browser(parent: &Element, output: &FileTransferOutput, ctx: &DomC
     if !output.root_listed {
         if output.root_loading {
             util::append(parent, &components::loading(""));
+            // A load in flight can be restarted: a device that went quiet
+            // mid-request used to leave a spinner only the 30 s request timeout
+            // could end, with no control beside it.
+            let again = components::button(
+                ctx,
+                &crate::i18n::t("btn.refresh", &[]),
+                components::ButtonKind::Small,
+                "ft_refresh",
+            );
+            again.set_attribute("data-field", "ft-refresh").ok();
+            util::append(parent, &again);
         } else {
             let browse = components::button(
                 ctx,
@@ -321,8 +350,11 @@ fn render_tree_row(list: &Element, row: &FileRow, ctx: &DomCtx) {
 
 /// Pull the currently-selected file — to this device's downloads, or into My
 /// files (`crate::user_files`), which keeps it privately in this browser. Both
-/// inert (dimmed, no handler) when nothing is selected.
+/// inert (dimmed, no handler) when nothing is selected, and while a pull is
+/// running (B-13): there is one report slot, so a second press would overwrite
+/// the only report of the first.
 fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    let pulling = ctx.pull_attempt.in_flight();
     for (keep, label, field) in [
         (false, "filetransfer.pull_selected", "ft-pull"),
         (true, "filetransfer.keep_selected", "ft-keep"),
@@ -333,7 +365,7 @@ fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &Dom
         // The plan comes from the model already decided — a share `read` or an
         // offer's content-closure walk. This layer must never learn which.
         match &output.selected_pull {
-            Some(plan) => {
+            Some(plan) if !pulling => {
                 let actions = ctx.actions.clone();
                 let rp = ctx.repaint.clone();
                 let peer_id = output.peer_id.clone();
@@ -352,12 +384,39 @@ fn render_pull_selected(parent: &Element, output: &FileTransferOutput, ctx: &Dom
                     rp();
                 });
             }
-            None => {
+            _ => {
                 components::disable(&btn);
             }
         }
         util::append(parent, &btn);
     }
+    render_pull_status(parent, output, ctx);
+}
+
+/// The last Pull's outcome, next to the button that started it (B-13). Only for
+/// the device on screen: a pull from a device you switched away from is not
+/// news about this one (its line is still in the Results pane).
+///
+/// **Success renders nothing** — the download, or the new My files row, is the
+/// feedback, as on the offer card.
+fn render_pull_status(parent: &Element, output: &FileTransferOutput, ctx: &DomCtx) {
+    use crate::pull_attempt::PullOutcome;
+    let Some(rec) = ctx.pull_attempt.read() else { return };
+    if rec.target != output.selected_target {
+        return;
+    }
+    let el = match rec.outcome {
+        // Slot + punctuation composition, not prose — the filename, the
+        // catalog's own "Loading…", and a chunk count once the blob names one.
+        PullOutcome::Pulling { held, total } => {
+            let count = if total > 0 { format!(" ({held}/{total})") } else { String::new() }; // i18n-ignore
+            components::loading(&format!("{} — {}{count}", rec.filename, crate::i18n::t("state.loading", &[]))) // i18n-ignore
+        }
+        PullOutcome::Failed(why) => components::error(&format!("{} — {why}", rec.filename)), // i18n-ignore
+        PullOutcome::Done => return,
+    };
+    el.set_attribute("data-field", "ft-pull-status").ok();
+    util::append(parent, &el);
 }
 
 /// Byte counts read the same here as in the model's own messages — one

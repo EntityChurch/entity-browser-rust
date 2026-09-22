@@ -16,7 +16,7 @@ use web_sys::Element;
 use crate::dom::components as c;
 use crate::dom::util::{self, DomCtx};
 use crate::views::registry_browser::output::{
-    NameListing, Phase, PinOrigin, RegistryBrowserOutput, ResolvedName,
+    NameListing, Phase, PinOrigin, Publications, RegistryBrowserOutput, ResolvedName,
 };
 use crate::window::WindowId;
 
@@ -300,7 +300,14 @@ fn render_resolve(
             &c::loading(&crate::i18n::t("registry.resolving", &[])),
         ),
         Phase::Failed(e) => util::append(&card, &c::pre_notice(e)),
-        Phase::Done(target) => render_evidence(&card, target, ctx, local_peer),
+        Phase::Done(target) => render_evidence(
+            &card,
+            target,
+            ctx,
+            local_peer,
+            &output.resolved,
+            &output.published,
+        ),
     }
     util::append(root, &card);
 }
@@ -317,6 +324,11 @@ fn render_evidence(
     target: &ResolvedName,
     ctx: &DomCtx,
     local_peer: &str,
+    // The same phase `target` came out of. `opens` takes the PHASE rather than
+    // the resolved name so its "nothing resolved yet" guard stays in natively
+    // tested code instead of moving into this wasm-only file.
+    resolved: &Phase<ResolvedName>,
+    published: &Phase<Publications>,
 ) {
     let (t, tbody) = c::table(&[&crate::i18n::t("registry.checked", &[]), ""]);
     let mut row = |k: &str, v: String| {
@@ -363,52 +375,129 @@ fn render_evidence(
         );
     }
 
-    // The wire to the Site Browser — and the caveat is rendered beside it, not
-    // buried in a doc comment. The origin came from a registry-SIGNED binding
-    // (better than the deployment list); the pages it then fetches are still
-    // origin-trusted, and the Site Browser labels them "not verified".
-    if let Some(to_open) =
-        crate::views::registry_browser::output::open_target(&Phase::Done(target.clone()), local_peer)
-    {
-        // **TWO listeners on one click, and the order is load-bearing.** The
-        // window event runs the window's own handler, which registers the
-        // origin the signed binding carried and warms that publisher's
-        // manifests into MY store; the action then spawns the Site Browser.
-        // Both land in one `actions` queue and are drained in registration
-        // order, so the origin is registered before the Site Browser's factory
-        // reads the origin roster to decide what to subscribe — the other order
-        // opens a window that cannot see the peer it was opened for.
-        //
-        // The spawned window is bound to **my** peer, not the publisher's:
-        // `peer_id` on a window is the store it reads, and the publisher's
-        // cached sites live in mine. `open_target` carries that decision and
-        // the reasoning; it is where this was wrong.
-        //
-        // This composition is why the button was broken: the window handler
-        // alone can only mark itself dirty (it has no way to emit an `Action`),
-        // so a control that must open *another* window needs the DOM half. The
-        // same class as the Leave button that did nothing — an action that is
-        // never raised — except here it was never raised at all rather than
-        // dropped in routing.
-        let open = c::button(
-            ctx,
-            &crate::i18n::t("registry.open_site", &[]),
-            c::ButtonKind::Secondary,
-            "registry_open",
-        );
-        ctx.on_action(
-            &open,
-            "click",
-            crate::action::Action::SpawnWindow {
-                type_name: to_open.window_type,
-                peer_id: Some(to_open.bind_peer),
-                target: Some(to_open.target),
-            },
-        );
-        util::append(card, &open);
-        util::append(
-            card,
-            &c::pre_notice(&crate::i18n::t("registry.open_caveat", &[])),
-        );
+    render_publications(card, resolved, ctx, local_peer, published);
+}
+
+/// ⭐ **What the resolved publisher actually carries — and every refusal is a
+/// row, not a silence.**
+///
+/// A resolve establishes *who* and *where*; a `system/registry/binding` says
+/// nothing about *what*. This asks the publisher's own signed root
+/// ([`crate::publication_probe`]) and renders **one row per registered
+/// convention**, including the ones that answered no and the ones that could
+/// not be asked.
+///
+/// **The two rules this enforces, both of which are the module's existing pair
+/// pointed at a new subject:**
+///
+/// 1. **Not probed yet is not "they publish nothing".** `Idle` gets its own
+///    sentence, exactly as the names listing does.
+/// 2. **Only a demonstrated convention gets a button.** The retired
+///    `open_target` offered a Site Browser for every resolved name, so a
+///    feed-only publisher got a window whose rail is empty by construction —
+///    a correct registry answer rendered as *"this publisher has nothing"*.
+fn render_publications(
+    card: &Element,
+    resolved: &Phase<ResolvedName>,
+    ctx: &DomCtx,
+    local_peer: &str,
+    published: &Phase<Publications>,
+) {
+    use crate::publication_probe::{Publishes, Unknown};
+
+    match published {
+        // Not asked yet — and a blank here would read as an answer.
+        Phase::Idle => {
+            util::append(card, &c::empty(&crate::i18n::t("registry.published_idle", &[])));
+            return;
+        }
+        Phase::Running => {
+            util::append(card, &c::loading(&crate::i18n::t("registry.probing", &[])));
+            return;
+        }
+        Phase::Failed(e) => {
+            util::append(card, &c::pre_notice(e));
+            return;
+        }
+        Phase::Done(found) => {
+            let (t, tbody) = c::table(&[&crate::i18n::t("registry.published", &[]), ""]);
+            for f in found {
+                let said = match &f.outcome {
+                    Publishes::Yes { units: Some(n) } => {
+                        crate::i18n::t("registry.pub_yes_n", &[("n", &n.to_string())])
+                    }
+                    Publishes::Yes { units: None } => crate::i18n::t("registry.pub_yes", &[]),
+                    Publishes::No => crate::i18n::t("registry.pub_no", &[]),
+                    Publishes::Partial { nodes_walked } => crate::i18n::t(
+                        "registry.pub_partial",
+                        &[("nodes", &nodes_walked.to_string())],
+                    ),
+                    Publishes::Unknown(u) => crate::i18n::t(
+                        match u {
+                            Unknown::Unreachable(_) => "registry.pub_unreachable",
+                            Unknown::Withheld(_) => "registry.pub_withheld",
+                            Unknown::Unproven(_) => "registry.pub_unproven",
+                            Unknown::OurFloor(_) => "registry.pub_declined",
+                            Unknown::Exhausted => "registry.pub_exhausted",
+                        },
+                        &[],
+                    ),
+                };
+                // The window type is an identity key AND the viewer's name on
+                // screen — the same string `window_registry` carries, so a row
+                // here cannot name a viewer the table does not have.
+                util::append(
+                    &tbody,
+                    &c::tr(vec![c::td_text(f.window_type), c::td_text(&said)]),
+                );
+            }
+            util::append(card, &t);
+
+            // One button per DEMONSTRATED convention. `opens` is where that
+            // rule lives — natively tested, unlike anything in this file.
+            for to_open in
+                crate::views::registry_browser::output::opens(found, resolved, local_peer)
+            {
+                // **TWO listeners on one click, and the order is load-bearing.**
+                // The window event runs the window's own handler, which
+                // registers the origin the signed binding carried and warms that
+                // publisher's manifests into MY store; the action then spawns
+                // the viewer. Both land in one `actions` queue and drain in
+                // registration order, so the origin is registered before the
+                // spawned window's factory reads the origin roster to decide
+                // what to subscribe — the other order opens a window that cannot
+                // see the peer it was opened for.
+                //
+                // The spawned window is bound to **my** peer, not the
+                // publisher's: `peer_id` on a window is the store it reads, and
+                // the publisher's cached content lives in mine. `opens` carries
+                // that decision and the reasoning; it is where this was wrong.
+                //
+                // This composition is why the button was broken for its whole
+                // life: the window handler alone can only mark itself dirty (it
+                // has no way to emit an `Action`), so a control that must open
+                // *another* window needs the DOM half.
+                let open = c::button(
+                    ctx,
+                    &crate::i18n::t("registry.open_in", &[("viewer", to_open.window_type)]),
+                    c::ButtonKind::Secondary,
+                    "registry_open",
+                );
+                ctx.on_action(
+                    &open,
+                    "click",
+                    crate::action::Action::SpawnWindow {
+                        type_name: to_open.window_type,
+                        peer_id: Some(to_open.bind_peer),
+                        target: Some(to_open.target),
+                    },
+                );
+                util::append(card, &open);
+            }
+            util::append(
+                card,
+                &c::pre_notice(&crate::i18n::t("registry.open_caveat", &[])),
+            );
+        }
     }
 }

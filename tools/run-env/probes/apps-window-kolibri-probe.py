@@ -196,11 +196,58 @@ def visit(n):
         check("a file taken out reaches the host", bool(res) and res[0]["ok"] and res[0]["name"] == "README.TXT", json.dumps(res))
         listing = ajs("EntityVm.work('x-work-list', {}).then(r => cb((r.files || []).map(f => f.path)))")
         check("the floppy is kept as FILES in the workspace, visible in the tree", f"floppy/{NAME}" in (listing or []) and "transfer.img" not in (listing or []), listing)
+        # ANOTHER WINDOW of this machine saves a file (written straight to the shared
+        # workspace, which is all a second window's save is). A running window does not
+        # read the workspace again on its own, so it must be absent until Reload floppy.
+        other = f"other-window-{secrets.token_hex(3)}.txt"
+        wrote = ajs(f"""const data = new TextEncoder().encode('saved by another window').buffer;
+                       EntityVm.work('x-work-save', {{put: [{{path: 'floppy/{other}', mode: 420, mtime: Math.floor(Date.now()/1000), data}}], remove: []}}, 60000).then(r => cb(r.ok))""")
+        check("(set up) another window saved a file to the shared workspace", wrote is True, wrote)
+        check("a running window does not see it before a reload", other not in (js("return (listFloppy(), __m1.floppy.names)") or []))
+        js("document.getElementById('reload').click(); return 1")
+        rel = poll(f"return (__m1.floppy.lastSwap || {{}}).why === 'reloaded' && __m1.floppy.names.includes({json.dumps(other)}) ? __m1.floppy : null", bool, 30)
+        check("Reload floppy brings in what another window saved", bool(rel), json.dumps(js("return __m1.floppy")))
+        check("and keeps this window's own files", bool(rel) and NAME in rel["names"], json.dumps((rel or {}).get("names")))
+        after = ajs("saveFloppy('look').then(cb)")
+        check("and the next save writes nothing (it compares against the host as reloaded)", (after or {}).get("text") == "nothing changed", after)
+        # TWO WINDOWS EDIT ONE FILE (BACKLOG B-10). Another window saves a new version of
+        # the host's file, not expecting anything (as a window that never read it would);
+        # then THIS window, still holding the version it read, changes the same file. The
+        # host must refuse the stale save and keep the other window's bytes, and this
+        # window's edit must be kept beside it, not lost. Falsified by dropping `expect`
+        # from doSaveFloppy: the other window's text is overwritten.
+        theirs = "changed by another window " + secrets.token_hex(4)
+        mine = "changed in this window " + secrets.token_hex(4)
+        clash = ajs(f"""const data = new TextEncoder().encode({json.dumps(theirs)}).buffer;
+                       EntityVm.work('x-work-save', {{put: [{{path: 'floppy/{NAME}', mode: 420, mtime: Math.floor(Date.now()/1000), data}}], remove: []}}, 60000).then(r => cb(r.ok))""")
+        check("(set up) another window saved a newer copy of a file this window holds", clash is True, clash)
+        # Edit the file IN PLACE on this window's floppy, as the guest would. (Sending it in
+        # with `x-file` is no edit: putIn picks a free name, `name (1).txt`, and the first
+        # cut of this step never touched the file it meant to.)
+        edited = ajs(f"""const {{ files }} = floppyFiles();
+          const f = files.find(x => x.path === {json.dumps(NAME)});
+          if (!f) return cb('no such file on the floppy');
+          f.data = new TextEncoder().encode({json.dumps(mine)});
+          insertFloppy(EntityFat.makeFloppy(files.map(x => ({{ path: x.path, dir: x.dir, data: x.data, mtime: x.mtime }}))), 'edited')
+            .then(() => saveFloppy('edited')).then(cb);""")
+        saved = js("return __m1.floppy.lastSave")
+        check("a save over a file another window changed is a conflict, not an overwrite",
+              bool(saved) and saved.get("reason") == "edited" and saved.get("conflicts") == 1, f"{edited} {json.dumps(saved)}")
+        stem, ext = (NAME.rsplit(".", 1) + [""])[:2]
+        copy = f"{stem} (this window).{ext}" if ext else f"{stem} (this window)"
+        host_theirs = ajs(f"EntityVm.work('x-work-get', {{path: 'floppy/{NAME}'}}).then(r => cb(r.ok ? new TextDecoder().decode(r.data) : r.reason))")
+        check("the other window's copy is still what the host holds", host_theirs == theirs, host_theirs)
+        host_mine = ajs(f"EntityVm.work('x-work-get', {{path: {json.dumps('floppy/' + copy)}}}).then(r => cb(r.ok ? new TextDecoder().decode(r.data) : r.reason))")
+        check("and this window's edit is kept beside it", host_mine == mine, f"{copy}: {host_mine}")
+        again = ajs("saveFloppy('look').then(cb)")
+        check("and saving again does not make a second copy", (again or {}).get("text") == "nothing changed", again)
         # Put this profile back into the shape builds before 2026-09-14 left it in: the
         # whole floppy as one transfer.img. Visit 2 must migrate it, not lose it.
+        # Everything the host holds goes, not only what this window tracks: the conflict
+        # step above left a copy this window never tracked.
         legacy = ajs("""const img = liveFloppy().slice().buffer; __floppyKeep.stopSaving();
-                       EntityVm.work('x-work-save', {put: [{path: 'transfer.img', mode: 420, mtime: Math.floor(Date.now()/1000), data: img}],
-                                              remove: __floppyKeep.paths()}, 60000).then(r => EntityVm.work('x-work-list', {})).then(r => cb((r.files || []).map(f => f.path)))""")
+                       EntityVm.work('x-work-list', {}).then(l => EntityVm.work('x-work-save', {put: [{path: 'transfer.img', mode: 420, mtime: Math.floor(Date.now()/1000), data: img}],
+                                              remove: (l.files || []).map(f => f.path).filter(p => p !== 'transfer.img')}, 60000)).then(r => EntityVm.work('x-work-list', {})).then(r => cb((r.files || []).map(f => f.path)))""")
         check("(set up) this profile now holds only the old one-image shape", legacy == ["transfer.img"], legacy)
         # The host's store is write-behind; give the save a moment before killing the page.
         time.sleep(3)

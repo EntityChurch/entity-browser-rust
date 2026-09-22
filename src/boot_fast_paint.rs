@@ -238,6 +238,7 @@ async fn paint(loc: Location, origin: String) {
         // No connect surface on this path — a default (empty) slot.
         connect_attempt: crate::connect_attempt::ConnectAttempt::default(),
         offer_attempt: crate::offer_attempt::OfferAttempt::default(),
+        pull_attempt: crate::pull_attempt::PullAttempt::default(),
         // Pre-peer: nothing has resolved provisioning yet, and this path
         // renders no connector surface — never a pending reload.
         provisioning_drifted: false,

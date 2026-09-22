@@ -158,11 +158,19 @@ impl RootProjector {
     }
 
     /// The signing algorithm name for a §5.2 signature entity.
+    ///
+    /// **The kernel's own `KeyType::label()`, not a local match.** This was
+    /// `Ed448 => "ed448", _ => "ed25519"`, which is wrong for
+    /// `ExperimentalTest` — and `feed_read::key_type_name` was a second,
+    /// exhaustive restatement of the same V7 §3.5 mapping that got it right, so
+    /// the two disagreed on exactly the arm the wildcard swallowed. C15, and the
+    /// canonical expression already existed one crate down (`label()` carries
+    /// the v7.66 pin in its own doc). Inert when it was found — `attribute`
+    /// never compares `algorithm`, and `verify_for_key_type` refuses that key
+    /// type outright — which is why a wildcard survived in a field that names a
+    /// cryptographic primitive.
     pub fn algorithm(&self) -> &'static str {
-        match self.peer.shared().keypair.key_type() {
-            entity_crypto::KeyType::Ed448 => "ed448",
-            _ => "ed25519",
-        }
+        self.peer.shared().keypair.key_type().label()
     }
 
     /// How many keys have been recorded so far.
@@ -594,13 +602,8 @@ impl DirFetcher {
     /// rejecting on it would break reading conformant publishers that omit the
     /// field (see `profile_peer_id`).
     fn discovered_layout(&self) -> Option<super::publish_layout::PublishLayout> {
-        let bytes = fs::read(self.base.join("transport-profile")).ok()?;
-        if let Some(declared) = super::publish_layout::PublishLayout::profile_peer_id(&bytes) {
-            if declared != self.peer_id {
-                return None;
-            }
-        }
-        super::publish_layout::PublishLayout::from_profile_artifact(&bytes)
+        let bytes = fs::read(self.base.join(TRANSPORT_PROFILE_REL)).ok()?;
+        super::publish_layout::PublishLayout::advertised_for(&bytes, &self.peer_id)
     }
 
     /// Where the manifest actually is, in order of authority: what the publisher

@@ -169,7 +169,7 @@ endif
 # refusable. This makes it CHOOSABLE.
 #
 # `tools/core-pin.sh --ensure` exports the named commit with `git archive` into
-# a gitignored `.core-pin/<sha>/`, and the mount below overlays it onto the
+# `~/.cache/entity-browser-core-pin/<sha>/` (outside the tree — see core-pin.sh), and the mount below overlays it onto the
 # sibling path INSIDE the container — so Cargo resolves the paths it always did
 # and finds the pinned bytes there. Nothing in `Cargo.toml` changes, nothing is
 # symlinked, and the sibling's git is never written to.
@@ -812,9 +812,12 @@ E2E_EXTRA ?=
 E2E_FEATURES ?= demo-apps
 
 # Hard wall-clock cap on an e2e run (see the `timeout` note in e2e-worker).
-# A healthy full suite is ~285s; 15m is ~3x headroom for a loaded box, so it
-# only ever fires on a genuine hang. Override: `make e2e-worker E2E_TIMEOUT=25m`.
-E2E_TIMEOUT ?= 15m
+# Measured 2026-09-15: the serial suite (78 tests, --test-threads=1) runs ~15 min
+# on this box — it was ~285 s when this cap was set, and at 15m it killed the LAST
+# test of every healthy run, which reads as a hang and is not one. 35m keeps it a
+# hang detector. The wall time is the serial design (one session, one :8092),
+# not CPU or memory; sharding is the fix for that. Override: E2E_TIMEOUT=25m.
+E2E_TIMEOUT ?= 35m
 # Preflight: the suite's own connect error is good, but it only surfaces on the
 # far side of the trunk build — a minute burnt on the commonest mistake. Probe
 # :4444 first (in-container python3, so the host still needs only make+podman).
@@ -917,7 +920,7 @@ endif
 	# a wedge in the layers below it (cargo itself, the container, a hung
 	# socket). Inside it: the suite's stall watchdog (E2E_STALL_SECS, names the
 	# stuck phase — the diagnosis you actually want) and the WebDriver
-	# script/pageLoad timeouts. A healthy full run is ~285s, so E2E_TIMEOUT
+	# script/pageLoad timeouts. A healthy full run is ~15 min (2026-09-15), so E2E_TIMEOUT
 	# never fires on one; it exists so a hang FAILS instead of sitting silent
 	# forever in CI or an agent loop. --signal=KILL because a wedged podman
 	# child may not honour TERM.
@@ -1222,6 +1225,121 @@ endif
 	@rc=0; NO_RELOAD=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
 	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet-noreload: PASS"; else echo ">>> e2e-webrtc-meet-noreload: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+.PHONY: e2e-webrtc-stall
+# ONE SIDE STALLS — the long-running-peer report, in a browser.
+#
+# Two browsers meet and chat, then A's main thread is blocked so its frames stop
+# the way a backgrounded tab's do, while B keeps its Chat open and keeps
+# offering. Then both send again. This is the configuration the report describes
+# and the one NO gate here has ever run: every other WebRTC gate drives both
+# browsers continuously.
+#
+# It is the browser evidence for H1/H2, which are fixed in `entity-core-rust` at
+# `c3f2b76` and — until this runs — only ever in THEIR unit tests. Both fixes
+# are present at `ad52ab0`: `find_counterpart_offer` takes the newest offer and
+# carries an `already_answered` guard, and `carrier::connection` re-dials when
+# the cached node connection's reader has ended.
+#
+# STALL_SECS has ONE validity bound and then CLASSIFIES — `stall_preconditions`
+# prints which case the run is testing, because they answer different questions:
+#   <= 30s   REFUSED — `wake_probe::decide` returns NoGap, so nothing re-checks
+#            anything and a green run would be satisfied by its fallback
+#    40s     stale-offers    gap noticed, offers still in the bucket, link UP
+#    90s     gap-only        offers expired, link still believed up
+#   150s     connection-dies past the 130s liveness deadline
+#            (max_missed 3 x (interval 30s + timeout 10s) + 10s grace) — the
+#            REPORTED shape, and the only one reaching the establishment path
+#
+# MEASURED 2026-09-15, kernel ad52ab0, and both results are worth knowing:
+#   40s  → PASS. gap 40013ms seen by A, none by B (control), channel SURVIVED
+#          (opens 1->1), delivery resumed on the first send.
+#   150s → INCONCLUSIVE (exit 2), and far more informative than a pass: A's gap
+#          was 150007ms, yet the channel STILL survived — so nothing had to
+#          re-establish — while B logged **9 §6.5 failures** at
+#          `role=answerer, sdp_exchange=INCOMPLETE, bucket 8->0 msg(s)`, which
+#          is a CORRELATION failure by `WebRtcError::Timeout`'s own definition.
+#          ⇒ B was rebuilding a path it still had. The reported END state is
+#          still not reproduced, because a one-sided freeze does not kill the
+#          existing data channel; that needs the node-restart variant.
+# Direct arm (it implies NO_RELOAD, like the other in-session gates).
+e2e-webrtc-stall:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-stall SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-stall BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-stall: meet, chat, freeze ONE side $(or $(STALL_SECS),40)s, chat again"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 STALL_SECS=$(or $(STALL_SECS),40) SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-stall: PASS"; \
+	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-stall: INCONCLUSIVE (rc=2) — the run could not put the mechanism at risk; see the precondition line above"; \
+	 else echo ">>> e2e-webrtc-stall: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+.PHONY: e2e-webrtc-node-restart
+# THE NODE GOES AWAY AND COMES BACK — H2's discriminator, in a browser.
+#
+# H2 is *"the WebRTC carrier holds a dead connection to the rendezvous node
+# forever"*. It was fixed upstream at `c3f2b76` (`carrier::connection` checks
+# `reader_ended()` and re-dials) and, until this target, only ever in THEIR unit
+# tests — no rig here had taken the node away, so nothing here had seen either
+# the defect or the fix.
+#
+# ⭐ THE DISCRIMINATING ACTION MUST NEED THE NODE. Two browsers with an open data
+# channel keep talking with the node in the bin, so a gate asserting delivery
+# passes with the carrier permanently wedged. The assertion is therefore a
+# SECOND MEET at a fresh tag — a round trip through the node by construction —
+# plus the un-assertion that the conversation they already had is untouched,
+# because a node is an introducer and not a relay (§1.3).
+#
+# The node returns at the SAME peer id (`--keypair`, a stable identity the rig
+# generates per run and removes on teardown). Ephemeral is the node's own
+# default and is right for a stateless introducer; here it would make a failure
+# to reconnect explained by the identity change, which is a different finding.
+# The restart subcommand asserts the identity did not move before returning.
+#
+# Three states, like its siblings: a restart that failed, or one that ran before
+# the peers had ever spoken, is INCONCLUSIVE and not a pass.
+e2e-webrtc-node-restart:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-node-restart SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-node-restart BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-node-restart: meet, chat, KILL THE NODE, meet again"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 NODE_RESTART=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-node-restart: PASS"; \
+	 elif [ $$rc -eq 2 ]; then echo ">>> e2e-webrtc-node-restart: INCONCLUSIVE (rc=2) — the run could not put the mechanism at risk; see the panel above"; \
+	 else echo ">>> e2e-webrtc-node-restart: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
+.PHONY: e2e-webrtc-node-restart-control
+# THE CONTROL FOR THE GATE ABOVE, AND IT IS NOT OPTIONAL READING.
+#
+# Identical run with the node NOT restarted. It exists because two earlier cuts
+# of that gate's assertion measured nothing and this arm is what caught both:
+# `met_ids` scrapes a CUMULATIVE shell scrollback, so a membership test was
+# already true before the second meet; and read as a count it does not move in
+# EITHER arm, because a second meet never re-announces a peer the shell has
+# already introduced. A flat count would have been published as H2 reproduced.
+#
+# Run it whenever the restart gate's verdict changes. If this arm also reports
+# `node lines after the mark: A=0 B=0`, the observable is broken and the other
+# arm's red is a rig fault, not a finding.
+e2e-webrtc-node-restart-control:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> SKIPPED: podman not found on host"; exit 0; }
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first"; exit 1; }
+	@echo ">>> e2e-webrtc-node-restart-control: the same run, node untouched"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 NODE_RESTART=1 NODE_RESTART_CONTROL=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> control: PASS — the observable works, so a red on the restart arm is a finding"; \
+	 else echo ">>> control: rc=$$rc — the observable itself is in question; do NOT read the restart arm"; fi; \
 	 exit $$rc
 
 .PHONY: e2e-signaling-node
@@ -1699,6 +1817,7 @@ appimage: wasm-release
 # boots into the baked content; to re-test, clear ~/.local/share/<app-identifier>.
 APPS_STAGE   := .apps-stage
 INGEST_STAGE := .ingest-stage
+FEED_STAGE   := .feed-stage
 # Stage an out-of-mount INGEST / APPS_DIST into repo-local dirs, so a path
 # ANYWHERE on the host works with a publish that runs in a container mounting
 # only the parent meta dir.
@@ -1721,23 +1840,26 @@ INGEST_STAGE := .ingest-stage
 # without still having what produced it), so staging there would copy a
 # multi-hundred-megabyte corpus to look at none of it.
 define stage_publish_sources
-	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE))
+	$(if $(VERIFY),,@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE))
 	$(if $(VERIFY),,$(if $(INGEST),@echo "==> staging INGEST=$(INGEST) → $(INGEST_STAGE)/ (the publish container mounts only this repo)"))
 	$(if $(VERIFY),,$(if $(INGEST),@cp -r $(INGEST) $(INGEST_STAGE)))
 	$(if $(VERIFY),,$(if $(APPS_DIST),@echo "==> staging APPS_DIST=$(APPS_DIST) → $(APPS_STAGE)/"))
 	$(if $(VERIFY),,$(if $(APPS_DIST),@cp -r $(APPS_DIST) $(APPS_STAGE)))
+	$(if $(VERIFY),,$(if $(FEED),@echo "==> staging FEED=$(FEED) → $(FEED_STAGE)/"))
+	$(if $(VERIFY),,$(if $(FEED),@cp -r $(FEED) $(FEED_STAGE)))
 endef
 define unstage_publish_sources
-	@rm -rf $(INGEST_STAGE) $(APPS_STAGE)
+	@rm -rf $(INGEST_STAGE) $(APPS_STAGE) $(FEED_STAGE)
 endef
 # The flags every staged publish passes — the staged paths, never the caller's.
 INGEST_STAGED_FLAG = $(if $(INGEST),--ingest=$(INGEST_STAGE),)
 APPS_STAGED_FLAG   = $(if $(APPS_DIST),--ingest-apps=$(APPS_STAGE),)
+FEED_STAGED_FLAG   = $(if $(FEED),--ingest-feed=$(FEED_STAGE),)
 tauri-bundle: EXTRA_RUN_ENV := -e ENTITY_DATA_DIR=/src/entity-systems/$(notdir $(CURDIR))/$(PUBLISH_DATA_DIR)
 tauri-bundle: wasm-release
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish dist $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(if $(LIVE),--live=$(LIVE),) --deployment-config $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 	$(call RUN,touch src-tauri/src/lib.rs && cd src-tauri && cargo build)
 	@echo ""
@@ -1900,7 +2022,15 @@ pair-check:
 #                   any generator's output OR a hand-authored folder — instead of
 #                   the bundled demo seed. One site dir, or a parent of many.
 #                   Format: docs/architecture/guides/PUBLISH-INGEST-FORMAT.md;
-#                   worked example: examples/demo-site/ (make site INGEST=…).
+#                   worked example: examples/entity-demo/ (make site INGEST=…).
+#   FEED=<dir>      source this peer's OWN FEED from a directory of authored
+#                   posts (`*.md`, each with a `+++` TOML block carrying
+#                   `created_at`) — the third publish axis, same staging and
+#                   same one-projector publish as INGEST. Opt-in like APPS_DIST
+#                   and for the same reason: a publish that invented an empty
+#                   feed would claim every site publisher has one.
+#                   Worked example: examples/entity-demo/feed/
+#                   (make site FEED=examples/entity-demo/feed).
 #   PREFIX=<path>   the per-peer HOSTING SCOPE: nest everything (.html, .bin,
 #                   deployment-config origin) under {OUT}/{PREFIX}/… so a domain
 #                   can host many isolated peers side by side. Empty (default) =
@@ -1962,7 +2092,7 @@ pair-check:
 #                     `site` target the dir must live UNDER the repo tree (only
 #                     the meta dir is bind-mounted); `site-serve` runs host
 #                     cargo and accepts any path. e.g.
-#   make site-serve INGEST=examples/demo-site APPS_DIST=~/path/to/entity-apps/dist
+#   make site-serve INGEST=examples/entity-demo APPS_DIST=~/path/to/entity-apps/dist
 APPS_DIST ?=
 # Deployment-config startup surface (used by publish / site-serve when
 # DEPLOY_CONFIG is set): chrome | site | window (default window + a Site Browser
@@ -2022,7 +2152,7 @@ site: image
 	$(call CHECK_IN_TREE,site,$(OUT),OUT)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(OUT) $(if $(PLAN),--plan,) $(if $(VERIFY),--verify,) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(LIVE),--live=$(LIVE),) $(if $(HTML_ONLY),--html-only,) $(if $(DEPLOY_CONFIG),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,))
 	$(unstage_publish_sources)
 
 # ============================================================================
@@ -2232,7 +2362,7 @@ site-serve: wasm
 	$(snapshot_serve_dir)
 	@mkdir -p $(PUBLISH_DATA_DIR)
 	$(stage_publish_sources)
-	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
+	$(call RUN,cargo run --quiet --bin entity-browser -- publish $(SERVE_DIR) $(INGEST_STAGED_FLAG) $(APPS_STAGED_FLAG) $(FEED_STAGED_FLAG) --live=$(LIVE) $(if $(filter-out 0,$(DEPLOY_CONFIG)),--deployment-config,) $(if $(REGISTRY_PIN),--registry-pin=$(REGISTRY_PIN),) $(if $(ALLOW_OUT_OF_SET_LINKS),--allow-out-of-set-links,) $(if $(CONFIG_SITE),--config-site=$(CONFIG_SITE),) $(if $(SET_HOME),--set-home,) $(if $(SURFACE),--surface=$(SURFACE),) $(if $(WINDOW_TYPE),--window-type=$(WINDOW_TYPE),) $(if $(LOCKED),--locked,) $(if $(PREFIX),--prefix=$(PREFIX),) $(if $(IDENTITY_SEED),--identity-seed=$(IDENTITY_SEED),) $(if $(DEMO_IDENTITY),--demo-identity,),-v $(SERVE_DIR):$(SERVE_DIR))
 	$(unstage_publish_sources)
 	@echo ""
 	@echo "=== fresh build + published sites — serving on :$(PORT) (one origin, isolated $(SERVE_DIR)) ==="

@@ -3017,6 +3017,41 @@ pub(crate) struct PublishSource {
 /// that is the whole publishing model: an input is translated into the tree, and
 /// the tree is what gets projected. Every `--ingest*` flag is one front door
 /// onto the same tree, never a parallel source.
+///
+/// ## ⭐ THE PEER IS FRESH, AND THAT IS WHY `A-36`'s PEER-ROOT SCOPE IS FREE HERE
+/// AND EXPENSIVE ELSEWHERE — read this before building the durable-load path above
+///
+/// Arch ruled (2026-09-15) that a publish MUST commit over a scope containing
+/// both an entry and its `FEED-R2` signature, and named the peer root as the
+/// scope that does. `entity-workbench-go` built it and measured the cost on
+/// their architecture: **4 committed keys → 386, 7 emitted entities → 400 across
+/// 379 paths**, with an operator's folder path, another peer's LAN address and
+/// an unshared document's body landing in the upload directory. Filed as their
+/// `A-38`. On the static road there is no grant, so **the published prefix *is*
+/// the disclosure control**, and the ruled fix moves exactly that control.
+///
+/// **We measured the same publish shape and it is 19 committed keys, 20 emitted
+/// paths, 23 content blobs** — one site of 7 pages plus a 4-post feed, every
+/// key something an axis projected. Not luck, and not a better ruling:
+/// [`Peers::new_direct_with_keypair`] builds a **fresh in-memory peer** whose
+/// only writes are the `ingest*` calls below, and `RootProjector::record`
+/// inserts only what an emitter hands it. ⇒ ***a publish scope here is a binding
+/// set we CONSTRUCTED, not a subtree we POINTED AT*** — the same sentence
+/// ("publish over the peer root") is a projection policy in one architecture and
+/// a directory traversal in the other.
+///
+/// ⛔ **So `A-38` is a property of the verb this doc comment tells you to build,
+/// not of their implementation.** The line above — *"replace this body with 'open
+/// a persisted peer dir → read its real sites'"* — is `F3`, and on the day it
+/// lands we inherit their finding exactly: a durable tree holds keys, app state
+/// and other peers' cached bytes, and projecting its root would publish them.
+/// `RootProjector`'s own doc already refuses that (*"the root commits to the
+/// bytes we projected, not to the tree we read from… never over the source
+/// peer's whole tree, which holds keys and app state a publish must not commit
+/// to"*), and what is missing is the thing `AGENTS.md` has named for weeks: **a
+/// publication policy — which subgraphs are public.** A grep for `publishable`
+/// still finds a comment. **`F3` is not "read a real store instead of a fresh
+/// one"; it is that plus the policy, and their measurement is the price tag.**
 fn resolve_publish_source(
     keypair: entity_crypto::Keypair,
     ingest_dir: Option<&Path>,

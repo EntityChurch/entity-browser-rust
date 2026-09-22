@@ -115,6 +115,41 @@ pub(crate) fn decode_listing(data: &[u8]) -> Vec<FsChild> {
     out
 }
 
+/// Every device this profile has connected to, with whether it is reachable
+/// now, reachable ones first (stable within each group).
+fn known_targets(peers: &Peers) -> Vec<(String, bool)> {
+    let mut known: Vec<(String, bool)> = crate::connections::read_connections(peers)
+        .into_iter()
+        .map(|p| {
+            let reachable = crate::peer_liveness::liveness_of(peers, &p.remote_pid).is_connected();
+            (p.remote_pid, reachable)
+        })
+        .collect();
+    known.sort_by_key(|(_, reachable)| !*reachable);
+    known
+}
+
+/// Which device the window points at.
+///
+/// **A person's choice is kept even while that device is unreachable** — the
+/// window says it is offline instead of silently switching to another device,
+/// which would put someone else's files under a Pull button they did not aim.
+/// With no choice (or a choice this profile no longer knows), the first
+/// **reachable** device; only if none is reachable, the first known one. The
+/// old rule took the first entry of the registry, which is sorted by id and
+/// holds every peer ever met — so the default could quietly be a dead one.
+pub fn pick_target(selected: &str, known: &[(String, bool)]) -> String {
+    if !selected.is_empty() && known.iter().any(|(pid, _)| pid == selected) {
+        return selected.to_string();
+    }
+    known
+        .iter()
+        .find(|(_, reachable)| *reachable)
+        .or_else(|| known.first())
+        .map(|(pid, _)| pid.clone())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Default)]
 struct FileTransferState {
     /// Selected target peer id, or empty for "auto / first connected".
@@ -160,12 +195,8 @@ impl FileTransferModel {
     /// `render_output` and the window's event handler so both agree.
     pub fn effective_target(&self, peers: &Peers) -> String {
         let selected = self.inner.lock().unwrap().selected_target.clone();
-        let connected = crate::connections::read_connections(peers);
-        if !selected.is_empty() && connected.iter().any(|p| p.remote_pid == selected) {
-            selected
-        } else {
-            connected.first().map(|p| p.remote_pid.clone()).unwrap_or_default()
-        }
+        let known = known_targets(peers);
+        pick_target(&selected, &known)
     }
 
     /// Borrow the event-log cache so the factory can install the per-event
@@ -199,25 +230,29 @@ impl FileTransferModel {
         // this to show the authorize affordance (§2.1). Keyed by Base58
         // `remote_pid`, reconciled to the hex-keyed mirror in read_connections.
         let connected = crate::connections::read_connections(peers);
-        // Resolve the effective target: an explicit selection if it's still
-        // connected, else the first connected peer.
-        let effective_target = if !state.selected_target.is_empty()
-            && connected.iter().any(|p| p.remote_pid == state.selected_target)
-        {
-            state.selected_target.clone()
-        } else {
-            connected.first().map(|p| p.remote_pid.clone()).unwrap_or_default()
-        };
+        let known = known_targets(peers);
+        let effective_target = pick_target(&state.selected_target, &known);
 
-        let target_options: Vec<TargetOption> = connected
+        // Reachable devices first, and an unreachable one says so. The list is
+        // every peer this profile has ever connected to — a registry, not a
+        // presence list — so without this a dead peer read the same as a live
+        // one, and could be the default (field report 2026-09-15).
+        let target_options: Vec<TargetOption> = known
             .iter()
-            .map(|p| TargetOption {
-                value: p.remote_pid.clone(),
-                label: crate::i18n::t(
+            .map(|(pid, reachable)| {
+                let name = crate::i18n::t(
                     "label.remote_option",
-                    &[("name", &crate::views::display_name(peers, &p.remote_pid))],
-                ),
-                selected: p.remote_pid == effective_target,
+                    &[("name", &crate::views::display_name(peers, pid))],
+                );
+                TargetOption {
+                    value: pid.clone(),
+                    label: if *reachable {
+                        name
+                    } else {
+                        format!("{name} · {}", crate::i18n::t("chip.offline", &[])) // i18n-ignore — separator between two catalog strings
+                    },
+                    selected: *pid == effective_target,
+                }
             })
             .collect();
 
@@ -233,7 +268,13 @@ impl FileTransferModel {
         // Ground truth: derive access from what actually happened when we talked
         // to the target. A real 403/401 → Denied (show the affordance); a 2xx →
         // Authorized; no evidence → Unknown (never alarm).
-        let access = match classify_target_access(&raw_messages, &effective_target) {
+        // A share listing that answered in this session outranks the log, which
+        // survives a reload and can still hold a 403 from before a grant.
+        let access = match if self.browse.share_root_ok() {
+            Some(true)
+        } else {
+            classify_target_access(&raw_messages, &effective_target)
+        } {
             Some(false) => TargetAccess::Denied,
             Some(true) => TargetAccess::Authorized(mirror_profile),
             None => match mirror_profile {
@@ -281,6 +322,8 @@ impl FileTransferModel {
             selected_full_path: self.browse.selected_full_path(),
             selected_pull: self.browse.selected_pull(),
             browse_error: self.browse.error(),
+            browse_unreachable: self.browse.unreachable(),
+            offers_error: self.browse.offers_error(),
             share_absent: self.browse.share_absent(),
             events,
             // What we serve, read from our OWN tree (not `list_offers`, which is
@@ -312,7 +355,28 @@ impl FileTransferModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_target_access, decode_listing};
+    use super::{classify_target_access, decode_listing, pick_target};
+
+    fn known(rows: &[(&str, bool)]) -> Vec<(String, bool)> {
+        rows.iter().map(|(p, r)| (p.to_string(), *r)).collect()
+    }
+
+    #[test]
+    fn with_no_choice_the_default_is_a_device_that_is_reachable() {
+        let k = known(&[("LIVE", true), ("DEAD_A", false)]);
+        assert_eq!(pick_target("", &k), "LIVE");
+        let unsorted = known(&[("DEAD_A", false), ("LIVE", true)]);
+        assert_eq!(pick_target("", &unsorted), "LIVE", "reachability decides, not registry order");
+        assert_eq!(pick_target("", &known(&[("DEAD_A", false), ("DEAD_B", false)])), "DEAD_A", "none reachable: the first known");
+        assert_eq!(pick_target("", &[]), "");
+    }
+
+    #[test]
+    fn a_chosen_device_is_kept_while_it_is_offline() {
+        let k = known(&[("LIVE", true), ("CHOSEN", false)]);
+        assert_eq!(pick_target("CHOSEN", &k), "CHOSEN", "a choice is not silently switched to another device");
+        assert_eq!(pick_target("FORGOTTEN", &k), "LIVE", "a choice this profile no longer knows falls back");
+    }
 
     #[test]
     fn decode_listing_extracts_children() {

@@ -88,6 +88,8 @@ pub struct PeerLiveness {
     pub last_seen: Option<u64>,
     /// ms since epoch the current failure episode began; absent ⇒ not failing.
     pub failing_since: Option<u64>,
+    /// ms since epoch the kernel wrote this `connected`; absent on older writers.
+    pub connected_at: Option<u64>,
 }
 
 impl PeerLiveness {
@@ -101,6 +103,7 @@ impl PeerLiveness {
             reason: d.reason,
             last_seen: d.last_seen,
             failing_since: d.failing_since,
+            connected_at: d.connected_at,
         })
     }
 
@@ -157,10 +160,56 @@ pub fn watch_all_vantages(peers: &Peers, watch: &mut crate::window_watch::Window
     }
 }
 
+/// **A `connected` written before this page started is not a connection.**
+///
+/// `system/peer/status` is durable, and the kernel writes it only on a
+/// transition — so after a reload it can still say `connected` about a pool that
+/// died with the previous page, and nothing resets it at start (a gap the kernel
+/// seat logged as a spec ambiguity, `SPEC-AMBIGUITIES` §3.13). Reading that row
+/// as live was not only a wrong chip: `reach_keeper` skips a connected peer and
+/// `connectors::reach_node` skips a connected node, so the recovery for exactly
+/// that peer was switched off, which is part of why a long-running pair did not
+/// come back after a reload (handoff 2026-09-15-a §4 H4).
+///
+/// So a `connected` row whose `connected_at` predates `page_started_ms` reads as
+/// `Suspect` ("Reconnecting…"), with `reason` saying why. **Only for a vantage
+/// that lives in this page** (`in_page`): a desktop backend peer is a separate
+/// process that survives a WebView reload with its connections intact. A row
+/// with no `connected_at` is left alone — absence is not evidence of age.
+pub fn demote_if_from_before(mut row: PeerLiveness, in_page: bool, page_started_ms: f64) -> PeerLiveness {
+    if in_page
+        && row.status == LiveStatus::Connected
+        && row.connected_at.is_some_and(|at| (at as f64) < page_started_ms)
+    {
+        row.status = LiveStatus::Suspect;
+        row.reason = Some("from-before-reload".to_string()); // i18n-ignore — kernel-style reason token
+    }
+    row
+}
+
+/// When this page started, in ms since the epoch — `performance.timeOrigin`.
+/// Native has no page, so nothing is from before it.
+fn page_started_ms() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.time_origin())
+            .unwrap_or(0.0)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        0.0
+    }
+}
+
 /// Read `vantage_pid`'s view of every remote peer's liveness from the kernel
 /// status surface. Rows sorted by `remote_pid`. Empty when nothing is connected
-/// — or, in the Worker arm, when the prefix wasn't watched.
+/// — or, in the Worker arm, when the prefix wasn't watched. A `connected` from
+/// before this page started reads as `Suspect` ([`demote_if_from_before`]).
 pub fn read_peer_liveness(peers: &Peers, vantage_pid: &str) -> Vec<PeerLiveness> {
+    let in_page = peers.has_peer_context(vantage_pid);
+    let started = page_started_ms();
     let prefix = peer_status_prefix(vantage_pid);
     let mut entries = peers.tree_listing(vantage_pid, &prefix);
     entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -174,7 +223,7 @@ pub fn read_peer_liveness(peers: &Peers, vantage_pid: &str) -> Vec<PeerLiveness>
                 return None;
             }
             let e = peers.get_entity(vantage_pid, &entry.path)?;
-            PeerLiveness::from_status_entity(&e)
+            PeerLiveness::from_status_entity(&e).map(|row| demote_if_from_before(row, in_page, started))
         })
         .collect()
 }
@@ -488,6 +537,7 @@ mod tests {
             reason: Some("keepalive-miss".into()),
             last_seen: Some(10),
             failing_since: Some(10),
+            connected_at: None,
         };
         let conn = PeerLiveness {
             remote_pid: "R".into(),
@@ -495,8 +545,32 @@ mod tests {
             reason: None,
             last_seen: Some(20),
             failing_since: None,
+            connected_at: Some(20),
         };
         assert!(supersedes(&conn, &disc));
         assert!(!supersedes(&disc, &conn));
+    }
+
+    #[test]
+    fn a_connected_from_before_this_page_is_not_a_connection() {
+        let row = |connected_at| PeerLiveness {
+            remote_pid: "R".into(),
+            status: LiveStatus::Connected,
+            reason: None,
+            last_seen: connected_at,
+            failing_since: None,
+            connected_at,
+        };
+        let started = 1_000.0;
+        let before = demote_if_from_before(row(Some(999)), true, started);
+        assert_eq!(before.status, LiveStatus::Suspect, "a pool that died with the last page is not live");
+        assert_eq!(before.reason.as_deref(), Some("from-before-reload"));
+        assert_eq!(demote_if_from_before(row(Some(1_000)), true, started).status, LiveStatus::Connected, "made in this page");
+        assert_eq!(demote_if_from_before(row(Some(999)), false, started).status, LiveStatus::Connected,
+            "a desktop backend is its own process and keeps its connections across a WebView reload");
+        assert_eq!(demote_if_from_before(row(None), true, started).status, LiveStatus::Connected, "no stamp is not evidence of age");
+        let mut disc = row(Some(1));
+        disc.status = LiveStatus::Disconnected;
+        assert_eq!(demote_if_from_before(disc, true, started).status, LiveStatus::Disconnected, "only `connected` is second-guessed");
     }
 }

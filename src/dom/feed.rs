@@ -42,6 +42,7 @@ pub fn render(container: &Element, output: &FeedOutput, ctx: &DomCtx) {
     util::set_text(&hint, &crate::i18n::t("feed.hint", &[]));
     util::append(&wrapper, &hint);
 
+    render_composer(&wrapper, output, ctx);
     render_follow_form(&wrapper, output, ctx);
     if let Some(notice) = output.notice {
         util::append(&wrapper, &components::notice(&crate::i18n::t(notice.0, &[])));
@@ -51,6 +52,124 @@ pub fn render(container: &Element, output: &FeedOutput, ctx: &DomCtx) {
     render_panel(&wrapper, output, ctx);
 
     util::append(container, &wrapper);
+}
+
+/// The draft key for the composer box. Its own field for `GATHERER_FIELD`'s
+/// reason — three boxes, three drafts, so no press can read what was typed into
+/// a different one.
+const POST_FIELD: &str = "feed_post";
+
+/// **The composer** — post into your own tree, and unpublish what is there.
+///
+/// ⭐ Rendered **above** the reading surface, which is the one layout decision
+/// here that is not arbitrary: this is the only part of the window that acts on
+/// *your* tree, and burying it under two lists of other people's peer ids reads
+/// as an afterthought on a surface whose whole other half is reading.
+///
+/// ⛔ **`FEED-R21` lives on the Remove button's own notice, at the moment of the
+/// action.** §7.5 is explicit that the honest sentence belongs there and not in
+/// a help page, and the model hands it back from the verb
+/// ([`crate::feed_compose::RemovalMeaning`]) so this renderer cannot forget to
+/// ask for it — it renders whatever key the model chose, and for a removal that
+/// key is the unpublication sentence.
+fn render_composer(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {
+    let heading = components::subheading(&crate::i18n::t("feed.compose.heading", &[]));
+    util::append(parent, &heading);
+
+    if !output.can_author {
+        // **Says so rather than rendering a dead box.** This profile holds no
+        // authoring key for the bound peer, which is not something retrying or
+        // typing differently fixes, so offering the control would be offering
+        // an act that cannot succeed.
+        let note = components::empty(&crate::i18n::t("feed.compose.not_our_peer", &[]));
+        let _ = note.set_attribute("data-field", "feed-compose-unavailable");
+        util::append(parent, &note);
+        return;
+    }
+
+    let row = util::create_element("div");
+    row.set_attribute("style", theme::ROW_INLINE).ok();
+
+    let input = components::text_input(
+        ctx,
+        POST_FIELD,
+        "",
+        &crate::i18n::t("feed.compose.placeholder", &[]),
+    );
+    let _ = input.set_attribute("data-field", "feed-post-text");
+    util::append(&row, &input);
+
+    let btn = components::button_el(
+        &crate::i18n::t("feed.compose.post", &[]),
+        components::ButtonKind::Primary,
+    );
+    let _ = btn.set_attribute("data-field", "feed-post");
+    {
+        let actions = ctx.actions.clone();
+        let rp = ctx.repaint.clone();
+        let drafts = ctx.drafts.clone();
+        let wid = output.window_id;
+        ctx.listen(&btn, "click", move |_| {
+            let typed = drafts.borrow().get(POST_FIELD).cloned().unwrap_or_default();
+            // An empty press still dispatches, for the Follow button's reason:
+            // the refusal is a real, distinct sentence and a button that does
+            // nothing at all is worse than one that says why.
+            actions.borrow_mut().push(Action::WindowEvent {
+                window_id: wid,
+                event: "feed_post".to_string(),
+                value: typed,
+            });
+            rp();
+        });
+    }
+    util::append(&row, &btn);
+    util::append(parent, &row);
+
+    if let Some(notice) = output.compose_notice {
+        let n = components::notice(&crate::i18n::t(notice.key(), &[]));
+        // Read as an attribute, never by matching the sentence — a gate that
+        // matched copy would be red the day the wording is translated or
+        // improved, which is the needle defect one subsystem over.
+        let _ = n.set_attribute("data-field", "feed-compose-notice");
+        util::append(parent, &n);
+    }
+
+    if output.own_posts.is_empty() {
+        util::append(parent, &components::empty(&crate::i18n::t("feed.compose.no_posts", &[])));
+        return;
+    }
+
+    let list = util::create_element("div");
+    let _ = list.set_attribute("data-field", "feed-own-posts");
+    for post in &output.own_posts {
+        let line = util::create_element("div");
+        line.set_attribute("style", theme::ROW_INLINE).ok();
+
+        let text = util::create_element("div");
+        let _ = text.set_attribute("data-field", "feed-own-post-text");
+        util::set_text(&text, &post.text);
+        util::append(&line, &text);
+
+        let id = util::create_element("span");
+        id.set_attribute("style", theme::HINT).ok();
+        let _ = id.set_attribute("data-field", "feed-own-post-id");
+        util::set_text(&id, &post.id_short);
+        util::append(&line, &id);
+
+        let drop = components::button_el(
+            &crate::i18n::t("feed.compose.remove", &[]),
+            components::ButtonKind::Secondary,
+        );
+        let _ = drop.set_attribute("data-field", "feed-remove-post");
+        // ⚠ **The FULL hash, not `id_short`.** §7.3's unbinding is by address
+        // and a shortened hash names no binding — a remove built from one would
+        // unbind nothing and report the unpublication sentence anyway.
+        ctx.on_window_event(&drop, "click", "feed_remove_post", &post.hash_hex);
+        util::append(&line, &drop);
+
+        util::append(&list, &line);
+    }
+    util::append(parent, &list);
 }
 
 fn render_follow_form(parent: &Element, output: &FeedOutput, ctx: &DomCtx) {

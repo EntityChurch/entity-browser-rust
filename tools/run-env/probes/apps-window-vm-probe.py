@@ -323,6 +323,44 @@ def visit(n):
             # the host's durability window.
             time.sleep(2)
 
+            # ── two windows edit one file (BACKLOG B-10) ─────────────────────
+            # Another window of this machine saves a newer copy of a file this
+            # window holds (written straight to the shared workspace, which is all
+            # a second window's save is). Then THIS window edits the same file. The
+            # host must refuse the stale save and keep the other window's bytes, and
+            # this window's edit must be kept beside it as `clash (this window).txt`.
+            # Falsified by dropping `expect` from doSave: the other window's text is
+            # overwritten. Its own file, so visit 2's quick.txt check is untouched.
+            def host_op(expr):
+                js(sid, f"window.__probeOp = null; ({expr}).then(r => window.__probeOp = {{done: true, r}}, "
+                        f"e => window.__probeOp = {{done: true, r: String(e)}}); return 1;")
+                return (poll(sid, "return window.__probeOp;", lambda v: bool(v) and v.get("done"), 60) or {}).get("r")
+            def host_text(path):
+                return host_op(f"window.EntityVm.work('x-work-get', {{path: {json.dumps(path)}}})"
+                               ".then(r => r.ok ? new TextDecoder().decode(r.data) : 'ERR:' + r.reason)")
+            orig, theirs, mine = ("orig-" + secrets.token_hex(3), "theirs-" + secrets.token_hex(3),
+                                  "mine-" + secrets.token_hex(3))
+            w1, _ = guest(sid, f"printf {orig} > ~/clash.txt && echo CL-WROTE", r"CL-WROTE")
+            first = poll(sid, "const w = window.__m1.work; return w && (w.recent || []).find(r => "
+                              "(r.paths || []).includes('clash.txt')) || null;", bool, 20)
+            check("(set up) this window saved clash.txt", bool(w1) and bool(first) and host_text("clash.txt") == orig,
+                  json.dumps(first))
+            clash = host_op("window.EntityVm.work('x-work-save', {put: [{path: 'clash.txt', mode: 420, "
+                            f"mtime: Math.floor(Date.now()/1000), data: new TextEncoder().encode({json.dumps(theirs)}).buffer}}], "
+                            "remove: []}, 60000).then(r => r.ok)")
+            check("(set up) another window saved a newer copy of clash.txt", clash is True, clash)
+            w2, _ = guest(sid, f"printf {mine} > ~/clash.txt && echo CL-EDIT", r"CL-EDIT")
+            conflicted = poll(sid, "const w = window.__m1.work; return w && (w.recent || []).find(r => r.conflicts) || null;",
+                              bool, 30)
+            check("a save over a file another window changed is a conflict, not an overwrite",
+                  bool(w2) and bool(conflicted) and conflicted.get("conflicts") == 1, json.dumps(conflicted))
+            check("the other window's copy is still what the host holds", host_text("clash.txt") == theirs,
+                  host_text("clash.txt"))
+            check("and this window's edit is kept beside it", host_text("clash (this window).txt") == mine,
+                  host_text("clash (this window).txt"))
+            again = host_op("saveWorkspace('look')")
+            check("and saving again does not make a second copy", (again or {}).get("text") == "nothing changed", again)
+
             # ── receive: into the home directory, never over a file ──────────
             # Posted as the host would after its "Send a file" picker (the picker
             # itself is the x-file e2e gate's subject, not this one's).

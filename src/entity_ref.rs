@@ -672,6 +672,20 @@ fn hash_to_param(h: &Hash) -> String {
     h.to_hex()
 }
 
+/// V7 §3.5's `{content_hash_hex}` back to a [`Hash`], for callers outside this
+/// module's atom grammar.
+///
+/// **A wrapper rather than a second parser.** The tree binds several things at
+/// a hex address — a feed entry at [`crate::feed::entry_key`], a detached
+/// signature at the invariant pointer — so reading one back is not unique to a
+/// reference atom, and a second hex loop is the drift C15 names in the one place
+/// where getting it wrong produces an address that silently names nothing.
+/// `Option`, because a caller outside the atom grammar has no use for
+/// [`RefError`]'s `param`.
+pub(crate) fn hash_from_hex(s: &str) -> Option<Hash> {
+    hash_from_param(s, "hash").ok()
+}
+
 /// The inverse. Accepts either case; see the module doc on why we emit
 /// lowercase and what that costs a non-conformant input.
 fn hash_from_param(s: &str, param: &'static str) -> Result<Hash, RefError> {

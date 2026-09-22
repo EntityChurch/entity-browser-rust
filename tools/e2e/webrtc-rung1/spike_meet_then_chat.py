@@ -129,6 +129,53 @@ TOPOLOGY = os.environ.get("TOPOLOGY", "shared").strip().lower()
 # (nat_topology.sh applies it; it is echoed here rather than re-read per router).
 UDP_TIMEOUT = int(os.environ.get("UDP_TIMEOUT", "180") or 180)
 
+# ── the `one side stalls` phase (the long-running-peer report) ───────────────
+# The report is *"it worked, then one side was away for a while, and after that
+# they find each other and cannot connect"*. Every other WebRTC gate here runs
+# both browsers continuously, so that configuration has never been in the
+# population — the AP34/AP35 shape the boot-only establisher already shipped
+# through once.
+#
+# Blocking the main thread is the faithful stand-in: `requestAnimationFrame`
+# stops exactly as it does for a backgrounded tab or a sleeping phone, while the
+# websocket to the node stays open at the OS level and the counterpart keeps
+# depositing offers into the rendezvous bucket.
+#
+# **The default sits in a window bounded at BOTH ends, and both bounds are
+# load-bearing — `stall_preconditions` asserts them rather than documenting
+# them.** Below `wake_gap_threshold_ms()` the product classifies the gap as
+# `NoGap` and does nothing, so the stall is invisible to the very recovery path
+# under test and a green run would mean nothing. Above the node's bucket TTL the
+# stale offers H1 is about have expired — that is the survey's own *"break it:
+# stop both sides for > 60 s"*, i.e. a different case. 40 s is the middle.
+STALL_SECS = int(os.environ.get("STALL_SECS", "0") or 0)
+# Take the rendezvous node away mid-run and bring it back at the same identity —
+# H2's discriminator. Off by default: it costs a second meet and it is a
+# different question from the stall.
+NODE_RESTART = os.environ.get("NODE_RESTART", "").strip() in ("1", "true", "yes")
+# Run the restart phase WITHOUT restarting anything — the control that decides
+# whether a failed second meet is about the node at all.
+NODE_RESTART_CONTROL = os.environ.get("NODE_RESTART_CONTROL", "").strip() in ("1", "true", "yes")
+# The node's rendezvous bucket TTL, echoed rather than re-read (same convention
+# as UDP_TIMEOUT). It bounds what a stall can still be ABOUT.
+BUCKET_TTL = int(os.environ.get("BUCKET_TTL", "60") or 60)
+# `wake_probe::wake_gap_threshold_ms()`, which derives it from
+# `KeepaliveConfig::default().interval_ms` (30_000) so a §12.4 retune moves both.
+# Echoed here; if that default moves this must move with it, and
+# `stall_preconditions` is what makes the mismatch loud instead of silently
+# testing nothing.
+WAKE_THRESHOLD = int(os.environ.get("WAKE_THRESHOLD", "30") or 30)
+# `KeepaliveConfig::default()` — core/peer/src/keepalive.rs, read from source
+# rather than from a handoff. These decide when a peer stops being BELIEVED
+# connected, which is a different question from when a frame gap is noticed and
+# is the one that governs whether anything has to re-establish.
+KEEPALIVE_INTERVAL = int(os.environ.get("KEEPALIVE_INTERVAL", "30") or 30)
+KEEPALIVE_TIMEOUT = int(os.environ.get("KEEPALIVE_TIMEOUT", "10") or 10)
+MAX_MISSED = int(os.environ.get("MAX_MISSED", "3") or 3)
+# §5.4's ladder: max_missed pings each with its own timeout, then `suspect`, then
+# one more grace period before `disconnected`.
+LIVENESS_DEATH = MAX_MISSED * (KEEPALIVE_INTERVAL + KEEPALIVE_TIMEOUT) + KEEPALIVE_TIMEOUT
+
 A_BASE, B_BASE = "http://localhost:4446", "http://localhost:4447"
 APP = "http://host.containers.internal:8092"
 NODE_WS = "ws://host.containers.internal:4071"
@@ -275,9 +322,12 @@ FALSE_NOTES = (
 )
 SHELL_COUNT = _windows("Shell") + "return out.length;"
 
-def ex(base, sid, script, args=None):
+def ex(base, sid, script, args=None, timeout=60):
+    # `timeout` is the HTTP read timeout, NOT WebDriver's script timeout — the
+    # stall step raises both, and raising only one produces a urllib timeout on a
+    # script that is running exactly as intended.
     return rq(base, "POST", f"/session/{sid}/execute/sync",
-              {"script": script, "args": args or []})["value"]
+              {"script": script, "args": args or []}, timeout=timeout)["value"]
 
 # ---------------------------------------------------------------------------
 # Typing — real WebDriver keys, and always confirmed
@@ -542,6 +592,35 @@ def provision(base, sid, node_peer, label):
     print(f"  {label} connector added: {ok_add}   selected: {ok_use}")
     return ok_add and ok_use
 
+# ── the node vantage, read from the host ─────────────────────────────────────
+# The spike runs on the host, beside the node, so it can read the node's own log
+# directly. This is the ONLY place that sees both halves of a rendezvous — the
+# browsers can each say what they did, and neither can say whether the node
+# heard it.
+NODE_LOG = "/tmp/sig_repro.out"
+
+def node_log_lines():
+    """Current length of the node log, as a mark to measure activity AFTER."""
+    try:
+        with open(NODE_LOG, encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+def node_saw_caller(mark, peer_id):
+    """Lines past `mark` in which the node served `peer_id`.
+
+    `caller="<id>"` is on both the `signaling offer:` and `signaling collect`
+    debug lines (target `entity_signaling=debug`, which the rig sets). A count,
+    never a bool: zero is the claim, and a number says how far from it a run was.
+    """
+    try:
+        with open(NODE_LOG, encoding="utf-8", errors="replace") as f:
+            return sum(1 for i, l in enumerate(f) if i >= mark and peer_id in l)
+    except OSError:
+        return 0
+
+
 # `met <short>  <full-id>` is what pump_meet pushes per discovered peer.
 MET_RE = re.compile(r"met\s+\S+\s+([1-9A-HJ-NP-Za-km-z]{40,})")
 
@@ -637,6 +716,114 @@ def channel_opens(base, sid):
     return sum(1 for l in log_lines(base, sid) if "data channel is OPEN" in l)
 
 
+# ---------------------------------------------------------------------------
+# One side stalls — freezing frames, and proving the freeze REGISTERED
+# ---------------------------------------------------------------------------
+
+def stall_preconditions():
+    """Whether this run may claim anything, and WHICH case it is testing.
+
+    Returns `(ok, mode, why)`. Only the lower bound is a validity condition: a
+    stall the product classifies as `NoGap` exercises none of the recovery path,
+    and a green run over it is a gate satisfied by its fallback.
+
+    ⭐ **The upper bounds classify rather than refuse, and that correction came
+    from a measurement.** The first cut refused anything past the bucket TTL, on
+    the reasoning that H1 is about STALE OFFERS and those expire. True — and it
+    made the gate unable to test the thing that was actually reported. A 40s run
+    measured `data-channel opens A 1->1, B 1->1`: the channel simply SURVIVES,
+    because a peer is not declared disconnected until
+    `max_missed × (interval + timeout) + timeout` = 130s. With a live channel no
+    negotiation is ever started, so **H1 is unreachable in this shape whatever
+    the bucket holds** — H1 governs the establishment path, not an established
+    one. A window chosen to keep stale offers alive is therefore a window too
+    short to need them.
+
+    The three cases are genuinely different questions and must not report as one:
+      stale-offers    the offers are still in the bucket, but the link is up, so
+                      this says the gap was NOTICED and nothing had to recover
+      gap-only        offers expired, link still believed alive — same claim,
+                      minus the bucket
+      connection-dies past the liveness deadline: the peer really is declared
+                      gone and the link must be rebuilt. **This is the reported
+                      shape** ("away for a while, then they cannot connect") and
+                      the only one that reaches the establishment path H1/H2 are
+                      about.
+    """
+    if STALL_SECS <= WAKE_THRESHOLD:
+        return False, "too-short", (
+            f"stall {STALL_SECS}s <= wake threshold {WAKE_THRESHOLD}s — "
+            "`wake_probe::decide` returns NoGap below the threshold, so nothing "
+            "re-checks the connection and the stall exercises no recovery at "
+            "all; raise STALL_SECS")
+    if STALL_SECS >= LIVENESS_DEATH:
+        return True, "connection-dies", (
+            f"stall {STALL_SECS}s >= the liveness deadline {LIVENESS_DEATH}s "
+            f"({MAX_MISSED} x ({KEEPALIVE_INTERVAL}s + {KEEPALIVE_TIMEOUT}s) + "
+            f"{KEEPALIVE_TIMEOUT}s grace) — the peer is declared gone and the "
+            "link must be REBUILT. This is the reported shape, and the only one "
+            "that reaches the establishment path")
+    if STALL_SECS >= BUCKET_TTL:
+        return True, "gap-only", (
+            f"stall {STALL_SECS}s is past the bucket TTL {BUCKET_TTL}s but under "
+            f"the liveness deadline {LIVENESS_DEATH}s — the gap is noticed, the "
+            "stale offers are gone, and the link is still believed alive, so "
+            "nothing has to re-establish")
+    return True, "stale-offers", (
+        f"stall {STALL_SECS}s sits between the wake threshold {WAKE_THRESHOLD}s "
+        f"and the bucket TTL {BUCKET_TTL}s — the gap is noticed and the "
+        f"counterpart's offers are still in the bucket, but the link is up "
+        f"(nothing is declared gone until {LIVENESS_DEATH}s), so no negotiation "
+        "is started and H1 is NOT exercised")
+
+
+def set_script_timeout(base, sid, ms):
+    """WebDriver refuses a synchronous script that outlives its script timeout
+    (default 30 s), which is BELOW every legal STALL_SECS by construction."""
+    rq(base, "POST", f"/session/{sid}/timeouts", {"script": ms})
+
+
+def freeze_frames(base, sid, secs, label):
+    """Block the main thread for `secs`, so rAF stops as it does on a
+    backgrounded tab. Returns the gap the page itself measured.
+
+    A busy-wait rather than a `debugger`/CDP pause on purpose: it needs no
+    engine-specific hook, so the same step runs on Firefox and Chrome, and it
+    stops the frame loop the way the product's own detector is written to
+    observe — `wake_probe` reads a frame-to-frame wall-clock gap, so anything
+    that merely suspends timers would not be seen."""
+    set_script_timeout(base, sid, (secs + 30) * 1000)
+    script = ("const ms = arguments[0]; const t0 = Date.now();"
+              "while (Date.now() - t0 < ms) {}"
+              "return Date.now() - t0;")
+    print(f"  freezing {label}'s main thread for {secs}s …", flush=True)
+    got = ex(base, sid, script, [secs * 1000], timeout=secs + 60)
+    print(f"  {label} unfroze after {got}ms (frames were stopped for that long)")
+    return got
+
+
+# `wake: frames resumed after a gap` — `src/wake_probe.rs`, the `Resumed` arm.
+# Matched on the stem rather than the whole sentence so a copy edit does not
+# silently turn this witness off; `gap_ms` is read as a NUMBER for the same
+# reason the ICE assertions are format-agnostic (the field reaches
+# `__entity_browser_log` variously as `gap_ms=N`, `"gap_ms":N` or escaped).
+WAKE_LINE = "frames resumed after a gap"
+_GAP_RE = re.compile(r'gap_ms\D{0,4}(\d+)')
+
+
+def wake_gaps(base, sid):
+    """Every frame gap this page reported, in ms. Empty means the product never
+    noticed a stall — which is the difference between 'recovery worked' and
+    'nothing was ever asked to recover'."""
+    out = []
+    for l in log_lines(base, sid):
+        if WAKE_LINE in l:
+            m = _GAP_RE.search(l)
+            if m:
+                out.append(int(m.group(1)))
+    return out
+
+
 def met_ids(base, sid):
     if FIND_PEERS:
         return PID_RE.findall(ex(base, sid, FOUND_TEXT) or "")
@@ -719,6 +906,13 @@ def main():
     # MEANS anything, not whether it passed. Mixing them makes a run that could
     # not test idle survival indistinguishable from one where it broke.
     idle_inconclusive = {}
+    # Same rule for the stall phase: a window the product would classify as
+    # `NoGap` cannot be reported as a passing recovery.
+    stall_inconclusive = {}
+    # And for the node restart: "the carrier never recovered" and "the node
+    # never actually went away" are opposite findings, and only one of them is
+    # about the product.
+    node_restart_inconclusive = {}
     try:
         if not (wait_boot(A_BASE, sa, "A") and wait_boot(B_BASE, sb, "B")): return 1
 
@@ -979,6 +1173,215 @@ def main():
         checks["A->B message delivered"] = got_b
         checks["B->A message delivered"] = got_a
 
+        # ── 5a. THE NODE GOES AWAY AND COMES BACK — H2's discriminator ───────
+        #
+        # H2: *the WebRTC carrier holds a dead connection to the rendezvous node
+        # forever.* Fixed upstream at `c3f2b76` (`carrier::connection` checks
+        # `reader_ended()` and re-dials) — **in their unit tests.** Nothing here
+        # had ever seen it, because no rig here had ever taken the node away.
+        #
+        # ⭐ THE DISCRIMINATING ACTION MUST NEED THE NODE. Chat over an already
+        # open data channel does not: the two browsers would keep talking with
+        # the node in the bin, and a gate asserting delivery would pass with the
+        # carrier permanently wedged. So the assertion is a SECOND MEET, at a
+        # fresh tag, which is a round trip through the node by construction.
+        #
+        # The node comes back at the SAME peer id (`--keypair`, see
+        # `rung1_repro.sh`). A fresh identity would make a failure to reconnect
+        # explained by the identity change and would say nothing about whether
+        # the carrier noticed its connection had died.
+        if NODE_RESTART:
+            print("\n── 5a. the node restarts under them ───────────")
+            # Precondition, asserted rather than assumed: both sides must be
+            # talking BEFORE the node goes away, or this is an establishment
+            # test wearing a recovery test's name.
+            if not (got_b and got_a):
+                print("  ⚠ no two-way delivery before the restart — refusing to "
+                      "call what follows a recovery")
+                node_restart_inconclusive["the peers were talking before the node went away"] = False
+            else:
+                node_restart_inconclusive["the peers were talking before the node went away"] = True
+                if NODE_RESTART_CONTROL:
+                    # THE CONTROL ARM, and it is what makes the restart arm mean
+                    # anything. A second `meet` might fail to introduce anybody
+                    # for a reason that has nothing to do with the node — two
+                    # peers that have already met, a shell that dedups, a tag
+                    # nobody else is at. Running the identical second meet with
+                    # the node UNTOUCHED separates "the carrier lost the node"
+                    # from "a second meet never introduces anyone twice".
+                    print("  CONTROL: the node is NOT restarted; everything else is identical")
+                    rc = subprocess.CompletedProcess([], 0, "", "")
+                else:
+                    rc = subprocess.run(["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                              "rung1_repro.sh"), "node-restart"],
+                                        capture_output=True, text=True)
+                for line in (rc.stdout or "").strip().splitlines():
+                    print(f"  {line}")
+                if rc.returncode != 0:
+                    print(f"  ⚠ the restart itself failed (rc={rc.returncode}); "
+                          f"nothing below is about the carrier")
+                    print((rc.stderr or "").strip()[:800])
+                    node_restart_inconclusive["the node came back at the same identity"] = False
+                else:
+                    node_restart_inconclusive["the node came back at the same identity"] = True
+
+                    # The carrier's own line. NOT the claim — a step indicator:
+                    # the redial could also happen lazily on the next use, and
+                    # the meet below is what decides whether recovery happened.
+                    time.sleep(2)
+                    redials = {w: sum(1 for l in log_lines(b, s)
+                                      if "reader has ended; re-dialing" in l)
+                               for b, s, w in ((A_BASE, sa, "A"), (B_BASE, sb, "B"))}
+                    print(f"  carrier re-dial lines: A={redials['A']} B={redials['B']}")
+
+                    # ⚠⚠ THE OBSERVABLE IS THE NODE'S OWN LOG, AND TWO EARLIER
+                    # CUTS OF THIS ASSERTION MEASURED NOTHING.
+                    #
+                    # (1) `pb in met_ids(A)` — vacuous: `met_ids` scrapes the
+                    #     Shell SCROLLBACK, which is cumulative, so the FIRST
+                    #     meet's `met <short> <id>` line is still on screen and
+                    #     the membership test was already true before the second
+                    #     meet was typed. It "passed" in 1 s with the node
+                    #     uninvolved.
+                    # (2) the same thing read as a COUNT — measured, and the
+                    #     count does not move EITHER WAY: with the node killed
+                    #     and restarted, and with the node untouched, both runs
+                    #     read `A=1 B=1` before and after. A second meet simply
+                    #     never introduces a peer the shell has already
+                    #     announced. **The control arm is what caught this**, and
+                    #     without it the flat count would have been published as
+                    #     H2 reproduced in a browser.
+                    #
+                    # What actually answers *"did the carrier reach the node
+                    # again"* is the node vantage: `signaling offer:` /
+                    # `signaling collect` lines carry `caller="<peer id>"`, so
+                    # new lines naming BOTH browsers, after the restart, are the
+                    # round trip itself rather than a proxy for it.
+                    tag2 = f"{TAG}-after-restart"
+                    mark = node_log_lines()
+                    print(f"  both `meet tag {tag2}` — a round trip the node must serve")
+                    print(f"  node log mark: line {mark}")
+                    for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+                        started, _ = run_until(base, sid, f"meet tag {tag2}",
+                                               shell_says(base, sid, "meeting at"), tries=10)
+                        print(f"  {lbl} meet started: {started}")
+                    saw_a = saw_b = 0
+                    for i in range(45):
+                        time.sleep(1)
+                        saw_a, saw_b = node_saw_caller(mark, pa), node_saw_caller(mark, pb)
+                        if saw_a and saw_b:
+                            print(f"  the node served BOTH browsers again at t={i+1}s "
+                                  f"(A={saw_a} B={saw_b} lines)"); break
+                    print(f"  node lines after the mark: A={saw_a} B={saw_b}")
+                    checks["the carrier reaches the node again after it restarts"] = (
+                        saw_a > 0 and saw_b > 0)
+                    # And the link they already had is untouched by any of it —
+                    # a node is an introducer, not a relay (§1.3), so losing one
+                    # must not cost an established conversation.
+                    checks["the existing conversation survived the node restart"] = (
+                        send_and_wait(A_BASE, sa, B_BASE, sb,
+                                      "hello from A, after the node came back",
+                                      "A->B post-restart"))
+
+        # ── 5b. ONE SIDE STALLS, the other keeps going ───────────────────────
+        #
+        # Placed here deliberately: the claim is *"it worked, THEN one side was
+        # away"*, so the preceding two-way delivery is the precondition, not
+        # decoration. A stall step that ran before a message had ever crossed
+        # would be testing establishment, which other gates already cover.
+        #
+        # Only A freezes. B is the control in the same run: it never stops, so a
+        # wake line on B would mean the harness froze the wrong thing (or both),
+        # and that is asserted rather than assumed.
+        if STALL_SECS > 0:
+            ok_stall, stall_mode, why_stall = stall_preconditions()
+            print(f"\n── 5b. one side stalls ({STALL_SECS}s) ─────────────")
+            print(f"  case: {stall_mode}")
+            print(f"  precondition: {why_stall}")
+            # NOT a failure and NOT a pass when it does not hold: the run could
+            # not put the mechanism at risk, so it has nothing to say either
+            # way. Kept in its own dict for the same reason the idle phase does
+            # it — merging them makes "could not test" indistinguishable from
+            # "tested and fine". Bool, keyed by the claim, matching
+            # `idle_inconclusive`'s convention.
+            stall_inconclusive["the stall window put the mechanism at risk"] = ok_stall
+            if ok_stall:
+                opens_a0, opens_b0 = channel_opens(A_BASE, sa), channel_opens(B_BASE, sb)
+                freeze_frames(A_BASE, sa, STALL_SECS, "A")
+
+                # THE ANTI-VACUITY GATE. Everything below is only evidence if
+                # the product actually saw a gap; `wake_probe::decide` is what
+                # decides that, and its answer is this log line. Without this
+                # check a run where the freeze silently did nothing delivers its
+                # post-stall messages perfectly and reports a green recovery.
+                gaps_a = []
+                for _ in range(40):
+                    gaps_a = wake_gaps(A_BASE, sa)
+                    if gaps_a:
+                        break
+                    time.sleep(0.5)
+                gaps_b = wake_gaps(B_BASE, sb)
+                big = [g for g in gaps_a if g >= WAKE_THRESHOLD * 1000]
+                print(f"  A reported frame gaps (ms): {gaps_a or 'NONE'}")
+                print(f"  B (control, never frozen)  : {gaps_b or 'none — correct'}")
+                checks["the stall registered as a wake-worthy frame gap on A"] = bool(big)
+                checks["the side that did not stall reports no frame gap"] = not gaps_b
+
+                # Survived vs REBUILT. Both are legitimate recoveries and they
+                # are different facts, so this is reported and never collapsed
+                # into the delivery check — the distinction `channel_opens`
+                # exists for, one phase over.
+                opens_a1, opens_b1 = channel_opens(A_BASE, sa), channel_opens(B_BASE, sb)
+                rebuilt = (opens_a1 > opens_a0) or (opens_b1 > opens_b0)
+                print(f"  data-channel opens A {opens_a0}->{opens_a1}, B {opens_b0}->{opens_b1}"
+                      f"   ⇒ {'RE-ESTABLISHED after the stall' if rebuilt else 'the channel survived'}")
+                if stall_mode == "connection-dies":
+                    # This mode's entire claim is that a link which really went
+                    # away comes back. A channel that survived means the run did
+                    # not test that — inconclusive, never a pass, and never a
+                    # fail either: "it recovered" and "it never broke" are
+                    # different findings and a shared green hides the second.
+                    stall_inconclusive["the link actually had to re-establish"] = rebuilt
+
+                msg_a3 = "hello from A, after the stall"
+                msg_b3 = "reply from B, after the stall"
+                got_b3 = send_and_wait(A_BASE, sa, B_BASE, sb, msg_a3, "A->B post-stall")
+                got_a3 = send_and_wait(B_BASE, sb, A_BASE, sa, msg_b3, "B->A post-stall")
+                checks["post-stall A->B delivered"] = got_b3
+                checks["post-stall B->A delivered"] = got_a3
+
+                # ── the diagnostic panel, printed on PASS as well as FAIL ────
+                # A run that does not say WHICH shape it saw cannot tell a
+                # bimodal product from a flaky rig — the `e2e-webrtc-vanish`
+                # lesson. The needles are the exact strings in
+                # `extensions/signaling/src/webrtc.rs` (`WebRtcError::Timeout`'s
+                # Display) and `core/peer/src/carrier.rs`, read from source
+                # rather than from a handoff.
+                print("\n  ── what the two hypotheses predict, and what this run saw ──")
+                needles = [
+                    ("H1  answerer answered a stale offer",
+                     ["sdp_exchange=INCOMPLETE", "last counterpart bucket="]),
+                    ("H1  role reported at all (offerer/answerer)",
+                     ["role=offerer", "role=answerer"]),
+                    ("H2  carrier held a dead node connection",
+                     ["carrier refused or failed"]),
+                    ("H2  carrier noticed and re-dialled (the c3f2b76 fix)",
+                     ["reader has ended; re-dialing"]),
+                    ("CONTROL  capture works at all (must be present)",
+                     ["Frame loop started"]),
+                ]
+                for lbl, ns in needles:
+                    hits = {}
+                    for base, sid, who in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+                        ls = log_lines(base, sid)
+                        hits[who] = sum(1 for l in ls if any(n in l for n in ns))
+                    print(f"    {lbl:<52} A={hits['A']:<3} B={hits['B']}")
+                # A zero from an unvalidated needle is not evidence. The control
+                # is asserted, so a run whose capture was broken fails as a RIG
+                # fault instead of silently reporting "no H1, no H2".
+                ctl = sum(1 for l in log_lines(A_BASE, sa) if "Frame loop started" in l)
+                checks["the log-grep panel captured anything at all (control)"] = ctl > 0
+
         # ── 6. the header agrees with reality ────────────────────────────────
         # Messages just crossed in both directions, so the link is live by
         # demonstration — the header must say so. This is the only place that
@@ -1001,6 +1404,20 @@ def main():
                     break
                 time.sleep(1)
             print(f"  {lbl} header: {reach!r}")
+            # ⚠ BELIEF vs EVIDENCE, printed side by side and NOT asserted.
+            # Messages crossed in both directions moments ago, so a header that
+            # does not say Connected is a belief its own transport contradicts.
+            # Measured every stall run since 2026-09-15 and recorded rather than
+            # gated: liveness is kernel-owned (`system/peer/status`) and this rig
+            # cannot say whether the status is stale or the route is not the one
+            # the chat used. Asserting it here would red the gate permanently on
+            # a subject it was not built to measure — but leaving it UNPRINTED is
+            # how "it says I'm offline and chat works" stays a field report
+            # instead of a datapoint.
+            if not EXPECT_NO_MEDIA and "Connected" not in reach:
+                print(f"     ⚠ {lbl} carries an open data channel and a header that does not "
+                      f"say Connected — belief and evidence disagree (not gated; see GOTCHAS, "
+                      f"'Connection liveness & reachability')")
             if EXPECT_NO_MEDIA:
                 # THE SPLIT RIG IS THE `NoReflector` TOPOLOGY, exactly: host
                 # candidates only (`ice_servers: Vec::new()`), two isolated
@@ -1160,6 +1577,31 @@ def main():
             if classes:
                 print("     classes: " + ", ".join(f"{k}={v}" for k, v in sorted(classes.items())))
 
+        # ── the CLASSIFIER's own line, because the header is downstream of it ──
+        # When a header raises a note the traffic contradicts, there are two
+        # candidate causes and they are repaired in different files: the
+        # classifier reached the wrong verdict, or a correct verdict was
+        # rendered somewhere it is not relevant. `reachability.rs` emits the
+        # inputs AND the verdict it derived, so one line separates them — and
+        # without it the run says only that a sentence appeared on screen.
+        #
+        # `ever_answered` is the field to read first: it OVERRIDES this
+        # negotiation's `sdp_exchange_complete`, so a peer that answered once is
+        # classified against the network arms forever after.
+        print("\n── the reachability classifier (last verdict per side) ─")
+        for base, sid, lbl in ((A_BASE, sa, "A"), (B_BASE, sb, "B")):
+            cls = [l for l in log_lines(base, sid) if "negotiation classified" in l]
+            if not cls:
+                # NOT evidence on its own — `tracing::debug!` may simply be below
+                # the build's level. The needle is unvalidated until a run that
+                # SHOULD produce one does; say so rather than printing a zero.
+                print(f"  {lbl}: none captured (debug level, or no negotiation finished)")
+                continue
+            print(f"  {lbl}: {len(cls)} classified")
+            print(f"     first: {cls[0][:400]}")
+            if len(cls) > 1:
+                print(f"     last:  {cls[-1][:400]}")
+
         print("\n── meet-then-chat gate ───────────────────────")
         for k, v in checks.items():
             print(f"   {'✅' if v else '❌'}  {k}")
@@ -1256,6 +1698,41 @@ def main():
             print("   The delivery and no-rebuild results above stand on their own;"
                   "\n   what is NOT established is that they were obtained across a"
                   "\n   silence long enough for the NAT mapping to have died.")
+            return 2
+        if ok and STALL_SECS and not all(stall_inconclusive.values()):
+            # Same three-state rule as idle, and the same reason: "the link did
+            # not come back after one side was away" and "we never actually took
+            # one side away" are opposite findings, and a shared red hides the
+            # first behind the second.
+            print("\nRESULT: INCONCLUSIVE ⚠  the transport behaved correctly, but "
+                  "this run cannot claim anything about a stalled peer:")
+            for k, v in stall_inconclusive.items():
+                if not v:
+                    print(f"   ⚠  {k}")
+            # Say what IS established, so an exit 2 is not read as "nothing was
+            # learned". Each unmet condition above voids a different claim, and
+            # the delivery/wake results are unaffected by either.
+            print("   Delivery and the frame-gap result above stand on their own."
+                  "\n   What is NOT established is the claim the unmet condition"
+                  "\n   names — most often that a link which really went away came"
+                  "\n   back, when in fact it never went away. Read the §6.5"
+                  "\n   establishment panel above: a counterpart that logged"
+                  "\n   failures while the channel survived means the app was"
+                  "\n   rebuilding a path it still had.")
+            return 2
+        if ok and NODE_RESTART and not all(node_restart_inconclusive.values()):
+            # Third instance of the same rule, and it is the one this phase most
+            # needs: a restart that quietly minted a new node identity, or that
+            # ran before the two peers had ever spoken, produces a run with
+            # nothing to say about the carrier — which must not read as a pass.
+            print("\nRESULT: INCONCLUSIVE ⚠  the transport behaved correctly, but "
+                  "this run cannot claim anything about a carrier whose node died:")
+            for k, v in node_restart_inconclusive.items():
+                if not v:
+                    print(f"   ⚠  {k}")
+            print("   What is NOT established is that a SECOND rendezvous survived"
+                  "\n   the node going away — which is the whole of H2. The delivery"
+                  "\n   results above stand on their own.")
             return 2
         return 0 if ok else 1
     finally:

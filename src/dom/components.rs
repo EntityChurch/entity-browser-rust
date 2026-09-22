@@ -739,11 +739,22 @@ pub fn carry_line(ctx: &util::DomCtx, label: &str, value: &str, hint: Option<&st
 
 /// A themed table with a header row. Returns `(table, tbody)` — append rows
 /// (built with [`tr`]) to `tbody`, then append `table` to your card.
+///
+/// **The first element is a scroll box holding the table, not the table.** A
+/// peer id (44 characters) or a `ws://host:port` is one unbreakable token, so
+/// on a phone a bare table's minimum width exceeded its card and the rows ran
+/// past the card's background (field report 2026-09-15). Cells wrap anywhere,
+/// which fits nearly every row; the box scrolls sideways for what still cannot
+/// fit (a chip, a nowrap button). Callers only append the element or put a
+/// `data-field` on it, and every selector in the gates reaches rows by
+/// descendant, so neither notices the wrapper.
 pub fn table(headers: &[&str]) -> (Element, Element) {
+    let wrap = util::create_element("div");
+    wrap.set_attribute("style", "max-width:100%;overflow-x:auto").ok();
     let t = util::create_element("table");
     t.set_attribute(
         "style",
-        "width:100%;border-collapse:collapse;font-size:12px",
+        "width:100%;border-collapse:collapse;font-size:12px;overflow-wrap:anywhere",
     )
     .ok();
 
@@ -755,7 +766,7 @@ pub fn table(headers: &[&str]) -> (Element, Element) {
             "style",
             &format!(
                 "text-align:start;padding:{} {};font-size:11px;font-weight:600;\
-                 text-transform:uppercase;letter-spacing:0.05em;\
+                 text-transform:uppercase;letter-spacing:0.05em;overflow-wrap:normal;\
                  color:var(--text-dim,#888);border-bottom:1px solid var(--border,#333)",
                 theme::SP_1, theme::SP_2
             ),
@@ -769,7 +780,8 @@ pub fn table(headers: &[&str]) -> (Element, Element) {
 
     let tbody = util::create_element("tbody");
     util::append(&t, &tbody);
-    (t, tbody)
+    util::append(&wrap, &t);
+    (wrap, tbody)
 }
 
 /// A table row (`<tr>`) from a set of cell contents. Each element is wrapped in

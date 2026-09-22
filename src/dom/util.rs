@@ -65,6 +65,9 @@ pub struct DomCtx {
     /// the action, so a refusal on size or a failed read has no action to ride
     /// and would otherwise be invisible to the app entirely.
     pub offer_attempt: crate::offer_attempt::OfferAttempt,
+    /// Outcome of the last Pull (`crate::pull_attempt`) — same ownership shape
+    /// as `offer_attempt`, written only from the app side.
+    pub pull_attempt: crate::pull_attempt::PullAttempt,
     /// Would a reload change the §6.5 signaling node this session rendezvous
     /// through? A plain fact rather than a handle, because unlike the two above
     /// it is *derived* per frame (boot-time provisioning vs what a fresh resolve

@@ -78,11 +78,14 @@
   <p>Files move through a floppy disk in drive A (<code>/fd/1</code> inside KolibriOS). It holds 1.44 MB,
      and its files are kept between visits (in the entity tree, under this app's workspace, <code>floppy/</code>).
      Put a file in and it appears there; save a file there from KolibriOS and take it out here.
-     A file taken out goes to File Transfer.</p>
+     A file taken out goes to File Transfer.
+     Every window of this machine shares these files, but each reads them when it starts:
+     <b>Reload floppy</b> picks up what another window saved.</p>
   <div class="row">
     <button id="putfile">Put a file in…</button>
     <button id="takeall">Take all files out</button>
     <button id="rescan">Look again</button>
+    <button id="reload" title="Rebuild the floppy from the files kept in the workspace, including files another window of this machine saved">Reload floppy</button>
   </div>
   <input id="picker" type="file" multiple hidden>
   <table><tbody id="filelist"></tbody></table>
@@ -149,6 +152,8 @@ const AUDIO = (() => { try { return new URLSearchParams(location.search).get('au
 let floppy = null;                   // the transfer floppy's bytes, as the page last put them in
 let floppySig = null;                // the image as it was when it last matched the host (null = unknown)
 let kept = new Map();                // workspace path -> hash of what the host holds
+let hostVer = new Map();             // workspace path -> the host's version of it, as last read or saved
+let hostVersions = false;            // whether the host reports versions (and so checks what a save expects)
 let legacyImage = false;             // the host still holds a transfer.img to remove
 let ready = false;                   // the desktop is up and the transfer floppy is in the drive
 
@@ -626,6 +631,10 @@ async function restoreFloppy() {
   if (!listing.ok) throw new Error(`the host did not list the workspace (${listing.reason})`);
   const all = listing.files || [];
   legacyImage = all.some(f => f.path === LEGACY_IMAGE);
+  // What this window read is what its saves expect (workspace.rs, "Two windows,
+  // one workspace"). A host that does not report versions does not check them.
+  hostVersions = all.every(f => typeof f.version === 'string');
+  hostVer = new Map(hostVersions ? all.map(f => [f.path, f.version]) : []);
   const mine = all.filter(f => f.path.startsWith(FLOPPY_DIR));
   if (mine.length) {
     const entries = [];
@@ -682,26 +691,113 @@ async function doSaveFloppy(reason) {
   const put = [], remove = [];
   for (const [path, x] of want) {
     const h = idHash(x.data);
-    if (kept.get(path) !== h) put.push({ path, h, msg: { path, mode: 0o644, mtime: Math.floor(x.mtime || Date.now() / 1000), data: x.data.slice().buffer } });
+    if (kept.get(path) !== h) put.push({ path, h, bytes: x.data, msg: { path, mode: 0o644, mtime: Math.floor(x.mtime || Date.now() / 1000), data: x.data.slice().buffer } });
   }
   for (const path of kept.keys()) if (!want.has(path)) remove.push(path);
   if (legacyImage) remove.push(LEGACY_IMAGE);
   if (!put.length && !remove.length) { floppySig = sig; f.lastSave = { reason, nothing: true, at: since() }; return { ok: true, text: 'nothing changed' }; }
   if (reason === 'auto' || reason === 'hidden') f.changedByGuest++;
-  const r = await V.work('x-work-save', { put: put.map(p => p.msg), remove }, 60000);
+  // Every path says which version this window last saw, so a file another
+  // window saved since is refused instead of overwritten (last save used to win).
+  const expect = {};
+  if (hostVersions) {
+    for (const p of put) expect[p.path] = hostVer.has(p.path) ? hostVer.get(p.path) : null;
+    for (const path of remove) if (hostVer.has(path)) expect[path] = hostVer.get(path);
+  }
+  const r = await V.work('x-work-save', { put: put.map(p => p.msg), remove, expect }, 60000);
   if (!r.ok && r.reason) { f.lastSave = { reason, failed: r.reason, at: since() }; return { ok: false, text: r.reason }; }
   const bad = new Map((r.failed || []).map(x => [x.path, x.reason]));
-  for (const p of put) if (!bad.has(p.path)) kept.set(p.path, p.h);
-  for (const path of remove) if (!bad.has(path)) { kept.delete(path); if (path === LEGACY_IMAGE) legacyImage = false; }
+  const versions = r.versions || {};
+  for (const p of put) if (!bad.has(p.path)) { kept.set(p.path, p.h); if (versions[p.path]) hostVer.set(p.path, versions[p.path]); }
+  for (const path of remove) if (!bad.has(path)) { kept.delete(path); hostVer.delete(path); if (path === LEGACY_IMAGE) legacyImage = false; }
+  // A conflict is not a failure to save: the other window's file is kept as it
+  // is, and this window's version goes next to it under a new name, so nothing
+  // is lost either way. `hostVer` is left at what this window read, so a later
+  // edit of the same file conflicts again rather than overwriting.
+  const conflicts = [...bad].filter(([, why]) => why === 'conflict').map(([path]) => path);
+  const copies = [];
+  for (const path of conflicts) {
+    bad.delete(path);
+    const mine = put.find(p => p.path === path);
+    if (!mine) { kept.delete(path); hostVer.delete(path); continue; }   // a remove the other window overtook: keep theirs
+    kept.set(path, mine.h);
+    if (path.endsWith('/' + EMPTY_FOLDER)) continue;
+    const copy = conflictCopyName(path, want);
+    // A fresh buffer: the save above transferred the first one, which is detached now.
+    const c = await V.work('x-work-save', { put: [{ ...mine.msg, path: copy, data: mine.bytes.slice().buffer }], remove: [], expect: { [copy]: null } }, 60000);
+    if (c.ok) copies.push(copy.slice(FLOPPY_DIR.length));
+    else bad.set(path, `conflict, and this window's copy was not saved: ${(c.failed && c.failed[0] && c.failed[0].reason) || c.reason}`);
+  }
+  f.conflicts = (f.conflicts || 0) + conflicts.length;
   if (bad.size) {
     const [path, why] = bad.entries().next().value;
     f.lastSave = { reason, failed: `${path}: ${why}`, at: since() };
     return { ok: false, text: `${bad.size} file(s) were not saved -- ${path}: ${why}` };
   }
   floppySig = sig; f.saves++;
-  f.lastSave = { reason, saved: true, files: put.length, removed: remove.length, at: since() };
+  f.lastSave = { reason, saved: true, files: put.length, removed: remove.length, conflicts: conflicts.length, copies, at: since() };
   if (reason !== 'power') listFloppy();
+  if (conflicts.length) {
+    return { ok: true, text: `saved -- ${conflicts.length} file(s) were changed in another window, so both copies are kept`
+      + (copies.length ? ` (this window's: ${copies.join(', ')})` : '') + '; Reload floppy to see them' };
+  }
   return { ok: true, text: 'saved' };
+}
+
+// The name this window's copy of a conflicting file is saved under: beside the
+// original, never over it, and never over anything this window or the host has.
+function conflictCopyName(path, want) {
+  const slash = path.lastIndexOf('/'), dir = path.slice(0, slash + 1), leaf = path.slice(slash + 1);
+  const dot = leaf.lastIndexOf('.');
+  const stem = dot > 0 ? leaf.slice(0, dot) : leaf, ext = dot > 0 ? leaf.slice(dot) : '';
+  for (let n = 1; ; n++) {
+    const name = `${dir}${stem} (this window${n > 1 ? ' ' + n : ''})${ext}`;
+    if (!want.has(name) && !hostVer.has(name) && !kept.has(name)) return name;
+  }
+}
+
+// ── reload: pick up what another window saved ───────────────────────────────────
+// Every window of this app shares one workspace, and each reads it once, at boot
+// (restoreFloppy). So a file window B saved never reaches a window A that was
+// already running. This rebuilds A's floppy from the workspace and swaps it in --
+// the same hot swap putIn uses, which KolibriOS notices at once.
+//
+// Order matters and it is the whole safety argument:
+//   1. save THIS window's own changes first (the usual per-file save, so it only
+//      writes files this window changed), or the swap would throw them away;
+//   2. forget what this window thought the host held, then read the host again,
+//      so the next save compares against the host as it is now and cannot re-put
+//      a stale copy of a file another window replaced;
+//   3. if any saved file cannot be fetched, stop saving for this session -- the
+//      same rule boot applies -- rather than let a partial picture drive a save.
+// Runs in the save queue, so an auto-save cannot interleave with the swap.
+async function doReloadFloppy() {
+  if (!hostWorkspace) return { ok: false, text: 'nothing keeps files here' };
+  if (!emulator || !ready) return { ok: false, text: 'the machine is still starting' };
+  const before = await doSaveFloppy('before reload');
+  if (!before.ok && before.text !== 'no floppy in the drive') {
+    return { ok: false, text: 'not reloaded -- this window\'s own changes could not be saved first: ' + before.text };
+  }
+  const previous = kept, previousVer = hostVer;
+  kept = new Map();
+  let bytes;
+  try {
+    bytes = await restoreFloppy();
+  } catch (e) {
+    kept = previous;
+    hostVer = previousVer;
+    hostWorkspace = false;
+    return { ok: false, text: 'not reloaded, and saving is off for this window: ' + String(e.message || e).slice(0, 120) };
+  }
+  if (!bytes) { bytes = Fat.makeFloppy([]); floppySig = sigOfBytes(bytes); }
+  await insertFloppy(bytes, 'reloaded');
+  window.__m1.floppy.reloads = (window.__m1.floppy.reloads || 0) + 1;
+  return { ok: true, text: `reloaded the floppy from the workspace -- ${floppyFiles().files.length} file(s)` };
+}
+function reloadFloppy() {
+  const run = (saving || Promise.resolve()).then(() => doReloadFloppy());
+  saving = run.catch(() => {});
+  return run.catch(e => ({ ok: false, text: String(e).slice(0, 200) }));
 }
 
 // ── the files panel ───────────────────────────────────────────────────────────
@@ -716,6 +812,11 @@ $('files').addEventListener('click', e => {
 $('filepanel').addEventListener('click', e => e.stopPropagation());
 document.addEventListener('click', () => { $('filepanel').hidden = true; });
 $('rescan').addEventListener('click', () => { listFloppy(); saveFloppy('look'); });
+$('reload').addEventListener('click', async () => {
+  status('reloading the floppy from the workspace…');
+  const r = await reloadFloppy();
+  status(r.text, r.ok ? 'ok' : 'bad');
+});
 $('takeall').addEventListener('click', () => takeOut(floppyFiles().files.filter(f => !f.dir)));
 $('putfile').addEventListener('click', () => {
   // Hosted: the host chooses the file (its "Send a file" flow). Standalone: a picker.

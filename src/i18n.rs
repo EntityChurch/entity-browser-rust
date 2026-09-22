@@ -373,6 +373,11 @@ pub const EN: &[(&str, Message)] = &[
     ("label.state_path", Message::Simple("State: {path}")),
     // Target-selector option shared by File Transfer + Execute Console.
     ("label.remote_option", Message::Simple("Remote: {name}")),
+    (
+        "filetransfer.unreachable",
+        Message::Simple("Can't reach this device right now. Its files will load again when it reconnects."),
+    ),
+    ("filetransfer.offers_failed", Message::Simple("Couldn't get the list of files this device is offering.")),
     // Transient status glyphs.
     ("status.copied", Message::Simple("Copied ✓")),
     ("status.loading", Message::Simple("Loading…")),
@@ -558,6 +563,13 @@ pub const EN: &[(&str, Message)] = &[
     ("filetransfer.results", Message::Simple("Results")),
     ("filetransfer.pull_selected", Message::Simple("\u{2b07} Pull selected file")),
     ("filetransfer.keep_selected", Message::Simple("Keep in My files")),
+    // Renders verbatim on the Pull card (`PullOutcome::Failed`), so the frame is
+    // a catalog string and `{why}` carries the model's own English detail —
+    // `doctor.rs`'s rule: the reasoning stays in the model, the wording here.
+    (
+        "filetransfer.pull_bad_content_id",
+        Message::Simple("Unreadable content id: {why}"),
+    ),
     ("filetransfer.upload_file", Message::Simple("Upload a file")),
     ("filetransfer.title_files", Message::Simple("Files — {label}")),
     (
@@ -1558,7 +1570,46 @@ pub const EN: &[(&str, Message)] = &[
     ("registry.no_key", Message::Simple(
         "The pinned registry peer-id carries no public key, so it cannot be pinned (the SHA-256 \
          legacy form needs an out-of-band key).")),
-    ("registry.open_site", Message::Simple("Open in Site Browser")),
+    // -- what the resolved publisher carries (publication_probe) --
+    //
+    // A translator needs to know that these eight outcome lines are eight
+    // DIFFERENT facts and must not converge: "they publish none" and "we could
+    // not tell" are the pair that costs a reader most, and the five refusals
+    // name three different parties (the origin, the publisher, this reader).
+    // A line that reads as reassuring where the check established nothing is
+    // the failure mode, exactly as in `doctor.rs`.
+    //
+    // `registry.open_in`'s `{viewer}` is a window's identity key ("Site
+    // Browser", "Feed") and is NOT translated — window names are untranslated
+    // throughout this product, including in the palette and the title bar, so a
+    // translated button naming an untranslated window would be the odd one out.
+    // It replaced the per-viewer `registry.open_site`, which could only ever
+    // name one convention.
+    ("registry.published", Message::Simple("Carries")),
+    ("registry.published_idle", Message::Simple(
+        "Not asked yet \u{2014} this is not a publisher who carries nothing.")),
+    ("registry.probing", Message::Simple("Asking this publisher's signed root\u{2026}")),
+    ("registry.pub_yes", Message::Simple("Published")),
+    ("registry.pub_yes_n", Message::Simple("Published ({n})")),
+    ("registry.pub_no", Message::Simple(
+        "Not published \u{2014} their own signed root binds nothing here.")),
+    ("registry.pub_partial", Message::Simple(
+        "Could not finish looking ({nodes} node(s) fetched); there may be more.")),
+    ("registry.pub_unreachable", Message::Simple("The origin did not answer.")),
+    ("registry.pub_withheld", Message::Simple(
+        "The origin withheld part of what its own signed root declares.")),
+    ("registry.pub_unproven", Message::Simple(
+        "This publisher's signed root did not verify.")),
+    ("registry.pub_declined", Message::Simple(
+        "This reader declined their signed root (its own anti-rollback floor).")),
+    ("registry.pub_exhausted", Message::Simple(
+        "The walk did not converge. Please report this.")),
+    ("registry.published_no_origin", Message::Simple(
+        "Resolved who, but not where \u{2014} there is no origin to ask.")),
+    ("registry.published_no_key", Message::Simple(
+        "That publisher's peer-id carries no public key, so their signed root cannot be \
+         verified.")),
+    ("registry.open_in", Message::Simple("Open in {viewer}")),
     ("registry.open_caveat", Message::Simple(
         "This registers the origin the signed binding named. The pages themselves are not \
          verified \u{2014} the Site Browser reads no signed root, so that origin still chooses \
@@ -1854,6 +1905,20 @@ pub const EN: &[(&str, Message)] = &[
         "feed.via.published",
         Message::Simple("Read from this publisher's published site."),
     ),
+    // ⛔ **The one place a gatherer's peer id may appear.** `FEED-R13` / §6.1
+    // rule 3: attribution follows each entry's own signature, and a surface
+    // naming the gatherer as the author is non-conformant. It says *"gathered
+    // by"* and it says *"may be partial"*, because §6.1 rule 2 gives a mirror
+    // no way to claim completeness — a reader deciding whether they have seen
+    // everything needs both halves.
+    (
+        "feed.via.mirror",
+        Message::Simple(
+            "Read from {peer}, who gathered this publisher's posts. A gathered \
+             view may be partial — each post below is still checked against its \
+             own author's key.",
+        ),
+    ),
     (
         "feed.no_posts",
         Message::Simple("This publisher has not posted anything."),
@@ -1874,6 +1939,45 @@ pub const EN: &[(&str, Message)] = &[
     (
         "feed.notice.not_a_peer_id",
         Message::Simple("That is not a peer id."),
+    ),
+    // -- the third source leg: peers you read OTHERS through (§6's gatherers) --
+    ("feed.gatherers", Message::Simple("Read through")),
+    (
+        "feed.gatherers_hint",
+        Message::Simple(
+            "Name a peer who republishes other people's posts, and this window \
+             will try them when a publisher cannot be reached directly. Nothing \
+             is read from them unless the publisher's own sources come up empty.",
+        ),
+    ),
+    ("feed.gatherer_placeholder", Message::Simple("peer id of a gatherer")),
+    ("feed.add_gatherer", Message::Simple("Add gatherer")),
+    ("feed.remove_gatherer", Message::Simple("Remove")),
+    (
+        "feed.no_gatherers",
+        Message::Simple("You are not reading through anyone."),
+    ),
+    (
+        "feed.gatherer_no_route",
+        Message::Simple(
+            "this deployment does not know where they are hosted, so they cannot \
+             be read yet",
+        ),
+    ),
+    // Their own sentences where the sentence differs: *you already follow
+    // them* and *you already read through them* are facts about two different
+    // lists, and one shared string would name the wrong one.
+    //
+    // ⚠ **`ThatIsYou` deliberately REUSES `feed.notice.thats_you`**, and that is
+    // the same rule pointed the other way: the sentence is identical in English,
+    // so a second key would let thirty locales translate one sentence two ways —
+    // the drift `i18n-locale-check` caught when a fresh `feed.refresh` rendered
+    // "Refresh" differently from `btn.refresh` in four of them. **One English
+    // sentence, one key**; two facts needing two sentences get two keys.
+    ("feed.notice.gatherer_added", Message::Simple("Reading through them.")),
+    (
+        "feed.notice.gatherer_already",
+        Message::Simple("You already read through this peer."),
     ),
     ("feed.attr.signed", Message::Simple("verified")),
     (
@@ -1900,6 +2004,39 @@ pub const EN: &[(&str, Message)] = &[
         "feed.attr.bad_signature",
         Message::Simple("unsigned — the signature does not verify"),
     ),
+    // ⛔ `FEED-R21` is a **MUST NOT**: a conformant application MUST NOT present
+    // removal as deletion. §7.5 also says where this belongs — *"at the moment
+    // of the action rather than in a help page"* — and supplies the wording,
+    // which is taken here almost verbatim because it is the honest sentence and
+    // because a paraphrase is where the promise creeps back in. Translators: the
+    // second clause is the load-bearing one. There is no global takedown and no
+    // protocol operation reaches into another peer's store, so any rendering
+    // that reads as *erased*, *deleted* or *destroyed* is non-conformant, not
+    // merely loose.
+    (
+        "feed.compose.removal_is_unpublication",
+        Message::Simple(
+            "Removed from your feed — people who already have it still have it.",
+        ),
+    ),
+    ("feed.compose.heading", Message::Simple("Your feed")),
+    ("feed.compose.post", Message::Simple("Post")),
+    ("feed.compose.placeholder", Message::Simple("Write something")),
+    ("feed.compose.remove", Message::Simple("Remove")),
+    (
+        "feed.compose.posted",
+        Message::Simple("Posted. Anyone connected to you can read it."),
+    ),
+    ("feed.compose.empty", Message::Simple("Nothing to post.")),
+    // Translators: this is not a failure the reader can retry or type their way
+    // out of — the profile does not hold the signing key for this peer, so it
+    // cannot author as them. Avoid wording that suggests trying again.
+    (
+        "feed.compose.not_our_peer",
+        Message::Simple("You cannot post as this peer — this profile does not hold its key."),
+    ),
+    ("feed.compose.refused", Message::Simple("That post could not be written.")),
+    ("feed.compose.no_posts", Message::Simple("You have not posted anything yet.")),
     (
         "contentstream.hint",
         Message::Simple(
@@ -2713,6 +2850,18 @@ pub const EN: &[(&str, Message)] = &[
         "doctor.check1.detail.origin_error",
         Message::Simple(
             "The domain is reachable but returned a fault instead of its configuration, so nothing could be compared. That is a problem at the domain, not on this machine, and it says nothing about whether your publisher is current.",
+        ),
+    ),
+    (
+        "doctor.check1.source.refused",
+        Message::Simple(
+            "this domain would not serve its configuration (HTTP {status})",
+        ),
+    ),
+    (
+        "doctor.check1.detail.refused",
+        Message::Simple(
+            "The domain is reachable and refused to hand its configuration to this app. That is an access rule at the domain, not a fault and not a problem on this machine. Nothing could be compared, so nothing is known about whether your publisher is current.",
         ),
     ),
     (

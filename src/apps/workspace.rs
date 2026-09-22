@@ -42,6 +42,20 @@
 //! lose it, so the rule that decides what was deleted lives in the app, which
 //! is the only side that knows what the person actually removed.
 //!
+//! ## Two windows, one workspace
+//!
+//! Every window of an app shares its workspace, and a window saves what it
+//! changed against what it last read. Without a check, the last save wins: a
+//! file edited in two windows keeps only the later edit, and a file deleted in
+//! one window is removed even after another saved a newer copy (field report
+//! 2026-09-15, BACKLOG B-10). So a save may say, per path, which **version** it
+//! expects the workspace to hold (`expect`; a version is the file's blob hash,
+//! reported by the listing and by each save) — `null` for *I expect no file
+//! here*. A path whose current version differs is refused as [`Refusal::Conflict`]
+//! and left exactly as it is; the app decides what to do with its own copy.
+//! Paths the save does not name in `expect` are not checked, which keeps an app
+//! that never sends one working as before.
+//!
 //! ## Stated bounds
 //!
 //! - **Direct/IDB arm only.** The Worker/OPFS proxy has no content verb (see
@@ -72,15 +86,15 @@ pub const FILE_TYPE: &str = "app/app-work-file";
 
 /// app → host: `{id}` — "what files do I have?"
 pub const MSG_LIST: &str = "x-work-list";
-/// host → app: `{id, ok, files: [{path, size, mode, mtime}], unreadable: [path], reason?}`
+/// host → app: `{id, ok, files: [{path, size, mode, mtime, version}], unreadable: [path], reason?}`
 pub const MSG_LISTING: &str = "x-work-listing";
 /// app → host: `{id, path}` — "give me this file".
 pub const MSG_GET: &str = "x-work-get";
 /// host → app: `{id, path, ok, data?, reason?}`
 pub const MSG_FILE: &str = "x-work-file";
-/// app → host: `{id, put: [{path, mode, mtime, data}], remove: [path]}`
+/// app → host: `{id, put: [{path, mode, mtime, data}], remove: [path], expect?: {path: version | null}}`
 pub const MSG_SAVE: &str = "x-work-save";
-/// host → app: `{id, ok, saved, removed, bytes, failed: [{path, reason}], reason?}`
+/// host → app: `{id, ok, saved, removed, bytes, failed: [{path, reason}], versions: {path: version}, reason?}`
 pub const MSG_SAVED: &str = "x-work-saved";
 
 /// Largest single file a save accepts. The app holds it in memory to send it,
@@ -264,6 +278,9 @@ pub enum Refusal {
     Unavailable(String),
     /// A stored file does not decode or reassemble. Ours.
     Unreadable(String),
+    /// The file is not the version the save expected: another window of this
+    /// app changed, created or removed it since this one read it.
+    Conflict,
 }
 
 impl Refusal {
@@ -278,6 +295,7 @@ impl Refusal {
             Refusal::NotFound => "not-found",
             Refusal::Unavailable(_) => "unavailable",
             Refusal::Unreadable(_) => "unreadable",
+            Refusal::Conflict => "conflict",
         }
     }
 }
@@ -293,6 +311,7 @@ impl std::fmt::Display for Refusal {
             Refusal::NotFound => write!(f, "no such file in the workspace"),
             Refusal::Unavailable(why) => write!(f, "the workspace is unavailable: {why}"),
             Refusal::Unreadable(why) => write!(f, "a stored file is unreadable: {why}"),
+            Refusal::Conflict => write!(f, "another window changed this file since it was read"),
         }
     }
 }
@@ -368,6 +387,22 @@ pub struct SaveReport {
     pub removed: usize,
     pub bytes: u64,
     pub failed: Vec<(String, Refusal)>,
+    /// The version each saved path now holds, so the app can expect it next time.
+    pub versions: Vec<(String, String)>,
+}
+
+/// Per path, the version a save expects the workspace to hold (`None`: no file).
+pub type Expect = std::collections::BTreeMap<String, Option<String>>;
+
+/// A file's version: its blob hash, hex. Two saves of the same bytes are one
+/// version, so a window that wrote what another already wrote is not a conflict.
+pub fn version_of(file: &WorkFile) -> String {
+    file.blob.to_hex()
+}
+
+/// The version at `full` now, or `None` for no (readable) file.
+fn current_version(store: &dyn WorkStore, full: &str) -> Option<String> {
+    store.get(full).and_then(|e| WorkFile::from_entity(&e).ok()).map(|f| version_of(&f))
 }
 
 /// Check a whole save before writing any of it. **Batch limits refuse the
@@ -394,14 +429,45 @@ pub fn admit_save(put: &[PutFile], remove: &[String]) -> Result<(), Refusal> {
 
 /// Write `put`, remove `remove`. Removes only the paths named (module doc).
 pub fn save(store: &dyn WorkStore, prefix: &str, put: &[PutFile], remove: &[String]) -> Result<SaveReport, Refusal> {
+    save_expecting(store, prefix, put, remove, &Expect::new())
+}
+
+/// [`save`], refusing any path named in `expect` whose current version is not
+/// the expected one (module doc, *Two windows, one workspace*).
+///
+/// - a **put** conflicts when the file changed, or when it appeared where the
+///   app expected none. A put where the app expected a file that another window
+///   has since removed is **not** a conflict: writing it back loses nothing.
+/// - a **remove** conflicts when the file changed. Removing a file that is
+///   already gone is not.
+pub fn save_expecting(
+    store: &dyn WorkStore,
+    prefix: &str,
+    put: &[PutFile],
+    remove: &[String],
+    expect: &Expect,
+) -> Result<SaveReport, Refusal> {
     store.usable().map_err(Refusal::Unavailable)?;
     admit_save(put, remove)?;
     let mut report = SaveReport::default();
     for p in put {
+        if let (Some(expected), Ok(full)) = (expect.get(&p.path), tree_path(prefix, &p.path)) {
+            let now = current_version(store, &full);
+            let conflict = match (expected, &now) {
+                (Some(want), Some(have)) => want != have,
+                (None, Some(_)) => true,
+                (_, None) => false,
+            };
+            if conflict {
+                report.failed.push((p.path.clone(), Refusal::Conflict));
+                continue;
+            }
+        }
         match save_one(store, prefix, p) {
-            Ok(()) => {
+            Ok(version) => {
                 report.saved += 1;
                 report.bytes += p.bytes.len() as u64;
+                report.versions.push((p.path.clone(), version));
             }
             Err(r) => report.failed.push((p.path.clone(), r)),
         }
@@ -409,6 +475,12 @@ pub fn save(store: &dyn WorkStore, prefix: &str, put: &[PutFile], remove: &[Stri
     for path in remove {
         match tree_path(prefix, path) {
             Ok(full) => {
+                if let Some(Some(want)) = expect.get(path) {
+                    if current_version(store, &full).is_some_and(|have| &have != want) {
+                        report.failed.push((path.clone(), Refusal::Conflict));
+                        continue;
+                    }
+                }
                 if store.get(&full).is_some() {
                     store.remove(&full);
                     report.removed += 1;
@@ -420,7 +492,7 @@ pub fn save(store: &dyn WorkStore, prefix: &str, put: &[PutFile], remove: &[Stri
     Ok(report)
 }
 
-fn save_one(store: &dyn WorkStore, prefix: &str, p: &PutFile) -> Result<(), Refusal> {
+fn save_one(store: &dyn WorkStore, prefix: &str, p: &PutFile) -> Result<String, Refusal> {
     let full = tree_path(prefix, &p.path)?;
     if p.mode > MAX_MODE {
         return Err(Refusal::BadMode);
@@ -437,7 +509,7 @@ fn save_one(store: &dyn WorkStore, prefix: &str, p: &PutFile) -> Result<(), Refu
     }
     let file = WorkFile { size: entry.size, mode: p.mode, mtime: p.mtime, blob: entry.blob };
     store.put(&full, file.to_entity());
-    Ok(())
+    Ok(version_of(&file))
 }
 
 #[cfg(test)]
@@ -600,5 +672,79 @@ mod tests {
         for n in [MANIFEST_KEY, INIT_KEY, MSG_LIST, MSG_LISTING, MSG_GET, MSG_FILE, MSG_SAVE, MSG_SAVED] {
             assert!(n.starts_with("x-"), "{n} is not x-prefixed");
         }
+    }
+
+    // ── two windows, one workspace (BACKLOG B-10) ──────────────────────────────
+
+    fn version_at(s: &MemStore, path: &str) -> Option<String> {
+        list(s, P).unwrap().0.into_iter().find(|(p, _)| p == path).map(|(_, f)| version_of(&f))
+    }
+
+    fn expect(rows: &[(&str, Option<&str>)]) -> Expect {
+        rows.iter().map(|(p, v)| (p.to_string(), v.map(str::to_string))).collect()
+    }
+
+    #[test]
+    fn a_file_edited_in_two_windows_keeps_the_first_save_and_refuses_the_stale_one() {
+        let s = MemStore::default();
+        save(&s, P, &[file("notes.txt", 0o644, b"original")], &[]).unwrap();
+        let read_by_both = version_at(&s, "notes.txt").unwrap();
+        // Window B saves its edit, against what it read.
+        let b = save_expecting(&s, P, &[file("notes.txt", 0o644, b"edited in B")], &[], &expect(&[("notes.txt", Some(&read_by_both))])).unwrap();
+        assert!(b.failed.is_empty(), "{b:?}");
+        // Window A, still holding the original, saves its own edit.
+        let a = save_expecting(&s, P, &[file("notes.txt", 0o644, b"edited in A")], &[], &expect(&[("notes.txt", Some(&read_by_both))])).unwrap();
+        assert_eq!(a.failed, vec![("notes.txt".to_string(), Refusal::Conflict)], "the stale save must be refused");
+        assert_eq!(read(&s, P, "notes.txt").unwrap(), b"edited in B", "and B's edit is still there");
+        assert_eq!(a.saved, 0);
+    }
+
+    #[test]
+    fn a_new_file_where_another_window_already_made_one_is_a_conflict() {
+        let s = MemStore::default();
+        save(&s, P, &[file("new.txt", 0o644, b"from B")], &[]).unwrap();
+        let a = save_expecting(&s, P, &[file("new.txt", 0o644, b"from A")], &[], &expect(&[("new.txt", None)])).unwrap();
+        assert_eq!(a.failed, vec![("new.txt".to_string(), Refusal::Conflict)]);
+        assert_eq!(read(&s, P, "new.txt").unwrap(), b"from B");
+    }
+
+    #[test]
+    fn removing_a_file_another_window_has_since_updated_is_refused() {
+        let s = MemStore::default();
+        save(&s, P, &[file("keep.txt", 0o644, b"v1")], &[]).unwrap();
+        let v1 = version_at(&s, "keep.txt").unwrap();
+        save(&s, P, &[file("keep.txt", 0o644, b"v2, saved by A")], &[]).unwrap();
+        let b = save_expecting(&s, P, &[], &["keep.txt".into()], &expect(&[("keep.txt", Some(&v1))])).unwrap();
+        assert_eq!(b.failed, vec![("keep.txt".to_string(), Refusal::Conflict)]);
+        assert_eq!(b.removed, 0);
+        assert_eq!(read(&s, P, "keep.txt").unwrap(), b"v2, saved by A", "the newer copy survives B's delete");
+        // Removing what B actually read still works when nothing moved.
+        let v2 = version_at(&s, "keep.txt").unwrap();
+        let ok = save_expecting(&s, P, &[], &["keep.txt".into()], &expect(&[("keep.txt", Some(&v2))])).unwrap();
+        assert_eq!((ok.removed, ok.failed.len()), (1, 0));
+    }
+
+    #[test]
+    fn writing_back_a_file_another_window_removed_loses_nothing_and_is_allowed() {
+        let s = MemStore::default();
+        save(&s, P, &[file("gone.txt", 0o644, b"v1")], &[]).unwrap();
+        let v1 = version_at(&s, "gone.txt").unwrap();
+        save(&s, P, &[], &["gone.txt".into()]).unwrap();
+        let a = save_expecting(&s, P, &[file("gone.txt", 0o644, b"v1 edited")], &[], &expect(&[("gone.txt", Some(&v1))])).unwrap();
+        assert!(a.failed.is_empty(), "{a:?}");
+        assert_eq!(read(&s, P, "gone.txt").unwrap(), b"v1 edited");
+    }
+
+    #[test]
+    fn a_save_that_expects_nothing_is_unchecked_and_versions_are_reported() {
+        let s = MemStore::default();
+        save(&s, P, &[file("f", 0o644, b"one")], &[]).unwrap();
+        let r = save(&s, P, &[file("f", 0o644, b"two")], &[]).unwrap();
+        assert!(r.failed.is_empty(), "an app that sends no `expect` saves as before");
+        assert_eq!(r.versions, vec![("f".to_string(), version_at(&s, "f").unwrap())], "each save reports the version it wrote");
+        // The same bytes are the same version: a window writing what another wrote is not a conflict.
+        let same = version_at(&s, "f").unwrap();
+        let again = save_expecting(&s, P, &[file("f", 0o600, b"two")], &[], &expect(&[("f", Some(&same))])).unwrap();
+        assert!(again.failed.is_empty());
     }
 }

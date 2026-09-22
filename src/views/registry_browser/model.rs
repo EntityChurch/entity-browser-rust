@@ -29,7 +29,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use super::output::{
-    NameListing, Phase, PinOrigin, PinnedRegistry, RegistryBrowserOutput, ResolvedName,
+    NameListing, Phase, PinOrigin, PinnedRegistry, Publications, RegistryBrowserOutput,
+    ResolvedName,
 };
 use crate::peers::Peers;
 use crate::window::WindowId;
@@ -48,6 +49,11 @@ pub struct RegistryBrowserModel {
     /// Why the last pin attempt was refused. In memory and dropped on reload —
     /// it describes a keystroke, not state worth persisting.
     pin_error: Rc<RefCell<Option<String>>>,
+    /// What the resolved publisher publishes, probed from **their** signed
+    /// root. Session-only: it is an answer about one publisher at one moment,
+    /// and a durable copy would be a record of a remote assertion with no
+    /// trigger to re-check it (AP30/D24). Re-asked on every resolve.
+    published: Rc<RefCell<Phase<Publications>>>,
 }
 
 impl RegistryBrowserModel {
@@ -58,6 +64,7 @@ impl RegistryBrowserModel {
             resolved: Rc::new(RefCell::new(Phase::Idle)),
             changed: Rc::new(Cell::new(false)),
             pin_error: Rc::new(RefCell::new(None)),
+            published: Rc::new(RefCell::new(Phase::Idle)),
         }
     }
 
@@ -153,6 +160,10 @@ impl RegistryBrowserModel {
     fn clear_for_new_registry(&self) {
         *self.listing.borrow_mut() = Phase::Idle;
         *self.resolved.borrow_mut() = Phase::Idle;
+        // The probe is an answer about the publisher the OLD registry named.
+        // Every slot this function clears has the same reason; the only way to
+        // keep that true is to add to it (`every_registry_scoped_slot_is_cleared`).
+        *self.published.borrow_mut() = Phase::Idle;
         self.mark();
     }
 
@@ -170,6 +181,7 @@ impl RegistryBrowserModel {
             // independent expressions that happen to be equal is a coincidence
             // a future edit gets to break silently (AP44).
             local_peer: Self::reader_peer(peers),
+            published: self.published.borrow().clone(),
             pin_error: self.pin_error.borrow().clone(),
         }
     }
@@ -246,6 +258,7 @@ impl RegistryBrowserModel {
     pub fn resolve(&self, _name: &str) {
         *self.resolved.borrow_mut() =
             Phase::Failed(crate::i18n::t("registry.needs_browser", &[]));
+        *self.published.borrow_mut() = Phase::Idle;
         self.mark();
     }
 
@@ -270,9 +283,16 @@ impl RegistryBrowserModel {
         };
 
         *self.resolved.borrow_mut() = Phase::Running;
+        // A finding is an answer about ONE publisher. Carrying the previous
+        // one forward while a new name resolves would attach the last
+        // publisher's conventions to this one, on screen, for as long as the
+        // probe takes — the stalest possible version of the guess this change
+        // exists to retire.
+        *self.published.borrow_mut() = Phase::Idle;
         self.mark();
 
         let slot = self.resolved.clone();
+        let published = self.published.clone();
         let changed = self.changed.clone();
         crate::views::shell::model::spawn_task(async move {
             let src = crate::content_site::http_poll::FetchBinSource;
@@ -305,6 +325,44 @@ impl RegistryBrowserModel {
                 }
                 Err(e) => Phase::Failed(e.to_string()),
             };
+            changed.set(true);
+
+            // ── and then ask the publisher what they publish ──────────────
+            //
+            // Chained rather than spawned beside the resolve, because the probe
+            // needs the peer-id the resolve produced. A failed resolve probes
+            // nothing: there is no publisher to ask.
+            let Phase::Done(target) = slot.borrow().clone() else { return };
+            let Some(origin) = target.origin.clone() else {
+                // Resolved WHO but not WHERE. **Not `Idle`** — a reader who
+                // sees nothing here would read it as "not asked yet" and wait
+                // for an answer that is never coming.
+                *published.borrow_mut() =
+                    Phase::Failed(crate::i18n::t("registry.published_no_origin", &[]));
+                changed.set(true);
+                return;
+            };
+            // The publisher's own session, NOT the registry's — the whole claim
+            // is that this is the publisher's signed root. `session_for` is
+            // keyed by peer-id so this shares the `seq` floor with every other
+            // surface reading them, which is the point of that cache.
+            let Some(theirs) =
+                crate::content_site::session_cache::session_for(&target.peer_id, &origin)
+            else {
+                *published.borrow_mut() =
+                    Phase::Failed(crate::i18n::t("registry.published_no_key", &[]));
+                changed.set(true);
+                return;
+            };
+            *published.borrow_mut() = Phase::Running;
+            changed.set(true);
+            let found = crate::publication_probe::probe_all(
+                &crate::content_site::http_poll::FetchBinSource,
+                &theirs,
+                &target.peer_id,
+            )
+            .await;
+            *published.borrow_mut() = Phase::Done(found);
             changed.set(true);
         });
     }
@@ -366,6 +424,21 @@ impl RegistryBrowserModel {
         self.mark();
         Some(target.peer_id.clone())
     }
+
+    /// Fill every registry-scoped slot with something that is not `Idle`, so
+    /// [`tests::every_registry_scoped_slot_is_cleared`] can measure the clear
+    /// rather than measure a fresh model.
+    ///
+    /// A test-only setter and not a widened field: the slots are `Rc<RefCell<…>>`
+    /// precisely so the spawned landings own them, and making them writable from
+    /// outside is how a second writer appears.
+    #[cfg(test)]
+    fn seed_every_slot_for_test(&self) {
+        *self.listing.borrow_mut() =
+            Phase::Done(NameListing { names: vec!["a".into()], complete: true, nodes_walked: 1 });
+        *self.resolved.borrow_mut() = Phase::Running;
+        *self.published.borrow_mut() = Phase::Done(Vec::new());
+    }
 }
 
 #[cfg(test)]
@@ -395,6 +468,57 @@ mod tests {
             empty_but_asked,
             Phase::Idle,
             "a completed walk that found no names must not compare equal to having asked nothing"
+        );
+    }
+
+    /// ⭐ **Every slot that belongs to the OLD registry is cleared when the pin
+    /// moves — and this is a census, because the rule needs the word "every".**
+    ///
+    /// `clear_for_new_registry` is a *"and also do X here"* hook, which is
+    /// AP44's shape: correct the day it lands and one field behind on the first
+    /// slot somebody adds. The probe result was exactly that field — it is an
+    /// answer about the publisher the *previous* registry named, and left on
+    /// screen under a new pin's identity row it attributes one registry's
+    /// publisher to another.
+    ///
+    /// The destructure is what makes it a census rather than three assertions:
+    /// `#[deny(unused_variables)]` plus naming every field means a new one is a
+    /// **compile error** at this site, so whoever adds it has to decide whether
+    /// it survives a pin change. That is the shape
+    /// `every_deployment_declared_field_says_who_owns_it` had to be repaired
+    /// into after it spent months counting a literal.
+    #[test]
+    #[deny(unused_variables)]
+    fn every_registry_scoped_slot_is_cleared() {
+        let peers = Peers::new_direct();
+        let m = RegistryBrowserModel::new(1);
+        m.seed_every_slot_for_test();
+
+        // Anti-vacuity: if the seed did not take, the clear below proves nothing.
+        let before = m.render_output(&peers);
+        assert_ne!(before.listing, Phase::Idle);
+        assert_ne!(before.resolved, Phase::Idle);
+        assert_ne!(before.published, Phase::Idle);
+
+        m.clear_for_new_registry();
+        let RegistryBrowserOutput {
+            listing,
+            resolved,
+            published,
+            // Not registry-scoped — named so the destructure stays exhaustive
+            // and a new field cannot slip past by being ignored.
+            pinned: _,
+            sessions: _,
+            browser_only: _,
+            local_peer: _,
+            pin_error: _,
+        } = m.render_output(&peers);
+        assert_eq!(listing, Phase::Idle, "the old registry's names survived the pin change");
+        assert_eq!(resolved, Phase::Idle, "the old registry's resolve survived the pin change");
+        assert_eq!(
+            published,
+            Phase::Idle,
+            "the previous publisher's conventions are still on screen under a new registry"
         );
     }
 

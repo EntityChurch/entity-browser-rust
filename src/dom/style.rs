@@ -347,6 +347,18 @@ select optgroup {
     }
 }
 
+/* While a grip is dragged (`build_size_grip`): no iframe in the window area
+   takes the pointer, so a drag that crosses a running app stays with the grip
+   (Chromium routes a move over a cross-process iframe to that iframe until
+   capture is applied), and the cursor stays a resize cursor everywhere. */
+.window-area.grip-drag iframe {
+    pointer-events: none;
+}
+
+.window-area.grip-drag {
+    cursor: ns-resize;
+}
+
 .window.maximized .win-grip {
     display: none;
 }
@@ -407,6 +419,12 @@ select optgroup {
     flex: 1;
     overflow: auto;
     min-height: 0;
+    /* A peer id or a ws:// address is one unbreakable token; on a phone it ran
+       past its card (field report 2026-09-15) — in tables and in plain notices
+       like "✓ Added ws://…". `anywhere` breaks only a token that cannot fit
+       otherwise, and leaves nowrap and pre text alone. Tables also get a scroll
+       box (`components::table`) for cells that genuinely cannot wrap. */
+    overflow-wrap: anywhere;
 }
 
 /* Every window renders exactly one root wrapper into `.window-content`.

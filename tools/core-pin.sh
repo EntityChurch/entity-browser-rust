@@ -32,8 +32,17 @@
 # from here — and it leaks entries into the other seat's `git worktree list`.
 # That is not theoretical: `entity-core-rust` carries two stale `/tmp` worktrees
 # marked `prunable` today, from sessions that are long over. `git archive` reads
-# and never writes, and everything it produces lands in ONE gitignored directory
-# inside our own tree, which `make core-pin-clean` empties.
+# and never writes, and everything it produces lands in ONE cache directory,
+# which `make core-pin-clean` empties.
+#
+# **That directory is OUTSIDE our tree** (`${XDG_CACHE_HOME:-~/.cache}/entity-browser-core-pin`,
+# override with `CORE_PIN_ROOT`), and it used to be `.core-pin/` inside it. Moved
+# 2026-09-15 because a whole second repository inside ours is read as OURS by
+# every tool that walks the tree: `tools/vocab-lint.sh`'s analyzer globbed
+# `*.rs` into `.core-pin/<sha>/extensions/query/` and reported `single-seat
+# app/user` against this seat — a tag the kernel uses and we do not. gitignore
+# hides a directory from git, not from `rglob`. The container mount is its own
+# `-v`, so the build never needed the pin inside the parent mount.
 #
 # **The pin is keyed by resolved COMMIT, never by the ref you typed.** Passing
 # `CORE_RUST_REF=dev` pins to the commit `dev` names *at the moment you ask*; if
@@ -60,7 +69,7 @@ root="$(cd "$here/.." && pwd)"
 # build image's bind mount alike, so `<script>/../..` is a stable answer where
 # `../entity-core-rust` is a claim about who invoked us.
 sibling="$(cd "$root/.." 2>/dev/null && pwd)/entity-core-rust"
-pin_root="$root/.core-pin"
+pin_root="${CORE_PIN_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/entity-browser-core-pin}"
 
 say() { printf '%s\n' "$1" >&2; }
 
@@ -116,7 +125,7 @@ case "${1:-}" in
         exit 1
     fi
     mv "$scratch" "$dest"
-    say "core-pin: materialized entity-core-rust @ ${sha:0:7} → .core-pin/${sha:0:7}…"
+    say "core-pin: materialized entity-core-rust @ ${sha:0:7} → $pin_root/${sha:0:7}…"
     printf '%s\n' "$dest"
     ;;
 

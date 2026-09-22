@@ -162,9 +162,67 @@
 #   the honest summary is "we became conformant and the tier's implementation
 #   gap widened by one." Both halves are true and only the names show it.
 #
-# app/user — single-seat, declared in EXTENSION-TYPE. Not app-tier convention
-#   work; carried so the row is visible rather than filtered out by hand.
+# app/user — RETIRED 2026-09-12, BACK 2026-09-15, AND IT IS A FALSE POSITIVE ON
+#   BOTH SIDES OF THE ANALYZER. The 09-12 note below stands and is the reason
+#   this row is a RECORD OF WHAT THE GATE REPORTS, never a claim we endorse:
+#
+#     "It was single-seat on the strength of a query-console filter example and
+#      its tests ('app/user' as a sample type_filter), which is a string, not an
+#      implementation of the type. The analyzer (entity-system-arch-tools,
+#      2026-09-11 changes) now reports it as declared-unimplemented, i.e. no
+#      seat, and this repo never emitted one."
+#
+#   `entity-system-arch-tools` has moved six commits since (a45c6d4 and five
+#   before it) and the classification flipped back to `single-seat`. Measured
+#   rather than inferred: `app/user` appears in this tree in exactly two files
+#   (`views/query_console/{mod,model}.rs`), as the console's sample filter and
+#   its tests, and the DECLARING side is the same shape — the only occurrences
+#   in the spec corpus are illustrative (`EXTENSION-TYPE` §112/§138/§265,
+#   `EXTENSION-QUERY` §203). A doc example read as a declaration, and a sample
+#   string read as an emission.
+#
+#   ⚠ THE ROW IS RESTORED RATHER THAN THE STRING CHANGED, deliberately. Renaming
+#   the console's example to dodge the analyzer makes the product worse to
+#   satisfy a tool, and `app/user` is a GOOD example there precisely because the
+#   specs use it. The alternative to a row is a standing red, and this file's own
+#   design note says a gate that fails on something we cannot fix is a gate
+#   people learn to skip.
+#
+#   ⛔ It is also INHERITED, not introduced: `views/query_console/` and this file
+#   are byte-identical to `origin/dev` at the merge that surfaced it, so `dev`
+#   was red on this before the merge. Routed to arch — the same recipient the
+#   parametric-family observation above went to, since `vocab-lint` wraps
+#   arch-tools' `spec vocab` and arch owns the tier
+#   (`ROUTING-2026-09-15-b-arch-AN-ILLUSTRATIVE-EXAMPLE-IS-NOT-A-DECLARATION`).
+#   The ask is that an illustrative occurrence in prose or in a CDDL example be
+#   distinguishable from a declaration, which is the same class as that gap and
+#   as the path/tag confusion recorded four times in AGENTS.md. Remove the row
+#   when either side stops reporting; the gate fails both ways, so it cannot
+#   rot.
 
+# app/feed/collection — SEVENTH ROW, 2026-09-15, AND IT CLOSES THE FAMILY FROM
+#   OUR SIDE: 7 declared / 7 implemented. Every row above that predicted its own
+#   clearance said "it clears as workbench-go models it"; this one is the last
+#   type in `APP-CONVENTION-FEED` that no seat had built.
+#
+#   It arrives because the type finally has a consumer. The four rows above that
+#   sat here for days each read "the collection has no consumer yet" — that was
+#   true and it is what the composer changes: §5's set is what two of the four
+#   verbs operate on, so building the verbs without the type was not an option.
+#
+#   Honest and not debt we chose, on the same terms as its six siblings: the type
+#   is DECLARED (§2's table, §5's CDDL, §11.3's installed list) and we are the
+#   first seat to implement it. There is nothing for us to fix.
+#
+#   ⚠ What building it settled, kept here because it is the kind of thing a later
+#   session re-derives: §11.1 carries exactly ONE collection row — `FEED-R15`,
+#   present `members` in the authored order — and §5's *"cover: one member, for
+#   presentation"* is a CDDL comment with no requirement id behind it. So a cover
+#   outside `members` is ACCEPTED, pinned by a test named for the fact that
+#   nothing forbids it. Refusing would be this repo inventing a MUST on somebody
+#   else's convention, which is what `A-24` cost a correction for.
+
+single-seat	app/feed/collection
 single-seat	app/feed/mirror
 single-seat	app/feed/mirror-page
 single-seat	app/site-asset

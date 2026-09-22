@@ -47,6 +47,25 @@
 # been bitten by more than once, so the skip names every missing piece and what
 # went unchecked. `spec vocab` itself keeps the distinction (exit 2 =
 # could-not-look) and so does this.
+#
+# ⛔ AND IT RESOLVES OUR SEAT BY DIRECTORY NAME, WHICH IS NOT THIS CHECKOUT WHEN
+# YOU ARE IN A WORKTREE.
+#
+# `spec vocab` finds the seat at `<corpus parent>/entity-browser-rust` and reads
+# whatever is on disk there. Run this from a worktree — `entity-browser-rust-vm`,
+# say — and the gate measures the OTHER tree, at the other seat's head, **mid
+# edit**, and attributes what it finds to your commit. Measured 2026-09-15: this
+# worktree's lint went red on `single-seat app/feed/collection`, a tag that
+# appears nowhere in this checkout outside `docs/status/` prose, because the main
+# worktree had just landed the feed composer. It survived a full stash of the
+# session's changes, which is the tell — *if the symptom survives your change
+# being gone, the symptom is not yours.*
+#
+# Same class as the `Cargo.lock` hazard this repo already records: a tool that
+# resolves a sibling BY NAME resolves it against whatever is on disk. The
+# analyzer's own JSON carries `head` and `dirty` per seat and this wrapper used
+# to throw both away, so nothing anywhere said which tree had been read. It now
+# prints them on every run and refuses to speak for a tree that is not this one.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -68,6 +87,26 @@ skip() {
 command -v python3 >/dev/null 2>&1 || skip "no python3"
 [ -d "$ARCH/specs/applications" ] || skip "no $ARCH — the corpus that declares the tags"
 [ -f "$TOOLS/spec-tool/cli.py" ] || skip "no $TOOLS — the analyzer"
+
+# WHOSE TREE IS THE ANALYZER ABOUT TO READ? Checked BEFORE running it, because a
+# report about another checkout is not a weaker answer, it is an answer to a
+# different question — and one that names us in its findings.
+SEAT_DIR="$PARENT/$SEAT"
+seat_real="$(cd "$SEAT_DIR" 2>/dev/null && pwd -P)"
+here_real="$(cd "$HERE" && pwd -P)"
+if [ "$seat_real" != "$here_real" ]; then
+	echo "vocab-lint: SKIPPED — the analyzer reads the seat at a fixed path and that is not this checkout."
+	echo "            it would read: ${seat_real:-$SEAT_DIR}"
+	if [ -n "$seat_real" ]; then
+		echo "                        ($(git -C "$seat_real" log --oneline -1 2>/dev/null || echo 'not a checkout')$(
+			[ -n "$(git -C "$seat_real" status --short 2>/dev/null)" ] && echo ', DIRTY')"
+		echo "                         — another seat's work, attributed to your commit)"
+	fi
+	echo "            you are in:  $here_real"
+	echo "            Run 'make lint' from $SEAT_DIR to exercise this gate. Rows found"
+	echo "            there are that tree's to answer for, not this one's."
+	skip "our seat resolves to a different tree"
+fi
 
 VOCAB_RAW="$(cd "$ARCH" && python3 "$TOOLS/spec-tool/cli.py" vocab --json 2>/dev/null)"
 rc=$?
@@ -107,6 +146,12 @@ for it in f.get("divergent-family", []):
 
 missing = d.get("missing_seats") or []
 n_missing = len(missing) if isinstance(missing, list) else int(missing or 0)
+# WHICH TREE, AT WHICH HEAD. The analyzer reports this per seat and the wrapper
+# used to discard it, so a run could not be reproduced and a report about
+# somebody else's checkout was indistinguishable from one about ours.
+mine = next((s for s in seats if s.get("name") == seat), {})
+print("SEAT\t%s%s" % (
+    mine.get("head", "?"), ", DIRTY — this run is not reproducible" if mine.get("dirty") else ""))
 print("CTX\t%d seat(s), %d missing, %s declared / %s emitted" % (
     n_seats, n_missing, d.get("declared_total"), d.get("implemented_total")))
 for c, t in sorted(rows):
@@ -121,7 +166,12 @@ case "$REDUCED" in
 esac
 
 CONTEXT="$(printf '%s\n' "$REDUCED" | sed -n 's/^CTX\t//p')"
+SEAT_AT="$(printf '%s\n' "$REDUCED" | sed -n 's/^SEAT\t//p')"
 OURS="$(printf '%s\n' "$REDUCED" | sed -n 's/^ROW\t//p')"
+# `$here_real` is honest ONLY because the guard above proved the analyzer's seat
+# path resolves to this checkout. Relax that guard and this line starts naming a
+# directory the report is not about — which is the defect it was added for.
+echo "vocab-lint: read $SEAT at $here_real ($SEAT_AT)"
 
 [ -f "$BASELINE" ] || { echo "vocab-lint: FAIL — no baseline at $BASELINE"; exit 1; }
 BASE="$(grep -vE '^\s*(#|$)' "$BASELINE" | sort)"

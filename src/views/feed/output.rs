@@ -25,6 +25,25 @@ pub struct FeedOutput {
     pub panel: FeedPanel,
     /// The result of the last Follow press, if there was one this session.
     pub notice: Option<Notice>,
+    /// **Your own posts**, newest first, read out of your own tree.
+    ///
+    /// Separate from [`Self::panel`], which is whoever you selected — including,
+    /// possibly, yourself. The two would render identically and mean different
+    /// things: one is a read over a road, the other is what is in your tree
+    /// right now.
+    pub own_posts: Vec<OwnPostRow>,
+    /// The result of the last compose act, if there was one this session.
+    ///
+    /// Session-only, like [`Self::notice`] — what you last did is not a fact
+    /// about the profile, and a removal's sentence surviving a reload would be
+    /// an answer to a question nobody asked twice.
+    pub compose_notice: Option<ComposeNotice>,
+    /// Whether this profile holds the authoring key for the bound peer.
+    ///
+    /// Drives whether the composer is offered at all. **Spelled positively** so
+    /// a future reason to disable it cannot silently start rendering as
+    /// available — `AppServerView::is_serving`'s bug, one surface over.
+    pub can_author: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,3 +172,64 @@ pub struct EntryRow {
 /// Catalog key for the outcome of a Follow press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Notice(pub &'static str);
+
+/// One of **your own** posts, read back out of your own tree.
+///
+/// ⭐ **A separate type from [`EntryRow`], and the difference is the whole
+/// reason.** An `EntryRow` is somebody else's post arriving over a road, so it
+/// carries an attribution verdict — *may a renderer name the author* — which is
+/// a question about evidence. Your own post in your own tree does not raise that
+/// question, and giving it an `attributed: true` field would be a claim
+/// manufactured by the renderer rather than checked by
+/// [`crate::feed_read::attribute`]. What it carries instead is what a *removal*
+/// needs: the full hash, because §7.3's unbinding is by address and a shortened
+/// one does not name a binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnPostRow {
+    /// The full content hash, hex. **Not shortened** — it is what `Remove`
+    /// sends back.
+    pub hash_hex: String,
+    /// Shortened, for display beside the text.
+    pub id_short: String,
+    pub text: String,
+    pub created_at: u64,
+}
+
+/// What the composer can say after an act. Each is a catalog key.
+///
+/// ⛔ **`Removed` is not a success message and must not be rendered as one.**
+/// `FEED-R21` is a MUST NOT — *a conformant application MUST NOT present
+/// removal as deletion* — and §7.5 puts the sentence *"at the moment of the
+/// action rather than in a help page"*. So the removal outcome carries
+/// [`crate::feed_compose::RemovalMeaning::COPY_KEY`] and nothing else: there is
+/// no cheerful variant for it to be confused with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposeNotice {
+    /// The post is in your tree and a connected peer can read it.
+    Posted,
+    /// Nothing was typed.
+    Empty,
+    /// This profile does not hold the authoring key for the bound peer, so it
+    /// cannot sign. Its own outcome rather than a generic failure: it is not
+    /// something the person did wrong and not something retrying fixes.
+    NotOurPeer,
+    /// The mint or the encode refused. Ours.
+    Refused,
+    /// §7.5's sentence. **Unpublication, never deletion.**
+    Removed,
+}
+
+impl ComposeNotice {
+    /// The catalog key. `Removed`'s is the composer's own constant rather than a
+    /// `feed.*` sibling, so the wording and the rule it discharges live
+    /// together.
+    pub fn key(self) -> &'static str {
+        match self {
+            ComposeNotice::Posted => "feed.compose.posted",
+            ComposeNotice::Empty => "feed.compose.empty",
+            ComposeNotice::NotOurPeer => "feed.compose.not_our_peer",
+            ComposeNotice::Refused => "feed.compose.refused",
+            ComposeNotice::Removed => crate::feed_compose::RemovalMeaning::COPY_KEY,
+        }
+    }
+}

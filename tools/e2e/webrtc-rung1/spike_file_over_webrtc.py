@@ -74,6 +74,24 @@ def ROW_NAMED(name):
     return _root() + f"const e=r.querySelector('[data-row-name=\"{name}\"]');return !!e;"
 
 
+# B-13: Pull reports on its own card. A sampler in the page records whether the
+# Pull button was ever disabled, or the pull's status line ever shown, while a
+# pull ran — a multi-chunk walk lasts many frames, and polling from the harness
+# over WebDriver could miss the whole window. Installed before the press.
+PULL_SAMPLER = _root() + (
+    "if(window.__pullSeen)return 'already';"
+    "window.__pullSeen={disabled:false,status:'',n:0};"
+    "window.__pullSampler=setInterval(()=>{const l=document.getElementById('dom-layer');const r=l.shadowRoot||l;"
+    "const b=r.querySelector('[data-field=\"ft-pull\"]');const st=r.querySelector('[data-field=\"ft-pull-status\"]');"
+    "window.__pullSeen.n++;if(b&&b.disabled&&r.querySelector('[data-field=\"ft-pull-status\"]'))window.__pullSeen.disabled=true;"
+    "if(st&&!window.__pullSeen.status)window.__pullSeen.status=st.textContent;},10);return 'armed';")
+PULL_AFTER = _root() + (
+    "clearInterval(window.__pullSampler);const s=window.__pullSeen||{};"
+    "const b=r.querySelector('[data-field=\"ft-pull\"]');"
+    "return {disabled_while_pulling:!!s.disabled,status:s.status||'',samples:s.n||0,"
+    "enabled_after:!!b&&!b.disabled,status_after:!!r.querySelector('[data-field=\"ft-pull-status\"]')};")
+
+
 def FIELD_TEXT(field):
     return _root() + f"const e=r.querySelector('[data-field=\"{field}\"]');return e?e.textContent:'';"
 
@@ -395,6 +413,7 @@ def main():
             for _ in range(20):
                 click_field(B_BASE, sb, f'[data-row-name="{NAME}"]')
                 time.sleep(0.5)
+                ex(B_BASE, sb, PULL_SAMPLER)
                 click_field(B_BASE, sb, '[data-field="ft-pull"]')
                 for _ in range(10):
                     time.sleep(1)
@@ -408,6 +427,15 @@ def main():
             if not saved:
                 print(f"  results pane: {(ex(B_BASE, sb, FIELD_TEXT('ft-results')) or '')[-400:]!r}")
         checks["the window pulls it (Pull → saved)"] = saved
+        if saved:
+            # The card's own report (B-13). Give the finished pull a frame to repaint.
+            time.sleep(1)
+            card = ex(B_BASE, sb, PULL_AFTER) or {}
+            print(f"  Pull card: {card}")
+            checks["while the pull ran, Pull was disabled and its status shown on the card"] = (
+                bool(card.get("disabled_while_pulling")) and NAME in (card.get("status") or ""))
+            checks["after the pull, Pull works again and no status line is left"] = (
+                bool(card.get("enabled_after")) and not card.get("status_after"))
 
         # ── 7. A OFFERS from the window, with no Shell at all ────────────
         # Phase 3 offered through `offer <name> size=…`, which is the model

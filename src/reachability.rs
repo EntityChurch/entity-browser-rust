@@ -344,6 +344,19 @@ mod store {
             RefCell::new(HashMap::new());
     }
 
+    /// Drop any sentence we were adding about `peer_id` — what a working
+    /// connection earns. Separate from `set` because "store nothing" and
+    /// "remove what is stored" are different acts, and only one of them is what
+    /// [`Record::Keep`] must NOT do.
+    pub(super) fn forget(peer_id: &str) {
+        VERDICTS.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.remove(peer_id).is_some() {
+                GENERATION.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+    }
+
     pub(super) fn set(peer_id: &str, v: Reachability) {
         VERDICTS.with(|m| {
             let mut m = m.borrow_mut();
@@ -439,6 +452,58 @@ pub fn generation() -> u64 {
     store::generation()
 }
 
+/// What one classified observation does to the stored verdict.
+///
+/// **Three outcomes, not two, and the third is the one a tidy version drops:**
+/// an observation that *established nothing* must not overwrite one that did.
+/// That is AP30's corollary (a) — *an errored round-trip is not an answer; keep
+/// what you have* — arriving in the reachability store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Record {
+    /// An earned claim about the path between us and them.
+    Replace(Reachability),
+    /// A working connection retires whatever sentence we were adding.
+    Clear,
+    /// This negotiation established nothing about that path, so it is not
+    /// evidence in either direction.
+    Keep,
+}
+
+/// How a classified verdict meets the memory of previous negotiations.
+///
+/// **Pure, and separate from `classify`, because the two reason over different
+/// spans.** `classify` is a table over ONE observation and stays that way; this
+/// is the only place cross-negotiation memory (`store::ANSWERED_EVER`) is
+/// applied.
+///
+/// The arm that earns the function is `NoCounterpart` + `answered_before`.
+/// Suppressing *"nobody was there"* about a peer we have heard from is right —
+/// it is what the NAT rig bought — but the previous spelling suppressed it by
+/// telling `classify` the exchange had completed, which **promoted the
+/// observation into the network arms** and made a claim about a path nothing
+/// touched. Measured 2026-09-15 in `make e2e-webrtc-stall`: while A's main
+/// thread was frozen, B's retry negotiations classified `no-reflector` and B's
+/// Chat header read *"No reflector is set up, so this app can only reach devices
+/// on your local network"* — beside a conversation that was delivering in both
+/// directions. There is a third answer and it is *we have nothing to say*.
+///
+/// ⭐ The passing runs of that gate differed only in `gathered = []`, which hits
+/// `classify`'s empty-gather arm first. **The assertion's PASS/FAIL was a coin
+/// toss on whether a doomed retry happened to gather a host candidate** — a
+/// product that was right by fallback, not by rule.
+pub fn record_for(verdict: Reachability, answered_before: bool) -> Record {
+    match verdict {
+        Reachability::Connected => Record::Clear,
+        // Established nothing: an agent that never gathered, or a relay that
+        // gathered and failed, are both statements about *us*.
+        Reachability::Unknown => Record::Keep,
+        // "Nobody answered" about a peer we have heard from is not a fact about
+        // them — but it is not a fact about the network either.
+        Reachability::NoCounterpart if answered_before => Record::Keep,
+        v => Record::Replace(v),
+    }
+}
+
 /// Record one finished negotiation.
 ///
 /// `reflectors_configured` is the session's provisioning, not a property of the
@@ -453,17 +518,20 @@ pub fn record_negotiation(
     sdp_exchange_complete: Option<bool>,
 ) {
     // **"Have they ever answered" is a fact about the peer, not about this
-    // negotiation** — see `store::ANSWERED_EVER`. Folded here rather than in
-    // `classify`, which stays pure over one observation.
+    // negotiation** — see `store::ANSWERED_EVER`. It is applied in `record_for`
+    // rather than folded into the observation: this negotiation's exchange
+    // either completed or it did not, and overwriting that answer is what let a
+    // peer we had merely *heard from* be reported as a network topology.
     let ever_answered =
         store::note_exchange(peer_id, established || sdp_exchange_complete == Some(true));
     let obs = Observation {
         gathered: GatheredTypes::from_sdp_lines(local_candidates.iter().map(|s| s.as_str())),
         reflectors_configured,
         outcome: if established { Outcome::Connected } else { Outcome::Failed },
-        sdp_exchange_complete: if ever_answered { Some(true) } else { sdp_exchange_complete },
+        sdp_exchange_complete,
     };
     let verdict = classify(&obs);
+    let record = record_for(verdict, ever_answered);
     tracing::debug!(
         peer = %peer_id,
         gathered = ?obs.gathered.kinds(),
@@ -472,9 +540,14 @@ pub fn record_negotiation(
         sdp_exchange_complete = ?sdp_exchange_complete,
         ever_answered,
         verdict = verdict.as_token(),
+        record = ?record,
         "reachability: negotiation classified"
     );
-    store::set(peer_id, verdict);
+    match record {
+        Record::Replace(v) => store::set(peer_id, v),
+        Record::Clear => store::forget(peer_id),
+        Record::Keep => {}
+    }
 }
 
 /// Should a conversation show a diagnosis, and which?
@@ -904,6 +977,103 @@ mod tests {
                 [Reachability::Unknown, Reachability::NoReflector]
             ),
             Some(Reachability::NoReflector)
+        );
+    }
+
+    /// ⭐ **The stall bug, as a table.** Two browsers chat; one's main thread is
+    /// frozen for 40 s; the side still running retries §6.5 at a peer it cannot
+    /// momentarily hear, and every retry fails `sdp_exchange=INCOMPLETE,
+    /// candidates posted=3/fed=0`. Measured in `make e2e-webrtc-stall`
+    /// (2026-09-15, kernel `86e313b`): the header read *"No reflector is set
+    /// up…"* **while messages were crossing in both directions.**
+    ///
+    /// The shape is a peer that is `Connected`, then misses. Asserted over every
+    /// gathered set, because the run that passed differed from the run that
+    /// failed only in `gathered = []` — the empty-gather arm catching it first.
+    /// A property that holds only for one candidate set is the fallback, not the
+    /// rule.
+    #[test]
+    fn a_miss_after_a_success_says_nothing_about_the_network() {
+        for gathered in [
+            vec![],
+            vec![RAW_HOST.to_string()],
+            vec![RAW_HOST.to_string(), SRFLX.to_string()],
+        ] {
+            for reflectors_configured in [false, true] {
+                store::clear();
+                // 1. They answered and we connected: no sentence is owed.
+                record_negotiation("2KAlice", &gathered, reflectors_configured, true, Some(true));
+                assert_eq!(verdict_for("2KAlice"), Reachability::Unknown);
+
+                // 2. A retry while they are frozen. Nothing correlated, so this
+                //    negotiation exercised no path between the two of us.
+                record_negotiation("2KAlice", &gathered, reflectors_configured, false, Some(false));
+                assert_eq!(
+                    verdict_for("2KAlice"),
+                    Reachability::Unknown,
+                    "{gathered:?} reflectors={reflectors_configured}: a peer we are talking to \
+                     must not acquire a network diagnosis from a retry that correlated nothing"
+                );
+                assert!(!verdict_for("2KAlice").is_advisory());
+            }
+        }
+    }
+
+    /// The three outcomes, and the count — so a seventh `Reachability` variant
+    /// has to be given a rule instead of falling into `Replace` by default.
+    ///
+    /// **`Replace` may only ever carry an advisory verdict**: a non-advisory one
+    /// reaching the store would put connection state in a map whose header
+    /// promises it holds none.
+    #[test]
+    fn every_verdict_has_a_rule_for_what_it_does_to_the_store() {
+        let all = [
+            Reachability::Unknown,
+            Reachability::Connected,
+            Reachability::NoCounterpart,
+            Reachability::NoReflector,
+            Reachability::ReflectorUnreachable,
+            Reachability::NoDirectPath,
+        ];
+        assert_eq!(all.len(), 6, "a new variant needs a row here, not a default");
+
+        for v in all {
+            for answered_before in [false, true] {
+                if let Record::Replace(stored) = record_for(v, answered_before) {
+                    assert!(
+                        stored.is_advisory(),
+                        "{v:?} would store a non-advisory verdict"
+                    );
+                }
+            }
+        }
+        // The one arm that reads `answered_before` — and it is the fix.
+        assert_eq!(record_for(Reachability::NoCounterpart, false),
+                   Record::Replace(Reachability::NoCounterpart));
+        assert_eq!(record_for(Reachability::NoCounterpart, true), Record::Keep);
+        assert_eq!(record_for(Reachability::Connected, false), Record::Clear);
+        assert_eq!(record_for(Reachability::Unknown, true), Record::Keep);
+        // And a network claim is unaffected by having heard from them: that is
+        // the NAT rig's verdict and it must still be written.
+        assert_eq!(record_for(Reachability::NoReflector, true),
+                   Record::Replace(Reachability::NoReflector));
+    }
+
+    /// An observation that established nothing must not erase one that did —
+    /// including an ICE agent that never gathered, which is a statement about
+    /// **us** and therefore no evidence against a finding about the path.
+    #[test]
+    fn an_agent_that_never_started_does_not_un_say_a_real_finding() {
+        store::clear();
+        let host_only = [RAW_HOST.to_string()];
+        record_negotiation("2KAlice", &host_only, false, false, Some(true));
+        assert_eq!(verdict_for("2KAlice"), Reachability::NoReflector, "precondition");
+
+        record_negotiation("2KAlice", &[], false, false, Some(true));
+        assert_eq!(
+            verdict_for("2KAlice"),
+            Reachability::NoReflector,
+            "an agent that gathered nothing is not evidence about their network"
         );
     }
 

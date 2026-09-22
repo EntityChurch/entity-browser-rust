@@ -859,6 +859,12 @@ async function receiveIn(m) {
 let hostWorkspace = false;           // `init` said the host keeps files
 let hostSigs = new Map();            // path -> sig, as the host listed them at launch
 let known = null;                    // path -> sig we believe the host holds (null = no baseline yet)
+// Two windows of one machine share one workspace (workspace.rs, "Two windows, one
+// workspace"). What this window READ is what its saves expect: a file another
+// window saved since is refused as `conflict` instead of overwritten, and this
+// window's copy is kept beside it. A host that reports no versions checks nothing.
+let hostVersions = false;
+let hostVer = new Map();             // path -> version (blob hash) as this window last saw it
 let saving = null;
 window.__m1.work = { restored: 0, restoreFailed: 0, saves: 0, saved: 0, removed: 0, last: null, recent: [] };
 
@@ -869,6 +875,8 @@ async function fetchWorkspace() {
   const listing = await workRequest('x-work-list', {});
   if (!listing.ok) throw new Error(`the host did not list the workspace (${listing.reason})`);
   const files = listing.files || [];
+  hostVersions = files.every(f => typeof f.version === 'string');
+  hostVer = new Map(hostVersions ? files.map(f => [f.path, f.version]) : []);
   const got = [];
   let next = 0, failed = 0;
   // A few at a time: a workspace can hold thousands of small files.
@@ -1074,23 +1082,55 @@ async function doSave(reason) {
     return { ok: true, text: 'nothing changed' };
   }
   let saved = 0, bytes = 0, gone = 0;
-  const failed = [], savedPaths = [];
+  const failed = [], savedPaths = [], conflicts = [], copies = [];
   let batch = [], batchBytes = 0;
   const flush = async (rm) => {
     if (!batch.length && !rm.length) return;
-    const r = await workRequest('x-work-save', { put: batch.map(b => b.msg), remove: rm }, 120000);
+    // Every path says which version this window last saw (null = no file).
+    const expect = {};
+    if (hostVersions) {
+      for (const b of batch) expect[b.path] = hostVer.has(b.path) ? hostVer.get(b.path) : null;
+      for (const p of rm) if (hostVer.has(p)) expect[p] = hostVer.get(p);
+    }
+    const r = await workRequest('x-work-save', { put: batch.map(b => b.msg), remove: rm, expect }, 120000);
     if (!r.ok && r.reason) {                       // the whole batch was refused
       for (const b of batch) failed.push(`${b.path} (${r.reason})`);
     } else {
       const bad = new Map((r.failed || []).map(f => [f.path, f.reason]));
+      const versions = r.versions || {};
       for (const b of batch) {
-        if (bad.has(b.path)) {
+        if (bad.get(b.path) === 'conflict') {
+          // Another window changed this file since this window read it. Theirs
+          // stays as it is; this window's goes beside it under a new name. `known`
+          // takes the guest's sig so it is not re-sent every 30 s, and `hostVer`
+          // stays at what this window read, so a later edit conflicts again
+          // rather than overwriting.
+          conflicts.push(b.path);
+          known.set(b.path, b.sig);
+          const copy = conflictCopyName(b.path, current);
+          // Read again from the guest disk: the save above transferred the
+          // buffer, and copying every batch up front would double a 48 MB batch.
+          let data = null;
+          try { data = (await emulator.read_file('root/' + b.path)).slice(); } catch (err) { /* reported below */ }
+          const c = data
+            ? await workRequest('x-work-save', { put: [{ ...b.msg, path: copy, data: data.buffer }], remove: [], expect: { [copy]: null } }, 120000)
+            : { ok: false, reason: 'unreadable' };
+          if (c.ok) { copies.push(copy); hostVer.set(copy, (c.versions || {})[copy] || ''); }
+          else failed.push(`${b.path} (conflict, and this window's copy was not saved: ${(c.failed && c.failed[0] && c.failed[0].reason) || c.reason})`);
+        } else if (bad.has(b.path)) {
           failed.push(`${b.path} (${bad.get(b.path)})`);
           // A path the host will never accept is not retried every 30 s.
           if (bad.get(b.path) === 'bad-path' || bad.get(b.path) === 'bad-mode') known.set(b.path, b.sig);
-        } else { known.set(b.path, b.sig); saved++; bytes += b.size; savedPaths.push(b.path); }
+        } else {
+          known.set(b.path, b.sig); saved++; bytes += b.size; savedPaths.push(b.path);
+          if (versions[b.path]) hostVer.set(b.path, versions[b.path]);
+        }
       }
-      for (const p of rm) if (!bad.has(p)) { known.delete(p); }
+      for (const p of rm) {
+        // A remove another window overtook (they changed the file): keep theirs.
+        if (bad.get(p) === 'conflict') { conflicts.push(p); known.delete(p); continue; }
+        if (!bad.has(p)) { known.delete(p); hostVer.delete(p); }
+      }
       gone += r.removed || 0;
     }
     batch = []; batchBytes = 0;
@@ -1107,16 +1147,31 @@ async function doSave(reason) {
   await flush(removed);
   const w = window.__m1.work;
   w.saves++; w.saved += saved; w.removed += gone;
-  w.last = { reason, saved, removed: gone, bytes, failed, at: since(),
+  w.conflicts = (w.conflicts || 0) + conflicts.length;
+  w.last = { reason, saved, removed: gone, bytes, failed, conflicts: conflicts.length, copies, at: since(),
             paths: savedPaths.slice(0, 20) };
   w.recent.push(w.last); if (w.recent.length > 12) w.recent.shift();
   const parts = [];
   if (saved) parts.push(`${saved} file${saved === 1 ? '' : 's'} saved (${kb(bytes)})`);
   if (gone) parts.push(`${gone} removed`);
+  if (conflicts.length) parts.push(`${conflicts.length} changed in another window, so both copies are kept`
+    + (copies.length ? ` (this window's: ${copies.slice(0, 3).join(', ')})` : ''));
   if (failed.length) parts.push(`not saved: ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ` and ${failed.length - 3} more` : ''}`);
   const text = (parts.join(', ') || 'nothing saved') + (failed.length ? '' : ' -- kept in this browser');
-  if (reason !== 'command' && (saved || gone || failed.length)) status(`saved ~: ${parts.join(', ')}`, failed.length ? 'bad' : 'ok');
+  if (reason !== 'command' && (saved || gone || failed.length || conflicts.length)) status(`saved ~: ${parts.join(', ')}`, failed.length ? 'bad' : 'ok');
   return { ok: !failed.length, text };
+}
+
+// The name this window's copy of a conflicting file is saved under: beside the
+// original, never over anything the guest, the host or this window has.
+function conflictCopyName(path, current) {
+  const slash = path.lastIndexOf('/'), dir = path.slice(0, slash + 1), leaf = path.slice(slash + 1);
+  const dot = leaf.lastIndexOf('.');
+  const stem = dot > 0 ? leaf.slice(0, dot) : leaf, ext = dot > 0 ? leaf.slice(dot) : '';
+  for (let n = 1; ; n++) {
+    const name = `${dir}${stem} (this window${n > 1 ? ' ' + n : ''})${ext}`;
+    if (!current.has(name) && !hostVer.has(name) && !known.has(name)) return name;
+  }
 }
 
 // A command finished (the shell's PROMPT_COMMAND, build-guest.sh 3). Save a

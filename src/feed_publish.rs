@@ -387,12 +387,24 @@ pub(crate) mod tests {
     // The consumer half, exercised here because this is where a real projection
     // exists to read back. The `Tree` double and the executor are its.
     use crate::feed_read::{
-        block_on, read_feed, attribute, Attribution, FeedReadError, FeedSource, Tree, Unattributed,
+        attribute, block_on, read_feed, read_feed_from, Attribution, Cursor, FeedReadError,
+        FeedSource, Resumed, Tree, Unattributed,
     };
 
-    const NOW: u64 = 1_757_000_000_000;
+    /// **A fixed clock, and holding it still is a rig property a gate must ask
+    /// about before it leans on it** — `posting_again_rewrites_only_the_last_page`
+    /// passed for weeks while every page carried the publish instant, because
+    /// the fixture published twice at one `NOW`.
+    ///
+    /// `pub(crate)` so a fixture in another module that publishes a feed *and*
+    /// something else through one projector uses one clock rather than
+    /// inventing a second (`publication_probe::published`).
+    pub(crate) const NOW: u64 = 1_757_000_000_000;
 
-    fn identity() -> entity_crypto::Keypair {
+    /// The fixture keypair. `pub(crate)` for the same reason as [`NOW`]: a
+    /// multi-axis fixture needs **one** identity, because one publish is one
+    /// signed root and a second keypair would make it two publishers.
+    pub(crate) fn identity() -> entity_crypto::Keypair {
         entity_crypto::Keypair::from_seed([7u8; 32])
     }
 
@@ -588,6 +600,13 @@ pub(crate) mod tests {
     }
 
     fn entries(author: &str, n: usize) -> Vec<FeedEntry> {
+        entries_for(author, n)
+    }
+
+    /// `n` posts by `author`, on [`NOW`]'s clock — the same entries every gate
+    /// here publishes, exposed so a cross-module fixture does not grow a second
+    /// definition of *what a test post looks like*.
+    pub(crate) fn entries_for(author: &str, n: usize) -> Vec<FeedEntry> {
         (0..n)
             .map(|i| FeedEntry::new(author, NOW + i as u64, body(&format!("post {i}"))))
             .collect()
@@ -927,6 +946,164 @@ pub(crate) mod tests {
         // The control: the other entry is unaffected, so this is not a rig that
         // fails to attribute anything.
         assert!(read.iter().any(|r| r.attribution == Attribution::Signed));
+    }
+
+    /// Publish into a temp dir, then sign a root that commits **only to the keys
+    /// outside `excluded`** — a publisher whose publish scope is narrower than
+    /// what it wrote.
+    ///
+    /// ⭐ **Every `.bin` and every blob is on disk either way.**
+    /// [`crate::content_site::publish_fixture::write_entity`] writes the pointer
+    /// and the body whatever the projector records, so the *only* thing this
+    /// changes is the committed key set. That is the shape `entity-workbench-go`
+    /// measured on a real publisher — *"absent from the committed key set of a
+    /// real signed root"* — and it is what makes the gate below a gate: a reader
+    /// that fetched by path would sail through it.
+    fn publish_signed_scoped_without(
+        entries: &[FeedEntry],
+        page_size: usize,
+        excluded: &str,
+    ) -> (SignedOrigin, PublishedFeed) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut full = RootProjector::new(identity()).unwrap();
+        let author = full.peer_id().to_string();
+        let report =
+            publish_feed(dir.path(), &mut full, entries, &[], page_size, NOW).unwrap();
+
+        let mut scoped = RootProjector::new(identity()).unwrap();
+        let (mut kept, mut dropped) = (0usize, 0usize);
+        for (key, hash) in full.bindings_for_measurement() {
+            if key.starts_with(excluded) {
+                dropped += 1;
+                continue;
+            }
+            scoped.record_hash(&author, &key, hash);
+            kept += 1;
+        }
+        assert!(
+            dropped > 0,
+            "the fixture excluded nothing under '{excluded}', so it is not the narrowed \
+             publish it claims to be"
+        );
+        assert!(kept > 0, "the fixture excluded everything, so there is no feed to read");
+        scoped.finish(dir.path()).expect("the narrower root signs");
+
+        let pin = crate::content_site::signed_fetch::PinnedPublisher::from_peer_id("", &author)
+            .expect("a canonical peer-id carries its key");
+        let session =
+            std::rc::Rc::new(crate::content_site::signed_fetch::SignedSession::new(pin));
+        let path = dir.path().to_path_buf();
+        (SignedOrigin { _dir: dir, path, session }, report)
+    }
+
+    /// ⭐⭐ **`FEED-14` — a feed published over a scope that excludes the
+    /// signature location is read as ZERO attributed entries.**
+    ///
+    /// The reader half of arch's `A-36` ruling (*the publisher commits to the
+    /// evidence, or the subject is not attributable*). Three obligations make an
+    /// entry attributable end to end and the corpus named two: the signature is
+    /// **minted** (`FEED-R2`, ours, done) and it is **reachable by an authorized
+    /// reader** (`SITE` §7's grant). The third — it is **present in the
+    /// published artifact** — was unspecified, and a static reader has no second
+    /// channel to make up the difference.
+    ///
+    /// ## Why this is not [`an_entry_with_no_signature_is_unattributed…`] again
+    ///
+    /// That gate **deletes the bytes**. This one leaves every byte where the
+    /// publisher wrote it and narrows only the **committed key set** — so the
+    /// signature is sitting on disk, at the path the convention pins, and the
+    /// entry still reads as unattributed because no signed root names it. The
+    /// distinction is the whole finding: this is a fault a publisher can commit
+    /// while every file it emitted is present and correct.
+    ///
+    /// ## ⛔ The two causes are indistinguishable, and that is the argument
+    ///
+    /// `FEED-R4` says present an unsigned entry as unattributed. Asserted below:
+    /// *the author never signed* and *the publisher did not commit the
+    /// signature* produce the **identical verdict**, byte for byte. So a fully
+    /// conformant reader, behaving correctly, publishes **a false statement
+    /// about an author** — manufactured by a third party's scoping choice. That
+    /// is why obligation 3 is a MUST on the publisher rather than something a
+    /// reader could be asked to detect: there is nothing here to detect with.
+    ///
+    /// The anti-vacuity arm is the same feed over the peer root ⇒ every entry
+    /// attributed. ⭐ *A single-prefix fixture passes against both rules and
+    /// measures neither* — the same observation as one-page feed fixtures making
+    /// `FEED-R12` unfalsifiable, one axis over.
+    #[test]
+    fn a_feed_published_over_a_scope_that_excludes_the_signatures_is_read_as_unattributed() {
+        let author = author_id();
+        let posts = entries(&author, 3);
+
+        // ── The anti-vacuity arm, first: the peer-root scope the ruling
+        //    requires, which is what our publisher already does.
+        let (whole, _) = publish_signed(&posts, 10);
+        let attributed = block_on(read_feed(&whole, &author, 10)).unwrap();
+        assert_eq!(attributed.len(), 3, "the control arm did not read the feed at all");
+        assert!(
+            attributed.iter().all(|r| r.attribution == Attribution::Signed),
+            "a publish over the peer root commits to the signatures, so every entry is \
+             attributable: {:?}",
+            attributed.iter().map(|r| &r.attribution).collect::<Vec<_>>()
+        );
+
+        // ── The subject: identical bytes, a narrower committed key set.
+        let (scoped, report) = publish_signed_scoped_without(&posts, 10, "system/signature/");
+
+        // The discriminating precondition — the bytes really are there. Without
+        // this the gate cannot be told from deleting them, and the finding is
+        // precisely that a publisher can strand a signature it emitted.
+        for hash in &report.entry_hashes {
+            let on_disk = scoped
+                .path
+                .join(&author)
+                .join(format!("{}.bin", signature_key(&author, hash)));
+            assert!(
+                on_disk.exists(),
+                "the fixture did not write the signature it is about to fail to commit to: \
+                 {}",
+                on_disk.display()
+            );
+        }
+
+        let read = block_on(read_feed(&scoped, &author, 10)).unwrap();
+        assert_eq!(
+            read.len(),
+            3,
+            "every entry still arrives — the entries are inside the scope; it is only the \
+             evidence that is outside it"
+        );
+        assert!(
+            read.iter().all(|r| r.attribution
+                == Attribution::Unattributed(Unattributed::NoSignature)),
+            "FEED-14: zero attributed, and each for the reason the reader can actually \
+             see: {:?}",
+            read.iter().map(|r| &r.attribution).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            read.iter().filter(|r| r.attribution.may_name_the_author()).count(),
+            0,
+            "and not one of them may be rendered as by its author"
+        );
+        assert!(
+            read.iter().all(|r| r.obtained.signature.is_none()),
+            "a republisher carrying these forward would carry no evidence either — §6.1 \
+             rule 3's may-carry-never-supply, with nothing to carry"
+        );
+
+        // ⛔ The two causes, side by side, producing one verdict.
+        let (mut deleted, del_report, _) = publish(&posts, 10);
+        for hash in &del_report.entry_hashes {
+            deleted.0.remove(&signature_key(&author, hash));
+        }
+        let never_signed = block_on(read_feed(&deleted, &author, 10)).unwrap();
+        assert_eq!(
+            never_signed.iter().map(|r| r.attribution.clone()).collect::<Vec<_>>(),
+            read.iter().map(|r| r.attribution.clone()).collect::<Vec<_>>(),
+            "an author who never signed and a publisher who did not commit the signature \
+             are the SAME verdict to a static reader — which is why the obligation has to \
+             land on the publisher"
+        );
     }
 
     /// **Every way an attribution can fail, each with its own word.** A copied
@@ -1275,6 +1452,167 @@ pub(crate) mod tests {
     /// A head naming a page the publisher does not serve is **not** the same as
     /// an entry going missing: the publisher committed to that page number in a
     /// signed root. Different fact, different outcome.
+    // -----------------------------------------------------------------------
+    // §4.4 — the reader's cursor. Local state, and the thing that makes §4.3
+    // rule 4's `O(new)` real rather than a sentence.
+    // -----------------------------------------------------------------------
+
+    /// **A poll that holds a position returns only what is newer than it** —
+    /// §4.3 rule 4, *read down from `current` to your cursor and stop.*
+    ///
+    /// The control is the same feed read with no position, which returns the
+    /// whole window: without it this gate would pass against a reader that
+    /// simply returned nothing.
+    #[test]
+    fn a_poll_that_holds_a_position_returns_only_what_is_newer() {
+        let author = author_id();
+        let (tree, report, author) = publish(&entries(&author, 6), 2);
+        let h = &report.entry_hashes; // oldest-first, as handed in
+
+        // Pages fill oldest-first, two to a page: entry 3 is on page 1.
+        let held = Cursor { page: 1, applied: h[3] };
+        let w = block_on(read_feed_from(&tree, &author, 10, Some(&held))).unwrap();
+        assert_eq!(w.resumed, Resumed::AtCursor);
+        assert_eq!(
+            w.entries.iter().map(|r| r.hash).collect::<Vec<_>>(),
+            vec![h[5], h[4]],
+            "only the two entries newer than the position, newest-first"
+        );
+        assert_eq!(w.next, Some(Cursor { page: 2, applied: h[5] }));
+
+        // The control: no position ⇒ the whole window.
+        let all = block_on(read_feed_from(&tree, &author, 10, None)).unwrap();
+        assert_eq!(all.entries.len(), 6);
+        assert_eq!(all.resumed, Resumed::FromNewest);
+        assert_eq!(all.next, Some(Cursor { page: 2, applied: h[5] }));
+
+        // And an unchanged feed polled at a fresh position costs nothing and
+        // moves nothing — which is the whole point of holding one.
+        let idle = block_on(read_feed_from(&tree, &author, 10, all.next.as_ref())).unwrap();
+        assert!(idle.entries.is_empty(), "nothing is newer than the newest");
+        assert_eq!(idle.resumed, Resumed::AtCursor);
+        assert_eq!(idle.next, all.next, "and the position stands");
+    }
+
+    /// ⭐ **`FEED-R14` — an entry deleted under a reader resumes from its page.**
+    ///
+    /// §4.4: *"an author may remove the very entry a reader was holding as its
+    /// position, and **a cursor that cannot survive that is a cursor that breaks
+    /// on edit**."* This is the whole reason the position carries a page number
+    /// and not only a hash, and it is what we told arch we could not implement
+    /// against §2.4's v0.2 field.
+    ///
+    /// The author's edit is modelled the way §4.3 rule 3 specifies it — *"a page
+    /// that loses an entry is a page with fewer entries"*, rewritten in place,
+    /// never renumbered — because a fixture that renumbered would be testing a
+    /// publisher the convention forbids.
+    ///
+    /// **The bound is asserted, not just the recovery**: resuming costs ONE page
+    /// of re-delivery, not a walk back to the beginning of the feed. A reader
+    /// that started over would also "survive" the edit, so without the second
+    /// assertion this gate cannot tell the two apart.
+    #[test]
+    fn an_entry_deleted_under_a_reader_resumes_from_its_page_and_costs_one_page() {
+        let author = author_id();
+        let (mut tree, report, author) = publish(&entries(&author, 6), 2);
+        let h = &report.entry_hashes;
+        let held = Cursor { page: 1, applied: h[3] };
+
+        let page_key = index_page_key(1);
+        let before = IndexPage::from_entity(tree.0.get(&page_key).unwrap(), 1).unwrap();
+        let kept: Vec<EntityRef> = before
+            .entries
+            .iter()
+            .filter(|r| !matches!(r, EntityRef::Pinned { hash, .. } if *hash == held.applied))
+            .cloned()
+            .collect();
+        assert_eq!(kept.len(), before.entries.len() - 1, "the fixture removed nothing");
+        tree.0.insert(page_key, IndexPage::new(1, kept, NOW).to_entity().unwrap());
+
+        let w = block_on(read_feed_from(&tree, &author, 10, Some(&held))).unwrap();
+        assert_eq!(w.resumed, Resumed::FromPage { page: 1 }, "§4.4's MUST");
+        assert_eq!(
+            w.entries.iter().map(|r| r.hash).collect::<Vec<_>>(),
+            vec![h[5], h[4], h[2]],
+            "page 1 comes back whole — entry 2 again, which is what FromPage warns about"
+        );
+        assert!(
+            !w.entries.iter().any(|r| r.hash == h[0] || r.hash == h[1]),
+            "resuming from `page` must not walk back to the start of the archive"
+        );
+        assert_eq!(w.next, Some(Cursor { page: 2, applied: h[5] }));
+    }
+
+    /// **A position outside the publisher's range names which side it fell off.**
+    ///
+    /// Below `oldest` is §4.3 rule 3 working as designed — a publisher may drop
+    /// old pages — and the reader has lost history through nobody's fault. Above
+    /// `current` is a publisher anomaly: rule 1 rewrites only the last page, so
+    /// an index that no longer reaches a page we already read is not something a
+    /// conformant publisher produces. Both would be a silent full re-read if
+    /// they were collapsed into *"no position"*, and only one of them is normal.
+    #[test]
+    fn a_position_outside_the_publishers_range_names_which_side_it_fell_off() {
+        let author = author_id();
+        let (mut tree, report, author) = publish(&entries(&author, 6), 2);
+        let h = &report.entry_hashes;
+
+        let head_key = index_head_key().to_string();
+        let mut head = IndexHead::from_entity(tree.0.get(&head_key).unwrap()).unwrap();
+        head.oldest = 1;
+        tree.0.insert(head_key, head.to_entity().unwrap());
+
+        let dropped = Cursor { page: 0, applied: h[1] };
+        let w = block_on(read_feed_from(&tree, &author, 10, Some(&dropped))).unwrap();
+        assert_eq!(w.resumed, Resumed::ArchiveMovedOn { held: 0, oldest: 1 });
+        assert_eq!(w.entries.len(), 4, "everything still kept is new to this reader");
+        assert_eq!(w.next, Some(Cursor { page: 2, applied: h[5] }));
+
+        let ahead = Cursor { page: 99, applied: h[5] };
+        let w = block_on(read_feed_from(&tree, &author, 10, Some(&ahead))).unwrap();
+        assert_eq!(w.resumed, Resumed::PositionAhead { held: 99, current: 2 });
+        assert_eq!(w.entries.len(), 4);
+    }
+
+    /// ⛔ **The gap rule — a catch-up cut short by the limit does not advance.**
+    ///
+    /// The entries returned are the newest, so between the oldest of them and
+    /// the held position there is a stretch the reader has never seen.
+    /// Advancing would put the next poll's stopping point *above* that stretch
+    /// and skip it permanently — a silent loss, on the path a reader takes after
+    /// being away.
+    ///
+    /// ⭐ **And a FRESH truncated read is the opposite call.** A reader with no
+    /// position never claimed the older entries, so the newest `limit` are its
+    /// position and the backlog below is a backfill question. Collapsing the two
+    /// either loses entries or leaves a first read unable to establish a cursor
+    /// at all — and that second failure is the one this whole mechanism exists
+    /// to remove, so it would be a quiet way to ship nothing.
+    #[test]
+    fn a_catch_up_cut_short_by_the_limit_does_not_advance_the_position() {
+        let author = author_id();
+        let (tree, report, author) = publish(&entries(&author, 6), 2);
+        let h = &report.entry_hashes;
+
+        let held = Cursor { page: 0, applied: h[0] };
+        let w = block_on(read_feed_from(&tree, &author, 2, Some(&held))).unwrap();
+        assert_eq!(w.entries.len(), 2);
+        assert_eq!(w.resumed, Resumed::Behind { held: 0 });
+        assert_eq!(
+            w.next, None,
+            "advancing here would skip entries 1..3 forever — the caller keeps what it has"
+        );
+
+        let fresh = block_on(read_feed_from(&tree, &author, 2, None)).unwrap();
+        assert_eq!(fresh.entries.len(), 2);
+        assert_eq!(fresh.resumed, Resumed::FromNewest);
+        assert_eq!(
+            fresh.next,
+            Some(Cursor { page: 2, applied: h[5] }),
+            "a first read establishes a position even when the limit truncates it"
+        );
+    }
+
     #[test]
     fn a_head_naming_a_page_that_does_not_resolve_is_its_own_outcome() {
         let author = author_id();

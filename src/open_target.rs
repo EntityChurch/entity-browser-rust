@@ -68,6 +68,10 @@ pub struct Viewer {
     /// here resolves to no factory and silently opens nothing, which is the same
     /// shape as the retired `Games` key.
     pub window_type: &'static str,
+    /// How a reader asks a publisher *"do you publish this at all?"* — see
+    /// [`EntryPoint`], and read its doc before adding a row, because the two
+    /// arms are a fact about the conventions and not a convenience here.
+    pub entry: EntryPoint,
     /// The peer-relative prefix this viewer's addresses live under, **leading
     /// slash, no trailing one** — see [`FEED_SEGMENT`] for why the leading one is
     /// load-bearing. Pinned against the owning convention's own path builders by
@@ -80,6 +84,56 @@ pub struct Viewer {
     pub why: &'static str,
 }
 
+/// How a reader asks a publisher **whether they publish this convention at
+/// all** — the one question a name binding cannot answer.
+///
+/// ⭐ **The two arms are not an implementation detail; they are the namespace
+/// asymmetry the conventions themselves carry, and it is worth knowing which
+/// one you are in before designing anything that browses.**
+///
+/// - `APP-CONVENTION-FEED` §4.2 pins **two tree paths** by hand — the head at
+///   `/{peer}/app/feed/index` and pages beneath it — precisely because §4.1
+///   argues a reader holding no reference *has to start somewhere*, and that
+///   discovering what is new under a prefix costs the whole trie. So the feed
+///   probe is **one keyed read**.
+/// - `APP-CONVENTION-SEMANTIC-CONTENT-SITE` v0.5 §2 makes a site **"a free
+///   subgraph at any publisher-chosen tree path"** and pins no tree path at
+///   all; what it registers (§11) is a *URL projection prefix* at
+///   `EXTENSION-NETWORK` §6.5.6's demux, explicitly *"a publish-time
+///   projection, not a tree-storage rule"*. So there is no key to ask for, the
+///   probe is a **bounded walk**, and `/sites` is **this publisher's** choice
+///   of placement rather than the convention's.
+///
+/// **A convention that pins an entry point can be probed in one round trip; one
+/// that does not has to be walked.** That is the whole cost difference, and it
+/// is the argument for pinning one.
+/// **Both arms are spelled with a LEADING SLASH**, like [`Viewer::segment`] and
+/// for the same two reasons: it is what makes them read as *paths* rather than
+/// type tags to a human and to `spec vocab` alike, and it keeps one spelling
+/// convention across the row. [`EntryPoint::relative`] strips it — the signed
+/// session takes a peer-relative key with no leading slash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryPoint {
+    /// One key whose presence in the publisher's **signed root** is the answer.
+    Key(&'static str),
+    /// A prefix (trailing slash) to walk, because the convention pins no entry
+    /// point. Bounded at the call site; a walk that ran out of budget reports
+    /// itself rather than answering short.
+    Prefix(&'static str),
+}
+
+impl EntryPoint {
+    /// The peer-relative form a `SignedSession` takes — this spelling with the
+    /// leading slash removed.
+    pub fn relative(&self) -> &'static str {
+        let s = match self {
+            EntryPoint::Key(k) => k,
+            EntryPoint::Prefix(p) => p,
+        };
+        s.strip_prefix('/').unwrap_or(s)
+    }
+}
+
 /// THE table. Two implementors, which is the minimum that makes a table
 /// trustworthy — `publish_axes`' own rule: *"a registration table with one
 /// implementor and two special cases is a table nobody can trust."*
@@ -87,16 +141,29 @@ pub fn viewers() -> &'static [Viewer] {
     &[
         Viewer {
             window_type: SITE_BROWSER,
+            entry: EntryPoint::Prefix(SITES_ENTRY_PREFIX),
             segment: SITES_SEGMENT,
             why: "APP-CONVENTION-SEMANTIC-CONTENT-SITE — /{peer}/sites/{site}/pages/{page}",
         },
         Viewer {
             window_type: FEED,
+            entry: EntryPoint::Key(FEED_ENTRY_KEY),
             segment: FEED_SEGMENT,
             why: "APP-CONVENTION-FEED §4.2 — /{peer}/app/feed/index and what hangs under it",
         },
     ]
 }
+
+/// Where this publisher places sites — **ours, not the convention's.** SITE
+/// v0.5 §2 leaves placement free, so this is a choice we made and the test
+/// below is what keeps it honest against `content_site::paths`.
+const SITES_ENTRY_PREFIX: &str = "/sites/";
+
+/// `APP-CONVENTION-FEED` §4.2's index head — **the convention's**, pinned
+/// against `feed::index_head_key` by
+/// [`the_entry_points_are_pinned_against_the_conventions_own_paths`] so the two
+/// spellings of §4.2 in this crate cannot drift.
+const FEED_ENTRY_KEY: &str = "/app/feed/index";
 
 /// The Site Browser's identity key.
 ///
@@ -209,6 +276,20 @@ pub fn site_directory(peer: &str) -> EntityRef {
     EntityRef::live(peer, "/sites")
 }
 
+/// *Everything of this convention that this publisher has* — the viewer's own
+/// segment under their peer.
+///
+/// **One expression instead of a per-convention builder**, which matters
+/// because a caller holding a `Viewer` (a probe result, a browse row) would
+/// otherwise need a `match` on the window type to pick between
+/// [`site_directory`] and [`feed`] — the literal this module exists to retire,
+/// reintroduced one level up. It works because [`path_is_under`]'s exact-match
+/// arm makes a bare segment routable, which is the difference between
+/// *routable* and *aimable* that arm was added for.
+pub fn directory(peer: &str, viewer: &Viewer) -> EntityRef {
+    EntityRef::live(peer, viewer.segment)
+}
+
 /// A target naming a publisher's feed — `APP-CONVENTION-FEED` §4.2's index head,
 /// which is where a reader holding no reference has to start.
 pub fn feed(peer: &str) -> EntityRef {
@@ -275,6 +356,74 @@ mod tests {
         assert!(
             crate::feed::index_head_path("PEER").starts_with(&format!("/PEER{feed_seg}/")),
             "the feed viewer's segment no longer matches APP-CONVENTION-FEED §4.2"
+        );
+    }
+
+    /// ⭐ **The entry points are the conventions' own too, and one of them is
+    /// not a convention's at all.**
+    ///
+    /// The feed's is `APP-CONVENTION-FEED` §4.2's pinned head, so it is checked
+    /// against `feed::index_head_key` — two spellings of one normative path in
+    /// one crate is C15's drift with a routing symptom.
+    ///
+    /// The site's is checked against `content_site::paths` and **nothing
+    /// normative**, because SITE v0.5 §2 makes placement free: *"a site is a
+    /// free subgraph at any publisher-chosen tree path"*. That asymmetry is the
+    /// point of [`EntryPoint`] having two arms, and this test is where it is
+    /// stated in code rather than in prose — a probe that assumed every
+    /// convention pins an entry point would answer *"this publisher has no
+    /// sites"* about every publisher who placed theirs somewhere else.
+    #[test]
+    fn the_entry_points_are_pinned_against_the_conventions_own_paths() {
+        let site = viewers().iter().find(|v| v.window_type == SITE_BROWSER).unwrap();
+        let EntryPoint::Prefix(site_entry) = site.entry else {
+            panic!("a convention that pins no tree path cannot have a keyed entry point");
+        };
+        assert!(
+            crate::content_site::paths::manifest_path("PEER", "demo")
+                .starts_with(&format!("/PEER{site_entry}")),
+            "the site viewer's entry prefix no longer matches content_site::paths"
+        );
+
+        let feed = viewers().iter().find(|v| v.window_type == FEED).unwrap();
+        let EntryPoint::Key(feed_entry) = feed.entry else {
+            panic!("FEED §4.2 pins the head by hand; a prefix walk is not what it asks for");
+        };
+        assert_eq!(
+            feed.entry.relative(),
+            crate::feed::index_head_key(),
+            "the feed viewer's entry key no longer matches APP-CONVENTION-FEED §4.2"
+        );
+        assert!(
+            feed_entry.starts_with('/') && site_entry.starts_with('/'),
+            "entry points are spelled with a leading slash so they read as paths, not tags"
+        );
+    }
+
+    /// ⭐ **`directory` must agree with the hand-written builders, and it must
+    /// route back to the viewer it was built from.**
+    ///
+    /// The first half stops two spellings of *"this publisher's sites"*; the
+    /// second is the property that makes a generic builder safe at all — a
+    /// segment that did not round-trip through [`route`] would hand a caller an
+    /// address the table refuses, i.e. an Open button that opens nothing.
+    #[test]
+    fn a_directory_address_agrees_with_the_builders_and_routes_home() {
+        for v in viewers() {
+            assert_eq!(
+                route(&directory("PEER", v)),
+                Routing::Viewer(v.window_type),
+                "`{}`'s own segment does not route back to it",
+                v.window_type
+            );
+        }
+        let site = viewers().iter().find(|v| v.window_type == SITE_BROWSER).unwrap();
+        assert_eq!(directory("PEER", site), site_directory("PEER"));
+        let feed_v = viewers().iter().find(|v| v.window_type == FEED).unwrap();
+        assert_eq!(
+            payload(&directory("PEER", feed_v), FEED_SEGMENT),
+            Some(""),
+            "the Feed window's aim reads a payload, and a bare segment must give it the empty one"
         );
     }
 

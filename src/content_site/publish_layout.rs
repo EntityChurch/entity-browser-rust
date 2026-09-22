@@ -160,6 +160,70 @@ impl PublishLayout {
         }
     }
 
+    /// **The publisher's advertised layout, if the artifact is about the peer we
+    /// are reading** — [`Self::from_profile_artifact`] with AP52/AP53's peer
+    /// guard applied.
+    ///
+    /// The two halves belong together and were written apart: `transport-profile`
+    /// is ONE artifact per hosting scope with PER-PEER contents, so decoding it
+    /// without asking whose it is locates the other publisher's tree. That pairing
+    /// is the whole rule, and this is the one place it is expressed — [`DirFetcher`]
+    /// (the CLI reader) and `feed_gather::PublishedTree` (the gatherer's source)
+    /// both call it, rather than each carrying a copy that can drift.
+    ///
+    /// [`DirFetcher`]: super::signed_root::DirFetcher
+    pub fn advertised_for(bytes: &[u8], peer_id: &str) -> Option<Self> {
+        if let Some(declared) = Self::profile_peer_id(bytes) {
+            if declared != peer_id {
+                return None;
+            }
+        }
+        Self::from_profile_artifact(bytes)
+    }
+
+    /// **Re-root an advertised layout onto a different origin** — the move a
+    /// directory consumer needs, because *a directory is an origin with the
+    /// transport removed.*
+    ///
+    /// A profile advertises absolute URLs at the origin the publisher was
+    /// pointed at when it emitted. A consumer reading the same bytes off disk
+    /// holds them at a different origin (`""`, i.e. relative to the directory),
+    /// so every URL in the layout has to move together — **all three, or none.**
+    ///
+    /// ⚠ **Returns `None` if any URL is not under the profile's own origin**,
+    /// rather than re-rooting the ones that match and leaving the rest absolute.
+    /// A layout whose manifest and content live at different origins is one this
+    /// directory cannot serve, and a partial re-root reads as a working consumer
+    /// that 404s on every blob — which presents as a withholding origin, the
+    /// same misattribution [`Self::from_http_poll_profile`] refuses to make
+    /// about an unknown `content_layout`.
+    pub fn rooted_at(&self, peer_id: &str, origin: &str) -> Option<Self> {
+        let from = self.origin_for(peer_id);
+        let to = origin.trim_end_matches('/');
+        // ⚠ **The leading slash is load-bearing and dropping it is a bug that
+        // reads as a 404 from the origin.** [`Self::prefix_carries_peer`] — the
+        // discriminator that decides whether `tree_url` appends the peer-id —
+        // is `rsplit_once('/')`, so it cannot see a peer in a prefix that has no
+        // slash in it at all. Re-rooting our own same-origin `/{peer}` onto `""`
+        // as a bare `{peer}` therefore flips that test and every tree URL comes
+        // out `{peer}/{peer}/…`. Measured 2026-09-15: the whole `--gather` suite
+        // red with *"signature pointer: origin served no such entity"* — the
+        // origin blamed for a string we mangled. Empty stays empty (the trailing
+        // trim), which is the form `conventional("")` already produces.
+        let join = |url: &str| {
+            let rel = Self::relative_to_origin(url, &from)?;
+            let joined = if to.is_empty() { format!("/{rel}") } else { format!("{to}/{rel}") };
+            Some(joined.trim_end_matches('/').to_string())
+        };
+        Some(Self {
+            manifest_url: join(&self.manifest_url)?,
+            content_url_prefix: join(&self.content_url_prefix)?,
+            content_layout: self.content_layout,
+            tree_url_prefix: join(&self.tree_url_prefix)?,
+            tree_leaf_suffix: self.tree_leaf_suffix.clone(),
+        })
+    }
+
     /// **Which peer a transport-profile artifact declares itself to be about**,
     /// or `None` when it does not say.
     ///
@@ -351,6 +415,45 @@ mod tests {
             "if these ever coincide this gate has stopped testing anything — the \
              point is that a convention-derived front door misses a conformant peer"
         );
+    }
+
+    /// **Re-rooting onto a directory keeps every URL resolvable — including
+    /// ours, whose prefix carries the peer-id.**
+    ///
+    /// The two shapes are opposite and both real: a same-origin emission
+    /// advertises `/{peer}` (peer-rooted, empty head) and a foreign publisher
+    /// advertises a bare origin (not peer-rooted). [`PublishLayout::tree_url`]
+    /// decides between them with `rsplit_once('/')`, so **a prefix with no slash
+    /// in it is silently read as not-peer-rooted** and the peer-id gets appended
+    /// a second time.
+    ///
+    /// Asserted through `tree_leaf_url` rather than on the field, because the
+    /// field being `/{peer}` vs `{peer}` is not the property — *the URL a
+    /// consumer fetches* is, and that is what a test on the string would have
+    /// missed.
+    #[test]
+    fn re_rooting_a_layout_onto_a_directory_does_not_double_the_peer_id() {
+        let peer = "2PEER";
+        for (label, advertised) in [
+            ("peer-rooted, as our own same-origin publish emits", "/2PEER"),
+            ("origin-rooted, as the Go arm emits", "https://go-arm.example"),
+        ] {
+            let manifest = match advertised.starts_with("http") {
+                true => format!("{advertised}/manifest"),
+                false => format!("{advertised}/system/peer/published-root"),
+            };
+            let l = PublishLayout::from_http_poll_profile(&profile(advertised, &manifest))
+                .expect("decodes");
+            let rooted = l.rooted_at(peer, "").expect("re-roots onto a directory");
+
+            let url = rooted.tree_leaf_url(peer, "app/feed/index");
+            assert_eq!(
+                url.trim_start_matches('/'),
+                format!("{peer}/app/feed/index.bin"),
+                "{label}: {advertised:?} → {:?} produced {url:?}",
+                rooted.tree_url_prefix
+            );
+        }
     }
 
     /// A profile with no `manifest_url_prefix` is refused rather than filled in

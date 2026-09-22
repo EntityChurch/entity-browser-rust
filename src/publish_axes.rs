@@ -28,7 +28,7 @@
 //! | `--plan`'s per-unit add/remove naming | the value of the plan is naming *which site* disappears, and a uniform "N units" term would be strictly worse reporting than what sites and apps have. Every axis owes a term (see [`PublishAxis::incoming`]); only the naming is bespoke |
 //! | the `http_poll` URL builders | consumer-side, and the feed's already exist ([`crate::feed_fetch`]) |
 //!
-//! ## The clean is wholesale, so [`PublishAxis::tree_prefix`] is load-bearing
+//! ## The clean is wholesale, so [`PublishAxis::tree_prefixes`] is load-bearing
 //!
 //! `run_projection` removes `{base}/{peer}/` in one `remove_dir_all`. Anything
 //! under a peer's prefix is therefore **in scope by construction** — a publish
@@ -36,7 +36,46 @@
 //! is what made the apps blind spot expensive (*"plan a content fix, forget
 //! `--ingest-apps`, publish"* reported *"nothing would be removed"* and then
 //! deleted every app bundle on the domain), and it is why a row states its
-//! prefix: the prefix is what the accounting is *about*.
+//! prefixes: they are what the accounting is *about*.
+//!
+//! ## ⭐ The declaration is MEASURED, and it was a false statement until it was
+//!
+//! `tree_prefix` was singular, `FeedAxis` answered `app/feed/`, and
+//! [`crate::feed_publish::publish_feed`] also writes `system/signature/{hex}` —
+//! `FEED-R2`'s per-entry detached signature, at the kernel's invariant pointer.
+//! So the one method whose whole job is to state what a publish touches was
+//! **wrong about the axis that had most recently joined the table**, and the
+//! only thing standing between that and a live defect was that nothing read it:
+//! the clean is `clean.push(base.join(peer_id))`, the whole peer subtree, by a
+//! mechanism that never consults the declaration.
+//!
+//! ⇒ ***a value that is only printed is not a guard.*** Second instance in this
+//! tree after `--prune`'s `assets_named_by`, which was described in its own doc
+//! as *"the whole safety argument"* and wired to nothing — and a second instance
+//! of a shape in one tree is when it earns a check rather than a note.
+//! [`every_key_an_axis_records_falls_under_a_prefix_it_declared`] is the check:
+//! it runs each axis's [`project`](PublishAxis::project) against a real
+//! projector and compares the keys it **recorded** with the prefixes it
+//! **declared**, so the two can no longer drift in silence.
+//!
+//! **What the false declaration was one commit away from costing**, stated
+//! because it is the reason this is not hygiene: the day anyone scopes the clean
+//! to the declared prefixes — which is what the declaration is *for* —
+//! `app/feed/` is cleaned and rebuilt while `system/signature/` is left behind,
+//! unbound by the new root, and **every entry in a statically published feed
+//! becomes unattributable.** `entity-workbench-go` reached exactly that
+//! conclusion reading our source; it was wrong about today's code (our root
+//! commits over the peer subtree, so an own-feed signature is in it — measured,
+//! `a_published_feed_reaches` reads 34 of 34 attributed) and right about the
+//! system the declaration described.
+//!
+//! **This is the emitter half of arch's `A-36` ruling** (*the publisher commits
+//! to the evidence, or the subject is not attributable*): the ruling is that a
+//! publish MUST commit over a scope containing both the entries and their
+//! signatures, which our peer-root projection already does. Nothing on the
+//! emitter moved. What moved is that the table now **says** so, and the reader
+//! half is `FEED-14` —
+//! `crate::feed_publish::a_feed_published_over_a_scope_that_excludes_the_signatures_is_read_as_unattributed`.
 
 // Native-only: every emitter below writes a directory, which is what
 // `RootProjector`, `publish_fixture` and `feed_publish` are all gated on.
@@ -58,10 +97,22 @@ pub trait PublishAxis {
     /// What an operator sees this called in a report or a refusal.
     fn name(&self) -> &'static str;
 
-    /// The **peer-relative** tree prefix this convention owns — what the
+    /// Every **peer-relative** tree prefix this axis writes under — what the
     /// wholesale clean removes, and therefore what a publish carrying none of
     /// this axis silently deletes. See the module doc.
-    fn tree_prefix(&self) -> &'static str;
+    ///
+    /// ⚠ **Plural, because an axis does not only write its own convention's
+    /// namespace.** The feed's entries and index live under `app/feed/`, and
+    /// `FEED-R2`'s per-entry signature lives at `system/signature/{hex}` — the
+    /// *kernel's* invariant pointer (V7 §3.5), which the convention borrows
+    /// rather than owns. A singular answer forced that second prefix to go
+    /// unstated, which it did for two days.
+    ///
+    /// **Under the publisher's own peer, always.** Foreign segments are
+    /// [`carried_peers`](Self::carried_peers)' subject and are deliberately not
+    /// expressible here: the clean is rooted at `{base}/{peer}/` and cannot
+    /// reach them, so listing one would describe a removal that cannot happen.
+    fn tree_prefixes(&self) -> Vec<&'static str>;
 
     /// How many units this publish carries: sites, app bundles, posts. Zero
     /// means the axis contributes nothing — which is a real answer and not an
@@ -159,8 +210,8 @@ impl PublishAxis for SiteAxis<'_> {
     fn name(&self) -> &'static str {
         "sites"
     }
-    fn tree_prefix(&self) -> &'static str {
-        "sites/"
+    fn tree_prefixes(&self) -> Vec<&'static str> {
+        vec!["sites/"]
     }
     fn incoming(&self) -> usize {
         self.sites.len()
@@ -198,8 +249,8 @@ impl PublishAxis for AppsAxis<'_> {
     fn name(&self) -> &'static str {
         "apps"
     }
-    fn tree_prefix(&self) -> &'static str {
-        "apps/"
+    fn tree_prefixes(&self) -> Vec<&'static str> {
+        vec!["apps/"]
     }
     fn incoming(&self) -> usize {
         self.sets.values().map(|i| i.catalog.entries.len()).sum()
@@ -226,11 +277,22 @@ impl PublishAxis for AppsAxis<'_> {
                 set,
                 &ing.catalog,
                 &ing.bundles,
+                &ing.assets,
                 prefix,
                 Some(root),
             )
             .map_err(|e| format!("app-set '{set}': {e}"))?;
-            lines.push(format!("apps[{set}]: {n} bundle(s) → {peer_id}/apps/{set}/"));
+            let mut line = format!("apps[{set}]: {n} bundle(s) → {peer_id}/apps/{set}/");
+            if !ing.assets.is_empty() {
+                let files: usize = ing.assets.iter().map(|b| b.index.entries.len()).sum();
+                let bytes: u64 = ing.assets.iter().map(|b| b.index.total_bytes()).sum();
+                line.push_str(&format!(
+                    " + {} asset bundle(s), {files} file(s), {:.1} MiB",
+                    ing.assets.len(),
+                    bytes as f64 / 1048576.0
+                ));
+            }
+            lines.push(line);
         }
         Ok((!lines.is_empty()).then(|| lines.join("\n  ")))
     }
@@ -248,10 +310,20 @@ impl PublishAxis for FeedAxis<'_> {
     fn name(&self) -> &'static str {
         "feed"
     }
-    fn tree_prefix(&self) -> &'static str {
-        // §4.2's pinned index and, beneath it, the pages. Our entry keys
-        // (`app/feed/entries/`) sit alongside; both are under `app/feed/`.
-        "app/feed/"
+    fn tree_prefixes(&self) -> Vec<&'static str> {
+        vec![
+            // §4.2's pinned index and, beneath it, the pages. Our entry keys
+            // (`app/feed/entries/`) sit alongside; both are under `app/feed/`.
+            "app/feed/",
+            // ⭐ **`FEED-R2`, and the prefix this axis does not own.** One
+            // detached `system/signature` per entry, at V7 §3.5's invariant
+            // pointer — the kernel's namespace, which is why it is easy to
+            // forget it is written here. It is also the whole of arch's `A-36`:
+            // a publish scope that excludes this prefix produces a feed whose
+            // every entry reads as unattributed, and a reader cannot tell that
+            // from an author who never signed.
+            "system/signature/",
+        ]
     }
     fn incoming(&self) -> usize {
         self.feed.map_or(0, |f| f.entries.len())
@@ -330,10 +402,12 @@ impl PublishAxis for MirrorAxis<'_> {
     fn name(&self) -> &'static str {
         "mirrors"
     }
-    fn tree_prefix(&self) -> &'static str {
+    fn tree_prefixes(&self) -> Vec<&'static str> {
         // §6.0.1's derived key, under the GATHERER. The carried bodies are not
-        // here and cannot be — see `carried_peers`.
-        crate::feed::mirror_prefix()
+        // here and cannot be — see `carried_peers`. No `system/signature/` row:
+        // a gathered entry's signature is its **author's**, so it is carried
+        // under the author's segment and never minted under ours.
+        vec![crate::feed::mirror_prefix()]
     }
     fn incoming(&self) -> usize {
         self.mirrors.len()
@@ -403,25 +477,31 @@ fn head_clock(feed: &OwnedFeed) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     /// **A publish's axes are enumerated in one place, and every one of them
-    /// states the tree prefix the wholesale clean removes.** The census is the
+    /// states the tree prefixes the wholesale clean removes.** The census is the
     /// point: the clean deletes `{base}/{peer}/` entire, so an axis nobody
     /// listed is not an axis that is left alone — it is one that is silently
     /// deleted the first time somebody publishes without it.
+    ///
+    /// ⚠ **This census asserts what the table SAYS. It cannot tell you whether
+    /// the table is true** — that is
+    /// [`every_key_an_axis_records_falls_under_a_prefix_it_declared`], and for
+    /// two days this test was green over a `FeedAxis` row that was wrong.
     #[test]
-    fn every_axis_names_the_tree_prefix_the_clean_would_remove() {
+    fn every_axis_names_the_tree_prefixes_the_clean_would_remove() {
         let sets = crate::apps::ingest::IngestedSets::new();
         let all = axes("QmPeer", &[], &sets, None, &[]);
-        let rows: Vec<(&str, &str)> =
-            all.iter().map(|a| (a.name(), a.tree_prefix())).collect();
+        let rows: Vec<(&str, Vec<&str>)> =
+            all.iter().map(|a| (a.name(), a.tree_prefixes())).collect();
         assert_eq!(
             rows,
             vec![
-                ("sites", "sites/"),
-                ("apps", "apps/"),
-                ("feed", "app/feed/"),
-                ("mirrors", "app/feed/mirrors/"),
+                ("sites", vec!["sites/"]),
+                ("apps", vec!["apps/"]),
+                ("feed", vec!["app/feed/", "system/signature/"]),
+                ("mirrors", vec!["app/feed/mirrors/"]),
             ],
             "a fifth L5 convention is a row in `axes` — if this fails because you added \
              one, add it here and check `run_plan` gives it a term"
@@ -429,6 +509,184 @@ mod tests {
         // Nothing to publish is not an error on any axis; most publishers use
         // one convention.
         assert!(all.iter().all(|a| a.incoming() == 0));
+    }
+
+    /// ⭐⭐ **THE DECLARATION, MEASURED — every key an axis records falls under a
+    /// prefix that axis declared.**
+    ///
+    /// Each axis is handed something real to publish, projected into a temp dir
+    /// through a real [`RootProjector`], and the keys it **recorded** are
+    /// compared against the prefixes it **declared**. That is the difference
+    /// between a table and a guard: the census above is satisfied by whatever
+    /// the rows happen to say, and this one is satisfied only by their being
+    /// true.
+    ///
+    /// **It found a live false statement the first time it was run** —
+    /// `FeedAxis` declared `app/feed/` and records one `system/signature/{hex}`
+    /// per entry (`FEED-R2`). See the module doc for what that was one commit
+    /// away from costing.
+    ///
+    /// **Anti-vacuity is the load-bearing half**, because an axis handed nothing
+    /// records nothing and passes trivially: every axis must contribute at least
+    /// one key, and the set of axes exercised is asserted, so a fifth row cannot
+    /// join the table without a fixture. *A census you have not falsified reports
+    /// what you hoped.*
+    ///
+    /// **Foreign keys are out of scope by construction, not by filtering:**
+    /// [`RootProjector::record`] early-returns for a peer that is not the
+    /// projector's own, so a mirror's carried entries never reach `bindings`.
+    /// That is [`PublishAxis::carried_peers`]' subject and
+    /// [`only_the_mirror_axis_writes_under_a_peer_that_is_not_the_publisher`]
+    /// is where it is measured.
+    #[test]
+    fn every_key_an_axis_records_falls_under_a_prefix_it_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut projector = RootProjector::new(fixture_identity()).unwrap();
+        let peer_id = projector.peer_id().to_string();
+
+        let sites = vec![fixture_site(&peer_id)];
+        let sets = fixture_app_sets();
+        let feed = fixture_feed(&peer_id);
+        let mirrors = fixture_mirrors(&peer_id);
+
+        let mut exercised: Vec<&str> = Vec::new();
+        let mut recorded_by_axis: Vec<(&str, Vec<String>)> = Vec::new();
+        for axis in axes(&peer_id, &sites, &sets, Some(&feed), &mirrors) {
+            let before: BTreeSet<String> =
+                projector.bindings_for_measurement().into_keys().collect();
+            axis.project(dir.path(), &peer_id, "", &mut projector)
+                .unwrap_or_else(|e| panic!("axis '{}' projects: {e}", axis.name()));
+            let after: BTreeSet<String> =
+                projector.bindings_for_measurement().into_keys().collect();
+
+            let new_keys: Vec<String> = after.difference(&before).cloned().collect();
+            assert!(
+                !new_keys.is_empty(),
+                "axis '{}' recorded nothing — its fixture does not exercise it, so this \
+                 gate cannot see whether its declaration is true",
+                axis.name()
+            );
+
+            let declared = axis.tree_prefixes();
+            let undeclared: Vec<&String> = new_keys
+                .iter()
+                .filter(|k| !declared.iter().any(|p| k.starts_with(p)))
+                .collect();
+            assert!(
+                undeclared.is_empty(),
+                "axis '{}' declares {declared:?} and recorded {undeclared:?}. A key outside \
+                 every declared prefix is a publish this table cannot account for — add the \
+                 prefix to `tree_prefixes`, and check whether a clean scoped to the \
+                 declaration would strand it.",
+                axis.name()
+            );
+
+            exercised.push(axis.name());
+            recorded_by_axis.push((axis.name(), new_keys));
+        }
+
+        assert_eq!(
+            exercised,
+            vec!["sites", "apps", "feed", "mirrors"],
+            "a fifth axis joined the table without a fixture here, so its declaration is \
+             unmeasured"
+        );
+
+        // ⭐ The row this gate exists for, named rather than left implicit: the
+        // feed records under BOTH of its declared prefixes, so dropping either
+        // one reds this test rather than going quietly unstated.
+        let feed_keys = &recorded_by_axis
+            .iter()
+            .find(|(n, _)| *n == "feed")
+            .expect("the feed axis ran")
+            .1;
+        assert!(
+            feed_keys.iter().any(|k| k.starts_with("app/feed/")),
+            "the feed recorded no entry or index key: {feed_keys:?}"
+        );
+        assert!(
+            feed_keys.iter().any(|k| k.starts_with("system/signature/")),
+            "the feed recorded no `FEED-R2` signature, so this gate's own subject is \
+             absent from its fixture: {feed_keys:?}"
+        );
+    }
+
+    // -- fixtures for the measured census -----------------------------------
+
+    fn fixture_identity() -> entity_crypto::Keypair {
+        entity_crypto::Keypair::from_seed([23u8; 32])
+    }
+
+    fn fixture_site(peer_id: &str) -> OwnedSite {
+        use crate::content_site::format::{SiteManifest, SitePage};
+        OwnedSite {
+            peer_id: peer_id.to_string(),
+            site_id: "demo".into(),
+            manifest: SiteManifest::new("demo", "Demo", "index", vec![]),
+            pages: vec![("index".to_string(), SitePage::markdown("Index", "hello"))],
+            assets: vec![],
+            content: Default::default(),
+        }
+    }
+
+    fn fixture_app_sets() -> crate::apps::ingest::IngestedSets {
+        use crate::apps::format::{AppBundle, AppCatalog, AppEntry};
+        use crate::apps::ingest::IngestedApps;
+        let mut sets = crate::apps::ingest::IngestedSets::new();
+        sets.insert(
+            "apps".to_string(),
+            IngestedApps {
+                catalog: AppCatalog {
+                    entries: vec![AppEntry {
+                        id: "demo".into(),
+                        name: "Demo".into(),
+                        ..Default::default()
+                    }],
+                },
+                bundles: vec![("demo".to_string(), AppBundle::new("<html></html>"))],
+                assets: vec![],
+            },
+        );
+        sets
+    }
+
+    fn fixture_feed(peer_id: &str) -> OwnedFeed {
+        use crate::embed::{EmbedData, EmbedNode, EmbedPayload};
+        use crate::feed::FeedEntry;
+        let body = EmbedNode::new(
+            "text/plain",
+            EmbedData::new(EmbedPayload::Inline(b"a post".to_vec()), "a post"),
+        );
+        OwnedFeed {
+            peer_id: peer_id.to_string(),
+            entries: vec![FeedEntry::new(peer_id, 1_000, body)],
+            content: Vec::new(),
+        }
+    }
+
+    fn fixture_mirrors(gatherer: &str) -> Vec<crate::feed_mirror::MirrorPlan> {
+        use crate::feed::{FeedMirror, MirrorSubject};
+        use crate::feed_mirror::{Carried, MirrorPlan};
+        let author = "2AuthorPeerIdForThisCensus";
+        vec![MirrorPlan {
+            record: FeedMirror::new(
+                MirrorSubject::timeline(author).reference(),
+                0,
+                7,
+                gatherer,
+            ),
+            pages: Vec::new(),
+            carried: vec![Carried {
+                peer: author.to_string(),
+                key: "app/feed/entries/ff".into(),
+                entity: entity_entity::Entity::new(
+                    "app/feed/entry",
+                    entity_ecf::to_ecf(&entity_ecf::Value::Map(Vec::new())),
+                )
+                .unwrap(),
+            }],
+            content: Vec::new(),
+        }]
     }
 
     /// ⛔ **The census reads like a partition and is not one — so say which pair
@@ -450,7 +708,17 @@ mod tests {
         let mut nested: Vec<(&str, &str)> = Vec::new();
         for a in &all {
             for b in &all {
-                if a.name() != b.name() && a.tree_prefix().starts_with(b.tree_prefix()) {
+                if a.name() == b.name() {
+                    continue;
+                }
+                // Plural on both sides: a pair collides if ANY of one axis's
+                // prefixes sits inside ANY of the other's. Checking only the
+                // first would have stopped seeing the feed's second prefix the
+                // day it was added.
+                if a.tree_prefixes()
+                    .iter()
+                    .any(|pa| b.tree_prefixes().iter().any(|pb| pa.starts_with(pb)))
+                {
                     nested.push((a.name(), b.name()));
                 }
             }
@@ -474,9 +742,6 @@ mod tests {
     /// about it.
     #[test]
     fn only_the_mirror_axis_writes_under_a_peer_that_is_not_the_publisher() {
-        use crate::feed_mirror::{Carried, MirrorPlan};
-        use crate::feed::{FeedMirror, MirrorSubject};
-
         let sets = crate::apps::ingest::IngestedSets::new();
         let empty = axes("QmPeer", &[], &sets, None, &[]);
         assert!(
@@ -487,25 +752,7 @@ mod tests {
         // One mirror of one author, which is the only shape that can answer
         // non-empty — and a plan with no carried rows would make this vacuous.
         let author = "2AuthorPeerIdForThisCensus";
-        let plan = MirrorPlan {
-            record: FeedMirror::new(
-                MirrorSubject::timeline(author).reference(),
-                0,
-                7,
-                "QmPeer",
-            ),
-            pages: Vec::new(),
-            carried: vec![Carried {
-                peer: author.to_string(),
-                key: "app/feed/entries/ff".into(),
-                entity: entity_entity::Entity::new("app/feed/entry", entity_ecf::to_ecf(
-                    &entity_ecf::Value::Map(Vec::new()),
-                ))
-                .unwrap(),
-            }],
-            content: Vec::new(),
-        };
-        let mirrors = vec![plan];
+        let mirrors = fixture_mirrors("QmPeer");
         let all = axes("QmPeer", &[], &sets, None, &mirrors);
         let carrying: Vec<(&str, Vec<String>)> = all
             .iter()

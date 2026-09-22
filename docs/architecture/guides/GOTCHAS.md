@@ -15,6 +15,32 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Windows, DOM & rendering
 
+- **A DRAG ON A WINDOW'S GRIP MUST SURVIVE THE WINDOW REBUILDING, AND AN IFRAME MUST NOT TAKE THE POINTER — two
+  Chromium-only defects, fixed 2026-09-15 (`build_size_grip`, `window_size::holding`).** Field report: *"it just
+  releases it in one or two seconds"* in Chromium, never in Firefox. **(1)** The grip is built inside the section
+  rebuild, so any rebuild replaces it; Chromium releases pointer capture on a removed element and the drag ends.
+  Measured on System Monitor (rebuilds every second): a 150 px drag stopped after 18 px, seven grips replaced in 3 s.
+  The rebuild loop now **holds back** a window whose grip is held (`deferred_rebuild`, rebuilt on the first frame
+  after release), and a hold goes stale after `HOLD_STALE_MS` (30 s) without pointer activity, so a release nobody
+  heard cannot freeze a window — **it was 5 s and a paused drag lost its grip to the rebuild it defers**; a move with
+  no button down ends a drag at once, which is the fast path for a missed release. **(2)** Chromium applies capture at the *next* pointer event, and a first move that lands on
+  a cross-process iframe (an app, a VM) is routed there: the grip never gets capture, never hears the release, and was
+  left armed. Measured: a quick 150 px drag toward a running VM changed nothing. On press the window area takes
+  `grip-drag`, which drops every iframe out of hit-testing for the drag; `lostpointercapture` ends a drag as well.
+  **Firefox does not show either** (same-process iframes; it keeps delivering to a removed capture target), which is
+  why the gate asserts the *mechanism* — no grip replaced while held, shield up mid-drag, full distance landed, rebuild
+  resumes — and not an engine's reaction: `a_drag_on_a_windows_grip_survives_the_window_rebuilding_under_it`.
+  A Chromium bottom-third overlay after resizing is **open and not reproduced** (BACKLOG B-12).
+- **ON A PHONE A WINDOW'S CONTENT STAYS INSIDE IT — `.window-content { overflow-wrap: anywhere }`, and
+  `components::table` returns a scroll box (2026-09-15).** A 44-character peer id or a `ws://` address is one
+  unbreakable token, so on a phone it ran past its card — in tables (Known devices, Rendezvous nodes) **and in plain
+  notices**: with the table fixed, the add notice `✓ Added ws://…` alone still made the content 590 px in a 468 px
+  box. So the wrap rule is on the window content, where every surface inherits it; `anywhere` breaks only a token that
+  cannot fit, and leaves `nowrap`/`pre` text alone. Tables also scroll sideways for cells that genuinely cannot wrap.
+  **Build the test token with no hyphen, dot or slash after the port** — those are break opportunities, and the first
+  cut of the gate passed with the fix removed for that reason. Gate: `on_a_phone_a_windows_content_stays_inside_it`
+  (Firefox headless will not go under 500 px), which lists what sticks out when it fails; falsified at 867 px (no table
+  fix) and 590 px (no content rule).
 - **A WINDOW THAT WATCHES THE WHOLE TREE PAYS FOR EVERY WRITE — keep its rebuild cheap (2026-09-14).** Storage
   watches `/{pid}/` and rebuilds on any write; adding a size read per entity per rebuild slowed the whole app enough
   that the e2e monolith's fixed-sleep steps missed (falsified: two different steps red without the fix). Sizes are
@@ -638,6 +664,15 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     do not call.
 
 ## Connection liveness & reachability
+
+- **A `connected` WRITTEN BEFORE THIS PAGE STARTED IS NOT A CONNECTION (2026-09-15, `demote_if_from_before`).**
+  `system/peer/status` is durable and written only on a transition, so after a reload it can still say `connected`
+  about a pool that died with the last page — and `reach_keeper` and `connectors::reach_node` skip a connected peer,
+  switching off the very recovery that peer needs (long-running-peer survey H4; the kernel logged the missing reset
+  as `SPEC-AMBIGUITIES` §3.13). `read_peer_liveness` reads such a row as `Suspect` with reason `from-before-reload`,
+  judged by the kernel's `connected_at` against `performance.timeOrigin`. **Only for a vantage with a local peer
+  context:** a desktop backend is its own process and keeps its connections across a WebView reload. A row with no
+  `connected_at` is left alone. Native-tested; no browser gate yet (the two-browser reload rig is the handoff's plan).
 
 - **Connection LIVENESS is kernel-owned now — subscribe it, do NOT add another
   mirror.** The kernel writes `system/peer/status/{peer}` (Amendment 12): `connected`
@@ -1792,6 +1827,113 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     file's two standing warnings that a **`cfg` line** and a **constant name** are not the code path:
     *a directory listing is not the conformance surface* — read the spec's own conformance sentence,
     then the tree.
+- **A STALL HAS THREE DIFFERENT DURATIONS AND THEY TEST THREE DIFFERENT THINGS — `make e2e-webrtc-stall`,
+  built 2026-09-15 for the long-running-peer report.** One browser's main thread is blocked so its frames
+  stop the way a backgrounded tab's do, while the other keeps its Chat open. **Three constants decide what
+  the run is even about, and getting one wrong silently tests nothing:**
+  **(1) `wake_gap_threshold_ms()` = 30 s** (`KeepaliveConfig::default().interval_ms`). Below it
+  `wake_probe::decide` returns `NoGap`, nothing re-checks any connection, and the stall is invisible to the
+  recovery path under test. ⚠ **The plan that commissioned this gate specified a 20 s stall** — under the
+  threshold, so it would have exercised nothing while looking like a clean pass. `stall_preconditions`
+  REFUSES it rather than documenting it.
+  **(2) The node's rendezvous bucket TTL = 60 s.** Past it the counterpart's stale offers have aged out,
+  which is the survey's own *"break it: stop both sides for > 60 s"*.
+  **(3) The liveness deadline = `max_missed × (interval + timeout) + timeout` = 3 × (30+10) + 10 = 130 s.**
+  This is when a peer stops being *believed* connected, and it is the one that decides whether anything has
+  to re-establish.
+  ⭐ **The upper bounds CLASSIFY, they do not refuse — and that correction came from a measurement, not from
+  reasoning.** The first cut refused anything past the bucket TTL, to keep H1's stale offers alive. Measured:
+  at 40 s the channel simply **survives** (`data-channel opens A 1->1, B 1->1`), because nothing is declared
+  gone until 130 s — so **no negotiation is ever started and H1 is unreachable whatever the bucket holds.**
+  *H1 governs the ESTABLISHMENT path, not an established one; a window chosen to keep stale offers alive is
+  by construction too short to need them.*
+  **Measured at kernel `ad52ab0`, and the 150 s run is the informative one:** A's gap was `150007 ms` — past
+  the liveness deadline — and **the channel still survived**, so the gate returns **exit 2 = INCONCLUSIVE**
+  (its `connection-dies` mode requires that the link actually had to re-establish). Meanwhile the side that
+  kept running logged **9 §6.5 failures** at `role=answerer, sdp_exchange=INCOMPLETE, bucket 8→0 msg(s)` —
+  a **correlation failure by `WebRtcError::Timeout`'s own definition**. ⇒ **the app was rebuilding a path it
+  still had.** The reported END state is still **not reproduced**: a one-sided freeze does not kill the
+  existing data channel, so the node-restart variant is what is owed next.
+  **Anti-vacuity is the whole design and it is two-sided:** the stalled side must report a wake-worthy frame
+  gap (`wake: frames resumed after a gap`, read as a NUMBER), **and the side that did not stall must report
+  none** — a run that froze both, or the wrong one, is otherwise indistinguishable from a good one. The
+  log-grep panel carries a **must-be-present control needle** (`Frame loop started`), because a zero from an
+  unvalidated needle is not evidence, and it prints on PASS as well as FAIL.
+  ⚠ **Stability, stated rather than implied: 4 runs of the 40 s case gave 3 PASS / 1 FAIL.** The failure
+  showed **16 OFFER deposits/side against §11.5's O(1) bound of 8** and the counterpart's header reading
+  `○ Offline`. That is **K-1's open question** (is each extra negotiation a legitimate recovery or a spurious
+  teardown?), now with a stall-shaped datapoint. **Do not read one run of this gate in either direction** —
+  deposit counts are a variable metric here. And note a false lead this cost: *many distinct caller peer ids
+  in the node vantage is NORMAL* — a passing run showed 45 caller lines with max 4 deposits/side, so caller
+  count is not a contamination signal; the deposit bound is.
+- ⭐⭐ **THE BIMODAL HALF OF THAT GATE WAS A PRODUCT DEFECT, AND THE PASSING MODE WAS PASSING BY ITS
+  FALLBACK — `record_for`, 2026-09-15.** The entry above records *3 PASS / 1 FAIL* as instability. It is
+  not: the FAIL is **a false sentence on screen**, and it reproduced at the new kernel (`86e313b`: 3 PASS /
+  2 FAIL, then 1/1 — *the A/B moved nothing*, so do not re-run it hoping). While one browser's main thread
+  is frozen, the side still running retries §6.5 at it; each retry fails
+  `sdp_exchange=INCOMPLETE, candidates posted=3/fed=0`, and the Chat header then reads
+  ***"No reflector is set up, so this app can only reach devices on your local network"* beside a
+  conversation delivering in both directions.**
+  **Measured, not inferred** — the spike prints the classifier's own line now (`── the reachability
+  classifier (last verdict per side) ─`), and the two modes sit side by side:
+  `PASS  gathered=[]   sdp=Some(false) ever_answered=true -> unknown` ·
+  `FAIL  gathered=[Host] sdp=Some(false) ever_answered=true -> no-reflector`.
+  ⭐ **They differ ONLY in whether a doomed retry happened to gather a host candidate**, which is what hits
+  `classify`'s empty-gather arm first. *A bimodal gate's PASSING mode deserves the same scrutiny as its
+  failing one* — here the product was right by fallback and the coin toss was on an irrelevant fact.
+  **Cause, and it is a shape worth carrying: SUPPRESSING A CLAIM BY LYING ABOUT ITS PREMISE PROMOTES THE
+  OBSERVATION INSTEAD OF SILENCING IT.** `record_negotiation` suppressed *"nobody answered"* about a peer we
+  have heard from by telling `classify` the exchange HAD completed — which does not quiet the verdict, it
+  skips the `NoCounterpart` arm and falls through into the **network** arms, making a topology claim about a
+  path nothing touched. There is a third answer and it is *we have nothing to say*.
+  **`record_for` is that answer: `Replace | Clear | Keep`, pure and native.** An observation that
+  **established nothing must not overwrite one that did** — AP30's corollary (*an errored round-trip is not
+  an answer; keep what you have*) arriving in this store. The NAT rig's stickiness is preserved by `Keep`
+  rather than by the lie, so `a_counterpart_that_answered_once_is_not_called_absent_by_a_later_miss` stays
+  green **through the new mechanism**, which is the assertion that made the change safe to make.
+  Gates: `a_miss_after_a_success_says_nothing_about_the_network` (all three gathered sets, because one set
+  is the fallback), `every_verdict_has_a_rule_for_what_it_does_to_the_store` (count asserted; `Replace` may
+  only ever carry an advisory verdict), `an_agent_that_never_started_does_not_un_say_a_real_finding`.
+  **Both arms falsified separately, landing on distinct tests.** Behaviourally: **5/5 PASS after**,
+  including two runs that hit the 16-deposit mode — so the deposit storm and the false note were two
+  consequences of one cause and only the reporting half is fixed. **`K-1` is untouched and still open.**
+  ⚠ **Stated bound, and it is the next thread:** the header still reads `○ Offline` / `◐ Connecting…` for a
+  peer that is delivering messages in both directions. That is *liveness*, kernel-owned, and a different
+  subject from the sentence this change removed — **do not read a green stall gate as the belief being
+  right.**
+
+- ⛔⭐⭐ **A RENDEZVOUS NODE THAT RESTARTS IS NEVER REACHED AGAIN — `make e2e-webrtc-node-restart`,
+  and it is RED ON PURPOSE (2026-09-15, kernel `86e313b`).** H2 — *the carrier holds a dead
+  connection to the node forever* — was fixed upstream at `c3f2b76` and, until this gate, only ever
+  in **their** unit tests: no rig here had taken the node away. Take it away and bring it back at
+  **the same peer id** (`--keypair`, so a failure cannot be explained by an identity change) and the
+  node's own log shows **zero** lines from either browser for 45 s afterwards, against **A=2 B=2 at
+  t=1 s** in the control. 3/3 and 2/2. **A reload is the only way back**, which is the operator's
+  standing *"I had to reload"* report with a cause under it.
+  ⭐⭐ **THE CONTROL IS THE ENTRY. TWO EARLIER CUTS OF THE ASSERTION MEASURED NOTHING AND ONLY THE
+  CONTROL ARM CAUGHT EITHER.** (1) `pb in met_ids(A)` — `met_ids` scrapes a **cumulative shell
+  scrollback**, so the first meet's `met <id>` line is still on screen and the membership test was
+  true *before the second meet was typed*; it "passed" in 1 s with the node uninvolved. (2) The same
+  thing read as a **count** — and the count is flat in **both** arms (`A=1 B=1` before and after,
+  restarted or not), because a second meet never re-announces a peer the shell has already
+  introduced. ⇒ ***a flat number is not a negative result until a control shows the number can
+  move***, and had `make e2e-webrtc-node-restart-control` not existed, cut (2) would have been
+  published as *H2 reproduced in a browser*. It is a make target precisely so the pairing cannot
+  become folklore.
+  ⭐ **THE DISCRIMINATING ACTION MUST NEED THE NODE.** Two browsers with an open data channel keep
+  talking with the node in the bin — `A->B post-restart delivered: True` in every run, correctly, a
+  node is an introducer and not a relay (§1.3) — so any gate asserting *delivery* passes with the
+  carrier permanently wedged. The claim has to be a **second rendezvous**, and the observable has to
+  be the **node's own log** (`caller="<peer id>"` on `signaling offer:` / `signaling collect`),
+  because the browsers can each say what they did and neither can say whether the node heard it.
+  ⚠ **What is NOT established, and do not let the gate's name overstate it: WHICH connection is
+  stuck.** `carrier::connection`'s redial line (`reader has ended; re-dialing`) reads **0 in both
+  arms** — and it is the **only** `tracing::` call in that whole module, so there is no
+  must-be-present control available there and a zero cannot separate *the branch was not taken* from
+  *the module is silent*. `meet` is an ordinary websocket call to the node and may not go through
+  the §6.5 carrier at all. The finding is *the browsers stop reaching the node*; attributing it to
+  `carrier::connection` would be the 09-08 mistake of a correct measurement with an invented
+  explanation.
 
 ## Publishing, signed roots & names
 
@@ -3105,6 +3247,20 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
 
 ## Apps & embedded programs
 
+- **TWO WINDOWS OF ONE APP SAVE AGAINST WHAT THEY READ — the workspace takes `expect` (2026-09-15, B-10).** The
+  listing and every save report each file's version (its blob hash); `x-work-save` may carry `expect: {path: version |
+  null}`, and `workspace::save_expecting` refuses a path whose version moved (`conflict`) and leaves it untouched. A
+  put where another window *removed* the file is allowed (nothing is lost); removing an already-gone file is not a
+  conflict. The KolibriOS page keeps the other window's file and saves its own beside it as `name (this window).ext`,
+  and leaves its expected version where it was so a later edit conflicts again instead of overwriting. **The first
+  save transfers the page's ArrayBuffers** (`vm-sdk.js` `work()` passes `put[].data` as transferables), so the copy is
+  sent from a fresh buffer — resending `msg.data` would send a detached, empty one. Alpine sends no `expect` yet and is
+  still last-writer-wins. Gate: the *two windows edit one file* step in `apps-window-kolibri-probe.py`.
+- **Chromium isolates an app's sandboxed iframe in its own process; Firefox does not (field report 2026-09-15).** A VM
+  pegging a core in Chromium leaves the page responsive; in Firefox the same VM freezes the whole browser, since the
+  frame shares the page's process. Nothing here controls that — more than one core per VM is not on offer from either
+  engine — but it changes what *"the page froze"* means in a report: ask which browser before tracing app code.
+
 - **A TOGGLE BUTTON ON A PHONE MUST DECIDE ON WHAT WAS TRUE AT `pointerdown`, NOT AT `click` — the VM
   keyboard button, field report 2026-09-14 (Android).** Once the phone keyboard was up, the button
   never put it away (only leaving full screen did). A tap can blur the focused field before `click`
@@ -3488,7 +3644,58 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
     name and asserts `life_tiles == 2` structurally, and the phase's completion line **reports the
     measured tile count** instead of the literal "3 built-in programs" it had gone stale carrying.
 
+- **⭐ THE SYSTEM MONITOR CANNOT NAME WHAT IS EATING THE CPU, AND IT IS NOT BECAUSE THE MECHANISM IS
+  MISSING — IT IS BECAUSE IT HAS ONE PRODUCER AND ONE BLIND SPOT (measured 2026-09-15, both halves
+  read in source).** Reported as *"I ran an interactive Life, the app was obviously CPU-heavy, and I
+  had no way to see that."* Two separate causes, and neither is a bug in the monitor:
+  - **`x-stats` is built end to end and only the VM machines send it.** `vm-sdk.js:480` reports
+    `{busy_ms, span_ms, instructions?, memory_bytes?}`; `dom/games.rs:1249` receives it,
+    `monitor::sampler::note_app_stats` records it, the Processes pane renders it *labelled reported by
+    the app*. A named search of `entity-apps` at `38e434bb` for `x-stats` / `busy_ms` / `reportStats`
+    across `sdk/`, `apps/` and `games/` returns **zero** — so **every non-VM app renders a row with no
+    numbers in it.** ⇒ **a capability with one producer reads, from inside, as a capability the
+    surface has** — AP34/AP35's population problem pointed at a protocol rather than a test suite. The
+    ask is `AP-5` on the entity-apps tracker; the shape is deliberately two fields, because *busy or
+    not busy* is the whole question a person is asking.
+  - **A compute PROGRAM's cost is attributed to no window at all**, and that is the half no app can
+    fix for us. `sampler::note_sections` takes the DOM renderer's **per-window rebuild** timings and
+    there is no `note_tick`; a Life/Snake/Asteroids tick (`src/program_host/`, EXTENSION-COMPUTE,
+    in-process on the main thread — **not** an iframe) lands inside `note_frame`'s total frame work
+    and in **no** row. So the total says the tab is busy, every row says nobody is. **A per-window
+    tick hook beside `note_sections` closes it with no protocol, no app cooperation and no external
+    dependency** — the same structural-hook shape (AP44), on the path every window's tick already
+    takes. Not built.
+  **The distinction that decides who fixes what: *life* is OURS** (`assets/programs/life.json`, the
+  Programs surface) and is not in entity-apps' catalog at all — so the reported case is the second
+  bullet, and the first bullet is about their apps. **Three app-ish surfaces, not one:** Apps (their
+  `dist/` → iframes), Programs (`assets/programs/*.json`, our host), and the VM machines (ours today,
+  packaged as Apps). Ask which one before attributing a symptom.
+  **Firefox is why this is worth more than it looks:** an app frame's script runs on the host's own
+  thread there (measured, `tools/monitor-probe`), so a busy app degrades the whole tab and the host
+  cannot attribute it without the frame's own number. Design and the unbuilt half:
+  `DESIGN-2026-09-14-c-THE-SYSTEM-MONITOR-…` §4 and §8's **M3** (`x-ping`/`x-pong` and the busy flag +
+  Close are also unbuilt — `grep -rn x-ping src/` is empty, so an app that goes *quiet* is currently
+  indistinguishable from one that is *idle*).
+
 ## File transfer & chat
+
+- **FILE TRANSFER: EVERY ANSWER CARRIES A TICKET, A LOAD HAS A DEADLINE, AND A RECONNECT RELOADS (2026-09-15, survey
+  §5 #1–#6).** `FsBrowseCache::begin_load_at` / `begin_offers` hand back a ticket naming the **target and attempt**;
+  a result applies only while both hold, so a listing that finishes after a target switch, or after a Refresh
+  superseded it, lands nowhere (it used to land on the peer selected since). **Refresh supersedes a load in flight**
+  instead of being refused by it, and a load past `LOAD_DEADLINE_MS` (15 s, below the kernel's 30 s request timeout)
+  stops spinning and says the device could not be reached — a timer marks the window dirty, because a stuck load
+  changes no tree state. A transport `Err` is `ShareState::Unreachable`, rendered as a sentence with the kernel's
+  string (*"no transport profile for peer"*, the ladder's fall-through) only in the tooltip. On the target's
+  **transition** to reachable (`note_reachable`; first sight is not one) the window re-lists both halves. The device
+  list puts reachable devices first and marks the rest offline; with no choice the default is the first **reachable**
+  one, and a chosen device is kept while offline rather than silently switched (`pick_target`). A share listing that
+  answered in this session outranks the event log's old 403, which survives a reload. An offers failure is kept and
+  shown where it is the reason the pane is empty (a peer with no share). **Pull reports on its own card**
+  (`crate::pull_attempt`, B-13): **every terminal path of a pull must call `PullReport::done` or `failed`** — the
+  share read, the offer walk, the save and the keep each have one — or Pull stays disabled for the rest of the session.
+  A new pull path goes through `pull_report` and `pull_finisher`, never around them. Gate: `make e2e-webrtc-file`
+  samples the card in the page, because a three-chunk pull is over before a WebDriver poll comes round.
 
 - **WHAT COUNTS AS A FILE IS A TABLE, AND A SECOND SURFACE OVER FILES REUSES ACTIONS, NOT CODE —
   the Files window, 2026-09-14 (`src/file_kinds.rs`, `src/views/files/`).** A file is an entity
@@ -4505,6 +4712,53 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   names remain for one release as stubs that fail with a pointer. The **app CLI
   is a separate namespace and did NOT change**: `entity-browser publish <dir>`,
   `PUBLISH_DATA_DIR`, and `PUBLISH-INGEST-FORMAT.md` all still say publish.
+- **A WORKTREE MUST BE A DIRECT CHILD OF `<shared-parent>`, AND ITS `.git`
+  MUST HOLD A RELATIVE PATH — two separate traps, and the nested one makes the
+  repo unbuildable rather than merely awkward (2026-09-15).** Every containerized
+  verb bind-mounts `$(PARENT)` — `dirname $(CURDIR)` — at `/src/entity-systems`,
+  and all thirty-three path deps resolve through
+  `/src/entity-systems/entity-core-rust`. A worktree at
+  `entity-browser-rust/.worktrees/<name>` therefore mounts `.worktrees/`, which
+  contains **no sibling repos at all**, and every build dies with
+  `failed to load manifest for dependency 'entity-capability'`. `.worktrees/run-env`
+  lived there for four days; it had **no `target/` directory**, i.e. a
+  containerized build had never once succeeded in it, and nobody noticed because
+  that seat's gates were being run in the main worktree. Moved to
+  `<shared-parent>/entity-browser-rust-vm`, a sibling of the kernel like the
+  other five.
+  ⛔ **A symlink does NOT fix it and makes the pin worse.** `.worktrees/entity-core-rust
+  -> ../../entity-core-rust` resolves on the host and **escapes the mount** in the
+  container; worse, it occupies the path `CORE_PIN_MOUNT` needs, so `CORE_RUST_REF`
+  fails differently — `crun: creating /src/entity-systems/entity-core-rust: openat2
+  … No such file or directory`. **Pinning cannot rescue a nested worktree**: `core-pin.sh`
+  resolves the sibling as `<repo>/../entity-core-rust`, the *same path* podman must
+  have free as a mountpoint, and one path cannot be both a host git checkout and a
+  container mountpoint.
+  ⭐ **The second trap is git, and it is invisible until the last lint step.** A
+  worktree's `.git` is a FILE holding an **absolute host path**
+  (`gitdir: /home/.../entity-browser-rust/.git/worktrees/<name>`), which does not
+  exist inside the container — so container-side git fails, `make lint` dies on
+  `tree-hygiene.sh` with `fatal: not a git repository`, and `build-stamp.sh`
+  records our half of the pair as **`unknown`** while the kernel half (carried in
+  by `ENTITY_CORE_PIN`) stamps fine. *The same defect one field over from the one
+  `ENTITY_CORE_PIN` already exists to fix.* The cure is a **relative** gitdir,
+  which resolves on both sides — `commondir` is already relative.
+  ⛔ **But do NOT just run `git worktree repair --relative-paths`.** On git ≥2.48 it
+  also writes `extensions.relativeWorktrees` into the **shared** `.git/config`, and
+  the build image's git (**2.39.5**) rejects any repo carrying an extension it does
+  not know: `fatal: unknown repository extension found: relativeworktrees`. That
+  config is shared by **every** worktree including the main one, so the "fix" breaks
+  container git for the whole repo — a strictly worse state than the bug, and it
+  lands in another seat's tree. Relative paths work in 2.39 **without** the marker,
+  so: run the repair, then `git config --local --unset extensions.relativeWorktrees`,
+  then verify with a container `git rev-parse` before believing it. Note the repair
+  converts **every** worktree regardless of the path argument you pass.
+  ⚠ **`make e2e-signaling-node` is incompatible with `CORE_RUST_REF`** — cargo
+  writes `Cargo.lock` into the source tree and the pin is mounted `:ro`, so it
+  fails `Read-only file system (os error 30)`. Build it unpinned and verify
+  provenance instead: `git -C ../entity-core-rust status --short` empty and `HEAD`
+  equal to the pin, **checked before and after**, which makes the unpinned build
+  provably that commit's bytes.
 
 ## Testing & the gates
 
@@ -5258,6 +5512,35 @@ earned. A `[AP*]`/`[D*]` tag refers to the anti-pattern catalog and disciplines 
   requests and one wire-level stall on both (measured 2026-08-30) — i.e. one deadline, and the
   boot re-read added by map-B2 did **not** double it, because `!config_was_absent` still stops
   the second read within a boot.
+- ⛔ **`make` EXITS 2 ON ANY RECIPE FAILURE, WHICH COLLIDES WITH A THREE-STATE GATE'S
+  `INCONCLUSIVE = 2` — READ THE PRINTED LINE, NEVER `$?` (2026-09-15).** `e2e-webrtc-stall` is
+  deliberately three-state, and its recipe faithfully re-exits the spike's code — but GNU make
+  then reports **its own** failure as 2, so a caller looping over runs and branching on `$?` reads
+  a plain **FAIL** as *"the run could not put the mechanism at risk"*. Measured: the log says
+  `>> gate exit: 1 (FAIL ❌)` and `>>> e2e-webrtc-stall: FAIL (rc=1)` while the shell sees `rc=2`.
+  **No recipe exit code survives make**, so the distinction can only ever live in the text — which
+  it does, correctly, in the `>>> …: PASS | FAIL (rc=N) | INCONCLUSIVE (rc=2)` line. Grep that.
+  *A three-state design is defeated at whatever boundary can only carry two.*
+- ⛔⭐ **`vocab-lint` RESOLVES OUR SEAT BY DIRECTORY NAME, SO IN A WORKTREE IT MEASURES THE OTHER
+  SEAT'S TREE AND NAMES YOUR COMMIT (2026-09-15).** `spec vocab` reads the seat at
+  `<corpus parent>/entity-browser-rust` — whatever is on disk there. Run `make lint` from
+  `entity-browser-rust-vm` and the gate reports the **main** worktree, at the other seat's head,
+  **mid-edit**, as ours. Measured: this worktree went red on `single-seat app/feed/collection`, a
+  tag that appears nowhere in this checkout outside `docs/status/` prose, minutes after the feed
+  seat landed the composer next door — and the seat head moved `7be6ab2 → b1046e5` **between two
+  runs of the gate**.
+  ⭐ **The tell is the standing one and it cost nothing: it survived a full stash of the session's
+  changes.** *If the symptom survives your change being gone, the symptom is not yours* — and with
+  two seats on one `dev` that now has a second meaning: **it may not even be your tree.** Same
+  class as the `Cargo.lock`-from-a-path-dep hazard (*a tool that resolves a sibling by name
+  resolves it against whatever is on disk*), and the analyzer's own JSON carried `head` and
+  `dirty` per seat while the wrapper threw both away, so nothing said which tree had been read.
+  It prints them now and **skips loudly** when the seat path is not this checkout, naming both
+  paths and the class that therefore went unchecked. Falsified: with the guard disabled the false
+  red returns verbatim.
+  ⚠ **The cost is real and stated: this gate does not run in a worktree at all.** It is the one
+  class no test here can see alone, so **run `make lint` from `entity-browser-rust` before landing
+  anything that mints or retires a type tag** — a skip is honest, not coverage.
 
 ## The recovery console (L1 BIOS)
 

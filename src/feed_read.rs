@@ -238,17 +238,125 @@ pub fn attribute(author: &str, entry_hash: &Hash, signature: Option<&Entity>) ->
     }
 }
 
-/// The `key_type` string a `system/peer` entity carries.
+/// The `key_type` string a `system/peer` entity carries — **the kernel's
+/// `KeyType::label()`**, which carries V7 §3.5's v7.66 pin in its own doc.
 ///
-/// Mirrors `RootProjector::algorithm` rather than re-deriving: the identity
-/// entity and the signature's `algorithm` field must agree, and two spellings of
-/// one mapping is the drift C15 names.
-fn key_type_name(k: entity_crypto::KeyType) -> &'static str {
-    match k {
-        entity_crypto::KeyType::Ed448 => "ed448",
-        entity_crypto::KeyType::Ed25519 => "ed25519",
-        entity_crypto::KeyType::ExperimentalTest => "experimental-test",
-    }
+/// ⚠ **This function's doc used to say it "mirrors `RootProjector::algorithm`
+/// rather than re-deriving", and it did not** — it was a second, independent
+/// match over the same three arms, and the two disagreed on
+/// `ExperimentalTest` (that one wrote `"ed25519"` through a wildcard). *A
+/// comment claiming a factoring is not the factoring*, and the tell is the one
+/// AGENTS.md gives: ask which module would have to change if the shared thing
+/// changed. The answer was "both, independently", which is the definition of the
+/// drift it claimed to avoid.
+pub(crate) fn key_type_name(k: entity_crypto::KeyType) -> &'static str {
+    k.label()
+}
+
+// ---------------------------------------------------------------------------
+// The cursor — §4.4, and it is LOCAL STATE
+// ---------------------------------------------------------------------------
+
+/// A reader's position in one author's feed: **`{page, applied}`**, §4.4.
+///
+/// `page` is the index page the position is on and `applied` is the newest entry
+/// the reader took from it. Reading is then §4.3 rule 4 — *fetch the head, read
+/// down from `current` to your cursor, and stop* — which is `O(new)` instead of
+/// `O(window)` on every poll. **An implementation with no cursor of any kind
+/// re-reads its whole window forever, whether or not anything changed**, which
+/// is what this reader did until now.
+///
+/// ## ⛔ It lives here, in the reader, and it has no `to_entity`
+///
+/// `FEED-R35` is a MUST NOT: *publish a reader's cursor position in any record
+/// this convention defines.* §2.4 states the field's absence as normative and
+/// §4.4 says the position *"is held wherever a reader keeps its own bookkeeping,
+/// it is never a field on a published record, and a publisher never learns
+/// it."* So this type is deliberately **not** in [`crate::feed`], which is the
+/// wire codec: a position type sitting beside `Follow` is one somebody gives a
+/// `to_entity` to. There is nothing to publish it with.
+///
+/// ## Why a page number and not just a hash
+///
+/// So it survives an edit. An author may remove the very entry a reader is
+/// holding as its position; a bare hash then resolves to nothing and the reader
+/// has no way back into the archive except from the top.
+/// [`Resumed::FromPage`] is §4.4's `[MUST]` — *if `applied` no longer resolves,
+/// resume from `page`* — and it costs one page of re-delivery rather than the
+/// whole feed. We carried the v0.2 bare-hash field for two weeks and said in
+/// writing that it could not satisfy `FEED-R14`; this is the shape that can.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    /// The index page [`applied`](Self::applied) is on. Stable: §4.3 rule 3
+    /// forbids renumbering precisely because *"renumbering would invalidate
+    /// every reader's cursor"*, so an entry never moves between pages.
+    pub page: u64,
+    /// The newest entry hash taken from that page.
+    pub applied: Hash,
+}
+
+/// **How a walk related to the position it was given.** Seven facts, each
+/// routing a caller somewhere different — which is the test for whether a split
+/// is real (AP40).
+///
+/// | | what a caller does about it |
+/// |---|---|
+/// | [`FromNewest`](Self::FromNewest) | record the returned cursor; this was a first read |
+/// | [`AtCursor`](Self::AtCursor) | the ordinary incremental poll; record and render |
+/// | [`FromPage`](Self::FromPage) | **expect duplicates from that page** and dedupe — the position was edited away |
+/// | [`Behind`](Self::Behind) | poll again, or raise the limit. The position is **unchanged** and there is more between here and it |
+/// | [`ArchiveMovedOn`](Self::ArchiveMovedOn) | history was lost, not by us: the publisher dropped the page we were on |
+/// | [`PositionAhead`](Self::PositionAhead) | a publisher anomaly — their index does not reach a page we already read |
+/// | [`Unpositioned`](Self::Unpositioned) | this source has no index, so §4.4 does not apply to it at all |
+///
+/// Collapsing any pair costs a real answer. *Duplicates are coming* and *there
+/// is a gap above your position* are opposite instructions; *the publisher
+/// dropped your page* and *your page is ahead of theirs* are a normal §4.3
+/// rule 3 event and a fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resumed {
+    /// No position was held. The window is the newest `limit` entries.
+    FromNewest,
+    /// The held `applied` was found on its page, so everything returned is
+    /// strictly newer than it.
+    AtCursor,
+    /// **§4.4's `[MUST]`.** `applied` was not on its page — the author removed
+    /// it — so the reader resumed from `page` and re-delivered that page whole.
+    FromPage { page: u64 },
+    /// The limit cut the walk short **before** it reached the held position, so
+    /// there is a gap between the oldest entry returned and `held`. The cursor
+    /// is not advanced: advancing over a gap skips it forever.
+    Behind { held: u64 },
+    /// The held page is older than `head.oldest`. §4.3 rule 3 lets a publisher
+    /// drop old pages, so this is a normal event and not a fault — but the
+    /// reader has lost the history between them and cannot get it back here.
+    ArchiveMovedOn { held: u64, oldest: u64 },
+    /// The held page is newer than `head.current`: the publisher's index no
+    /// longer reaches a page we have already read. A conformant publisher does
+    /// not produce this (rule 1 rewrites only the last page), so it is reported
+    /// rather than quietly treated as a fresh read.
+    PositionAhead { held: u64, current: u64 },
+    /// The source served no index, so the window came from §4.3 rule 6's
+    /// enumeration fallback. **There are no pages, so there is no
+    /// `{page, applied}` to record** — a cursor held against this author's
+    /// published leg does not transfer to their live one, and pretending it did
+    /// would be a position over an order we reconstructed.
+    Unpositioned,
+}
+
+/// A walk's result: the entries, how it related to the position it was given,
+/// and the position to hold next.
+///
+/// ⚠ **`next` is `None` when the cursor MUST NOT be advanced**, not when
+/// nothing happened — [`Resumed`] is what says which. The two cases are
+/// [`Resumed::Behind`] (a gap above the held position) and
+/// [`Resumed::Unpositioned`] (no pages to name one with). A caller that treats
+/// `None` as *"keep the old one"* is correct in both.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedWindow {
+    pub entries: Vec<ReadEntry>,
+    pub resumed: Resumed,
+    pub next: Option<Cursor>,
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +547,42 @@ pub async fn read_feed<S: FeedSource + ?Sized>(
     author: &str,
     limit: usize,
 ) -> Result<Vec<ReadEntry>, FeedReadError> {
+    Ok(read_feed_from(src, author, limit, None).await?.entries)
+}
+
+/// [`read_feed`], resuming from a held position — §4.3 rule 4's `O(new)` poll.
+///
+/// With `cursor: None` this is byte-for-byte the old walk, which is why
+/// [`read_feed`] is a one-line delegation and no existing caller moved.
+///
+/// With a position held, the walk **reads down from `head.current` and stops at
+/// it**, so an unchanged feed costs one head fetch, one page fetch and zero
+/// entry fetches. The three ways that can fail to be simple — the position was
+/// edited away, the publisher dropped the page it was on, the limit ran out
+/// before we got there — are [`Resumed`]'s subject, and each one is a different
+/// instruction to the caller.
+///
+/// ## ⚠ The gap rule, which is the only place this can lose data
+///
+/// If `limit` is reached before the walk arrives at the held position, the
+/// entries returned are the newest ones and **there is a gap between the oldest
+/// of them and the position**. Advancing the cursor to the newest would make
+/// that gap permanent: the next poll reads down to the new position and stops
+/// above the entries it skipped. So `next` is `None` and the caller keeps what
+/// it has ([`Resumed::Behind`]).
+///
+/// **A FRESH truncated read is not the same case and does advance.** A reader
+/// with no position never claimed the older entries, so the newest `limit` are
+/// its position and the backlog below is a *backfill* question, not a *what is
+/// new* one. Conflating the two would either lose entries or make a first read
+/// unable to establish a cursor at all — and that second failure is the defect
+/// this function exists to remove.
+pub async fn read_feed_from<S: FeedSource + ?Sized>(
+    src: &S,
+    author: &str,
+    limit: usize,
+    cursor: Option<&Cursor>,
+) -> Result<FeedWindow, FeedReadError> {
     let head_entity = match src.get(index_head_key().to_string()).await {
         Err(detail) => return Err(FeedReadError::NoIndex { detail }),
         Ok(Some(entity)) => entity,
@@ -447,19 +591,48 @@ pub async fn read_feed<S: FeedSource + ?Sized>(
         // artifact (`plan_index` builds it on the way out, into the out-dir),
         // so an author's own tree holds entries and no index at all. A reader
         // that stopped here would tell you a peer with three posts has no feed.
-        Ok(None) => return read_by_enumeration(src, author, limit).await,
+        Ok(None) => {
+            return Ok(FeedWindow {
+                entries: read_by_enumeration(src, author, limit).await?,
+                // No pages, so no `{page, applied}`. Reported rather than
+                // silently dropping a cursor the caller handed us.
+                resumed: Resumed::Unpositioned,
+                next: None,
+            })
+        }
     };
     let head = IndexHead::from_entity(&head_entity).map_err(|source| FeedReadError::Malformed {
         key: index_head_key().into(),
         source,
     })?;
 
+    // Where does the held position sit relative to what the publisher still
+    // keeps? Only one of the three answers lets the walk stop early, and the
+    // other two are facts worth reporting rather than a silent full read.
+    let (stop_at, out_of_range) = match cursor {
+        None => (None, None),
+        Some(c) if c.page > head.current => (
+            None,
+            Some(Resumed::PositionAhead { held: c.page, current: head.current }),
+        ),
+        Some(c) if c.page < head.oldest => (
+            None,
+            Some(Resumed::ArchiveMovedOn { held: c.page, oldest: head.oldest }),
+        ),
+        Some(c) => (Some(c), None),
+    };
+
     let mut out: Vec<ReadEntry> = Vec::new();
+    // The NEWEST entry actually taken, with the page it came from — that is the
+    // cursor's own definition, and it is `first` because the walk is
+    // newest-first throughout.
+    let mut newest_taken: Option<(u64, Hash)> = None;
+    let mut reached_position = stop_at.is_none();
+    let mut hit_applied = false;
+    let mut truncated = false;
     let mut page = head.current;
+
     loop {
-        if out.len() >= limit {
-            break;
-        }
         let key = index_page_key(page);
         let entity = src
             .get(key.clone())
@@ -475,23 +648,71 @@ pub async fn read_feed<S: FeedSource + ?Sized>(
             .map_err(|source| FeedReadError::Malformed { key: key.clone(), source })?;
 
         for reference in &decoded.entries {
-            if out.len() >= limit {
-                break;
-            }
             // §2.2.1 types `entries` as `reference`, i.e. pinned-only, and
             // `IndexPage::from_entity` already refused anything else — so this
             // is a pin and its hash is the entry's identity.
             let EntityRef::Pinned { hash, .. } = reference else { continue };
+            // **Before the limit check, deliberately.** Arriving at the position
+            // means there is nothing left to take, so a budget that happens to
+            // run out on the same step must not be reported as a gap.
+            if let Some(c) = stop_at {
+                if page == c.page && *hash == c.applied {
+                    hit_applied = true;
+                    break;
+                }
+            }
+            if out.len() >= limit {
+                truncated = true;
+                break;
+            }
             let Some(read) = read_one(src, author, hash).await? else { continue };
+            if newest_taken.is_none() {
+                newest_taken = Some((page, read.hash));
+            }
             out.push(read);
         }
 
+        if truncated {
+            break;
+        }
+        if let Some(c) = stop_at {
+            if page == c.page {
+                reached_position = true;
+                break;
+            }
+        }
         if page <= head.oldest {
             break;
         }
         page -= 1;
     }
-    Ok(out)
+
+    let resumed = match (out_of_range, stop_at) {
+        (Some(r), _) => r,
+        (None, None) => Resumed::FromNewest,
+        (None, Some(c)) if !reached_position => Resumed::Behind { held: c.page },
+        (None, Some(c)) => {
+            if hit_applied {
+                Resumed::AtCursor
+            } else {
+                // §4.4's MUST: `applied` was not on its page, so the whole page
+                // came back and the caller may see entries it already has.
+                Resumed::FromPage { page: c.page }
+            }
+        }
+    };
+
+    let next = match newest_taken {
+        // The gap rule. See the doc comment — this is the one `None` that is a
+        // refusal to advance rather than an absence.
+        Some(_) if !reached_position => None,
+        Some((page, applied)) => Some(Cursor { page, applied }),
+        // Nothing taken: a still-valid position stands, and a lost or absent
+        // one stays lost. `stop_at` is `None` in exactly the second case.
+        None => stop_at.cloned(),
+    };
+
+    Ok(FeedWindow { entries: out, resumed, next })
 }
 
 /// One entry and its verdict. `Ok(None)` when the index names an entry the
@@ -856,5 +1077,98 @@ mod tests {
             ),
             "the struct's own claim about its address was taken as the address"
         );
+    }
+
+    // -- the cursor ---------------------------------------------------------
+
+    /// **A source with no index cannot be positioned against, and says so.**
+    ///
+    /// §4.3 rule 6's enumeration fallback is the live-peer path — the index is a
+    /// publish artifact, so an author's own tree holds entries and no pages at
+    /// all. There is no `{page, applied}` to record there, and a cursor held
+    /// against that author's *published* leg does not transfer: the order on
+    /// this leg is reconstructed by us, not authored by them.
+    ///
+    /// So the position is neither applied nor silently dropped. It is reported
+    /// as inapplicable and the caller keeps what it had — which matters because
+    /// `feed_route` walks both legs for one author, and a leg that quietly
+    /// reset the position would make the other leg re-deliver its whole window
+    /// on the next poll.
+    #[test]
+    fn a_source_with_no_index_reports_that_a_position_does_not_apply_to_it() {
+        struct Enumerating(Tree);
+        impl FeedSource for Enumerating {
+            fn get(
+                &self,
+                relative_key: String,
+            ) -> Pin<Box<dyn Future<Output = Result<Option<Entity>, String>>>> {
+                self.0.get(relative_key)
+            }
+            fn list(
+                &self,
+                relative_prefix: String,
+            ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<String>>, String>>>> {
+                let names: Vec<String> = self
+                    .0
+                     .0
+                    .keys()
+                    .filter_map(|k| k.strip_prefix(&relative_prefix).map(str::to_string))
+                    .collect();
+                Box::pin(std::future::ready(Ok(Some(names))))
+            }
+        }
+
+        let (mut tree, author, report) = crate::feed_publish::tests::published_tree(3);
+        tree.0.remove(index_head_key());
+        let src = Enumerating(tree);
+
+        // A position that was perfectly valid against this author's published
+        // leg — which is the case the outcome is about.
+        let held = Cursor { page: 0, applied: report.entry_hashes[0] };
+        let w = block_on(read_feed_from(&src, &author, 10, Some(&held))).unwrap();
+        assert_eq!(w.resumed, Resumed::Unpositioned);
+        assert_eq!(w.entries.len(), 3, "the fallback still read the feed");
+        assert_eq!(
+            w.next, None,
+            "and offered no position, because this source has no pages to name one with"
+        );
+    }
+
+    /// **Seven ways a walk relates to the position it was given, and each has
+    /// its own word.** The count is asserted so an eighth cannot quietly reuse
+    /// one — the same reason `Unattributed`'s roster is pinned, and the same
+    /// reason `Hydration` ships five labels rather than four.
+    ///
+    /// Two pairs are the ones a tidy implementation merges, and both would cost
+    /// a real answer: [`Resumed::FromPage`] says *expect duplicates* while
+    /// [`Resumed::Behind`] says *there is a gap above you* — opposite
+    /// instructions; and [`Resumed::ArchiveMovedOn`] is a publisher exercising
+    /// §4.3 rule 3 while [`Resumed::PositionAhead`] is one that cannot have.
+    #[test]
+    fn every_way_a_walk_relates_to_its_position_has_its_own_word() {
+        let all = [
+            Resumed::FromNewest,
+            Resumed::AtCursor,
+            Resumed::FromPage { page: 1 },
+            Resumed::Behind { held: 1 },
+            Resumed::ArchiveMovedOn { held: 0, oldest: 1 },
+            Resumed::PositionAhead { held: 9, current: 1 },
+            Resumed::Unpositioned,
+        ];
+        let words: std::collections::BTreeSet<String> =
+            all.iter().map(|r| format!("{r:?}")).collect();
+        assert_eq!(words.len(), all.len(), "two outcomes render alike: {words:?}");
+
+        // Exhaustive, so an eighth variant is a compile error here rather than a
+        // silent seventh-and-a-half.
+        let _exhaustive = |r: Resumed| match r {
+            Resumed::FromNewest
+            | Resumed::AtCursor
+            | Resumed::FromPage { .. }
+            | Resumed::Behind { .. }
+            | Resumed::ArchiveMovedOn { .. }
+            | Resumed::PositionAhead { .. }
+            | Resumed::Unpositioned => (),
+        };
     }
 }

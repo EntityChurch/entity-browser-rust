@@ -399,6 +399,12 @@
   <div id="version"><div class="empty">probing…</div></div>
   <div id="domain"><div class="empty">probing…</div></div>
 
+  <h2>Last recorded crash</h2>
+  <p class="note">If the program stopped running rather than failing to load, the shell records the
+     first fault here — it survives the reload. <b>Read this before the stale-program advice below</b>:
+     a recorded crash is a specific fault, and the steps below are for a different one.</p>
+  <div id="lastcrash"><div class="empty">probing…</div></div>
+
   <div class="bootnote">
     <p><b>Stuck on “Loading Entity Browser…”?</b> The usual cause is a <b>stale
        service worker</b> serving an old or partial cached bundle — <i>not</i> lost data.
@@ -547,6 +553,61 @@
                 $("origin2").textContent = location.origin;
                 if ($("origin3")) $("origin3").textContent = location.origin;
                 $("ts").textContent = new Date().toLocaleString();
+
+                // --- Last recorded crash -------------------------------------
+                //
+                // Written by the dead-instance detector in the shell (see the
+                // script near the bottom of this file). It is there and not in
+                // the app for the reason the whole console is: on 2026-09-15 a
+                // WASM instance stopped resolving its own closures and threw
+                // 388 times, and `diagnostics.rs` — the in-app browser-failure
+                // capture, whose entire purpose is to make exactly this
+                // visible — logged NOTHING, because its handler is itself a
+                // wasm closure. A reporter inside the thing that dies is not a
+                // reporter, so the record is made in plain JS and read here.
+                //
+                // Three outcomes, kept apart: no record / a record / a record
+                // we could not read. The middle two are obvious; the first and
+                // third are the pair a tidy version merges, and they license
+                // opposite things — "nothing has crashed here" is a finding,
+                // "we could not tell" is not.
+                (function () {
+                    const el = $("lastcrash");
+                    if (!el) return;
+                    let raw;
+                    try {
+                        raw = localStorage.getItem("entity_last_trap");
+                    } catch (e) {
+                        setErr(el, "storage is not readable here, so whether this profile has "
+                            + "recorded a crash could not be determined");
+                        return;
+                    }
+                    if (!raw) {
+                        setEmpty(el, "no crash recorded on this profile — the program has not stopped "
+                            + "mid-session here since this build's shell was loaded");
+                        return;
+                    }
+                    let t;
+                    try { t = JSON.parse(raw); } catch (e) { t = null; }
+                    if (!t || typeof t !== "object") {
+                        setErr(el, "a crash record exists and could not be read — that is a fault in "
+                            + "the record, not evidence about the crash");
+                        return;
+                    }
+                    const when = t.at ? new Date(t.at).toLocaleString() : "(no timestamp)";
+                    el.innerHTML = card(
+                        "The program stopped at " + when,
+                        esc(String(t.message || "(no message)"))
+                        + "<br>build <code>" + esc(String(t.build || "unstamped")) + "</code>"
+                        + (t.filename ? "<br>" + esc(String(t.filename))
+                            + (t.line ? ":" + esc(String(t.line)) : "") : "")
+                        + "<br><br><b>Stack — this is the part worth sending on:</b>"
+                        + "<pre style=\"white-space:pre-wrap;word-break:break-all;margin:6px 0 0;"
+                        + "color:#c8ced8;font-size:11.5px\">"
+                        + esc(String(t.stack || "(no stack)")) + "</pre>"
+                    ) + `<p class="note">Your data is untouched by this — a stopped program is a
+                         stopped program, not a lost tree. Nothing here needs to be reset.</p>`;
+                })();
 
                 // --- Version identity ---------------------------------------
                 //
@@ -1350,6 +1411,229 @@
                     + BOOT_STALL_MS + 'ms; last step: '
                     + ((step && step.textContent) || '(none reported)'));
             }, BOOT_STALL_MS);
+        })();
+    </script>
+    <script>
+        // ── THE DEAD-INSTANCE DETECTOR ───────────────────────────────────
+        //
+        // Measured 2026-09-15 from a real session (a LAN browser on the
+        // desktop's app server, the alpine VM mounted): the WASM instance
+        // stopped resolving its own closures and the page threw
+        // `RuntimeError: index out of bounds` from a wasm-bindgen closure
+        // shim 388 times in a row, alternating between two shim signatures.
+        // Not a Rust panic — `console_error_panic_hook` was installed and
+        // printed nothing; a Firefox `RuntimeError: index out of bounds` on
+        // a closure-invoke shim is a `call_indirect` at a function-table
+        // index the table does not have. After the first one NOT ONE MORE
+        // tracing line was emitted — not even the 5-minute `build_update`
+        // interval that had been ticking right up to it. The app was dead,
+        // and the person looking at it was told nothing at all.
+        //
+        // **Nothing that lives inside the WASM can report this.** We had
+        // three detectors and every one of them died with its subject:
+        //   * `diagnostics.rs` installs `window` error/rejection capture
+        //     precisely so a browser-level failure is "captured and visible
+        //     in-app" — it logged ZERO lines against those 388 errors,
+        //     because the handler is itself a wasm closure;
+        //   * `watchdog.rs` runs its watcher off the main thread in a Worker
+        //     (correctly) and then reports back through a main-thread wasm
+        //     `onmsg` closure, so the watcher kept ticking into a corpse;
+        //   * and it was installed with `show_banner = false`, so even a
+        //     correct detection would have drawn nothing.
+        // That is G8's point about the recovery console arriving over the
+        // channel the worker poisoned, one tier in: **a reporter that lives
+        // inside the thing that dies is not a reporter.** So this runs here,
+        // in plain JS, before any WASM, the same tier as
+        // __ENTITY_RECOVERY__ and __ENTITY_BUILD_SLOT__, for the same reason.
+        //
+        // i18n-ignore — same tier as the L1 recovery console; this file
+        // carries no i18n, and a detector that needed the catalog to load
+        // would need the thing it is reporting on.
+        //
+        // **It reports and offers; it never acts.** No auto-reload: a
+        // crash-loop reload is a brick generator, and the script one block
+        // up already records what a post-start auto-reload cost us (it wiped
+        // live sessions on a denied `clipboard.writeText`). Reload and
+        // System Recovery are one click away and both are non-destructive.
+        //
+        // **A banner, not a modal**, and that is the F2 lease-not-deed
+        // instinct applied to a verdict: if we are WRONG about the app being
+        // dead, a full-screen overlay is us bricking a working session on our
+        // own false positive. A banner leaves the app usable, carries a
+        // Dismiss, and when the app really is dead a banner is plenty —
+        // nothing else on the page works anyway.
+        (function () {
+            // The recovery console is the surface that HELPS here, and it is
+            // a JS-only BIOS that must work when the WASM is the broken
+            // thing. Never overlay it. Same exemption, same reason, as the
+            // build-slot pin and the WASM-load auto-retry.
+            if (window.__ENTITY_RECOVERY__) return;
+
+            // A trap is only evidence of a DEAD INSTANCE once it repeats: one
+            // dead closure is a defect, a recurring host callback firing into
+            // a dead function table is the app being over. Five inside ten
+            // seconds is a floor chosen so a single freed closure cannot
+            // accuse the whole instance — it is not a measured constant, and
+            // `?deadinstance=<n>` moves it.
+            var TRAPS_TO_DECLARE_DEAD = 5;
+            var WINDOW_MS = 10000;
+            // A test affordance, not a knob — nothing in the product sets it.
+            // Same shape and same reason as `?bootstall=`: without it the
+            // branch that matters is unreachable from any gate, and would
+            // ship untested.
+            try {
+                var _di = new URLSearchParams(location.search).get('deadinstance');
+                if (_di !== null && /^[0-9]+$/.test(_di)) TRAPS_TO_DECLARE_DEAD = parseInt(_di, 10);
+            } catch (e) { /* no URLSearchParams → keep the default */ }
+
+            var LAST_TRAP_KEY = 'entity_last_trap';
+
+            // Four outcomes, kept apart on purpose (AP40). `pre-start` is not
+            // a weaker `isolated`: before the module is executing, an error
+            // belongs to the WASM-LOAD auto-retry one block up, which owns
+            // that failure and already handles it — counting those here would
+            // put a "the program stopped" banner over a boot that never
+            // started, which is a different fault with different advice.
+            var state = {
+                verdict: 'ok',      // ok | pre-start | isolated | dead
+                traps: 0,           // wasm RuntimeErrors seen post-start
+                other: 0,           // post-start uncaught errors that are NOT traps
+                preStart: 0,        // errors seen before the module was executing
+                first: null,        // the FIRST trap, with its stack — the instrument
+                declaredAt: null,
+                dismissed: false
+            };
+            // Readable by a gate as structured state rather than by scraping
+            // a sentence out of the banner — the copy is allowed to change.
+            window.__ENTITY_INSTANCE_WATCH__ = state;
+
+            var appStarted = false;
+            window.addEventListener('TrunkApplicationStarted', function () { appStarted = true; });
+
+            var recent = [];
+
+            // Is this a WASM trap? `WebAssembly.RuntimeError` is the clean
+            // test and covers both shapes that matter: a `call_indirect` into
+            // a freed closure ("index out of bounds") AND an ordinary Rust
+            // panic reaching `abort` ("unreachable executed") — after either
+            // one the instance is not executing our code any more, so the
+            // subject is the same. The filename fallback is for a runtime
+            // that does not expose the constructor.
+            function isTrap(event) {
+                try {
+                    if (typeof WebAssembly !== 'undefined'
+                        && WebAssembly.RuntimeError
+                        && event.error instanceof WebAssembly.RuntimeError) return true;
+                } catch (e) { /* fall through to the filename test */ }
+                try {
+                    return typeof event.filename === 'string' && event.filename.indexOf('.wasm') !== -1;
+                } catch (e) { return false; }
+            }
+
+            window.addEventListener('error', function (event) {
+                // Our own handler must never throw: an error thrown here
+                // fires `error` again, and the recursion would look exactly
+                // like the burst we are trying to measure.
+                try {
+                    if (!appStarted) { state.preStart++; if (state.verdict === 'ok') state.verdict = 'pre-start'; return; }
+                    if (!isTrap(event)) { state.other++; return; }
+
+                    state.traps++;
+                    if (!state.first) {
+                        state.first = {
+                            at: new Date().toISOString(),
+                            message: String((event.error && event.error.message) || event.message || '(no message)').slice(0, 500),
+                            filename: String(event.filename || '').slice(0, 500),
+                            line: event.lineno || 0,
+                            col: event.colno || 0,
+                            // The stack is the whole point: it names the
+                            // closure shim, which is what turns "something
+                            // died" into "THIS died".
+                            stack: String((event.error && event.error.stack) || '(no stack)').slice(0, 2000)
+                        };
+                        try {
+                            var m = document.querySelector('meta[name="entity-build-id"]');
+                            state.first.build = (m && m.getAttribute('content')) || 'unstamped';
+                        } catch (e) { state.first.build = 'unknown'; }
+                        // Survives the reload so it is readable afterwards —
+                        // in the console, and in System Recovery. Written
+                        // only when a trap actually happens, bounded, and
+                        // NOTHING BRANCHES ON IT: same rules as the routing
+                        // mirror `boot_diagnostics.rs` writes.
+                        try { localStorage.setItem(LAST_TRAP_KEY, JSON.stringify(state.first)); } catch (e) { /* storage denied — console still has it */ }
+                        console.error('[Entity Browser] WASM TRAP — the instance threw at a closure shim. '
+                            + 'This is the first one and it is the one worth reading:\n'
+                            + state.first.message + '\n' + state.first.stack);
+                    }
+
+                    var now = Date.now();
+                    recent.push(now);
+                    while (recent.length && now - recent[0] > WINDOW_MS) recent.shift();
+
+                    if (state.verdict !== 'dead' && recent.length >= TRAPS_TO_DECLARE_DEAD) {
+                        state.verdict = 'dead';
+                        state.declaredAt = now;
+                        console.error('[Entity Browser] THE PROGRAM HAS STOPPED — ' + recent.length
+                            + ' WASM traps in ' + WINDOW_MS + 'ms. The instance is no longer running our code; '
+                            + 'nothing inside it can report this, which is why you are reading it from the shell.');
+                        showBanner();
+                    } else if (state.verdict === 'ok' || state.verdict === 'pre-start') {
+                        // Traps, but not enough of them to call the instance
+                        // dead. Say so rather than staying silent OR
+                        // overclaiming — those are different facts and only
+                        // one of them warrants putting something on screen.
+                        state.verdict = 'isolated';
+                    }
+                } catch (e) { /* never let the detector become the failure */ }
+            });
+
+            function showBanner() {
+                try {
+                    if (state.dismissed) return;
+                    if (document.getElementById('entity-dead-instance')) return;
+                    var host = document.body || document.documentElement;
+                    if (!host) return;
+                    var bar = document.createElement('div');
+                    bar.id = 'entity-dead-instance';
+                    bar.setAttribute('role', 'alert');
+                    // Every style inline: the app's stylesheet may be gone,
+                    // and an app-host payload clears the body outright.
+                    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;'
+                        + 'background:#3a1111;color:#ffd9d9;border-bottom:1px solid #7a2222;'
+                        + 'font:13px/1.5 system-ui,sans-serif;padding:10px 14px;display:flex;'
+                        + 'flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+                    var msg = document.createElement('span');
+                    msg.style.cssText = 'flex:1 1 320px';
+                    msg.textContent = 'The program stopped running. Your data is on this device and was not '
+                        + 'touched — reloading is safe.';
+                    bar.appendChild(msg);
+                    bar.appendChild(button('Reload', function () { location.reload(); }));
+                    bar.appendChild(button('Open System Recovery', function () {
+                        location.href = '?systemrecovery=1';
+                    }));
+                    // If we are wrong, this is how someone gets their working
+                    // session back. Once dismissed we stay quiet for the rest
+                    // of the page's life rather than re-asserting a verdict
+                    // the person has already rejected.
+                    bar.appendChild(button('Dismiss', function () {
+                        state.dismissed = true;
+                        if (bar.parentNode) bar.parentNode.removeChild(bar);
+                    }));
+                    host.appendChild(bar);
+                } catch (e) {
+                    console.error('[Entity Browser] could not draw the stopped-program banner: ' + e);
+                }
+            }
+
+            function button(label, onClick) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = label;
+                b.style.cssText = 'background:#7a2222;color:#ffecec;border:1px solid #a33;'
+                    + 'border-radius:4px;padding:5px 12px;font:inherit;cursor:pointer';
+                b.addEventListener('click', onClick);
+                return b;
+            }
         })();
     </script>
     <script>

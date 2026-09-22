@@ -346,10 +346,114 @@ impl SignedSession {
         &self.pin
     }
 
+    /// **The prefix this publisher's signed root DECLARES** (§3.3a) — the thing
+    /// [`Self::resolve`]'s keys are relative to.
+    ///
+    /// ## ⚠ Why a caller ever needs this, and it is a live cross-impl trap
+    ///
+    /// [`Self::resolve`] takes a key **relative to the declared prefix**, and
+    /// several conventions pin their addresses as **absolute peer-relative
+    /// paths**: `APP-CONVENTION-FEED` §4.2 pins `{peer}/app/feed/index` by hand.
+    /// The two agree exactly while a publisher declares the universal tree, and
+    /// **our own emitter always does**, so nothing in this repo could notice
+    /// they are different questions.
+    ///
+    /// Against a publisher who declared `app/feed/`, the committed key is
+    /// `index` and a reader asking for the pinned `app/feed/index` misses every
+    /// time. `entity-workbench-go` filed this as a reader's-mistakes entry and
+    /// arch has taken it into `GUIDE-APPLICATION-DEVELOPMENT`; their framing is
+    /// the part that transfers — *getting it wrong yields an empty feed with a
+    /// valid signature over it, which is the most confident wrong answer
+    /// available.* Measured here 2026-09-15 against their corridor fixture.
+    ///
+    /// ⭐ **It is the source's job, not the reader's.** A convention pins one
+    /// address; what varies is the transport the bytes arrived over, and a live
+    /// peer has no declared prefix at all. Putting the strip here keeps
+    /// [`crate::feed_read`] spelling §4.2's address the way §4.2 spells it.
+    ///
+    /// Costs one manifest fetch. Callers that resolve many keys should ask once
+    /// and hold it for the walk — the prefix is a property of the root they are
+    /// already pinned to, not of the key.
+    pub async fn declared_prefix<S: BinSource + ?Sized>(
+        &self,
+        src: &S,
+    ) -> Result<String, SignedFetchError> {
+        let bytes = src
+            .get(self.pin.manifest_url(), Freshness::Mutable)
+            .await
+            .map_err(|e| SignedFetchError::Transport(format!("manifest: {e}")))?;
+        match self.manifest.lock() {
+            Ok(mut m) => *m = bytes,
+            Err(_) => return Err(SignedFetchError::Transport("manifest slot poisoned".into())),
+        }
+        // The root carries its own detached signature, so reading it needs the
+        // same async hop `resolve` makes — `fetch_root` is sync and reports the
+        // miss rather than fetching it. One round is enough in practice (there
+        // is exactly one signature to want); the bound is `resolve`'s, for the
+        // same reason.
+        for _ in 0..MAX_ROUNDS {
+            match self.client.fetch_root() {
+                Ok(root) => return Ok(root.prefix),
+                Err(e) if !matches!(e, PublishedRootError::Fetch(_)) => {
+                    return Err(classify_root_error(e))
+                }
+                _ => {}
+            }
+            let wanted = drain(&self.state.signature_misses);
+            if wanted.is_empty() {
+                // A fetch error with nothing outstanding is the origin failing
+                // to serve its own manifest, not a key that is absent.
+                return Err(SignedFetchError::Transport(
+                    "the root could not be read and nothing was outstanding".into(),
+                ));
+            }
+            self.pump_signatures(src, wanted).await?;
+        }
+        Err(SignedFetchError::Transport("the root did not settle".into()))
+    }
+
+    /// The signature half of the pump's async hop, shared by
+    /// [`Self::declared_prefix`] and [`Self::resolve`] so there is one of it.
+    async fn pump_signatures<S: BinSource + ?Sized>(
+        &self,
+        src: &S,
+        wanted: Vec<Hash>,
+    ) -> Result<(), SignedFetchError> {
+        for target in wanted {
+            let bytes = fetch_signature(src, &self.pin, &target).await?;
+            if let Ok(mut c) = self.state.signatures.lock() {
+                c.insert(target, bytes);
+            }
+        }
+        Ok(())
+    }
+
+    /// Map an address a **convention** pins — absolute and peer-relative — onto
+    /// the key space *this* publisher's trie was built over.
+    ///
+    /// Pure, and separate from [`Self::declared_prefix`] so the rule is gated
+    /// without a publish: `/` (the universal tree) and `""` both mean *no
+    /// prefix*, and a declared prefix that the pinned path does not start with
+    /// is left alone rather than mangled — that publisher simply does not carry
+    /// this key, and reporting it as absent is the honest answer.
+    pub fn key_under_prefix(pinned_peer_relative: &str, declared_prefix: &str) -> String {
+        let p = declared_prefix.trim_start_matches('/');
+        if p.is_empty() {
+            return pinned_peer_relative.to_string();
+        }
+        let p = if p.ends_with('/') { p.to_string() } else { format!("{p}/") };
+        pinned_peer_relative.strip_prefix(&p).unwrap_or(pinned_peer_relative).to_string()
+    }
+
     /// Resolve `relative_key` from the signed tree.
     ///
     /// `relative_key` is peer-relative — `sites/{site}/pages/{slug}`, the same
     /// key space the projection's trie was built over.
+    ///
+    /// ⚠ **Relative to the publisher's DECLARED PREFIX**, which is the same
+    /// thing only while that prefix is the universal tree. If your key came
+    /// from a convention that pins an absolute address, put it through
+    /// [`Self::key_under_prefix`] first — see [`Self::declared_prefix`].
     pub async fn resolve<S: BinSource + ?Sized>(
         &self,
         src: &S,
@@ -391,12 +495,7 @@ impl SignedSession {
             }
 
             // ⟵ the async hop.
-            for target in signature_wanted {
-                let bytes = fetch_signature(src, &self.pin, &target).await?;
-                if let Ok(mut c) = self.state.signatures.lock() {
-                    c.insert(target, bytes);
-                }
-            }
+            self.pump_signatures(src, signature_wanted).await?;
             for want in content_wanted {
                 // `want` came out of the miss log, which means a trie node the
                 // signed root commits to NAMED this hash. So a 404 here is the

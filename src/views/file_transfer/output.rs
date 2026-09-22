@@ -56,6 +56,13 @@ pub struct FileTransferOutput {
     /// Last **real** browse error, surfaced loudly (D13). A peer that serves no
     /// share is not one — see [`share_absent`](Self::share_absent).
     pub browse_error: Option<String>,
+    /// The device could not be reached (no answer, or none in time), with the
+    /// underlying detail for a tooltip. Rendered as a sentence, never as the
+    /// kernel's string.
+    pub browse_unreachable: Option<String>,
+    /// The offers half failed. Shown only where nothing else explains an empty
+    /// pane (a peer with no share).
+    pub offers_error: Option<String>,
     /// This peer serves no share at all — it answered `handler_not_found`, which
     /// is what **every** browser peer answers (`entity-local-files` is
     /// native-only). Not a failure; see `browse::ShareState`.

@@ -66,99 +66,6 @@ pub struct ResolvedName {
     pub clamped: Option<(u64, u64)>,
 }
 
-/// The window an *Open in Site Browser* click must spawn, and the peer it must
-/// be bound to — `None` when there is nothing to open.
-///
-/// **This exists because the button did not open anything for its entire life.**
-/// The click registered the origin the signed binding carried (real work, which
-/// is why it did not feel completely inert) and then marked the window dirty,
-/// so the Registry Browser repainted itself and no Site Browser was ever
-/// spawned. Reported from a live deployment against a name that resolves
-/// perfectly — every layer under the button was correct.
-///
-/// It is a free function rather than a line in the renderer for one reason: the
-/// renderer is wasm-only, so a rule living there is unreachable from
-/// `make test`, and *"which window does this open, bound to whom"* is exactly
-/// the part that was wrong. **What a native test still cannot see is whether
-/// the renderer calls this at all** — that needs a browser, and this repo has
-/// no gate that drives the Registry Browser. Said plainly rather than implied.
-///
-/// The window type is the **identity key** from `window_registry`, not UI text;
-/// a wrong string here resolves to no factory and silently opens nothing, which
-/// is the same shape as the retired `Games` key.
-///
-/// # The bound peer is MINE, not the publisher's — and getting that backwards
-/// is what emptied the window
-///
-/// The first version of this function bound the Site Browser to
-/// `target.peer_id`, which reads as the obvious answer: *open a browser onto
-/// that publisher*. It is wrong, and it is wrong in a way that produces a
-/// window rather than an error.
-///
-/// **A window's bound peer is the store it READS**, never the subject it is
-/// looking at. Every read in the Site Browser passes it to `Peers` as a
-/// selector — the derived site index, `scan_local_sites`, the origins registry,
-/// prefs, provenance — and cached foreign content lives at `/{foreign}/sites/`
-/// in **my** store (V7 §1.4: the path's peer-segment carries whose site it is,
-/// the selector says whose store to look in). A publisher's peer-id is hosted
-/// by no local SDK, so `Peers::sdk_for` answers `UnknownPeer` and every one of
-/// those reads collapses to its empty value. The rail then says *"No external
-/// sites cached"* about a manifest sitting in that very store.
-///
-/// So the failure was total, silent and network-independent — which is why the
-/// publishing side measured green (`ROUTING-2026-08-24-REGISTRY-OPEN…`: all
-/// three hops 200 with CORS) while the rail stayed empty. Pinned from both
-/// sides by `the_rail_reads_my_store_so_a_foreign_bound_window_sees_nothing`.
-///
-/// The publisher is still reached — by the origin registration and the
-/// `warm_peer_sites` enumeration that run on the same click — and it appears in
-/// the rail as a *cached* entry, which is what it is.
-/// # ⭐ The window type is no longer a literal here — 2026-09-12
-///
-/// It used to be `Some(("Site Browser", local_peer))`, and
-/// `DESIGN-2026-09-12-BROWSING-WITHOUT-PRIVILEGING-A-CONVENTION` §1 row 1 names
-/// that literal as one of the three places the site convention is privileged.
-/// What this builds now is an **address** — *this publisher's sites* — and
-/// [`crate::open_target::route`] decides which viewer shows it. The answer is
-/// still the Site Browser, and that is the point: the table gives the same
-/// answer and a second convention can register beside it without editing this
-/// function.
-///
-/// ⚠ **The remaining guess is `sites`, and it is deliberately visible.** A name
-/// binding carries a peer and an origin and says **nothing** about what that peer
-/// publishes, so *which convention* is not derivable here — it is the discovery
-/// half §4 separates out and refuses to smuggle in with the open. Before, that
-/// guess was a window name in a literal; now it is one address on one line, and
-/// the day a binding can say *"I publish a feed"* this is the line that changes.
-pub fn open_target(resolved: &Phase<ResolvedName>, local_peer: &str) -> Option<Open> {
-    let Phase::Done(target) = resolved else { return None };
-    // No origin means we resolved WHO but not WHERE. A Site Browser opened for
-    // a peer with no registered origin can only fail to fetch, and it would
-    // fail as "that site is not there" — a wrong sentence about a registry that
-    // answered correctly.
-    target.origin.as_ref()?;
-    let address = crate::open_target::site_directory(&target.peer_id);
-    match crate::open_target::route(&address) {
-        crate::open_target::Routing::Viewer(window_type) => Some(Open {
-            window_type,
-            bind_peer: local_peer.to_string(),
-            target: address,
-        }),
-        // Unreachable while `sites` has a row, and not asserted away: a table
-        // with no viewer for this address is a real state, and opening *some*
-        // window because one was expected is how a routing hole becomes an empty
-        // rail somebody has to debug.
-        other => {
-            tracing::warn!(
-                resolved_peer = %target.peer_id,
-                routing = ?other,
-                "a resolved name has no viewer to open it in"
-            );
-            None
-        }
-    }
-}
-
 /// What an *Open* click must do: **which window, whose store it reads, and what
 /// it is looking at.**
 ///
@@ -186,6 +93,93 @@ pub enum Phase<T> {
     Failed(String),
 }
 
+/// ⭐ **What the resolved publisher actually publishes — and the reason this
+/// surface no longer guesses.**
+///
+/// A resolve establishes *who* and *where*. It cannot establish *what*: a
+/// `system/registry/binding` carries `name`, `target_peer_id` and `transports`
+/// and nothing about the publisher's content, so `open_target` below picked
+/// `sites` and said so in its own doc. [`crate::publication_probe`] asks the
+/// publisher's signed root instead, and the answer it produces includes a
+/// **verified negative** — something no registry field could supply.
+///
+/// `Phase` for the same reason the listing is: *nothing asked yet* and *asked,
+/// and they publish nothing* are different states, and rendering them alike is
+/// how a reader concludes a publisher is empty.
+pub type Publications = Vec<crate::publication_probe::Finding>;
+
+/// One *Open* per convention the publisher **demonstrably** carries.
+///
+/// # This replaced `open_target`, which guessed — 2026-09-15
+///
+/// That function returned a Site Browser for **every** resolved name with an
+/// origin, and its own doc said why: *"a name binding carries a peer and an
+/// origin and says nothing about what that peer publishes … the day a binding
+/// can say 'I publish a feed' this is the line that changes."* The line changed
+/// — not because a binding learned to say it, but because the publisher can be
+/// asked directly ([`crate::publication_probe`]).
+///
+/// # The bound peer is MINE, not the publisher's — and getting that backwards
+/// emptied the window
+///
+/// **A window's bound peer is the store it READS**, never the subject it is
+/// looking at. Every read in a viewer passes it to `Peers` as a selector, and
+/// cached foreign content lives at `/{foreign}/…` in **my** store (V7 §1.4: the
+/// path's peer-segment carries whose content it is, the selector says whose
+/// store to look in). A publisher's peer-id is hosted by no local SDK, so
+/// `Peers::sdk_for` answers `UnknownPeer` and every read collapses to its empty
+/// value — a real window, a plausible title, and a rail that says *"nothing
+/// cached"* about a manifest sitting in that very store.
+///
+/// The failure was total, silent and network-independent, which is why the
+/// publishing side measured green (`ROUTING-2026-08-24-REGISTRY-OPEN…`: all
+/// three hops 200 with CORS) while the rail stayed empty. Pinned from both
+/// sides by `the_rail_reads_my_store_so_a_foreign_bound_window_sees_nothing`.
+///
+/// **What a native test still cannot see is whether the renderer calls this at
+/// all** — that needs a browser, and this repo has no gate that drives the
+/// Registry Browser. Said plainly rather than implied.
+///
+/// ⛔ **A refusal offers nothing, and that is the whole behaviour change.** The
+/// retired `open_target` returned a Site Browser for every resolved name with
+/// an origin — so a publisher who carries only a feed got a window whose rail
+/// is empty by construction, which reads as *"this publisher has nothing"*
+/// about a publisher with an archive. Only [`Publishes::Yes`] licenses a
+/// button; the other seven outcomes are rendered as what they are.
+///
+/// [`Publishes::Yes`]: crate::publication_probe::Publishes::Yes
+pub fn opens(
+    published: &Publications,
+    resolved: &Phase<ResolvedName>,
+    local_peer: &str,
+) -> Vec<Open> {
+    // ⚠ **Takes the PHASE, not the resolved name, deliberately.** The retired
+    // `open_target` did too, and its `an_unresolved_phase_opens_nothing` is the
+    // only place that guard is checkable: the renderer is wasm-only, so a rule
+    // living there is unreachable from `make test`. Narrowing the parameter to
+    // `&ResolvedName` would move a real rule into the one file no gate reads.
+    let Phase::Done(target) = resolved else { return Vec::new() };
+    // Resolved WHO but not WHERE. Belt-and-braces — with no origin the probe
+    // cannot have run — but it is the guard on the DECISION rather than on the
+    // acquisition, so it keeps holding if a future caller probes by some other
+    // route.
+    if target.origin.is_none() {
+        return Vec::new();
+    }
+    published
+        .iter()
+        .filter(|f| f.outcome.is_offerable())
+        .filter_map(|f| {
+            let viewer = crate::open_target::viewers().iter().find(|v| v.window_type == f.window_type)?;
+            Some(Open {
+                window_type: viewer.window_type,
+                bind_peer: local_peer.to_string(),
+                target: crate::open_target::directory(&target.peer_id, viewer),
+            })
+        })
+        .collect()
+}
+
 /// Everything the Registry Browser renders.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryBrowserOutput {
@@ -208,6 +202,11 @@ pub struct RegistryBrowserOutput {
     /// renderer holds no `Peers`, and because *which peer* is precisely the
     /// thing `open_target` got wrong — see its doc.
     pub local_peer: String,
+    /// What the resolved publisher publishes — see [`Publications`]. `Idle`
+    /// until a name resolves; reset on every new resolve, because a finding is
+    /// an answer about **one** publisher and carrying it forward would attach
+    /// the last publisher's conventions to this one.
+    pub published: Phase<Publications>,
     /// Why the last pin attempt was refused, if it was.
     ///
     /// Carried to the pixel rather than dropped: the two refusals (no peer-id, a
@@ -221,6 +220,7 @@ pub struct RegistryBrowserOutput {
 #[cfg(test)]
 mod open_target_tests {
     use super::*;
+    use crate::publication_probe::{Finding, Publishes, Unknown};
 
     fn resolved(origin: Option<&str>) -> ResolvedName {
         ResolvedName {
@@ -235,63 +235,145 @@ mod open_target_tests {
         }
     }
 
-    /// A resolved name with an origin opens a **Site Browser bound to MY peer**,
-    /// which is the store the window reads. The publisher's id appears in that
-    /// window as a cached *entry*, not as the binding.
+    /// ⭐ **The SUBJECT is the publisher and the BINDING is my store** — two
+    /// peers, two facts, and collapsing them is the bug that shipped.
     ///
-    /// **The negative half is the load-bearing one**, because binding to the
-    /// publisher is the reading that shipped: it produces a real window with a
-    /// plausible title and an empty rail, so it looks like a working button
-    /// reporting that the publisher has nothing. Asserting only "some peer" or
-    /// only "not the default" would both pass it.
+    /// Binding the window to the publisher is the reading that looks obvious
+    /// (*open a browser onto that peer*) and it produces a real window with a
+    /// plausible title and an empty rail — a working-looking button reporting
+    /// that the publisher has nothing. Asserting only "some peer" or only "not
+    /// the default" would both pass it, which is why both peers are named here.
     #[test]
-    fn a_resolved_name_opens_a_site_browser_bound_to_my_own_store() {
+    fn the_subject_is_the_publisher_and_the_binding_is_mine() {
         let r = resolved(Some("https://billslab.com"));
-        let got = open_target(&Phase::Done(r.clone()), "2KMYLOCALPEER").expect("an open");
-        assert_eq!(got.window_type, "Site Browser");
+        let found = vec![finding(crate::open_target::SITE_BROWSER, Publishes::Yes { units: Some(1) })];
+        let got = opens(&found, &Phase::Done(r.clone()), "2KMYLOCALPEER");
+        let got = got.first().expect("a demonstrated convention is offered");
+        assert_eq!(got.window_type, crate::open_target::SITE_BROWSER);
         assert_eq!(got.bind_peer, "2KMYLOCALPEER");
+        assert_eq!(got.target.peer(), r.peer_id, "the target names the publisher");
         assert_ne!(
             got.bind_peer, r.peer_id,
             "binding the window to the publisher is the bug: no local SDK hosts \
              that id, so every read in the window is empty"
         );
-    }
-
-    /// ⭐ **…and the SUBJECT is the publisher, which is the same fact from the
-    /// other side.** The pair that shipped carried only the binding, so *whose
-    /// content this is* travelled as a side effect (the origin registration and
-    /// the manifest warm on the same click). Asserting both peers in one test is
-    /// what stops a later simplification from collapsing them back — and it is
-    /// the one assertion that would fail if somebody "fixed" the binding to point
-    /// at the publisher.
-    #[test]
-    fn the_subject_is_the_publisher_and_the_binding_is_mine() {
-        let r = resolved(Some("https://billslab.com"));
-        let got = open_target(&Phase::Done(r.clone()), "2KMYLOCALPEER").expect("an open");
-        assert_eq!(got.target.peer(), r.peer_id, "the target names the publisher");
-        assert_ne!(got.target.peer(), got.bind_peer, "subject and binding are two facts");
         assert_eq!(
             crate::open_target::route(&got.target),
-            crate::open_target::Routing::Viewer("Site Browser"),
+            crate::open_target::Routing::Viewer(crate::open_target::SITE_BROWSER),
             "the window type must come from the table, not from a literal here"
         );
     }
 
-    /// **Resolved WHO but not WHERE opens nothing.** A binding carrying no
-    /// consumable transport profile gives a peer with no registered origin, and
-    /// a Site Browser opened for one can only fail to fetch — reporting "that
-    /// site is not there" about a registry that answered correctly. The same
-    /// absent-vs-withheld seam this arc keeps meeting, at the UI layer.
-    #[test]
-    fn resolving_who_but_not_where_opens_nothing() {
-        assert_eq!(open_target(&Phase::Done(resolved(None)), "2KMYLOCALPEER"), None);
-    }
-
-    /// Nothing resolved yet is not something to open. Guards the arm a
-    /// renderer would otherwise reach by unwrapping an in-flight phase.
+    /// Nothing resolved yet is not something to open. Guards the arm a renderer
+    /// would otherwise reach by unwrapping an in-flight phase — and it is the
+    /// reason [`opens`] takes the `Phase` rather than the resolved name.
     #[test]
     fn an_unresolved_phase_opens_nothing() {
-        assert_eq!(open_target(&Phase::Idle, "2KMYLOCALPEER"), None);
-        assert_eq!(open_target(&Phase::Running, "2KMYLOCALPEER"), None);
+        let found = vec![finding(crate::open_target::FEED, Publishes::Yes { units: None })];
+        assert!(opens(&found, &Phase::Idle, "2KMYLOCALPEER").is_empty());
+        assert!(opens(&found, &Phase::Running, "2KMYLOCALPEER").is_empty());
+        assert!(opens(&found, &Phase::Failed("no such name".into()), "2KMYLOCALPEER").is_empty());
+    }
+
+    // -- what the probe replaced the guess with ----------------------------
+
+    fn finding(window_type: &'static str, outcome: Publishes) -> Finding {
+        let v = crate::open_target::viewers()
+            .iter()
+            .find(|v| v.window_type == window_type)
+            .expect("a fixture naming a viewer the table does not have measures nothing");
+        Finding { window_type: v.window_type, entry: v.entry, outcome }
+    }
+
+    /// ⭐⭐ **The behaviour change, stated as the case that was wrong.**
+    ///
+    /// A publisher who carries a feed and no sites used to get an *Open in Site
+    /// Browser* button — the only button there was — and it opened a window
+    /// whose rail is empty by construction. So the surface reported *"this
+    /// publisher has nothing"* about somebody with an archive, from a registry
+    /// that had answered perfectly.
+    ///
+    /// **Both halves asserted:** the feed IS offered and the site is NOT. A test
+    /// checking only the first passes for an implementation that offers
+    /// everything, which is the defect.
+    #[test]
+    fn a_feed_only_publisher_is_offered_a_feed_and_not_a_site_browser() {
+        let r = resolved(Some("https://billslab.com"));
+        let found = vec![
+            finding(crate::open_target::SITE_BROWSER, Publishes::No),
+            finding(crate::open_target::FEED, Publishes::Yes { units: None }),
+        ];
+        let got = opens(&found, &Phase::Done(r.clone()), "2KMYLOCALPEER");
+        assert_eq!(got.len(), 1, "exactly one convention was demonstrated: {got:?}");
+        assert_eq!(got[0].window_type, crate::open_target::FEED);
+        assert_eq!(got[0].target.peer(), r.peer_id, "the subject is the publisher");
+        assert_eq!(got[0].bind_peer, "2KMYLOCALPEER", "the binding is my store");
+    }
+
+    /// A publisher carrying both is offered both, in table order — so a reader
+    /// sees the whole of what this peer has rather than whichever convention
+    /// the code happened to privilege.
+    #[test]
+    fn a_publisher_carrying_both_is_offered_both() {
+        let r = resolved(Some("https://billslab.com"));
+        let found = vec![
+            finding(crate::open_target::SITE_BROWSER, Publishes::Yes { units: Some(2) }),
+            finding(crate::open_target::FEED, Publishes::Yes { units: None }),
+        ];
+        let got = opens(&found, &Phase::Done(r.clone()), "2KMYLOCALPEER");
+        assert_eq!(
+            got.iter().map(|o| o.window_type).collect::<Vec<_>>(),
+            vec![crate::open_target::SITE_BROWSER, crate::open_target::FEED],
+        );
+    }
+
+    /// ⛔ **A refusal offers nothing** — and a *"we could not tell"* offers
+    /// nothing either, which is the arm a tidy version gets wrong by treating
+    /// unknown as *probably yes, let them try*. A window opened on a hunch can
+    /// only render an empty rail, and the reader cannot tell that from an
+    /// answer.
+    #[test]
+    fn nothing_we_could_not_establish_is_offered() {
+        let r = resolved(Some("https://billslab.com"));
+        for outcome in [
+            Publishes::No,
+            Publishes::Partial { nodes_walked: 32 },
+            Publishes::Unknown(Unknown::Unreachable("down".into())),
+            Publishes::Unknown(Unknown::Withheld("cut".into())),
+            Publishes::Unknown(Unknown::Unproven("bad sig".into())),
+            Publishes::Unknown(Unknown::OurFloor("seq rollback".into())),
+            Publishes::Unknown(Unknown::Exhausted),
+        ] {
+            let found = vec![finding(crate::open_target::SITE_BROWSER, outcome.clone())];
+            assert!(
+                opens(&found, &Phase::Done(r.clone()), "2KMYLOCALPEER").is_empty(),
+                "`{}` is not a demonstration that there is anything to open",
+                outcome.word()
+            );
+        }
+    }
+
+    /// Resolved WHO but not WHERE still opens nothing, even if findings somehow
+    /// exist. The guard is on the decision, not on the acquisition.
+    #[test]
+    fn a_publisher_with_no_origin_is_offered_nothing_whatever_the_findings_say() {
+        let found = vec![finding(crate::open_target::FEED, Publishes::Yes { units: None })];
+        assert!(opens(&found, &Phase::Done(resolved(None)), "2KMYLOCALPEER").is_empty());
+    }
+
+    /// Nothing probed yet is not *"they publish nothing"*. The empty finding
+    /// list and a list of refusals both offer nothing, and the **renderer** is
+    /// what must keep them apart — asserted here so a later simplification that
+    /// collapses `Phase::Idle` into an empty vec has something to red against.
+    #[test]
+    fn an_unprobed_publisher_offers_nothing_and_that_is_not_an_answer() {
+        let r = resolved(Some("https://billslab.com"));
+        assert!(opens(&Vec::new(), &Phase::Done(r), "2KMYLOCALPEER").is_empty());
+        let idle: Phase<Publications> = Phase::Idle;
+        assert_ne!(
+            idle,
+            Phase::Done(Vec::new()),
+            "nothing asked and asked-and-empty must not compare equal"
+        );
     }
 }

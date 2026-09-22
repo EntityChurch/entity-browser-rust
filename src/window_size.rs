@@ -231,6 +231,10 @@ struct Registry {
     prefs: BTreeMap<String, SizePref>,
     /// A drag in progress: `(window, px)`.
     live: Option<(WindowId, u32)>,
+    /// A grip held, press to release: `(window, last pointer activity, ms)`.
+    /// Separate from `live`, which starts only at the first move — a rebuild
+    /// between the press and that move replaces the grip too.
+    held: Option<(WindowId, f64)>,
     /// The player's fitted height per window, tagged with the size key it was
     /// computed for, so a window that went back to its launcher does not keep
     /// the machine's height.
@@ -281,6 +285,55 @@ pub fn pref(key: &str) -> Option<SizePref> {
     REG.with(|r| r.borrow().prefs.get(key).copied())
 }
 
+/// How long a held grip may go without a pointer event before it stops
+/// holding rebuilds back — a safety net for a release no handler ever saw, so a
+/// window's content cannot freeze for good. **Long on purpose:** it was 5 s, and
+/// a drag that paused that long lost its grip to the very rebuild the hold
+/// exists to defer (the grip gate went red on a loaded run). A move with no
+/// button down ends a drag at once (`build_size_grip`), which is the fast path
+/// for a missed release; this is only the path for no pointer activity at all.
+pub const HOLD_STALE_MS: f64 = 30_000.0;
+
+/// Whether a held grip at `held` keeps window `id` from rebuilding at `now_ms`.
+/// Pure so the staleness rule is native-tested; [`holding`] reads the registry.
+pub fn holds(held: Option<(WindowId, f64)>, id: WindowId, now_ms: f64) -> bool {
+    held.is_some_and(|(w, at)| w == id && now_ms - at < HOLD_STALE_MS)
+}
+
+/// The grip of `id` was pressed or moved (`Some(now)`), or released (`None`).
+pub fn set_held(id: WindowId, at_ms: Option<f64>) {
+    REG.with(|r| {
+        let mut r = r.borrow_mut();
+        match at_ms {
+            Some(at) => r.held = Some((id, at)),
+            None => {
+                if r.held.is_some_and(|(w, _)| w == id) {
+                    r.held = None;
+                }
+            }
+        }
+    });
+}
+
+/// Whether window `id`'s section must not be rebuilt right now.
+///
+/// **A rebuild replaces the grip, and a replaced grip ends the drag.** Measured
+/// in Chromium 151 (2026-09-15): System Monitor rebuilds every second, the grip
+/// element is removed, Chromium fires `lostpointercapture` and the next move goes
+/// nowhere — a 150 px drag stopped after 18 px. That is the field report's *"it
+/// just releases it in one or two seconds"*, on windows that rebuild often.
+pub fn holding(id: WindowId, now_ms: f64) -> bool {
+    REG.with(|r| holds(r.borrow().held, id, now_ms))
+}
+
+/// Whether any grip is held right now (fresh). The renderer takes the iframe
+/// shield down whenever this is false, because the release handler that
+/// normally does it lives on the grip — and a grip replaced before its release
+/// (a hold gone stale, a window closed mid-drag) never runs it.
+pub fn holding_any(now_ms: f64) -> bool {
+    REG.with(|r| r.borrow().held.is_some_and(|(id, at)| holds(Some((id, at)), id, now_ms)))
+}
+
 pub fn set_live(id: WindowId, px: Option<u32>) {
     REG.with(|r| r.borrow_mut().live = px.map(|p| (id, p)));
 }
@@ -315,6 +368,9 @@ pub fn forget_window(id: WindowId) {
         if r.live.is_some_and(|(w, _)| w == id) {
             r.live = None;
         }
+        if r.held.is_some_and(|(w, _)| w == id) {
+            r.held = None;
+        }
     });
 }
 
@@ -326,6 +382,16 @@ pub fn applied(id: WindowId, key: &str) -> Applied {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_grip_holds_back_only_its_own_window_and_only_while_it_is_fresh() {
+        let held = Some((3, 1_000.0));
+        assert!(holds(held, 3, 1_000.0));
+        assert!(holds(held, 3, 1_000.0 + HOLD_STALE_MS - 1.0), "a drag still in progress must hold");
+        assert!(!holds(held, 3, 1_000.0 + HOLD_STALE_MS), "a release nobody heard must not freeze the window");
+        assert!(!holds(held, 4, 1_000.0), "another window rebuilds as usual");
+        assert!(!holds(None, 3, 1_000.0));
+    }
 
     #[test]
     fn a_drag_outranks_everything_and_a_stored_height_outranks_the_apps_fit() {

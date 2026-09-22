@@ -192,6 +192,8 @@ pub struct EntityApp {
     /// picker owns the half before the action exists (choosing a file, reading
     /// its bytes), this owns the half after.
     offer_attempt: crate::offer_attempt::OfferAttempt,
+    /// Outcome of the last Pull in File Transfer (`crate::pull_attempt`, B-13).
+    pull_attempt: crate::pull_attempt::PullAttempt,
     /// Tree-backed publisher for the WS listener's bound address.
     /// Cloned into the listener-bind spawned task; only used on native.
     #[cfg(feature = "native-ws")]
@@ -1558,6 +1560,7 @@ impl EntityApp {
         let dial_markers = crate::dial_markers::DialMarkers::new();
         let connect_attempt = crate::connect_attempt::ConnectAttempt::new();
         let offer_attempt = crate::offer_attempt::OfferAttempt::new();
+        let pull_attempt = crate::pull_attempt::PullAttempt::new();
         let mut peer_registry = PeerRegistry::new(&peer_manager);
         // Seed the roster from boot peers (primary + any persisted)
         // so the registry is populated before the first frame.
@@ -1776,6 +1779,7 @@ impl EntityApp {
             dial_markers,
             connect_attempt,
             offer_attempt,
+            pull_attempt,
             peer_registry,
             user_themes,
             share_sync,
@@ -2303,7 +2307,7 @@ impl EntityApp {
         effective_surface: &crate::session_config::BootSurface,
         system_pid: &str,
     ) {
-        if let crate::session_config::BootSurface::Window { peer_id, window_type } =
+        if let crate::session_config::BootSurface::Window { peer_id, window_type, target } =
             &effective_surface
         {
             // Resolve the target peer: empty `peer_id` = the system peer
@@ -2333,16 +2337,23 @@ impl EntityApp {
                 // Window ids are ephemeral → the durable `(peer, type)` is
                 // the stable identifier, re-spawned each boot; no extra
                 // persistence needed.
-                match self
-                    .window_manager
-                    .spawn(window_type, &target_peer, &self.peer_manager)
-                {
+                match self.window_manager.spawn_at(
+                    window_type,
+                    &target_peer,
+                    target.as_ref(),
+                    &self.peer_manager,
+                ) {
                     Some(id) => {
                         self.maximized_window = Some(id);
                         tracing::info!(
                             window_type = %window_type,
                             target_peer = %target_peer,
                             window_id = id,
+                            // `target_peer` is the local store; this is the
+                            // publisher. Both, because a deployment that boots
+                            // the Feed window at nobody and one that boots it at
+                            // a publisher are the same line otherwise.
+                            aimed_at = %crate::open_target::write(target.as_ref()),
                             "boot_load: booted into maximized window surface"
                         );
                     }
@@ -3281,7 +3292,14 @@ impl EntityApp {
                         Some((p, t)) => (p.to_string(), t.to_string()),
                         None => (String::new(), raw),
                     };
-                    crate::session_config::BootSurface::Window { peer_id, window_type }
+                    // `?window=` is a developer override for the SURFACE, not
+                    // for an address — the query grammar is `{peer}:{type}` and
+                    // widening it to carry a URI is a separate decision.
+                    crate::session_config::BootSurface::Window {
+                        peer_id,
+                        window_type,
+                        target: None,
+                    }
                 })
                 .unwrap_or_else(|| cfg.boot_surface.clone());
             self.apply_window_surface(&effective_surface, &system_pid);
@@ -3710,7 +3728,7 @@ impl EntityApp {
 
         let mut actions = Vec::new();
         if let Some(ref mut dom) = self.dom {
-            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt, &self.offer_attempt, provisioning_drifted);
+            dom.render(&self.peer_manager, &self.window_manager, &mut actions, self.maximized_window, &self.dial_markers, &self.connect_attempt, &self.offer_attempt, &self.pull_attempt, provisioning_drifted);
         }
         if !actions.is_empty() {
             self.process_actions(actions);
@@ -3858,7 +3876,7 @@ impl EntityApp {
     fn process_actions(&mut self, actions: Vec<Action>) {
         for action in &actions {
             match action {
-                Action::SpawnWindow { type_name, peer_id } => {
+                Action::SpawnWindow { type_name, peer_id, target } => {
                     let open = self.window_manager.open_count();
                     let pid = peer_id.as_deref()
                         .unwrap_or(self.peer_manager.primary_peer_id());
@@ -3874,6 +3892,25 @@ impl EntityApp {
                             if let Some(dom) = self.dom.as_ref() {
                                 dom.focus_window(existing);
                             }
+                            // **Focusing is not opening, and a focused window is
+                            // still owed the address.** Singleton mode reuses the
+                            // open instance, so a second *Open* click at a
+                            // different publisher would otherwise focus a window
+                            // still showing the first one — the button doing
+                            // nothing, which is the defect `open_target` was
+                            // built to fix arriving through the other arm.
+                            if let (Some(target), Some(win)) =
+                                (target.as_ref(), self.window_manager.get_mut(existing))
+                            {
+                                let outcome = win.view.aim(target, &self.peer_manager);
+                                tracing::info!(
+                                    window_type = %type_name,
+                                    window_id = existing,
+                                    subject_peer = %target.peer(),
+                                    outcome = outcome.label(),
+                                    "focused window re-aimed at a target"
+                                );
+                            }
                             continue;
                         }
                     }
@@ -3883,7 +3920,12 @@ impl EntityApp {
                     // menu and nothing happened (VM design §8). Opening one
                     // restores the surface, the same rule `ShowWindow` follows.
                     self.maximized_window = None;
-                    self.window_manager.spawn(type_name, pid, &self.peer_manager);
+                    self.window_manager.spawn_at(
+                        type_name,
+                        pid,
+                        target.as_ref(),
+                        &self.peer_manager,
+                    );
                 }
                 Action::CloseWindow(id) => {
                     tracing::info!(window_id = id, "CloseWindow");
@@ -4429,8 +4471,8 @@ impl EntityApp {
                 }
                 Action::DownloadFile { peer_id, handler_uri, path, filename } => {
                     tracing::info!(peer = %peer_id, uri = %handler_uri, path = %path, "Action::DownloadFile");
-                    let finish = self.pull_finisher(None);
-                    self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone(), finish);
+                    let finish = self.pull_finisher(None, None);
+                    self.handle_download_file(peer_id.clone(), handler_uri.clone(), path.clone(), filename.clone(), finish, None);
                 }
                 Action::PullFile { peer_id, target, plan, keep } => {
                     tracing::info!(peer = %peer_id, target = %target, plan = ?plan, keep, "Action::PullFile");
@@ -4849,27 +4891,39 @@ impl EntityApp {
     #[cfg(target_arch = "wasm32")]
     fn handle_pull_file(&self, pid: String, target: String, plan: crate::action::PullPlan, keep: bool) {
         use crate::action::PullPlan;
+        // The Pull card's own report of THIS press (B-13): the button disables
+        // while it runs and a failure lands next to it, not only in the Results
+        // pane at the bottom of the window.
+        let report = self.pull_report(&target, plan.filename());
+        report.start();
         let keep_to = keep.then(|| self.peer_manager.dispatch_handle(&pid)).flatten();
         if keep && keep_to.is_none() {
-            self.event_log_writer.log(format!("✗ keep → {}", crate::file_offer::not_routed_message(&pid)));
+            let why = crate::file_offer::not_routed_message(&pid);
+            self.event_log_writer.log(format!("✗ keep → {why}"));
+            report.failed(&why);
             return;
         }
-        let finish = self.pull_finisher(keep_to);
+        let finish = self.pull_finisher(keep_to, Some(report.clone()));
         match plan {
             PullPlan::Share { path, filename } => {
-                self.handle_download_file(pid, format!("entity://{target}/local/files"), path, filename, finish)
+                self.handle_download_file(pid, format!("entity://{target}/local/files"), path, filename, finish, Some(report))
             }
             PullPlan::Offer { blob_hex, filename } => {
                 let log = self.event_log_writer.clone();
                 log.log(format!("↓ pulling {} from {}...", filename, crate::views::short_pid(&target)));
                 let Some(dispatch) = self.peer_manager.dispatch_handle(&pid) else {
                     log.log(format!("✗ pull {filename} → local peer {pid} is not routed"));
+                    report.failed(&crate::file_offer::not_routed_message(&pid));
                     return;
                 };
                 let blob = match crate::file_offer::hash_from_id(&blob_hex) {
                     Ok(h) => h,
                     Err(e) => {
                         log.log(format!("✗ pull {filename} → unreadable content id: {e}"));
+                        report.failed(&crate::i18n::t(
+                            "filetransfer.pull_bad_content_id",
+                            &[("why", &e)],
+                        ));
                         return;
                     }
                 };
@@ -4882,6 +4936,7 @@ impl EntityApp {
                 // itself, loudly, a moment later).
                 let progress_log = log.clone();
                 let progress_name = filename.clone();
+                let progress_report = report.clone();
                 let mut last = 0usize;
                 let progress = move |held: usize, total: usize| {
                     if held == last && held != 0 {
@@ -4889,18 +4944,42 @@ impl EntityApp {
                     }
                     last = held;
                     progress_log.log(format!("↓ {progress_name} — {held}/{total} chunks"));
+                    progress_report.progress(held, total);
                 };
                 let progress = std::cell::RefCell::new(progress);
                 wasm_bindgen_futures::spawn_local(async move {
-                    let report = |held, total| (progress.borrow_mut())(held, total);
-                    match crate::file_offer::pull_offer_with(&dispatch, &target, &blob, report)
+                    let on_progress = |held, total| (progress.borrow_mut())(held, total);
+                    match crate::file_offer::pull_offer_with(&dispatch, &target, &blob, on_progress)
                         .await
                     {
                         Ok(bytes) => finish(filename, bytes),
-                        Err(e) => log.log(format!("✗ pull {filename} → {e}")),
+                        Err(e) => {
+                            log.log(format!("✗ pull {filename} → {e}"));
+                            report.failed(&e.to_string());
+                        }
                     }
                 });
             }
+        }
+    }
+
+    /// The Pull card's report handle for one press: the slot, and the dirty
+    /// flags of every open window that renders it. Waking is not optional — the
+    /// outcome lives in memory precisely so it never becomes a tree entity, so
+    /// no write fires and no subscription fires (`handle_offer_file`'s lesson).
+    #[cfg(target_arch = "wasm32")]
+    fn pull_report(&self, target: &str, filename: &str) -> PullReport {
+        PullReport {
+            attempt: self.pull_attempt.clone(),
+            watchers: self
+                .window_manager
+                .windows
+                .iter()
+                .filter(|w| w.open && w.view.type_name() == "File Transfer") // i18n-ignore — stable type identifier
+                .map(|w| w.view.watch().flag())
+                .collect(),
+            target: target.to_string(),
+            filename: filename.to_string(),
         }
     }
 
@@ -5117,23 +5196,40 @@ impl EntityApp {
     /// handle — My files. One function for every pull, so no two of them word
     /// the outcome differently.
     #[cfg(target_arch = "wasm32")]
-    fn pull_finisher(&self, keep_to: Option<crate::dispatch_handle::DispatchHandle>) -> impl Fn(String, Vec<u8>) + 'static {
+    fn pull_finisher(
+        &self,
+        keep_to: Option<crate::dispatch_handle::DispatchHandle>,
+        report: Option<PullReport>,
+    ) -> impl Fn(String, Vec<u8>) + 'static {
         let log = self.event_log_writer.clone();
         move |filename: String, bytes: Vec<u8>| {
             let n = bytes.len();
             match keep_to.clone() {
                 Some(dispatch) => {
                     let log = log.clone();
+                    let report = report.clone();
                     wasm_bindgen_futures::spawn_local(async move {
                         match crate::user_files::keep(&dispatch, &filename, &bytes).await {
-                            Ok(_) => log.log(format!("✓ kept {filename} in My files ({n} bytes)")),
-                            Err(e) => log.log(format!("✗ keep {filename} → {e}")),
+                            Ok(_) => {
+                                log.log(format!("✓ kept {filename} in My files ({n} bytes)"));
+                                report.iter().for_each(PullReport::done);
+                            }
+                            Err(e) => {
+                                log.log(format!("✗ keep {filename} → {e}"));
+                                report.iter().for_each(|r| r.failed(&e.to_string()));
+                            }
                         }
                     });
                 }
                 None => match crate::ops::download::save_bytes(&filename, &bytes) {
-                    Ok(()) => log.log(format!("✓ saved {filename} ({n} bytes)")),
-                    Err(e) => log.log(format!("✗ save {filename} → {e}")),
+                    Ok(()) => {
+                        log.log(format!("✓ saved {filename} ({n} bytes)"));
+                        report.iter().for_each(PullReport::done);
+                    }
+                    Err(e) => {
+                        log.log(format!("✗ save {filename} → {e}"));
+                        report.iter().for_each(|r| r.failed(&e.to_string()));
+                    }
                 },
             }
         }
@@ -5152,6 +5248,7 @@ impl EntityApp {
         path: String,
         filename: String,
         finish: impl Fn(String, Vec<u8>) + 'static,
+        report: Option<PullReport>,
     ) {
         let log = self.event_log_writer.clone();
         log.log(format!("↓ pulling {}...", path));
@@ -5174,15 +5271,20 @@ impl EntityApp {
                     // reassemble an error entity.
                     if resp.result.status != entity_handler::STATUS_OK {
                         log.log(format!("✗ pull {} → {}", path, resp.summary));
+                        report.iter().for_each(|r| r.failed(&resp.summary));
                         return;
                     }
                     match crate::ops::download::materialize(&resp.result) {
                         Ok(bytes) => finish(filename, bytes),
-                        Err(e) => log.log(format!("✗ save {} → {}", filename, e)),
+                        Err(e) => {
+                            log.log(format!("✗ save {} → {}", filename, e));
+                            report.iter().for_each(|r| r.failed(&e.to_string()));
+                        }
                     }
                 }
                 Err(e) => {
                     log.log(format!("✗ pull {} → {}", path, e));
+                    report.iter().for_each(|r| r.failed(&e.to_string()));
                 }
             }
         });
@@ -7063,6 +7165,44 @@ mod late_arm_tests {
 /// window). A handler that woke only one would leave the other showing a press
 /// that never finished.
 #[cfg(target_arch = "wasm32")]
+/// One Pull press's report handle (`EntityApp::pull_report`): writes the slot and
+/// wakes the File Transfer windows that render it. Every terminal path of a pull
+/// calls exactly one of `done` / `failed`, or the button stays disabled for the
+/// rest of the session.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct PullReport {
+    attempt: crate::pull_attempt::PullAttempt,
+    watchers: Vec<crate::window_watch::DirtyFlag>,
+    target: String,
+    filename: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PullReport {
+    fn wake(&self) {
+        for f in &self.watchers {
+            f.mark();
+        }
+    }
+    fn start(&self) {
+        self.attempt.start(&self.target, &self.filename);
+        self.wake();
+    }
+    fn progress(&self, held: usize, total: usize) {
+        self.attempt.progress(&self.target, &self.filename, held, total);
+        self.wake();
+    }
+    fn done(&self) {
+        self.attempt.done(&self.target, &self.filename);
+        self.wake();
+    }
+    fn failed(&self, why: &str) {
+        self.attempt.failed(&self.target, &self.filename, why);
+        self.wake();
+    }
+}
+
 fn shows_own_files(type_name: &str) -> bool {
     matches!(type_name, "File Transfer" | "Files") // i18n-ignore — stable type identifiers, not UI text
 }

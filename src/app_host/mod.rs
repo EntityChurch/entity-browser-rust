@@ -416,6 +416,13 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
         // the total every 16 ticks).
         let mut compute_ms_accum = 0.0f64;
         let mut render_ms_accum = 0.0f64;
+        // The `x-stats` window: busy over span, on a WALL CLOCK rather than a
+        // tick count. A tick count is the wrong unit here because `interval_ms`
+        // is per-program — 16 ticks is a fifth of a second for Asteroids and
+        // sixteen seconds for a 1 Hz program, and the System Monitor's row wants
+        // the same cadence from both.
+        let mut stats_window_start = now_ms();
+        let mut stats_busy_ms = 0.0f64;
         // Emit the current state to the host when it differs from the last
         // emission (dedup by content hash — a climbing host-side seq proves
         // distinct evolution). Shared by the tick path AND the reset path: a
@@ -473,6 +480,21 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
             // unconditionally every round (so a stray click while running can't
             // cause a surprise step later after a pause) and, while paused, lets
             // exactly one tick fall through below instead of sleeping.
+            // Report our share of the shared main thread — ABOVE the pause
+            // branch, deliberately. A paused program is **idle**, and idle is a
+            // number (`busy_ms: 0`); going silent instead would render as *not
+            // reporting*, which the monitor keeps apart from idle on purpose and
+            // which is the one thing a person pausing a program has just
+            // disproved. Same rule as every other three-state surface here:
+            // "I did no work" and "I have nothing to say" are different facts.
+            let stats_now = now_ms();
+            let stats_span = stats_now - stats_window_start;
+            if stats_span >= STATS_INTERVAL_MS {
+                post_stats_to_host(stats_busy_ms, stats_span);
+                stats_window_start = stats_now;
+                stats_busy_ms = 0.0;
+            }
+
             let stepping = step_req.replace(false);
             if paused.get() && !stepping {
                 sleep_ms(interval_ms).await;
@@ -544,6 +566,7 @@ async fn run_program(root: &web_sys::Element, program_key: &str) -> Result<(), J
 
             let elapsed = render_done - tick_start;
             work_ms_accum += elapsed;
+            stats_busy_ms += elapsed;
             compute_ms_accum += compute_done - tick_start;
             render_ms_accum += render_done - compute_done;
             if ticks.is_multiple_of(16) {
@@ -822,3 +845,47 @@ fn post_to_host(msg_type: &str, state: Option<&js_sys::Object>) {
     }
     let _ = parent.post_message(&out, "*");
 }
+
+/// Post `x-stats` — *how much of the shared main thread this payload used, over
+/// what span* ([`crate::monitor::MSG_STATS`]).
+///
+/// # A compute program runs in an IFRAME, so no host-side hook can see its cost
+///
+/// `src/program_host/` looks in-process and is not: a Programs window delivers
+/// `index.html?app-host={key}` through the same `dom::games::render_player` an
+/// app uses, so the tick loop is a **separate WASM instance in a separate
+/// document**, with its own `monitor::sampler` thread-local that nothing reads.
+/// A hook beside `note_sections` therefore cannot account for a tick, however
+/// obvious that fix looks from the host side — the numbers have to cross ③α.
+///
+/// What makes this cheap is that **both ends are ours**: the host half already
+/// exists (`dom::games`'s `MSG_STATS` arm → `sampler::note_app_stats`) and is
+/// already wired for the Programs window, because Programs reuse the Apps
+/// delivery verbatim. `AP-5` — *would entity-apps report `x-stats`* — is about
+/// THEIR payloads and does not block this one.
+///
+/// The fields are top-level, not under `state`: that is the shape the host arm
+/// reads, and `post_to_host` can only carry `state`.
+fn post_stats_to_host(busy_ms: f64, span_ms: f64) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(Some(parent)) = window.parent() else {
+        return;
+    };
+    let out = js_sys::Object::new();
+    let set = |k: &str, v: &JsValue| {
+        let _ = js_sys::Reflect::set(&out, &JsValue::from_str(k), v);
+    };
+    set("source", &JsValue::from_str(APP_SOURCE));
+    set("type", &JsValue::from_str(crate::monitor::MSG_STATS));
+    set("busy_ms", &JsValue::from_f64(busy_ms));
+    set("span_ms", &JsValue::from_f64(span_ms));
+    let _ = parent.post_message(&out, "*");
+}
+
+/// How often a payload reports its share of the thread. The host clamps `busy_ms`
+/// to `span_ms` and refuses a span over 60 s, so this is a floor on resolution
+/// rather than a tuning knob: report too rarely and a burst of work is averaged
+/// into invisibility.
+const STATS_INTERVAL_MS: f64 = 1000.0;

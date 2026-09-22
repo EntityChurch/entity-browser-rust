@@ -1,13 +1,27 @@
-//! `APP-CONVENTION-FEED` v0.1 — the entry, the index and the subscription
-//! record.
+//! `APP-CONVENTION-FEED` v0.3 — the entry, the index, the collection, the
+//! mirror and the subscription record.
 //!
-//! Four of the convention's six types, which is stage 1's scope: `app/feed/`
-//! `{entry, index-head, index-page, follow}`. **`collection` (§5) and `mirror`
-//! (§6) are deliberately not here** — the mirror is phase 4 and needs the
-//! byte-fidelity republication path rather than a codec (its rule 1 is the one
-//! `tests/mirror_byte_fidelity.rs` already gates), and the collection has no
-//! consumer yet. Saying which four is not the same as saying "the FEED types
-//! are done".
+//! **All seven of the convention's types**: `app/feed/{entry, index-head,
+//! index-page, collection, mirror, mirror-page, follow}`.
+//!
+//! ⚠ **This paragraph said "four of six" until 2026-09-15, and it was stale by
+//! two revisions in a way that cost somebody else a wrong number.** It named
+//! `mirror` as *"deliberately not here"* while `FEED_MIRROR_TYPE` was defined
+//! twenty lines below the sentence and `feed_mirror.rs` was 1,417 lines;
+//! `entity-core-papers` read it and reported *"four of six"* — their conclusion
+//! was right and their evidence was a drifted artifact (arch's
+//! `ROUTING-2026-09-15-g` §4.3). **The rule this earns: a module doc that
+//! enumerates what a module does NOT contain has to be re-read whenever the
+//! module grows, and nothing enforces that** — an enumeration of absences is a
+//! claim about code nobody has written yet, which is the same shape as
+//! `code_only`'s *"the two false positives this census can actually produce"*.
+//! Prefer *"all N"* over a list of exclusions, and when an exclusion is real,
+//! say what would retire it.
+//!
+//! The one thing still deliberately absent is a **consumer** for some of this,
+//! not a type: `collection` has one as of the composer
+//! ([`crate::feed_compose`]), and `mirror`'s republication path is
+//! `feed_mirror.rs` with `tests/mirror_byte_fidelity.rs` gating its rule 1.
 //!
 //! ## Three properties everything else is derived from
 //!
@@ -77,28 +91,34 @@
 //!
 //! [`an_implausible_created_at_is_not_a_reason_to_reject_an_entry`]: self::tests
 //!
-//! ## ⚠ §2.4 and §4.4 declare two different cursors, and the declared one
-//! cannot satisfy `FEED-R14`
+//! ## ✅ The cursor is not a field here, and its absence is normative
 //!
-//! §2.4's CDDL: `? cursor: content-hash ; last index page this reader applied
-//! (§4.4)`. §4.4: *"**The cursor is `{page, applied}`** — the page number the
-//! reader reached, and the newest entry hash it took from that page … **This is
-//! why the cursor carries a number and not only a hash**: an author may remove
-//! the very entry a reader was holding as its position, and a cursor that
-//! cannot survive that is a cursor that breaks on edit."*
+//! **RESOLVED v0.3 — and the resolution is that the contradiction was real and
+//! the declared field was the wrong half.** We used to emit §2.4's
+//! `? cursor: content-hash` and route the contradiction with §4.4's
+//! `{page, applied}`, on `G-PIN-4`'s rule that whatever publishes first is the
+//! baseline: inventing a map would have made us the baseline for a shape the
+//! spec did not declare. That was the right call on the evidence and it held for
+//! exactly as long as it needed to. v0.3 **removed the field**, and the removal
+//! note gives our own argument back to us — *"the field was simultaneously the
+//! declared one and the wrong shape, and an implementation building to the
+//! declaration got a cursor that breaks on edit."*
 //!
-//! **A single `content-hash` is exactly the "only a hash" form §4.4 says is
-//! insufficient**, so `FEED-R14` — *resume from `page` when `applied` no longer
-//! resolves* — has no field to read `page` out of.
+//! ⛔ **`FEED-R35` is a MUST NOT: publish a reader's cursor position in any
+//! record this convention defines.** So the field is gone from [`Follow`] — not
+//! defaulted, not deprecated, **absent**, because a struct that can still hold
+//! one is a struct somebody can still fill in. The position lives in
+//! [`crate::feed_read::Cursor`], which has no `to_entity` and is in the reader
+//! rather than in this codec for exactly that reason.
 //!
-//! **We implement the declared field** (`? cursor: content-hash`) and route the
-//! contradiction, for the reason `G-PIN-4` taught one convention over: whatever
-//! publishes first is the baseline, and inventing a `{page, applied}` map would
-//! make us the baseline for a shape the spec does not declare. The cost is
-//! bounded and stated — §2.4 says a follow record is **the reader's private
-//! data** and *"nothing in this convention publishes it"* — so where the page
-//! number lives for our own resumption is a phase-3 decision about local state,
-//! not a wire question we may settle alone.
+//! **Reading an old one is a different question and V7 §2.6 answers it:** a
+//! v0.2 record in a reader's own tree may carry `cursor`, and an unknown field
+//! is skipped **silently**. R35 governs publishing, carves no exception out of
+//! §2.6, and there is no emitter to name — the record is the reader's own
+//! historical write. Pinned by
+//! [`a_v0_2_follow_record_still_decodes_and_its_position_does_not_come_back`].
+//!
+//! [`a_v0_2_follow_record_still_decodes_and_its_position_does_not_come_back`]: self::tests
 //!
 //! ## The detached signature is `FEED-R2` and is NOT built here
 //!
@@ -136,6 +156,19 @@ pub const FEED_INDEX_HEAD_TYPE: &str = "app/feed/index-head";
 /// `app/feed/index-page` — one **key-addressed** page of the author's stream,
 /// newest-first within the page.
 pub const FEED_INDEX_PAGE_TYPE: &str = "app/feed/index-page";
+
+/// `app/feed/collection` — **the author's own, bounded, complete set** (§5).
+///
+/// An album, a playlist, a portfolio and a curated reading list are one shape,
+/// and §5 makes it a type rather than a label because it differs from §4's index
+/// on three axes at once: it is **bounded** (the index grows forever), it
+/// **claims completeness** (*this is the album*), and its **order is content**
+/// rather than recency — *"a collection re-sorted is a different collection."*
+///
+/// It holds **references, never bodies** (§1.2), which this type satisfies
+/// structurally: [`members`](FeedCollection::members) cannot hold bytes. A photo
+/// in three albums is referenced three times and stored once.
+pub const FEED_COLLECTION_TYPE: &str = "app/feed/collection";
 
 /// `app/feed/mirror` — **what one reader gathered, published so the next reader
 /// does not have to gather it again** (§6).
@@ -691,6 +724,226 @@ impl IndexPage {
 }
 
 // ---------------------------------------------------------------------------
+// app/feed/collection
+// ---------------------------------------------------------------------------
+
+/// The tree prefix a collection is bound under. ⚠ **OURS, not the
+/// convention's.**
+///
+/// §5 pins no path and §2's cross-impl contract is the type tag, so this is the
+/// same local choice [`ENTRY_PREFIX_REL`] is — and it is deliberately *not*
+/// `mirrors/`'s situation, where arch later ruled the prefix because a reader
+/// has to enumerate a stranger's gathered views from their signed root. A
+/// collection is reached through a reference somebody already holds, so nothing
+/// needs to guess this. Leading slash for [`index_head_key`]'s reason.
+const COLLECTION_PREFIX_REL: &str = "/app/feed/collections/";
+
+/// The tree prefix a collection is bound under. Ours; see
+/// [`COLLECTION_PREFIX_REL`].
+pub fn collection_prefix() -> &'static str {
+    COLLECTION_PREFIX_REL.trim_start_matches('/')
+}
+
+/// Where a collection is bound — **at a MUTABLE key, and that is the difference
+/// from an entry.**
+///
+/// [`entry_key`] is the entry's own content hash because §2.2.1 makes every
+/// reference to an entry a pin, so its identity *is* its hash. A collection is
+/// the opposite by construction: adding a member is the primary verb, so its
+/// bytes change while the thing stays the same, and a content-addressed key
+/// would mean *every edit is a new collection* — which is exactly the sentence
+/// §5 uses for the thing that must **not** happen silently (*"a collection
+/// re-sorted is a different collection"*, said of the order, not of the
+/// address).
+///
+/// So the id is the identity, and it is the author's. It is validated by
+/// [`CollectionId`] rather than taken as a string, because this segment lands in
+/// a tree path.
+pub fn collection_key(id: &CollectionId) -> String {
+    format!("{}{}", collection_prefix(), id.as_str())
+}
+
+/// A collection's identity — the one mutable name in this module, validated
+/// because it becomes a tree path segment.
+///
+/// **Not derived from `title`.** §5 says `title` is *"human-facing; NOT an
+/// identifier"* in as many words, and deriving a key from it would make renaming
+/// an album either a re-key or a lie. The caller mints an id; the UI's is a
+/// slug of the title at creation time and never again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CollectionId(String);
+
+/// Why a collection id was refused. Each is a different mistake and a caller can
+/// say which — an empty box and a pasted path are not one report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectionIdError {
+    /// Nothing was typed.
+    Empty,
+    /// Longer than [`CollectionId::MAX_LEN`].
+    TooLong { len: usize },
+    /// A byte outside `[a-z0-9-]`. Carried so the refusal can point at it.
+    IllegalCharacter { at: usize, found: char },
+}
+
+impl std::fmt::Display for CollectionIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CollectionIdError::Empty => write!(f, "a collection id cannot be empty"),
+            CollectionIdError::TooLong { len } => {
+                write!(f, "a collection id is at most {} characters, got {len}", CollectionId::MAX_LEN)
+            }
+            CollectionIdError::IllegalCharacter { at, found } => write!(
+                f,
+                "a collection id is lowercase letters, digits and '-' only; found {found:?} at {at}"
+            ),
+        }
+    }
+}
+
+impl CollectionId {
+    /// The ceiling. Arbitrary, and stated rather than implied: it exists so a
+    /// pasted document cannot become a tree key, not because any layer below
+    /// cares.
+    pub const MAX_LEN: usize = 64;
+
+    /// Validate an authored id.
+    ///
+    /// **An allowlist, never a denylist** — the same posture as `src-tauri`'s
+    /// `sanitize_name` and `paths::asset_name_from_ref`, and for the same
+    /// reason: this segment is concatenated into a tree path, so the question is
+    /// not *"which characters are dangerous"* but *"which are known safe"*.
+    /// `.`, `/` and `%` are excluded by being absent from the allowed set rather
+    /// than by being checked for.
+    pub fn parse(raw: &str) -> Result<Self, CollectionIdError> {
+        if raw.is_empty() {
+            return Err(CollectionIdError::Empty);
+        }
+        if raw.len() > Self::MAX_LEN {
+            return Err(CollectionIdError::TooLong { len: raw.len() });
+        }
+        for (at, found) in raw.char_indices() {
+            let ok = found.is_ascii_lowercase() || found.is_ascii_digit() || found == '-';
+            if !ok {
+                return Err(CollectionIdError::IllegalCharacter { at, found });
+            }
+        }
+        Ok(CollectionId(raw.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// `app/feed/collection` — §5's bounded, complete, **ordered** set.
+///
+/// ## `FEED-R15` is a property of this type, not of its renderer
+///
+/// The MUST is *"present `members` in the authored order"*, and the reason a
+/// renderer is not where it is enforced is that by the time a renderer has the
+/// data the order is either still there or already gone. `members` is a `Vec`
+/// and the encoder writes a CBOR **array**, which is ordered — the failure mode
+/// the rule is written against is an implementation that reaches for a map, a
+/// set, or a sort on the way through, and each of those is a *decode-side or
+/// encode-side* choice. So the gate is a round trip through an order no derived
+/// rule would reproduce; see `feed_8_three_members_and_a_cover_keep_the_authored_order`.
+///
+/// ⚠ **`cover` is not required to be a member and we do not refuse one that is
+/// not.** §5's CDDL comment reads *"one member, for presentation"* — descriptive
+/// prose, with no requirement id behind it (`FEED-R15` is the only collection
+/// row in §11.1). Refusing here would be this repo inventing a MUST on somebody
+/// else's convention, which is the thing `A-24` cost a correction for. Pinned by
+/// a test so the choice is visible rather than accidental.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeedCollection {
+    /// Human-facing. **NOT an identifier** (§5) — see [`CollectionId`].
+    pub title: String,
+    /// **ORDERED, and the order is content** (`FEED-R15`).
+    pub members: Vec<EntityRef>,
+    pub note: Option<String>,
+    /// One member, for presentation. See the type doc for why it is not checked.
+    pub cover: Option<EntityRef>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+impl FeedCollection {
+    /// A new, empty collection. `created_at` and `updated_at` start equal — an
+    /// album nobody has edited was last edited when it was made.
+    pub fn new(title: impl Into<String>, created_at: u64) -> Self {
+        Self {
+            title: title.into(),
+            members: Vec::new(),
+            note: None,
+            cover: None,
+            created_at,
+            updated_at: created_at,
+        }
+    }
+
+    /// The `data` map. Optional terms are emitted only when present, for
+    /// [`FeedEntry::data_value`]'s reason.
+    ///
+    /// **`members` is emitted even when empty**, unlike `attachments` on an
+    /// entry, and the asymmetry is the point: an entry with no attachments and
+    /// one whose attachments we could not read should not encode alike, whereas
+    /// *an album with nothing in it yet* is a real, authored state a person can
+    /// see on screen. The CDDL agrees — `members` is required, `[* reference]`
+    /// admits zero.
+    pub fn data_value(&self) -> Value {
+        let mut fields = vec![
+            (text("title"), text(self.title.clone())),
+            (
+                text("members"),
+                Value::Array(self.members.iter().map(EntityRef::to_value).collect()),
+            ),
+        ];
+        if let Some(note) = &self.note {
+            fields.push((text("note"), text(note.clone())));
+        }
+        if let Some(cover) = &self.cover {
+            fields.push((text("cover"), cover.to_value()));
+        }
+        fields.push((text("created_at"), uinteger(self.created_at)));
+        fields.push((text("updated_at"), uinteger(self.updated_at)));
+        Value::Map(fields)
+    }
+
+    pub fn to_entity(&self) -> Result<Entity, String> {
+        Entity::new(FEED_COLLECTION_TYPE, to_ecf(&self.data_value()))
+            .map_err(|e| format!("feed collection: {e}"))
+    }
+
+    /// Decode a collection.
+    ///
+    /// **Takes no namespace**, unlike [`FeedEntry::from_entity`]. `FEED-R1`'s
+    /// forgery gate exists because an entry carries an `author` field that can
+    /// disagree with where it was found; a collection carries no such claim, so
+    /// there is nothing to check it against and a namespace parameter would be
+    /// a argument nobody reads. The publisher is the namespace, which is
+    /// `decode_share`'s rule one convention over.
+    pub fn from_entity(entity: &Entity) -> Result<Self, FeedError> {
+        let map = body_map(entity, FEED_COLLECTION_TYPE)?;
+        let members = match field(&map, "members") {
+            None => return Err(FeedError::Malformed("members")),
+            Some(v) => reference_list(v, "members", false)?,
+        };
+        let cover = match field(&map, "cover") {
+            None => None,
+            Some(v) => Some(reference(v, "cover", false)?),
+        };
+        Ok(FeedCollection {
+            title: required_text(&map, "title")?,
+            members,
+            note: field(&map, "note").and_then(|v| v.as_text()).map(str::to_string),
+            cover,
+            created_at: required_uint(&map, "created_at")?,
+            updated_at: required_uint(&map, "updated_at")?,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // app/feed/mirror
 // ---------------------------------------------------------------------------
 
@@ -1153,14 +1406,17 @@ pub struct Follow {
     pub via: Option<String>,
     /// When this follow was created, ms.
     pub since: u64,
-    /// The declared cursor — see the module doc's ⚠ on why this cannot satisfy
-    /// `FEED-R14` and why we emit it anyway.
-    pub cursor: Option<Hash>,
+    // ⛔ **No `cursor`, and the absence is the conformance.** `FEED-R35` is a
+    // MUST NOT and §2.4's own note makes the field's absence normative: a
+    // reader's position is local state, held in [`crate::feed_read::Cursor`].
+    // A field here — even `Option`, even never written — is a slot somebody can
+    // fill, and the last time this struct carried one it was filled by nobody
+    // and blessed by a test.
 }
 
 impl Follow {
     pub fn new(subject: impl Into<String>, since: u64) -> Self {
-        Self { subject: subject.into(), label: None, via: None, since, cursor: None }
+        Self { subject: subject.into(), label: None, via: None, since }
     }
 
     pub fn data_value(&self) -> Value {
@@ -1172,9 +1428,6 @@ impl Follow {
             fields.push((text("via"), text(via.clone())));
         }
         fields.push((text("since"), uinteger(self.since)));
-        if let Some(cursor) = &self.cursor {
-            fields.push((text("cursor"), ecf_bytes(cursor.to_bytes())));
-        }
         Value::Map(fields)
     }
 
@@ -1190,7 +1443,9 @@ impl Follow {
             label: field(&map, "label").and_then(|v| v.as_text()).map(str::to_string),
             via: field(&map, "via").and_then(|v| v.as_text()).map(str::to_string),
             since: required_uint(&map, "since")?,
-            cursor: hash_field(&map, "cursor")?,
+            // A v0.2 record's `cursor` is an unknown field now, and V7 §2.6
+            // skips it silently. Not an exception to carve: `FEED-R35` binds
+            // the emitter, and the emitter of this record is us, last year.
         })
     }
 }
@@ -1543,6 +1798,118 @@ mod tests {
         }
     }
 
+    // -- the collection ---------------------------------------------------
+
+    /// ⭐ **`FEED-8`, and the fixture is the gate.** §11.2 gives the vector as
+    /// *"`app/feed/collection`, three members and a `cover`"* against `FEED-R15`,
+    /// with the failure mode *"authored order is not known to be preserved"* —
+    /// so the members are deliberately in an order **no derived rule
+    /// reproduces**.
+    ///
+    /// `zebra`/`apple`/`mango` is not lexical by label, and the pins they make
+    /// are checked here to be non-lexical by hash too, so a decoder that sorted
+    /// by either would red. A fixture whose authored order happens to *be* the
+    /// sorted order passes against an implementation that sorts, and measures
+    /// nothing — the same trap `feed_8`'s own failure-mode column names.
+    #[test]
+    fn feed_8_three_members_and_a_cover_keep_the_authored_order() {
+        let hashes = [h("zebra"), h("apple"), h("mango")];
+        let members: Vec<EntityRef> =
+            hashes.iter().map(|x| EntityRef::pin(ME, *x)).collect();
+        // The anti-vacuity half: if these were already in hash order, a decoder
+        // that sorted by hash would be invisible here and the test would assert
+        // nothing. Checked rather than assumed, because the hashes are opaque.
+        let hexes: Vec<String> = hashes.iter().map(Hash::to_hex).collect();
+        let mut sorted = hexes.clone();
+        sorted.sort();
+        assert_ne!(hexes, sorted, "the fixture's order must not BE the sorted order");
+
+        let mut c = FeedCollection::new("Three things", 1_757_000_000_000);
+        c.members = members.clone();
+        c.cover = Some(members[1].clone());
+        c.note = Some("in the order I chose".into());
+        c.updated_at = 1_757_000_000_001;
+
+        let decoded = FeedCollection::from_entity(&c.to_entity().unwrap()).unwrap();
+        assert_eq!(decoded, c);
+        assert_eq!(decoded.members, members, "FEED-R15: the authored order, exactly");
+    }
+
+    /// An empty collection encodes `members` and survives the round trip.
+    ///
+    /// *An album with nothing in it yet* is a state a person can create and look
+    /// at, so it must be representable — and the CDDL agrees, since `members` is
+    /// required and `[* reference]` admits zero. The contrast is deliberate:
+    /// `attachments` on an entry is omitted when empty, because there *absent*
+    /// and *empty* are not a distinction anybody authored.
+    #[test]
+    fn an_empty_collection_is_a_real_collection() {
+        let c = FeedCollection::new("Nothing yet", 7);
+        let entity = c.to_entity().unwrap();
+        let decoded = FeedCollection::from_entity(&entity).unwrap();
+        assert_eq!(decoded, c);
+        assert!(decoded.members.is_empty());
+        assert_eq!(decoded.created_at, decoded.updated_at, "unedited");
+    }
+
+    /// ⚠ **The concession, pinned as a concession.** §5's *"one member, for
+    /// presentation"* is a CDDL comment with no requirement id, so a cover that
+    /// is not among the members is accepted. This test exists to make that a
+    /// visible decision rather than an oversight — if arch ever rules it, this
+    /// is the one file that moves.
+    #[test]
+    fn a_cover_that_is_not_a_member_is_accepted_because_no_requirement_forbids_it() {
+        let mut c = FeedCollection::new("Odd one out", 1);
+        c.members = vec![EntityRef::pin(ME, h("inside"))];
+        c.cover = Some(EntityRef::pin(ME, h("outside")));
+        let decoded = FeedCollection::from_entity(&c.to_entity().unwrap()).unwrap();
+        assert_eq!(decoded.cover, c.cover);
+    }
+
+    /// A collection is refused for the same first question every other type
+    /// asks: is this even one of ours.
+    #[test]
+    fn a_collection_decoder_refuses_another_feed_type() {
+        let entry = entry().to_entity().unwrap();
+        assert!(matches!(
+            FeedCollection::from_entity(&entry),
+            Err(FeedError::NotAFeedEntity { .. })
+        ));
+    }
+
+    /// The id is validated because it becomes a tree path segment, and every
+    /// refusal names a different mistake.
+    #[test]
+    fn a_collection_id_is_an_allowlist_and_each_refusal_is_its_own() {
+        assert_eq!(CollectionId::parse("summer-2026").unwrap().as_str(), "summer-2026");
+        assert_eq!(CollectionId::parse(""), Err(CollectionIdError::Empty));
+        let long = "a".repeat(CollectionId::MAX_LEN + 1);
+        assert_eq!(
+            CollectionId::parse(&long),
+            Err(CollectionIdError::TooLong { len: CollectionId::MAX_LEN + 1 })
+        );
+        // The three that matter are excluded by ABSENCE from the allowlist, not
+        // by a check anybody has to remember to write.
+        for bad in ["../escape", "a/b", "dot.dot", "per%cent", "UPPER", "sp ace"] {
+            assert!(
+                matches!(
+                    CollectionId::parse(bad),
+                    Err(CollectionIdError::IllegalCharacter { .. })
+                ),
+                "{bad:?} must not become a tree key"
+            );
+        }
+    }
+
+    /// The key is ours, and it is pinned by literal for the reason
+    /// [`the_index_and_entry_keys_are_the_paths_we_publish_at`] is.
+    #[test]
+    fn a_collection_key_is_a_mutable_address_under_our_own_prefix() {
+        let id = CollectionId::parse("summer-2026").unwrap();
+        assert_eq!(collection_prefix(), "app/feed/collections/");
+        assert_eq!(collection_key(&id), "app/feed/collections/summer-2026");
+    }
+
     // -- the follow record ------------------------------------------------
 
     #[test]
@@ -1553,32 +1920,64 @@ mod tests {
         let mut full = bare.clone();
         full.label = Some("Ada".into());
         full.via = Some("entity+ref://QmOtherPeerIdEntirely/".into());
-        full.cursor = Some(h("page 12"));
         assert_eq!(Follow::from_entity(&full.to_entity().unwrap()).unwrap(), full);
     }
 
-    /// **The declared `cursor` cannot satisfy `FEED-R14`, and this test is
-    /// where that is recorded rather than in prose alone.** §2.4 types it as a
-    /// bare `content-hash`; §4.4 says the cursor is `{page, applied}` and *"this
-    /// is why the cursor carries a number and not only a hash"*. We emit the
-    /// declared field. If arch rules the map, this test is the one that
-    /// changes — and until then nothing here can resume from a page number,
-    /// because no field carries one.
+    /// ⛔⭐ **`FEED-R35` — a follow record carries no position, and this test
+    /// replaces one that asserted the opposite.**
+    ///
+    /// Its predecessor was `the_declared_cursor_is_a_bare_hash_and_carries_no_
+    /// page_number`, and it was a correct test of a v0.2 field: §2.4 declared
+    /// `? cursor: content-hash`, we emitted it deliberately rather than invent
+    /// `{page, applied}`, and the test pinned the shape so a ruling would move
+    /// one file. v0.3 ruled — by **deleting the field** and adding a MUST NOT —
+    /// and from that moment the test asserted our non-conformance under a name
+    /// that read as a documented decision. **AP45 exactly, and it is the second
+    /// time a landed rule has found us through a green test in this convention.**
+    ///
+    /// *A rule nobody re-reads is a rule a passing test says you satisfy.* The
+    /// field is now absent from the struct, so this test is a floor rather than
+    /// the only defence: you cannot set what does not exist.
     #[test]
-    fn the_declared_cursor_is_a_bare_hash_and_carries_no_page_number() {
+    fn a_follow_record_publishes_no_reader_position() {
         let mut f = Follow::new(THEM, 1);
-        f.cursor = Some(h("page 12"));
+        f.label = Some("Ada".into());
+        f.via = Some("entity+ref://QmOtherPeerIdEntirely/".into());
         let value = f.data_value();
-        let cursor = value
-            .as_map()
-            .unwrap()
-            .iter()
-            .find(|(k, _)| k.as_text() == Some("cursor"))
-            .map(|(_, v)| v.clone())
-            .expect("cursor is emitted");
+        let keys: Vec<&str> =
+            value.as_map().unwrap().iter().filter_map(|(k, _)| k.as_text()).collect();
+        assert_eq!(
+            keys,
+            vec!["subject", "label", "via", "since"],
+            "§2.4's field set exactly — a position in any of these is FEED-R35"
+        );
+    }
+
+    /// **A v0.2 record still decodes, and the position does not come back.**
+    ///
+    /// V7 §2.6 skips an unknown field **silently**, and `FEED-R35` carves no
+    /// exception out of that: it binds the *emitter*, and the emitter of a
+    /// follow record is the reader itself — so there is nobody to warn about
+    /// and nothing to refuse. What must not happen is the value surviving into
+    /// a re-emit, which is what the round trip below asserts.
+    #[test]
+    fn a_v0_2_follow_record_still_decodes_and_its_position_does_not_come_back() {
+        let legacy = Value::Map(vec![
+            (text("subject"), text(THEM)),
+            (text("since"), uinteger(7)),
+            (text("cursor"), ecf_bytes(h("page 12").to_bytes())),
+        ]);
+        let entity = Entity::new(FEED_FOLLOW_TYPE, to_ecf(&legacy)).unwrap();
+
+        let decoded = Follow::from_entity(&entity).expect("a v0.2 record is still readable");
+        assert_eq!(decoded, Follow::new(THEM, 7));
+
+        let re_emitted = decoded.data_value();
+        let keys: Vec<&str> =
+            re_emitted.as_map().unwrap().iter().filter_map(|(k, _)| k.as_text()).collect();
         assert!(
-            cursor.as_bytes().is_some(),
-            "§2.4 declares a bare content-hash, not a map: {cursor:?}"
+            !keys.contains(&"cursor"),
+            "re-emitting a v0.2 record must not republish its position: {keys:?}"
         );
     }
 

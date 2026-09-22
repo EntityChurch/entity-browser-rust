@@ -3656,8 +3656,9 @@ pub(crate) mod memory_transport_tests {
 
         // (2) B disappears. Aborting the server drops its listener, which
         // unregisters the endpoint: B now neither answers nor accepts dials.
-        srv_b.abort();
+        // Count before aborting — see the same line in the release test below.
         let endpoints_before = registry.len();
+        srv_b.abort();
         assert!(
             eventually(Duration::from_secs(2), || registry.len() < endpoints_before).await,
             "B's endpoint must leave the registry once its server is aborted \
@@ -3853,8 +3854,13 @@ pub(crate) mod memory_transport_tests {
         );
 
         // (3) Now B disappears — the same way the reconnect proof kills it.
-        srv_b.abort();
+        // Count BEFORE aborting: on a multi-thread runtime the aborted task can
+        // be dropped (and its endpoint unregistered) on another worker before
+        // the next line runs, and a count taken after that never drops again —
+        // a premise failure that reads as a product one (1 in 3 runs on kernel
+        // `c3f2b76`, whose timing moved; 0 in 8 on `033a7c7`).
         let endpoints_before = registry.len();
+        srv_b.abort();
         assert!(
             eventually(Duration::from_secs(2), || registry.len() < endpoints_before).await,
             "B's endpoint must leave the registry once its server is aborted \

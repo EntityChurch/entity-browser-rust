@@ -13,8 +13,12 @@
 //!   in-memory and per-window, so there is no offline read and D24 does not
 //!   engage. [`crate::feed_fetch`]'s module doc carries the three-way currency
 //!   analysis for when that changes.
-//! - **It cannot post.** No verb publishes a feed (`A-35` is armed on the first
-//!   one that does), so this reads other people and never writes an entry.
+//! - ~~**It cannot post.**~~ **It can, as of 2026-09-15** —
+//!   [`crate::feed_compose`]'s four verbs, wired as the *Your feed* section.
+//!   Writing `app/feed/entry` into your own tree **is** publishing on the live
+//!   road; the static emit is a separate operational act and is not this
+//!   window's business. What it still cannot do is author a **collection** —
+//!   the verbs exist and are gated, and nothing on screen calls them.
 //! - **It persists no window state**, deliberately — see [`model`]. Who you
 //!   follow is app-scoped; which of them you are looking at is not a fact about
 //!   the profile.
@@ -83,6 +87,17 @@ impl FeedWindow {
                 let gatherers =
                     crate::app_paths::feed_gatherers_prefix(crate::app_paths::APP_ID, peer_id);
                 pm.watch_prefix(&mut window.watch, peer_id, gatherers);
+                // ⭐ **The THIRD watch, and it is the composer's.** Your own
+                // posts are read per render out of the entry prefix (AP41), so
+                // without this a post marks nothing dirty, the frame never
+                // re-reads, and the list you just added to renders unchanged —
+                // the same dead-button defect the gatherer watch above exists to
+                // avoid, one registry over. On the Worker arm it is doing more
+                // than dirtying: the per-prefix mirror is filled only for
+                // subscribed prefixes, so an unsubscribed entry prefix lists
+                // EMPTY and the surface would say you have posted nothing.
+                let entries = format!("/{peer_id}/{}", crate::feed::entry_prefix());
+                pm.watch_prefix(&mut window.watch, peer_id, entries);
                 Box::new(window)
             },
         }
@@ -151,6 +166,11 @@ impl WindowView for FeedWindow {
             "feed_refresh" => self.model.refresh(),
             "feed_add_gatherer" => self.model.add_gatherer(peers, &me, value, now_ms_u64()),
             "feed_remove_gatherer" => self.model.remove_gatherer(peers, &me, value),
+            // The composer. `value` is the draft for a post and the full hex
+            // address for a removal — **the full one**, never `id_short`: the
+            // shortened form is for a person to read and names no binding.
+            "feed_post" => self.model.post(peers, &me, value, now_ms_u64()),
+            "feed_remove_post" => self.model.remove_post(peers, &me, value),
             _ => return,
         }
         self.watch.mark_dirty();

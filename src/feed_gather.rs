@@ -36,6 +36,7 @@
 // this arc is gated on.
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::cell::RefCell;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -44,7 +45,9 @@ use std::rc::Rc;
 use entity_entity::Entity;
 
 use crate::content_site::http_poll::{poll_error_for_io, BinSource, Freshness, PollError};
+use crate::content_site::publish_layout::PublishLayout;
 use crate::content_site::signed_fetch::{PinnedPublisher, SignedFetchError, SignedSession};
+use crate::content_site::signed_root::TRANSPORT_PROFILE_REL;
 use crate::feed::MirrorSubject;
 use crate::feed_mirror::{plan_mirror, GatherError, MirrorPlan};
 use crate::feed_read::{read_feed, FeedReadError, FeedSource, ReadEntry};
@@ -93,6 +96,12 @@ impl BinSource for DirOrigin {
 pub struct PublishedTree {
     base: PathBuf,
     session: Rc<SignedSession>,
+    /// This publisher's declared §3.3a prefix, learned once and held for the
+    /// walk. **A property of the root we are pinned to, not of the key** — and
+    /// a gather that re-asked per key would pay a manifest fetch for each of
+    /// them, on top of the one `resolve` already makes. Held for the session,
+    /// not written down: the next gather opens a new `PublishedTree`.
+    prefix: Rc<RefCell<Option<String>>>,
 }
 
 impl PublishedTree {
@@ -106,9 +115,53 @@ impl PublishedTree {
     /// check"*, never *"this is not theirs"*** — the same distinction
     /// `feed_publish::attribute` draws, and the caller reports it as its own
     /// refusal rather than as the author's defect.
+    ///
+    /// ## ⛔ The layout is READ, not derived — and it was derived until 2026-09-15
+    ///
+    /// `--gather` reads a tree **somebody else** published, so the one thing it
+    /// may not assume is that they publish the way we do. This pinned
+    /// [`PublishLayout::conventional`] — `{peer}/system/peer/published-root` —
+    /// and `entity-workbench-go` serves its signed root at `{out}/manifest`.
+    /// **Hop 0, every time, for every conformant publisher whose layout is not
+    /// ours.** `publish_layout`'s own
+    /// `two_conformant_publishers_advertise_different_manifest_urls` has
+    /// asserted that those two differ since before this module existed, and the
+    /// gatherer derived one anyway.
+    ///
+    /// ⭐ **No gate could see it**, and the reason generalises past this bug:
+    /// every `--gather` test in this tree points at a directory *our own
+    /// publisher wrote*, so the layout the gatherer assumed and the layout the
+    /// fixture used were the same expression. That is
+    /// `OriginFeedSource`'s empty origin one convention over and a degree
+    /// stronger — *a test population you generated cannot contain the shape you
+    /// are missing*, where here the missing shape is **another implementation**.
+    /// It took a real foreign emission to produce it.
+    ///
+    /// `advertised_for` is the same rule [`DirFetcher`] has always applied, and
+    /// it is called rather than copied: an advertised layout that **declares a
+    /// different peer** is not authority for this one, and silence is trusted
+    /// (AP52/AP53). [`PublishLayout::rooted_at`] then moves it onto the empty
+    /// origin, because a directory is an origin with the transport removed.
+    ///
+    /// [`DirFetcher`]: crate::content_site::signed_root::DirFetcher
     pub fn open(base: impl Into<PathBuf>, author: &str) -> Option<Self> {
-        let pin = PinnedPublisher::from_peer_id("", author)?;
-        Some(Self { base: base.into(), session: Rc::new(SignedSession::new(pin)) })
+        let base: PathBuf = base.into();
+        let layout = std::fs::read(base.join(TRANSPORT_PROFILE_REL))
+            .ok()
+            .and_then(|bytes| PublishLayout::advertised_for(&bytes, author))
+            .and_then(|l| l.rooted_at(author, ""));
+        let pin = match layout {
+            Some(layout) => PinnedPublisher::with_layout(author, layout)?,
+            // No profile, or one that is about somebody else: our own shape is
+            // the documented fallback, and it is right for the case this verb
+            // started with — a tree this implementation published.
+            None => PinnedPublisher::from_peer_id("", author)?,
+        };
+        Some(Self {
+            base,
+            session: Rc::new(SignedSession::new(pin)),
+            prefix: Rc::new(RefCell::new(None)),
+        })
     }
 }
 
@@ -154,14 +207,34 @@ impl PublishedTree {
 }
 
 impl FeedSource for PublishedTree {
+    /// ⚠ **`relative_key` arrives as the CONVENTION pins it** — `FEED` §4.2's
+    /// absolute peer-relative `app/feed/index` — and the trie was built over
+    /// keys relative to whatever prefix this publisher declared. Those are the
+    /// same string only while the prefix is the universal tree, which is why
+    /// every gather in this tree worked until one pointed at a publisher who
+    /// had narrowed it. See [`SignedSession::declared_prefix`].
     fn get(
         &self,
         relative_key: String,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Entity>, String>>>> {
         let session = Rc::clone(&self.session);
         let base = self.base.clone();
+        let cached = Rc::clone(&self.prefix);
         Box::pin(async move {
-            match session.resolve(&DirOrigin(base), &relative_key).await {
+            let held = cached.borrow().clone();
+            let prefix = match held {
+                Some(p) => p,
+                None => {
+                    let p = session
+                        .declared_prefix(&DirOrigin(base.clone()))
+                        .await
+                        .map_err(|e| format!("{e:?}"))?;
+                    *cached.borrow_mut() = Some(p.clone());
+                    p
+                }
+            };
+            let key = SignedSession::key_under_prefix(&relative_key, &prefix);
+            match session.resolve(&DirOrigin(base), &key).await {
                 Ok(e) => Ok(Some(e)),
                 Err(SignedFetchError::Absent) => Ok(None),
                 Err(e) => Err(format!("{e:?}")),

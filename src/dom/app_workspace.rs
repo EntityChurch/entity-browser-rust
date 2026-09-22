@@ -76,6 +76,7 @@ impl WorkspaceHost {
                     set(&o, "size", &JsValue::from_f64(f.size as f64));
                     set(&o, "mode", &JsValue::from_f64(f.mode as f64));
                     set(&o, "mtime", &JsValue::from_f64(f.mtime as f64));
+                    set(&o, "version", &JsValue::from_str(&workspace::version_of(f)));
                     arr.push(&o);
                 }
                 set(&msg, "files", &arr);
@@ -115,8 +116,8 @@ impl WorkspaceHost {
     fn save(&self, data: &JsValue) {
         let id = field(data, "id").unwrap_or(JsValue::NULL);
         let msg = reply(workspace::MSG_SAVED, &id);
-        let outcome = parse_save(data).and_then(|(put, remove)| {
-            workspace::save(&self.writer, &self.source.prefix, &put, &remove)
+        let outcome = parse_save(data).and_then(|(put, remove, expect)| {
+            workspace::save_expecting(&self.writer, &self.source.prefix, &put, &remove, &expect)
         });
         match outcome {
             Ok(report) => {
@@ -133,6 +134,11 @@ impl WorkspaceHost {
                     tracing::warn!(app = %self.source.app_id, path = %path, reason = why.code(), detail = %why, "app workspace: file not saved");
                 }
                 set(&msg, "failed", &failed);
+                let versions = js_sys::Object::new();
+                for (path, version) in &report.versions {
+                    set(&versions, path, &JsValue::from_str(version));
+                }
+                set(&msg, "versions", &versions);
                 tracing::info!(
                     app = %self.source.app_id, saved = report.saved, removed = report.removed,
                     bytes = report.bytes, failed = report.failed.len(), "app workspace: saved"
@@ -177,7 +183,7 @@ impl WorkspaceHost {
 /// Decode `{put: [{path, mode, mtime, data}], remove: [path]}`. A malformed
 /// entry refuses the batch: the app sent something it did not mean, and saving
 /// the rest would leave it guessing which half landed.
-fn parse_save(data: &JsValue) -> Result<(Vec<PutFile>, Vec<String>), Refusal> {
+fn parse_save(data: &JsValue) -> Result<(Vec<PutFile>, Vec<String>, workspace::Expect), Refusal> {
     let bad = |why: &str| Refusal::BadRequest(why.to_string());
     let mut put = Vec::new();
     if let Some(arr) = field(data, "put").filter(|v| !v.is_undefined() && !v.is_null()) {
@@ -207,7 +213,23 @@ fn parse_save(data: &JsValue) -> Result<(Vec<PutFile>, Vec<String>), Refusal> {
             remove.push(item.as_string().ok_or_else(|| bad("a `remove` entry is not a string"))?);
         }
     }
-    Ok((put, remove))
+    // `{path: version | null}`; absent means no path is checked.
+    let mut expect = workspace::Expect::new();
+    if let Some(obj) = field(data, "expect").filter(|v| !v.is_null()) {
+        let obj: js_sys::Object = obj.dyn_into().map_err(|_| bad("`expect` is not an object"))?;
+        for entry in js_sys::Object::entries(&obj).iter() {
+            let pair: js_sys::Array = entry.dyn_into().map_err(|_| bad("`expect` entry"))?;
+            let path = pair.get(0).as_string().ok_or_else(|| bad("an `expect` key is not a string"))?;
+            let v = pair.get(1);
+            let version = if v.is_null() {
+                None
+            } else {
+                Some(v.as_string().ok_or_else(|| bad("an `expect` version is not a string or null"))?)
+            };
+            expect.insert(path, version);
+        }
+    }
+    Ok((put, remove, expect))
 }
 
 use wasm_bindgen::JsCast;

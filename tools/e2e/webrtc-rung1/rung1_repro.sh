@@ -56,6 +56,15 @@ SIG="${SIG:-$CORE/target/debug/entity-signaling-node}"
 DISTPORT=8092
 WSPORT=4071
 SCRATCH="$(dirname "$0")"
+# A STABLE NODE IDENTITY, so a restart is a restart and not a different node.
+# Ephemeral is the node's default and is right for a stateless introducer (§1.3:
+# losing a node drops in-flight handshakes and loses nothing that mattered) —
+# but it makes the `node-restart` variant below unable to ask its own question.
+# With a fresh keypair the browsers would be dialling a peer id that no longer
+# exists, so a failure to reconnect is explained by the identity change and says
+# nothing about whether the carrier noticed its connection had died. Same file
+# across every invocation, including the separate `node-restart` one.
+NODE_KEYPAIR="${NODE_KEYPAIR:-/tmp/entity-rung1-node.key}"
 
 teardown() {
   echo ">> teardown"
@@ -67,7 +76,68 @@ teardown() {
   pkill -f "http.server $DISTPORT" 2>/dev/null || true
   echo ">> done"
 }
-[ "${1:-}" = "teardown" ] && { teardown; exit 0; }
+[ "${1:-}" = "teardown" ] && { teardown; rm -f "$NODE_KEYPAIR"; exit 0; }
+
+# Bring the signaling node up on :$WSPORT with a STABLE identity, appending to
+# the same log the diagnostics read. Shared by the main flow and `node-restart`.
+start_node() {
+	local before
+	# NOT `$(grep -c ... || echo 0)`: `grep -c` PRINTS 0 and RETURNS 1 when it
+	# matches nothing, so the fallback fires too and the substitution is the
+	# two-line string "0\n0", which `[` then refuses as a non-integer. The
+	# failure surfaced as "the node did not announce itself", i.e. as the
+	# condition this function exists to detect.
+	before=$(grep -c "peer_id:" /tmp/sig_repro.out 2>/dev/null)
+	before=${before:-0}
+	local reflect=()
+	[ -n "${E2E_NODE_REFLECTION:-}" ] && reflect=(--reflection-endpoint "$E2E_NODE_REFLECTION")
+	# APPEND (`>>`), never truncate: the node vantage is the only place that sees
+	# both halves of a rendezvous, and a restart that wiped the log would destroy
+	# the evidence for everything that happened before it — including the
+	# deposits the restart is supposed to be measured against.
+	RUST_LOG=info,entity_signaling=debug,entity_peer=debug nohup "$SIG" \
+		--ws-listen 0.0.0.0:$WSPORT --open --keypair "$NODE_KEYPAIR" "${reflect[@]}" \
+		>>/tmp/sig_repro.out 2>&1 &
+	# Wait for THIS start's banner rather than sleeping: a fixed sleep makes a
+	# slow start look like a node that never came up, and on the restart path
+	# that would be reported as the defect under test.
+	for _ in $(seq 1 40); do
+		local now
+		now=$(grep -c "peer_id:" /tmp/sig_repro.out 2>/dev/null)
+		[ "${now:-0}" -gt "$before" ] && return 0
+		sleep 0.25
+	done
+	echo "!! signaling node did not announce itself within 10s"
+	return 1
+}
+
+# `node-restart` — kill the node and bring it back at the SAME identity, for
+# H2's discriminator (*the carrier holds a dead connection to the node forever*).
+# Invoked BY THE SPIKE mid-run, because only the spike knows when the browsers
+# have finished their first exchange; node lifecycle stays here, where `$SIG`,
+# `$WSPORT` and the keypair are resolved.
+#
+# ⚠ It asserts the identity is UNCHANGED before returning. A restart that
+# silently minted a new peer id would make every downstream assertion measure
+# the wrong thing, and it is the one failure this subcommand can have that looks
+# exactly like the defect it exists to test.
+if [ "${1:-}" = "node-restart" ]; then
+	was=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | tail -1 | awk '{print $2}')
+	[ -x "$SIG" ] || SIG="$PWD/target/e2e-node/debug/entity-signaling-node"
+	echo ">> node-restart: killing the node at :$WSPORT (was $was)"
+	pkill -f "entity-signaling-node --ws-listen 0.0.0.0:$WSPORT" 2>/dev/null || true
+	sleep 1
+	start_node || exit 1
+	now=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | tail -1 | awk '{print $2}')
+	if [ "$was" != "$now" ]; then
+		echo "!! node identity CHANGED across the restart ($was -> $now)."
+		echo "   Every assertion after this would be about a different node. Is"
+		echo "   --keypair $NODE_KEYPAIR writable?"
+		exit 1
+	fi
+	echo ">> node-restart: back up, same identity ($now)"
+	exit 0
+fi
 
 # --- Build-skew preflight (load-bearing since §6.5 raised to Require) ----------
 # core-rust flipped §6.5 to Require (007e078): the browser leg now REFUSES SDP
@@ -184,15 +254,13 @@ sleep 0.5
 # §4.5.1's AUTOMATIC half: when E2E_NODE_REFLECTION is set the node publishes
 # that STUN URI in `advertise`, and the browsers are told NOTHING — they learn
 # it by asking. That is the whole difference from E2E_ICE, which the user types.
-NODE_REFLECT_ARGS=()
 if [ -n "${E2E_NODE_REFLECTION:-}" ]; then
-  NODE_REFLECT_ARGS=(--reflection-endpoint "$E2E_NODE_REFLECTION")
   echo "   node advertises its own reflector: $E2E_NODE_REFLECTION (§4.5.1)"
 fi
-RUST_LOG=info,entity_signaling=debug,entity_peer=debug nohup "$SIG" --ws-listen 0.0.0.0:$WSPORT --open "${NODE_REFLECT_ARGS[@]}" >/tmp/sig_repro.out 2>&1 &
-sleep 2
+: >/tmp/sig_repro.out
+start_node || exit 1
 NODE=$(grep -oE "peer_id:   [1-9A-HJ-NP-Za-km-z]+" /tmp/sig_repro.out | head -1 | awk '{print $2}')
-echo "   node peer: $NODE"
+echo "   node peer: $NODE  (identity from $NODE_KEYPAIR — stable across a restart)"
 
 echo ">> dist server on :$DISTPORT"
 pkill -f "http.server $DISTPORT" 2>/dev/null || true
@@ -333,6 +401,23 @@ echo "(node peer id in \$NODE=$NODE; teardown with: bash $0 teardown)"
 # The gate's verdict IS this script's exit code. Containers/node/dist are left
 # up on purpose (manual inspection); `make e2e-webrtc` tears them down around
 # this run. A bare `bash rung1_repro.sh` now exits non-zero on a FAIL.
+#
+# THREE STATES, AND THIS LINE USED TO FLATTEN THEM TO TWO — it printed
+# `FAIL ❌` for anything non-zero, so a spike that had carefully reported
+# `2 = INCONCLUSIVE` (the run could not put the mechanism at risk) was announced
+# as a failure one line later, contradicting the `make` wrapper directly above
+# it in the same output. *A three-state design is defeated at whatever boundary
+# can only carry two*, and the boundary here was a ternary.
+#
+# ⚠ The code does NOT survive `make`: GNU make reports its own recipe failure as
+# exit 2 whatever the recipe returned, which collides with INCONCLUSIVE. So a
+# caller must read this LINE (or the `>>> <gate>: …` line make prints), never
+# `$?`. Recorded in GOTCHAS under *Testing & the gates*.
+case "$DRIVE_RC" in
+	0) verdict='PASS ✅' ;;
+	2) verdict='INCONCLUSIVE ⚠ — the run could not put the mechanism at risk' ;;
+	*) verdict='FAIL ❌' ;;
+esac
 echo ""
-echo ">> gate exit: $DRIVE_RC ($([ "$DRIVE_RC" -eq 0 ] && echo 'PASS ✅' || echo 'FAIL ❌'))"
+echo ">> gate exit: $DRIVE_RC ($verdict)"
 exit "$DRIVE_RC"

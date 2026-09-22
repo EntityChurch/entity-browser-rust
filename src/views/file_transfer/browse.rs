@@ -70,8 +70,45 @@ pub enum ShareState {
     /// **not** something to render as a failure.
     Absent,
     /// The peer has a share and the listing genuinely failed — a denial, a
-    /// transport fault, a broken directory. Loud (D13).
+    /// broken directory, anything that came back as an answer. Loud (D13).
     Failed(String),
+    /// We never heard an answer: the dispatch failed below the handler, or the
+    /// load outlived [`LOAD_DEADLINE_MS`]. Carries the underlying detail for a
+    /// tooltip. Kept apart from `Failed` because the remedy differs — this one
+    /// clears itself when the device is reachable again (the window reloads on
+    /// that transition), where a denial does not — and because the kernel's
+    /// string for it (*"no transport profile for peer"*) is the ladder's
+    /// fall-through, not something a person can act on.
+    Unreachable(String),
+}
+
+/// How long a listing may stay in flight before the window stops showing it as
+/// loading and says the device could not be reached. Below the kernel's 30 s
+/// request timeout on purpose: a spinner that only that timeout can end is the
+/// field report's *"loading that never ends"*.
+pub const LOAD_DEADLINE_MS: f64 = 15_000.0;
+
+/// One listing request: which target and which attempt it was made for. A
+/// result is applied only while both still hold, so an answer that arrives
+/// after a target switch, or after a Refresh superseded it, lands nowhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadTicket {
+    target: String,
+    relpath: String,
+    generation: u64,
+}
+
+impl LoadTicket {
+    pub fn relpath(&self) -> &str {
+        &self.relpath
+    }
+}
+
+/// The same for the offers half, which is one request per target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OffersTicket {
+    target: String,
+    generation: u64,
 }
 
 /// Classify a non-OK answer to a share `list`.
@@ -104,8 +141,25 @@ struct Inner {
     target: String,
     /// Open directory relpaths (`""` = root).
     expanded: HashSet<String>,
-    /// Directory relpaths with an in-flight `list`.
-    loading: HashSet<String>,
+    /// Directory relpaths with an in-flight `list` → when it started (ms; `0`
+    /// for callers without a clock, which never expire).
+    loading: BTreeMap<String, f64>,
+    /// The latest attempt issued per relpath. A result is current only if its
+    /// ticket carries this number.
+    latest: BTreeMap<String, u64>,
+    /// Attempt counter shared by listings and offers.
+    generation: u64,
+    /// The latest offers attempt for this target.
+    offers_latest: u64,
+    /// Why the offers half produced nothing, when it failed.
+    offers_error: Option<String>,
+    /// Whether the target was reachable at the last render, for the
+    /// reconnect transition (`note_reachable`). `None` until first observed.
+    last_reachable: Option<bool>,
+    /// The share root answered with a listing in this session — direct evidence
+    /// that we may read this target's share, newer than anything in the event
+    /// log (which survives a reload and can still hold an old 403).
+    share_root_ok: bool,
     /// Directory relpaths whose `list` has returned (may be empty dirs).
     listed: HashSet<String>,
     /// Every known entry, keyed by relpath.
@@ -139,6 +193,7 @@ fn forget_subtree(inner: &mut Inner, key: &str) {
         inner.listed.remove(&k);
         inner.expanded.remove(&k);
         inner.loading.remove(&k);
+        inner.latest.remove(&k);
         if inner.selected.as_deref() == Some(k.as_str()) {
             inner.selected = None;
         }
@@ -179,7 +234,7 @@ impl FsBrowseCache {
             return false;
         }
         inner.auto_attempted = true;
-        !inner.loading.contains("") && !inner.listed.contains("")
+        !inner.loading.contains_key("") && !inner.listed.contains("")
     }
 
     /// Toggle a directory open/closed. Returns the new expanded state.
@@ -213,16 +268,137 @@ impl FsBrowseCache {
     /// two-device run as *"I hit refresh and it deletes the file"*. The
     /// in-flight state is `loading`, which the renderer shows beside the rows.
     pub fn begin_load(&self, relpath: &str, force: bool) -> bool {
+        self.begin_load_at(relpath, force, 0.0).is_some()
+    }
+
+    /// [`begin_load`](Self::begin_load) with a clock, handing back the ticket
+    /// the result must present.
+    ///
+    /// **A forced load supersedes one in flight** rather than being refused by
+    /// it. Refresh used to return early while a load was pending, so against a
+    /// peer that had gone quiet the only thing that could end the spinner was
+    /// the kernel's 30 s request timeout. The superseded request's answer, when
+    /// it comes, carries an old ticket and is dropped.
+    pub fn begin_load_at(&self, relpath: &str, force: bool, now_ms: f64) -> Option<LoadTicket> {
         let mut inner = self.inner.lock().unwrap();
-        if inner.loading.contains(relpath) {
-            return false;
+        if !force && inner.loading.contains_key(relpath) {
+            return None;
         }
         if !force && inner.listed.contains(relpath) {
+            return None;
+        }
+        inner.generation += 1;
+        let generation = inner.generation;
+        inner.loading.insert(relpath.to_string(), now_ms);
+        inner.latest.insert(relpath.to_string(), generation);
+        inner.share = ShareState::Fine;
+        Some(LoadTicket { target: inner.target.clone(), relpath: relpath.to_string(), generation })
+    }
+
+    fn ticket_is_current(inner: &Inner, ticket: &LoadTicket) -> bool {
+        inner.target == ticket.target && inner.latest.get(&ticket.relpath) == Some(&ticket.generation)
+    }
+
+    /// Apply a listing if its request is still the current one. Returns whether
+    /// it was applied — `false` for an answer that belongs to a target the
+    /// window has left, or to an attempt a Refresh replaced.
+    pub fn apply_listing_for(&self, ticket: &LoadTicket, children: Vec<FsChild>) -> bool {
+        if !Self::ticket_is_current(&self.inner.lock().unwrap(), ticket) {
             return false;
         }
-        inner.loading.insert(relpath.to_string());
-        inner.share = ShareState::Fine;
+        self.apply_listing(&ticket.relpath, children);
         true
+    }
+
+    /// Record a failure if its request is still the current one.
+    pub fn fail_load_for(&self, ticket: &LoadTicket, state: ShareState) -> bool {
+        if !Self::ticket_is_current(&self.inner.lock().unwrap(), ticket) {
+            return false;
+        }
+        self.fail_load(&ticket.relpath, state);
+        true
+    }
+
+    /// Stop showing a load as in flight once it has outlived
+    /// [`LOAD_DEADLINE_MS`]. A root that expires says the device could not be
+    /// reached. The request is not cancelled: if its answer arrives later it is
+    /// still the current attempt, and it still applies. Returns whether anything
+    /// a render shows changed.
+    pub fn expire_stale(&self, now_ms: f64) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let expired: Vec<String> = inner
+            .loading
+            .iter()
+            .filter(|(_, started)| **started > 0.0 && now_ms - **started >= LOAD_DEADLINE_MS)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &expired {
+            inner.loading.remove(k);
+            if k.is_empty() {
+                let secs = (LOAD_DEADLINE_MS / 1000.0) as u64;
+                // The detail behind the localized sentence, shown only on hover.
+                inner.share = ShareState::Unreachable(format!("no answer in {secs} s")); // i18n-ignore — diagnostic detail, tooltip only
+            }
+        }
+        !expired.is_empty()
+    }
+
+    /// Note whether the target is reachable now. Returns `true` exactly when it
+    /// has just become reachable after being seen unreachable — the moment the
+    /// window reloads, so a peer that dropped and came back does not keep the
+    /// listing (or the error) from before the drop. The first observation is not
+    /// a transition; the first-load path covers it.
+    pub fn note_reachable(&self, reachable: bool) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let came_back = inner.last_reachable == Some(false) && reachable;
+        inner.last_reachable = Some(reachable);
+        came_back
+    }
+
+    /// Start an offers request for the current target.
+    pub fn begin_offers(&self) -> OffersTicket {
+        let mut inner = self.inner.lock().unwrap();
+        inner.generation += 1;
+        inner.offers_latest = inner.generation;
+        OffersTicket { target: inner.target.clone(), generation: inner.generation }
+    }
+
+    fn offers_ticket_is_current(inner: &Inner, ticket: &OffersTicket) -> bool {
+        inner.target == ticket.target && inner.offers_latest == ticket.generation
+    }
+
+    /// [`apply_offers`](Self::apply_offers) for a request that is still current.
+    /// `false` for a stale answer, and otherwise whether anything changed.
+    pub fn apply_offers_for(&self, ticket: &OffersTicket, offers: Vec<crate::file_offer::FileOffer>) -> bool {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !Self::offers_ticket_is_current(&inner, ticket) {
+                return false;
+            }
+            inner.offers_error = None;
+        }
+        self.apply_offers(offers)
+    }
+
+    /// Record that the offers half failed, for a request that is still current.
+    pub fn fail_offers_for(&self, ticket: &OffersTicket, detail: String) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if !Self::offers_ticket_is_current(&inner, ticket) {
+            return false;
+        }
+        let changed = inner.offers_error.as_deref() != Some(detail.as_str());
+        inner.offers_error = Some(detail);
+        changed
+    }
+
+    /// Did the share root answer with a listing in this session?
+    pub fn share_root_ok(&self) -> bool {
+        self.inner.lock().unwrap().share_root_ok
+    }
+
+    /// Why the offers half failed, if it did.
+    pub fn offers_error(&self) -> Option<String> {
+        self.inner.lock().unwrap().offers_error.clone()
     }
 
     /// Record a directory's children (marks it listed, clears its loading flag).
@@ -244,6 +420,9 @@ impl FsBrowseCache {
         let mut inner = self.inner.lock().unwrap();
         inner.loading.remove(relpath);
         inner.listed.insert(relpath.to_string());
+        if relpath.is_empty() {
+            inner.share_root_ok = true;
+        }
 
         let prefix = if relpath.is_empty() { String::new() } else { format!("{relpath}/") };
         let incoming: HashSet<&str> = children.iter().map(|c| c.relpath.as_str()).collect();
@@ -306,7 +485,7 @@ impl FsBrowseCache {
             // listing, and leaving the window on "Browse" would be a lie. Only
             // on a non-empty answer, though — an empty one must not turn a
             // failed share browse into a confident "this share is empty".
-            changed |= inner.loading.remove("");
+            changed |= inner.loading.remove("").is_some();
             changed |= inner.listed.insert(String::new());
         }
         let fresh: BTreeMap<String, FsChild> = offers
@@ -398,7 +577,7 @@ impl FsBrowseCache {
 
     /// Is the root currently loading?
     pub fn root_loading(&self) -> bool {
-        self.inner.lock().unwrap().loading.contains("")
+        self.inner.lock().unwrap().loading.contains_key("")
     }
 
     /// A **real** share failure, for loud rendering (D13). An absent share is
@@ -406,7 +585,17 @@ impl FsBrowseCache {
     pub fn error(&self) -> Option<String> {
         match &self.inner.lock().unwrap().share {
             ShareState::Failed(msg) => Some(msg.clone()),
-            ShareState::Fine | ShareState::Absent => None,
+            ShareState::Fine | ShareState::Absent | ShareState::Unreachable(_) => None,
+        }
+    }
+
+    /// The device could not be reached (no answer, or no answer in time), with
+    /// the underlying detail. Rendered as a sentence a person can act on, not as
+    /// the kernel's string.
+    pub fn unreachable(&self) -> Option<String> {
+        match &self.inner.lock().unwrap().share {
+            ShareState::Unreachable(detail) => Some(detail.clone()),
+            _ => None,
         }
     }
 
@@ -461,7 +650,7 @@ impl FsBrowseCache {
                     is_dir,
                     expanded,
                     // An expanded dir whose listing hasn't come back yet.
-                    loading: is_dir && expanded && inner.loading.contains(&r.path),
+                    loading: is_dir && expanded && inner.loading.contains_key(&r.path),
                     selected: inner.selected.as_deref() == Some(r.path.as_str()),
                     size: child.and_then(|c| c.size),
                     full_path: child
@@ -477,7 +666,7 @@ impl FsBrowseCache {
 mod tests {
     use super::*;
 
-    fn child(name: &str, is_dir: bool) -> FsChild {
+    pub(super) fn child(name: &str, is_dir: bool) -> FsChild {
         FsChild {
             name: name.to_string(),
             relpath: name.to_string(),
@@ -850,7 +1039,7 @@ mod tests {
 
 #[cfg(test)]
 mod share_state_tests {
-    use super::tests::offer;
+    use super::tests::{child, offer};
     use super::*;
 
     /// **The bug, in one assertion.** A browser peer has no `local/files`
@@ -933,5 +1122,92 @@ mod share_state_tests {
         cache.apply_offers(vec![offer("shared.bin", b"payload")]);
         assert!(cache.share_absent(), "the verdict itself is unchanged");
         assert!(!cache.is_empty(), "…but there is content now, so the note is suppressed");
+    }
+
+    /// Field report 2026-09-15 (§5 #3): a listing that finishes late landed on
+    /// whichever peer was selected by then. The ticket names the target it was
+    /// asked for, and a switch makes it stale.
+    #[test]
+    fn a_late_answer_for_a_target_the_window_left_is_dropped() {
+        let c = FsBrowseCache::new();
+        c.sync_target("PEER_A");
+        let asked = c.begin_load_at("", false, 1.0).expect("first load");
+        c.sync_target("PEER_B");
+        assert!(!c.apply_listing_for(&asked, vec![child("from-a.txt", false)]), "PEER_A's answer must not apply to PEER_B");
+        assert_eq!(c.rows().len(), 0, "PEER_B shows none of PEER_A's files");
+        assert!(!c.fail_load_for(&asked, ShareState::Failed("x".into())), "nor its failure");
+        assert_eq!(c.error(), None);
+    }
+
+    /// §5 #4: Refresh could not restart a load already in flight, so only the
+    /// kernel's 30 s timeout ended the spinner. A forced load supersedes it, and
+    /// the superseded answer is dropped when it comes.
+    #[test]
+    fn a_refresh_supersedes_a_load_in_flight_and_the_old_answer_is_dropped() {
+        let c = FsBrowseCache::new();
+        c.sync_target("PEER");
+        let first = c.begin_load_at("", false, 1.0).expect("first load");
+        assert!(c.begin_load_at("", false, 2.0).is_none(), "an ordinary second load still waits");
+        let refresh = c.begin_load_at("", true, 3.0).expect("Refresh must not be refused by the load in flight");
+        assert!(!c.apply_listing_for(&first, vec![child("old.txt", false)]), "the superseded answer is dropped");
+        assert!(c.root_loading(), "the Refresh is still in flight");
+        assert!(c.apply_listing_for(&refresh, vec![child("new.txt", false)]));
+        assert_eq!(c.rows().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), vec!["new.txt"]);
+    }
+
+    /// §5 #4, the other half: a spinner nothing ends. Past the deadline the root
+    /// stops loading and says the device could not be reached — and a late
+    /// answer, still the current attempt, is still welcome.
+    #[test]
+    fn a_load_that_outlives_the_deadline_stops_spinning_and_says_unreachable() {
+        let c = FsBrowseCache::new();
+        c.sync_target("PEER");
+        let t = c.begin_load_at("", false, 1_000.0).unwrap();
+        assert!(!c.expire_stale(1_000.0 + LOAD_DEADLINE_MS - 1.0), "not yet");
+        assert!(c.root_loading());
+        assert!(c.expire_stale(1_000.0 + LOAD_DEADLINE_MS));
+        assert!(!c.root_loading(), "a load past its deadline is not shown as loading");
+        assert!(c.unreachable().is_some(), "and the pane says why: {:?}", c.unreachable());
+        assert_eq!(c.error(), None, "unreachable is not rendered as a failure the device reported");
+        assert!(c.apply_listing_for(&t, vec![child("late.txt", false)]), "a late answer to the current attempt still applies");
+        assert!(c.root_listed());
+        let untimed = FsBrowseCache::new();
+        untimed.begin_load("", false);
+        assert!(!untimed.expire_stale(f64::MAX), "a load started without a clock never expires");
+    }
+
+    /// §5 #2: a window that loaded once never loaded again after a reconnect.
+    /// Coming back is a transition; first sight is not (the auto-load covers it).
+    #[test]
+    fn coming_back_is_a_transition_and_first_sight_is_not() {
+        let c = FsBrowseCache::new();
+        c.sync_target("PEER");
+        assert!(!c.note_reachable(true), "first sight");
+        assert!(!c.note_reachable(true));
+        assert!(!c.note_reachable(false), "dropping is not the reload moment");
+        assert!(!c.note_reachable(false));
+        assert!(c.note_reachable(true), "coming back is");
+        assert!(!c.note_reachable(true), "once");
+        c.sync_target("OTHER");
+        assert!(!c.note_reachable(true), "a new target starts unobserved");
+    }
+
+    /// The offers half under the same rule, and its failure is kept (§5 #6).
+    #[test]
+    fn a_stale_offers_answer_is_dropped_and_a_failure_is_kept() {
+        let c = FsBrowseCache::new();
+        c.sync_target("PEER_A");
+        let from_a = c.begin_offers();
+        c.sync_target("PEER_B");
+        assert!(!c.apply_offers_for(&from_a, vec![offer("a.bin", b"a")]));
+        assert!(c.is_empty());
+        let first = c.begin_offers();
+        let second = c.begin_offers();
+        assert!(!c.fail_offers_for(&first, "old".into()), "a superseded failure is dropped");
+        assert!(c.fail_offers_for(&second, "no route".into()));
+        assert_eq!(c.offers_error().as_deref(), Some("no route"));
+        let third = c.begin_offers();
+        assert!(c.apply_offers_for(&third, vec![offer("b.bin", b"b")]));
+        assert_eq!(c.offers_error(), None, "an answer clears the failure");
     }
 }

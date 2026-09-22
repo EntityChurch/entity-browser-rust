@@ -52,9 +52,9 @@ impl FileTransferWindow {
             return;
         }
         let cache = self.model.browse().clone();
-        if !cache.begin_load(relpath, force) {
+        let Some(ticket) = cache.begin_load_at(relpath, force, js_sys::Date::now()) else {
             return; // already listed (and not forced) or in flight
-        }
+        };
         let resource = if relpath.is_empty() {
             model::SHARE_PREFIX.to_string()
         } else {
@@ -71,12 +71,26 @@ impl FileTransferWindow {
             },
         );
         let dirty = self.watch.flag();
-        let relpath = relpath.to_string();
+        // The deadline needs its own wake: a stuck load changes no tree state,
+        // so nothing else would repaint the window to notice it expired.
+        {
+            let (cache, dirty) = (cache.clone(), dirty.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                crate::dom::programs::sleep_ms(browse::LOAD_DEADLINE_MS as i32 + 50).await;
+                if cache.expire_stale(js_sys::Date::now()) {
+                    dirty.mark();
+                }
+            });
+        }
         wasm_bindgen_futures::spawn_local(async move {
+            // Every arm goes through the ticket: an answer for a target the
+            // window has left, or for an attempt a Refresh replaced, lands
+            // nowhere (field report 2026-09-15 — a late listing showed up on the
+            // peer selected since).
             match fut.await {
                 Ok(resp) if resp.result.status == entity_handler::STATUS_OK => {
                     let children = model::decode_listing(&resp.result.result.data);
-                    cache.apply_listing(&relpath, children);
+                    cache.apply_listing_for(&ticket, children);
                 }
                 // A peer that serves no share answers 404 `handler_not_found`,
                 // which is an ANSWER and not a fault — every browser peer gives
@@ -86,8 +100,8 @@ impl FileTransferWindow {
                 Ok(resp) => {
                     let code = entity_handler::decode_error_entity(&resp.result.result)
                         .and_then(|(code, _msg)| code);
-                    cache.fail_load(
-                        &relpath,
+                    cache.fail_load_for(
+                        &ticket,
                         browse::classify_share_failure(
                             resp.result.status,
                             code.as_deref(),
@@ -96,8 +110,13 @@ impl FileTransferWindow {
                     );
                 }
                 // A transport failure is never "this peer has no share" — we
-                // never heard an answer at all.
-                Err(e) => cache.fail_load(&relpath, browse::ShareState::Failed(e)),
+                // never heard an answer at all. Nor is it a failure the device
+                // reported: the kernel's string here ("no transport profile for
+                // peer") is the reach ladder's fall-through, so the pane says the
+                // device could not be reached and reloads when it can be.
+                Err(e) => {
+                    cache.fail_load_for(&ticket, browse::ShareState::Unreachable(e));
+                }
             }
             dirty.mark();
         });
@@ -109,10 +128,12 @@ impl FileTransferWindow {
     ///
     /// Runs beside `load_dir`, never instead of it: a peer may have a mounted
     /// share *and* offered files, and neither answer is authoritative about the
-    /// other. A failure is deliberately quiet — a native peer that offers
-    /// nothing simply returns an empty list, and a peer that cannot answer at
-    /// all already has its error from the share half. Loudness here would put a
-    /// permanent red banner on the ordinary desktop case.
+    /// other. A failure is kept but shown only where nothing else explains an
+    /// empty pane — a peer with no share (every browser peer), where the offers
+    /// are the whole listing. A native peer that offers nothing returns an empty
+    /// list, and a peer that cannot answer at all has the share half's
+    /// unreachable note; loudness there would put a permanent banner on the
+    /// ordinary desktop case.
     #[cfg(target_arch = "wasm32")]
     fn load_offers(&self, peers: &Peers, target: &str) {
         if target.is_empty() {
@@ -127,6 +148,7 @@ impl FileTransferWindow {
         // do not: a window opened on a peer we merely remember.
         crate::reach_keeper::global().want(&self.peer_id, target);
         let cache = self.model.browse().clone();
+        let ticket = cache.begin_offers();
         let dirty = self.watch.flag();
         let target = target.to_string();
         wasm_bindgen_futures::spawn_local(async move {
@@ -137,11 +159,19 @@ impl FileTransferWindow {
                 // took down. Repaint only on an actual change — this runs on
                 // every Refresh and every target switch.
                 Ok(offers) => {
-                    if cache.apply_offers(offers) {
+                    if cache.apply_offers_for(&ticket, offers) {
                         dirty.mark();
                     }
                 }
-                Err(e) => tracing::debug!("file transfer: no offers from {target}: {e}"),
+                // Kept rather than only logged: against a peer with no share
+                // (every browser peer) the offers ARE the listing, and a failure
+                // here used to leave an empty pane with nothing saying why.
+                Err(e) => {
+                    tracing::debug!("file transfer: no offers from {target}: {e}");
+                    if cache.fail_offers_for(&ticket, e.to_string()) {
+                        dirty.mark();
+                    }
+                }
             }
         });
     }
@@ -313,8 +343,17 @@ impl WindowView for FileTransferWindow {
         // "Loading…" rather than the Browse button this frame.
         let target = self.model.effective_target(peers);
         if !target.is_empty() {
-            self.model.browse().sync_target(&target);
-            if self.model.browse().claim_auto_load() {
+            let browse = self.model.browse();
+            browse.sync_target(&target);
+            browse.expire_stale(js_sys::Date::now());
+            let reachable = crate::peer_liveness::liveness_of(peers, &target).is_connected();
+            if browse.note_reachable(reachable) {
+                // Back after a drop: what was listed (or the error) is from
+                // before. This window used to load a peer once and never again.
+                browse.set_expanded("");
+                self.load_dir(peers, &target, "", true);
+                self.load_offers(peers, &target);
+            } else if browse.claim_auto_load() {
                 self.load_dir(peers, &target, "", false);
                 self.load_offers(peers, &target);
             }

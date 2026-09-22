@@ -234,6 +234,7 @@ impl SiteOverlay {
             // No connect surface on this path — a default (empty) slot.
             connect_attempt: crate::connect_attempt::ConnectAttempt::default(),
             offer_attempt: crate::offer_attempt::OfferAttempt::default(),
+            pull_attempt: crate::pull_attempt::PullAttempt::default(),
             // Site surface only — no connector card, so nothing reads this.
             provisioning_drifted: false,
         };
