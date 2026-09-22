@@ -237,6 +237,18 @@ pub struct EntityApp {
     /// actually moves.
     #[cfg(target_arch = "wasm32")]
     webrtc_booted: Option<crate::session_config::WebRtcProvisioning>,
+    /// The §6.5 seam slot installed at boot, kept so a rendezvous node chosen
+    /// **during** this session can be armed into the running peer.
+    ///
+    /// This is the field that removes the reload. See `crate::late_establish`.
+    #[cfg(target_arch = "wasm32")]
+    late_establisher: Option<std::sync::Arc<crate::late_establish::LateEstablisher>>,
+    /// The system seed, kept so [`Self::arm_webrtc_if_provisioned`] can rebuild
+    /// the carrier identity. Kept rather than re-read: `system_seed()` mints one
+    /// when nothing is persisted, so a second call on an ephemeral profile would
+    /// return a different identity.
+    #[cfg(target_arch = "wasm32")]
+    webrtc_seed: Option<[u8; 32]>,
     /// Session-lived inspect sink on the system peer feeding the app-tier
     /// access log (`crate::access_log_store`) with local dispatches. Installed
     /// once at boot — app-global, not per-window — so the Access Log window is a
@@ -563,7 +575,7 @@ const DEFAULT_WEBRTC_MAX_DEADLINE_MS: u64 = 15_000;
 fn build_direct_webrtc_establisher(
     seed: [u8; 32],
     self_peer_id: &str,
-) -> Option<std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>> {
+) -> Option<(String, std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>)> {
     use entity_wasm_worker_proxy::{MainThreadWebRtcEstablisher, VerificationPolicy};
 
     // Resolve FIRST, then decide — the decision is a function of what resolved.
@@ -633,7 +645,7 @@ fn build_direct_webrtc_establisher(
     // not answered — sending them to fix something they never configured.
     let reflectors_configured = p.has_reflector();
 
-    Some(std::sync::Arc::new(
+    Some((p.node_peer_id.clone(), std::sync::Arc::new(
         MainThreadWebRtcEstablisher::new(
             carrier,
             self_peer_id.to_string(),
@@ -653,7 +665,56 @@ fn build_direct_webrtc_establisher(
         .with_ice_observer(std::sync::Arc::new(
             crate::reachability::EstablisherObserver::new(reflectors_configured),
         )),
-    ) as std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>)
+    ) as std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>))
+}
+
+/// **Which `arm_webrtc_if_provisioned` call did something.**
+///
+/// Four outcomes rather than a `bool`, for the reason everything else in this
+/// area has them: *nothing to do because we are already pointed there* and
+/// *nothing to do because there is nothing to point at* are different facts, and
+/// only one of them means the user still has to act.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LateArm {
+    /// No §6.5 slot on this profile at all — the ephemeral in-memory fallback
+    /// (IDB unavailable), or the Worker arm, where the establisher is installed
+    /// by the worker host from `InitParams`.
+    NoSlot,
+    /// A slot, and still nothing resolving. The user has not chosen a node.
+    NoProvisioning,
+    /// Already armed for exactly this node. **The steady state**, hit on every
+    /// frame after the first, and deliberately silent.
+    AlreadyArmed,
+    /// Installed now — either the first arm of the session or a re-point onto a
+    /// different node.
+    Armed { node: String, replaced: Option<String> },
+}
+
+/// Decide what a late-arm pass should do, given the slot's current node and
+/// what a resolve offers.
+///
+/// Pure, and split out for the reason `decide_home` and `ladder_step` are: the
+/// only caller is behind `cfg(wasm32)` and reads the URL and localStorage, so
+/// without this the branch could not be gated by `make test` on either arm.
+pub fn decide_late_arm(
+    has_slot: bool,
+    armed_node: Option<&str>,
+    resolved_node: Option<&str>,
+) -> LateArm {
+    if !has_slot {
+        return LateArm::NoSlot;
+    }
+    let Some(node) = resolved_node else {
+        return LateArm::NoProvisioning;
+    };
+    match armed_node {
+        Some(current) if current == node => LateArm::AlreadyArmed,
+        Some(current) => LateArm::Armed {
+            node: node.to_string(),
+            replaced: Some(current.to_string()),
+        },
+        None => LateArm::Armed { node: node.to_string(), replaced: None },
+    }
 }
 
 /// Free-function spawn dispatcher used by both fresh-create and reload
@@ -960,6 +1021,14 @@ impl EntityApp {
         // available — this is what makes the roster readable BEFORE any data
         // peer spawns); otherwise (or on IDB failure) it is the ephemeral
         // in-memory primary, preserving today's Direct behavior.
+        // The §6.5 slot and the seed that can refill it, carried out of the
+        // branch below so the frame loop can arm the establisher when a
+        // rendezvous node is chosen mid-session. The seed is kept rather than
+        // re-read: `system_seed()` generates one when nothing is persisted, so a
+        // second call on an ephemeral profile would hand back a *different*
+        // identity and the carrier would sign as a peer nobody has met.
+        let mut late_slot: Option<std::sync::Arc<crate::late_establish::LateEstablisher>> = None;
+        let mut webrtc_seed: Option<[u8; 32]> = None;
         let (mut peer_manager, idb_active, had_warm_identity) = if use_idb {
             let (seed, was_persisted) = crate::persistence::system_seed();
             let keypair = entity_crypto::Keypair::from_seed(seed);
@@ -970,14 +1039,41 @@ impl EntityApp {
             // (the BUG-A class). Never change identity derivation without a
             // data migration that re-keys the old database.
             let db_name = format!("entity-peer-{}", keypair.peer_id());
-            // v11 Direct-arm §6.5: install the main-thread WebRTC establisher on
-            // the primary before build (the seam must be captured before the
-            // peer's `PeerShared` clones). `None` (unprovisioned / opted-out) is
-            // byte-identical to the pre-A-series boot.
+            // Direct-arm §6.5. The seam must be captured before the peer's
+            // `PeerShared` clones, so it is a constructor argument — and that
+            // used to mean the establisher was decided entirely at boot, from a
+            // node that a fresh profile does not have. A private window, a first
+            // visit or a freshly launched desktop therefore spent its whole
+            // first session unreachable: discovery worked and every connect-back
+            // was structurally impossible, so peers met and no message moved.
+            //
+            // We now always install a `LateEstablisher` — an empty slot that
+            // satisfies the capture-before-clone constraint and can be filled
+            // the moment a rendezvous node appears. Unarmed it answers
+            // `NotAttempted`, which §10.3 documents as equivalent to no seam at
+            // all, so an unprovisioned boot is unchanged. See the module docs.
             let self_peer_id = keypair.peer_id().to_string();
-            let webrtc_seam = build_direct_webrtc_establisher(seed, &self_peer_id);
-            match Peers::new_direct_idb_with_establish(keypair, &db_name, webrtc_seam).await {
-                Ok(pm) => (pm, true, was_persisted),
+            let late = std::sync::Arc::new(crate::late_establish::LateEstablisher::new());
+            if let Some((node, inner)) = build_direct_webrtc_establisher(seed, &self_peer_id) {
+                late.arm(&node, inner);
+            }
+            let armed_at_boot = late.is_armed();
+            let seam: std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish> =
+                late.clone();
+            match Peers::new_direct_idb_with_establish(keypair, &db_name, Some(seam)).await {
+                Ok(mut pm) => {
+                    // **Reachability follows the ARM, not the slot existing.**
+                    // The constructor no longer infers it: with a late slot
+                    // always present, "a seam is installed" and "a node is
+                    // configured" are different facts, and letting the first
+                    // stand for the second would make `peer_has_webrtc`
+                    // permanently true and every meet warning permanently
+                    // silent (AP40).
+                    pm.set_webrtc_peer(&self_peer_id, armed_at_boot);
+                    late_slot = Some(late);
+                    webrtc_seed = Some(seed);
+                    (pm, true, was_persisted)
+                }
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
@@ -1117,6 +1213,11 @@ impl EntityApp {
             );
         }
         let mut app = Self::build_wasm_app(peer_manager, pending);
+        // Hand the app the §6.5 slot and the seed that can refill it. Both are
+        // `None` on the ephemeral fallback (no IDB), which `decide_late_arm`
+        // reports as `NoSlot` rather than pretending a node could be armed.
+        app.late_establisher = late_slot;
+        app.webrtc_seed = webrtc_seed;
         // Direct arm: the system-peer tree is durable iff the IDB store came up.
         let plan = app.boot_load(boot_class, idb_active).await;
         (app, idb_active, plan)
@@ -1653,6 +1754,16 @@ impl EntityApp {
             connectors,
             #[cfg(target_arch = "wasm32")]
             webrtc_booted,
+            // Filled by `new_wasm` right after this returns — the slot is built
+            // in the same breath as the peer it is installed on, and threading
+            // it through two builder signatures that no other caller needs would
+            // buy nothing. The Worker arm leaves both `None`: there the worker
+            // host installs the establisher from `InitParams`, so there is no
+            // main-thread slot to arm and `decide_late_arm` answers `NoSlot`.
+            #[cfg(target_arch = "wasm32")]
+            late_establisher: None,
+            #[cfg(target_arch = "wasm32")]
+            webrtc_seed: None,
             access_log_sink,
             dom,
             pending_backend_peers,
@@ -2644,16 +2755,29 @@ impl EntityApp {
             //    never be able to wipe a valid repair, which is the same rule
             //    the adoption path states as "says nothing" ≠ "says something
             //    different".
-            if let Some(publisher) = deployment
-                .as_ref()
-                .and_then(|dc| dc.home_site.as_ref())
-                .map(|h| h.peer_id.as_str())
-                .filter(|p| !p.is_empty())
-            {
+            // 4. **The document can now AFFIRM more than its home peer.**
+            //    `origins` is a map and a domain may host several publishers
+            //    (`hosted_peer_origins` above logs when it does), so judging
+            //    every record against the home peer alone deleted correct
+            //    records about the others — written on one boot, gone the next,
+            //    forever (§1.1f). What widened is the *declared* set, NOT the
+            //    routed one: an `origins` entry says "reachable here", which a
+            //    retired peer deliberately stays through a re-key transition.
+            if let Some(dc) = deployment.as_ref() {
+                // Adoption before revalidation — the ordering in note 1, which
+                // the declared set is subject to exactly as the inferred home
+                // re-key is.
+                crate::peer_supersession::adopt_declared(
+                    &self.peer_manager,
+                    &system_pid,
+                    &dc.superseded,
+                )
+                .await;
                 crate::peer_supersession::revalidate(
                     &self.peer_manager,
                     &system_pid,
-                    publisher,
+                    dc.affirmed_home(),
+                    &dc.superseded,
                 )
                 .await;
             } else {
@@ -2844,6 +2968,41 @@ impl EntityApp {
                     "boot_load: domain deployment hosts {} peer origin(s)",
                     dc.origins.len()
                 );
+                // §1.1f **item 3** — un-name the publishers this domain has
+                // stopped declaring. The paired removal for the adopt loop
+                // directly above (D9): that loop only ever ADDS, so before this
+                // a peer a deployment stopped hosting kept a registered origin
+                // that 404s on every visit — in the browse-all roster, in the
+                // retry ladder, and in Doctor's `fetch-failure-by-peer`.
+                //
+                // Placed here, and the position is the argument:
+                //
+                // - **After the adopt loop**, so the rows the document *does*
+                //   declare are already written and the listing it judges is
+                //   final. Judging first would withdraw a row this same boot is
+                //   about to re-seed.
+                // - **Inside `if let Some(dc)`**, so no document means no change
+                //   — `revalidate`'s precondition one field over, and for the
+                //   same reason: D23's bounded fetch makes "no document" more
+                //   common, and a truncated one must never be able to empty the
+                //   registry.
+                // - **Before `mirror_to_all_local_peers`** below, so what gets
+                //   copied to the other local peers is the swept state.
+                //
+                // The exemptions live in `withdrawn_rows` and are gated there;
+                // the one worth knowing at this call site is that the HOME peer
+                // is passed from the RESOLVED `cfg`, not from the document — a
+                // home the user chose (D25) may name a peer this document does
+                // not host, and taking its origin away is strictly worse than
+                // leaving a row a later document can correct.
+                crate::content_site::origins::unname_withdrawn_origins(
+                    &self.peer_manager,
+                    &system_pid,
+                    &dc.origins,
+                    &cfg.home_site.peer_id,
+                    SEED_TIMEOUT_MS,
+                )
+                .await;
                 // Warm each registered peer's site index NOW — fetch its
                 // `sites.list` + manifests and write them through into my store —
                 // so a foreign published peer's sites appear in the directory rail
@@ -3197,6 +3356,81 @@ impl EntityApp {
     /// radius of the old behaviour, stated because it is smaller than it sounds:
     /// page bodies were never affected — `resolve_closure_via` is a pure-network
     /// two-hop — so what went stale was the directory listing, not the content.
+    /// Install the §6.5 establisher if a rendezvous node is now resolvable and
+    /// the slot is not already pointed at it.
+    ///
+    /// **This is the call that removes the reload.** The seam is a constructor
+    /// argument, so before `crate::late_establish` a node chosen after boot could
+    /// not reach the running peer: the session found peers and could never be
+    /// connected back to, which is what made a fresh profile look like broken
+    /// chat. Now the slot is always installed and this fills it.
+    ///
+    /// Runs **every frame** and is therefore built to be silent and cheap in the
+    /// steady state — `decide_late_arm` short-circuits to `AlreadyArmed` on a
+    /// string compare, and only a transition writes or logs (AP43: an idempotent
+    /// operation reported as an event is a bug one layer up).
+    ///
+    /// The resolve goes through `resolve_provisioning_quietly` — the one
+    /// expression of URL > selection mirror > build knob, the same one boot uses
+    /// — so a session booted with `?webrtc_node=` is never re-pointed by a
+    /// selection that the precedence says loses.
+    #[cfg(target_arch = "wasm32")]
+    fn arm_webrtc_if_provisioned(&mut self) -> LateArm {
+        let resolved =
+            crate::connectors::resolve_provisioning_quietly(&webrtc_url_query()).map(|(p, _)| p);
+        let armed_node = self.late_establisher.as_ref().and_then(|l| l.armed_node());
+        let outcome = decide_late_arm(
+            self.late_establisher.is_some() && self.webrtc_seed.is_some(),
+            armed_node.as_deref(),
+            resolved.as_ref().map(|p| p.node_peer_id.as_str()),
+        );
+        let LateArm::Armed { ref node, .. } = outcome else {
+            return outcome;
+        };
+        let (Some(slot), Some(seed)) = (self.late_establisher.clone(), self.webrtc_seed) else {
+            return LateArm::NoSlot;
+        };
+        let primary = self.peer_manager.primary_peer_id().to_string();
+        // Rebuild through the SAME builder boot uses, so there is one expression
+        // of what an establisher is made of (carrier, ICE, policy, observer).
+        // A second construction site here is exactly how the two would drift.
+        let Some((built_node, inner)) = build_direct_webrtc_establisher(seed, &primary) else {
+            // The resolver said yes and the builder said no — `?webrtc_enable=0`
+            // is the one way that happens, and it is a deliberate refusal, not a
+            // failure. Report it as "nothing provisioned" rather than retrying
+            // the build on every frame forever.
+            return LateArm::NoProvisioning;
+        };
+        debug_assert_eq!(&built_node, node, "the builder and the resolver disagreed on the node");
+        // Reachability follows the arm — this is what un-silences the meet
+        // surfaces, and what makes `peer_has_webrtc` true without a reload.
+        let armed = slot.arm(&built_node, inner);
+        self.peer_manager.set_webrtc_peer(&primary, true);
+        // **Report from the ARM, never from the decision.** Logging at the call
+        // site off the returned outcome looked equivalent and is not: it states
+        // what we resolved to do rather than what happened, so a defect between
+        // the two would print "armed" over a session that armed nothing. Caught
+        // by a neuter that returned `Armed` without arming — the gate still red,
+        // at message delivery, but its *first* assertion passed and would have
+        // named the wrong layer. Silent in the steady state, because
+        // `Arm::Unchanged` is where every frame after the first lands (AP43).
+        match &armed {
+            crate::late_establish::Arm::Armed => tracing::info!(
+                node_peer_id = %built_node,
+                "webrtc: armed the §6.5 establisher from a node chosen after \
+                 boot — this session is now reachable, no reload needed"
+            ),
+            crate::late_establish::Arm::Rearmed { from } => tracing::info!(
+                node_peer_id = %built_node,
+                previous = %from,
+                "webrtc: re-pointed the §6.5 establisher at a different rendezvous \
+                 node — no reload needed"
+            ),
+            crate::late_establish::Arm::Unchanged => {}
+        }
+        outcome
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn precache_origin_sites(&self, me: &str) {
         use crate::content_site::foreign_cache::{self, Currency, ForeignArtifact};
@@ -3365,10 +3599,22 @@ impl EntityApp {
         // both above the render, and check the mechanism before moving either.
         self.connectors.sync(&self.peer_manager);
 
+        // **Arm the §6.5 seam if a rendezvous node has appeared since boot.**
+        // This is what makes the ordinary flow — open the app, add a connector,
+        // meet someone — work without a reload. See `crate::late_establish`.
+        #[cfg(target_arch = "wasm32")]
+        let _ = self.arm_webrtc_if_provisioned();
+
         // Would a reload change what this session is rendezvousing through?
         // Computed here, where the app owns the boot-time value, and handed to
         // the render as a plain fact. Both sides go through the same resolver,
         // so URL precedence is self-handling (see `provisioning_drifted`).
+        //
+        // **Still meaningful after late arming**, and the distinction is worth
+        // keeping: arming installs the establisher, but `InitParams.webrtc` on
+        // the Worker arm is Init-only upstream, and ICE/relay credentials that
+        // only `apply_to` consumes are still boot-shaped. So this notice now
+        // means "some of your choice needs a reload", not "none of it is live".
         #[cfg(target_arch = "wasm32")]
         let provisioning_drifted = crate::connectors::provisioning_drifted(
             self.webrtc_booted.as_ref(),
@@ -6352,5 +6598,108 @@ mod status_summary_tests {
             status_summary(0, 0, false),
             "\u{2068}0\u{2069} windows · \u{2068}0\u{2069} peers · Not saved"
         );
+    }
+}
+
+/// **The late §6.5 arm — the decision that removes the reload.**
+///
+/// Native because `decide_late_arm` is pure; the wiring that consumes it is
+/// behind `cfg(wasm32)` and reads the URL and localStorage, which is exactly why
+/// the decision was split out. `crate::late_establish` gates the slot itself.
+#[cfg(test)]
+mod late_arm_tests {
+    use super::*;
+
+    /// **The regression, stated as a test.** A fresh profile boots with nothing
+    /// resolving, the user adds a rendezvous node, and the very next frame must
+    /// arm — no reload. Before this, the seam was a constructor argument and the
+    /// whole first session was unreachable: peers met and no message moved.
+    #[test]
+    fn a_node_chosen_after_boot_arms_without_a_reload() {
+        assert_eq!(
+            decide_late_arm(true, None, Some("2KNodeA")),
+            LateArm::Armed { node: "2KNodeA".to_string(), replaced: None },
+            "a node chosen after boot must arm the running peer, not wait for a reload"
+        );
+    }
+
+    /// The steady state, hit on every frame after the first. It must be
+    /// distinguishable from "nothing to do because nothing is configured", or a
+    /// per-frame caller writes and logs forever (AP43).
+    #[test]
+    fn an_already_armed_slot_is_not_re_armed_every_frame() {
+        assert_eq!(
+            decide_late_arm(true, Some("2KNodeA"), Some("2KNodeA")),
+            LateArm::AlreadyArmed
+        );
+        assert_ne!(
+            decide_late_arm(true, Some("2KNodeA"), Some("2KNodeA")),
+            LateArm::NoProvisioning,
+            "already armed and nothing configured are different facts — only one \
+             of them means the user still has to act"
+        );
+    }
+
+    /// Switching connectors mid-session re-points the live establisher and names
+    /// what it left, so the log can state the transition rather than a bare
+    /// "armed" that reads as a first install.
+    #[test]
+    fn switching_connectors_re_points_the_live_establisher() {
+        assert_eq!(
+            decide_late_arm(true, Some("2KNodeA"), Some("2KNodeB")),
+            LateArm::Armed {
+                node: "2KNodeB".to_string(),
+                replaced: Some("2KNodeA".to_string())
+            }
+        );
+    }
+
+    /// Nothing configured stays nothing configured — this must never invent an
+    /// arm, or a profile with no node would report itself reachable and the meet
+    /// warning would go silent for the case it exists to cover.
+    #[test]
+    fn no_provisioning_never_arms() {
+        assert_eq!(decide_late_arm(true, None, None), LateArm::NoProvisioning);
+        assert_eq!(
+            decide_late_arm(true, Some("2KNodeA"), None),
+            LateArm::NoProvisioning,
+            "a resolve that stops answering does not disarm what is already \
+             working — this session keeps the establisher it has"
+        );
+    }
+
+    /// **No slot outranks everything**, and it is its own outcome rather than
+    /// folded into `NoProvisioning`: the ephemeral in-memory fallback and the
+    /// Worker arm have nowhere to install, so a node resolving changes nothing
+    /// and the difference is what stops a caller retrying forever.
+    #[test]
+    fn a_profile_with_no_slot_reports_that_rather_than_a_missing_node() {
+        assert_eq!(decide_late_arm(false, None, Some("2KNodeA")), LateArm::NoSlot);
+        assert_eq!(decide_late_arm(false, None, None), LateArm::NoSlot);
+        assert_ne!(
+            decide_late_arm(false, None, Some("2KNodeA")),
+            LateArm::NoProvisioning,
+            "nowhere to install and nothing to install are different problems"
+        );
+    }
+
+    /// Four outcomes, all reachable, none merged — the count asserted so a fifth
+    /// cannot quietly reuse one of these.
+    #[test]
+    fn every_late_arm_outcome_is_reachable_and_distinct() {
+        let outcomes = [
+            decide_late_arm(false, None, None),
+            decide_late_arm(true, None, None),
+            decide_late_arm(true, Some("n"), Some("n")),
+            decide_late_arm(true, None, Some("n")),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for o in &outcomes {
+            assert!(
+                seen.insert(format!("{o:?}").split(' ').next().unwrap().to_string()),
+                "two inputs collapsed onto the same outcome: {outcomes:?}"
+            );
+        }
+        assert_eq!(seen.len(), 4);
     }
 }

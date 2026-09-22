@@ -991,6 +991,29 @@ endif
 # retries until the app visibly responds, waits for the window before typing, and
 # reads the app's own output for confirmation; the spike's docstring has the
 # measured trace and what was ruled out on the way.
+# The SAME journey with step 3's reload REMOVED — the regression gate for late
+# arming (`src/late_establish.rs`). Until 2026-09-07 the §6.5 seam was a
+# constructor argument, so a rendezvous node chosen mid-session could not reach
+# the running peer: a fresh profile (a private window, a first visit, a freshly
+# launched desktop) was findable and unreachable for its whole first session,
+# which reached the operator as "they detect each other but chat doesn't work".
+# Direct arm only — the Worker arm takes provisioning from Init-only
+# `InitParams`, so there the reload is genuinely still required, and the spike
+# refuses rather than passing a run that proves nothing.
+.PHONY: e2e-webrtc-meet-noreload
+e2e-webrtc-meet-noreload:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-meet-noreload SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-meet-noreload BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-meet-noreload: add a connector mid-session, NO reload, then chat"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 SPIKE=spike_meet_then_chat.py SPIKE_ARGS="" bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-meet-noreload: PASS"; else echo ">>> e2e-webrtc-meet-noreload: FAIL (rc=$$rc)"; fi; \
+	 exit $$rc
+
 e2e-webrtc-meet:
 	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-meet SKIPPED: podman not found on host"; exit 0; }
 ifneq ($(strip $(BUILD)),)
@@ -1066,6 +1089,38 @@ endif
 	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
 	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-file: PASS — a file crossed between two browsers"; \
 	 else echo ">>> e2e-webrtc-file: FAIL (rc=$$rc) — read which phase failed: offer (serving), offers (the manifest crossing), or pull (the closure walk)"; fi; \
+	 exit $$rc
+
+# THE SAME TRANSFER FROM A COLD PROFILE — no reload, so nothing was ever read
+# out of localStorage at boot. This is the arm that matches what a person
+# actually does: open the app for the first time, add a rendezvous node, send
+# a file. It exists because `e2e-webrtc-file`'s reload is exactly what warms
+# the profile — `resolve_provisioning_quietly`'s middle source is the
+# localStorage selection mirror, readable only at boot — so every file run
+# this repo has ever done was on the warm path, and none of them could have
+# exhibited the 2026-09-07 establisher defect.
+#
+# Distinct from `e2e-webrtc-meet-noreload`: that one proves a late-armed seam
+# carries a chat message (one dispatch, one entity). This proves it carries a
+# multi-chunk closure walk over `system/content`, which is a different load on
+# the same seam and is what the original report was trying to do.
+#
+# Direct arm only — the spike refuses on Worker rather than passing a run that
+# proves nothing, since `InitParams.webrtc` is Init-only upstream.
+.PHONY: e2e-webrtc-file-noreload
+e2e-webrtc-file-noreload:
+	@command -v podman >/dev/null 2>&1 || { echo ">>> e2e-webrtc-file-noreload SKIPPED: podman not found on host"; exit 0; }
+ifneq ($(strip $(BUILD)),)
+	@$(MAKE) wasm
+endif
+	@test -f $(DIST)/entity-worker_bg.wasm || { echo "!! $(DIST)/ not built — run 'make wasm' first (or 'make e2e-webrtc-file-noreload BUILD=1')"; exit 1; }
+	@echo ">>> e2e-webrtc-file-noreload: cold profile, connector added mid-session, NO reload, then SERVE a file ($(FILE_SIZE) bytes)"
+	@bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true
+	@rc=0; NO_RELOAD=1 FILE_SIZE="$(FILE_SIZE)" SPIKE=spike_file_over_webrtc.py SPIKE_ARGS="" \
+	   bash tools/e2e/webrtc-rung1/rung1_repro.sh || rc=$$?; \
+	 bash tools/e2e/webrtc-rung1/rung1_repro.sh teardown >/dev/null 2>&1 || true; \
+	 echo; if [ $$rc -eq 0 ]; then echo ">>> e2e-webrtc-file-noreload: PASS — a file crossed from a COLD profile, no reload"; \
+	 else echo ">>> e2e-webrtc-file-noreload: FAIL (rc=$$rc) — read which phase failed: the in-session arm (step 1), the meet, offer (serving), offers (the manifest crossing), or pull (the closure walk)"; fi; \
 	 exit $$rc
 
 # THE SAME FILE TRANSFER, ACROSS TWO DIFFERENT ENGINES — and the reason this

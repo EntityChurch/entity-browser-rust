@@ -69,6 +69,7 @@ mod peers;
 mod program_host;
 #[cfg(target_arch = "wasm32")]
 mod peers_worker;
+mod late_establish;
 mod listener_state;
 mod peer_mode;
 mod peer_registry;

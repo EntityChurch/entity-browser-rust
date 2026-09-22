@@ -84,6 +84,17 @@ const INFO_SITE_ID: &str = "entity-info";
 /// - `--set-home` — with `--deployment-config`, take this domain's `home_site`
 ///   even though the existing document names a different peer. What a re-key
 ///   uses, and what the second peer on a shared domain must NOT do by accident.
+/// - `--supersede=OLD=NEW` (repeatable, with `--deployment-config`) — declare
+///   that peer `OLD` was replaced by `NEW`. A returning profile adopts it on the
+///   next warm boot and rewrites its stored references to `OLD`.
+///
+///   **The home peer's re-key does not need this** — moving `home_site` is one
+///   slot changing, which the client infers. Every *other* hosted peer does:
+///   `origins` is a map, and a key leaving as another arrives is ambiguous
+///   between a re-key and one tenant leaving as another joins, so the client
+///   must not guess (`DESIGN-RESILIENCE…` §1.1f). Additive — an existing
+///   declaration is never dropped by a later publish, including the home
+///   publisher's.
 /// - `--identity-seed=<64-hex>` — publish under a **specific system identity**
 ///   (the same 32-byte hex seed form as the runtime `entity_system_seed`), so
 ///   each site/deployment gets its own stable peer-id (`sites/{peer}/…`).
@@ -148,6 +159,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // wrong. Validated below, before anything is written.
     let registry_pin_raw: Option<String> =
         args.iter().find_map(|a| a.strip_prefix("--registry-pin=").map(str::to_string));
+    // `--supersede=OLD=NEW` (repeatable) — the succession this domain DECLARES.
+    //
+    // The consumer cannot infer it for anyone but the home peer: `origins` is a
+    // map, and a key leaving as another arrives is ambiguous between a re-key
+    // and one tenant leaving as another joins. Guessing writes a supersession
+    // against a peer that is alive, so the deployer — the only party who knows —
+    // says it (`DESIGN-RESILIENCE…` §1.1f item 1).
+    let supersede_raw: Vec<String> =
+        args.iter().filter_map(|a| a.strip_prefix("--supersede=").map(str::to_string)).collect();
     // Publisher identity resolution (see `resolve_publish_keypair`):
     //   default            → the DURABLE publisher keypair under `{ENTITY_DATA_DIR}/publish/`
     //   --identity-seed=hex → a SPECIFIC system identity (same hex form as `entity_system_seed`)
@@ -275,6 +295,22 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Same rule as the pin, and for the same reason: a declaration with no
+    // document to ride in does nothing at all, silently.
+    if !supersede_raw.is_empty() && !deployment_config {
+        eprintln!(
+            "publish --supersede: the declaration rides in /entity-deployment.json, so it \
+             needs --deployment-config too (without it nothing would carry it)"
+        );
+        return ExitCode::FAILURE;
+    }
+    let superseded = match parse_supersessions(&supersede_raw) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("publish --supersede: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
     if deployment_config && bare_root {
         eprintln!(
             "publish: --deployment-config is for the SPA projection (sites/{{peer}}/…), \
@@ -341,6 +377,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 origin,
                 registry_pin,
                 set_home: config_set_home,
+                superseded,
             }
         });
         run_projection(
@@ -425,6 +462,58 @@ struct DeployConfigSpec {
     /// itself (see [`merge_deployment_doc`]). Moving a domain's home is a
     /// deliberate act, so it gets a word.
     set_home: bool,
+    /// **`--supersede=OLD=NEW`, repeatable — the succession this domain
+    /// declares** (`DESIGN-RESILIENCE…` §1.1f item 1).
+    ///
+    /// Merged into any existing `superseded` map rather than replacing it, the
+    /// same way sibling `origins` entries are preserved: several tenants may
+    /// each have re-keyed, and a publish that dropped another's declaration
+    /// would be the clobber `HomeClaim` exists to prevent, one field along.
+    ///
+    /// **Stated limit:** this is authority by *who holds the out-dir*, not by
+    /// signature — nothing here stops a secondary publish declaring a
+    /// succession for a peer it does not own. That is true of every field in
+    /// this document, which is domain-managed by construction, so it is not a
+    /// new hole; it is written down because succession is the field where the
+    /// consequence (traffic redirected to another peer) is worst.
+    superseded: std::collections::BTreeMap<String, String>,
+}
+
+/// Parse `--supersede=OLD=NEW` occurrences into a succession map.
+///
+/// Refuses at the CLI boundary rather than emitting something a consumer drops
+/// silently — audit F9's rule, the same one `parse_registry_pin` follows. The
+/// three refusals are the three shapes `DeploymentConfig::parse` would discard:
+/// a missing side, a self-loop, and (added here, because only the emitter can
+/// see it) the same peer retired twice to different replacements, which is a
+/// typo the map would otherwise resolve by silently keeping the last one.
+fn parse_supersessions(
+    raw: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut out: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for entry in raw {
+        let (retired, replacement) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("expected OLD=NEW, got {entry:?}"))?;
+        let (retired, replacement) = (retired.trim(), replacement.trim());
+        if retired.is_empty() || replacement.is_empty() {
+            return Err(format!("both peer ids are required, got {entry:?}"));
+        }
+        if retired == replacement {
+            return Err(format!(
+                "a peer cannot supersede itself ({retired}) — if you meant to declare a \
+                 re-key, the two ids differ"
+            ));
+        }
+        if let Some(prior) = out.get(retired) {
+            return Err(format!(
+                "{retired} is declared superseded twice, by {prior} and by {replacement} — \
+                 a peer has one successor"
+            ));
+        }
+        out.insert(retired.to_string(), replacement.to_string());
+    }
+    Ok(out)
 }
 
 /// What a publish is allowed to do to a domain's existing
@@ -1921,7 +2010,31 @@ fn emit_deployment_config(
     });
     let claim = home_claim(existing_home.as_deref(), peer_id, spec.set_home);
 
-    let merged = match (&claim, existing) {
+    // The successions this document will carry: whatever it already declared,
+    // plus whatever this publish declares. **Additive on every arm**, including
+    // the home-publish arms that rewrite the domain's own fields — a re-key is
+    // a historical fact about a peer, and a home publish has no more business
+    // dropping a tenant's succession than dropping their `origins` entry. The
+    // only way one leaves is an operator editing the document.
+    let mut superseded: serde_json::Map<String, serde_json::Value> = existing
+        .as_ref()
+        .and_then(|o| o.get("superseded"))
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let mut declared_now: Vec<(String, String)> = Vec::new();
+    for (retired, replacement) in &spec.superseded {
+        let prior = superseded.get(retired).and_then(|v| v.as_str()).map(str::to_string);
+        if prior.as_deref() != Some(replacement.as_str()) {
+            declared_now.push((retired.clone(), replacement.clone()));
+        }
+        superseded.insert(retired.clone(), serde_json::Value::String(replacement.clone()));
+    }
+    // Applied to `merged` below rather than to `obj` here, because `obj` is the
+    // FRESH document and the `Defers` arm never uses it — a secondary publish
+    // returns the prior document, so an insert here would be silently dropped
+    // on exactly the arm a re-keying tenant publishes under.
+    let mut merged = match (&claim, existing) {
         // This publish defines or rewrites the domain's own fields. Keep any
         // origins siblings already registered — they are other peers' routing
         // facts and none of this publish's business.
@@ -1960,8 +2073,20 @@ fn emit_deployment_config(
         }
     };
 
+    if superseded.is_empty() {
+        merged.remove("superseded");
+    } else {
+        merged.insert("superseded".into(), serde_json::Value::Object(superseded));
+    }
+
     // D13: say what was done to a document this publish did not author. Silence
     // here is how the clobber went unnoticed for as long as it did.
+    for (retired, replacement) in &declared_now {
+        println!(
+            "  deployment config: DECLARED {retired} superseded by {replacement} — returning \
+             profiles will adopt this and rewrite their stored references to {retired}"
+        );
+    }
     match &claim {
         HomeClaim::Defers { to } => println!(
             "  deployment config: MERGED as a secondary peer — this domain's home stays \
@@ -2792,6 +2917,126 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// **A declared succession survives a later publish by the OTHER peer.**
+    ///
+    /// The whole point of `--supersede` is that a returning profile reads it on
+    /// a warm boot, so the day it stops being in the document is the day the
+    /// mechanism stops working — and the document is rewritten by every publish.
+    /// The home-publish arm rebuilds the domain's own fields from scratch, which
+    /// is exactly how `origins` siblings were being dropped before the merge; a
+    /// succession dropped the same way would be *silent*, because nothing 404s
+    /// and nothing renders wrong. It just never reaches anyone.
+    ///
+    /// Falsified by making the merge non-additive (build `superseded` from
+    /// `spec` alone): the second assertion reds with an empty map.
+    #[test]
+    fn a_declared_succession_survives_a_later_publish_by_another_peer() {
+        let tmp = std::env::temp_dir()
+            .join(format!("entity-publish-supersede-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.to_string_lossy().to_string();
+        let read_doc = || -> serde_json::Value {
+            serde_json::from_str(
+                &std::fs::read_to_string(tmp.join("entity-deployment.json")).unwrap(),
+            )
+            .unwrap()
+        };
+
+        let a = "d1".repeat(32);
+        let b = "d2".repeat(32);
+
+        // Peer A takes the domain and declares that some earlier identity of a
+        // tenant was replaced. The ids are opaque to the emitter, which is the
+        // point: only the deployer knows the pair.
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                format!("--identity-seed={a}"),
+                "--prefix=alpha".to_string(),
+                "--supersede=2KTenantOld=2KTenantNew".to_string(),
+            ]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(read_doc()["superseded"]["2KTenantOld"].as_str(), Some("2KTenantNew"));
+
+        // A secondary publish contributes its origin and must not disturb it…
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                format!("--identity-seed={b}"),
+                "--prefix=beta".to_string(),
+            ]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            read_doc()["superseded"]["2KTenantOld"].as_str(),
+            Some("2KTenantNew"),
+            "a secondary publish dropped a succession the domain had declared"
+        );
+
+        // …and neither must the home publisher republishing its own fields,
+        // which is the arm that rebuilds the document from scratch.
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                format!("--identity-seed={a}"),
+                "--prefix=alpha".to_string(),
+            ]),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            read_doc()["superseded"]["2KTenantOld"].as_str(),
+            Some("2KTenantNew"),
+            "the home publish rebuilt the document and dropped the succession — the same \
+             clobber `origins` had, one field along and silent"
+        );
+
+        // And a document that declares nothing carries no empty map, so a
+        // consumer cannot read "declared nothing" as "declared an empty set".
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert_eq!(
+            run(&[
+                "publish".to_string(),
+                out.clone(),
+                "--deployment-config".to_string(),
+                format!("--identity-seed={a}"),
+            ]),
+            ExitCode::SUCCESS
+        );
+        assert!(read_doc().get("superseded").is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The `--supersede` refusals, at the CLI boundary where an operator can
+    /// read them — audit F9's rule. The last one is the emitter's own: a typo
+    /// that retires one peer twice would otherwise be resolved by silently
+    /// keeping whichever came last.
+    #[test]
+    fn a_malformed_supersession_is_refused_where_the_operator_can_see_it() {
+        let ok = parse_supersessions(&["2KA=2KB".to_string()]).unwrap();
+        assert_eq!(ok.get("2KA").map(String::as_str), Some("2KB"));
+
+        for bad in ["2KA", "2KA=", "=2KB", "2KA=2KA"] {
+            assert!(
+                parse_supersessions(&[bad.to_string()]).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
+        assert!(
+            parse_supersessions(&["2KA=2KB".to_string(), "2KA=2KC".to_string()]).is_err(),
+            "one peer has one successor"
+        );
     }
 
     /// **Publishing a second peer at a shared hosting scope must not destroy the
@@ -3952,6 +4197,7 @@ mod tests {
             origin: String::new(), // same-origin
             registry_pin: None,
             set_home: false,
+            superseded: Default::default(),
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
         assert_eq!(path.file_name().unwrap(), "entity-deployment.json");
@@ -4046,6 +4292,7 @@ mod tests {
             origin: String::new(),
             registry_pin: Some(pin.clone()),
             set_home: false,
+            superseded: Default::default(),
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
         let cfg = DeploymentConfig::parse(&std::fs::read_to_string(&path).unwrap())
@@ -4065,6 +4312,7 @@ mod tests {
             origin: String::new(),
             registry_pin: None,
             set_home: false,
+            superseded: Default::default(),
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec_none).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -4093,6 +4341,7 @@ mod tests {
             origin: String::new(),
             registry_pin: None,
             set_home: false,
+            superseded: Default::default(),
         };
         let path = emit_deployment_config(dir.path(), &peer_id, &sites, &spec).unwrap();
         let cfg = DeploymentConfig::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();

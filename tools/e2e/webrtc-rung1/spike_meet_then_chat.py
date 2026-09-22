@@ -86,6 +86,9 @@ is that lesson applied to a WebDriver harness.
 import json, os, re, subprocess, sys, time, urllib.request
 
 MODE = os.environ.get("MODE", "direct").strip().lower()
+# Skip step 3's reload and require the seam to arm in-session instead — the
+# regression gate for `src/late_establish.rs`. See step 3.
+NO_RELOAD = os.environ.get("NO_RELOAD", "").strip() in ("1", "true", "yes")
 if MODE not in ("direct", "worker"):
     print(f"!! MODE must be 'direct' or 'worker', got {MODE!r}"); sys.exit(2)
 
@@ -364,6 +367,21 @@ def log_lines(base, sid):
 def log_has(base, sid, needle):
     n = needle.lower()
     return any(n in l.lower() for l in log_lines(base, sid))
+
+def wait_log(base, sid, needle, secs):
+    """Poll for a log line rather than sleeping a fixed amount.
+
+    The late arm happens on a frame, not on a request, so how long it takes is a
+    function of when the connector write lands and when the next frame runs.
+    A fixed sleep here would be either flaky or slow, and the value it would
+    have to be is exactly the thing under test.
+    """
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        if log_has(base, sid, needle):
+            return True
+        time.sleep(0.5)
+    return False
 
 def open_shell(base, sid, label):
     """Ensure a usable Shell exists and has actually printed its banner.
@@ -664,17 +682,58 @@ def main():
         if not (pa_ok and pb_ok):
             print("\nRESULT: FAIL ❌ could not register the connector"); return 1
 
-        # ── 3. reload: provisioning now comes from that choice ───────────────
-        print("\n── 3. reload — provisioning from the registry ─")
-        goto(A_BASE, sa); goto(B_BASE, sb)
-        if not (wait_boot(A_BASE, sa, "A") and wait_boot(B_BASE, sb, "B")): return 1
-        reg_a = log_has(A_BASE, sa, "provisioning from the selected connector")
-        reg_b = log_has(B_BASE, sb, "provisioning from the selected connector")
+        # ── 3. the establisher arrives — with or WITHOUT a reload ────────────
+        #
+        # `NO_RELOAD=1` is the regression gate for late arming
+        # (`src/late_establish.rs`). Until 2026-09-07 the seam was a constructor
+        # argument, so a node chosen mid-session could not reach the running
+        # peer and this step HAD to reload; a fresh profile therefore spent its
+        # whole first session findable and unreachable, which reached the
+        # operator as "they detect each other but chat doesn't work". The slot
+        # is now installed empty at boot and filled on the next frame.
+        #
+        # Direct arm only, and that is not a gap being papered over: the Worker
+        # arm takes its provisioning from `InitParams`, which is Init-only
+        # upstream, so there the reload is still genuinely required. The gate
+        # refuses rather than silently passing a run that proves nothing.
+        if NO_RELOAD and MODE != "direct":
+            print("\nRESULT: FAIL ❌ NO_RELOAD is a Direct-arm claim; "
+                  f"MODE={MODE} still needs the reload (InitParams is Init-only)")
+            return 1
+
+        if NO_RELOAD:
+            print("\n── 3. NO reload — the seam is armed in-session ─")
+            armed_a = wait_log(A_BASE, sa, "armed the §6.5 establisher", 20)
+            armed_b = wait_log(B_BASE, sb, "armed the §6.5 establisher", 20)
+            print(f"  A/B logged an in-session arm: {armed_a}/{armed_b}")
+            # **A step indicator, not the claim.** It says the arming path ran;
+            # it cannot say the armed slot is the one wired into the peer.
+            # Measured: a neuter that installed the seam only when boot already
+            # had a node left this True — the detached slot is still armed — and
+            # the run failed two steps later. So the assertions that
+            # DISCRIMINATE are message delivery and the unreachable-note checks
+            # below, and this one exists to say which step broke when they do.
+            checks["the in-session arming path runs"] = armed_a and armed_b
+            if not (armed_a and armed_b):
+                print("\nRESULT: FAIL ❌ THE SEAM DID NOT ARM IN-SESSION. A rendezvous "
+                      "node was selected through the Shell and the running peer never "
+                      "picked it up, so this session can find peers and can never be "
+                      "connected back to. That is the 2026-09-07 report: discovery "
+                      "works, chat does not, and the only escape is a reload nobody "
+                      "is told to do.")
+                return 1
+        else:
+            print("\n── 3. reload — provisioning from the registry ─")
+            goto(A_BASE, sa); goto(B_BASE, sb)
+            if not (wait_boot(A_BASE, sa, "A") and wait_boot(B_BASE, sb, "B")): return 1
+            reg_a = log_has(A_BASE, sa, "provisioning from the selected connector")
+            reg_b = log_has(B_BASE, sb, "provisioning from the selected connector")
+            print(f"  A/B provisioned from their connector selection: {reg_a}/{reg_b}")
+            checks["provisioning resolves from the durable registry"] = reg_a and reg_b
+
         est_a = log_has(A_BASE, sa, "establisher")
         est_b = log_has(B_BASE, sb, "establisher")
-        print(f"  A/B provisioned from their connector selection: {reg_a}/{reg_b}")
         print(f"  A/B installed a §6.5 establisher: {est_a}/{est_b}")
-        checks["provisioning resolves from the durable registry"] = reg_a and reg_b
         checks["an establisher installs with no enable knob"] = est_a and est_b
 
         # Reflectors reached the ICE agent, when the rig is driving a NAT

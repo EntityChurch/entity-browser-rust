@@ -1773,17 +1773,44 @@ impl ShellModel {
         )));
         // A meet hands strangers THIS peer's id, and a browser peer with no §6.5
         // establisher has no way to be connected back to — the discovery half
-        // succeeds completely and the connect half can never be attempted. The
-        // establisher is primary-only, while this dispatches from the *bound*
-        // peer, so on any shell bound to a second local peer the meet "works" and
-        // the counterpart is left holding an unreachable id. Say it here rather
-        // than let the failure land on their side later.
-        if !peers.peer_has_webrtc(&self.peer_id) {
-            push(ScrollbackEntry::ErrorText(
+        // succeeds completely and the connect half can never be attempted. Say it
+        // here rather than let the failure land on their side later.
+        //
+        // **WHICH reason, though — this named one cause for three (AP40), and it
+        // shared that defect with the Peer Connections window**, which is why the
+        // decision now lives in one place (`meet_reach_for`). The old text was
+        // *"bind the shell to your primary peer"*, correct only for a shell bound
+        // to a second local peer — and this very test binds to the PRIMARY, so
+        // the case it claimed to guard was never the case it exercised.
+        use crate::views::peer_connections::model::MeetReach;
+        let advice = match crate::views::peer_connections::model::meet_reach_for(
+            peers,
+            &self.peer_id,
+        ) {
+            MeetReach::Reachable => None,
+            MeetReach::NoWebRtcApi => Some(
+                "warning: this engine has no RTCPeerConnection — peers you meet \
+                 cannot connect back to it, and no rendezvous configuration will \
+                 change that. The Linux desktop WebView ships without WebRTC; meet \
+                 from a browser and let this process be the node.", // i18n-ignore — dev-facing CLI
+            ),
+            MeetReach::NotThisPeer => Some(
                 "warning: this peer has no WebRTC establisher — peers you meet \
-                 cannot connect back to it. Bind the shell to your primary peer." // i18n-ignore — dev-facing CLI
-                    .into(),
-            ));
+                 cannot connect back to it. Bind the shell to your primary peer.", // i18n-ignore — dev-facing CLI
+            ),
+            MeetReach::NeedsReload => Some(
+                "warning: peers you meet cannot connect back to it yet — the \
+                 rendezvous node was chosen after this session started. Reload the \
+                 page to apply it.", // i18n-ignore — dev-facing CLI
+            ),
+            MeetReach::NoNode => Some(
+                "warning: peers you meet cannot connect back to it — no rendezvous \
+                 node is configured. Add one (Peer Connections -> Connectors), then \
+                 reload the page.", // i18n-ignore — dev-facing CLI
+            ),
+        };
+        if let Some(advice) = advice {
+            push(ScrollbackEntry::ErrorText(advice.into()));
         }
     }
 
@@ -2491,6 +2518,23 @@ mod tests {
             warned.iter().any(|t| t.contains("cannot connect back")),
             "a meet from a peer with no establisher must say the counterpart \
              cannot reach it: {warned:?}"
+        );
+        // **And it must say the RIGHT thing.** This fixture binds the shell to
+        // the PRIMARY peer and selects a connector, so the accurate advice is
+        // *reload* — the establisher is a constructor argument and a node chosen
+        // mid-session cannot be installed into the running peer. The message
+        // this replaced said "bind the shell to your primary peer", to a shell
+        // already bound to it: the doc above described a second-local-peer case
+        // the fixture never set up (`meet_reach`'s own tests cover all four).
+        assert!(
+            warned.iter().any(|t| t.contains("Reload the page")),
+            "a primary peer with a connector selected after boot must be told to \
+             RELOAD, not to switch to the peer it is already on: {warned:?}"
+        );
+        assert!(
+            !warned.iter().any(|t| t.contains("Bind the shell")),
+            "the second-local-peer advice must not be given to the primary peer — \
+             that is the misdirection this branch exists to remove: {warned:?}"
         );
 
         let quiet = meet_scrollback(true).await;

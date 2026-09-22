@@ -1249,19 +1249,28 @@ impl Peers {
             std::sync::Arc<dyn entity_peer::live_establish::LiveEstablish>,
         >,
     ) -> Result<Self, entity_sdk::SdkError> {
-        let installed = live_establish.is_some();
         let pm = entity_sdk::PeerManager::with_keypair_idb_and_establish(
             keypair,
             db_name,
             live_establish,
         )
         .await?;
-        let mut peers = Self::new_direct_with_sdk(Sdk::Direct(pm));
-        if installed {
-            let primary = peers.primary_peer_id.clone();
-            peers.webrtc_peers.insert(primary);
-        }
-        Ok(peers)
+        // **The caller declares reachability; this no longer infers it.**
+        //
+        // It used to insert the primary into `webrtc_peers` whenever a seam was
+        // passed, which was right while the seam was either the real
+        // establisher or nothing. It stopped being right when the boot path
+        // started installing a `LateEstablisher` unconditionally
+        // (`crate::late_establish`): *a seam slot exists* and *a rendezvous node
+        // is configured* became different facts, and inferring the second from
+        // the first would make [`Self::peer_has_webrtc`] permanently true — so
+        // every meet surface's "peers can't reach you" warning would go
+        // permanently silent, which is the opposite of the defect that change
+        // was made to fix (AP40).
+        //
+        // Callers set it explicitly with [`Self::set_webrtc_peer`], from
+        // `LateEstablisher::is_armed`.
+        Ok(Self::new_direct_with_sdk(Sdk::Direct(pm)))
     }
 
     /// Worker-mode constructor. Wraps an already-spawned WorkerPeerStore
@@ -1431,6 +1440,24 @@ impl Peers {
     /// which is correct, not a gap: a native peer is reached by its address.
     pub fn peer_has_webrtc(&self, peer_id: &str) -> bool {
         self.webrtc_peers.contains(peer_id)
+    }
+
+    /// Declare whether `peer_id` currently holds a working §6.5 establisher.
+    ///
+    /// **This exists because the answer can now change after boot.** The seam is
+    /// a constructor argument, so the app installs a `crate::late_establish::LateEstablisher`
+    /// — an empty slot — and fills it when a rendezvous node is chosen. The slot
+    /// being present says nothing about reachability; only the arm does, and the
+    /// arm is what every meet surface warns from.
+    ///
+    /// Idempotent, and returns whether it changed anything, so a per-frame
+    /// caller can drive it without producing an event on every frame (AP43).
+    pub fn set_webrtc_peer(&mut self, peer_id: &str, has_establisher: bool) -> bool {
+        if has_establisher {
+            self.webrtc_peers.insert(peer_id.to_string())
+        } else {
+            self.webrtc_peers.remove(peer_id)
+        }
     }
 
     /// Which arm hosts `peer_id` — `"direct"`, `"worker"`, or `"unknown"` for a

@@ -94,7 +94,7 @@
 //!    advance it".
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use entity_entity::Entity;
 
@@ -174,20 +174,84 @@ fn resolve_in(map: &BTreeMap<String, String>, peer_id: &str) -> String {
 /// An empty `publisher` is not an answer and drops nothing — see the module note
 /// on absence of evidence.
 pub fn stale_against(map: &BTreeMap<String, String>, publisher: &str) -> Vec<String> {
-    if publisher.is_empty() || map.is_empty() {
+    stale_against_declared(map, publisher, &BTreeMap::new())
+}
+
+/// [`stale_against`] generalized to a domain that hosts **several** publishers
+/// and may declare succession for any of them — `DESIGN-RESILIENCE…` §1.1f
+/// item 2.
+///
+/// # What "current" means, and the mistake to not repeat
+///
+/// **Currency is what the document AFFIRMS, never what it merely routes to.**
+///
+/// ```text
+/// current = { home } ∪ values(declared) − keys(declared)
+/// ```
+///
+/// The tempting definition is *every peer in `origins`*, and it is wrong in the
+/// most common case there is. After a re-key the document names the **new** peer
+/// as home and deliberately keeps the retired one's `origins` entry, so old URLs
+/// keep resolving while visitors roll over (`HomeClaim::Takes` preserves sibling
+/// origins). Reading that entry as *current* contradicts the record the re-key
+/// adoption just wrote and deletes it on the same boot — measured, five e2e
+/// gates, all of them re-key gates
+/// (`the_retired_peer_still_being_routable_does_not_contradict_the_record`).
+/// **An `origins` entry says *reachable here*, which is exactly what a retired
+/// peer stays.**
+///
+/// So a peer is current iff the document positively names it: as the home
+/// publisher, or as the *replacement* in a succession it declares. Peers it
+/// declares **retired** are subtracted, which is what lets a chain's intermediate
+/// hops (`A→B→C` declared as two pairs) not be mistaken for live publishers.
+///
+/// The two rules are the single-publisher ones with `publisher` widened to
+/// `current`, and **the order still matters** for the same reason:
+///
+/// - **A record keyed on a current peer is dropped.** The domain has just said
+///   that peer is publishing; the record asserts it is dead. This is the F2 case
+///   and it is also what makes a deployer's *rollback* to an earlier publisher
+///   work.
+/// - **Every surviving chain must end at a current peer.** Anywhere else is an
+///   orphan or corruption (a cycle terminates at its own entry point, so it
+///   fails this too). Evaluated on the map with the first rule's drops already
+///   removed, because they interact.
+///
+/// This is also what keeps F2's escape working for a *declared* succession the
+/// deployer withdraws: with the declaration gone the replacement stops being
+/// affirmed, the chain orphans, and rule 2 drops it on the next boot.
+///
+/// An empty `current` drops nothing — the document named no live publisher, and
+/// absence of evidence is never evidence (module note, invariant 1).
+pub fn stale_against_declared(
+    map: &BTreeMap<String, String>,
+    home: &str,
+    declared: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if map.is_empty() {
         return Vec::new();
     }
+    let retired_by_declaration: BTreeSet<&str> =
+        declared.keys().map(String::as_str).collect();
+    let current: BTreeSet<&str> = std::iter::once(home)
+        .chain(declared.values().map(String::as_str))
+        .filter(|p| !p.is_empty() && !retired_by_declaration.contains(*p))
+        .collect();
+    if current.is_empty() {
+        return Vec::new();
+    }
+
     let mut stale: Vec<String> = Vec::new();
     let mut kept: BTreeMap<String, String> = BTreeMap::new();
     for (retired, replacement) in map {
-        if retired == publisher {
+        if current.contains(retired.as_str()) {
             stale.push(retired.clone());
         } else {
             kept.insert(retired.clone(), replacement.clone());
         }
     }
     for retired in kept.keys() {
-        if resolve_in(&kept, retired) != publisher {
+        if !current.contains(resolve_in(&kept, retired).as_str()) {
             stale.push(retired.clone());
         }
     }
@@ -363,6 +427,70 @@ pub async fn forget(peers: &Peers, our_peer_id: &str, retired: &str) -> bool {
     }
 }
 
+/// Persist every succession the live deployment document **declares**, for any
+/// hosted peer — `DESIGN-RESILIENCE…` §1.1f item 1's consumer half. Returns the
+/// records this boot newly wrote.
+///
+/// This is the multi-peer half of *detect*. The home peer's re-key is inferred
+/// from a single slot changing and keeps its own path in `boot_phase2`; every
+/// other peer needs the deployer to say so, because a key leaving the `origins`
+/// map as another arrives is ambiguous between a re-key and a tenant swap, and
+/// guessing writes a supersession against a peer that is alive.
+///
+/// **Idempotent by comparison, not by write.** A document declaring a succession
+/// re-declares it on every boot for as long as the deployer leaves it there, and
+/// re-persisting an identical record each time would be a durable write per boot
+/// for no change. Records already live and agreeing are skipped; a record whose
+/// replacement has *moved* is re-persisted, because the document outranks what we
+/// hold.
+///
+/// **Runs before [`revalidate`]**, like the home-peer adoption it sits beside and
+/// for the same reason (module note, invariant 2): a succession the document
+/// declares this boot has to be in the map before anything judges the map
+/// against the document, or the check condemns the record it just asked for.
+pub async fn adopt_declared(
+    peers: &Peers,
+    our_peer_id: &str,
+    declared: &BTreeMap<String, String>,
+) -> usize {
+    let to_write = declared_to_adopt(&snapshot(), declared);
+    for (retired, replacement) in &to_write {
+        tracing::info!(
+            retired = %retired,
+            replacement = %replacement,
+            "peer-supersession: the deployment DECLARES a succession — adopting it"
+        );
+        persist(peers, our_peer_id, retired, replacement).await;
+    }
+    to_write.len()
+}
+
+/// Which declared successions [`adopt_declared`] would write, given what is
+/// already held. Pure, so every combination is gated by `make test` on both
+/// arms rather than only through a boot — the `decide_home` / `ladder_step`
+/// shape, and for the same reason: the only caller is an `async fn` reached
+/// from `boot_phase2`.
+fn declared_to_adopt(
+    held: &BTreeMap<String, String>,
+    declared: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    declared
+        .iter()
+        // `record` rejects these too; filtering here keeps the log and the
+        // return count honest about what was actually adopted.
+        .filter(|(retired, replacement)| {
+            !retired.is_empty() && !replacement.is_empty() && retired != replacement
+        })
+        // Already held and agreeing. A document re-declares its succession on
+        // every boot for as long as the deployer leaves it there, so without
+        // this the mechanism is a durable write per boot forever.
+        .filter(|(retired, replacement)| {
+            held.get(retired.as_str()) != Some(replacement) // the document outranks what we hold
+        })
+        .map(|(r, p)| (r.clone(), p.clone()))
+        .collect()
+}
+
 /// Re-check every record against the live deployment document and drop the ones
 /// it contradicts. Returns the records dropped.
 ///
@@ -370,20 +498,25 @@ pub async fn forget(peers: &Peers, our_peer_id: &str, retired: &str) -> bool {
 /// actually obtained this boot** — both conditions are in the module note, and
 /// getting either wrong turns the repair into a deletion of good records.
 ///
-/// `publisher` is the home peer the live document names. `None`/empty means the
-/// document declined to say, which is not a disagreement: nothing is dropped.
-pub async fn revalidate(peers: &Peers, our_peer_id: &str, publisher: &str) -> Vec<String> {
-    if publisher.is_empty() {
-        return Vec::new();
-    }
-    let stale = stale_against(&snapshot(), publisher);
+/// `home` is the home peer the live document names and `declared` is its
+/// `superseded` map — together, every peer the document **affirms** as current.
+/// A document that affirmed nobody declined to say anything, which is not a
+/// disagreement: nothing is dropped. See [`stale_against_declared`] for why an
+/// `origins` entry is deliberately *not* an affirmation.
+pub async fn revalidate(
+    peers: &Peers,
+    our_peer_id: &str,
+    home: &str,
+    declared: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let stale = stale_against_declared(&snapshot(), home, declared);
     if stale.is_empty() {
         return Vec::new();
     }
     for retired in &stale {
         tracing::warn!(
             retired = %retired,
-            publisher = %publisher,
+            home = %home,
             "peer-supersession: DROPPING a record the domain contradicts — the deployment \
              document says this publisher is current, so the record was wrong or is spent"
         );
@@ -391,7 +524,8 @@ pub async fn revalidate(peers: &Peers, our_peer_id: &str, publisher: &str) -> Ve
     }
     tracing::info!(
         dropped = stale.len(),
-        publisher = %publisher,
+        home = %home,
+        declared = declared.len(),
         "peer-supersession: revalidated against the live deployment document"
     );
     stale
@@ -567,22 +701,158 @@ mod tests {
     /// written on one boot and deleted on the next, forever.
     #[test]
     fn a_record_for_a_peer_that_is_not_the_home_publisher_is_dropped() {
-        // The domain hosts two publishers: 2KHome (home) and 2KOther. 2KOther
-        // re-keys to 2KOtherNew. The record is correct and the domain agrees
-        // with it — and it is condemned anyway, because rule 2 measures every
-        // chain against the home peer alone.
+        // A document that names only its home peer says nothing about anyone
+        // else, so a record about another peer orphans and is dropped. This was
+        // the whole of the old behaviour and it is still correct *for a
+        // single-publisher document*; what changed is that the document can now
+        // say more (see the `hosted` tests below), not that this case moved.
         let m = map_of(&[("2KOther", "2KOtherNew")]);
         assert_eq!(
             stale_against(&m, "2KHome"),
             vec!["2KOther".to_string()],
-            "rule 2 is single-publisher: a true record about a non-home peer is stale"
+            "a document naming one publisher cannot vouch for a chain ending elsewhere"
         );
     }
 
-    /// The same shape one step on: even a chain that is internally consistent and
-    /// ends at a peer the domain still hosts is dropped. Pins that the predicate
-    /// is not "ends at a peer this domain publishes" but the narrower "ends at
-    /// THE home peer" — the distinction a multi-publisher fix has to cross.
+    /// **The re-key document's own shape, and the regression that widening the
+    /// predicate introduced on 2026-09-07 before this test existed.**
+    ///
+    /// After a re-key the document names the NEW peer as home and — deliberately,
+    /// since `HomeClaim::Takes` preserves sibling `origins` entries so old URLs
+    /// keep resolving — **still lists the retired one**. A predicate that treated
+    /// every `origins` key as *current* therefore contradicted the record the
+    /// inferred home adoption had just written, and dropped it on the same boot.
+    /// Five e2e gates red, all of them re-key gates.
+    ///
+    /// The lesson generalized into the predicate: **currency is what the document
+    /// AFFIRMS — its home peer and the replacements it declares — never merely
+    /// what it routes to.** An `origins` entry says *reachable here*, which is
+    /// exactly what a retired peer stays.
+    #[test]
+    fn the_retired_peer_still_being_routable_does_not_contradict_the_record() {
+        let held = map_of(&[("2KOld", "2KNew")]);
+        assert!(
+            stale_against_declared(&held, "2KNew", &BTreeMap::new()).is_empty(),
+            "the document names 2KNew as home and still routes to 2KOld — that is the \
+             ordinary re-key document, not a contradiction"
+        );
+    }
+
+    /// **The §1.1f defect, as a test.** A domain hosts two publishers; the
+    /// non-home one re-keys and the document declares it. The record is correct
+    /// and the document agrees with it — and the single-publisher predicate
+    /// condemned it anyway, so it was written on one boot and deleted on the
+    /// next, forever.
+    #[test]
+    fn a_declared_succession_for_a_non_home_peer_survives_revalidation() {
+        let held = map_of(&[("2KOther", "2KOtherNew")]);
+        let declared = map_of(&[("2KOther", "2KOtherNew")]);
+        assert!(
+            stale_against_declared(&held, "2KHome", &declared).is_empty(),
+            "a succession the document itself declares must survive the document"
+        );
+    }
+
+    /// The other direction, so the widening cannot be read as blanket tolerance:
+    /// with nothing declared, a record claiming the **home** peer is dead is
+    /// still contradicted and still dropped. F2's rule, widened rather than
+    /// weakened — and the escape a deployer uses to repair a mistaken record.
+    #[test]
+    fn a_record_against_the_affirmed_home_is_still_dropped() {
+        let held = map_of(&[("2KA", "2KB")]);
+        assert_eq!(
+            stale_against_declared(&held, "2KA", &BTreeMap::new()),
+            vec!["2KA".to_string()],
+            "the domain says 2KA is publishing; a record calling it retired is wrong"
+        );
+    }
+
+    /// **F2's escape for a DECLARED succession.** A deployer who declares one by
+    /// mistake repairs it by withdrawing the declaration: the replacement stops
+    /// being affirmed, the chain orphans, and rule 2 drops it on the next boot.
+    /// E1 — a reload repairs it — which is what makes the whole mechanism safe
+    /// to ship.
+    #[test]
+    fn withdrawing_a_declaration_drops_the_record_it_created() {
+        let held = map_of(&[("2KA", "2KB")]);
+        assert!(
+            stale_against_declared(&held, "2KHome", &map_of(&[("2KA", "2KB")])).is_empty(),
+            "while declared, it stands"
+        );
+        assert_eq!(
+            stale_against_declared(&held, "2KHome", &BTreeMap::new()),
+            vec!["2KA".to_string()],
+            "withdrawn, it must not survive — or a bad declaration is permanent (F2)"
+        );
+    }
+
+    /// A chain may end at a peer the document declares as a **replacement**, not
+    /// only at the home peer. The narrower rule is what made this
+    /// single-publisher. Note the intermediate hop is subtracted from `current`
+    /// by being a declared *key*, so it is not itself mistaken for a live
+    /// publisher.
+    #[test]
+    fn a_chain_ending_at_a_declared_replacement_survives() {
+        let held = map_of(&[("2KA", "2KB"), ("2KB", "2KC")]);
+        let declared = map_of(&[("2KA", "2KB"), ("2KB", "2KC")]);
+        assert!(
+            stale_against_declared(&held, "2KHome", &declared).is_empty(),
+            "2KC is the declared replacement, so a chain terminating there is not an orphan"
+        );
+    }
+
+    /// **A document may affirm through its declaration alone.** Not every
+    /// document names a home — `a_deployment_that_moves_its_registry_pin`'s
+    /// declares only a pin, deliberately — so a succession must stand on a
+    /// document that says nothing about a home peer. Under the old
+    /// single-publisher predicate an empty `publisher` short-circuited to
+    /// "drop nothing", which was right by accident; here it is the rule.
+    #[test]
+    fn a_succession_stands_on_a_document_that_names_no_home() {
+        let held = map_of(&[("2KA", "2KB")]);
+        assert!(
+            stale_against_declared(&held, "", &map_of(&[("2KA", "2KB")])).is_empty(),
+            "the declaration alone affirms 2KB, so the chain is not an orphan"
+        );
+    }
+
+    /// Absence of evidence, on the widened predicate. A document affirming
+    /// nobody drops nothing rather than everything — the safe direction, and the
+    /// case D23's deadline makes more common, not less.
+    #[test]
+    fn a_document_that_affirms_nobody_drops_nothing() {
+        let held = map_of(&[("2KA", "2KB")]);
+        assert!(stale_against_declared(&held, "", &BTreeMap::new()).is_empty());
+        // A document whose only affirmation is a peer it also retires affirms
+        // nobody — a self-cancelling declaration must not become a mass delete.
+        assert!(stale_against_declared(&held, "", &map_of(&[("2KB", "2KB")])).is_empty());
+    }
+
+    #[test]
+    fn a_declared_succession_is_adopted_once_and_not_rewritten_every_boot() {
+        let declared = map_of(&[("2KA", "2KB")]);
+        assert_eq!(
+            declared_to_adopt(&BTreeMap::new(), &declared),
+            vec![("2KA".to_string(), "2KB".to_string())],
+            "a succession we do not hold is adopted"
+        );
+        assert!(
+            declared_to_adopt(&map_of(&[("2KA", "2KB")]), &declared).is_empty(),
+            "re-declaring what we already hold must not be a durable write per boot"
+        );
+        assert_eq!(
+            declared_to_adopt(&map_of(&[("2KA", "2KStale")]), &declared),
+            vec![("2KA".to_string(), "2KB".to_string())],
+            "the document outranks a replacement we hold that has since moved"
+        );
+    }
+
+    /// The same shape one step on, and **the pair to
+    /// `a_chain_ending_at_any_hosted_peer_survives`**: an internally consistent
+    /// chain ending somewhere the *document did not name* is still an orphan.
+    /// The distinction the multi-publisher fix crossed is between "the document
+    /// named only its home" (this) and "the document named the chain's end"
+    /// (that) — not between home and non-home peers.
     #[test]
     fn a_non_home_chain_is_dropped_however_well_formed_it_is() {
         let m = map_of(&[("2KA", "2KB"), ("2KB", "2KOtherNew")]);

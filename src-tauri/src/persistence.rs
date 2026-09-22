@@ -184,17 +184,23 @@ struct PeerConfigFile {
     /// directory under a key we did not issue.
     managed_by: Option<String>,
     /// Serve `system/signaling` — act as a §6.5 rendezvous for peers that
-    /// reach this listener. **Absent means false**, which is both the
-    /// fail-closed direction and what every peer written before this key
-    /// existed meant, so an old `config.toml` needs no migration.
+    /// reach this listener. **Absent from a readable document means TRUE**
+    /// since 2026-09-07; see [`read_config`] for why the default moved and
+    /// what it does and does not widen.
     signaling_node: bool,
     /// Ask the router to forward this peer's listening port from the internet
-    /// (PCP / NAT-PMP). **Absent means false**, same fail-closed reading as
-    /// `signaling_node` and for a stronger reason: this one changes who can
-    /// reach the listener from *this LAN* to *anyone*.
+    /// (PCP / NAT-PMP). **Absent means false.**
+    ///
+    /// This used to read *"the same fail-closed reading as `signaling_node`"*.
+    /// It is no longer the same reading — that one defaults ON as of
+    /// 2026-09-07 and this one does not, which is now the **only** difference
+    /// between them and is the whole reason flipping the other two was safe.
+    /// Its two neighbours bind on this LAN; this one changes who can reach the
+    /// listener from *this LAN* to *anyone on the internet*. It stays opt-in.
     port_mapping: bool,
     /// Serve the SPA over HTTP so another device on this network can load it
-    /// (`app_server.rs`). **Absent means false**, like its two neighbours.
+    /// (`app_server.rs`). **Absent from a readable document means TRUE** since
+    /// 2026-09-07, like `signaling_node` and unlike `port_mapping`.
     ///
     /// Unlike them this one takes effect **live** — it is an independent TCP
     /// listener, not something mounted on `PeerBuilder` or bound to the port
@@ -203,6 +209,21 @@ struct PeerConfigFile {
     app_server: bool,
 }
 
+/// **The no-document defaults, and they are deliberately NOT the absent-key
+/// defaults.**
+///
+/// This value is returned only when `config.toml` is missing or does not
+/// parse. *"The deployer's document says nothing about this key"* and *"there
+/// is no readable document"* are different facts and they license different
+/// actions — the same split `deployment_config::read_document` draws one tier
+/// up. A key absent from a document we read fine is a default we get to
+/// choose; a document we could not read is not permission to open a listener,
+/// so this stays fail-closed on all three.
+///
+/// In practice such a peer is not adopted at all — [`is_tauri_managed`] needs
+/// `managed_by`, which an unreadable document also cannot supply — so this is
+/// belt-and-braces. It is written down because the two paths share a function
+/// and the next person to widen a default here should have to notice that.
 impl Default for PeerConfigFile {
     fn default() -> Self {
         Self {
@@ -216,6 +237,60 @@ impl Default for PeerConfigFile {
     }
 }
 
+/// Serve a §6.5 rendezvous unless the peer's document says otherwise.
+///
+/// One expression, consumed by [`read_config`]'s absent-key arm **and** by
+/// every in-memory construction of a newly created peer in `lib.rs`. Those are
+/// the same decision taken in two places — once for this session, once for
+/// every later launch — and a peer that serves now and not after a restart is
+/// the drift this constant exists to make impossible (AP44: if the rule needs
+/// the word *every*, the structure has to enforce it, not a comment).
+pub const DEFAULT_SIGNALING_NODE: bool = true;
+
+/// Serve the SPA over HTTP unless the peer's document says otherwise. Same
+/// single-expression rule as [`DEFAULT_SIGNALING_NODE`].
+pub const DEFAULT_APP_SERVER: bool = true;
+
+/// **Never** ask the router to forward a port unless explicitly told to.
+///
+/// Deliberately the odd one out, and it must stay that way: its two
+/// neighbours bind on this LAN, this one reaches past it to the whole
+/// internet. Do not fold it in with them later because they read alike in a
+/// struct.
+pub const DEFAULT_PORT_MAPPING: bool = false;
+
+/// Parse one peer's `config.toml`.
+///
+/// # The rendezvous and app-server defaults moved to ON (2026-09-07)
+///
+/// A freshly installed desktop used to be neither a rendezvous nor an app
+/// server, so the zero-configuration LAN path — *walk to the other device,
+/// type this URL, you are paired before the app boots* — existed in full and
+/// was switched off. Every visitor had to already know about two toggles in
+/// System Overview to find them. The operator's call: on by default,
+/// configurable.
+///
+/// **What this widens, precisely.** The peer binds its WebSocket listener
+/// (rendezvous) and an HTTP listener for the SPA, **on this LAN only**. The
+/// seeded grant is exactly the three signaling operations on exactly
+/// `system/signaling` with an empty resource scope — not a wildcard, and it
+/// grants nothing on `local/files`, so this does not widen access to the file
+/// share. A node writes no disk and keeps nothing (§1.3); its exposure is
+/// bounded by `Limits::default` (§5: ≤8 KiB per blob, ≤32 blobs per key, 60 s
+/// TTL, a cap on live keys).
+///
+/// **`port_mapping` deliberately did NOT move**, and that is the whole reason
+/// this is a safe default to flip. It is the one flag that changes reach from
+/// *this LAN* to *anyone on the internet*, so it stays opt-in and fail-closed.
+/// A default that opens a door on your desk is a different decision from one
+/// that opens a door on the street; do not fold them together later because
+/// they read alike in a struct.
+///
+/// **An explicit `false` is preserved.** `set_peer_flag` writes the key, so a
+/// user who turned either off keeps it off across this change and across
+/// upgrades. Only a document that never mentioned the key adopts the new
+/// default — which is every peer this app has ever created, since
+/// [`write_default_config`] emits neither key.
 fn read_config(dir: &Path) -> PeerConfigFile {
     let body = match std::fs::read_to_string(dir.join("config.toml")) {
         Ok(s) => s,
@@ -247,12 +322,15 @@ fn read_config(dir: &Path) -> PeerConfigFile {
         signaling_node: table
             .get("signaling_node")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+            .unwrap_or(DEFAULT_SIGNALING_NODE),
         port_mapping: table
             .get("port_mapping")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        app_server: table.get("app_server").and_then(|v| v.as_bool()).unwrap_or(false),
+            .unwrap_or(DEFAULT_PORT_MAPPING),
+        app_server: table
+            .get("app_server")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(DEFAULT_APP_SERVER),
     }
 }
 
@@ -725,6 +803,71 @@ mod tests {
             !dir.join("config.toml").exists(),
             "and the refused toggle must not have written one",
         );
+
+        std::env::remove_var("ENTITY_DATA_DIR");
+    }
+
+    /// **The document a fresh install writes must actually round-trip to the
+    /// shipped defaults.**
+    ///
+    /// The defaults live in `read_config`'s absent-key arm, so they apply only
+    /// while `write_default_config` keeps *not* emitting those keys. Nothing
+    /// but this test connects the two: adding `signaling_node = false` to the
+    /// written document would silently disable the default for every new peer
+    /// and leave `DEFAULT_SIGNALING_NODE` sitting there reading as if it were
+    /// in force. That is the shape this repo keeps paying for — a rule whose
+    /// enforcement point does not actually reach the thing it names.
+    ///
+    /// It asserts the round trip, not the literals: `assert_eq!(x, true)`
+    /// against a constant on the next line measures nothing.
+    #[test]
+    fn a_freshly_created_peer_reads_back_the_shipped_service_defaults() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("ENTITY_DATA_DIR", tmp.path());
+
+        let kp = Keypair::generate();
+        let store = save_peer(&kp, Some("fresh")).expect("save writes a config");
+        let dir = store.parent().unwrap().to_path_buf();
+        let cfg = read_config(&dir);
+
+        assert_eq!(
+            (cfg.signaling_node, cfg.app_server),
+            (DEFAULT_SIGNALING_NODE, DEFAULT_APP_SERVER),
+            "a peer created by this app must come up serving what a peer restored by \
+             this app comes up serving — the two are one decision",
+        );
+        assert_eq!(
+            cfg.port_mapping, DEFAULT_PORT_MAPPING,
+            "port mapping is the flag that reaches past the LAN and must stay opt-in",
+        );
+        assert!(
+            !cfg.port_mapping,
+            "and it must stay OFF specifically, whatever the constant says — a default \
+             that forwards a port from the internet on first launch is not a default",
+        );
+
+        std::env::remove_var("ENTITY_DATA_DIR");
+    }
+
+    /// Turning a service **off** must survive, or the new default silently
+    /// re-enables it on every launch and the toggle appears not to work.
+    #[test]
+    fn an_explicit_off_outranks_the_new_on_by_default() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("ENTITY_DATA_DIR", tmp.path());
+
+        let kp = Keypair::generate();
+        let pid = kp.peer_id().to_string();
+        let dir = save_peer(&kp, Some("off")).unwrap().parent().unwrap().to_path_buf();
+
+        assert!(set_signaling_node(&pid, false), "the toggle writes");
+        assert!(set_app_server(&pid, false), "the toggle writes");
+
+        let cfg = read_config(&dir);
+        assert!(!cfg.signaling_node, "an explicit false must not be re-defaulted to true");
+        assert!(!cfg.app_server, "an explicit false must not be re-defaulted to true");
 
         std::env::remove_var("ENTITY_DATA_DIR");
     }

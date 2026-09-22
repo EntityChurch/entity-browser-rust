@@ -1094,3 +1094,269 @@ pub fn generate_qr_svg(payload: &str) -> String {
         Err(_) => format!("<p>{}</p>", crate::i18n::t("peerconn.qr_failed", &[])),
     }
 }
+
+/// **Why a peer you meet may not be able to reach back.**
+///
+/// A meet hands a stranger this window's peer id. Discovery runs over the
+/// websocket to the rendezvous node and succeeds without a §6.5 establisher;
+/// the *connect back* cannot even be attempted without one. So a meet with no
+/// establisher leaves the counterpart holding an id that silently never
+/// connects — worth saying at the moment of meeting.
+///
+/// **There are four outcomes and the surface used to state one of them for all
+/// of them (AP40).** The message said *"switch this window to your main peer"*,
+/// which is the right advice for exactly one cause and actively misdirecting for
+/// the other two — a fresh profile (a private window, a first visit) has no
+/// rendezvous node at boot, so it is already on its main peer and is told to
+/// move to it.
+///
+/// **Why `NeedsReload` is a state at all, rather than something we just fix.**
+/// The establisher is a **constructor argument** — `Peers::new_direct_idb_with_establish`
+/// takes the seam because it must be captured before the peer's `PeerShared`
+/// clones do, and there is no `&mut Peer` on this arm. So a rendezvous node
+/// chosen *after* the tab loaded cannot be installed into the running peer, and
+/// the honest thing is to say the reload is what applies it. That is also why
+/// this matters more than it looks: `provisioning` resolves from URL → the
+/// localStorage selection mirror → the build knob, all read at boot, so **every
+/// first session on a fresh profile is unreachable until one reload.**
+///
+/// Pure and native-tested; the caller gathers the three facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeetReach {
+    /// A §6.5 establisher is installed on this window's peer — meets are
+    /// two-way and nothing needs saying.
+    Reachable,
+    /// **This engine has no `RTCPeerConnection`.** Outranks everything below,
+    /// because no amount of rendezvous configuration can help: the Linux Tauri
+    /// WebView (WebKitGTK) ships without the bindings compiled in — measured on
+    /// Debian 2.50.6 and Fedora 43 2.50.5, both with `MediaStream` present and
+    /// `RTCPeerConnection` undefined — so a desktop window is a rendezvous
+    /// *node* and a websocket peer, never a WebRTC peer.
+    ///
+    /// It is listed first for the reason `src-tauri`'s own note gives about why
+    /// this cost three sessions to find: *"nothing fails loudly, and the half
+    /// that keeps working is the half you look at"* — `meet` is an ordinary
+    /// websocket call, so two devices pair and appear fine, then every
+    /// establishment fails in both directions for a reason no surface mentioned.
+    /// `readiness`'s `webrtc-api` row was right the whole time and nobody was
+    /// pointed at it.
+    NoWebRtcApi,
+    /// This window is bound to a peer that is not the primary. The establisher
+    /// is primary-only, so no amount of rendezvous configuration helps here;
+    /// the fix really is to meet from the main peer.
+    NotThisPeer,
+    /// The primary, with a rendezvous node available **now** but not at boot —
+    /// the user selected a connector during this session. One reload applies it.
+    NeedsReload,
+    /// The primary, and no rendezvous node is configured at all. Nothing to
+    /// reload into; a connector has to be added first.
+    NoNode,
+}
+
+impl MeetReach {
+    /// Does the user need to be told anything?
+    pub fn warrants_notice(self) -> bool {
+        !matches!(self, MeetReach::Reachable)
+    }
+
+    /// The catalog key for this outcome, or `None` when there is nothing to say.
+    ///
+    /// A key per outcome rather than one string with a suffix: two outcomes
+    /// rendered alike lose the distinction they exist to carry, and the whole
+    /// defect here was one sentence standing in for three situations.
+    pub fn message_key(self) -> Option<&'static str> {
+        match self {
+            MeetReach::Reachable => None,
+            MeetReach::NoWebRtcApi => Some("peerconn.meet_no_webrtc_api"),
+            MeetReach::NotThisPeer => Some("peerconn.meet_no_establisher"),
+            MeetReach::NeedsReload => Some("peerconn.meet_needs_reload"),
+            MeetReach::NoNode => Some("peerconn.meet_no_node"),
+        }
+    }
+}
+
+/// Gather the three facts and classify — the one expression both meet surfaces
+/// use (the Peer Connections window and the Shell's `meet` verb).
+///
+/// Shared rather than duplicated because it had already been written twice, in
+/// two files, with the same single-cause mistake in both — which is the shape
+/// AP44 names: a rule stated as *"and also warn here"* is right the day it lands
+/// and decays at the next call site.
+///
+/// **`node_available` is answered differently per arm, deliberately.** On wasm it
+/// is *what a reload would resolve* — `resolve_provisioning_quietly`, the one
+/// expression of URL > selection mirror > build knob — so a session booted with
+/// `?webrtc_node=…` is never told to reload for a selection a reload will keep
+/// ignoring. On native there is no URL and no mirror, so it is the durable
+/// selection, which is the same question minus the two sources native cannot
+/// have.
+pub fn meet_reach_for(peers: &Peers, window_peer: &str) -> MeetReach {
+    #[cfg(target_arch = "wasm32")]
+    let node_available =
+        crate::connectors::resolve_provisioning_quietly(&crate::app::webrtc_url_query()).is_some();
+    #[cfg(not(target_arch = "wasm32"))]
+    let node_available = {
+        let sys = peers.system_peer_id().to_string();
+        crate::connectors::selected_connector(peers, &sys).is_some()
+    };
+
+    // Feature-detect the constructor rather than construct one — the same probe
+    // and the same reason as `readiness`: a construction attempt throws in one
+    // engine and returns a crippled object in another, and the question is only
+    // whether the API is there. Native has no window; the arm is covered by
+    // `meet_reach`'s own tests, which is why the decision is pure.
+    #[cfg(target_arch = "wasm32")]
+    let engine_has_webrtc = web_sys::window()
+        .map(|w| {
+            js_sys::Reflect::get(
+                w.as_ref(),
+                &wasm_bindgen::JsValue::from_str("RTCPeerConnection"),
+            )
+            .map(|v| v.is_function())
+            .unwrap_or(false)
+        })
+        .unwrap_or(true);
+    #[cfg(not(target_arch = "wasm32"))]
+    let engine_has_webrtc = true;
+
+    meet_reach_with_engine(
+        engine_has_webrtc,
+        peers.peer_has_webrtc(window_peer),
+        window_peer == peers.primary_peer_id(),
+        node_available,
+    )
+}
+
+/// [`meet_reach`] plus the engine question, which outranks everything.
+///
+/// Split so the three-argument form stays the shape the existing tests and
+/// callers use, and so the engine arm is gated on its own.
+pub fn meet_reach_with_engine(
+    engine_has_webrtc: bool,
+    has_establisher: bool,
+    is_primary: bool,
+    node_available: bool,
+) -> MeetReach {
+    if !engine_has_webrtc {
+        return MeetReach::NoWebRtcApi;
+    }
+    meet_reach(has_establisher, is_primary, node_available)
+}
+
+/// Classify a meet's reachability. See [`MeetReach`].
+///
+/// Order matters and is the whole content: an installed establisher settles it;
+/// otherwise a non-primary peer cannot be helped by configuration, so that
+/// outcome outranks both node cases.
+pub fn meet_reach(has_establisher: bool, is_primary: bool, node_available: bool) -> MeetReach {
+    if has_establisher {
+        return MeetReach::Reachable;
+    }
+    if !is_primary {
+        return MeetReach::NotThisPeer;
+    }
+    if node_available {
+        return MeetReach::NeedsReload;
+    }
+    MeetReach::NoNode
+}
+
+#[cfg(test)]
+mod meet_reach_tests {
+    use super::*;
+
+    /// An installed establisher settles it whatever else is true — otherwise a
+    /// working session could be told to reload.
+    #[test]
+    fn an_installed_establisher_is_reachable_however_it_got_there() {
+        for is_primary in [true, false] {
+            for node in [true, false] {
+                assert_eq!(meet_reach(true, is_primary, node), MeetReach::Reachable);
+            }
+        }
+    }
+
+    /// **The regression this exists to prevent.** A fresh profile — a private
+    /// window, a first visit — is on its main peer with no node at boot, and was
+    /// told to switch to the peer it is already on.
+    #[test]
+    fn a_fresh_profile_on_its_main_peer_is_not_told_to_switch_peers() {
+        assert_eq!(meet_reach(false, true, false), MeetReach::NoNode);
+        assert_eq!(meet_reach(false, true, true), MeetReach::NeedsReload);
+        assert_ne!(
+            meet_reach(false, true, false),
+            MeetReach::NotThisPeer,
+            "the primary peer must never be told to switch to the primary peer"
+        );
+    }
+
+    /// A node chosen after boot and no node at all are different situations
+    /// with different next actions — reload versus add one (AP40).
+    #[test]
+    fn a_node_selected_this_session_is_a_reload_not_a_missing_node() {
+        assert_eq!(meet_reach(false, true, true), MeetReach::NeedsReload);
+        assert_eq!(meet_reach(false, true, false), MeetReach::NoNode);
+    }
+
+    /// A non-primary peer cannot be repaired by configuration, so it outranks
+    /// both node cases — telling that user to reload would be a promise the
+    /// app cannot keep.
+    #[test]
+    fn a_non_primary_peer_is_not_offered_a_reload_that_would_not_help_it() {
+        assert_eq!(meet_reach(false, false, true), MeetReach::NotThisPeer);
+        assert_eq!(meet_reach(false, false, false), MeetReach::NotThisPeer);
+    }
+
+    /// Every outcome has its own word, and the count is asserted so a fifth
+    /// cannot quietly reuse one.
+    #[test]
+    fn every_outcome_has_its_own_message_and_only_one_is_silent() {
+        let all = [
+            MeetReach::Reachable,
+            MeetReach::NoWebRtcApi,
+            MeetReach::NotThisPeer,
+            MeetReach::NeedsReload,
+            MeetReach::NoNode,
+        ];
+        let keys: std::collections::BTreeSet<&str> =
+            all.iter().filter_map(|r| r.message_key()).collect();
+        assert_eq!(keys.len(), 4, "four distinct messages, one per non-clear outcome");
+        assert_eq!(
+            all.iter().filter(|r| r.warrants_notice()).count(),
+            4,
+            "only Reachable is silent"
+        );
+    }
+
+    /// **An engine with no `RTCPeerConnection` outranks every other cause**, and
+    /// this is the arm that matters on the Linux desktop: WebKitGTK ships
+    /// without the bindings, so a Tauri window can hold a perfectly good
+    /// rendezvous node, report `peer_has_webrtc`, and still never establish
+    /// anything. Telling that user to add a connector or reload sends them to
+    /// fix something that is not broken — the misdirection this whole enum
+    /// exists to stop, one row further out.
+    #[test]
+    fn an_engine_without_webrtc_outranks_every_configuration_answer() {
+        for has_est in [true, false] {
+            for is_primary in [true, false] {
+                for node in [true, false] {
+                    assert_eq!(
+                        meet_reach_with_engine(false, has_est, is_primary, node),
+                        MeetReach::NoWebRtcApi,
+                        "no engine support is not fixable by configuration"
+                    );
+                }
+            }
+        }
+    }
+
+    /// …and it must not fire on an engine that HAS the API, or every browser
+    /// gets a desktop-only message. One bit apart from the test above.
+    #[test]
+    fn an_engine_with_webrtc_falls_through_to_the_configuration_answers() {
+        assert_eq!(meet_reach_with_engine(true, true, true, true), MeetReach::Reachable);
+        assert_eq!(meet_reach_with_engine(true, false, true, false), MeetReach::NoNode);
+        assert_eq!(meet_reach_with_engine(true, false, true, true), MeetReach::NeedsReload);
+        assert_eq!(meet_reach_with_engine(true, false, false, true), MeetReach::NotThisPeer);
+    }
+}

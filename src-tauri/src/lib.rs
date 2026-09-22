@@ -245,6 +245,14 @@ struct BackendPeers {
 /// other device connects to"); the *server* lives here.
 struct SpaServer {
     running: Mutex<Option<app_server::AppServer>>,
+    /// Why the last start attempt failed, when one did.
+    ///
+    /// Held because *"off"* and *"could not start"* are different facts and the
+    /// row had no way to say the second — a failed bind rendered as a plain off
+    /// switch, so the operator saw a service they had not disabled with no
+    /// reason given. Cleared on a successful start, so a recovered retry cannot
+    /// leave the row stuck reporting a fault that is over.
+    error: Mutex<Option<String>>,
 }
 
 /// Response sent back to the WASM frontend.
@@ -359,12 +367,13 @@ fn create_backend_peer(
         seed,
         label,
         sqlite_path,
-        // A newly created peer serves no rendezvous and asks for no port map
-        // until asked — the same fail-closed defaults
-        // `persistence::PeerConfigFile` writes.
-        signaling_node: false,
-        port_mapping: false,
-        app_server: false,
+        // The same constants `read_config` applies to the `config.toml`
+        // `save_peer` just wrote (which names none of these keys), so this
+        // session and every later launch agree by construction rather than by
+        // two literals someone has to keep in step.
+        signaling_node: persistence::DEFAULT_SIGNALING_NODE,
+        port_mapping: persistence::DEFAULT_PORT_MAPPING,
+        app_server: persistence::DEFAULT_APP_SERVER,
         runtime: None,
     });
 
@@ -945,6 +954,10 @@ struct AppServerStatus {
     /// node means the other device types a URL and is done; serving without one
     /// means it still has to add a connector by hand.
     node_peer_id: Option<String>,
+    /// Why it is not serving, when it was asked to and could not. Carries the
+    /// backend's own sentence (which names the port), because a generic
+    /// "failed" sends the reader nowhere.
+    error: Option<String>,
 }
 
 /// The rendezvous a freshly-loaded browser should be pointed at: this desktop's
@@ -977,15 +990,32 @@ fn set_backend_app_server(
 ) -> Result<AppServerStatus, String> {
     persistence::set_app_server(&peer_id, enabled);
     let mut running = spa.running.lock().unwrap();
+    let mut error = spa.error.lock().unwrap();
     if enabled {
         if running.is_none() {
-            *running = Some(start_spa_server(&app)?);
+            // **Report the failure in the row rather than returning `Err`.** An
+            // `Err` here surfaces as a toggle that snapped back with a console
+            // line nobody sees; the whole point of this change is that a port
+            // clash is visible on screen, in the row it concerns.
+            match start_spa_server(&app) {
+                Ok(server) => {
+                    log::info!("app-server: serving at {}", server.url());
+                    *running = Some(server);
+                    *error = None;
+                }
+                Err(e) => {
+                    log::error!("app-server: {e}");
+                    *error = Some(e);
+                }
+            }
         }
     } else {
-        // Dropping the handle stops the accept loop.
+        // Dropping the handle stops the accept loop. Switching off deliberately
+        // is not a fault, so it clears any recorded one.
         *running = None;
+        *error = None;
     }
-    Ok(spa_status(&running, &peers))
+    Ok(spa_status(&running, &error, &peers))
 }
 
 #[tauri::command]
@@ -993,17 +1023,21 @@ fn app_server_status(
     peers: tauri::State<'_, BackendPeers>,
     spa: tauri::State<'_, SpaServer>,
 ) -> AppServerStatus {
-    spa_status(&spa.running.lock().unwrap(), &peers)
+    spa_status(&spa.running.lock().unwrap(), &spa.error.lock().unwrap(), &peers)
 }
 
 fn spa_status(
     running: &Option<app_server::AppServer>,
+    error: &Option<String>,
     peers: &BackendPeers,
 ) -> AppServerStatus {
     AppServerStatus {
         serving: running.is_some(),
         url: running.as_ref().map(|s| s.url()),
         node_peer_id: current_node_hint(peers).map(|n| n.peer_id),
+        // Only when nothing is bound. A stale failure beside a live socket
+        // would report a fault the retry already cleared.
+        error: if running.is_some() { None } else { error.clone() },
     }
 }
 
@@ -1012,6 +1046,39 @@ fn spa_status(
 /// The hint is a **closure, not a captured value**: the user can flip the
 /// rendezvous after the server is up, and a visitor arriving afterwards must get
 /// the node that exists then, not the one that existed at bind time.
+/// Bring the SPA server up if any peer is configured to serve it and it is not
+/// already running. Idempotent; safe to call from more than one place.
+///
+/// **One expression, two callers, and the second caller is the whole reason it
+/// exists.** The setup hook runs before any peer has been auto-provisioned, so
+/// on a genuinely first launch the persisted set is *empty* and there is
+/// nothing to restore — the peer that wants the server is created moments later
+/// by the WebView's `ensure_system_backend` call. With the restore living only
+/// at setup, the on-by-default app server did not serve until the **second**
+/// launch, which is precisely the launch nobody verifying a fresh install
+/// performs. Found by asking what the new default reaches, not by a failing
+/// test: the native tests cover the flag's value and cannot see who reads it.
+fn ensure_spa_server(app: &tauri::AppHandle, spa: &SpaServer, peers: &BackendPeers) {
+    if !peers.peers.lock().unwrap().values().any(|bp| bp.app_server) {
+        return;
+    }
+    let mut running = spa.running.lock().unwrap();
+    if running.is_some() {
+        return;
+    }
+    match start_spa_server(app) {
+        Ok(server) => {
+            log::info!("app-server: serving at {}", server.url());
+            *running = Some(server);
+            *spa.error.lock().unwrap() = None;
+        }
+        Err(e) => {
+            log::error!("app-server: {e}");
+            *spa.error.lock().unwrap() = Some(e);
+        }
+    }
+}
+
 fn start_spa_server(app: &tauri::AppHandle) -> Result<app_server::AppServer, String> {
     let handle = app.clone();
     app_server::start(app.clone(), app_server::DEFAULT_PORT, move || {
@@ -1134,9 +1201,11 @@ async fn ensure_backend_peer(
                     seed,
                     label: lbl,
                     sqlite_path,
-                    signaling_node: false,
-                    port_mapping: false,
-                    app_server: false,
+                    // Same constants as `create_backend_peer` and
+                    // `read_config` — see the note there.
+                    signaling_node: persistence::DEFAULT_SIGNALING_NODE,
+                    port_mapping: persistence::DEFAULT_PORT_MAPPING,
+                    app_server: persistence::DEFAULT_APP_SERVER,
                     runtime: None,
                 },
             );
@@ -1159,12 +1228,23 @@ async fn ensure_backend_peer(
 /// peer-id, and the manager grant is load-bearing, so S makes the call. This is
 /// the production replacement for the manual create → start dance.
 /// See `DESIGN-SYSTEM-BACKEND-PEER.md` §10.2.
+///
+/// **It also brings the app server up on a first launch.** The setup hook's
+/// restore ran before this peer existed, so without this a fresh install
+/// serves the SPA only from its second launch. Scoped to the production
+/// auto-provision deliberately — `autostart_listener` shares
+/// `ensure_backend_peer` and is the E2E hook, which should not start binding a
+/// second port because the production path wanted one.
 #[tauri::command]
 async fn ensure_system_backend(
     state: tauri::State<'_, BackendPeers>,
+    spa: tauri::State<'_, SpaServer>,
+    app: tauri::AppHandle,
     manager_peer_id: String,
 ) -> Result<BackendPeerResponse, String> {
-    ensure_backend_peer(state, SYSTEM_BACKEND_LABEL, manager_peer_id).await
+    let resp = ensure_backend_peer(state.clone(), SYSTEM_BACKEND_LABEL, manager_peer_id).await?;
+    ensure_spa_server(&app, &spa, &state);
+    Ok(resp)
 }
 
 /// Test-only autostart entry point. Drives the same production listener-start
@@ -1320,7 +1400,7 @@ pub fn run() {
             }
             BackendPeers { peers: Mutex::new(peers) }
         })
-        .manage(SpaServer { running: Mutex::new(None) })
+        .manage(SpaServer { running: Mutex::new(None), error: Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             webview_log,
             create_backend_peer,
@@ -1370,22 +1450,14 @@ pub fn run() {
             // person can walk to another device and type a URL, and a server
             // that starts when the app is next asked about it would not be
             // listening when they got there.
-            if app
-                .state::<BackendPeers>()
-                .peers
-                .lock()
-                .unwrap()
-                .values()
-                .any(|bp| bp.app_server)
-            {
-                match start_spa_server(app.handle()) {
-                    Ok(server) => {
-                        log::info!("app-server: restored, serving at {}", server.url());
-                        *app.state::<SpaServer>().running.lock().unwrap() = Some(server);
-                    }
-                    Err(e) => log::error!("app-server: could not restore: {e}"),
-                }
-            }
+            // Covers a RETURNING install, whose peers are already on disk. A
+            // first launch has none yet and is covered by
+            // `ensure_system_backend` — see `ensure_spa_server`.
+            ensure_spa_server(
+                app.handle(),
+                &app.state::<SpaServer>(),
+                &app.state::<BackendPeers>(),
+            );
             // **Ask the WebView for WebRTC, and log what we get.** The
             // property is off by default and nothing in our stack turned it on
             // — but see `enable_webview_webrtc`: on the Linux WebKit builds

@@ -702,6 +702,13 @@ fn render_app_server_row(
             components::ServiceState::Off,
             crate::i18n::t("sysoverview.appserver_off", &[]),
         ),
+        // **The backend's own sentence, not a translated stand-in.** It names
+        // the port and what is likely holding it, and a generic localized
+        // "could not start" would throw away the only part a reader can act on.
+        // Same call the recovery console makes about a raw status.
+        AppServerView::Failed { detail } => {
+            (components::ServiceState::Off, detail.clone())
+        }
     };
     let row = components::service_row(
         &crate::i18n::t("sysoverview.appserver", &[]),

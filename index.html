@@ -717,17 +717,46 @@
                 (async () => {
                     const el = $("domain");
                     try {
+                        // **The guard goes on the DECISION, not the acquisition
+                        // (AP36).** This used to `return` when the document could
+                        // not be read, which threw away the half of the card that
+                        // does not need the origin at all — what THIS PROFILE
+                        // believes, and the retired-publisher records — at exactly
+                        // the moment a stranded visitor needs it, since an origin
+                        // that cannot be reached is a normal condition for one. It
+                        // also made the verdict's own `!home` arm ("the domain did
+                        // not answer, so there is nothing to compare it against")
+                        // unreachable: someone wrote the branch and an early
+                        // return above it meant nobody ever saw it.
+                        //
+                        // Three states, not two, for the same reason the Rust side
+                        // splits `NoDocument` from `Unheard` (AP40): a deployment
+                        // that serves no config BY CHOICE and one nobody could
+                        // reach decide different things, and a 502 is not a
+                        // deployer's decision.
                         let doc = null;
+                        let docNote = "";
                         try {
                             const r = await fetchWithDeadline("/entity-deployment.json", PROBE_DEADLINE_MS);
-                            if (r && r.ok) doc = await r.json();
-                        } catch (_) { /* below */ }
-                        if (!doc) {
-                            return setEmpty(el, "this origin serves no /entity-deployment.json, or it " +
-                                "could not be read within " + (PROBE_DEADLINE_MS / 1000) + "s");
+                            if (r && r.ok) {
+                                try {
+                                    doc = await r.json();
+                                } catch (_) {
+                                    docNote = "this origin served a deployment document this console could not parse";
+                                }
+                            } else if (r) {
+                                docNote = "this origin answered " + r.status + " for /entity-deployment.json" +
+                                    (r.status === 404 || r.status === 410
+                                        ? " — it serves no deployment config"
+                                        : " — that is a fault, not a deployer's choice");
+                            } else {
+                                docNote = "this origin did not answer within " + (PROBE_DEADLINE_MS / 1000) + "s";
+                            }
+                        } catch (_) {
+                            docNote = "this origin did not answer within " + (PROBE_DEADLINE_MS / 1000) + "s";
                         }
-                        const home = (doc.home_site && doc.home_site.peer) || null;
-                        const pin = doc.name_registry_pin || null;
+                        const home = (doc && doc.home_site && doc.home_site.peer) || null;
+                        const pin = (doc && doc.name_registry_pin) || null;
 
                         // What THIS PROFILE is pointed at. Mirrored to
                         // localStorage on every boot by `boot_diagnostics.rs`,
@@ -763,8 +792,11 @@
                                 "either this profile has not booted since then, or it has never completed " +
                                 "a boot here.";
                         } else if (!home) {
-                            verdict = "This profile is pointed at <b>" + esc(believed || "?") + "</b>. The " +
-                                "domain did not answer, so there is nothing to compare it against.";
+                            verdict = "This profile is pointed at <b>" + esc(believed || "?") + "</b>. " +
+                                (docNote ? esc(docNote).charAt(0).toUpperCase() + esc(docNote).slice(1) + ", so "
+                                         : "The domain named no home publisher, so ") +
+                                "there is nothing to compare it against. What this profile believes is " +
+                                "still shown below — it does not depend on the domain answering.";
                         } else if (believed && believed !== home) {
                             verdict = "<b>STRANDED — this profile is pointed at a publisher this domain no " +
                                 "longer uses.</b> It believes <b>" + esc(believed) + "</b>; the domain " +
@@ -783,7 +815,7 @@
 
                         el.innerHTML = card("Publisher routing",
                             `<div class="kv">` +
-                            `<span>this domain publishes as <b>${home ? esc(home) : ""}</b>${home ? "" : unknown}</span>` +
+                            `<span>this domain publishes as <b>${home ? esc(home) : ""}</b>${home ? "" : (docNote ? `<span class="empty">${esc(docNote)}</span>` : unknown)}</span>` +
                             `<span>this profile is pointed at <b>${believed ? esc(believed) : ""}</b>${believed ? "" : unknown}</span>` +
                             (when ? `<span>profile last booted <b>${esc(when)}</b></span>` : "") +
                             (mirror && mirror.build ? `<span>by build <b>${esc(mirror.build)}</b></span>` : "") +

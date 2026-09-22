@@ -30,6 +30,36 @@
 //! this one it is exactly the wrong granularity — it would hide the difference
 //! this file exists to detect. Every assertion below compares raw bytes.
 //!
+//! ## What this file does NOT establish — read before deriving a blocker from it
+//!
+//! **Measured 2026-09-07:** the product's HTTP ingest path does not preserve a
+//! foreign encoding, and that is conformant rather than a defect.
+//! `http_poll::verify_and_decode` re-encodes a fetched entity's `data` with
+//! `to_ecf` and *then* validates the hash, so a publisher who hashed
+//! canonically has their canonical bytes stored at the address their root
+//! commits to, and one who hashed non-canonical bytes raw is refused with
+//! `HashMismatch`. Either way **no non-canonical entity enters the store over
+//! HTTP.**
+//!
+//! `ENTITY-CBOR-ENCODING` §5.4 blesses both mechanisms: store-and-forward the
+//! original bytes (steps 3–4, what this file measures) *or* carry the validated
+//! hash and re-encode canonically on receipt. We are on the second arm. §9 is
+//! the same rule from the other side: *"Always re-encode to ECF before hashing.
+//! Never hash received wire bytes directly, as they may be valid but
+//! non-canonical."*
+//!
+//! So this file measures **a capability of the store**, not a requirement the
+//! consumer imposes — the store can hold and re-serve a foreign encoding
+//! verbatim, which is what steps 3–4 would need if we ever chose them. It does
+//! **not** mean a mirror must carry original bytes, and a design that reads it
+//! that way will invent a constraint the spec does not impose. (One nearly was,
+//! from this file's opening paragraph, on 2026-09-07.)
+//!
+//! Corollary worth stating because it bounds every mirror design: **a publisher
+//! who hashed their own non-canonical bytes is unmirrorable by anyone**, us
+//! included, because their root commits to a hash no conformant impl
+//! reproduces. That is the spec working, not a gap to close.
+//!
 //! ## The second question, which arch did not ask and the model needs
 //!
 //! `an_entity_carries_no_signer` records what a mirrored entry can and cannot

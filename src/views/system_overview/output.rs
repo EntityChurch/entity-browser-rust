@@ -101,14 +101,24 @@ pub struct SystemOverviewOutput {
 
 /// The "serve the app from here" row.
 ///
-/// Three states, deliberately not two. Collapsing `Serving` and
-/// `ServingUnprovisioned` into one "on" would promise *type a URL and you are
-/// done* while delivering *type a URL, then add a connector by hand* — which is
-/// the same shape of half-truth as a rendezvous row that reports the persisted
-/// setting instead of what is mounted.
+/// **Four** states, deliberately not two and no longer three. Collapsing
+/// `Serving` and `ServingUnprovisioned` into one "on" would promise *type a URL
+/// and you are done* while delivering *type a URL, then add a connector by
+/// hand* — the same shape of half-truth as a rendezvous row that reports the
+/// persisted setting instead of what is mounted.
+///
+/// `Failed` was split out of `Off` on 2026-09-07, for the same reason one tier
+/// down. *"You turned this off"* and *"this could not start"* are different
+/// facts and they send a person to different places, and until the split a
+/// failed bind rendered as a plain off switch — so the operator saw a service
+/// they had not disabled, sitting off, with no reason given. Measured: a
+/// leftover `make serve` held port 8081 while the desktop silently moved to an
+/// ephemeral one, and the other device spent two sessions loading a three-day-old
+/// build that looked like this product misbehaving.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum AppServerView {
-    /// Not serving. Another device cannot load the app from here at all.
+    /// Not serving, because it is switched off. Another device cannot load the
+    /// app from here at all — and that is what was asked for.
     #[default]
     Off,
     /// Serving, and a visitor arrives provisioned with this desktop's
@@ -118,17 +128,35 @@ pub enum AppServerView {
     /// and still has to be told how to reach anybody. The remedy is the
     /// Rendezvous row directly above, which is why they sit together.
     ServingUnprovisioned { url: String },
+    /// It was asked to serve and could not. `detail` is the backend's own
+    /// sentence, which names the port — never a generic "failed", because the
+    /// whole value of this state is telling the reader *where* to look.
+    Failed { detail: String },
 }
 
 impl AppServerView {
-    /// Grade the IPC report into the three states.
+    /// Grade the IPC report into the four states.
     ///
     /// A **pure function over plain arguments, not over `AppServerInfo`** — the
     /// IPC type is `wasm32`-only, and taking it here would put this classifier
     /// out of reach of `make test`, which is where the "serving but
     /// unprovisioned" distinction is actually checked. Same native-shadow split
     /// as `WebRtcProvisioning` against the worker wire types.
-    pub fn grade(serving: bool, url: Option<&str>, node_peer_id: Option<&str>) -> Self {
+    pub fn grade(
+        serving: bool,
+        url: Option<&str>,
+        node_peer_id: Option<&str>,
+        error: Option<&str>,
+    ) -> Self {
+        // A recorded failure outranks everything except actually serving: if a
+        // socket is bound the failure is stale and the truth is on screen.
+        // Ordered this way rather than checked first so a successful retry
+        // cannot leave the row stuck reporting a fault it recovered from.
+        if !serving {
+            if let Some(detail) = error.filter(|d| !d.is_empty()) {
+                return Self::Failed { detail: detail.to_string() };
+            }
+        }
         match (serving, url, node_peer_id) {
             (true, Some(url), Some(node)) if !url.is_empty() && !node.is_empty() => {
                 Self::Serving { url: url.to_string(), node_peer_id: node.to_string() }
@@ -143,14 +171,26 @@ impl AppServerView {
         }
     }
 
+    /// Is a socket actually bound right now.
+    ///
+    /// **Stated positively, not as `!Off`.** It drives the row's toggle, so the
+    /// negative spelling silently classified every state added later as
+    /// *serving* — and the first one added was `Failed`, which would have shown
+    /// the switch ON for a server that is not running and left flipping it OFF
+    /// as the only way to retry. Caught by
+    /// `a_server_that_could_not_start_is_not_reported_as_switched_off` on the
+    /// commit that introduced the variant.
     pub fn is_serving(&self) -> bool {
-        !matches!(self, Self::Off)
+        matches!(self, Self::Serving { .. } | Self::ServingUnprovisioned { .. })
     }
 
     /// The URL to hand a person, when there is one.
     pub fn url(&self) -> Option<&str> {
         match self {
-            Self::Off => None,
+            // A failure has no URL for the same reason `Off` does not: there is
+            // nothing bound. The *reason* is rendered by the row; handing back
+            // an address here would put a copy button on a port we are not on.
+            Self::Off | Self::Failed { .. } => None,
             Self::Serving { url, .. } | Self::ServingUnprovisioned { url } => Some(url),
         }
     }
@@ -488,21 +528,21 @@ mod pairing_tests {
     #[test]
     fn serving_without_a_rendezvous_is_its_own_state_not_just_on() {
         assert_eq!(
-            AppServerView::grade(true, Some("http://192.168.1.9:8081"), Some("2KaNODE")),
+            AppServerView::grade(true, Some("http://192.168.1.9:8081"), Some("2KaNODE"), None),
             AppServerView::Serving {
                 url: "http://192.168.1.9:8081".into(),
                 node_peer_id: "2KaNODE".into(),
             },
         );
         assert_eq!(
-            AppServerView::grade(true, Some("http://192.168.1.9:8081"), None),
+            AppServerView::grade(true, Some("http://192.168.1.9:8081"), None, None),
             AppServerView::ServingUnprovisioned { url: "http://192.168.1.9:8081".into() },
             "a visitor gets the app but must still add a connector by hand",
         );
         // An empty node-id is the same absence as a missing one — it arrives
         // over IPC, where "" and null are not reliably distinct.
         assert_eq!(
-            AppServerView::grade(true, Some("http://x:8081"), Some("")),
+            AppServerView::grade(true, Some("http://x:8081"), Some(""), None),
             AppServerView::ServingUnprovisioned { url: "http://x:8081".into() },
         );
     }
@@ -513,10 +553,66 @@ mod pairing_tests {
     /// the pairing row, which renders nothing when nothing is listening.
     #[test]
     fn serving_with_no_url_is_reported_as_off() {
-        assert_eq!(AppServerView::grade(true, None, Some("2KaNODE")), AppServerView::Off);
-        assert_eq!(AppServerView::grade(true, Some(""), Some("2KaNODE")), AppServerView::Off);
-        assert_eq!(AppServerView::grade(false, Some("http://x:8081"), Some("n")), AppServerView::Off);
+        assert_eq!(AppServerView::grade(true, None, Some("2KaNODE"), None), AppServerView::Off);
+        assert_eq!(AppServerView::grade(true, Some(""), Some("2KaNODE"), None), AppServerView::Off);
+        assert_eq!(AppServerView::grade(false, Some("http://x:8081"), Some("n"), None), AppServerView::Off);
         assert!(!AppServerView::Off.is_serving());
-        assert!(AppServerView::grade(true, Some("http://x:8081"), None).is_serving());
+        assert!(AppServerView::grade(true, Some("http://x:8081"), None, None).is_serving());
+    }
+
+    /// **"You switched this off" and "this could not start" are different
+    /// facts**, and until 2026-09-07 they rendered identically — a failed bind
+    /// produced a plain off switch, so the operator saw a service they had not
+    /// disabled, with no reason and nothing to act on.
+    ///
+    /// The measured cost of the collapse: a leftover `make serve` held port
+    /// 8081, the desktop silently moved to an ephemeral port, and the other
+    /// device loaded a three-day-old build for two sessions. Nothing on either
+    /// machine said the word "8081".
+    #[test]
+    fn a_server_that_could_not_start_is_not_reported_as_switched_off() {
+        let v = AppServerView::grade(false, None, None, Some("Port 8081 is already in use"));
+        assert_eq!(
+            v,
+            AppServerView::Failed { detail: "Port 8081 is already in use".into() },
+            "a failed bind must not be indistinguishable from an off switch",
+        );
+        assert!(!v.is_serving(), "it is still not serving");
+        assert!(v.url().is_none(), "and there is nothing to type");
+    }
+
+    /// The detail must survive into the row verbatim. A generic localized
+    /// "could not start" would drop the port number, which is the only part of
+    /// the message a reader can act on.
+    #[test]
+    fn the_failure_detail_reaches_the_row_and_names_the_port() {
+        let AppServerView::Failed { detail } =
+            AppServerView::grade(false, None, None, Some("Port 8081 is already in use"))
+        else {
+            panic!("expected Failed");
+        };
+        assert!(detail.contains("8081"), "the port must survive grading: {detail}");
+    }
+
+    /// A recovered retry must not leave the row stuck on a fault that is over —
+    /// so a bound socket outranks a recorded error. The backend clears it too;
+    /// this pins the classifier so both halves have to fail for the row to lie.
+    #[test]
+    fn a_live_socket_outranks_a_stale_recorded_failure() {
+        assert_eq!(
+            AppServerView::grade(true, Some("http://x:8081"), Some("2KaNODE"), Some("old error")),
+            AppServerView::Serving {
+                url: "http://x:8081".into(),
+                node_peer_id: "2KaNODE".into(),
+            },
+        );
+    }
+
+    /// An empty string is not a reason. It arrives over IPC where "" and null
+    /// are not reliably distinct, and rendering an empty Failed row would be a
+    /// service reporting a fault it cannot name.
+    #[test]
+    fn an_empty_error_is_the_same_absence_as_no_error() {
+        assert_eq!(AppServerView::grade(false, None, None, Some("")), AppServerView::Off);
     }
 }

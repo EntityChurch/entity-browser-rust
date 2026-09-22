@@ -21242,6 +21242,327 @@ async fn the_recovery_console_names_a_stranded_profile(
     Ok(())
 }
 
+/// **§1.1f's DECLARED path, in a browser — the gate the design named as missing.**
+///
+/// Every *decision* in declared succession is pure and natively gated
+/// (`declared_to_adopt`, `stale_against_declared`, `affirmed_home`). None of that
+/// is evidence that a **boot** adopts one: `adopt_declared` and `revalidate` are
+/// called from `boot_phase2`, inside a `cfg(wasm32)` block no native test can
+/// enter — the same gap that let the registry pin never reach a warm boot (AP50),
+/// and the same gap the seven *inferred* re-key gates cover for the home peer
+/// only.
+///
+/// **The document declares a succession and NO `home_site` change, which is what
+/// makes this a falsifier rather than a re-run of the inferred gates.** The
+/// inferred path fires on `home_site.peer_id` moving; here the home is declared
+/// once, on first contact, and never moves again, so the only thing that can put
+/// a record in the map is `adopt_declared`. A document that also re-keyed its
+/// home would pass with the declared path deleted — a gate satisfied by its
+/// fallback.
+///
+/// **The witness is the recovery console's *Retired publishers* card**, not a log
+/// line and not localStorage. It is the one surface in the product that renders a
+/// supersession record, it reads the same routing mirror an operator would, and
+/// it is L1 — so this also confirms the record crosses the tier boundary a
+/// stranded visitor is stuck behind.
+///
+/// **Step 3 is the half that makes this safe to ship at all.** F2 was a
+/// supersession written durably with no way out; the escape is that withdrawing
+/// the declaration orphans the chain and `revalidate` drops it. That escape works
+/// *because* currency is what the document affirms — under the `origins`-based
+/// definition the first cut used, both peers stayed routed and the record could
+/// survive indefinitely.
+///
+/// **The peers are synthetic and that is fine here.** Nothing resolves them: the
+/// subject is whether the record is adopted, reported and dropped, and a
+/// supersession key is a deep path segment (`app/…/peer-supersession/{retired}`),
+/// not the peer-qualified first segment that has to be a real id.
+///
+/// **Falsified, and the second one is why step 3 exists.**
+///
+/// - Delete the `adopt_declared` call in `boot_phase2` → **step 2 reds**, the
+///   console listing no retired publisher.
+/// - Delete the `revalidate` call → **step 4 reds**. It did **not** before step 3
+///   was written: `adopt_declared` re-writes the record on every boot that
+///   declares it, so *"gone after a document that stopped declaring it"* is
+///   equally explained by *"never durable, and not re-adopted"*. Step 3 removes
+///   the document entirely — nothing adopts, nothing revalidates — so a record
+///   still on screen is a durable one, and only then does step 4 measure the
+///   drop. **A neuter that passes has a third cause: the gate does not
+///   distinguish what you thought it did.**
+/// - Pass `&Default::default()` instead of `&dc.superseded` to `revalidate` →
+///   **step 2** reds, not step 4: with nothing affirmed but the home, the record
+///   is dropped on the same boot that adopted it. Recorded because it is the
+///   obvious neuter to reach for and it lands somewhere unexpected.
+#[tokio::test]
+async fn a_declared_succession_for_a_non_home_peer_reaches_a_returning_profile(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (client, _server) = setup().await?;
+
+    let root = "target/e2e-declared-succession".to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let cp = Command::new("cp").args(["-a", "dist/.", &root]).status()?;
+    if !cp.success() {
+        return Err(format!("could not stage an isolated SPA copy at {root}: {cp}").into());
+    }
+
+    // A well-formed-looking home plus the two sides of a NON-home succession.
+    // The home is declared identically in both documents below — it is here to
+    // make the second document *affirm* somebody (a document that affirms nobody
+    // has declined to say anything, and `stale_against_declared` correctly drops
+    // nothing), never to move.
+    let home_peer = "2KDeclaredSuccessionHomePublisher00";
+    let old_peer = "2KDeclaredSuccessionTenantRetired00";
+    let new_peer = "2KDeclaredSuccessionTenantLivePeer0";
+
+    let doc_path = std::path::PathBuf::from(&root).join("entity-deployment.json");
+    let with_declaration = format!(
+        r#"{{
+  "home_site": {{ "peer": "{home_peer}", "site": "demo", "loc": "" }},
+  "origins": {{ "{home_peer}": "", "{new_peer}": "" }},
+  "superseded": {{ "{old_peer}": "{new_peer}" }}
+}}
+"#
+    );
+    // Identical minus `superseded` — the deployer taking the declaration back.
+    // Everything else is byte-identical on purpose, so step 3 cannot be
+    // explained by anything but the withdrawal.
+    let without_declaration = format!(
+        r#"{{
+  "home_site": {{ "peer": "{home_peer}", "site": "demo", "loc": "" }},
+  "origins": {{ "{home_peer}": "", "{new_peer}": "" }}
+}}
+"#
+    );
+    std::fs::write(&doc_path, &with_declaration)?;
+
+    let port = pick_free_port()?;
+    let server = Command::new("python3")
+        .args(["tools/cors-serve.py", &root, &port.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let _serving = FederationServer(server);
+    sleep(Duration::from_millis(400)).await;
+    let app_url = format!("http://localhost:{port}/?log=trace");
+    let bios_url = format!("http://localhost:{port}/?systemrecovery=1");
+
+    // The console's routing element carries both the publisher card and the
+    // "Retired publishers" card. Poll past "probing…" so this never races the
+    // bounded deployment-document fetch the console makes itself.
+    async fn routing(client: &Client) -> Result<String, Box<dyn std::error::Error>> {
+        let js = r#"const d = document.getElementById('domain'); return d ? d.textContent : '';"#;
+        let mut text = String::new();
+        for _ in 0..60 {
+            sleep(Duration::from_millis(250)).await;
+            text = client.execute(js, vec![]).await?.as_str().unwrap_or("").to_string();
+            if !text.is_empty() && !text.contains("probing…") {
+                break;
+            }
+        }
+        Ok(text)
+    }
+
+    /// **Wait on the STORE, not on the log line — and do it before navigating.**
+    ///
+    /// The Direct-IDB arm is write-behind (250 ms debounce; only identity and
+    /// destructive ops await a checkpoint), so `put_and_wait` returning is not
+    /// durability and a `goto` issued straight after phase 2 lands inside the
+    /// unflushed window. Measured here: the record and the session config were
+    /// both lost, boot 3 came up on the build default, and the console correctly
+    /// reported "could not determine" for a profile that had simply never
+    /// written anything down. **It must run on the APP page** — navigating away
+    /// is what abandons the pending drain, so waiting from the BIOS is waiting
+    /// for something that can no longer happen.
+    async fn wait_durable(
+        client: &Client,
+        frag: &str,
+        frag2: &str,
+        what: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for _ in 0..40 {
+            if !durable_hash_for(client, frag, frag2).await?.is_empty() {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(250)).await;
+        }
+        Err(format!(
+            "{what} never reached IndexedDB within 10s (probe: {frag:?} + {frag2:?}). Either \
+             the write did not happen or the probe's key fragment stopped matching — and a \
+             fragment that matches nothing waits for nothing, which silently reinstates the \
+             write-behind race this wait exists to remove."
+        )
+        .into())
+    }
+    // `/{peer}/app/entity-browser/peer-supersessions/{retired}` and
+    // `/{peer}/app/entity-browser/settings/session`.
+    let record_frag = "peer-supersessions/";
+    let config_frag = "settings/session";
+
+    let r = async {
+        // ── 1. A cold profile meets the domain ───────────────────────────────
+        // Settle the first boot BEFORE wiping: `wipe_all_storage` deletes the
+        // peer databases while phase 2 is in flight, and phase 2 then writes a
+        // mirror resolved against a store that has just vanished. That is the
+        // measured poisoning half of a 1-in-3 red on the sibling console gate.
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        wait_for_phase2(&client, 30_000).await?;
+        wipe_all_storage(&client).await?;
+
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let handover = wait_for_phase2(&client, 30_000).await?;
+        assert_eq!(
+            handover, "phase 2 complete",
+            "phase 2 did not complete, so neither the declared adoption nor the routing \
+             mirror this gate reads was written. Nothing below measures the feature."
+        );
+
+        // ── 2. The declared succession is adopted and REPORTED ───────────────
+        //
+        // The subject assertion runs HERE, on the app page, against the routing
+        // mirror — before the durability waits below. Order matters for the
+        // diagnosis, not the outcome: with `adopt_declared` unwired the waits
+        // would time out first and blame the probe, and a gate that names the
+        // wrong layer when it reds is the failure mode this suite keeps
+        // relearning.
+        let mirror = client
+            .execute("return localStorage.getItem('entity_routing_mirror') || '';", vec![])
+            .await?
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            mirror.contains(old_peer) && mirror.contains(new_peer),
+            "THE DECLARED SUCCESSION NEVER REACHED THE PROFILE. The domain declares \
+             {old_peer} → {new_peer} for a peer that is NOT its home, and after a full boot \
+             nothing on this profile knows it. A deployer's only way to say \"this tenant \
+             re-keyed\" is this field — `origins` is a map, so a client may not infer it — \
+             and if `adopt_declared` is not wired into `boot_phase2`, a correct publish \
+             simply never arrives (AP50's shape, succession edition). Mirror: {mirror:?}"
+        );
+
+        // Both durable writes have to land before the navigation below, or step
+        // 3 measures a profile that never wrote anything down. See `wait_durable`.
+        wait_durable(&client, record_frag, old_peer, "the declared supersession record").await?;
+        wait_durable(&client, config_frag, "", "the session config").await?;
+
+        // And the L1 witness: the record has to cross the tier boundary a
+        // stranded visitor is stuck behind. The console is the one surface in
+        // the product that renders a supersession, and it renders it from the
+        // mirror — which is why this is a second assertion and not the first.
+        client.goto(&bios_url).await?;
+        let adopted = routing(&client).await?;
+        assert!(
+            adopted.contains(&format!("this profile is pointed at {home_peer}")),
+            "PRECONDITION — the console does not name the publisher this profile is pointed \
+             at, so its retired-publisher card has no source and its absence would mean \
+             nothing. Got: {adopted:?}\nRaw mirror: {mirror}"
+        );
+        assert!(
+            adopted.contains(old_peer) && adopted.contains(new_peer),
+            "the record reached the profile but the RECOVERY CONSOLE does not report it. \
+             That console is the only surface that renders a supersession, and it is the \
+             only one reachable when the app will not boot — which is the situation a \
+             retired publisher creates. Got: {adopted:?}"
+        );
+        println!("  declared succession adopted, durable, and reported at L1");
+
+        // ── 3. The record is DURABLE, and no document means no change ────────
+        //
+        // **This step exists because without it step 4 is vacuous, and that was
+        // measured, not reasoned.** `adopt_declared` re-writes the record on
+        // every boot the document declares it, so step 2 passing proves only
+        // that it reached the live map *this* boot. Step 4 then asserts the
+        // record is gone after a document that stopped declaring it — which is
+        // equally explained by *revalidation dropped it* and by *it was never
+        // durable and simply was not re-adopted*. Deleting the `revalidate` call
+        // outright left the gate GREEN until this step existed.
+        //
+        // Withdrawing the whole document separates them: nothing re-adopts and
+        // nothing revalidates, so a record still on screen is a durable one. It
+        // doubles as the `revalidate` precondition the boot code states — *no
+        // document means no change*, and D23's bounded fetch makes that case
+        // more common, not less.
+        std::fs::rename(&doc_path, format!("{root}/entity-deployment.json.away"))?;
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        wait_for_phase2(&client, 30_000).await?;
+        client.goto(&bios_url).await?;
+        let no_document = routing(&client).await?;
+        assert!(
+            no_document.contains(old_peer),
+            "the record did not survive a boot with NO deployment document. Either it was \
+             never persisted — in which case step 4 below measures nothing, because a record \
+             that only ever lived in this boot's map disappears whether or not anything \
+             revalidates — or a truncated/unreachable document is able to wipe a valid \
+             repair, which is the failure `boot_phase2`'s note 3 exists to prevent. \
+             Got: {no_document:?}"
+        );
+        std::fs::rename(format!("{root}/entity-deployment.json.away"), &doc_path)?;
+        println!("  the record is durable and survives a boot with no document");
+
+        // ── 4. F2's escape: withdrawing the declaration drops the record ─────
+        // A supersession the deployer can create and cannot take back is a brick
+        // with better manners. Confirm the ORIGIN serves the new bytes first, so
+        // a stale file cannot be mistaken for the client failing to revalidate.
+        std::fs::write(&doc_path, &without_declaration)?;
+        let served = Command::new("curl")
+            .args([
+                "-fsS",
+                "--retry",
+                "10",
+                "--retry-all-errors",
+                "--retry-delay",
+                "1",
+                &format!("http://localhost:{port}/entity-deployment.json"),
+            ])
+            .output()?;
+        let body = String::from_utf8_lossy(&served.stdout).to_string();
+        assert!(
+            !body.contains("superseded") && body.contains(home_peer),
+            "the origin is still serving the OLD document, so nothing downstream is \
+             evidence about the client: {body:?}"
+        );
+
+        client.goto(&app_url).await?;
+        wait_for_boot(&client, 30_000).await?;
+        let handover = wait_for_phase2(&client, 30_000).await?;
+        assert_eq!(
+            handover, "phase 2 complete",
+            "phase 2 did not complete on the withdrawal boot, so `revalidate` never ran"
+        );
+
+        client.goto(&bios_url).await?;
+        let withdrawn = routing(&client).await?;
+        assert!(
+            withdrawn.contains(&format!("this profile is pointed at {home_peer}")),
+            "the mirror was not rewritten on the withdrawal boot, so the card below is a \
+             stale read rather than a revalidated one. Got: {withdrawn:?}"
+        );
+        assert!(
+            !withdrawn.contains(old_peer),
+            "THE DECLARATION COULD NOT BE TAKEN BACK. The deployer withdrew \
+             {old_peer} → {new_peer} and the profile still holds the record. This is F2: a \
+             supersession written durably with no way out, which turns one mistaken publish \
+             into permanent client state and leaves clear-site-data as the only repair. The \
+             escape is that the replacement stops being affirmed, the chain orphans, and \
+             `revalidate` drops it — and it works only because currency is what the document \
+             AFFIRMS, not what it routes to. Got: {withdrawn:?}"
+        );
+        println!("  withdrawal honoured: the record is gone, E1 not E5");
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&root);
+    r?;
+    client.close().await.ok();
+    Ok(())
+}
+
 /// **G1 (service-worker variant) — a cached shell must survive a black-holed origin.**
 ///
 /// `networkFirst` in `assets/sw.js` awaits `fetch(req, {cache:'reload'})` with no

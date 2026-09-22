@@ -181,6 +181,7 @@ what it names and inherits the rest. Unknown keys are ignored.
 | `site_mode.locked` | `bool` | Kiosk lock — `true` removes every chrome↔site escape (the escapable⇄locked axis). |
 | `fast_paint` | `bool` | Phase-1 fast-paint kill switch (paints the site shell before peers boot, for site-first deployments). Leave default unless debugging a paint flash. |
 | `peer_creation_enabled` | `bool` | Capability gate — set `false` to forbid minting new peers **independent of surface** (so a `chrome` deployment can still disable creation, and a locked kiosk sets it `false` here). |
+| `superseded` | `{ retiredPeerId: replacementPeerId }` | **Which of your peers was replaced by which** — see [§3.3](#33-declaring-that-a-peer-was-replaced). Set it with `publish --supersede=OLD=NEW`; you do not need it for the peer named in `home_site`. |
 
 ### 3.2 Precedence (highest wins)
 
@@ -192,10 +193,71 @@ what it names and inherits the rest. Unknown keys are ignored.
 5. Hard default             chrome (workspace, local demo)
 ```
 
-The deployment config shapes a **cold** boot only — the SPA fetches it just
-when no durable config exists yet. A returning user's persisted choices always
-win. (This is why testing a config change may require clearing storage or a
-fresh profile — your own previous session is winning at level 2.)
+**Two kinds of field, and they behave differently on a return visit.** The
+table above mixes them, so this is the distinction to hold on to:
+
+| | Fields | When a visitor picks up a change |
+|---|---|---|
+| **Posture** — what the app *is* for this audience | `surface`, `window_type`, `site_mode`, `fast_paint`, `peer_creation_enabled` | **First visit only.** A browser that has already booted here keeps what it first saw. |
+| **Routing** — where the content *is* | `home_site`, `origins`, `superseded`, `name_registry_pin`, and the resolver TTL | **Every visit** that can reach this file. |
+
+The split is deliberate. Moving a publisher, a CDN or an identity has to reach
+people who already visited, or a correct publish never arrives. Changing what
+the app *does* must not, because by then the visitor may have changed it
+themselves and it is their browser.
+
+Two consequences worth knowing before you debug:
+
+- **Editing a posture field and reloading shows you nothing.** Your own
+  previous session is winning. Use a fresh profile or a private window.
+- **`home_site` is routing, but a visitor who deliberately chose their own home
+  keeps it.** The deployment's value seeds a profile that never chose; it does
+  not overwrite one that did.
+
+---
+
+### 3.3 Declaring that a peer was replaced
+
+If you rotate the key of a publisher you host, every browser that already
+visited holds the **old** peer-id — in its saved home, its open site windows,
+and its cached routing. Those references have to be repaired, and the file that
+repairs them is this one.
+
+**For the peer named in `home_site`, you do nothing.** Publish under the new
+identity with `--set-home` and a returning visitor works it out: that field is
+a single slot, so a new value in it *means* the old one was replaced.
+
+**For any other peer you host, you have to say so**, because `origins` is a map.
+A key disappearing as another appears is ambiguous — it looks exactly the same
+whether one publisher re-keyed or one tenant left as another joined — and a
+browser that guessed wrong would redirect traffic away from a publisher that is
+perfectly alive. So it never guesses:
+
+```bash
+entity-browser publish dist --deployment-config \
+  --supersede=<old-peer-id>=<new-peer-id>
+```
+
+which lands in the document as:
+
+```json
+"superseded": { "<old-peer-id>": "<new-peer-id>" }
+```
+
+Notes that will save you a support ticket:
+
+- **Keep serving the old peer's `origins` entry through the transition.** Being
+  listed there does not undo the succession; it just means old links keep
+  resolving while visitors roll over.
+- **Repeat the flag** for more than one, and **leave the declaration in place**.
+  A visitor who has not been back for months picks it up on their next visit;
+  removing it early strands exactly those people. Later publishes — including
+  by a different peer on the same domain — keep it.
+- **Chains work.** Re-key twice and a browser that slept through both lands on
+  the current peer, not the intermediate one.
+- **It is a claim about your own peers.** Anything with write access to this
+  file can declare a succession, so treat write access to it the way you treat
+  write access to the site itself.
 
 ---
 

@@ -217,6 +217,10 @@ pub struct AppServerInfo {
     pub url: Option<String>,
     /// The rendezvous a fresh visitor is provisioned with, if any.
     pub node_peer_id: Option<String>,
+    /// Why it is not serving, when it was asked to and could not. `None` when
+    /// serving, and when it is off because that is what was asked for — those
+    /// two are not the same fact as this one.
+    pub error: Option<String>,
 }
 
 impl AppServerInfo {
@@ -228,6 +232,7 @@ impl AppServerInfo {
                 .unwrap_or(false),
             url: get_string(result, "url"),
             node_peer_id: get_string(result, "node_peer_id"),
+            error: get_string(result, "error"),
         })
     }
 }

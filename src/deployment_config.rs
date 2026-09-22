@@ -112,6 +112,28 @@ pub struct DeploymentConfig {
     /// origin would trust the origin, which is the one thing this chain never
     /// does.
     pub name_registry_pin: Option<crate::session_config::RegistryPin>,
+    /// **`retired-peer-id → replacement-peer-id`, declared by the deployer** —
+    /// the succession the client cannot infer.
+    ///
+    /// The home peer's re-key is inferable because `home_site.peer_id` is a
+    /// *single slot*: a new value in it means the old one was replaced, and
+    /// that inference is what `session_config::decide_home` already runs. The
+    /// `origins` map has no such property — a key disappearing while another
+    /// appears is ambiguous between *"A re-keyed to B"* and *"tenant A left as
+    /// tenant B joined"*, and guessing wrong writes a supersession that rewrites
+    /// every stored reference to a peer that is alive. That is F2's brick with a
+    /// wider trigger, which is why this is **declared and never inferred**
+    /// (`DESIGN-RESILIENCE…` §1.1f item 1).
+    ///
+    /// The deployer is the only party who knows, and they are also the party the
+    /// re-key belongs to. The home-peer inference stays as the one case that
+    /// works without this field — it is the deployed one, and this field does
+    /// not replace it.
+    ///
+    /// Two malformed shapes are dropped at parse rather than defended against
+    /// downstream, matching [`crate::peer_supersession::record`]'s own rules: an
+    /// entry with an empty side, and a self-loop (`A → A`).
+    pub superseded: BTreeMap<String, String>,
 }
 
 impl DeploymentConfig {
@@ -189,7 +211,45 @@ impl DeploymentConfig {
             }
         }
 
+        // Declared succession (§1.1f item 1). Tolerant like `origins`, and
+        // filtered on the way in: an empty side or a self-loop is not a
+        // supersession, and admitting one here would make `resolve`'s
+        // cycle guard load-bearing for a case the document could simply not
+        // have expressed.
+        if let Some(sup) = obj.get("superseded").and_then(|v| v.as_object()) {
+            for (retired, replacement) in sup {
+                let Some(replacement) = replacement.as_str() else {
+                    continue;
+                };
+                let retired = retired.trim();
+                let replacement = replacement.trim();
+                if retired.is_empty() || replacement.is_empty() || retired == replacement {
+                    continue;
+                }
+                cfg.superseded.insert(retired.to_string(), replacement.to_string());
+            }
+        }
+
         Some(cfg)
+    }
+
+    /// **The peer this document names as its home publisher**, or `""` when it
+    /// declines to say (including the empty-`peer` sentinel, which means *this
+    /// profile's own peer* and is not a claim about the domain).
+    ///
+    /// The affirmation half of `peer_supersession::revalidate`'s input. Pure and
+    /// named rather than inlined at the call site because getting it wrong
+    /// deletes correct supersession records, which is the failure that leaves no
+    /// trace.
+    ///
+    /// **Deliberately not the `origins` keys.** An `origins` entry says
+    /// *reachable here*, and a retired peer stays reachable through a re-key
+    /// transition on purpose — so treating one as an affirmation of currency
+    /// contradicts the record the re-key just wrote. See
+    /// [`crate::peer_supersession::stale_against_declared`], which has the
+    /// measurement.
+    pub fn affirmed_home(&self) -> &str {
+        self.home_site.as_ref().map(|h| h.peer_id.as_str()).unwrap_or("")
     }
 
     /// Whether this config carries anything actionable. An object that parsed
@@ -204,6 +264,7 @@ impl DeploymentConfig {
             && self.name_resolver_max_ttl_ms.is_none()
             && self.name_registry_pin.is_none()
             && self.peer_creation_enabled.is_none()
+            && self.superseded.is_empty()
     }
 
     /// Apply this deployment config over a `base` session config (the build
@@ -631,9 +692,62 @@ mod tests {
         FirstContactOnly(&'static str),
     }
 
+    /// Name a census row after the struct field it is about, consuming the
+    /// binding so the two cannot drift. See the `deny(unused_variables)` note.
+    fn field_of<T>(name: &'static str, _binding: &T) -> &'static str {
+        name
+    }
+
     /// The census. One row per `DeploymentConfig` field, in declaration order.
+    ///
+    /// **The compiler is the first half of this census, and it was not until
+    /// 2026-09-07.** This test used to assert `rows.len() == 9` against the
+    /// literal directly above it, while its own comment claimed *"a field added
+    /// to `DeploymentConfig` without a row here fails"*. It did not — nothing
+    /// connected `rows` to the struct, so a tenth field would have been
+    /// classified by nobody and the census would have stayed green saying so.
+    /// Exactly the shape the Doctor roster's `all.len() == 3` had, in the census
+    /// D25 was ratified on.
+    ///
+    /// Closed with two compile-time steps and one assertion, so the loop has no
+    /// manual link left in it:
+    ///
+    /// 1. The **exhaustive destructure** below: a new `DeploymentConfig` field
+    ///    is `error[E0027]` here, naming the field.
+    /// 2. **`deny(unused_variables)`**: binding it and not listing it in
+    ///    `declared` is a second compile error.
+    /// 3. `rows.len() == declared.len()`: listing it and not classifying it
+    ///    fails the test.
     #[test]
+    #[deny(unused_variables)]
     fn every_deployment_declared_field_says_who_owns_it() {
+        let DeploymentConfig {
+            surface,
+            window_type,
+            home_site,
+            origins,
+            site_mode,
+            fast_paint,
+            peer_creation_enabled,
+            name_resolver_max_ttl_ms,
+            name_registry_pin,
+            superseded,
+        } = DeploymentConfig::default();
+
+        // Every field the document may declare, named from its own binding.
+        let declared: Vec<&str> = vec![
+            field_of("surface", &surface),
+            field_of("window_type", &window_type),
+            field_of("home_site", &home_site),
+            field_of("origins", &origins),
+            field_of("site_mode", &site_mode),
+            field_of("fast_paint", &fast_paint),
+            field_of("peer_creation_enabled", &peer_creation_enabled),
+            field_of("name_resolver_max_ttl_ms", &name_resolver_max_ttl_ms),
+            field_of("name_registry_pin", &name_registry_pin),
+            field_of("superseded", &superseded),
+        ];
+
         let rows: Vec<(&str, Owned, Refreshed)> = vec![
             (
                 "surface",
@@ -712,18 +826,33 @@ mod tests {
                      DEPLOYMENT's seed only; the user's pin outranks it at every read",
                 ),
             ),
+            (
+                "superseded",
+                Owned::DeployerOnly,
+                Refreshed::EveryWarmBoot(
+                    "peer_supersession::adopt_declared, in boot_phase2 — succession IS the \
+                     routing fact that must reach a returning profile, since a profile that \
+                     never booted resolves the live peer anyway and only a returning one \
+                     holds the dead id",
+                ),
+            ),
         ];
 
-        // The count is the gate. A field added to `DeploymentConfig` without a
-        // row here fails, which is the only moment anyone is guaranteed to ask
-        // the ownership question about it.
+        // The gate, and it is measured against the STRUCT now rather than
+        // against the literal above it.
         assert_eq!(
             rows.len(),
-            9,
+            declared.len(),
             "a field was added to or removed from DeploymentConfig without classifying it. \
              MODEL-STAKEHOLDERS-AND-OWNERSHIP §5: answer 1 (which role owns it) and 5 (who \
              can fix it) before shipping — and say whether a warm boot re-reads it"
         );
+        for field in &declared {
+            assert!(
+                rows.iter().any(|(f, ..)| f == field),
+                "`{field}` is a field of DeploymentConfig with no census row"
+            );
+        }
 
         // No row may claim a mechanism it does not name, on EITHER axis.
         for (field, owned, refreshed) in &rows {
@@ -817,6 +946,76 @@ mod tests {
         assert!(cfg.home_site.is_none(), "home_site with no site id is dropped");
         assert!(cfg.origins.is_empty());
         assert!(cfg.site_mode.is_empty());
+    }
+
+    /// The declared-succession field (§1.1f item 1) — the deployer saying what
+    /// no client can infer from a map.
+    #[test]
+    fn parse_reads_declared_succession() {
+        let json = r#"{
+            "origins": { "2KOld": "https://cdn.example", "2KNew": "https://cdn.example" },
+            "superseded": { "2KOld": "2KNew" }
+        }"#;
+        let cfg = DeploymentConfig::parse(json).unwrap();
+        assert_eq!(cfg.superseded.get("2KOld").map(String::as_str), Some("2KNew"));
+        assert!(
+            cfg.origins.contains_key("2KOld"),
+            "the retired peer keeps its origin through the transition — that is the \
+             ordinary shape, and why `hosted` is not `current`"
+        );
+    }
+
+    /// Two shapes a document could carry that are not successions, dropped at
+    /// the parse rather than defended against downstream. A self-loop admitted
+    /// here would make `resolve`'s cycle guard load-bearing for an input the
+    /// document had no business expressing.
+    #[test]
+    fn a_self_loop_or_an_empty_side_is_not_a_declared_succession() {
+        let json = r#"{ "superseded": { "2KA": "2KA", "2KB": "", "": "2KC", "2KD": "2KE" } }"#;
+        let cfg = DeploymentConfig::parse(json).unwrap();
+        assert_eq!(
+            cfg.superseded.keys().collect::<Vec<_>>(),
+            vec!["2KD"],
+            "only the well-formed pair survives, got {:?}",
+            cfg.superseded
+        );
+    }
+
+    /// The affirmation half of revalidation's input, and the one expression
+    /// whose being wrong deletes correct records silently.
+    ///
+    /// **The `origins` entry is the trap and it is asserted here**: a domain
+    /// that re-keyed keeps routing to the retired peer on purpose, so an
+    /// `origins` key is not evidence of currency.
+    #[test]
+    fn the_affirmed_home_is_the_home_peer_and_not_an_origins_key() {
+        let json = r#"{
+            "home_site": { "peer": "2KNew", "site": "demo" },
+            "origins": { "2KOld": "", "2KNew": "/beta" },
+            "superseded": { "2KOldTenant": "2KTenant" }
+        }"#;
+        let cfg = DeploymentConfig::parse(json).unwrap();
+        assert_eq!(cfg.affirmed_home(), "2KNew");
+    }
+
+    /// The empty `home_site.peer_id` is the *own peer* sentinel, not a claim
+    /// about the domain, and a document with no `home_site` affirms nobody.
+    /// Both must read as "declined to say", or a malformed record matches.
+    #[test]
+    fn a_document_that_names_no_home_affirms_nobody() {
+        let sentinel =
+            DeploymentConfig::parse(r#"{ "home_site": { "peer": "", "site": "demo" } }"#).unwrap();
+        assert_eq!(sentinel.affirmed_home(), "");
+        let silent = DeploymentConfig::parse(r#"{ "surface": "chrome" }"#).unwrap();
+        assert_eq!(silent.affirmed_home(), "");
+    }
+
+    /// A document carrying *only* a succession is not an empty document — it
+    /// declares the one routing fact a returning profile cannot derive.
+    #[test]
+    fn a_document_that_only_declares_succession_is_not_empty() {
+        let cfg = DeploymentConfig::parse(r#"{ "superseded": { "2KA": "2KB" } }"#).unwrap();
+        assert!(!cfg.is_empty());
     }
 
     #[test]

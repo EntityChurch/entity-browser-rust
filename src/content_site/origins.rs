@@ -660,6 +660,169 @@ fn apply_supersession(
     out.into_iter().collect()
 }
 
+/// One registry row the live deployment document has stopped naming.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Withdrawn {
+    pub peer_id: String,
+    pub origin: String,
+}
+
+/// Which deployment-written registry rows the live document has **withdrawn** —
+/// `DESIGN-RESILIENCE…` §1.1f **item 3**, the *un-name before you remove* rule
+/// run in the other direction.
+///
+/// The adoption path only ever *adds*: `adopt_deployment_origin` writes a row per
+/// declared origin and nothing has ever removed one, so a peer a domain stops
+/// hosting keeps a registered origin that 404s forever. It shows up in the
+/// browse-all roster [`list_origins`] feeds, it burns the retry ladder on every
+/// visit, and Doctor's check 2 reports it as `fetch-failure-by-peer`.
+///
+/// **Pure, and it takes the whole listing rather than one row**, for the same
+/// reason `apply_supersession` and `decide_home` are pure: this decides what to
+/// *delete*, so every combination has to be gated by `make test` on both arms
+/// instead of only through a boot that happens to produce it.
+///
+/// Four rules, and three of them are refusals:
+///
+/// - **An empty `declared` withdraws NOTHING.** `DeploymentConfig` parses
+///   `origins` into a `BTreeMap`, so an **absent** `origins` key and an explicit
+///   `origins: {}` arrive identically — the AP40 collapse, one field over from
+///   the one `superseded` avoids by never emitting an empty key. Until the parse
+///   can tell them apart, the only safe reading is the weaker one: a document
+///   that names no origins is declining to say which peers it hosts, not
+///   withdrawing every one of them. **Stated bound: a deployer cannot express
+///   "I host nobody"**, and that is the direction we can afford to be wrong in.
+/// - **A `user`-marked row is never withdrawn.** The Registry Browser's *Open in
+///   Site Browser* registers peers the reader went and got, which no deployment
+///   document has any claim over — the same line `adopt_deployment_origin` draws
+///   with [`Adoption::KeptUserOverride`], drawn again here because a delete path
+///   that honoured the mark only on writes would silently undo every override.
+/// - **The home peer's row is never withdrawn**, even undeclared. A home the
+///   *user* chose (D25) may name a peer this document does not host, and taking
+///   its origin away turns "your home is a bit stale" into "your home cannot be
+///   fetched at all". Pass the **resolved** home, not the document's.
+/// - Everything else deployment-written and undeclared is **un-named**.
+///
+/// **A superseded row needs no special case, and the reason is worth keeping.**
+/// Where a retired peer's entry is deliberately preserved through a re-key
+/// transition it is still *in* `declared` (`HomeClaim::Takes` keeps sibling
+/// origins), so it is kept by rule 3 and the carry-forward arm of
+/// [`apply_supersession`] still has its row. Once the deployer drops it, the
+/// successor has a declared row of its own and the retired one is already inert
+/// at read time. That is the one distinction from `apply_supersession`'s
+/// "availability lost to hygiene" warning: **that** function is acting on an
+/// inference with no document in hand, and this one is acting on the live
+/// document explicitly not naming the peer.
+///
+/// Un-naming is **reversible by the next publish** — a document that declares
+/// the origin again re-seeds it as [`Adoption::Seeded`] on the next boot (E1) —
+/// and it does **not** touch the peer's cached content under `/{foreign}/…`,
+/// which stays readable exactly as a retired publisher's catalogs do (D24: a
+/// cache that drops what it cannot re-verify turns an outage into a missing app).
+/// We remove the *name*, never the bytes.
+pub fn withdrawn_rows(
+    rows: &[(String, String, String)],
+    declared: &std::collections::BTreeMap<String, String>,
+    home_peer: &str,
+) -> Vec<Withdrawn> {
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    rows.iter()
+        .filter(|(peer, _, source)| {
+            source != SOURCE_USER && peer != home_peer && !declared.contains_key(peer.as_str())
+        })
+        .map(|(peer, origin, _)| Withdrawn { peer_id: peer.clone(), origin: origin.clone() })
+        .collect()
+}
+
+/// What one [`unname_withdrawn_origins`] pass did.
+///
+/// `unreadable` is its own fact rather than an empty `unnamed`: *we could not
+/// list the registry* and *the registry holds nothing withdrawn* decide
+/// different things, and only the first means the next boot still owes the sweep
+/// (AP40 / AP30 corollary (a) — a read that cannot answer never changes state).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct UnnameReport {
+    pub examined: usize,
+    pub unnamed: Vec<Withdrawn>,
+    /// Removals the store refused. The row is still registered and will be
+    /// re-offered next boot; counted so a persistent refusal is nameable.
+    pub failed: usize,
+    pub unreadable: bool,
+}
+
+/// Un-name every row [`withdrawn_rows`] identifies, durably.
+///
+/// **Call only with a document actually read this boot** — the same precondition
+/// `peer_supersession::revalidate` carries, and for the same reason: no document
+/// means no change, and D23's bounded fetch makes "no document" *more* common,
+/// not less. A truncated document must never be able to empty the registry.
+///
+/// Runs **after** the adopt loop, so the rows the document does declare are
+/// already written and the listing it judges is final.
+pub async fn unname_withdrawn_origins(
+    peers: &Peers,
+    our_peer_id: &str,
+    declared: &std::collections::BTreeMap<String, String>,
+    home_peer: &str,
+    timeout_ms: u32,
+) -> UnnameReport {
+    // NOTE: no `declared.is_empty()` short-circuit here, deliberately. The rule
+    // lives in `withdrawn_rows` and nowhere else (C15) — a second copy would be
+    // the cheaper code and an untestable guard, since the pure one already
+    // returns nothing and the duplicate could be deleted with every test still
+    // green. The cost is one listing read on a document that declares no
+    // origins, which is a boot-path map walk.
+    let mut report = UnnameReport::default();
+    let rows = match list_origins_async(peers, our_peer_id).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "site-origins: could not list the registry — nothing un-named this boot"
+            );
+            report.unreadable = true;
+            return report;
+        }
+    };
+    report.examined = rows.len();
+    for row in withdrawn_rows(&rows, declared, home_peer) {
+        let path = origin_path(our_peer_id, &row.peer_id);
+        match peers.remove_and_wait(our_peer_id, &path, timeout_ms).await {
+            Ok(_) => {
+                tracing::info!(
+                    target_peer = %row.peer_id,
+                    origin = %row.origin,
+                    "site-origins: the deployment no longer declares this publisher — \
+                     UN-NAMED its origin (its cached content is untouched, and a document \
+                     that declares it again re-registers it on the next boot)"
+                );
+                report.unnamed.push(row);
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    target_peer = %row.peer_id,
+                    "site-origins: could not un-name a withdrawn origin — it stays registered \
+                     and will 404 until the next boot retries"
+                );
+                report.failed += 1;
+            }
+        }
+    }
+    if !report.unnamed.is_empty() || report.failed > 0 {
+        tracing::info!(
+            examined = report.examined,
+            unnamed = report.unnamed.len(),
+            failed = report.failed,
+            declared = declared.len(),
+            "site-origins: un-named the publishers the deployment stopped declaring"
+        );
+    }
+    report
+}
+
 fn decode_origin(entity: &Entity) -> Option<String> {
     let value: ciborium::Value = ciborium::from_reader(entity.data.as_slice()).ok()?;
     let origin = value.as_map()?.iter().find_map(|(k, v)| match k.as_text() {
@@ -827,6 +990,266 @@ mod tests {
             "the report must name WHICH publisher was retired and WHO replaced it — \
              a count alone cannot be acted on"
         );
+    }
+
+    // ── §1.1f item 3 — un-naming a withdrawn publisher ────────────────────
+    //
+    // `withdrawn_rows` decides what to DELETE, so every arm gets a test here
+    // rather than only the one a boot happens to produce. The shape is
+    // `apply_supersession`'s: pure, whole-listing, no store.
+
+    fn row(peer: &str, origin: &str, source: &str) -> (String, String, String) {
+        (peer.to_string(), origin.to_string(), source.to_string())
+    }
+
+    fn declares(peers: &[&str]) -> std::collections::BTreeMap<String, String> {
+        peers.iter().map(|p| (p.to_string(), format!("https://{p}.example"))).collect()
+    }
+
+    /// The plain case the item exists for: the domain stopped hosting a peer,
+    /// so its registration stops naming one.
+    #[test]
+    fn a_publisher_the_document_stopped_declaring_is_un_named() {
+        let rows = [
+            row("kept", "https://kept.example", SOURCE_DEPLOYMENT),
+            row("gone", "https://gone.example", SOURCE_DEPLOYMENT),
+        ];
+        let out = withdrawn_rows(&rows, &declares(&["kept"]), "kept");
+        assert_eq!(
+            out,
+            vec![Withdrawn {
+                peer_id: "gone".into(),
+                origin: "https://gone.example".into()
+            }],
+            "only the undeclared row is withdrawn, and the report names its origin"
+        );
+    }
+
+    /// **The guard that decides whether this feature is safe to ship.**
+    /// `DeploymentConfig` parses `origins` into a `BTreeMap`, so an absent
+    /// `origins` key and an explicit `origins: {}` are indistinguishable by the
+    /// time they reach here — and `dist/` has no deployment document at all
+    /// while a minimal one (`{"surface":"site"}`) names no origins. Sweeping on
+    /// an empty declared set would empty the registry of every profile that
+    /// booted against either.
+    #[test]
+    fn a_document_that_names_no_origins_withdraws_nothing() {
+        let rows = [row("a", "https://a.example", SOURCE_DEPLOYMENT)];
+        assert!(
+            withdrawn_rows(&rows, &Default::default(), "").is_empty(),
+            "declaring nothing is declining to say which peers are hosted — never a \
+             withdrawal of all of them"
+        );
+    }
+
+    /// A deployment document has no claim over a peer the reader went and got.
+    /// The same line `adopt_deployment_origin` draws on the write path, drawn
+    /// again on the delete path — honouring the mark only on writes would let a
+    /// sweep silently undo every override.
+    #[test]
+    fn a_user_registered_origin_is_never_withdrawn_by_a_document() {
+        let rows = [
+            row("mine", "https://mine.example", SOURCE_USER),
+            row("theirs", "https://theirs.example", SOURCE_DEPLOYMENT),
+        ];
+        let out = withdrawn_rows(&rows, &declares(&["other"]), "other");
+        assert_eq!(
+            out.iter().map(|w| w.peer_id.as_str()).collect::<Vec<_>>(),
+            vec!["theirs"],
+            "the user's row survives a document that declares neither"
+        );
+    }
+
+    /// A home the **user** chose (D25) may name a peer this document does not
+    /// host. Un-naming its origin turns "your home is stale" into "your home
+    /// cannot be fetched", which is strictly worse than leaving a row that a
+    /// later document can correct.
+    #[test]
+    fn the_resolved_home_peers_origin_survives_a_document_that_does_not_declare_it() {
+        let rows = [row("myhome", "https://myhome.example", SOURCE_DEPLOYMENT)];
+        assert!(
+            withdrawn_rows(&rows, &declares(&["theirhome"]), "myhome").is_empty(),
+            "the home peer is exempt even when the document declares someone else"
+        );
+        assert_eq!(
+            withdrawn_rows(&rows, &declares(&["theirhome"]), "theirhome").len(),
+            1,
+            "and the exemption is the HOME, not a blanket pass — one bit apart"
+        );
+    }
+
+    /// **The re-key transition, which is where a tidy version of this does
+    /// damage.** After a re-key the document names the new peer as home and
+    /// deliberately keeps the retired one's `origins` entry so old URLs resolve
+    /// while visitors roll over. That entry is still *declared*, so the sweep
+    /// must not touch it — `apply_supersession`'s carry-forward arm still needs
+    /// the row it carries.
+    #[test]
+    fn a_retired_peer_the_document_still_routes_to_keeps_its_registration() {
+        let rows = [
+            row("2KOld", "https://cdn.example", SOURCE_DEPLOYMENT),
+            row("2KNew", "https://cdn.example", SOURCE_DEPLOYMENT),
+        ];
+        assert!(
+            withdrawn_rows(&rows, &declares(&["2KOld", "2KNew"]), "2KNew").is_empty(),
+            "a routed retired peer is not a withdrawn one — this is the case the \
+             affirmation rule exists for, one layer down"
+        );
+        // …and once the deployer tidies it away, it goes — the successor has a
+        // declared row of its own, so nothing loses reachability.
+        let out = withdrawn_rows(&rows, &declares(&["2KNew"]), "2KNew");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].peer_id, "2KOld");
+    }
+
+    /// The report separates *nothing to do* from *could not tell* (AP40). The
+    /// pure half cannot produce `unreadable`, so this pins the default it is
+    /// distinguished from.
+    #[test]
+    fn an_empty_pass_is_not_an_unreadable_one() {
+        let report = UnnameReport::default();
+        assert!(report.unnamed.is_empty());
+        assert!(!report.unreadable, "a pass that found nothing has READ the registry");
+    }
+
+    /// The wiring, through a real store: the decision above is worth nothing if
+    /// the row is still readable afterwards. Asserts the **listing**, not the
+    /// return value — the removal is the subject, and `remove_and_wait` reporting
+    /// success is not evidence that a reader stopped seeing the row (the
+    /// recovery console's witness rule, one subsystem over).
+    #[test]
+    fn an_un_named_origin_is_gone_from_the_registry_and_its_neighbours_are_not() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        // `set_origin` marks USER, so write the two deployment rows the way boot
+        // does — through the adopt path, which is the only writer of the
+        // deployment mark.
+        assert_eq!(adopt(&peers, &me, "kept", "https://kept.example"), Adoption::Seeded);
+        assert_eq!(adopt(&peers, &me, "gone", "https://gone.example"), Adoption::Seeded);
+        set_origin(&peers, &me, "mine", "https://mine.example");
+        assert_eq!(list_origins(&peers, &me).len(), 3, "all three registered");
+
+        let report = block_on(unname_withdrawn_origins(
+            &peers,
+            &me,
+            &declares(&["kept"]),
+            "kept",
+            5_000,
+        ));
+
+        assert_eq!(report.examined, 3);
+        assert_eq!(report.failed, 0);
+        assert!(!report.unreadable);
+        assert_eq!(
+            report.unnamed.iter().map(|w| w.peer_id.as_str()).collect::<Vec<_>>(),
+            vec!["gone"]
+        );
+        let after: Vec<String> =
+            list_origins(&peers, &me).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(
+            after,
+            vec!["kept".to_string(), "mine".to_string()],
+            "the withdrawn row is gone from what a reader sees; the declared one and \
+             the user's own are untouched"
+        );
+    }
+
+    /// **The consequence, not the bookkeeping — the sibling of AP54's Apps
+    /// gate, with withdrawal as the trigger instead of a re-key.**
+    ///
+    /// Registry rows are not rendered anywhere (measured: `list_origins` has
+    /// seven consumers and every one of them either subscribes a prefix or picks
+    /// a fetch target — **there is no surface that displays the registry**, which
+    /// is most of why the 2026-09-05 incident was invisible). So the honest
+    /// question is not *is the row gone* but *does a surface stop acting on it*,
+    /// and `app_source` is where that is observable.
+    ///
+    /// **The PRECONDITION is the gate**, exactly as it is for the re-key twin: a
+    /// profile holding the withdrawn publisher's catalog is what makes
+    /// `app_source`'s "prefer the origin whose catalog we already hold" arm pick
+    /// it. Without the warmed catalog the first loop finds nothing, the fallback
+    /// takes "the first foreign origin", and the answer is decided by sort order
+    /// — a pass with the defect fully present. The withdrawn peer is chosen to
+    /// sort FIRST so even that fallback would hand it back.
+    ///
+    /// **Registered through the ADOPT path, not `set_origin`**, because
+    /// `set_origin` marks `user` and a user-marked row is exempt by design. Using
+    /// it here would make the sweep a no-op and the test vacuous.
+    ///
+    /// Falsified: neuter the removal in `unname_withdrawn_origins` and this reds
+    /// with `apps_peer == the withdrawn publisher`.
+    #[test]
+    fn a_withdrawn_publisher_stops_serving_apps_to_a_returning_profile() {
+        use crate::apps::format::AppCatalog;
+        use crate::apps::paths;
+        use crate::views::games::app_source;
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+
+        // Real generated peer ids — `catalog_path` is peer-qualified, so a
+        // placeholder string makes the warming `put` a silent no-op and the
+        // precondition unreachable.
+        let a = Peers::new_direct().primary_peer_id().to_string();
+        let b = Peers::new_direct().primary_peer_id().to_string();
+        let (withdrawn, kept) = if a < b { (a, b) } else { (b, a) };
+        let (withdrawn, kept) = (withdrawn.as_str(), kept.as_str());
+
+        assert_eq!(adopt(&peers, &me, withdrawn, "http://old.example"), Adoption::Seeded);
+        assert_eq!(adopt(&peers, &me, kept, "http://new.example"), Adoption::Seeded);
+        peers
+            .writer_handle_for(&me)
+            .expect("direct arm always has a writer")
+            .put(
+                paths::catalog_path(withdrawn, paths::APPS_SET),
+                AppCatalog::default().to_entity(),
+            );
+        assert_eq!(
+            app_source(&peers, &me, paths::APPS_SET).0,
+            withdrawn,
+            "PRECONDITION: the profile must be sourcing apps from the peer about to be \
+             withdrawn, or this test cannot tell the fix from the defect"
+        );
+
+        // The deployer republishes declaring only the surviving peer.
+        let declared: std::collections::BTreeMap<String, String> =
+            [(kept.to_string(), "http://new.example".to_string())].into_iter().collect();
+        let report =
+            block_on(unname_withdrawn_origins(&peers, &me, &declared, kept, 5_000));
+        assert_eq!(report.unnamed.len(), 1, "report: {report:?}");
+
+        assert_eq!(
+            app_source(&peers, &me, paths::APPS_SET).0,
+            kept,
+            "the Apps surface is still sourcing from a publisher the deployment has \
+             STOPPED DECLARING. Its catalogs 404, and the preference for an origin we \
+             already hold a catalog for is self-reinforcing — it can never recover on \
+             its own (AP54, one trigger over)"
+        );
+        assert!(
+            peers
+                .get_entity(&me, &paths::catalog_path(withdrawn, paths::APPS_SET))
+                .is_some(),
+            "the withdrawn peer's CACHED CONTENT must be untouched — we un-name, we do \
+             not sweep bytes (D24: a cache that drops what it cannot re-verify turns an \
+             outage into a missing app, and there is still no export path)"
+        );
+    }
+
+    /// The precondition, exercised rather than commented: with nothing declared
+    /// the pass must not read as "everyone was withdrawn". Neutering the guard
+    /// in [`withdrawn_rows`] empties this registry.
+    #[test]
+    fn a_pass_with_nothing_declared_leaves_the_registry_whole() {
+        let peers = Peers::new_direct();
+        let me = peers.primary_peer_id().to_string();
+        assert_eq!(adopt(&peers, &me, "a", "https://a.example"), Adoption::Seeded);
+        assert_eq!(adopt(&peers, &me, "b", "https://b.example"), Adoption::Seeded);
+
+        let report =
+            block_on(unname_withdrawn_origins(&peers, &me, &Default::default(), "a", 5_000));
+
+        assert!(report.unnamed.is_empty());
+        assert_eq!(list_origins(&peers, &me).len(), 2, "both rows survive");
     }
 
     #[test]

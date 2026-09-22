@@ -372,18 +372,27 @@ impl WindowView for PeerConnectionsWindow {
                             .and_then(|m| self.model.start_meet(peers, m))
                         {
                             // Started — but a meet hands strangers THIS peer's
-                            // id, and the §6.5 establisher is primary-only while
-                            // this window binds the *user-selected* peer. Without
-                            // one, discovery succeeds and the connect back can
-                            // never be attempted, so the counterpart is left
-                            // holding an unreachable id with nothing said. Warn
-                            // rather than refuse: the meet itself is legitimate,
-                            // and the user may be introducing two other peers.
-                            Ok(()) if !peers.peer_has_webrtc(&self.peer_id) => Some((
-                                crate::i18n::t("peerconn.meet_no_establisher", &[]),
-                                true,
-                            )),
-                            Ok(()) => None,
+                            // id, and without a §6.5 establisher discovery
+                            // succeeds while the connect back can never be
+                            // attempted, so the counterpart is left holding an
+                            // unreachable id. Warn rather than refuse: the meet
+                            // itself is legitimate, and the user may be
+                            // introducing two other peers.
+                            //
+                            // **Which of the three reasons, though.** This used
+                            // to state one cause for all of them — *"switch this
+                            // window to your main peer"* — which is right for a
+                            // second local peer and misdirecting for the case
+                            // that actually reaches people: a fresh profile has
+                            // no rendezvous node at boot, so it is on its main
+                            // peer already and was told to move to it. See
+                            // `MeetReach`.
+                            Ok(()) => crate::views::peer_connections::model::meet_reach_for(
+                                peers,
+                                &self.peer_id,
+                            )
+                                .message_key()
+                                .map(|k| (crate::i18n::t(k, &[]), true)),
                             // A refusal (no connector selected, a mode with
                             // nothing to meet at) must be sayable, or Meet is a
                             // dead button. It lands in the meet card's own slot,

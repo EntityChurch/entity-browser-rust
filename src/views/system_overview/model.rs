@@ -350,6 +350,7 @@ impl SystemOverviewModel {
                         info.serving,
                         info.url.as_deref(),
                         info.node_peer_id.as_deref(),
+                        info.error.as_deref(),
                     )
                 }
                 Err(e) => tracing::warn!(error = %e, "app-server toggle failed"),
@@ -503,6 +504,7 @@ impl SystemOverviewModel {
                             info.serving,
                             info.url.as_deref(),
                             info.node_peer_id.as_deref(),
+                            info.error.as_deref(),
                         );
                         if inner.app_server != graded {
                             inner.app_server = graded;

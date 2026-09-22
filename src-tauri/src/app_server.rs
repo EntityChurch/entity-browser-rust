@@ -374,10 +374,32 @@ fn serve_one(mut sock: std::net::TcpStream, assets: &dyn Assets, node: Option<&N
 /// so toggling the rendezvous changes what a new visitor is provisioned with
 /// without restarting the server.
 ///
-/// Falls back to an ephemeral port when the requested one is taken — the same
-/// call `WebSocketListener::bind` makes, and for the same reason: a developer
-/// box routinely has `make serve` already holding 8081, and refusing to start is
-/// a worse answer than starting somewhere the caller can read back.
+/// **Fails when the requested port is taken. It does NOT move (2026-09-07).**
+///
+/// It used to fall back to an ephemeral port, on the reasoning that *"a
+/// developer box routinely has `make serve` already holding 8081, and refusing
+/// to start is a worse answer than starting somewhere the caller can read
+/// back."* Both halves of that were wrong, and it cost two sessions:
+///
+/// **The caller cannot read it back.** This server's entire purpose is that a
+/// person walks to *another device* and types the URL. They are not looking at
+/// this machine's System Overview row when they do it; they type the port they
+/// have typed every other time. A fallback moves the service away from the one
+/// address the feature is about.
+///
+/// **And what held 8081 was this same application, three days older.** A
+/// leftover `make serve DIST=dist-site` container from 2026-09-05 answered every
+/// request at `:8081` while this server sat on an ephemeral port. The other
+/// device got a *plausible* app — same UI, older code, predating both the
+/// meet-message fix and the late-arm fix — so it did not look broken, it looked
+/// like the product was broken. A wrong answer that renders correctly is worse
+/// than a connection refused.
+///
+/// An explicit `port: 0` still means "any free port"; that is a caller asking,
+/// not a fallback deciding. Callers that genuinely want to move should pass 0.
+///
+/// The error names the port, because *"could not start"* and *"could not start
+/// because something else is on 8081"* send a person to different places.
 pub fn start<R, F>(app: AppHandle<R>, port: u16, node_of: F) -> Result<AppServer, String>
 where
     R: Runtime,
@@ -396,12 +418,15 @@ fn start_with_assets<F>(
 where
     F: Fn() -> Option<NodeHint> + Send + Sync + 'static,
 {
-    let listener = std::net::TcpListener::bind(("0.0.0.0", port))
-        .or_else(|first| {
-            log::warn!("app-server: port {port} unavailable ({first}); taking an ephemeral port");
-            std::net::TcpListener::bind(("0.0.0.0", 0))
-        })
-        .map_err(|e| format!("app-server: bind failed: {e}"))?;
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port)).map_err(|e| {
+        log::error!("app-server: cannot bind port {port} ({e}) — NOT serving");
+        format!(
+            "Port {port} is already in use, so the app is not being served. \
+             Something else on this machine is answering there — often a leftover \
+             `make serve`. Stop it and try again; anyone typing this machine's \
+             address on port {port} is currently reaching that, not this app."
+        )
+    })?;
     let addr = listener.local_addr().map_err(|e| format!("app-server: local_addr: {e}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -675,15 +700,42 @@ mod tests {
         assert!(r.contains("webrtc_node_peer=2KaLATE"), "{r}");
     }
 
-    /// A developer box routinely has `make serve` holding 8081. Refusing to
-    /// start would be a worse answer than moving, and the caller reads the port
-    /// back rather than assuming the one it asked for.
+    /// **The inverse of the test this replaces**, which asserted the server
+    /// moved to an ephemeral port and called that the better answer. It is not:
+    /// this server exists so a person can type a URL on *another* device, and
+    /// moving puts it somewhere they will not type. Measured 2026-09-07 — a
+    /// leftover `make serve` held 8081 and served a three-day-old build to the
+    /// other device for two sessions, looking like a product bug.
+    ///
+    /// The error must NAME the port, or "could not start" sends the reader
+    /// looking in the wrong place.
     #[test]
-    fn a_taken_port_moves_rather_than_failing() {
+    fn a_taken_port_fails_loudly_and_names_the_port() {
         let blocker = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let taken = blocker.local_addr().unwrap().port();
-        let server = start_with_assets(fixture(), taken, || None).expect("starts anyway");
-        assert_ne!(server.port(), taken, "it moved");
+        // `expect_err` would need `AppServer: Debug`; matching keeps the handle
+        // out of the failure path and drops any accidental server immediately.
+        let err = match start_with_assets(fixture(), taken, || None) {
+            Ok(s) => panic!(
+                "a taken port must NOT be served around — it bound {} instead",
+                s.port()
+            ),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains(&taken.to_string()),
+            "the error must name the port that is taken, got: {err}",
+        );
+        drop(blocker);
+    }
+
+    /// An explicit `0` is a caller asking for any free port, which is a
+    /// different thing from a fallback deciding to move. It must keep working —
+    /// every other test in this module relies on it.
+    #[test]
+    fn port_zero_is_still_an_explicit_request_for_any_port() {
+        let server = start_with_assets(fixture(), 0, || None).expect("port 0 binds");
+        assert_ne!(server.port(), 0, "the OS assigned a real port");
         assert!(request(server.port(), "GET / HTTP/1.1").starts_with("HTTP/1.1 200 OK"));
     }
 

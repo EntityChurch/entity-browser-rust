@@ -125,6 +125,7 @@ make noscript-check # the apex as a NO-JS agent sees it (crawler/text browser). 
                    # same Selenium grid — do NOT run it beside e2e-worker
 make e2e-webrtc-chat       # two browsers chat over §6.5 WebRTC — the MECHANISM
 make e2e-webrtc-meet       # two browsers meet at a name then chat — the SHIPPED PATH
+make e2e-webrtc-meet-noreload  # …the same journey with NO reload — the late-arm gate
 make e2e-webrtc-advertised # the node PUBLISHES its reflector (§4.5.1); browsers type nothing
 make e2e-webrtc-lan        # SAME LAN as a real browser does it — mDNS `.local`, 0 reflectors
 make e2e-webrtc-idle       # survives-idle across two NATs — exits 0/1/**2=INCONCLUSIVE**
@@ -662,6 +663,22 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   contact, with the count asserted — so adding a field to `/entity-deployment.json` fails the
   build until someone answers *whose value wins on the next boot*. A row claiming a mechanism must
   name it; a claim with nothing behind it is the defect the census exists to catch.
+  **AND IT WAS VACUOUS UNTIL 2026-09-07 — a census's own claim about itself is the last thing
+  anyone checks.** It asserted `rows.len() == 9` against the hand-written vec **directly above
+  it**, with nothing connecting either to `DeploymentConfig`, while its comment read *"a field
+  added to `DeploymentConfig` without a row here fails"*. It would not have. Exactly the shape of
+  the Doctor roster's `all.len() == 3` closed five days earlier, in the census D25 was ratified
+  on — *a rule with an enforcement point is only as good as the enforcement point being real*, and
+  the two most load-bearing censuses in this repo had the same hole at the same time. Found while
+  adding a tenth field, by the author of the field, which is the one moment it is cheap.
+  **Closed by making the compiler two thirds of it**, and the loop now has no manual link:
+  an **exhaustive destructure** of `DeploymentConfig` (a new field is `error[E0027]`, naming it),
+  **`#[deny(unused_variables)]`** on the test (binding it without listing it is a second compile
+  error), then `rows.len() == declared.len()` where `declared` is built **from the bindings**.
+  Falsified — a dummy field reds with `error[E0027]: pattern does not mention field`.
+  **The transferable move: when a census counts a literal, ask what would make the count wrong,
+  and make *that* a compile error.** `assert_eq!(rows.len(), N)` where `N` is typed by hand is
+  measuring the author's memory.
   Gates: `a_home_the_user_chose_is_not_overwritten_by_the_deployments_declaration` (browser,
   through the real Settings picker — falsified both ways, on the writer half and the reader half
   independently) and `a_user_chosen_home_is_kept_and_a_deployment_seeded_one_is_adopted` (native,
@@ -774,23 +791,252 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   **Stated and deliberate: the retired peer's cached catalogs are NOT swept.** They stop being
   consulted and are inert. Deleting them is the destructive direction with no export path, and D24
   is explicit that a cache which drops what it cannot re-verify turns an outage into a missing app.
-- **Re-key recovery is SINGLE-PUBLISHER, and `stale_against` will delete a correct multi-peer
-  record — do not widen the writer alone.** A deployment may declare several peers (`origins` is a
-  map; `boot_phase2` logs `hosted_peer_origins` and calls `>1` a multi-tenant umbrella). The
-  mechanism is three parts and only **Repair** generalizes: `resolve()` is already keyed by peer,
-  **Detect** compares the single `home_site.peer_id`, and **Revalidate** (`stale_against`) takes
-  *one* publisher and drops every chain not ending at it. So a correct `A_old → A_new` for a
-  non-home hosted peer is written on one boot and deleted on the next, forever — the fix and the
-  guard are incompatible as written. Pinned by
-  `a_record_for_a_peer_that_is_not_the_home_publisher_is_dropped` and
-  `a_non_home_chain_is_dropped_however_well_formed_it_is`, which assert **today's** behaviour so
-  the assumption is visible to whoever crosses it.
-  **Succession must be DECLARED, not inferred:** the home case works only because one slot changing
-  *means* replacement; `origins` is a map, where a key vanishing as another appears is ambiguous
-  between a re-key and one tenant leaving as another joins — and guessing writes a false
-  supersession, which is F2's brick with a wider trigger.
-  The three pieces it needs are in `DESIGN-RESILIENCE…` §1.1f; item 1 is new document surface.
-  **Do not describe re-key recovery as multi-peer until they land.**
+- **SUCCESSION IS DECLARED, NEVER INFERRED — `superseded` in the deployment document, shipped
+  2026-09-07 (§1.1f items 1+2).** The home peer's re-key is the one case a client may infer,
+  because `home_site.peer_id` is a **single slot** and a new value in it *means* replacement.
+  `origins` is a **map**, where a key vanishing as another appears is ambiguous between a re-key
+  and one tenant leaving as another joining — and guessing writes a supersession against a peer
+  that is alive, which is F2's brick with a wider trigger. So the deployer says it:
+  `publish --deployment-config --supersede=OLD=NEW` (repeatable), read by
+  `DeploymentConfig::superseded`, adopted by `peer_supersession::adopt_declared` in `boot_phase2`
+  **before** revalidation, on the same ordering invariant as the inferred home re-key.
+  **CURRENCY IS WHAT THE DOCUMENT AFFIRMS, NEVER WHAT IT ROUTES TO** —
+  `current = {home} ∪ values(declared) − keys(declared)`, and an `origins` key is deliberately
+  **not** in it. **This cost five red e2e gates and it is the entry to read before touching
+  `stale_against_declared`.** The obvious definition is *every peer in `origins`, minus the ones
+  declared retired*, and it is wrong in the most common case there is: after a re-key the document
+  names the NEW peer as home and **keeps the retired one's `origins` entry on purpose** so old URLs
+  resolve while visitors roll over (`HomeClaim::Takes` preserves sibling origins). Read that as an
+  affirmation and you contradict the record the *inferred* home adoption just wrote, and delete it
+  on the same boot — every failing gate was a re-key gate, on a change whose purpose was to make
+  re-key recovery work for *more* peers.
+  **The transferable half is the shape, not the subsystem: the wrong version already knew *hosted
+  is not current* and expressed it as a subtraction.** It just only covered the case that had a
+  *declaration* to subtract, while the inferred re-key makes the identical shape with nothing to
+  subtract. **A subtraction that exists to repair a set is a sign the set is the wrong set** — ask
+  what set would not need it. Replacing it removed the special case instead of adding a second one.
+  Pinned by `the_retired_peer_still_being_routable_does_not_contradict_the_record` (written before
+  the fix, seen red), with `a_record_against_the_affirmed_home_is_still_dropped` and
+  `withdrawing_a_declaration_drops_the_record_it_created` as the opposite faces — the second is
+  F2's escape, and it works *because* of the affirmation definition. `stale_against` is now a
+  one-peer call into it, so a single-publisher document behaves exactly as it did.
+  **The emitter is ADDITIVE on every arm, including the home publisher's**, which rebuilds the
+  domain's own fields from scratch. A succession dropped by a later publish is **silent** —
+  nothing 404s, nothing renders wrong, it just never reaches anyone — the `origins` clobber one
+  field along and much harder to notice (`a_declared_succession_survives_a_later_publish_by_another_peer`,
+  falsified). A document declaring nothing carries **no** `superseded` key, so *"declared nothing"*
+  and *"declared an empty set"* stay apart.
+  **One stated bound: authority is by who holds the out-dir, not by signature**, so nothing stops
+  a secondary publish declaring succession for a peer it does not own. (The declared path is
+  gated in a browser as of 2026-09-07 — next entry.)
+- **`make e2e-worker T=a_declared_succession` is the DECLARED path's browser gate, and the way it
+  was built is the transferable half.** Its document declares a succession and **no home change**,
+  which is what makes it a falsifier rather than a re-run of the seven inferred gates: the only
+  thing that can put a record in the map is `adopt_declared`. **No multi-peer publish was needed**
+  — the peers are synthetic, because a supersession key is a *deep* path segment, not the
+  peer-qualified first segment that has to be a real id.
+  **A NEUTER THAT PASSES HAS A THIRD CAUSE: the gate does not distinguish what you thought it
+  did.** Deleting `revalidate` left the withdrawal step **green** — not because the neuter missed
+  and not because the gate was unsound, but because `adopt_declared` re-writes the record on
+  **every boot that declares it**, so *"gone after a withdrawal"* is equally explained by *"never
+  durable, and simply not re-adopted."* The fix is a **step, not an assertion**: withdraw the whole
+  document and boot, so nothing adopts and nothing revalidates and a record still on screen is a
+  durable one. It also gates `revalidate`'s stated *no document means no change* precondition,
+  which nothing had ever exercised in a browser. And note the obvious neuter lands somewhere
+  unexpected: an **empty** declared set to `revalidate` reds the *adoption* step, because with
+  nothing affirmed but the home the record is dropped on the boot that adopted it.
+  **`put_and_wait` returning is not durability, and a `goto` loses the write.** The Direct-IDB arm
+  is write-behind (250 ms debounce), so the first cut lost the record *and* the session config to
+  the navigation after phase 2; boot 3 came up on the build default and the console correctly said
+  *"could not determine"* for a profile that had never written anything down. **Wait on the store,
+  on the APP page** — navigating away abandons the pending drain, so waiting from the recovery
+  console waits for something that can no longer happen. `durable_hash_for` is the probe.
+  **Order the assertions by the diagnosis they give**, not by the outcome: the subject assertion
+  reads the routing mirror on the app page *before* the durability waits, because with
+  `adopt_declared` unwired the waits would time out first and blame the probe.
+- **THE §6.5 ESTABLISHER WAS A BOOT-ONLY DECISION, SO EVERY FRESH PROFILE WAS FINDABLE AND
+  UNREACHABLE — fixed 2026-09-07 (`src/late_establish.rs`).** Reported as *"they detect each other
+  but chat doesn't work"*, in a private window and on the desktop, and read as a regression. Nothing
+  had regressed: `git log -S meet_no_establisher` lands at `043e56d`, 2026-08-24, untouched.
+  **The seam is a CONSTRUCTOR argument** — `new_direct_idb_with_establish` takes it because it must
+  be captured before the peer's `PeerShared` clones, and there is no `&mut Peer` on this arm — and
+  it was built at boot from `resolve_provisioning`: URL → the **localStorage selection mirror** →
+  the build knob. **A fresh profile has none of the three**, so no seam was installed, and a
+  connector chosen afterwards could not reach the running peer. A warm profile carried the selection
+  in localStorage and worked, which is exactly why it read as *"it used to work"*.
+  **Discovery and reachability are separate mechanisms, and only one was broken.** `meet` is an
+  ordinary websocket call to the rendezvous node and needs no establisher, so peers found each
+  other and the roster lit up while every connect-back was structurally impossible. *A roster
+  entry is not a transport.*
+  **The fix installs the seam ALWAYS, empty.** §10.3's own contract is what makes that free —
+  *"returning `None`, including no establisher registered at all, makes the ladder byte-identical
+  to the pre-seam behavior"*, and `Err` is *"a reason, never a branch"* — so an unarmed slot answers
+  `NotAttempted` and an unprovisioned boot is unchanged. The seam is consulted **per dispatch**, so
+  filling it later is picked up by the next attempt. **Stated cost:** an always-present slot accrues
+  failed consultations against the kernel's sequential backoff — bounded by its own constants, 10
+  free consultations and a **10 s** cap, so the worst case is one attempt arriving late.
+  **`peer_has_webrtc` follows the ARM, not the slot existing (AP40).** The constructor no longer
+  infers it: with a late slot always present, *a seam exists* and *a node is configured* became
+  different facts, and conflating them would make every meet warning permanently silent — the
+  opposite of the defect being fixed. `Peers::set_webrtc_peer` is how a caller declares it.
+  **Report from the ARM, never from the decision.** Logging at the call site off the returned
+  outcome looked equivalent and is not — a neuter that returned `Armed` without arming printed
+  *"armed"* over a session that armed nothing. The line moved next to `slot.arm()`.
+  **THE LINUX DESKTOP CANNOT DO WEBRTC AT ALL, and that is measured, not inferred.** WebKitGTK
+  ships without the bindings compiled in — `RTCPeerConnection` **undefined** on Debian 2.50.6 and
+  Fedora 43 2.50.5, with `MediaStream` present, which is what makes it diagnosable — so a Tauri
+  window is a rendezvous **node** and a websocket peer, never a WebRTC peer. `MeetReach::NoWebRtcApi`
+  outranks every configuration answer, because telling that user to add a connector or reload sends
+  them to fix something that is not broken. `src-tauri`'s own note says why this cost three sessions:
+  *"nothing fails loudly, and the half that keeps working is the half you look at."*
+  **Gates:** `decide_late_arm` and `MeetReach` are pure and native (four and five outcomes, counts
+  asserted), `late_establish`'s own tests cover the slot, and **`make e2e-webrtc-meet-noreload` is
+  the behavioural one** — the meet-then-chat journey with step 3's reload **removed**, so two
+  browsers boot bare, add a connector mid-session, and chat. Direct arm only, and the spike
+  **refuses** on Worker rather than passing (there `InitParams` really is Init-only). Falsified
+  twice; note the discriminating assertions are **message delivery and the unreachable note**, not
+  the arm log — a detached-but-armed slot still logs, which is why that check is labelled a step
+  indicator.
+- **A RELOAD IN A TEST SETUP IS A WARM-UP STEP — ASK WHAT IT WARMS (2026-09-07, AP55).** Every
+  WebRTC gate here boots warm and none of them said so: `spike_chat_over_webrtc` is handed
+  `?webrtc_node=` (the *top* of the precedence chain, installed at boot), and
+  `spike_meet_then_chat` + `spike_file_over_webrtc` both *"add the connector, then reload"* — and
+  `goto()` is **precisely the step that turns a fresh profile into a warm one**, because
+  `resolve_provisioning_quietly`'s middle source is the localStorage selection mirror, which is
+  readable only at boot. So the population contained no cold profile at all, which is why the
+  boot-only establisher shipped, was audited, and stayed green for two weeks (AP34/AP35's shape:
+  green because the failing configuration was not in the population, not green by inheritance).
+  The reload was even **documented as load-bearing** — true, and it was load-bearing *for the
+  defect*. **`make e2e-webrtc-file-noreload` closes the half that mattered**: the meet gate proves
+  a late-armed seam carries one chat entity; this proves it carries a **multi-chunk closure walk
+  over `system/content`**, which is what the report was actually doing. Falsified — the neuter
+  (install the seam only when boot already resolved a node) reds with the production symptom
+  exactly: ✅ met each other, ✅ a browser can serve a file, ❌ *every* delivery assertion, with
+  the in-session arm still logging `True/True`. **Run both `-noreload` gates for any change to
+  `late_establish`, provisioning precedence, or the connector registry.**
+- **A WORKAROUND IN A RUNBOOK IS A BUG REPORT NOBODY FILED (2026-09-07).**
+  `RUNBOOK-TWO-MACHINES` §5.1 carried *"Reload Tori once after step 1… provisioning is read at
+  boot, so until you reload, the UI can find peers and they cannot connect back to it."* That is
+  the establisher defect, diagnosed **correctly and in writing**, ~2 weeks before it was reported
+  as *"chat regressed"* and read as a regression. Someone understood it exactly and shipped a
+  step instead of a fix. **When you write "reload once" into a procedure, ask what is being
+  reloaded and whether the running process could just be told** — and grep the runbooks when you
+  fix something, because the workaround outlives the bug and keeps teaching it. That line was
+  also stale a *second* way nobody had noticed: on the Linux desktop `RTCPeerConnection` is
+  undefined, so the reload promised a repair that surface could never perform.
+- **THE DESKTOP'S RENDEZVOUS AND APP SERVER DEFAULT **ON** (2026-09-07, operator's call) —
+  `persistence::{DEFAULT_SIGNALING_NODE, DEFAULT_APP_SERVER}`.** A fresh install was neither, so
+  the whole zero-config LAN path (*walk over, type the URL, you are paired before the app boots*)
+  existed in full and was switched off behind two System Overview rows you had to already know
+  about. **`DEFAULT_PORT_MAPPING` deliberately did NOT move, and that is what made this safe:**
+  its neighbours bind on this LAN, that one reaches the internet. Do not fold them together later
+  because they read alike in a struct. Three things it cost to get right: **(1)** the defaults are
+  **one expression** consumed by `read_config`'s absent-key arm *and* both `lib.rs` construction
+  sites, because a peer that serves now and not after a restart is the drift (AP44); **(2)** an
+  **explicit `false` is preserved** — `set_peer_flag` writes the key, so a user who turned either
+  off keeps it off; **(3)** *absent key* and *unreadable document* stay apart — `PeerConfigFile::
+  default()` is still fail-closed on all three, because a document we could not read is not
+  permission to open a listener (AP40, one tier down from `deployment_config::read_document`).
+  **The gap this change created in itself, and how it was found:** the setup hook's app-server
+  restore runs **before** any peer is auto-provisioned, so on a *genuinely first* launch the
+  persisted set is empty and the on-by-default server would not have served until the **second**
+  launch — the launch nobody verifying a fresh install performs. Found by asking *what does this
+  default reach*, not by a red test: the native tests cover the flag's **value** and are blind to
+  **who reads it**. Fixed with `ensure_spa_server`, called from the setup hook *and*
+  `ensure_system_backend`. Gates: `a_freshly_created_peer_reads_back_the_shipped_service_defaults`
+  (falsified — emit `signaling_node = false` from `write_default_config` and it reds; it asserts
+  the **round trip**, since `assert_eq!(x, CONST)` on the next line measures the author's memory)
+  and `an_explicit_off_outranks_the_new_on_by_default` (falsified). **Verified live, cold:**
+  `rm -rf .tauri-home && make tauri-run` → *"SERVES §6.5 rendezvous at ws://…"* + *"app-server:
+  serving at http://…"*, zero toggles, plus the late arm firing against its own new backend.
+- **THE APP SERVER MOVED OFF ITS PORT AND THE THING THAT TOOK IT WAS THIS SAME APP, OLDER —
+  2026-09-07, and the diagnosis cost two sessions.** `app_server::start` fell back to an ephemeral
+  port when 8081 was taken, on the reasoning (in its own doc comment) that *"a developer box
+  routinely has `make serve` already holding 8081, and refusing to start is a worse answer than
+  starting somewhere the caller can read back."* **Both halves are false for this service.** The
+  caller *cannot* read it back — the whole purpose is that a person walks to **another device** and
+  types the URL, where they type the port they always type. And what held 8081 was a leftover
+  `make serve DIST=dist-site` container from three days earlier, so the other device got **the same
+  UI running older code** — predating both `71c7d21` (the meet message) and `f9bb540` (the late
+  arm), which is exactly why it presented as *"chat regressed"* and *"it says I'm not on my main
+  peer"* on a single-peer profile where that message is unreachable in current code.
+  **A wrong answer that renders correctly is worse than a connection refused.** It now hard-fails
+  and the error **names the port**; `port: 0` still means *any free port*, because a caller asking
+  is not a fallback deciding.
+  **The invisibility had three layers and no single one was the bug.** (1) The warning was a
+  `log::warn!` to stdout, which the GUI never shows. (2) `AppServerView` had **three** states, so a
+  failed bind graded as **`Off`** — indistinguishable from *"you switched it off"*, the AP40
+  collapse one tier down from `read_document`'s. There is a fourth state now, `Failed { detail }`,
+  carrying the backend's own sentence rather than a localized *"could not start"* that would drop
+  the port number, i.e. the only actionable part. (3) **`make serve` runs `--network host`, so
+  `podman ps` shows an EMPTY ports column** — the operator looked for a container on 8081 and the
+  tool correctly told them nothing. *When someone says "there's nothing on that port", check how
+  they looked before you disagree*: `ss -ltnp` and a `curl` of the build stamp settle it in two
+  commands, and `curl -s <url> | grep entity-build` is the one that names *which build* is
+  answering.
+  **The bug the fix itself introduced, caught by its own new test:** `is_serving()` was spelled
+  `!matches!(self, Off)`, so the moment a fourth variant existed it classified as *serving* and the
+  row would have shown the toggle ON for a server that is not running — leaving *switch it off* as
+  the only way to retry. **State a predicate positively when it drives a control**; a negative
+  spelling silently absorbs every variant added later. Gates:
+  `a_taken_port_fails_loudly_and_names_the_port` (falsified — restoring the fallback reds it,
+  reporting the port it bound instead), `port_zero_is_still_an_explicit_request_for_any_port`,
+  `a_server_that_could_not_start_is_not_reported_as_switched_off`,
+  `a_live_socket_outranks_a_stale_recorded_failure` (a recovered retry must not leave the row stuck
+  on a fault that is over) and `an_empty_error_is_the_same_absence_as_no_error`.
+  **Standing check when a report says "it used to work":** confirm which build the reporter is
+  actually running before tracing code. `make tauri-run` builds the current checkout correctly —
+  but only *that* checkout, and only onto a port it can get.
+- **THE RECOVERY CONSOLE THREW AWAY THE HALF OF ITS REPORT THAT DOES NOT NEED THE ORIGIN — AP36,
+  in the surface built to diagnose AP36's family (fixed 2026-09-07).** `index.html`'s routing card
+  opened `if (!doc) return setEmpty(…)` — an early return on the **acquisition** — so an origin
+  that could not be reached discarded *what this profile believes* **and the entire Retired
+  publishers card**, at exactly the moment a stranded visitor needs them, since an unreachable
+  origin is a normal condition for one. It also made the verdict's own `!home` arm (*"the domain
+  did not answer, so there is nothing to compare it against"*) **unreachable**: someone wrote that
+  branch and an early return above it meant nobody ever saw it. **Put the guard on the DECISION,
+  never on the acquisition** — and the probe is now **three** states, not two (served /
+  answered-with-a-status / did not answer), because a 502 is not a deployer choosing to serve no
+  config, the same AP40 split `deployment_config::read_document` carries one tier down. Found by
+  building a gate that needed the console to work with no document, not by reading the console.
+- **THE ADOPT AND THE UN-NAME ARE A PAIR — §1.1f item 3, shipped 2026-09-07
+  (`origins::unname_withdrawn_origins`).** `adopt_deployment_origin` only ever **adds**, so a peer a
+  domain stopped hosting kept a registered origin that 404s on every visit — in the browse-all
+  roster, in the retry ladder, and in Doctor's `fetch-failure-by-peer`. *Un-name before you remove*,
+  run in the other direction from the `--prune` finding that earned it.
+  **The decision is pure (`withdrawn_rows`) and three of its four rules are refusals**, which is
+  where all the risk in a delete path lives: an **empty declared set withdraws nothing**, a
+  **`user`-marked row** is never withdrawn, and the **resolved home peer's row** is never withdrawn.
+  **The empty-set guard is what decides whether this is safe to ship.** `DeploymentConfig` parses
+  `origins` into a `BTreeMap`, so an **absent** `origins` key and an explicit `origins: {}` arrive
+  **identically** — the AP40 collapse, one field over from the one `superseded` avoids by never
+  emitting an empty key. A minimal document (`{"surface":"site"}`) names no origins and `dist/` has
+  no document at all, so sweeping on an empty set would empty the registry of every profile that
+  booted against either. Stated bound: **a deployer cannot express "I host nobody"**, and that is
+  the direction we can afford to be wrong in.
+  **A superseded row needs no special case, and that is what a tidy version gets wrong.** Through a
+  re-key transition the retired peer's entry is deliberately still *in* `origins`
+  (`HomeClaim::Takes`), so rule 3 keeps it and `apply_supersession`'s carry-forward arm still has
+  the row it carries. The distinction from that function's *"availability lost to hygiene"* warning:
+  **`apply_supersession` acts on an inference with no document in hand; this acts on the live
+  document explicitly not naming the peer.**
+  **We remove the NAME, never the bytes** — the withdrawn peer's cached content is untouched (D24,
+  no export path), and un-naming is reversible by the next publish (E1, `Adoption::Seeded`).
+  **Assert the LISTING, not what `remove_and_wait` returned** — falsified by a report-only
+  implementation, which the return-value assertion passes. The gate that matters is the consequence
+  one, `a_withdrawn_publisher_stops_serving_apps_to_a_returning_profile`: AP54's twin, same
+  warmed-catalog precondition and same reason — without it `app_source`'s first loop finds nothing,
+  the fallback takes *"the first foreign origin"*, and sort order decides.
+  **Register through the ADOPT path in any test, never `set_origin`** — that one marks `user`, which
+  is exempt, so a fixture built on it makes the sweep a no-op and the gate vacuous.
+  **Measured, and it bounds what a browser gate could ever assert: the origin registry has no
+  user-visible readout.** All seven `list_origins` consumers either subscribe a tree prefix or pick
+  a fetch target; nothing renders a row. That is most of why the 2026-09-05 incident was invisible.
+  **The wiring is a census, not a structure** — `tests/origin_reconcile_census.rs` asserts both
+  calls are in `src/app.rs` and that the sweep comes **after** the adopt, ships its own two-way
+  falsifier, and was falsified against the real file. The better fix is one `reconcile` function
+  doing both halves (AP44); not taken because the adopt loop's `expand_origin` is WASM-only and
+  three e2e gates key on that loop's exact log lines. Design: §1.1f-b.
 - **`/entity-deployment.json` is DOMAIN-managed and describes the whole domain — the publisher
   used to clobber it down to the last peer (fixed 2026-09-03).** `emit_deployment_config` built a
   fresh single-entry `origins` map and `fs::write`'d over the file, so publishing a second peer
@@ -906,6 +1152,31 @@ false regression. The headless spelling is `env -u WAYLAND_DISPLAY -u DISPLAY ma
   bytes must carry an **inclusion proof** (the author's root + the trie path, cheap because HAMT nodes
   dedup) or accept that authorship needs the author's origin. Run this gate for any change to the emit
   path, the store round-trip, or a mirror/republication surface.
+  **WHAT THAT GATE DOES NOT ESTABLISH, AND A BLOCKER WAS NEARLY DERIVED FROM IT AGAIN ON
+  2026-09-07.** It measures **a capability of the store**, not a requirement the consumer imposes —
+  and the product's HTTP ingest path does **not** preserve a foreign encoding.
+  `http_poll::verify_and_decode` re-encodes a fetched entity's `data` with `to_ecf` and *then*
+  validates the hash, so a publisher who hashed canonically gets their canonical bytes stored at the
+  address their root commits to, and one who hashed non-canonical bytes raw is refused with
+  `HashMismatch`. **No non-canonical entity enters the store over HTTP, either way.**
+  **That is conformant, not a shortcut.** `ENTITY-CBOR-ENCODING` §5.4 blesses **both** mechanisms —
+  store-and-forward the original bytes (steps 3–4, what the gate measures) *or* carry the validated
+  hash and re-encode canonically on receipt, which is the arm we are on; §9 states the same rule from
+  the other side (*"Always re-encode to ECF before hashing. Never hash received wire bytes directly,
+  as they may be valid but non-canonical."*).
+  **So the handoff's Q1 — "the L1 `put` wire is lossy for bytes we did not author" — has a weaker
+  premise than it was written with.** `build_put_params` does re-encode (`data` goes as a decoded
+  `Value`, re-encoded peer-side at `core/tree/src/lib.rs`), but it is lossy for **exactly the set of
+  entities we already cannot ingest**, and option (c), *canonicalize on ingest*, was written down as
+  "probably a non-starter, breaks author-anchored verification" when it is **what we already do and
+  what the spec permits**. Note also the lossy hop is narrower than "L1": `WireEntity` carries `data`
+  as **raw bytes**, so the app→worker channel is byte-faithful, as is `WriterHandle::Direct`'s L0 put.
+  **Corollary that bounds every mirror design: a publisher who hashed their own non-canonical bytes
+  is unmirrorable by anyone**, because their root commits to a hash no conformant impl reproduces.
+  That is the spec working, not a gap. **Still open and routed, not closed here:** §5.4 clause (a)
+  requires re-encode-**and-compare against the received bytes** where we compare hashes, and the
+  appendix requires a re-encode arm to run the `encode_equal` round-trip vectors — an `entity_ecf`
+  obligation nobody here has verified is run.
   **A SITE AND A FEED ARE THE SAME MECHANISM WITH A DIFFERENT DATA MODEL — do not re-derive a blocker
   here, one was invented on 2026-09-04 and withdrawn the same day.** Entities at a peer-scoped tree path,
   projected to static files, committed to by a signed root; `RootProjector::record(peer, subpath,

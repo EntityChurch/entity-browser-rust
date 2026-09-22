@@ -1889,16 +1889,62 @@ pub const EN: &[(&str, Message)] = &[
         Message::Simple("Select a connector first — a meet happens at a signaling node."),
     ),
     // The meet runs, and the peers it finds are real — but they will not be able
-    // to reach back, because this peer has no §6.5 establisher (it is installed
-    // on the primary peer only, and this window acts as the peer you selected).
-    // Worth saying at the moment of meeting: the alternative is a stranger
-    // holding an id that silently never connects.
+    // to reach back, because this peer has no §6.5 establisher. Worth saying at
+    // the moment of meeting: the alternative is a stranger holding an id that
+    // silently never connects.
+    //
+    // THREE strings, not one. This was a single sentence for three situations
+    // and it named the least common of them, so the case that actually reaches
+    // people — a fresh profile with no rendezvous node at boot — was told to
+    // switch to the peer it was already on. See `MeetReach`, which is where the
+    // outcomes are decided and gated.
+    //
+    // This one is now ONLY the second-local-peer case: the establisher is
+    // primary-only, and this window acts as the peer you selected, so switching
+    // really is the fix here.
     (
         "peerconn.meet_no_establisher",
         Message::Simple(
             "Heads up: this peer can't be connected back to — peers you meet will \
              find you but won't reach you. Switch this window to your main peer to \
              be reachable.",
+        ),
+    ),
+    // The engine itself has no `RTCPeerConnection`. The Linux Tauri WebView
+    // (WebKitGTK) ships without the bindings compiled in — measured on Debian
+    // 2.50.6 and Fedora 43 2.50.5 — so a desktop window is a rendezvous NODE and
+    // a websocket peer, never a WebRTC peer. Says what still works rather than
+    // only what does not: the desktop's value here is being the node the
+    // browsers meet through.
+    (
+        "peerconn.meet_no_webrtc_api",
+        Message::Simple(
+            "Heads up: this app window has no WebRTC support, so peers you meet              will find you but can't connect directly. Meet from a browser              instead — this desktop can still serve as the rendezvous node they              connect through.",
+        ),
+    ),
+    // The primary, with a rendezvous node available now but not when this tab
+    // loaded. The establisher is a CONSTRUCTOR argument (it must be captured
+    // before the peer's shared clones), so a node chosen mid-session cannot be
+    // installed into the running peer — one reload applies it. Says what to do
+    // rather than what is wrong: this is the one outcome with a one-click fix.
+    (
+        "peerconn.meet_needs_reload",
+        Message::Simple(
+            "Heads up: reload this page to become reachable. You chose a rendezvous \
+             node after this tab loaded, so this session can still find peers but \
+             they can't connect back to you yet.",
+        ),
+    ),
+    // The primary, and nothing is configured at all — a fresh profile, a private
+    // window, a first visit. Nothing to reload into yet, so the advice is to add
+    // a connector first. Naming both steps because doing only the first leaves
+    // the user exactly where they started.
+    (
+        "peerconn.meet_no_node",
+        Message::Simple(
+            "Heads up: peers you meet will find you but won't reach you — no \
+             rendezvous node is set up. Add one under Connectors, then reload this \
+             page to become reachable.",
         ),
     ),
     ("peerconn.meet_mode", Message::Simple("Meet by")),

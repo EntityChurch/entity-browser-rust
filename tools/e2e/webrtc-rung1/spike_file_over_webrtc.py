@@ -187,18 +187,66 @@ def main():
         if not (meet.wait_boot(A_BASE, sa, "A") and meet.wait_boot(B_BASE, sb, "B")):
             return 1
 
-        print("\n── 1. add the connector, then reload ──────────")
+        # ── 1. the connector arrives — with or WITHOUT a reload ──────────────
+        #
+        # `NO_RELOAD=1` is the COLD-PROFILE arm, and it is a different claim
+        # from `spike_meet_then_chat.py`'s. That gate proves a mid-session
+        # arm carries a *chat message*: one dispatch, one entity. This one
+        # proves it carries a **transfer** — a multi-chunk closure walk over
+        # `system/content`, which is what the 2026-09-07 report was actually
+        # trying to do when it failed. The two are not the same load on the
+        # seam: a channel that opens late and delivers one small entity can
+        # still be the wrong channel for a walk that re-enters it per chunk.
+        #
+        # It exists because the reload below is what WARMED every file run
+        # this repo has ever done. `resolve_provisioning_quietly`'s middle
+        # source is the localStorage selection mirror, which is readable only
+        # at boot — so `goto()` is precisely the step that turns a fresh
+        # profile into a warm one, and with it in place this gate could not
+        # have exhibited the establisher defect at all.
+        #
+        # Direct arm only, same refusal as the meet spike and for the same
+        # reason: the Worker arm takes provisioning from `InitParams`, which
+        # is Init-only upstream, so there the reload is genuinely still
+        # required and a NO_RELOAD pass would prove nothing.
+        if meet.NO_RELOAD and meet.MODE != "direct":
+            print("\nRESULT: FAIL ❌ NO_RELOAD is a Direct-arm claim; "
+                  f"MODE={meet.MODE} still needs the reload (InitParams is Init-only)")
+            return 1
+
+        if meet.NO_RELOAD:
+            print("\n── 1. add the connector — NO reload ───────────")
+        else:
+            print("\n── 1. add the connector, then reload ──────────")
         if not (meet.provision(A_BASE, sa, node_peer, "A")
                 and meet.provision(B_BASE, sb, node_peer, "B")):
             print("\nRESULT: FAIL ❌ could not register the connector")
             return 1
-        meet.goto(A_BASE, sa)
-        meet.goto(B_BASE, sb)
-        if not (meet.wait_boot(A_BASE, sa, "A") and meet.wait_boot(B_BASE, sb, "B")):
-            return 1
-        checks["an establisher installs from the registry"] = (
-            meet.log_has(A_BASE, sa, "establisher") and meet.log_has(B_BASE, sb, "establisher")
-        )
+
+        if meet.NO_RELOAD:
+            armed_a = meet.wait_log(A_BASE, sa, "armed the §6.5 establisher", 20)
+            armed_b = meet.wait_log(B_BASE, sb, "armed the §6.5 establisher", 20)
+            print(f"  A/B logged an in-session arm: {armed_a}/{armed_b}")
+            # **A step indicator, not the claim** — the same bound the meet
+            # spike states: a detached-but-armed slot logs this too. What
+            # DISCRIMINATES here is phases 3–6, where the bytes either cross
+            # or do not.
+            checks["the in-session arming path runs"] = armed_a and armed_b
+            if not (armed_a and armed_b):
+                print("\nRESULT: FAIL ❌ THE SEAM DID NOT ARM IN-SESSION. A rendezvous "
+                      "node was selected through the Shell and the running peer never "
+                      "picked it up, so this session can find peers and can never be "
+                      "connected back to — nothing can be transferred to it.")
+                return 1
+        else:
+            meet.goto(A_BASE, sa)
+            meet.goto(B_BASE, sb)
+            if not (meet.wait_boot(A_BASE, sa, "A") and meet.wait_boot(B_BASE, sb, "B")):
+                return 1
+            checks["an establisher installs from the registry"] = (
+                meet.log_has(A_BASE, sa, "establisher")
+                and meet.log_has(B_BASE, sb, "establisher")
+            )
 
         # MODE=worker is a claim about an env var until the app agrees. Worker
         # mode is secure-context-gated (OPFS), and on a non-secure origin the
